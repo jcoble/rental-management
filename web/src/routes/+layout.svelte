@@ -1,5 +1,6 @@
 <script lang="ts">
 	import '../app.css';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
 	import {
@@ -39,6 +40,7 @@
 
 	let sidebarCollapsed = $state(false);
 	let isMobile = $state(false);
+	let authReady = $state(false);
 
 	const navItems: { href: string; label: string; icon: any; roles?: UserRole[] }[] = [
 		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -56,6 +58,7 @@
 	];
 
 	let currentUser = $derived(getCurrentUser());
+	let isLoginRoute = $derived($page.url.pathname === '/login');
 	let visibleNavItems = $derived.by(() => {
 		return navItems.filter((item) => {
 			if (!item.roles || item.roles.length === 0) return true;
@@ -94,14 +97,29 @@
 
 	$effect(() => {
 		const token = authToken.get();
-		if (!token) return;
+		if (!token) {
+			clearAuth();
+			authReady = true;
+			return;
+		}
 
 		auth.me()
 			.then((me) => setCurrentUser(me))
-			.catch(() => clearAuth());
+			.catch(() => clearAuth())
+			.finally(() => {
+				authReady = true;
+			});
 	});
 
 	$effect(() => {
+		if (!authReady) return;
+		if (!currentUser && !isLoginRoute) goto('/login');
+		if (currentUser && isLoginRoute) goto('/portal');
+	});
+
+	$effect(() => {
+		if (!currentUser || isLoginRoute) return;
+
 		const portfolioId = getCurrentPortfolioId();
 		const eventSource = new EventSource(`/api/events?portfolioId=${portfolioId}`);
 
@@ -145,73 +163,81 @@
 </script>
 
 <QueryClientProvider client={queryClient}>
-	<div class="flex h-screen">
-		<aside
-			class="flex flex-col border-r border-border bg-surface transition-all duration-200 {sidebarCollapsed ? 'w-16' : 'w-60'} shrink-0"
-		>
-			<div class="flex items-center gap-2 border-b border-border px-4 py-4">
-				<Building class="h-5 w-5 shrink-0 text-accent" />
-				{#if !sidebarCollapsed}
-					<span class="font-semibold text-text-primary truncate">Rental Command</span>
-				{/if}
-			</div>
-
-			<div class="border-b border-border py-2">
-				<PortfolioSelector collapsed={sidebarCollapsed} />
-			</div>
-
-			<nav class="flex-1 space-y-1 px-2 py-3 overflow-y-auto">
-				{#each visibleNavItems as item}
-					{@const active = isActive(item.href, $page.url.pathname)}
-					{@const Icon = item.icon}
-					<a
-						href={item.href}
-						onclick={handleNavClick}
-						class="flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors
-							{active
-							? 'bg-accent/10 text-accent'
-							: 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}
-							{sidebarCollapsed ? 'justify-center' : ''}"
-						title={sidebarCollapsed ? item.label : undefined}
-					>
-						<Icon class="h-4 w-4 shrink-0" />
-						{#if !sidebarCollapsed}
-							<span>{item.label}</span>
-						{/if}
-					</a>
-				{/each}
-			</nav>
-
-			<div class="border-t border-border p-2">
-				{#if !sidebarCollapsed && currentUser}
-					<div class="mb-2 rounded-md border border-border bg-bg px-3 py-2">
-						<p class="truncate text-sm font-medium text-text-primary">{currentUser.displayName}</p>
-						<p class="text-xs text-text-secondary">{currentUser.role}</p>
-					</div>
-					<button
-						onclick={logout}
-						class="mb-2 flex w-full items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-					>
-						<LogOut class="h-3.5 w-3.5" />
-						<span>Sign out</span>
-					</button>
-				{/if}
-				<button
-					onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
-					class="flex w-full items-center justify-center rounded-md p-2 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
-					title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-				>
-					{#if sidebarCollapsed}
-						<PanelLeftOpen class="h-4 w-4" />
-					{:else}
-						<PanelLeftClose class="h-4 w-4" />
-					{/if}
-				</button>
-			</div>
-		</aside>
-
-		<main class="flex-1 overflow-hidden">
+	{#if isLoginRoute}
+		<main class="h-screen overflow-hidden">
 			{@render children()}
 		</main>
-	</div>
+	{:else if !authReady || !currentUser}
+		<main class="flex h-screen items-center justify-center text-text-tertiary">Loading...</main>
+	{:else}
+		<div class="flex h-screen">
+			<aside
+				class="flex flex-col border-r border-border bg-surface transition-all duration-200 {sidebarCollapsed ? 'w-16' : 'w-60'} shrink-0"
+			>
+				<div class="flex items-center gap-2 border-b border-border px-4 py-4">
+					<Building class="h-5 w-5 shrink-0 text-accent" />
+					{#if !sidebarCollapsed}
+						<span class="font-semibold text-text-primary truncate">Rental Command</span>
+					{/if}
+				</div>
+
+				<div class="border-b border-border py-2">
+					<PortfolioSelector collapsed={sidebarCollapsed} />
+				</div>
+
+				<nav class="flex-1 space-y-1 px-2 py-3 overflow-y-auto">
+					{#each visibleNavItems as item}
+						{@const active = isActive(item.href, $page.url.pathname)}
+						{@const Icon = item.icon}
+						<a
+							href={item.href}
+							onclick={handleNavClick}
+							class="flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors
+								{active
+								? 'bg-accent/10 text-accent'
+								: 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}
+								{sidebarCollapsed ? 'justify-center' : ''}"
+							title={sidebarCollapsed ? item.label : undefined}
+						>
+							<Icon class="h-4 w-4 shrink-0" />
+							{#if !sidebarCollapsed}
+								<span>{item.label}</span>
+							{/if}
+						</a>
+					{/each}
+				</nav>
+
+				<div class="border-t border-border p-2">
+					{#if !sidebarCollapsed && currentUser}
+						<div class="mb-2 rounded-md border border-border bg-bg px-3 py-2">
+							<p class="truncate text-sm font-medium text-text-primary">{currentUser.displayName}</p>
+							<p class="text-xs text-text-secondary">{currentUser.role}</p>
+						</div>
+						<button
+							onclick={logout}
+							class="mb-2 flex w-full items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+						>
+							<LogOut class="h-3.5 w-3.5" />
+							<span>Sign out</span>
+						</button>
+					{/if}
+					<button
+						onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
+						class="flex w-full items-center justify-center rounded-md p-2 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+						title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+					>
+						{#if sidebarCollapsed}
+							<PanelLeftOpen class="h-4 w-4" />
+						{:else}
+							<PanelLeftClose class="h-4 w-4" />
+						{/if}
+					</button>
+				</div>
+			</aside>
+
+			<main class="flex-1 overflow-hidden">
+				{@render children()}
+			</main>
+		</div>
+	{/if}
 </QueryClientProvider>
