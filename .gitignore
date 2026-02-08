@@ -1,0 +1,35 @@
+# Logs
+.api.log
+.web.log
+.pids
+
+# .NET
+api/bin/
+api/obj/
+api/lifecycle.db
+api/lifecycle.db-shm
+api/lifecycle.db-wal
+api/uploads/
+api/appsettings.Local.json
+
+# Environment
+.env
+
+# Node
+node_modules/
+
+# Build output
+mcp/build/
+
+# TLS certs
+certs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
