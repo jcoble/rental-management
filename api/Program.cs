@@ -56,6 +56,8 @@ app.MapAppointmentEndpoints();
 app.MapInspectionEndpoints();
 app.MapActivityEndpoints();
 app.MapAiEndpoints();
+app.MapAuthEndpoints();
+app.MapPortalEndpoints();
 app.MapSseEndpoints();
 app.MapFallbackToFile("index.html");
 

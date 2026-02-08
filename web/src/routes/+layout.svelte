@@ -14,10 +14,17 @@
 		Sparkles,
 		Settings,
 		PanelLeftClose,
-		PanelLeftOpen
+		PanelLeftOpen,
+		Shield,
+		UserCircle2,
+		LogOut
 	} from '@lucide/svelte';
 	import PortfolioSelector from '$lib/components/shared/PortfolioSelector.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { auth } from '$lib/api/endpoints/auth';
+	import { authToken } from '$lib/api/client';
+	import { clearAuth, getCurrentUser, hasAnyRole, setCurrentUser } from '$lib/stores/auth.svelte';
+	import type { UserRole } from '$lib/types';
 
 	let { children } = $props();
 
@@ -33,18 +40,28 @@
 	let sidebarCollapsed = $state(false);
 	let isMobile = $state(false);
 
-	const navItems = [
+	const navItems: { href: string; label: string; icon: any; roles?: UserRole[] }[] = [
 		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
-		{ href: '/properties', label: 'Properties', icon: Building },
-		{ href: '/tenants', label: 'Tenants', icon: Users },
-		{ href: '/leases', label: 'Leases', icon: FileText },
-		{ href: '/maintenance', label: 'Maintenance', icon: Wrench },
-		{ href: '/accounting', label: 'Accounting', icon: Calculator },
-		{ href: '/appointments', label: 'Appointments', icon: Calendar },
-		{ href: '/owners', label: 'Owners & Vendors', icon: BadgeDollarSign },
-		{ href: '/ai', label: 'AI Assistant', icon: Sparkles },
-		{ href: '/settings', label: 'Settings', icon: Settings },
+		{ href: '/properties', label: 'Properties', icon: Building, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/tenants', label: 'Tenants', icon: Users, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/leases', label: 'Leases', icon: FileText, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/maintenance', label: 'Maintenance', icon: Wrench, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/accounting', label: 'Accounting', icon: Calculator, roles: ['Admin', 'Manager'] },
+		{ href: '/appointments', label: 'Appointments', icon: Calendar, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/owners', label: 'Owners & Vendors', icon: BadgeDollarSign, roles: ['Admin', 'Manager'] },
+		{ href: '/ai', label: 'AI Assistant', icon: Sparkles, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/portal', label: 'Portal', icon: UserCircle2 },
+		{ href: '/admin/users', label: 'User Access', icon: Shield, roles: ['Admin', 'Manager'] },
+		{ href: '/settings', label: 'Settings', icon: Settings, roles: ['Admin', 'Manager'] },
 	];
+
+	let currentUser = $derived(getCurrentUser());
+	let visibleNavItems = $derived.by(() => {
+		return navItems.filter((item) => {
+			if (!item.roles || item.roles.length === 0) return true;
+			return hasAnyRole(...item.roles);
+		});
+	});
 
 	function isActive(href: string, pathname: string): boolean {
 		if (href === '/') return pathname === '/';
@@ -65,6 +82,24 @@
 	function handleNavClick() {
 		if (isMobile) sidebarCollapsed = true;
 	}
+
+	async function logout() {
+		try {
+			await auth.logout();
+		} finally {
+			clearAuth();
+			window.location.href = '/login';
+		}
+	}
+
+	$effect(() => {
+		const token = authToken.get();
+		if (!token) return;
+
+		auth.me()
+			.then((me) => setCurrentUser(me))
+			.catch(() => clearAuth());
+	});
 
 	$effect(() => {
 		const portfolioId = getCurrentPortfolioId();
@@ -126,7 +161,7 @@
 			</div>
 
 			<nav class="flex-1 space-y-1 px-2 py-3 overflow-y-auto">
-				{#each navItems as item}
+				{#each visibleNavItems as item}
 					{@const active = isActive(item.href, $page.url.pathname)}
 					{@const Icon = item.icon}
 					<a
@@ -148,6 +183,19 @@
 			</nav>
 
 			<div class="border-t border-border p-2">
+				{#if !sidebarCollapsed && currentUser}
+					<div class="mb-2 rounded-md border border-border bg-bg px-3 py-2">
+						<p class="truncate text-sm font-medium text-text-primary">{currentUser.displayName}</p>
+						<p class="text-xs text-text-secondary">{currentUser.role}</p>
+					</div>
+					<button
+						onclick={logout}
+						class="mb-2 flex w-full items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+					>
+						<LogOut class="h-3.5 w-3.5" />
+						<span>Sign out</span>
+					</button>
+				{/if}
 				<button
 					onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
 					class="flex w-full items-center justify-center rounded-md p-2 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"

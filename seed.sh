@@ -12,8 +12,16 @@ patch() {
   curl -s -X PATCH "$1" -H "Content-Type: application/json" -H "$ORIGIN_HEADER" -d "$2"
 }
 
+post_auth() {
+  curl -s -X POST "$1" -H "Content-Type: application/json" -H "$ORIGIN_HEADER" -H "Authorization: Bearer $AUTH_TOKEN" -d "$2"
+}
+
 extract_id() {
   echo "$1" | sed -n 's/.*"id":\([0-9]*\).*/\1/p' | head -1
+}
+
+extract_token() {
+  echo "$1" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' | head -1
 }
 
 PORTFOLIO=$(post "$API_URL/api/portfolios" '{"name":"Downtown Residential Portfolio","description":"Mixed rental portfolio for downtown and nearby neighborhoods","managementCompanyName":"Acme Property Management","timeZone":"America/New_York"}')
@@ -67,4 +75,21 @@ post "$API_URL/api/appointments" "{\"portfolioId\":$PORTFOLIO_ID,\"propertyId\":
 
 post "$API_URL/api/inspections" "{\"portfolioId\":$PORTFOLIO_ID,\"propertyId\":$PROPERTY_A_ID,\"unitId\":$UNIT_A1_ID,\"type\":\"Routine\",\"status\":\"Scheduled\",\"scheduledFor\":\"2026-02-15T14:00:00Z\",\"notes\":\"Quarterly smoke detector + plumbing check\"}" >/dev/null
 
+# Seed role-based access users
+post "$API_URL/api/auth/users" "{\"portfolioId\":$PORTFOLIO_ID,\"email\":\"admin@rental.local\",\"displayName\":\"Admin User\",\"password\":\"Admin123!\",\"role\":\"Admin\"}" >/dev/null
+
+ADMIN_LOGIN=$(post "$API_URL/api/auth/login" "{\"portfolioId\":$PORTFOLIO_ID,\"email\":\"admin@rental.local\",\"password\":\"Admin123!\"}")
+AUTH_TOKEN=$(extract_token "$ADMIN_LOGIN")
+if [ -z "$AUTH_TOKEN" ]; then
+  echo "Failed to obtain admin auth token during seed."
+  exit 1
+fi
+
+post_auth "$API_URL/api/auth/users" "{\"portfolioId\":$PORTFOLIO_ID,\"email\":\"manager@rental.local\",\"displayName\":\"Manager User\",\"password\":\"Manager123!\",\"role\":\"Manager\"}" >/dev/null
+post_auth "$API_URL/api/auth/users" "{\"portfolioId\":$PORTFOLIO_ID,\"email\":\"agent@rental.local\",\"displayName\":\"Leasing Agent\",\"password\":\"Agent123!\",\"role\":\"Agent\"}" >/dev/null
+post_auth "$API_URL/api/auth/users" "{\"portfolioId\":$PORTFOLIO_ID,\"email\":\"owner@rental.local\",\"displayName\":\"Owner Portal User\",\"password\":\"Owner123!\",\"role\":\"Owner\",\"ownerId\":$OWNER_A_ID}" >/dev/null
+post_auth "$API_URL/api/auth/users" "{\"portfolioId\":$PORTFOLIO_ID,\"email\":\"tenant@rental.local\",\"displayName\":\"Tenant Portal User\",\"password\":\"Tenant123!\",\"role\":\"Tenant\",\"tenantId\":$TENANT_A_ID}" >/dev/null
+
 echo "Seed complete. Portfolio ID: $PORTFOLIO_ID"
+echo "Demo users: admin@rental.local / manager@rental.local / agent@rental.local / owner@rental.local / tenant@rental.local"
+echo "Default passwords: Admin123! Manager123! Agent123! Owner123! Tenant123!"
