@@ -11,6 +11,7 @@ public static class AuthUtility
     private const int Iterations = 100_000;
     private const int SaltSize = 16;
     private const int HashSize = 32;
+    private static readonly TimeSpan SessionTouchInterval = TimeSpan.FromMinutes(5);
 
     public static string HashPassword(string password)
     {
@@ -68,7 +69,7 @@ public static class AuthUtility
         if (session.ExpiresAt <= now) return null;
         if (session.UserAccount is null || !session.UserAccount.IsActive) return null;
 
-        if (touchSession)
+        if (touchSession && now - session.LastSeenAt >= SessionTouchInterval)
         {
             session.LastSeenAt = now;
             await db.SaveChangesAsync();

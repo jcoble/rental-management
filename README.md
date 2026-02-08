@@ -38,8 +38,9 @@ Run:
 ./start.sh
 ```
 
-- Web: `http://localhost:5667`
-- API: `http://localhost:5666`
+- Web: `https://localhost:5667`
+- API (HTTPS): `https://localhost:5666`
+- API (HTTP/internal tools): `http://localhost:5665`
 
 `start.sh` auto-seeds demo data on first run.
 
@@ -83,7 +84,7 @@ Register MCP server (example):
 ```bash
 claude mcp add rental-command \
   -s user \
-  -e RENTAL_API_URL=http://localhost:5666 \
+  -e RENTAL_API_URL=http://localhost:5665 \
   -e RENTAL_API_KEY=your-api-key \
   -e RENTAL_PORTFOLIO_ID=1 \
   -- node /path/to/rental-management/mcp/build/index.js

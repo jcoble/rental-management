@@ -11,7 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const API_URL = process.env.LIFECYCLE_API_URL || 'http://localhost:5666';
+const API_URL = process.env.LIFECYCLE_API_URL || 'http://localhost:5665';
 
 function getApiKey() {
   // Try env var first, then key file
