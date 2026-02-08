@@ -13,6 +13,7 @@
 	const meQuery = createQuery(() => ({
 		queryKey: ['auth-me'],
 		queryFn: () => auth.me(),
+		retry: false,
 	}));
 
 	$effect(() => {
