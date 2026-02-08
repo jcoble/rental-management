@@ -9,7 +9,7 @@ pnpm install
 pnpm dev
 ```
 
-Runs on `http://localhost:5667` and proxies `/api` to `http://localhost:5666`.
+Runs on `https://localhost:5667` and proxies `/api` to `https://localhost:5666`.
 
 ## Checks
 

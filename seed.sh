@@ -1,19 +1,19 @@
 #!/bin/bash
 set -e
 
-API_URL="${API_URL:-http://localhost:5666}"
-ORIGIN_HEADER="Origin: http://localhost"
+API_URL="${API_URL:-https://localhost:5666}"
+ORIGIN_HEADER="Origin: https://localhost:5667"
 
 post() {
-  curl -s -X POST "$1" -H "Content-Type: application/json" -H "$ORIGIN_HEADER" -d "$2"
+  curl -ks -X POST "$1" -H "Content-Type: application/json" -H "$ORIGIN_HEADER" -d "$2"
 }
 
 patch() {
-  curl -s -X PATCH "$1" -H "Content-Type: application/json" -H "$ORIGIN_HEADER" -d "$2"
+  curl -ks -X PATCH "$1" -H "Content-Type: application/json" -H "$ORIGIN_HEADER" -d "$2"
 }
 
 post_auth() {
-  curl -s -X POST "$1" -H "Content-Type: application/json" -H "$ORIGIN_HEADER" -H "Authorization: Bearer $AUTH_TOKEN" -d "$2"
+  curl -ks -X POST "$1" -H "Content-Type: application/json" -H "$ORIGIN_HEADER" -H "Authorization: Bearer $AUTH_TOKEN" -d "$2"
 }
 
 extract_id() {

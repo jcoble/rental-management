@@ -6,8 +6,8 @@ A project management tool with kanban board, test plans, and team orchestration.
 
 | Service | URL (Tailscale) | URL (Local Dev) |
 |---------|----------------|-----------------|
-| Web UI  | https://cloud-server.chimp-map.ts.net | http://localhost:5667 |
-| API     | https://cloud-server.chimp-map.ts.net/api | http://localhost:5666 |
+| Web UI  | https://cloud-server.chimp-map.ts.net | https://localhost:5667 |
+| API     | https://cloud-server.chimp-map.ts.net/api | https://localhost:5666 |
 
 ## MCP Server
 
@@ -29,7 +29,7 @@ claude mcp add lifecycle -s user \
 For local dev:
 ```bash
 claude mcp add lifecycle -s user \
-  -e LIFECYCLE_API_URL=http://localhost:5666 \
+  -e LIFECYCLE_API_URL=http://localhost:5665 \
   -e LIFECYCLE_API_KEY=<your-api-key> \
   -- node /path/to/lifecycle-tracker/mcp/build/index.js
 ```
@@ -75,7 +75,7 @@ claude mcp add lifecycle -s user \
 
 ## API Quick Reference
 
-All endpoints are under `/api`. Use `Origin: http://localhost` header to bypass API key auth, or set `X-API-Key` header.
+All endpoints are under `/api`. Use `Origin: https://localhost:5667` header to bypass API key auth, or set `X-API-Key` header.
 
 ### Tasks
 ```

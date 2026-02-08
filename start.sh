@@ -1,6 +1,6 @@
 #!/bin/bash
 # Rental Command — Start Script
-# Starts API (5666) + Web (5667), seeds demo data on first run.
+# Starts API (HTTPS 5666, HTTP 5665) + Web (HTTPS 5667), seeds demo data on first run.
 
 set -e
 
@@ -61,16 +61,22 @@ fi
 
 rm -f "$PIDS_FILE"
 
-echo -e "${BLUE}Starting API on port 5666...${NC}"
+API_HTTPS_URL="https://localhost:5666"
+API_HTTP_URL="http://localhost:5665"
+WEB_URL="https://localhost:5667"
+ORIGIN_HEADER="Origin: https://localhost:5667"
+
+echo -e "${BLUE}Starting API on ${API_HTTPS_URL}...${NC}"
 cd "$API_DIR"
-dotnet watch run --no-launch-profile > "$SCRIPT_DIR/.api.log" 2>&1 &
+# dotnet run is noticeably faster/leaner than dotnet watch for local runtime responsiveness.
+dotnet run --launch-profile https > "$SCRIPT_DIR/.api.log" 2>&1 &
 API_PID=$!
 echo "$API_PID" > "$PIDS_FILE"
 echo -e "${GREEN}✓ API started (PID: $API_PID)${NC}"
 
 MAX_WAIT=40
 WAITED=0
-while ! curl -s http://localhost:5666/api/portfolios >/dev/null 2>&1; do
+while ! curl -ks "$API_HTTPS_URL/api/portfolios" -H "$ORIGIN_HEADER" >/dev/null 2>&1; do
     sleep 1
     WAITED=$((WAITED + 1))
     if [ $WAITED -ge $MAX_WAIT ]; then
@@ -87,7 +93,7 @@ if [ "$FIRST_RUN" = true ]; then
     echo -e "${GREEN}✓ Seed complete${NC}"
 fi
 
-echo -e "${BLUE}Starting web dev server on port 5667...${NC}"
+echo -e "${BLUE}Starting web dev server on port 5667 (HTTPS)...${NC}"
 cd "$WEB_DIR"
 pnpm dev > "$SCRIPT_DIR/.web.log" 2>&1 &
 WEB_PID=$!
@@ -95,7 +101,7 @@ echo "$WEB_PID" >> "$PIDS_FILE"
 echo -e "${GREEN}✓ Web started (PID: $WEB_PID)${NC}"
 
 WAITED=0
-while ! curl -s http://localhost:5667 >/dev/null 2>&1; do
+while ! lsof -nP -iTCP:5667 -sTCP:LISTEN | grep -q 5667; do
     sleep 1
     WAITED=$((WAITED + 1))
     if [ $WAITED -ge $MAX_WAIT ]; then
@@ -110,9 +116,10 @@ echo ""
 echo -e "${BLUE}═══════════════════════════════════════════${NC}"
 echo -e "${GREEN}  Rental Command is running${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════${NC}"
-echo -e "  ${BLUE}Web UI:${NC}  http://localhost:5667"
-echo -e "  ${BLUE}API:${NC}     http://localhost:5666"
-echo -e "  ${BLUE}SSE:${NC}     http://localhost:5666/api/events?portfolioId=1"
+echo -e "  ${BLUE}Web UI:${NC}  ${WEB_URL}"
+echo -e "  ${BLUE}API (HTTPS):${NC} ${API_HTTPS_URL}"
+echo -e "  ${BLUE}API (HTTP):${NC}  ${API_HTTP_URL}"
+echo -e "  ${BLUE}SSE:${NC}     ${API_HTTPS_URL}/api/events?portfolioId=1"
 echo ""
 echo -e "  ${YELLOW}Press Ctrl+C to stop all services${NC}"
 

@@ -1,4 +1,4 @@
-const API_URL = process.env.RENTAL_API_URL || process.env.LIFECYCLE_API_URL || 'http://localhost:5666';
+const API_URL = process.env.RENTAL_API_URL || process.env.LIFECYCLE_API_URL || 'http://localhost:5665';
 const API_KEY = process.env.RENTAL_API_KEY || process.env.LIFECYCLE_API_KEY || '';
 const DEFAULT_PORTFOLIO_ID = process.env.RENTAL_PORTFOLIO_ID
   ? parseInt(process.env.RENTAL_PORTFOLIO_ID, 10)
