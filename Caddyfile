@@ -1,0 +1,11 @@
+cloud-server.chimp-map.ts.net {
+	tls /certs/cert.pem /certs/key.pem
+
+	handle /api/* {
+		reverse_proxy api:5556
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}
