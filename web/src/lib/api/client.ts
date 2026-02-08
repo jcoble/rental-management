@@ -1,10 +1,14 @@
 const API_BASE = '/api';
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+	const token =
+		typeof window !== 'undefined' ? localStorage.getItem('rental:authToken') : null;
+
 	const res = await fetch(`${API_BASE}${path}`, {
 		...options,
 		headers: {
 			'Content-Type': 'application/json',
+			...(token ? { Authorization: `Bearer ${token}` } : {}),
 			...options.headers,
 		},
 	});
@@ -29,4 +33,15 @@ export const api = {
 		fetch(`${API_BASE}${path}`, { method: 'POST', body: formData }).then(
 			(r) => r.json() as Promise<T>
 		),
+};
+
+export const authToken = {
+	get: () =>
+		typeof window !== 'undefined' ? localStorage.getItem('rental:authToken') : null,
+	set: (token: string) => {
+		if (typeof window !== 'undefined') localStorage.setItem('rental:authToken', token);
+	},
+	clear: () => {
+		if (typeof window !== 'undefined') localStorage.removeItem('rental:authToken');
+	},
 };

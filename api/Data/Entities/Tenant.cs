@@ -18,4 +18,5 @@ public class Tenant
     public List<Lease> Leases { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];
+    public List<UserAccount> UserAccounts { get; set; } = [];
 }

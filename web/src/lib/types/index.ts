@@ -12,6 +12,8 @@ export type AppointmentType = 'Showing' | 'MoveIn' | 'MoveOut' | 'Inspection' | 
 export type AppointmentStatus = 'Scheduled' | 'Confirmed' | 'Completed' | 'Cancelled' | 'NoShow';
 export type InspectionType = 'MoveIn' | 'MoveOut' | 'Routine' | 'AnnualSafety';
 export type InspectionStatus = 'Scheduled' | 'Completed' | 'NeedsFollowUp' | 'Cancelled';
+export type UserRole = 'Admin' | 'Manager' | 'Agent' | 'Owner' | 'Tenant';
+export type PortalMessageStatus = 'Open' | 'InProgress' | 'Resolved' | 'Closed';
 
 export interface Portfolio {
 	id: number;
@@ -305,4 +307,31 @@ export interface Dashboard {
 		unitId?: number;
 	}>;
 	recentActivity: ActivityLog[];
+}
+
+export interface AuthUser {
+	id: number;
+	portfolioId: number;
+	displayName: string;
+	email: string;
+	role: UserRole;
+	ownerId?: number;
+	tenantId?: number;
+	lastLoginAt?: string;
+}
+
+export interface PortalMessage {
+	id: number;
+	portfolioId: number;
+	userAccountId: number;
+	author?: string;
+	authorRole?: UserRole;
+	propertyId?: number;
+	unitId?: number;
+	subject: string;
+	body: string;
+	status: PortalMessageStatus;
+	reply?: string;
+	createdAt: string;
+	updatedAt: string;
 }

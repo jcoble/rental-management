@@ -25,4 +25,6 @@ public class Portfolio
     public List<Appointment> Appointments { get; set; } = [];
     public List<Inspection> Inspections { get; set; } = [];
     public List<ActivityLog> Activities { get; set; } = [];
+    public List<UserAccount> UserAccounts { get; set; } = [];
+    public List<PortalMessage> PortalMessages { get; set; } = [];
 }

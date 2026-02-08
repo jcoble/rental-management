@@ -20,6 +20,9 @@ public class LifecycleDbContext : DbContext
     public DbSet<Appointment> Appointments => Set<Appointment>();
     public DbSet<Inspection> Inspections => Set<Inspection>();
     public DbSet<ActivityLog> ActivityLogs => Set<ActivityLog>();
+    public DbSet<UserAccount> UserAccounts => Set<UserAccount>();
+    public DbSet<AuthSession> AuthSessions => Set<AuthSession>();
+    public DbSet<PortalMessage> PortalMessages => Set<PortalMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -325,6 +328,67 @@ public class LifecycleDbContext : DbContext
                 .WithMany(p => p.Activities)
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<UserAccount>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Email).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.DisplayName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.PasswordHash).IsRequired().HasMaxLength(500);
+            entity.HasIndex(e => new { e.PortfolioId, e.Email }).IsUnique();
+            entity.HasIndex(e => e.Role);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany(p => p.UserAccounts)
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Owner)
+                .WithMany(o => o.UserAccounts)
+                .HasForeignKey(e => e.OwnerId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Tenant)
+                .WithMany(t => t.UserAccounts)
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<AuthSession>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.TokenHash).IsRequired().HasMaxLength(128);
+            entity.HasIndex(e => e.TokenHash).IsUnique();
+            entity.HasIndex(e => e.ExpiresAt);
+            entity.HasOne(e => e.UserAccount)
+                .WithMany(u => u.Sessions)
+                .HasForeignKey(e => e.UserAccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<PortalMessage>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Body).IsRequired().HasMaxLength(5000);
+            entity.Property(e => e.Reply).HasMaxLength(5000);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.UserAccountId);
+            entity.HasIndex(e => e.Status);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany(p => p.PortalMessages)
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.UserAccount)
+                .WithMany(u => u.Messages)
+                .HasForeignKey(e => e.UserAccountId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Unit)
+                .WithMany()
+                .HasForeignKey(e => e.UnitId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
     }
 }
