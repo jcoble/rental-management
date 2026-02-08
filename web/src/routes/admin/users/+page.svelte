@@ -29,18 +29,23 @@
 
 	const usersQuery = createQuery(() => ({
 		queryKey: ['auth-users', portfolioId],
-		enabled: hasAnyRole('Admin', 'Manager'),
+		enabled: !!meQuery.data && hasAnyRole('Admin', 'Manager'),
 		queryFn: () => auth.listUsers(portfolioId),
+		retry: false,
 	}));
 
 	const ownersQuery = createQuery(() => ({
 		queryKey: ['owners', portfolioId],
+		enabled: !!meQuery.data && hasAnyRole('Admin', 'Manager'),
 		queryFn: () => owners.list(portfolioId),
+		retry: false,
 	}));
 
 	const tenantsQuery = createQuery(() => ({
 		queryKey: ['tenants', portfolioId],
+		enabled: !!meQuery.data && hasAnyRole('Admin', 'Manager'),
 		queryFn: () => tenants.list(portfolioId),
+		retry: false,
 	}));
 
 	let form = $state({ displayName: '', email: '', password: '', role: 'Tenant', ownerId: '', tenantId: '' });
@@ -78,57 +83,61 @@
 </svelte:head>
 
 <div class="h-full overflow-y-auto p-6">
-	<h1 class="mb-1 text-2xl font-bold">User Access Control</h1>
-	<p class="mb-5 text-sm text-text-secondary">Role-based user management for admin/manager operations.</p>
+	{#if meQuery.isPending}
+		<div class="flex h-40 items-center justify-center text-text-tertiary">Checking access...</div>
+	{:else if hasAnyRole('Admin', 'Manager')}
+		<h1 class="mb-1 text-2xl font-bold">User Access Control</h1>
+		<p class="mb-5 text-sm text-text-secondary">Role-based user management for admin/manager operations.</p>
 
-	<div class="mb-5 rounded-lg border border-border bg-surface p-4">
-		<h2 class="mb-2 font-semibold">Create User</h2>
-		<div class="grid gap-3 md:grid-cols-3">
-			<input bind:value={form.displayName} class="rounded border border-border bg-bg px-3 py-2 text-sm" placeholder="Display name" />
-			<input bind:value={form.email} class="rounded border border-border bg-bg px-3 py-2 text-sm" placeholder="Email" />
-			<input bind:value={form.password} class="rounded border border-border bg-bg px-3 py-2 text-sm" placeholder="Password" />
-			<select bind:value={form.role} class="rounded border border-border bg-bg px-3 py-2 text-sm">
-				<option>Admin</option><option>Manager</option><option>Agent</option><option>Owner</option><option>Tenant</option>
-			</select>
-			<select bind:value={form.ownerId} class="rounded border border-border bg-bg px-3 py-2 text-sm"><option value="">No owner link</option>{#each ownersQuery.data || [] as owner}<option value={owner.id}>{owner.name}</option>{/each}</select>
-			<select bind:value={form.tenantId} class="rounded border border-border bg-bg px-3 py-2 text-sm"><option value="">No tenant link</option>{#each tenantsQuery.data || [] as tenant}<option value={tenant.id}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</option>{/each}</select>
+		<div class="mb-5 rounded-lg border border-border bg-surface p-4">
+			<h2 class="mb-2 font-semibold">Create User</h2>
+			<div class="grid gap-3 md:grid-cols-3">
+				<input bind:value={form.displayName} class="rounded border border-border bg-bg px-3 py-2 text-sm" placeholder="Display name" />
+				<input bind:value={form.email} class="rounded border border-border bg-bg px-3 py-2 text-sm" placeholder="Email" />
+				<input bind:value={form.password} class="rounded border border-border bg-bg px-3 py-2 text-sm" placeholder="Password" />
+				<select bind:value={form.role} class="rounded border border-border bg-bg px-3 py-2 text-sm">
+					<option>Admin</option><option>Manager</option><option>Agent</option><option>Owner</option><option>Tenant</option>
+				</select>
+				<select bind:value={form.ownerId} class="rounded border border-border bg-bg px-3 py-2 text-sm"><option value="">No owner link</option>{#each ownersQuery.data || [] as owner}<option value={owner.id}>{owner.name}</option>{/each}</select>
+				<select bind:value={form.tenantId} class="rounded border border-border bg-bg px-3 py-2 text-sm"><option value="">No tenant link</option>{#each tenantsQuery.data || [] as tenant}<option value={tenant.id}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</option>{/each}</select>
+			</div>
+			<div class="mt-3">
+				<button onclick={submit} class="rounded bg-accent px-3 py-2 text-sm text-white" disabled={createUserMutation.isPending}>Create User</button>
+			</div>
 		</div>
-		<div class="mt-3">
-			<button onclick={submit} class="rounded bg-accent px-3 py-2 text-sm text-white" disabled={createUserMutation.isPending}>Create User</button>
-		</div>
-	</div>
 
-	<div class="rounded-lg border border-border bg-surface">
-		<div class="overflow-x-auto">
-			<table class="min-w-full text-sm">
-				<thead class="border-b border-border bg-bg text-left text-xs uppercase text-text-tertiary">
-					<tr>
-						<th class="px-3 py-2">Name</th>
-						<th class="px-3 py-2">Email</th>
-						<th class="px-3 py-2">Role</th>
-						<th class="px-3 py-2">Status</th>
-						<th class="px-3 py-2">Actions</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each (usersQuery.data as any[]) || [] as user}
-						<tr class="border-b border-border/70">
-							<td class="px-3 py-2 font-medium">{user.displayName}</td>
-							<td class="px-3 py-2">{user.email}</td>
-							<td class="px-3 py-2">{user.role}</td>
-							<td class="px-3 py-2">{user.isActive ? 'Active' : 'Disabled'}</td>
-							<td class="px-3 py-2">
-								<div class="flex gap-2">
-									<button class="rounded border border-border px-2 py-1 text-xs" onclick={() => updateUserMutation.mutate({ id: user.id, isActive: !user.isActive })}>{user.isActive ? 'Disable' : 'Enable'}</button>
-									{#if user.role !== 'Manager'}
-										<button class="rounded border border-border px-2 py-1 text-xs" onclick={() => updateUserMutation.mutate({ id: user.id, role: user.role === 'Agent' ? 'Manager' : 'Agent' })}>Toggle Agent/Manager</button>
-									{/if}
-								</div>
-							</td>
+		<div class="rounded-lg border border-border bg-surface">
+			<div class="overflow-x-auto">
+				<table class="min-w-full text-sm">
+					<thead class="border-b border-border bg-bg text-left text-xs uppercase text-text-tertiary">
+						<tr>
+							<th class="px-3 py-2">Name</th>
+							<th class="px-3 py-2">Email</th>
+							<th class="px-3 py-2">Role</th>
+							<th class="px-3 py-2">Status</th>
+							<th class="px-3 py-2">Actions</th>
 						</tr>
-					{/each}
-				</tbody>
-			</table>
+					</thead>
+					<tbody>
+						{#each (usersQuery.data as any[]) || [] as user}
+							<tr class="border-b border-border/70">
+								<td class="px-3 py-2 font-medium">{user.displayName}</td>
+								<td class="px-3 py-2">{user.email}</td>
+								<td class="px-3 py-2">{user.role}</td>
+								<td class="px-3 py-2">{user.isActive ? 'Active' : 'Disabled'}</td>
+								<td class="px-3 py-2">
+									<div class="flex gap-2">
+										<button class="rounded border border-border px-2 py-1 text-xs" onclick={() => updateUserMutation.mutate({ id: user.id, isActive: !user.isActive })}>{user.isActive ? 'Disable' : 'Enable'}</button>
+										{#if user.role !== 'Manager'}
+											<button class="rounded border border-border px-2 py-1 text-xs" onclick={() => updateUserMutation.mutate({ id: user.id, role: user.role === 'Agent' ? 'Manager' : 'Agent' })}>Toggle Agent/Manager</button>
+										{/if}
+									</div>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
 		</div>
-	</div>
+	{/if}
 </div>
