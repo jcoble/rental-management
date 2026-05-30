@@ -4,7 +4,7 @@
 
 **Goal:** Split the single SQLite api/ project into four .NET projects (Core/Data/Api/Engine) + test projects; migrate Lifecycle→RentalCommand namespace; delete ~18 dead template entities + migrations; convert Minimal APIs into thin controllers + scoped services + DTOs; swap SQLite→PostgreSQL with re-baselined migrations; add soft-delete, enum HasConversion, JSON columns, central PortfolioId scoping from JWT claims, and append-only AuditTrail; introduce OwnerEntity (Person/LLC/Trust) in the data layer; replace custom 14-day token auth with ASP.NET Identity + JWT access + rotated-refresh httpOnly cookies + email verify + password reset + lockout + ApiKeyAuthenticationHandler; migrate existing users/roles (rehash-on-first-login); upgrade frontend with SSR auth + route guards + fetch layer with single-flight refresh + Zod validators + toasts + data-testid; convert SSE→SignalR; stand up TestCommon + Tier-2 tests + Playwright + GitHub Actions CI + multi-stage Dockerfiles + Traefik + Postgres compose; add missing enum states and Portfolio.Currency; add edit/search/filter/pagination to every list.
 
-**Architecture:** Four-project split mirrors EdiPlatform (Core/Data/Api/Engine). RentalCommandDbContext inherits from IdentityDbContext<ApplicationUser>. PostgreSQL with Npgsql, real tenant scoping from JWT `portfolioId` claim + application-layer `.Where()` filtering (no RLS initially). JWT access tokens (15-min) + rotated refresh tokens (7-day, httpOnly, single-use). IMessagePublisher backed by DB-outbox (OutboxMessage + QueuedJob tables); Engine polls with advisory lock for single-instance safety. SignalR replaces SSE for realtime. Frontend uses hooks.server.ts (SSR auth), route groups, fetch layer with Zod, and TanStack Query integration with SignalR invalidation bridge.
+**Architecture:** Four-project split mirrors EdiPlatform (Core/Data/Api/Engine). RentalCommandDbContext inherits from IdentityDbContext<ApplicationUser, IdentityRole<int>, int>. PostgreSQL with Npgsql, real tenant scoping from JWT `portfolioId` claim + application-layer `.Where()` filtering (no RLS initially). JWT access tokens (15-min) + rotated refresh tokens (7-day, httpOnly, single-use). IMessagePublisher backed by DB-outbox (OutboxMessage + QueuedJob tables); Engine polls with advisory lock for single-instance safety. SignalR replaces SSE for realtime. Frontend uses hooks.server.ts (SSR auth), route groups, fetch layer with Zod, and TanStack Query integration with SignalR invalidation bridge.
 
 **Tech Stack:** .NET 10 (multi-project), PostgreSQL + Npgsql EF Core, ASP.NET Identity, JWT (System.IdentityModel.Tokens.Jwt), SignalR, SvelteKit 5 + Svelte runes, TanStack Query, Zod, Playwright, GitHub Actions, Docker/Traefik, Postgres compose.
 
@@ -16,7 +16,7 @@
 
 ### New projects to create
 - **RentalCommand.Core** — Entities, all service interfaces (ILlmProvider, IScanService, IPaymentProvider, IScreeningProvider, IEsignProvider, INotificationChannel, IAuditTrailService, IMessagePublisher, IFileStorage, etc.), enums (with HasConversion config), config option classes, DTOs, value objects.
-- **RentalCommand.Data** — RentalCommandDbContext : IdentityDbContext<ApplicationUser>, EF Core Migrations, DbContext configuration (soft-delete, enum converters, JSON columns, constraints), seeding, RLS interceptor (placeholder for later multi-tenant), AppSettings for connection string.
+- **RentalCommand.Data** — RentalCommandDbContext : IdentityDbContext<ApplicationUser, IdentityRole<int>, int>, EF Core Migrations, DbContext configuration (soft-delete, enum converters, JSON columns, constraints), seeding, RLS interceptor (placeholder for later multi-tenant), AppSettings for connection string.
 - **RentalCommand.Api** — ASP.NET Core web host, thin controllers, Scoped feature services, DTOs + responses, AuthController + JWT/cookie/API-key auth, SignalR hubs (NotificationHub, DataUpdateHub), middleware, Program.cs wiring.
 - **RentalCommand.Engine** — Background service host, EngineWorkerBase + single-instance advisory lock, workers (EngineHealthWorker, OutboxDispatchWorker, skeleton for future rent-posting/scan/etc.), program wiring.
 - **RentalCommand.TestCommon** — Tier-2 test infrastructure (Tier2WebAppFactory, Tier2TestBase, Tier2ControllerBase, Tier2InboundPipelineBase), DatabaseFixture (real Postgres via testcontainers or connection string), transaction rollback, fake implementations (ILlmProvider no-op, IPaymentProvider mock, etc.).
@@ -31,9 +31,9 @@ Portfolio, Property, Unit, Lease, Tenant, Payment, Expense, Vendor, WorkOrder, A
 
 ### Entities to add
 - **OwnerEntity** (int Id, enum OwnerEntityType {Person, LLC, Trust}, string Name, string? TaxId, string? Address, string? Phone, int PortfolioId, DateTime CreatedAt, DateTime UpdatedAt) — references from Property, Tenant, Payment (who collected), Expense (billable-to).
-- **ApplicationUser : IdentityUser** (int? PortfolioId, int? OwnerEntityId, int? TenantId, string DisplayName, DateTime CreatedAt, DateTime? LastLoginAt) — Identity user with portfolio/owner scoping.
-- **RefreshToken** (int Id, string UserId, string Token, string TokenHash, DateTime ExpiresAt, DateTime IssuedAt, bool IsRevoked, bool IsUsed, string? IpAddress, string? UserAgent) — rotated, single-use refresh tokens.
-- **AuditLog** (int Id, int PortfolioId, string UserId, string EntityType, int EntityId, string Operation, string? OldValues, string? NewValues, string? ChangeReason, DateTime Timestamp, string? IpAddress) — append-only audit trail with JSON payload hashing (post-baseline; Phase 0 structure only).
+- **ApplicationUser : IdentityUser<int>** (int? PortfolioId, int? OwnerEntityId, int? TenantId, string DisplayName, DateTime CreatedAt, DateTime? LastLoginAt) — Identity user with **int** PK (matches all domain entities) and portfolio/owner scoping.
+- **RefreshToken** (int Id, int UserId, string Token, string TokenHash, DateTime ExpiresAt, DateTime IssuedAt, bool IsRevoked, bool IsUsed, string? IpAddress, string? UserAgent) — rotated, single-use refresh tokens.
+- **AuditLog** (int Id, int PortfolioId, int? UserId, string? ActorLabel, string EntityType, int EntityId, string Operation, string? OldValues, string? NewValues, string? ChangeReason, DateTime Timestamp, string? IpAddress) — append-only audit trail with JSON payload hashing (post-baseline; Phase 0 structure only).
 - **StoredFile** (int Id, int PortfolioId, string FileName, string FilePath, string ContentType, long FileSize, string? EntityType, int? EntityId, DateTime UploadedAt, DateTime? DeletedAt) — polymorphic attachment (Phase 1 scope; Phase 0 just entity shape).
 - **ScanDraft** (int Id, int PortfolioId, string FilePath, string TargetEntityType, string Status, JSON ExtractedFields {value, confidence, sourceBox per field}, string? ModelId, int? TokensUsed, decimal? CostUsd, DateTime CreatedAt, DateTime? ReviewedAt, string? ReviewedBy, DateTime? ConfirmedAt) — Phase 2 scope; Phase 0 just entity shape.
 - **OutboxMessage** (long Id, int PortfolioId, string MessageType, JSON Payload, int RetryCount, DateTime CreatedAt, DateTime? SentAt, DateTime? FailedAt, string? Error) — reliable SMS/email send with retry.
@@ -80,17 +80,17 @@ ProjectTask, Milestone, Phase, LifecycleTask, TestPlan, TestStep, TestStepResult
 - [ ] Global namespace rename: grep -r "namespace Lifecycle" api/ → "namespace RentalCommand"; grep -r "using Lifecycle" api/ → "using RentalCommand". (Or via an IDE refactor, careful not to break class names.)
 - [ ] Move api/Data/Entities/ → RentalCommand.Core/Entities/.
 - [ ] Move api/Data/Enums/ → RentalCommand.Core/Enums/.
-- [ ] Move api/Data/LifecycleDbContext.cs → RentalCommand.Data/RentalCommandDbContext.cs; rename class LifecycleDbContext → RentalCommandDbContext : IdentityDbContext<ApplicationUser> (to be fleshed out in Task 3).
+- [ ] Move api/Data/LifecycleDbContext.cs → RentalCommand.Data/RentalCommandDbContext.cs; rename class LifecycleDbContext → RentalCommandDbContext : IdentityDbContext<ApplicationUser, IdentityRole<int>, int> (to be fleshed out in Task 3).
 - [ ] **Commit: "chore: delete dead template entities + LegacyMigrations; rename Lifecycle→RentalCommand namespace"**
 
 ### Task 3: Add ApplicationUser + auth entities; refactor DbContext
 
-**Files:** Create RentalCommand.Core/Entities/ApplicationUser.cs, RentalCommand.Core/Entities/RefreshToken.cs, RentalCommand.Core/Entities/AuditLog.cs, RentalCommand.Core/Entities/OwnerEntity.cs. Create RentalCommand.Core/Enums/OwnerEntityType.cs, RentalCommand.Core/Enums/AuditLogOperation.cs. Refactor RentalCommandDbContext to inherit IdentityDbContext<ApplicationUser> + add DbSets for auth entities + soft-delete + constraints.
+**Files:** Create RentalCommand.Core/Entities/ApplicationUser.cs, RentalCommand.Core/Entities/RefreshToken.cs, RentalCommand.Core/Entities/AuditLog.cs, RentalCommand.Core/Entities/OwnerEntity.cs. Create RentalCommand.Core/Enums/OwnerEntityType.cs, RentalCommand.Core/Enums/AuditLogOperation.cs. Refactor RentalCommandDbContext to inherit IdentityDbContext<ApplicationUser, IdentityRole<int>, int> + add DbSets for auth entities + soft-delete + constraints.
 
 **Steps:**
 - [ ] Create ApplicationUser.cs in RentalCommand.Core/Entities:
   ```csharp
-  public class ApplicationUser : IdentityUser
+  public class ApplicationUser : IdentityUser<int>   // int PK to match all domain entities
   {
       public int? PortfolioId { get; set; }
       public int? OwnerEntityId { get; set; }
@@ -110,7 +110,7 @@ ProjectTask, Milestone, Phase, LifecycleTask, TestPlan, TestStep, TestStepResult
   public class RefreshToken
   {
       public int Id { get; set; }
-      public string UserId { get; set; } = string.Empty;
+      public int UserId { get; set; }   // FK → ApplicationUser.Id (int)
       public string Token { get; set; } = string.Empty;
       public string TokenHash { get; set; } = string.Empty;
       public DateTime ExpiresAt { get; set; }
@@ -124,12 +124,12 @@ ProjectTask, Milestone, Phase, LifecycleTask, TestPlan, TestStep, TestStepResult
   }
   ```
 - [ ] Create OwnerEntity.cs with enum OwnerEntityType {Person, LLC, Trust}; add soft-delete flag (IsDeleted: DateTime? DeletedAt).
-- [ ] Create AuditLog.cs (append-only: Id, PortfolioId, UserId, EntityType, EntityId, Operation enum, OldValues JSON, NewValues JSON, Timestamp, IpAddress).
+- [ ] Create AuditLog.cs (append-only: Id, PortfolioId, **UserId int? + ActorLabel string?** — nullable because system/AI actors like "ai-scan" or "engine:RentChargeWorker" have no ApplicationUser, EntityType, EntityId, Operation enum, OldValues JSON, NewValues JSON, Timestamp, IpAddress).
 - [ ] Create RentalCommand.Core/Enums/OwnerEntityType.cs (Person=0, LLC=1, Trust=2).
 - [ ] Create RentalCommand.Core/Enums/AuditLogOperation.cs (Created=0, Updated=1, Deleted=2, Approved=3, Rejected=4).
-- [ ] Refactor RentalCommandDbContext in RentalCommand.Data/ to inherit IdentityDbContext<ApplicationUser>:
+- [ ] Refactor RentalCommandDbContext in RentalCommand.Data/ to inherit IdentityDbContext<ApplicationUser, IdentityRole<int>, int>:
   ```csharp
-  public class RentalCommandDbContext : IdentityDbContext<ApplicationUser>
+  public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, IdentityRole<int>, int>
   {
       public DbSet<Portfolio> Portfolios => Set<Portfolio>();
       public DbSet<OwnerEntity> OwnerEntities => Set<OwnerEntity>();
@@ -143,6 +143,7 @@ ProjectTask, Milestone, Phase, LifecycleTask, TestPlan, TestStep, TestStepResult
   }
   ```
 - [ ] Add OnModelCreating config for ApplicationUser (username=email, constraints on PortfolioId/TenantId/OwnerEntityId foreign keys).
+- [ ] **Int-key ripple (do consistently):** register `AddIdentity<ApplicationUser, IdentityRole<int>>()` in Program.cs (Task 6); `JwtTokenService` writes `ClaimTypes.NameIdentifier`/`sub` as the int `user.Id.ToString()`; `AuthenticatedPortfolioControllerBase.GetUserId()` parses it back with `int.Parse`; `RefreshToken.UserId`, `AuditLog.UserId`, and any other user FK are `int`. (This is the one intentional divergence from EdiPlatform, which uses the default string/GUID key — adjust generic signatures when porting its auth code.)
 - [ ] Add constraints to existing entities: `PortfolioId` non-null on Portfolio-scoped entities, soft-delete (IsDeleted: DateTime?) on Portfolio, Property, Lease, Unit, Tenant, Vendor, Expense, Expense.Category → enum ScheduleECategory (Advertising, AutoTravel, CleaningMaintenance, Commissions, Insurance, LegalProfessional, ManagementFees, MortgageInterest, Repairs, Supplies, Taxes, Utilities, Depreciation, Other).
 - [ ] Add Portfolio.Currency (string, default "USD").
 - [ ] **Commit: "feat: add ApplicationUser + RefreshToken + OwnerEntity + AuditLog entities; refactor DbContext to IdentityDbContext"**
