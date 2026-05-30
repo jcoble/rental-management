@@ -6,5 +6,7 @@ public enum LeaseStatus
     Active,
     NoticeGiven,
     Expired,
-    Terminated
+    Terminated,
+    PendingSignature,
+    Void
 }

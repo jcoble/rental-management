@@ -7,5 +7,7 @@ public enum WorkOrderStatus
     InProgress,
     WaitingParts,
     Completed,
-    Cancelled
+    Cancelled,
+    OnHold,
+    Archived
 }
