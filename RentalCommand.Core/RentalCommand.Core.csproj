@@ -8,6 +8,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Provides IdentityUser<TKey> for ApplicationUser : IdentityUser<int> -->
+    <PackageReference Include="Microsoft.Extensions.Identity.Stores" Version="10.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="RentalCommand.Core.Tests" />
   </ItemGroup>
 

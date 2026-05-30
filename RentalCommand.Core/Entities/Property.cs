@@ -1,12 +1,13 @@
-using Lifecycle.Data.Enums;
+using RentalCommand.Core.Enums;
 
-namespace Lifecycle.Data.Entities;
+namespace RentalCommand.Core.Entities;
 
 public class Property
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
     public int? OwnerId { get; set; }
+    public int? OwnerEntityId { get; set; }
     public string Name { get; set; } = string.Empty;
     public PropertyType PropertyType { get; set; } = PropertyType.MultiFamily;
     public PropertyStatus Status { get; set; } = PropertyStatus.Active;
@@ -21,8 +22,12 @@ public class Property
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>Soft-delete marker; null means active.</summary>
+    public DateTime? DeletedAt { get; set; }
+
     public Portfolio? Portfolio { get; set; }
     public Owner? Owner { get; set; }
+    public OwnerEntity? OwnerEntity { get; set; }
     public List<Unit> Units { get; set; } = [];
     public List<Lease> Leases { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];

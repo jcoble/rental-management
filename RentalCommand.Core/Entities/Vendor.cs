@@ -1,4 +1,4 @@
-namespace Lifecycle.Data.Entities;
+namespace RentalCommand.Core.Entities;
 
 public class Vendor
 {
@@ -15,6 +15,9 @@ public class Vendor
     public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+
+    /// <summary>Soft-delete marker; null means active.</summary>
+    public DateTime? DeletedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
     public List<WorkOrder> WorkOrders { get; set; } = [];

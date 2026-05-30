@@ -1,6 +1,6 @@
-using Lifecycle.Data.Enums;
+using RentalCommand.Core.Enums;
 
-namespace Lifecycle.Data.Entities;
+namespace RentalCommand.Core.Entities;
 
 public class Inspection
 {

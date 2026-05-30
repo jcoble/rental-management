@@ -1,14 +1,22 @@
-using Lifecycle.Data.Entities;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Entities;
 
-namespace Lifecycle.Data;
+namespace RentalCommand.Data;
 
-public class LifecycleDbContext : DbContext
+/// <summary>
+/// Primary application + Identity database context. Uses an <c>int</c> Identity key
+/// (<see cref="IdentityRole{Int32}"/>) so the auth user PK matches every domain entity.
+/// </summary>
+public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, IdentityRole<int>, int>
 {
-    public LifecycleDbContext(DbContextOptions<LifecycleDbContext> options) : base(options) { }
+    public RentalCommandDbContext(DbContextOptions<RentalCommandDbContext> options) : base(options) { }
 
+    // Domain entities
     public DbSet<Portfolio> Portfolios => Set<Portfolio>();
     public DbSet<Owner> Owners => Set<Owner>();
+    public DbSet<OwnerEntity> OwnerEntities => Set<OwnerEntity>();
     public DbSet<Property> Properties => Set<Property>();
     public DbSet<Unit> Units => Set<Unit>();
     public DbSet<Tenant> Tenants => Set<Tenant>();
@@ -24,17 +32,148 @@ public class LifecycleDbContext : DbContext
     public DbSet<AuthSession> AuthSessions => Set<AuthSession>();
     public DbSet<PortalMessage> PortalMessages => Set<PortalMessage>();
 
+    // Auth + audit + infrastructure entities (Task 3)
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<QueuedJob> QueuedJobs => Set<QueuedJob>();
+    public DbSet<StoredFile> StoredFiles => Set<StoredFile>();
+    public DbSet<ScanDraft> ScanDrafts => Set<ScanDraft>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        // Configures the ASP.NET Identity schema (AspNetUsers/Roles/etc.) with int keys.
+        base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<ApplicationUser>(entity =>
+        {
+            entity.Property(e => e.DisplayName).HasMaxLength(200);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.OwnerEntity)
+                .WithMany()
+                .HasForeignKey(e => e.OwnerEntityId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<RefreshToken>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Token).IsRequired().HasMaxLength(256);
+            entity.Property(e => e.TokenHash).IsRequired().HasMaxLength(128);
+            entity.Property(e => e.IpAddress).HasMaxLength(64);
+            entity.Property(e => e.UserAgent).HasMaxLength(512);
+            entity.HasIndex(e => e.TokenHash);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.ExpiresAt);
+            entity.HasOne(e => e.User)
+                .WithMany(u => u.RefreshTokens)
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AuditLog>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ActorLabel).HasMaxLength(120);
+            entity.Property(e => e.EntityType).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.ChangeReason).HasMaxLength(1000);
+            entity.Property(e => e.IpAddress).HasMaxLength(64);
+            // Append-only JSON payloads (Postgres jsonb).
+            entity.Property(e => e.OldValues).HasColumnType("jsonb");
+            entity.Property(e => e.NewValues).HasColumnType("jsonb");
+            entity.Property(e => e.Operation).HasConversion<int>();
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => new { e.EntityType, e.EntityId });
+            entity.HasIndex(e => e.Timestamp);
+            entity.HasOne(e => e.User)
+                .WithMany(u => u.AuditLogs)
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<OwnerEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.TaxId).HasMaxLength(64);
+            entity.Property(e => e.Address).HasMaxLength(500);
+            entity.Property(e => e.Phone).HasMaxLength(50);
+            entity.Property(e => e.OwnerEntityType).HasConversion<int>();
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany(p => p.OwnerEntities)
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<StoredFile>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.FileName).IsRequired().HasMaxLength(260);
+            entity.Property(e => e.FilePath).IsRequired().HasMaxLength(1024);
+            entity.Property(e => e.ContentType).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.EntityType).HasMaxLength(120);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => new { e.EntityType, e.EntityId });
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+        });
+
+        modelBuilder.Entity<ScanDraft>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.FilePath).IsRequired().HasMaxLength(1024);
+            entity.Property(e => e.TargetEntityType).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ModelId).HasMaxLength(120);
+            entity.Property(e => e.ReviewedBy).HasMaxLength(200);
+            entity.Property(e => e.CostUsd).HasPrecision(18, 4);
+            entity.Property(e => e.ExtractedFields).HasColumnType("jsonb");
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.Status);
+        });
+
+        modelBuilder.Entity<OutboxMessage>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.MessageType).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.Payload).HasColumnType("jsonb");
+            entity.Property(e => e.Error).HasMaxLength(4000);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.SentAt);
+        });
+
+        modelBuilder.Entity<QueuedJob>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.JobType).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Payload).HasColumnType("jsonb");
+            entity.Property(e => e.Error).HasMaxLength(4000);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.Status);
+        });
+
         modelBuilder.Entity<Portfolio>(entity =>
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
             entity.Property(e => e.ManagementCompanyName).IsRequired().HasMaxLength(200);
             entity.Property(e => e.TimeZone).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.Currency).IsRequired().HasMaxLength(8).HasDefaultValue("USD");
             entity.Property(e => e.Description).HasMaxLength(2000);
             entity.Property(e => e.Settings).HasMaxLength(10000);
+            entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.Status);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
         });
 
         modelBuilder.Entity<Owner>(entity =>
@@ -63,9 +202,13 @@ public class LifecycleDbContext : DbContext
             entity.Property(e => e.PostalCode).IsRequired().HasMaxLength(20);
             entity.Property(e => e.ManagementFeePercent).HasPrecision(18, 2);
             entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.PropertyType).HasConversion<int>();
+            entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.OwnerId);
+            entity.HasIndex(e => e.OwnerEntityId);
             entity.HasIndex(e => e.Status);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.Properties)
                 .HasForeignKey(e => e.PortfolioId)
@@ -73,6 +216,10 @@ public class LifecycleDbContext : DbContext
             entity.HasOne(e => e.Owner)
                 .WithMany(o => o.Properties)
                 .HasForeignKey(e => e.OwnerId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.OwnerEntity)
+                .WithMany()
+                .HasForeignKey(e => e.OwnerEntityId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 
@@ -85,8 +232,12 @@ public class LifecycleDbContext : DbContext
             entity.Property(e => e.Bathrooms).HasPrecision(4, 1);
             entity.Property(e => e.MarketRent).HasPrecision(18, 2);
             entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.Status);
+            // Unique unit number within a property.
+            entity.HasIndex(e => new { e.PropertyId, e.UnitNumber }).IsUnique();
+            entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Property)
                 .WithMany(p => p.Units)
                 .HasForeignKey(e => e.PropertyId)
@@ -103,6 +254,7 @@ public class LifecycleDbContext : DbContext
             entity.Property(e => e.EmergencyContact).HasMaxLength(200);
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.HasIndex(e => e.PortfolioId);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.Tenants)
                 .HasForeignKey(e => e.PortfolioId)
@@ -117,11 +269,19 @@ public class LifecycleDbContext : DbContext
             entity.Property(e => e.SecurityDeposit).HasPrecision(18, 2);
             entity.Property(e => e.LateFeeAmount).HasPrecision(18, 2);
             entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
             entity.HasIndex(e => e.TenantId);
             entity.HasIndex(e => e.Status);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            // StartDate must precede EndDate, and RentDueDay must be a valid day of month.
+            entity.ToTable(t =>
+            {
+                t.HasCheckConstraint("CK_Lease_StartBeforeEnd", "\"StartDate\" < \"EndDate\"");
+                t.HasCheckConstraint("CK_Lease_RentDueDay", "\"RentDueDay\" >= 1 AND \"RentDueDay\" <= 31");
+            });
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.Leases)
                 .HasForeignKey(e => e.PortfolioId)
@@ -147,6 +307,8 @@ public class LifecycleDbContext : DbContext
             entity.Property(e => e.Method).HasMaxLength(100);
             entity.Property(e => e.ExternalReference).HasMaxLength(200);
             entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.PaymentType).HasConversion<int>();
+            entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.LeaseId);
             entity.HasIndex(e => e.Status);
@@ -163,15 +325,17 @@ public class LifecycleDbContext : DbContext
         modelBuilder.Entity<Expense>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.Category).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.Category).HasConversion<int>();
             entity.Property(e => e.Description).IsRequired().HasMaxLength(500);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.VendorId);
             entity.HasIndex(e => e.WorkOrderId);
             entity.HasIndex(e => e.Status);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.Expenses)
                 .HasForeignKey(e => e.PortfolioId)
@@ -200,6 +364,7 @@ public class LifecycleDbContext : DbContext
             entity.Property(e => e.TaxId).HasMaxLength(50);
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.HasIndex(e => e.PortfolioId);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.Vendors)
                 .HasForeignKey(e => e.PortfolioId)
@@ -215,6 +380,8 @@ public class LifecycleDbContext : DbContext
             entity.Property(e => e.EstimatedCost).HasPrecision(18, 2);
             entity.Property(e => e.ActualCost).HasPrecision(18, 2);
             entity.Property(e => e.CreatedBy).HasMaxLength(120);
+            entity.Property(e => e.Priority).HasConversion<int>();
+            entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
@@ -257,6 +424,8 @@ public class LifecycleDbContext : DbContext
             entity.Property(e => e.ProspectEmail).HasMaxLength(200);
             entity.Property(e => e.AssignedTo).HasMaxLength(120);
             entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.Type).HasConversion<int>();
+            entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
@@ -291,6 +460,8 @@ public class LifecycleDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Outcome).HasMaxLength(500);
             entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.Type).HasConversion<int>();
+            entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
@@ -322,6 +493,7 @@ public class LifecycleDbContext : DbContext
             entity.Property(e => e.Action).HasMaxLength(100);
             entity.Property(e => e.Description).HasMaxLength(1000);
             entity.Property(e => e.Actor).HasMaxLength(120);
+            entity.Property(e => e.Type).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.Type);
             entity.HasOne(e => e.Portfolio)
@@ -336,6 +508,7 @@ public class LifecycleDbContext : DbContext
             entity.Property(e => e.Email).IsRequired().HasMaxLength(200);
             entity.Property(e => e.DisplayName).IsRequired().HasMaxLength(200);
             entity.Property(e => e.PasswordHash).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.Role).HasConversion<int>();
             entity.HasIndex(e => new { e.PortfolioId, e.Email }).IsUnique();
             entity.HasIndex(e => e.Role);
             entity.HasOne(e => e.Portfolio)
@@ -370,6 +543,7 @@ public class LifecycleDbContext : DbContext
             entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Body).IsRequired().HasMaxLength(5000);
             entity.Property(e => e.Reply).HasMaxLength(5000);
+            entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.UserAccountId);
             entity.HasIndex(e => e.Status);

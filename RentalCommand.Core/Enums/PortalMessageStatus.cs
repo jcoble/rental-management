@@ -1,4 +1,4 @@
-namespace Lifecycle.Data.Enums;
+namespace RentalCommand.Core.Enums;
 
 public enum PortalMessageStatus
 {
