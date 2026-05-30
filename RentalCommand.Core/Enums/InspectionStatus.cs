@@ -5,5 +5,8 @@ public enum InspectionStatus
     Scheduled,
     Completed,
     NeedsFollowUp,
-    Cancelled
+    Cancelled,
+    InProgress,
+    Reviewed,
+    Archived
 }

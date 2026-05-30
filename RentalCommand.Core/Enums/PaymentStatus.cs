@@ -6,5 +6,7 @@ public enum PaymentStatus
     Paid,
     Partial,
     Late,
-    Waived
+    Waived,
+    Failed,
+    Refunded
 }
