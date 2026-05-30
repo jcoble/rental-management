@@ -14,6 +14,7 @@ var builder = WebApplication.CreateBuilder(args);
 // --- Configuration binding ---
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
 builder.Services.Configure<ApiKeySettings>(builder.Configuration.GetSection(ApiKeySettings.SectionName));
+builder.Services.Configure<SeedSettings>(builder.Configuration.GetSection(SeedSettings.SectionName));
 
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
 
@@ -91,7 +92,9 @@ builder.Services.AddAuthorization();
 
 // --- Auth services ---
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+builder.Services.AddScoped<IUserMigrationService, UserMigrationService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IdentitySeeder>();
 
 // --- CORS (restrict to the web app origin) ---
 var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
@@ -111,6 +114,17 @@ builder.Services.AddControllers();
 builder.Services.AddHealthChecks();
 
 var app = builder.Build();
+
+// Apply migrations + seed the default admin/roles/portfolio so login works on a fresh database.
+// Migration is idempotent (no-op when already applied); seeding is gated by Seed:Enabled (Development).
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+    await db.Database.MigrateAsync();
+
+    var seeder = scope.ServiceProvider.GetRequiredService<IdentitySeeder>();
+    await seeder.SeedAsync();
+}
 
 app.UseCors("WebApp");
 app.UseAuthentication();

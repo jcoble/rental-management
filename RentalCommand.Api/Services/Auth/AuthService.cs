@@ -78,17 +78,20 @@ public class AuthService : IAuthService
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly SignInManager<ApplicationUser> _signInManager;
     private readonly IJwtTokenService _tokenService;
+    private readonly IUserMigrationService _userMigration;
     private readonly ILogger<AuthService> _logger;
 
     public AuthService(
         UserManager<ApplicationUser> userManager,
         SignInManager<ApplicationUser> signInManager,
         IJwtTokenService tokenService,
+        IUserMigrationService userMigration,
         ILogger<AuthService> logger)
     {
         _userManager = userManager;
         _signInManager = signInManager;
         _tokenService = tokenService;
+        _userMigration = userMigration;
         _logger = logger;
     }
 
@@ -98,6 +101,15 @@ public class AuthService : IAuthService
         if (user == null)
         {
             return AuthResult.Fail("Invalid email or password");
+        }
+
+        // Rehash-on-first-login: a migrated account with no password hash can't sign in with a password.
+        // Route it into the reset flow rather than returning a confusing "invalid password".
+        if (await _userMigration.RequiresPasswordResetAsync(user))
+        {
+            _logger.LogInformation("Login for {Email} requires password reset (migrated account, no password set).", email);
+            return AuthResult.Fail(
+                "PASSWORD_RESET_REQUIRED: This account needs a password. Please use the reset-password flow.");
         }
 
         // lockoutOnFailure: true enables Identity's lockout (configured in Program.cs: 5 attempts / 5 min).
