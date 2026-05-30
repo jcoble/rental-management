@@ -1,6 +1,6 @@
-using Lifecycle.Data.Enums;
+using RentalCommand.Core.Enums;
 
-namespace Lifecycle.Data.Entities;
+namespace RentalCommand.Core.Entities;
 
 public class Portfolio
 {
@@ -10,12 +10,17 @@ public class Portfolio
     public string ManagementCompanyName { get; set; } = string.Empty;
     public string TimeZone { get; set; } = "America/New_York";
     public PortfolioStatus Status { get; set; } = PortfolioStatus.Active;
+    public string Currency { get; set; } = "USD";
     public string? Settings { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>Soft-delete marker; null means active.</summary>
+    public DateTime? DeletedAt { get; set; }
+
     public List<Property> Properties { get; set; } = [];
     public List<Owner> Owners { get; set; } = [];
+    public List<OwnerEntity> OwnerEntities { get; set; } = [];
     public List<Tenant> Tenants { get; set; } = [];
     public List<Vendor> Vendors { get; set; } = [];
     public List<Lease> Leases { get; set; } = [];

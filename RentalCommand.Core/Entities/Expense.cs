@@ -1,6 +1,6 @@
-using Lifecycle.Data.Enums;
+using RentalCommand.Core.Enums;
 
-namespace Lifecycle.Data.Entities;
+namespace RentalCommand.Core.Entities;
 
 public class Expense
 {
@@ -9,7 +9,7 @@ public class Expense
     public int? PropertyId { get; set; }
     public int? VendorId { get; set; }
     public int? WorkOrderId { get; set; }
-    public string Category { get; set; } = string.Empty;
+    public ScheduleECategory Category { get; set; } = ScheduleECategory.Other;
     public string Description { get; set; } = string.Empty;
     public ExpenseStatus Status { get; set; } = ExpenseStatus.Pending;
     public decimal Amount { get; set; }
@@ -20,6 +20,9 @@ public class Expense
     public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+
+    /// <summary>Soft-delete marker; null means active.</summary>
+    public DateTime? DeletedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }

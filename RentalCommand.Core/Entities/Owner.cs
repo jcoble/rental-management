@@ -1,4 +1,4 @@
-namespace Lifecycle.Data.Entities;
+namespace RentalCommand.Core.Entities;
 
 public class Owner
 {
