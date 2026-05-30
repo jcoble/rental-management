@@ -1,4 +1,4 @@
-namespace Lifecycle.Api;
+namespace RentalCommand.Api;
 
 public static class SseEndpoints
 {

@@ -1,10 +1,10 @@
-using Lifecycle.Api.Auth;
-using Lifecycle.Data;
-using Lifecycle.Data.Entities;
-using Lifecycle.Data.Enums;
+using RentalCommand.Api.Auth;
+using RentalCommand.Data;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using Microsoft.EntityFrameworkCore;
 
-namespace Lifecycle.Api;
+namespace RentalCommand.Api;
 
 public static class PortalEndpoints
 {
@@ -12,7 +12,7 @@ public static class PortalEndpoints
     {
         var group = app.MapGroup("/api/portal");
 
-        group.MapGet("/overview", async (HttpContext context, LifecycleDbContext db) =>
+        group.MapGet("/overview", async (HttpContext context, RentalCommandDbContext db) =>
         {
             var user = await AuthUtility.GetCurrentUser(context, db);
             if (user is null) return Results.Unauthorized();
@@ -230,7 +230,7 @@ public static class PortalEndpoints
             });
         });
 
-        group.MapGet("/messages", async (HttpContext context, LifecycleDbContext db) =>
+        group.MapGet("/messages", async (HttpContext context, RentalCommandDbContext db) =>
         {
             var user = await AuthUtility.GetCurrentUser(context, db);
             if (user is null) return Results.Unauthorized();
@@ -264,7 +264,7 @@ public static class PortalEndpoints
             }));
         });
 
-        group.MapPost("/messages", async (HttpContext context, CreatePortalMessageRequest req, LifecycleDbContext db) =>
+        group.MapPost("/messages", async (HttpContext context, CreatePortalMessageRequest req, RentalCommandDbContext db) =>
         {
             var user = await AuthUtility.GetCurrentUser(context, db);
             if (user is null) return Results.Unauthorized();
@@ -296,7 +296,7 @@ public static class PortalEndpoints
             });
         });
 
-        group.MapPatch("/messages/{id:int}", async (HttpContext context, int id, UpdatePortalMessageRequest req, LifecycleDbContext db) =>
+        group.MapPatch("/messages/{id:int}", async (HttpContext context, int id, UpdatePortalMessageRequest req, RentalCommandDbContext db) =>
         {
             var user = await AuthUtility.GetCurrentUser(context, db);
             if (user is null) return Results.Unauthorized();
@@ -319,7 +319,7 @@ public static class PortalEndpoints
             });
         });
 
-        group.MapPost("/tenant/work-orders", async (HttpContext context, CreateTenantWorkOrderRequest req, LifecycleDbContext db, SseService sse) =>
+        group.MapPost("/tenant/work-orders", async (HttpContext context, CreateTenantWorkOrderRequest req, RentalCommandDbContext db, SseService sse) =>
         {
             var user = await AuthUtility.GetCurrentUser(context, db);
             if (user is null) return Results.Unauthorized();

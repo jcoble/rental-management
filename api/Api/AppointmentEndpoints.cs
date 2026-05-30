@@ -1,9 +1,9 @@
-using Lifecycle.Data;
-using Lifecycle.Data.Entities;
-using Lifecycle.Data.Enums;
+using RentalCommand.Data;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using Microsoft.EntityFrameworkCore;
 
-namespace Lifecycle.Api;
+namespace RentalCommand.Api;
 
 public static class AppointmentEndpoints
 {
@@ -11,7 +11,7 @@ public static class AppointmentEndpoints
     {
         var group = app.MapGroup("/api/appointments");
 
-        group.MapGet("/", async (int portfolioId, LifecycleDbContext db) =>
+        group.MapGet("/", async (int portfolioId, RentalCommandDbContext db) =>
         {
             var items = await db.Appointments
                 .Where(a => a.PortfolioId == portfolioId)
@@ -46,7 +46,7 @@ public static class AppointmentEndpoints
             }));
         });
 
-        group.MapPost("/", async (CreateAppointmentRequest req, LifecycleDbContext db, SseService sse) =>
+        group.MapPost("/", async (CreateAppointmentRequest req, RentalCommandDbContext db, SseService sse) =>
         {
             var now = DateTime.UtcNow;
             var appt = new Appointment
@@ -86,7 +86,7 @@ public static class AppointmentEndpoints
             return Results.Created($"/api/appointments/{appt.Id}", appt);
         });
 
-        group.MapPatch("/{id:int}", async (int id, UpdateAppointmentRequest req, LifecycleDbContext db, SseService sse) =>
+        group.MapPatch("/{id:int}", async (int id, UpdateAppointmentRequest req, RentalCommandDbContext db, SseService sse) =>
         {
             var appt = await db.Appointments.FindAsync(id);
             if (appt is null) return Results.NotFound();
@@ -111,7 +111,7 @@ public static class AppointmentEndpoints
             return Results.Ok(appt);
         });
 
-        group.MapDelete("/{id:int}", async (int id, LifecycleDbContext db) =>
+        group.MapDelete("/{id:int}", async (int id, RentalCommandDbContext db) =>
         {
             var appt = await db.Appointments.FindAsync(id);
             if (appt is null) return Results.NotFound();

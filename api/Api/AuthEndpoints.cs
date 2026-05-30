@@ -1,10 +1,10 @@
-using Lifecycle.Api.Auth;
-using Lifecycle.Data;
-using Lifecycle.Data.Entities;
-using Lifecycle.Data.Enums;
+using RentalCommand.Api.Auth;
+using RentalCommand.Data;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using Microsoft.EntityFrameworkCore;
 
-namespace Lifecycle.Api;
+namespace RentalCommand.Api;
 
 public static class AuthEndpoints
 {
@@ -12,7 +12,7 @@ public static class AuthEndpoints
     {
         var group = app.MapGroup("/api/auth");
 
-        group.MapPost("/login", async (LoginRequest req, LifecycleDbContext db) =>
+        group.MapPost("/login", async (LoginRequest req, RentalCommandDbContext db) =>
         {
             var email = req.Email.Trim().ToLowerInvariant();
             var user = await db.UserAccounts
@@ -56,7 +56,7 @@ public static class AuthEndpoints
             });
         });
 
-        group.MapGet("/me", async (HttpContext context, LifecycleDbContext db) =>
+        group.MapGet("/me", async (HttpContext context, RentalCommandDbContext db) =>
         {
             var user = await AuthUtility.GetCurrentUser(context, db);
             if (user is null) return Results.Unauthorized();
@@ -74,7 +74,7 @@ public static class AuthEndpoints
             });
         });
 
-        group.MapPost("/logout", async (HttpContext context, LifecycleDbContext db) =>
+        group.MapPost("/logout", async (HttpContext context, RentalCommandDbContext db) =>
         {
             var header = context.Request.Headers.Authorization.ToString();
             if (!header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
@@ -91,7 +91,7 @@ public static class AuthEndpoints
             return Results.NoContent();
         });
 
-        group.MapGet("/users", async (HttpContext context, int portfolioId, LifecycleDbContext db) =>
+        group.MapGet("/users", async (HttpContext context, int portfolioId, RentalCommandDbContext db) =>
         {
             var current = await AuthUtility.GetCurrentUser(context, db);
             if (current is null) return Results.Unauthorized();
@@ -120,7 +120,7 @@ public static class AuthEndpoints
             }));
         });
 
-        group.MapPost("/users", async (HttpContext context, CreateUserRequest req, LifecycleDbContext db) =>
+        group.MapPost("/users", async (HttpContext context, CreateUserRequest req, RentalCommandDbContext db) =>
         {
             var now = DateTime.UtcNow;
             var current = await AuthUtility.GetCurrentUser(context, db);
@@ -209,7 +209,7 @@ public static class AuthEndpoints
             });
         });
 
-        group.MapPatch("/users/{id:int}", async (HttpContext context, int id, UpdateUserRequest req, LifecycleDbContext db) =>
+        group.MapPatch("/users/{id:int}", async (HttpContext context, int id, UpdateUserRequest req, RentalCommandDbContext db) =>
         {
             var current = await AuthUtility.GetCurrentUser(context, db);
             if (current is null) return Results.Unauthorized();

@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Lifecycle.Api;
+namespace RentalCommand.Api;
 
 public class SseService
 {

@@ -1,13 +1,13 @@
-using Lifecycle.Data;
-using Lifecycle.Data.Entities;
-using Lifecycle.Data.Enums;
+using RentalCommand.Data;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 
-namespace Lifecycle.Api;
+namespace RentalCommand.Api;
 
 public static class ActivityHelper
 {
     public static async Task LogActivity(
-        LifecycleDbContext db,
+        RentalCommandDbContext db,
         int portfolioId,
         RentalActivityType type,
         string entityType,

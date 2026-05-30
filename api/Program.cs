@@ -1,7 +1,7 @@
 using System.Text.Json.Serialization;
-using Lifecycle.Api;
-using Lifecycle.Api.Middleware;
-using Lifecycle.Data;
+using RentalCommand.Api;
+using RentalCommand.Api.Middleware;
+using RentalCommand.Data;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -16,7 +16,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var dbConnectionString = builder.Configuration.GetConnectionString("Default")
     ?? $"Data Source={Path.Combine(builder.Environment.ContentRootPath, "lifecycle.db")}";
-builder.Services.AddDbContext<LifecycleDbContext>(options =>
+builder.Services.AddDbContext<RentalCommandDbContext>(options =>
     options.UseSqlite(dbConnectionString));
 
 builder.Services.AddSingleton<SseService>();
@@ -29,7 +29,7 @@ var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
 {
-    var db = scope.ServiceProvider.GetRequiredService<LifecycleDbContext>();
+    var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
     db.Database.Migrate();
 }
 
