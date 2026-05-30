@@ -4,9 +4,12 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using RentalCommand.Api.Auth;
+using RentalCommand.Api.Hubs;
+using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -113,6 +116,11 @@ builder.Services.AddCors(options =>
 builder.Services.AddControllers();
 builder.Services.AddHealthChecks();
 
+// --- SignalR (realtime hubs) + DataUpdateService broadcaster ---
+builder.Services.AddSignalR().AddJsonProtocol();
+builder.Services.AddScoped<IDataUpdateService, DataUpdateService>();
+builder.Services.AddScoped<INotificationHubService, NotificationHubService>();
+
 var app = builder.Build();
 
 // Apply migrations + seed the default admin/roles/portfolio so login works on a fresh database.
@@ -132,6 +140,10 @@ app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapControllers();
+
+// --- SignalR hubs (auth required; websocket transports pass the JWT via ?access_token=) ---
+app.MapHub<NotificationHub>("/api/v1/hubs/notifications");
+app.MapHub<DataUpdateHub>("/api/v1/hubs/updates");
 
 app.Run();
 
