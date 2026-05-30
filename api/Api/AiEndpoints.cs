@@ -1,8 +1,8 @@
-using Lifecycle.Data;
-using Lifecycle.Data.Enums;
+using RentalCommand.Data;
+using RentalCommand.Core.Enums;
 using Microsoft.EntityFrameworkCore;
 
-namespace Lifecycle.Api;
+namespace RentalCommand.Api;
 
 public static class AiEndpoints
 {
@@ -10,7 +10,7 @@ public static class AiEndpoints
     {
         var group = app.MapGroup("/api/ai");
 
-        group.MapPost("/intake", async (AiIntakeRequest req, LifecycleDbContext db) =>
+        group.MapPost("/intake", async (AiIntakeRequest req, RentalCommandDbContext db) =>
         {
             var portfolioExists = await db.Portfolios.AnyAsync(p => p.Id == req.PortfolioId);
             if (!portfolioExists) return Results.BadRequest(new { error = "Portfolio not found" });
@@ -82,7 +82,7 @@ public static class AiEndpoints
             });
         });
 
-        group.MapGet("/portfolio-summary/{portfolioId:int}", async (int portfolioId, LifecycleDbContext db) =>
+        group.MapGet("/portfolio-summary/{portfolioId:int}", async (int portfolioId, RentalCommandDbContext db) =>
         {
             var now = DateTime.UtcNow;
 

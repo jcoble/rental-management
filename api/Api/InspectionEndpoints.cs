@@ -1,9 +1,9 @@
-using Lifecycle.Data;
-using Lifecycle.Data.Entities;
-using Lifecycle.Data.Enums;
+using RentalCommand.Data;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using Microsoft.EntityFrameworkCore;
 
-namespace Lifecycle.Api;
+namespace RentalCommand.Api;
 
 public static class InspectionEndpoints
 {
@@ -11,7 +11,7 @@ public static class InspectionEndpoints
     {
         var group = app.MapGroup("/api/inspections");
 
-        group.MapGet("/", async (int portfolioId, LifecycleDbContext db) =>
+        group.MapGet("/", async (int portfolioId, RentalCommandDbContext db) =>
         {
             var items = await db.Inspections
                 .Where(i => i.PortfolioId == portfolioId)
@@ -40,7 +40,7 @@ public static class InspectionEndpoints
             }));
         });
 
-        group.MapPost("/", async (CreateInspectionRequest req, LifecycleDbContext db, SseService sse) =>
+        group.MapPost("/", async (CreateInspectionRequest req, RentalCommandDbContext db, SseService sse) =>
         {
             var now = DateTime.UtcNow;
             var inspection = new Inspection
@@ -76,7 +76,7 @@ public static class InspectionEndpoints
             return Results.Created($"/api/inspections/{inspection.Id}", inspection);
         });
 
-        group.MapPatch("/{id:int}", async (int id, UpdateInspectionRequest req, LifecycleDbContext db, SseService sse) =>
+        group.MapPatch("/{id:int}", async (int id, UpdateInspectionRequest req, RentalCommandDbContext db, SseService sse) =>
         {
             var inspection = await db.Inspections.FindAsync(id);
             if (inspection is null) return Results.NotFound();
@@ -97,7 +97,7 @@ public static class InspectionEndpoints
             return Results.Ok(inspection);
         });
 
-        group.MapDelete("/{id:int}", async (int id, LifecycleDbContext db) =>
+        group.MapDelete("/{id:int}", async (int id, RentalCommandDbContext db) =>
         {
             var inspection = await db.Inspections.FindAsync(id);
             if (inspection is null) return Results.NotFound();

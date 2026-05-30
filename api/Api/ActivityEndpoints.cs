@@ -1,7 +1,7 @@
-using Lifecycle.Data;
+using RentalCommand.Data;
 using Microsoft.EntityFrameworkCore;
 
-namespace Lifecycle.Api;
+namespace RentalCommand.Api;
 
 public static class ActivityEndpoints
 {
@@ -10,7 +10,7 @@ public static class ActivityEndpoints
         app.MapGet("/api/portfolios/{portfolioId:int}/activity", async (
             int portfolioId,
             int take,
-            LifecycleDbContext db) =>
+            RentalCommandDbContext db) =>
         {
             var safeTake = take is <= 0 or > 200 ? 50 : take;
 

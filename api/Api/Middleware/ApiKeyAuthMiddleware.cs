@@ -1,4 +1,4 @@
-namespace Lifecycle.Api.Middleware;
+namespace RentalCommand.Api.Middleware;
 
 public class ApiKeyAuthMiddleware
 {

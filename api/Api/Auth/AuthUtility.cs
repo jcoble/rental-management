@@ -1,10 +1,10 @@
 using System.Security.Cryptography;
-using Lifecycle.Data;
-using Lifecycle.Data.Entities;
-using Lifecycle.Data.Enums;
+using RentalCommand.Data;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using Microsoft.EntityFrameworkCore;
 
-namespace Lifecycle.Api.Auth;
+namespace RentalCommand.Api.Auth;
 
 public static class AuthUtility
 {
@@ -47,7 +47,7 @@ public static class AuthUtility
         return Convert.ToHexString(bytes);
     }
 
-    public static async Task<UserAccount?> GetCurrentUser(HttpContext context, LifecycleDbContext db, bool touchSession = true)
+    public static async Task<UserAccount?> GetCurrentUser(HttpContext context, RentalCommandDbContext db, bool touchSession = true)
     {
         var header = context.Request.Headers.Authorization.ToString();
         if (!header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)) return null;

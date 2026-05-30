@@ -1,9 +1,9 @@
-using Lifecycle.Data;
-using Lifecycle.Data.Entities;
-using Lifecycle.Data.Enums;
+using RentalCommand.Data;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using Microsoft.EntityFrameworkCore;
 
-namespace Lifecycle.Api;
+namespace RentalCommand.Api;
 
 public static class LeaseEndpoints
 {
@@ -11,7 +11,7 @@ public static class LeaseEndpoints
     {
         var group = app.MapGroup("/api/leases");
 
-        group.MapGet("/", async (int portfolioId, string? status, LifecycleDbContext db) =>
+        group.MapGet("/", async (int portfolioId, string? status, RentalCommandDbContext db) =>
         {
             var query = db.Leases
                 .Where(l => l.PortfolioId == portfolioId)
@@ -53,7 +53,7 @@ public static class LeaseEndpoints
             }));
         });
 
-        group.MapPost("/", async (CreateLeaseRequest req, LifecycleDbContext db, SseService sse) =>
+        group.MapPost("/", async (CreateLeaseRequest req, RentalCommandDbContext db, SseService sse) =>
         {
             var unit = await db.Units.Include(u => u.Property).FirstOrDefaultAsync(u => u.Id == req.UnitId);
             if (unit is null) return Results.BadRequest(new { error = "Unit not found" });
@@ -112,7 +112,7 @@ public static class LeaseEndpoints
             return Results.Created($"/api/leases/{lease.Id}", lease);
         });
 
-        group.MapPatch("/{id:int}", async (int id, UpdateLeaseRequest req, LifecycleDbContext db, SseService sse) =>
+        group.MapPatch("/{id:int}", async (int id, UpdateLeaseRequest req, RentalCommandDbContext db, SseService sse) =>
         {
             var lease = await db.Leases.Include(l => l.Unit).FirstOrDefaultAsync(l => l.Id == id);
             if (lease is null) return Results.NotFound();
@@ -157,7 +157,7 @@ public static class LeaseEndpoints
             return Results.Ok(lease);
         });
 
-        group.MapDelete("/{id:int}", async (int id, LifecycleDbContext db) =>
+        group.MapDelete("/{id:int}", async (int id, RentalCommandDbContext db) =>
         {
             var lease = await db.Leases.FindAsync(id);
             if (lease is null) return Results.NotFound();
@@ -166,7 +166,7 @@ public static class LeaseEndpoints
             return Results.NoContent();
         });
 
-        group.MapGet("/{id:int}/ledger", async (int id, LifecycleDbContext db) =>
+        group.MapGet("/{id:int}/ledger", async (int id, RentalCommandDbContext db) =>
         {
             var lease = await db.Leases
                 .Include(l => l.Payments.OrderBy(p => p.DueDate))

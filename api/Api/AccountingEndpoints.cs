@@ -1,9 +1,9 @@
-using Lifecycle.Data;
-using Lifecycle.Data.Entities;
-using Lifecycle.Data.Enums;
+using RentalCommand.Data;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using Microsoft.EntityFrameworkCore;
 
-namespace Lifecycle.Api;
+namespace RentalCommand.Api;
 
 public static class AccountingEndpoints
 {
@@ -11,7 +11,7 @@ public static class AccountingEndpoints
     {
         var group = app.MapGroup("/api/expenses");
 
-        group.MapGet("/", async (int portfolioId, string? status, LifecycleDbContext db) =>
+        group.MapGet("/", async (int portfolioId, string? status, RentalCommandDbContext db) =>
         {
             var query = db.Expenses
                 .Where(e => e.PortfolioId == portfolioId)
@@ -49,7 +49,7 @@ public static class AccountingEndpoints
             }));
         });
 
-        group.MapPost("/", async (CreateExpenseRequest req, LifecycleDbContext db, SseService sse) =>
+        group.MapPost("/", async (CreateExpenseRequest req, RentalCommandDbContext db, SseService sse) =>
         {
             var now = DateTime.UtcNow;
             var expense = new Expense
@@ -88,7 +88,7 @@ public static class AccountingEndpoints
             return Results.Created($"/api/expenses/{expense.Id}", expense);
         });
 
-        group.MapPatch("/{id:int}", async (int id, UpdateExpenseRequest req, LifecycleDbContext db, SseService sse) =>
+        group.MapPatch("/{id:int}", async (int id, UpdateExpenseRequest req, RentalCommandDbContext db, SseService sse) =>
         {
             var expense = await db.Expenses.FindAsync(id);
             if (expense is null) return Results.NotFound();
@@ -113,7 +113,7 @@ public static class AccountingEndpoints
             return Results.Ok(expense);
         });
 
-        group.MapGet("/summary", async (int portfolioId, LifecycleDbContext db) =>
+        group.MapGet("/summary", async (int portfolioId, RentalCommandDbContext db) =>
         {
             var now = DateTime.UtcNow;
             var items = await db.Expenses.Where(e => e.PortfolioId == portfolioId).ToListAsync();
