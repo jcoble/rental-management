@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using RentalCommand.Api.Auth;
+using RentalCommand.Api.Extensions;
 using RentalCommand.Api.Hubs;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
@@ -120,6 +121,9 @@ builder.Services.AddHealthChecks();
 builder.Services.AddSignalR().AddJsonProtocol();
 builder.Services.AddScoped<IDataUpdateService, DataUpdateService>();
 builder.Services.AddScoped<INotificationHubService, NotificationHubService>();
+
+// --- Domain feature services (per-entity scoped CRUD) ---
+builder.Services.AddDomainServices();
 
 var app = builder.Build();
 
