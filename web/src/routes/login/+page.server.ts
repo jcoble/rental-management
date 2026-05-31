@@ -11,6 +11,7 @@ import type { Actions, PageServerLoad } from './$types';
 import type { LoginResponse } from '$lib/types/user';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 import { AUTH_COOKIE_NAMES, deleteLegacyAuthCookies } from '$lib/server/auth-cookies';
+import { env } from '$env/dynamic/public';
 
 function safeRedirectPath(path: string | null, fallback: string): string {
 	if (!path) return fallback;
@@ -42,7 +43,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		throw redirect(303, safeRedirectPath(url.searchParams.get('redirectTo'), fallback));
 	}
 	return {
-		redirectTo: url.searchParams.get('redirectTo')
+		redirectTo: url.searchParams.get('redirectTo'),
+		googleError: url.searchParams.get('error') === 'google_unavailable',
+		googleEnabled: Boolean(env.PUBLIC_GOOGLE_CLIENT_ID)
 	};
 };
 
