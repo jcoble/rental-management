@@ -8,7 +8,7 @@
 	import { workOrderSchema, inspectionSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
-	import Dialog from '$lib/components/ui/Dialog.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import { Plus, ShieldCheck, Pencil, Trash2 } from '@lucide/svelte';
@@ -198,54 +198,70 @@
 	</div>
 </div>
 
-<Dialog open={showWoForm} title={editingWoId == null ? 'New Work Order' : 'Edit Work Order'} class="max-w-lg" onclose={closeWoForm}>
-	<div class="space-y-2" data-testid="work-order-form">
-		<div>
-			<select data-testid="work-order-property-input" bind:value={woForm.propertyId} class="{inputClass} w-full">
-				<option value="">Select property</option>
-				{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}
-			</select>
-			{#if woErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="work-order-property-error">{woErrors.propertyId}</p>{/if}
+<Dialog.Root
+	open={showWoForm}
+	onOpenChange={(v) => { if (!v) closeWoForm(); }}
+>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>{editingWoId == null ? 'New Work Order' : 'Edit Work Order'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="space-y-2" data-testid="work-order-form">
+			<div>
+				<select data-testid="work-order-property-input" bind:value={woForm.propertyId} class="{inputClass} w-full">
+					<option value="">Select property</option>
+					{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}
+				</select>
+				{#if woErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="work-order-property-error">{woErrors.propertyId}</p>{/if}
+			</div>
+			<div>
+				<input data-testid="work-order-title-input" bind:value={woForm.title} class="{inputClass} w-full" placeholder="Issue title" />
+				{#if woErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="work-order-title-error">{woErrors.title}</p>{/if}
+			</div>
+			<div>
+				<textarea data-testid="work-order-description-input" bind:value={woForm.description} rows={3} class="{inputClass} w-full" placeholder="Description"></textarea>
+				{#if woErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="work-order-description-error">{woErrors.description}</p>{/if}
+			</div>
+			<div class="grid grid-cols-2 gap-2">
+				<select data-testid="work-order-priority-input" bind:value={woForm.priority} class={inputClass}>{#each WO_PRIORITIES as p}<option value={p}>{p}</option>{/each}</select>
+				<input data-testid="work-order-category-input" bind:value={woForm.category} class={inputClass} placeholder="Category" />
+			</div>
 		</div>
-		<div>
-			<input data-testid="work-order-title-input" bind:value={woForm.title} class="{inputClass} w-full" placeholder="Issue title" />
-			{#if woErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="work-order-title-error">{woErrors.title}</p>{/if}
-		</div>
-		<div>
-			<textarea data-testid="work-order-description-input" bind:value={woForm.description} rows={3} class="{inputClass} w-full" placeholder="Description"></textarea>
-			{#if woErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="work-order-description-error">{woErrors.description}</p>{/if}
-		</div>
-		<div class="grid grid-cols-2 gap-2">
-			<select data-testid="work-order-priority-input" bind:value={woForm.priority} class={inputClass}>{#each WO_PRIORITIES as p}<option value={p}>{p}</option>{/each}</select>
-			<input data-testid="work-order-category-input" bind:value={woForm.category} class={inputClass} placeholder="Category" />
-		</div>
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="work-order-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeWoForm}>Cancel</button>
-		<button data-testid="work-order-form-save" onclick={submitWo} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveWoMutation.isPending}>{saveWoMutation.isPending ? 'Saving…' : 'Save Work Order'}</button>
-	</div>
-</Dialog>
+		<Dialog.Footer>
+			<button data-testid="work-order-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeWoForm}>Cancel</button>
+			<button data-testid="work-order-form-save" onclick={submitWo} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveWoMutation.isPending}>{saveWoMutation.isPending ? 'Saving…' : 'Save Work Order'}</button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
-<Dialog open={showInspectionForm} title="Schedule Inspection" class="max-w-md" onclose={() => (showInspectionForm = false)}>
-	<div class="space-y-2" data-testid="inspection-form">
-		<div>
-			<select data-testid="inspection-property-input" bind:value={inspectionForm.propertyId} class="{inputClass} w-full">
-				<option value="">Select property</option>
-				{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}
-			</select>
-			{#if inspectionErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="inspection-property-error">{inspectionErrors.propertyId}</p>{/if}
+<Dialog.Root
+	open={showInspectionForm}
+	onOpenChange={(v) => { if (!v) showInspectionForm = false; }}
+>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Schedule Inspection</Dialog.Title>
+		</Dialog.Header>
+		<div class="space-y-2" data-testid="inspection-form">
+			<div>
+				<select data-testid="inspection-property-input" bind:value={inspectionForm.propertyId} class="{inputClass} w-full">
+					<option value="">Select property</option>
+					{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}
+				</select>
+				{#if inspectionErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="inspection-property-error">{inspectionErrors.propertyId}</p>{/if}
+			</div>
+			<select data-testid="inspection-type-input" bind:value={inspectionForm.type} class="{inputClass} w-full"><option>Routine</option><option>MoveIn</option><option>MoveOut</option><option>AnnualSafety</option></select>
+			<div>
+				<input data-testid="inspection-scheduled-input" type="datetime-local" bind:value={inspectionForm.scheduledFor} class="{inputClass} w-full" />
+				{#if inspectionErrors.scheduledFor}<p class="mt-1 text-xs text-destructive" data-testid="inspection-scheduled-error">{inspectionErrors.scheduledFor}</p>{/if}
+			</div>
 		</div>
-		<select data-testid="inspection-type-input" bind:value={inspectionForm.type} class="{inputClass} w-full"><option>Routine</option><option>MoveIn</option><option>MoveOut</option><option>AnnualSafety</option></select>
-		<div>
-			<input data-testid="inspection-scheduled-input" type="datetime-local" bind:value={inspectionForm.scheduledFor} class="{inputClass} w-full" />
-			{#if inspectionErrors.scheduledFor}<p class="mt-1 text-xs text-destructive" data-testid="inspection-scheduled-error">{inspectionErrors.scheduledFor}</p>{/if}
-		</div>
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="inspection-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={() => (showInspectionForm = false)}>Cancel</button>
-		<button data-testid="inspection-form-save" onclick={submitInspection} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={createInspectionMutation.isPending}>{createInspectionMutation.isPending ? 'Scheduling…' : 'Schedule'}</button>
-	</div>
-</Dialog>
+		<Dialog.Footer>
+			<button data-testid="inspection-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={() => (showInspectionForm = false)}>Cancel</button>
+			<button data-testid="inspection-form-save" onclick={submitInspection} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={createInspectionMutation.isPending}>{createInspectionMutation.isPending ? 'Scheduling…' : 'Schedule'}</button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	open={woDeleteTarget !== null}

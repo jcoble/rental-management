@@ -1,8 +1,3 @@
-export { default as Button } from './Button.svelte';
-export { default as Card } from './Card.svelte';
-export { default as Badge } from './Badge.svelte';
-export { default as Input } from './Input.svelte';
+// Phase-0 hand-rolled wrappers were replaced by the shadcn-svelte folder components
+// (import from '$lib/components/ui/<name>'). Only Progress has no shadcn equivalent.
 export { default as Progress } from './Progress.svelte';
-export { default as Dialog } from './Dialog.svelte';
-export { default as Tabs } from './Tabs.svelte';
-export { default as DropdownMenu } from './DropdownMenu.svelte';
