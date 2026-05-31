@@ -309,6 +309,12 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.Property(e => e.PaymentType).HasConversion<int>();
             entity.Property(e => e.Status).HasConversion<int>();
+            entity.Property(p => p.PeriodKey).HasMaxLength(7);
+            // Idempotency: at most one auto-generated payment per (lease, type, period). Manual payments
+            // (PeriodKey == null) are excluded by the filter, so they never collide.
+            entity.HasIndex(p => new { p.LeaseId, p.PaymentType, p.PeriodKey })
+                  .IsUnique()
+                  .HasFilter("\"PeriodKey\" IS NOT NULL");
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.LeaseId);
             entity.HasIndex(e => e.Status);
