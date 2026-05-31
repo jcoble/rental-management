@@ -9,6 +9,7 @@ using RentalCommand.Api.Extensions;
 using RentalCommand.Api.Hubs;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
+using RentalCommand.Api.Services.Payments;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
@@ -26,6 +27,8 @@ builder.Services.Configure<RentalCommand.Core.Configuration.UploadSettings>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.UploadSettings.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.GoogleAuthOptions>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.GoogleAuthOptions.SectionName));
+builder.Services.Configure<RentalCommand.Core.Configuration.StripeConfig>(
+    builder.Configuration.GetSection(RentalCommand.Core.Configuration.StripeConfig.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
@@ -177,6 +180,9 @@ builder.Services.AddScoped<INotificationHubService, NotificationHubService>();
 
 // --- Domain feature services (per-entity scoped CRUD) ---
 builder.Services.AddDomainServices();
+
+// --- Stripe payment services (gated — no-ops when Stripe keys are absent) ---
+builder.Services.AddScoped<IStripePaymentService, StripePaymentService>();
 
 var app = builder.Build();
 

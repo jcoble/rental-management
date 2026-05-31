@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Services.Payments;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -15,10 +16,12 @@ namespace RentalCommand.Api.Controllers;
 public class PaymentController : AuthenticatedPortfolioControllerBase
 {
     private readonly IPaymentService _service;
+    private readonly IStripePaymentService _stripeService;
 
-    public PaymentController(IPaymentService service)
+    public PaymentController(IPaymentService service, IStripePaymentService stripeService)
     {
         _service = service;
+        _stripeService = stripeService;
     }
 
     [HttpGet]
@@ -75,5 +78,34 @@ public class PaymentController : AuthenticatedPortfolioControllerBase
     {
         var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Payment not found" });
+    }
+
+    /// <summary>
+    /// Creates a Stripe PaymentIntent for the given payment and returns the client secret needed
+    /// by the front end to complete the card collection step. Returns 503 when Stripe is not configured.
+    /// </summary>
+    [HttpPost("{id:int}/create-intent")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> CreatePaymentIntent(int id, CancellationToken ct)
+    {
+        // TODO: also verify the payment's lease belongs to the calling tenant
+        var result = await _stripeService.CreatePaymentIntentAsync(GetPortfolioId(), id, ct);
+
+        return result.Result switch
+        {
+            CreateIntentResult.Outcome.NotEnabled =>
+                StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Online payments are not enabled." }),
+            CreateIntentResult.Outcome.NotFound =>
+                NotFound(new { error = "Payment not found" }),
+            _ =>
+                Ok(new
+                {
+                    clientSecret = result.ClientSecret,
+                    publishableKey = result.PublishableKey,
+                    transactionId = result.TransactionId
+                })
+        };
     }
 }
