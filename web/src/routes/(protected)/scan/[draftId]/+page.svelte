@@ -169,11 +169,8 @@
 		}
 	}
 
-	function fieldInputClass(field: ScanFieldDto): string {
-		const level = confidenceLevel(field.confidence);
-		// Extra border colour classes layered on top of the Input component's base styles
-		if (level === 'low') return 'border-red-400 dark:border-red-500';
-		if (level === 'medium') return 'text-muted-foreground';
+	function fieldInputClass(_field: ScanFieldDto): string {
+		// Confidence is conveyed by the label text only — no colored outline on the input.
 		return '';
 	}
 
@@ -428,7 +425,8 @@
 						</p>
 						<!-- Manual entry fallback: provide common fields -->
 						<div class="mt-4 space-y-3">
-							{#each ['vendor_name', 'total', 'subtotal', 'tax', 'transaction_date', 'category', 'payment_method', 'notes'] as fieldName}
+							<!-- Suppressed while Pending so fields don't appear then get replaced by the full extracted set -->
+							{#each (data.status === 'Pending' ? [] : ['vendor_name', 'total', 'subtotal', 'tax', 'transaction_date', 'category', 'payment_method', 'notes']) as fieldName}
 								<div>
 									<label class="mb-1 block text-xs font-medium text-muted-foreground capitalize" for="field-{fieldName}">
 										{fieldName.replace(/_/g, ' ')}
@@ -488,8 +486,8 @@
 														data-testid="scan-field-{field.name}"
 														bind:value={editedFields[field.name]}
 														class="w-full rounded border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring
-															{level === 'low' ? 'border-red-400 dark:border-red-500' : 'border-border'}
-															{level === 'medium' ? 'text-muted-foreground' : ''}"
+															border-border
+															"
 													>
 														<option value="">Select category</option>
 														{#each SCHEDULE_E_CATEGORIES as cat}
