@@ -12,7 +12,13 @@ public interface ILlmProvider
     /// <summary>
     /// Extract structured fields from a document image or PDF (the flagship scan-&gt;LLM intake flow).
     /// </summary>
-    Task<ExtractedFields> ExtractAsync(byte[] imageOrPdfBytes, string prompt, CancellationToken ct = default);
+    Task<ExtractedFields> ExtractAsync(
+        byte[] documentBytes,
+        string contentType,                 // e.g. "image/jpeg", "application/pdf"
+        string instructions,                // human-readable extraction instructions
+        IReadOnlyList<ExtractionFieldSpec> fields,   // the schema the model must fill
+        string? groundingContext = null,    // optional JSON of vendors/properties/units to match against
+        CancellationToken ct = default);
 }
 
 /// <summary>Result of an <see cref="ILlmProvider.ExtractAsync"/> call.</summary>
@@ -50,3 +56,11 @@ public class Box
     public double Width { get; set; }
     public double Height { get; set; }
 }
+
+/// <summary>One field the model is asked to extract, used to build the tool schema.</summary>
+public sealed record ExtractionFieldSpec(
+    string Name,            // JSON key, e.g. "vendor_name"
+    string Type,            // "string" | "number" | "date" | "enum"
+    string Description,     // guidance shown to the model
+    bool Required = false,
+    IReadOnlyList<string>? EnumValues = null);
