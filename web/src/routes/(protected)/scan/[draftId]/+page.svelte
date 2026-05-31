@@ -23,6 +23,34 @@
 		'Other'
 	] as const;
 
+	// Grouped scalar field definitions (in display order within each group)
+	const FIELD_GROUPS: { label: string; fields: string[] }[] = [
+		{
+			label: 'Vendor',
+			fields: ['vendor_name', 'vendor_address', 'vendor_phone', 'vendor_website', 'vendor_tax_id', 'receipt_number']
+		},
+		{
+			label: 'Amounts',
+			fields: ['subtotal', 'tax', 'tax_rate', 'tip', 'discount', 'shipping', 'total', 'payment_method', 'card_last4']
+		},
+		{
+			label: 'Details',
+			fields: ['category', 'notes']
+		}
+	];
+
+	// All known scalar field names (excluding line_items)
+	const KNOWN_SCALAR_FIELDS = new Set(FIELD_GROUPS.flatMap((g) => g.fields));
+
+	const LINE_ITEMS_FIELD = 'line_items';
+
+	interface LineItem {
+		description?: string | null;
+		quantity?: number | null;
+		unit_price?: number | null;
+		amount?: number | null;
+	}
+
 	const queryClient = useQueryClient();
 
 	const draftId = $derived(parseInt($page.params.draftId ?? '0', 10));
@@ -36,7 +64,7 @@
 
 	const data = $derived(draftQuery.data);
 
-	// Editable field values (keyed by field name)
+	// Editable field values (keyed by field name, scalars only)
 	let editedFields = $state<Record<string, string>>({});
 
 	// Initialize editable fields when data arrives
@@ -44,6 +72,7 @@
 		if (data?.fields) {
 			const initial: Record<string, string> = {};
 			for (const f of data.fields) {
+				if (f.name === LINE_ITEMS_FIELD) continue;
 				if (!(f.name in editedFields)) {
 					initial[f.name] = f.value;
 				}
@@ -99,8 +128,52 @@
 	}
 
 	function isFirstLowField(fields: ScanFieldDto[], field: ScanFieldDto): boolean {
-		const firstLow = fields.find((f) => confidenceLevel(f.confidence) === 'low');
+		const firstLow = fields.filter((f) => f.name !== LINE_ITEMS_FIELD).find((f) => confidenceLevel(f.confidence) === 'low');
 		return firstLow?.name === field.name;
+	}
+
+	// Build grouped sections from the extracted fields
+	function buildGroups(fields: ScanFieldDto[]): { label: string; fields: ScanFieldDto[] }[] {
+		const fieldMap = new Map(fields.filter((f) => f.name !== LINE_ITEMS_FIELD).map((f) => [f.name, f]));
+		const result: { label: string; fields: ScanFieldDto[] }[] = [];
+
+		for (const group of FIELD_GROUPS) {
+			const present = group.fields.map((name) => fieldMap.get(name)).filter((f): f is ScanFieldDto => !!f);
+			if (present.length > 0) {
+				result.push({ label: group.label, fields: present });
+			}
+		}
+
+		// "Other" group: any scalar fields not in KNOWN_SCALAR_FIELDS
+		const otherFields = [...fieldMap.values()].filter((f) => !KNOWN_SCALAR_FIELDS.has(f.name));
+		if (otherFields.length > 0) {
+			result.push({ label: 'Other', fields: otherFields });
+		}
+
+		return result;
+	}
+
+	// Parse line_items field value
+	function parseLineItems(fields: ScanFieldDto[]): LineItem[] {
+		const f = fields.find((f) => f.name === LINE_ITEMS_FIELD);
+		if (!f?.value) return [];
+		try {
+			const parsed = JSON.parse(f.value);
+			if (Array.isArray(parsed)) return parsed as LineItem[];
+			return [];
+		} catch {
+			return [];
+		}
+	}
+
+	function formatMoney(val: number | null | undefined): string {
+		if (val == null) return '';
+		return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+	}
+
+	function formatQty(val: number | null | undefined): string {
+		if (val == null) return '';
+		return String(val);
 	}
 
 	const isImage = $derived(() => {
@@ -146,9 +219,9 @@
 	}));
 
 	function buildOverridesJson(): string {
-		// The form keys edits by the extraction field names (snake_case: vendor_name,
-		// transaction_date, …). The API's ApplyOverrides expects the flat camelCase override
-		// schema, so map the names here — otherwise edits to vendor/date are silently dropped.
+		// Send edited scalar fields only (line_items excluded).
+		// Map legacy snake_case names that the API still expects in camelCase;
+		// all new expanded fields are sent as-is (API accepts snake_case override keys).
 		const keyMap: Record<string, string> = {
 			vendor_name: 'vendorName',
 			amount: 'amount',
@@ -158,6 +231,7 @@
 		};
 		const overrides: Record<string, unknown> = {};
 		for (const [name, value] of Object.entries(editedFields)) {
+			if (name === LINE_ITEMS_FIELD) continue;
 			overrides[keyMap[name] ?? name] = value;
 		}
 		return JSON.stringify(overrides);
@@ -263,7 +337,7 @@
 						<span class="ml-1 text-xs text-muted-foreground">· ~${data.costUsd.toFixed(4)}</span>
 					{/if}
 				</div>
-				<div class="flex-1 space-y-4 overflow-y-auto p-4">
+				<div class="flex-1 overflow-y-auto p-4">
 					{#if data.fields.length === 0}
 						<p class="text-sm text-muted-foreground">
 							{#if data.status === 'Pending'}
@@ -273,8 +347,8 @@
 							{/if}
 						</p>
 						<!-- Manual entry fallback: provide common fields -->
-						<div class="space-y-3">
-							{#each ['vendor_name', 'amount', 'transaction_date', 'category', 'notes'] as fieldName}
+						<div class="mt-4 space-y-3">
+							{#each ['vendor_name', 'total', 'subtotal', 'tax', 'transaction_date', 'category', 'payment_method', 'notes'] as fieldName}
 								<div>
 									<label class="mb-1 block text-xs font-medium text-muted-foreground capitalize" for="field-{fieldName}">
 										{fieldName.replace(/_/g, ' ')}
@@ -304,46 +378,88 @@
 							{/each}
 						</div>
 					{:else}
-						{#each data.fields as field (field.name)}
-							{@const level = confidenceLevel(field.confidence)}
-							<div>
-								<div class="mb-1 flex items-center justify-between">
-									<label
-										class="text-xs font-medium capitalize {level === 'medium' ? 'text-muted-foreground' : 'text-foreground'}"
-										for="field-{field.name}"
-									>
-										{field.name.replace(/_/g, ' ')}
-									</label>
-									{#if level !== 'high'}
-										<span class="text-xs {level === 'low' ? 'text-red-500' : 'text-muted-foreground'}">
-											{confidenceLabel(field.confidence)}
-										</span>
-									{/if}
-								</div>
-								{#if field.name === 'category'}
-									<select
-										id="field-{field.name}"
-										data-testid="scan-field-{field.name}"
-										bind:value={editedFields[field.name]}
-										class={fieldInputClass(field)}
-									>
-										<option value="">Select category</option>
-										{#each SCHEDULE_E_CATEGORIES as cat}
-											<option value={cat}>{cat}</option>
+						{@const groups = buildGroups(data.fields)}
+						{@const lineItems = parseLineItems(data.fields)}
+						<div class="space-y-6">
+							{#each groups as group}
+								<section>
+									<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{group.label}</h2>
+									<div class="grid grid-cols-2 gap-x-4 gap-y-3">
+										{#each group.fields as field (field.name)}
+											{@const level = confidenceLevel(field.confidence)}
+											<div class="{field.name === 'vendor_address' || field.name === 'notes' ? 'col-span-2' : ''}">
+												<div class="mb-1 flex items-center justify-between">
+													<label
+														class="text-xs font-medium capitalize {level === 'medium' ? 'text-muted-foreground' : 'text-foreground'}"
+														for="field-{field.name}"
+													>
+														{field.name.replace(/_/g, ' ')}
+													</label>
+													{#if level !== 'high'}
+														<span class="text-xs {level === 'low' ? 'text-red-500' : 'text-muted-foreground'}">
+															{confidenceLabel(field.confidence)}
+														</span>
+													{/if}
+												</div>
+												{#if field.name === 'category'}
+													<select
+														id="field-{field.name}"
+														data-testid="scan-field-{field.name}"
+														bind:value={editedFields[field.name]}
+														class={fieldInputClass(field)}
+													>
+														<option value="">Select category</option>
+														{#each SCHEDULE_E_CATEGORIES as cat}
+															<option value={cat}>{cat}</option>
+														{/each}
+													</select>
+												{:else}
+													<input
+														id="field-{field.name}"
+														data-testid="scan-field-{field.name}"
+														type="text"
+														bind:value={editedFields[field.name]}
+														class={fieldInputClass(field)}
+														use:focusFirstLow={level === 'low' && isFirstLowField(data.fields, field)}
+													/>
+												{/if}
+											</div>
 										{/each}
-									</select>
+									</div>
+								</section>
+							{/each}
+
+							<!-- Line items table (read-only) -->
+							<section>
+								<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Line Items</h2>
+								{#if lineItems.length === 0}
+									<p class="text-sm text-muted-foreground">No line items.</p>
 								{:else}
-									<input
-										id="field-{field.name}"
-										data-testid="scan-field-{field.name}"
-										type="text"
-										bind:value={editedFields[field.name]}
-										class={fieldInputClass(field)}
-										use:focusFirstLow={level === 'low' && isFirstLowField(data.fields, field)}
-									/>
+									<div class="overflow-x-auto rounded border border-border" data-testid="scan-line-items">
+										<table class="w-full text-sm">
+											<thead>
+												<tr class="border-b border-border bg-muted/40">
+													<th class="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Description</th>
+													<th class="px-3 py-2 text-right text-xs font-medium text-muted-foreground">Qty</th>
+													<th class="px-3 py-2 text-right text-xs font-medium text-muted-foreground">Unit Price</th>
+													<th class="px-3 py-2 text-right text-xs font-medium text-muted-foreground">Amount</th>
+												</tr>
+											</thead>
+											<tbody>
+												{#each lineItems as item, i}
+													<tr class="border-b border-border last:border-0 {i % 2 === 1 ? 'bg-muted/20' : ''}">
+														<td class="px-3 py-2 text-foreground">{item.description ?? ''}</td>
+														<td class="px-3 py-2 text-right text-foreground">{formatQty(item.quantity)}</td>
+														<td class="px-3 py-2 text-right text-foreground">{item.unit_price != null ? formatMoney(item.unit_price) : ''}</td>
+														<td class="px-3 py-2 text-right text-foreground">{item.amount != null ? formatMoney(item.amount) : ''}</td>
+													</tr>
+												{/each}
+											</tbody>
+										</table>
+									</div>
 								{/if}
-							</div>
-						{/each}
+							</section>
+						</div>
 					{/if}
 				</div>
 
