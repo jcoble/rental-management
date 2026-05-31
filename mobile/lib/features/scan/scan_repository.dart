@@ -98,11 +98,19 @@ class ScanRepository {
   /// necessary because a plain network image widget cannot send auth headers.
   Future<Uint8List> downloadFile(int id) async {
     try {
-      final response = await _dio.get<List<int>>(
+      // Stream the response and accumulate Uint8List chunks. Dio's default
+      // `ResponseType.bytes` inflates a multi-MB image into a boxed List<int>
+      // (millions of integer objects) — seconds of CPU on-device. Streaming into
+      // a BytesBuilder keeps the data as raw bytes the whole way.
+      final response = await _dio.get<ResponseBody>(
         '/scans/$id/file',
-        options: Options(responseType: ResponseType.bytes),
+        options: Options(responseType: ResponseType.stream),
       );
-      return Uint8List.fromList(response.data!);
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in response.data!.stream) {
+        builder.add(chunk);
+      }
+      return builder.takeBytes();
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

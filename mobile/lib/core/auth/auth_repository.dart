@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_exception.dart';
@@ -133,6 +134,8 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
     },
   );
 
+  // Outermost: measures total wall-clock time including the auth interceptor.
+  baseDio.interceptors.add(_TimingInterceptor());
   baseDio.interceptors.add(interceptor);
 
   return AuthRepository(dio: baseDio, tokenStore: tokenStore);
@@ -142,4 +145,36 @@ Dio _buildRefreshDio(Dio source) {
   final dio = Dio(source.options.copyWith());
   dio.httpClientAdapter = source.httpClientAdapter;
   return dio;
+}
+
+/// Logs the total wall-clock duration of each HTTP request so slow ones are
+/// visible during on-device testing. debugPrint is stripped from release builds.
+class _TimingInterceptor extends Interceptor {
+  @override
+  void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+    options.extra['_t0'] = DateTime.now().millisecondsSinceEpoch;
+    handler.next(options);
+  }
+
+  @override
+  void onResponse(Response<dynamic> response, ResponseInterceptorHandler handler) {
+    _log(response.requestOptions, response.statusCode);
+    handler.next(response);
+  }
+
+  @override
+  void onError(DioException err, ErrorInterceptorHandler handler) {
+    _log(err.requestOptions, err.response?.statusCode);
+    handler.next(err);
+  }
+
+  void _log(RequestOptions o, int? status) {
+    final t0 = o.extra['_t0'];
+    if (t0 is int) {
+      final ms = DateTime.now().millisecondsSinceEpoch - t0;
+      if (ms > 150) {
+        debugPrint('[HTTP ${ms}ms] ${o.method} ${o.path} -> ${status ?? 'ERR'}');
+      }
+    }
+  }
 }
