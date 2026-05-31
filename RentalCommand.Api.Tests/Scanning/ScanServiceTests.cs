@@ -150,6 +150,32 @@ public class ScanServiceTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
+    // Confirm: snake_case vendor/date overrides are honored (regression guard)
+    // The review UI keys edits by the extraction field names (vendor_name,
+    // transaction_date); ApplyOverrides must apply them or a corrected vendor/date
+    // is silently dropped — the exact trust-breaking bug for this human gate.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_WithSnakeCaseVendorAndDateOverrides_AppliesThem()
+    {
+        const string extractedJson =
+            """{"vendor_name":{"value":"Old Vendor","confidence":0.4},"amount":{"value":"10.00","confidence":0.9},"transaction_date":{"value":"2026-01-01","confidence":0.4},"category":{"value":"Other","confidence":0.9},"notes":{"value":"","confidence":0.0}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson);
+        SeedStoredFile(draft.FilePath);
+        _expenses.SetupResponse(new ExpenseResponse { Id = 77, PortfolioId = PortfolioId });
+
+        var overrides = """{"vendor_name":"Corrected Vendor","transaction_date":"2026-03-20"}""";
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 2, overridesJson: overrides);
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _expenses.LastRequest.Should().NotBeNull();
+        _expenses.LastRequest!.Description.Should().Be("Corrected Vendor");
+        _expenses.LastRequest.IncurredAt.Should().Be(new DateTime(2026, 3, 20, 0, 0, 0, DateTimeKind.Utc));
+    }
+
+    // -------------------------------------------------------------------------
     // Confirm: already confirmed draft returns failure (idempotency guard)
     // -------------------------------------------------------------------------
 

@@ -51,7 +51,15 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                 using var ms = new MemoryStream();
                 await stream.CopyToAsync(ms, ct);
                 var bytes = ms.ToArray();
-                var contentType = GuessContentType(draft.FilePath);
+
+                // The stored key is extensionless, so prefer the real content type captured on the
+                // StoredFile row at upload (PNG/HEIC would otherwise be mislabeled image/jpeg);
+                // fall back to the path-based guess only if the row/type is missing.
+                var storedFile = await db.StoredFiles
+                    .FirstOrDefaultAsync(f => f.FilePath == draft.FilePath, ct);
+                var contentType = !string.IsNullOrWhiteSpace(storedFile?.ContentType)
+                    ? storedFile!.ContentType
+                    : GuessContentType(draft.FilePath);
 
                 // Receipt→Expense only this phase.
                 var extracted = await llm.ExtractAsync(
