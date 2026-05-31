@@ -24,6 +24,12 @@ public class ExpenseResponse
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>True when a <see cref="Core.Entities.StoredFile"/> is linked to this expense.</summary>
+    public bool HasReceipt { get; set; }
+
+    /// <summary>True when the linked file's content type starts with <c>image/</c>.</summary>
+    public bool ReceiptIsImage { get; set; }
+
     /// <summary>Stable selector for frontend tests, e.g. <c>expense-1</c>.</summary>
     public string TestId => $"expense-{Id}";
 
