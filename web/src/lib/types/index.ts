@@ -165,6 +165,32 @@ export interface Expense {
 	receiptIsImage?: boolean;
 }
 
+// --- Schedule E tax report types ---
+
+export interface ScheduleECategoryAmount {
+	category: string;
+	amount: number;
+}
+
+export interface ScheduleEPropertyReport {
+	propertyId: number;
+	propertyName: string;
+	rentalIncome: number;
+	expensesByCategory: ScheduleECategoryAmount[];
+	totalExpenses: number;
+	netIncome: number;
+}
+
+export interface ScheduleEReport {
+	year: number;
+	properties: ScheduleEPropertyReport[];
+	totalRentalIncome: number;
+	totalExpenses: number;
+	netIncome: number;
+}
+
+// ---
+
 /** Read-only financial rollup from GET /api/v1/accounting/summary (AccountingSummaryResponse). */
 export interface AccountingSummary {
 	portfolioId: number;
