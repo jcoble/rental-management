@@ -15,14 +15,15 @@
  *    replaying an already-consumed token.
  *
  * The API contract (see RentalCommand.Api AuthController):
- *  - POST /api/v1/auth/refresh reads the `refresh_token` cookie, returns a
- *    LoginResponse body, and sets a rotated `refresh_token` cookie
+ *  - POST /api/v1/auth/refresh reads the app-namespaced refresh cookie,
+ *    returns a LoginResponse body, and sets a rotated refresh cookie
  *    (httpOnly, Secure, SameSite=Strict).
  */
 
 import type { Cookies } from '@sveltejs/kit';
 import type { LoginResponse, User } from '$lib/types/user';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { AUTH_COOKIE_NAMES } from '$lib/server/auth-cookies';
 
 const REFRESH_FETCH_TIMEOUT_MS = 10_000;
 const CACHE_TTL_MS = 5_000; // enough for the rotated cookie to round-trip to the browser
@@ -79,7 +80,7 @@ async function doRefresh(refreshToken: string): Promise<RefreshResult | null> {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
-				Cookie: `refresh_token=${refreshToken}`
+				Cookie: `${AUTH_COOKIE_NAMES.refreshToken}=${refreshToken}`
 			},
 			signal: controller.signal
 		});
@@ -96,7 +97,9 @@ async function doRefresh(refreshToken: string): Promise<RefreshResult | null> {
 
 		const setCookieHeader = response.headers.get('set-cookie');
 		if (setCookieHeader) {
-			const refreshMatch = setCookieHeader.match(/refresh_token=([^;]+)/);
+			const refreshMatch = setCookieHeader.match(
+				new RegExp(`${AUTH_COOKIE_NAMES.refreshToken}=([^;]+)`)
+			);
 			if (refreshMatch) {
 				newRefreshToken = refreshMatch[1];
 				const expiresMatch = setCookieHeader.match(/expires=([^;]+)/i);
@@ -128,7 +131,7 @@ async function doRefresh(refreshToken: string): Promise<RefreshResult | null> {
  */
 export function applyRefreshCookies(cookies: Cookies, result: RefreshResult): void {
 	if (result.newRefreshToken) {
-		cookies.set('refresh_token', result.newRefreshToken, {
+		cookies.set(AUTH_COOKIE_NAMES.refreshToken, result.newRefreshToken, {
 			path: '/',
 			httpOnly: true,
 			secure: true,
@@ -137,7 +140,7 @@ export function applyRefreshCookies(cookies: Cookies, result: RefreshResult): vo
 		});
 	}
 
-	cookies.set('access_token', result.accessToken, {
+	cookies.set(AUTH_COOKIE_NAMES.accessToken, result.accessToken, {
 		path: '/',
 		httpOnly: true,
 		secure: true,
@@ -145,7 +148,7 @@ export function applyRefreshCookies(cookies: Cookies, result: RefreshResult): vo
 		expires: new Date(result.accessTokenExpiration)
 	});
 
-	cookies.set('access_token_expiration', result.accessTokenExpiration, {
+	cookies.set(AUTH_COOKIE_NAMES.accessTokenExpiration, result.accessTokenExpiration, {
 		path: '/',
 		httpOnly: true,
 		secure: true,

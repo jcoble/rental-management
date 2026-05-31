@@ -56,7 +56,7 @@ export function updateToken(newToken: string, expiration: Date) {
  *
  * We go to /logout (not /login) on purpose: the access/refresh tokens are
  * httpOnly cookies the client can't delete, so navigating straight to /login
- * would leave a still-valid access_token cookie behind — the /login load would
+ * would leave a still-valid access-token cookie behind — the /login load would
  * see locals.user and bounce the user back to the dashboard, looping until the
  * access token expires. /logout clears all session cookies (and best-effort
  * revokes the refresh token) server-side, then redirects to /login cleanly.

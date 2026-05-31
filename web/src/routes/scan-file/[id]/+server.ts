@@ -1,6 +1,7 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { getAccessToken } from '$lib/server/auth-cookies';
 
 // Only these render inline; anything else downloads as octet-stream so an uploaded
 // html/svg can't execute on the app origin (defense-in-depth; the API does this too).
@@ -18,13 +19,13 @@ const INLINE_SAFE = new Set([
  *
  * The API's `/scans/{id}/file` endpoint requires a JWT bearer, which a browser
  * `<img>`/`<iframe>` cannot attach — so a direct preview URL 401s and the panel renders
- * blank. We read the first-party `access_token` cookie here and forward it as a bearer
+ * blank. We read the first-party access-token cookie here and forward it as a bearer
  * using the GLOBAL fetch (the same approach the login/logout server actions use — the
  * SvelteKit event `fetch` does not reliably carry an Authorization header to the
  * cross-origin API). The file is streamed back on our own origin.
  */
 export const GET: RequestHandler = async ({ params, cookies }) => {
-	const token = cookies.get('access_token');
+	const token = getAccessToken(cookies);
 	if (!token) {
 		throw error(401, 'Unauthorized');
 	}
