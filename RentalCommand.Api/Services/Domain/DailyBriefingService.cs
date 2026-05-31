@@ -124,6 +124,7 @@ public class DailyBriefingService : IDailyBriefingService
             .Where(i =>
                 i.PortfolioId == portfolioId &&
                 i.Status == InspectionStatus.Scheduled &&
+                i.ScheduledFor.Date >= today &&
                 i.ScheduledFor.Date <= today.AddDays(7))
             .ToListAsync(ct);
 

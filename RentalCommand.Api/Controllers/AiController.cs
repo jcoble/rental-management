@@ -38,6 +38,7 @@ public class AiController : AuthenticatedPortfolioControllerBase
     public async Task<ActionResult<AskResponse>> Ask([FromBody] AskRequest req, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest("Question is required.");
+        if (req.Question.Length > 4000) return BadRequest("Question is too long (max 4000 characters).");
         return Ok(await _qa.AskAsync(GetPortfolioId(), req.Question, req.History, ct));
     }
 }

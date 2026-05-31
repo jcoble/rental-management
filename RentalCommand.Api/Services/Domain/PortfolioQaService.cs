@@ -107,12 +107,18 @@ public class PortfolioQaService : IPortfolioQaService
             """;
 
         // Build initial message list from history + current question.
+        // Only the last few turns are kept, and roles are allowlisted to user/assistant — a
+        // caller must never be able to inject a "system" turn (which would override our prompt)
+        // or run up unbounded token cost via a huge history.
+        const int maxHistoryTurns = 20;
         var messages = new List<LlmChatMessage>();
         if (history is { Count: > 0 })
         {
-            foreach (var turn in history)
+            foreach (var turn in history.TakeLast(maxHistoryTurns))
             {
-                messages.Add(new LlmChatMessage(Role: turn.Role, Content: turn.Content));
+                if (turn.Role is not ("user" or "assistant")) continue;
+                var content = turn.Content?.Length > 4000 ? turn.Content[..4000] : turn.Content;
+                messages.Add(new LlmChatMessage(Role: turn.Role, Content: content));
             }
         }
         messages.Add(new LlmChatMessage(Role: "user", Content: question));
