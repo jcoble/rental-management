@@ -6,6 +6,7 @@
 	import { leases } from '$lib/api/endpoints/leases';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { properties } from '$lib/api/endpoints/properties';
+	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Payment, Expense, AccountingSummary } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
@@ -20,12 +21,20 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 20;
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
+	// Schedule E categories (mirrors RentalCommand.Core.Enums.ScheduleECategory — the values the API accepts).
+	const EXPENSE_CATEGORIES = [
+		'Advertising', 'AutoTravel', 'CleaningMaintenance', 'Commissions', 'Insurance',
+		'LegalProfessional', 'ManagementFees', 'MortgageInterest', 'Repairs', 'Supplies',
+		'Taxes', 'Utilities', 'Depreciation', 'Other'
+	];
+	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
 
 	let paymentSearch = $state('');
 	let paymentSkip = $state(0);
@@ -48,6 +57,7 @@
 	const leasesQuery = createQuery(() => ({ queryKey: ['leases', portfolioId], queryFn: () => leases.list(portfolioId, { take: 200 }) }));
 	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }) }));
 	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
+	const workOrdersQuery = createQuery(() => ({ queryKey: ['work-orders', portfolioId], queryFn: () => workOrders.list(portfolioId, { take: 200 }) }));
 
 	// --- Payment form/dialog ---
 	const emptyPayment = { leaseId: '', amount: '', dueDate: '', type: 'Rent', status: 'Scheduled' };
@@ -120,12 +130,20 @@
 	}
 
 	// --- Expense form/dialog ---
-	const emptyExpense = { category: 'Repairs', description: '', amount: '', incurredAt: '', propertyId: '', vendorId: '', status: 'Pending' };
+	const emptyExpense = {
+		category: 'Repairs', description: '', amount: '', subtotal: '', taxAmount: '',
+		incurredAt: '', dueDate: '', paidAt: '', propertyId: '', vendorId: '', workOrderId: '',
+		status: 'Pending', billableToOwner: false, notes: '',
+		vendorAddress: '', vendorPhone: '', vendorWebsite: '', vendorTaxId: '',
+		receiptNumber: '', paymentMethod: '', cardLast4: '', taxRate: '', tip: '', discount: '', shipping: ''
+	};
 	let showExpenseForm = $state(false);
 	let editingExpenseId = $state<number | null>(null);
 	let expenseForm = $state({ ...emptyExpense });
 	let expenseErrors = $state<Record<string, string>>({});
 	let expenseDeleteTarget = $state<Expense | null>(null);
+	// Holds the parsed ReceiptData of the expense being edited, so line items / extra survive a re-save.
+	let editingReceipt = $state<Record<string, any> | null>(null);
 
 	function invalidateExpenses() {
 		queryClient.invalidateQueries({ queryKey: ['expenses', portfolioId] });
@@ -155,16 +173,40 @@
 
 	function openCreateExpense() {
 		editingExpenseId = null;
+		editingReceipt = null;
 		expenseForm = { ...emptyExpense };
 		expenseErrors = {};
 		showExpenseForm = true;
 	}
 	function openEditExpense(e: Expense) {
 		editingExpenseId = e.id;
+		let rd: Record<string, any> | null = null;
+		try { rd = e.receiptData ? JSON.parse(e.receiptData) : null; } catch { rd = null; }
+		editingReceipt = rd;
 		expenseForm = {
 			category: e.category, description: e.description, amount: String(e.amount),
-			incurredAt: e.incurredAt?.slice(0, 10) ?? '', propertyId: e.propertyId != null ? String(e.propertyId) : '',
-			vendorId: e.vendorId != null ? String(e.vendorId) : '', status: e.status,
+			subtotal: e.subtotal != null ? String(e.subtotal) : '',
+			taxAmount: e.taxAmount != null ? String(e.taxAmount) : '',
+			incurredAt: e.incurredAt?.slice(0, 10) ?? '',
+			dueDate: e.dueDate?.slice(0, 10) ?? '',
+			paidAt: e.paidAt?.slice(0, 10) ?? '',
+			propertyId: e.propertyId != null ? String(e.propertyId) : '',
+			vendorId: e.vendorId != null ? String(e.vendorId) : '',
+			workOrderId: e.workOrderId != null ? String(e.workOrderId) : '',
+			status: e.status,
+			billableToOwner: !!e.billableToOwner,
+			notes: e.notes ?? '',
+			vendorAddress: rd?.vendor?.address ?? '',
+			vendorPhone: rd?.vendor?.phone ?? '',
+			vendorWebsite: rd?.vendor?.website ?? '',
+			vendorTaxId: rd?.vendor?.taxId ?? '',
+			receiptNumber: rd?.receiptNumber ?? '',
+			paymentMethod: rd?.paymentMethod ?? '',
+			cardLast4: rd?.cardLast4 ?? '',
+			taxRate: rd?.taxRate != null ? String(rd.taxRate) : '',
+			tip: rd?.tip != null ? String(rd.tip) : '',
+			discount: rd?.discount != null ? String(rd.discount) : '',
+			shipping: rd?.shipping != null ? String(rd.shipping) : ''
 		};
 		expenseErrors = {};
 		showExpenseForm = true;
@@ -181,7 +223,40 @@
 			return;
 		}
 		expenseErrors = {};
-		saveExpenseMutation.mutate({ id: editingExpenseId, data: { portfolioId, ...result.data } });
+		const d = result.data;
+		// Nest the receipt-detail fields into the same ReceiptData JSON shape the scan path produces,
+		// preserving any line items / extra that came from a prior scan of this expense.
+		const hasReceiptDetail = !!(
+			d.vendorAddress || d.vendorPhone || d.vendorWebsite || d.vendorTaxId || d.receiptNumber ||
+			d.paymentMethod || d.cardLast4 || d.taxRate != null || d.tip != null || d.discount != null ||
+			d.shipping != null || (editingReceipt?.lineItems?.length ?? 0) > 0
+		);
+		const receiptData = hasReceiptDetail
+			? JSON.stringify({
+					documentKind: editingReceipt?.documentKind ?? null,
+					dueDate: d.dueDate,
+					vendor: { address: d.vendorAddress, phone: d.vendorPhone, website: d.vendorWebsite, taxId: d.vendorTaxId },
+					receiptNumber: d.receiptNumber,
+					paymentMethod: d.paymentMethod,
+					cardLast4: d.cardLast4,
+					taxRate: d.taxRate,
+					tip: d.tip,
+					discount: d.discount,
+					shipping: d.shipping,
+					lineItems: editingReceipt?.lineItems ?? [],
+					extra: editingReceipt?.extra ?? {}
+				})
+			: null;
+		const data: Record<string, unknown> = {
+			portfolioId,
+			description: d.description, amount: d.amount, subtotal: d.subtotal, taxAmount: d.taxAmount,
+			category: d.category, status: d.status,
+			incurredAt: d.incurredAt, dueDate: d.dueDate, paidAt: d.paidAt,
+			propertyId: d.propertyId, vendorId: d.vendorId, workOrderId: d.workOrderId,
+			billableToOwner: d.billableToOwner, notes: d.notes
+		};
+		if (receiptData != null) data.receiptData = receiptData;
+		saveExpenseMutation.mutate({ id: editingExpenseId, data });
 	}
 
 	function money(value: number) {
@@ -202,6 +277,9 @@
 	);
 	const selectedVendorLabel = $derived(
 		(vendorsQuery.data || []).find((v) => String(v.id) === expenseForm.vendorId)?.name ?? null
+	);
+	const selectedWorkOrderLabel = $derived(
+		(workOrdersQuery.data || []).find((w) => String(w.id) === expenseForm.workOrderId)?.title ?? null
 	);
 </script>
 
@@ -406,70 +484,183 @@
 	open={showExpenseForm}
 	onOpenChange={(v) => { if (!v) closeExpenseForm(); }}
 >
-	<Dialog.Content class="max-w-lg">
+	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto">
 		<Dialog.Header>
 			<Dialog.Title>{editingExpenseId == null ? 'New Expense' : 'Edit Expense'}</Dialog.Title>
 		</Dialog.Header>
-		<div class="space-y-2" data-testid="expense-form">
+		<div class="space-y-4" data-testid="expense-form">
 			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Description</span>
 				<Input data-testid="expense-description-input" bind:value={expenseForm.description} placeholder="Description" />
 				{#if expenseErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expense-description-error">{expenseErrors.description}</p>{/if}
 			</div>
-			<div class="grid grid-cols-2 gap-2">
+			<div class="grid grid-cols-3 gap-2">
 				<div>
-					<Input data-testid="expense-amount-input" bind:value={expenseForm.amount} placeholder="Amount" />
+					<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
+					<Input data-testid="expense-amount-input" bind:value={expenseForm.amount} placeholder="0.00" />
 					{#if expenseErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expense-amount-error">{expenseErrors.amount}</p>{/if}
 				</div>
 				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Subtotal</span>
+					<Input data-testid="expense-subtotal-input" bind:value={expenseForm.subtotal} placeholder="0.00" />
+					{#if expenseErrors.subtotal}<p class="mt-1 text-xs text-destructive">{expenseErrors.subtotal}</p>{/if}
+				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Tax</span>
+					<Input data-testid="expense-tax-input" bind:value={expenseForm.taxAmount} placeholder="0.00" />
+					{#if expenseErrors.taxAmount}<p class="mt-1 text-xs text-destructive">{expenseErrors.taxAmount}</p>{/if}
+				</div>
+			</div>
+			<div class="grid grid-cols-3 gap-2">
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Incurred</span>
 					<Input data-testid="expense-incurred-input" type="date" bind:value={expenseForm.incurredAt} />
 					{#if expenseErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expense-incurred-error">{expenseErrors.incurredAt}</p>{/if}
 				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Due date</span>
+					<Input data-testid="expense-due-input" type="date" bind:value={expenseForm.dueDate} />
+				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Paid date</span>
+					<Input data-testid="expense-paid-input" type="date" bind:value={expenseForm.paidAt} />
+				</div>
 			</div>
 			<div class="grid grid-cols-2 gap-2">
-				<Select.Root type="single" bind:value={expenseForm.category}>
-					<Select.Trigger class="w-full" data-testid="expense-category-input">
-						{expenseForm.category || 'Select category'}
-					</Select.Trigger>
-					<Select.Content>
-						{#each ['Repairs', 'Utilities', 'Landscaping', 'Cleaning', 'Management', 'Other'] as cat}
-							<Select.Item value={cat} label={cat}>{cat}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				<Select.Root type="single" bind:value={expenseForm.status}>
-					<Select.Trigger class="w-full" data-testid="expense-status-input">
-						{expenseForm.status || 'Select status'}
-					</Select.Trigger>
-					<Select.Content>
-						{#each ['Pending', 'Approved', 'Paid'] as s}
-							<Select.Item value={s} label={s}>{s}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Category</span>
+					<Select.Root type="single" bind:value={expenseForm.category}>
+						<Select.Trigger class="w-full" data-testid="expense-category-input">
+							{expenseForm.category || 'Select category'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each EXPENSE_CATEGORIES as cat}
+								<Select.Item value={cat} label={cat}>{cat}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Status</span>
+					<Select.Root type="single" bind:value={expenseForm.status}>
+						<Select.Trigger class="w-full" data-testid="expense-status-input">
+							{expenseForm.status || 'Select status'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each EXPENSE_STATUSES as s}
+								<Select.Item value={s} label={s}>{s}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
 			</div>
-			<div class="grid grid-cols-2 gap-2">
-				<Select.Root type="single" bind:value={expenseForm.propertyId}>
-					<Select.Trigger class="w-full" data-testid="expense-property-input">
-						{selectedPropertyLabel ?? 'No property'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="No property">No property</Select.Item>
-						{#each propertiesQuery.data || [] as property}
-							<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				<Select.Root type="single" bind:value={expenseForm.vendorId}>
-					<Select.Trigger class="w-full" data-testid="expense-vendor-input">
-						{selectedVendorLabel ?? 'No vendor'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="No vendor">No vendor</Select.Item>
-						{#each vendorsQuery.data || [] as vendor}
-							<Select.Item value={String(vendor.id)} label={vendor.name}>{vendor.name}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
+			<div class="grid grid-cols-3 gap-2">
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Property</span>
+					<Select.Root type="single" bind:value={expenseForm.propertyId}>
+						<Select.Trigger class="w-full" data-testid="expense-property-input">
+							{selectedPropertyLabel ?? 'No property'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="No property">No property</Select.Item>
+							{#each propertiesQuery.data || [] as property}
+								<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Vendor</span>
+					<Select.Root type="single" bind:value={expenseForm.vendorId}>
+						<Select.Trigger class="w-full" data-testid="expense-vendor-input">
+							{selectedVendorLabel ?? 'No vendor'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="No vendor">No vendor</Select.Item>
+							{#each vendorsQuery.data || [] as vendor}
+								<Select.Item value={String(vendor.id)} label={vendor.name}>{vendor.name}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Work order</span>
+					<Select.Root type="single" bind:value={expenseForm.workOrderId}>
+						<Select.Trigger class="w-full" data-testid="expense-workorder-input">
+							{selectedWorkOrderLabel ?? 'No work order'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="No work order">No work order</Select.Item>
+							{#each workOrdersQuery.data || [] as wo}
+								<Select.Item value={String(wo.id)} label={wo.title}>{wo.title}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+			</div>
+			<label class="flex items-center gap-2 text-sm">
+				<Checkbox bind:checked={expenseForm.billableToOwner} data-testid="expense-billable-input" />
+				Billable to owner
+			</label>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
+				<textarea data-testid="expense-notes-input" bind:value={expenseForm.notes} rows="2" class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"></textarea>
+			</div>
+			<div class="border-t border-border pt-3">
+				<h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Receipt details (optional)</h3>
+				<div class="space-y-2">
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Vendor address</span>
+						<Input data-testid="expense-vendor-address-input" bind:value={expenseForm.vendorAddress} />
+					</div>
+					<div class="grid grid-cols-3 gap-2">
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Vendor phone</span>
+							<Input data-testid="expense-vendor-phone-input" bind:value={expenseForm.vendorPhone} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Vendor website</span>
+							<Input data-testid="expense-vendor-website-input" bind:value={expenseForm.vendorWebsite} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Vendor tax ID</span>
+							<Input data-testid="expense-vendor-taxid-input" bind:value={expenseForm.vendorTaxId} />
+						</div>
+					</div>
+					<div class="grid grid-cols-3 gap-2">
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Receipt #</span>
+							<Input data-testid="expense-receipt-number-input" bind:value={expenseForm.receiptNumber} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Payment method</span>
+							<Input data-testid="expense-payment-method-input" bind:value={expenseForm.paymentMethod} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Card last 4</span>
+							<Input data-testid="expense-card-last4-input" bind:value={expenseForm.cardLast4} />
+						</div>
+					</div>
+					<div class="grid grid-cols-4 gap-2">
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Tax rate</span>
+							<Input data-testid="expense-tax-rate-input" bind:value={expenseForm.taxRate} />
+							{#if expenseErrors.taxRate}<p class="mt-1 text-xs text-destructive">{expenseErrors.taxRate}</p>{/if}
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Tip</span>
+							<Input data-testid="expense-tip-input" bind:value={expenseForm.tip} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Discount</span>
+							<Input data-testid="expense-discount-input" bind:value={expenseForm.discount} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Shipping</span>
+							<Input data-testid="expense-shipping-input" bind:value={expenseForm.shipping} />
+						</div>
+					</div>
+				</div>
 			</div>
 		</div>
 		<Dialog.Footer>

@@ -31,6 +31,13 @@ const idString = z
 	.trim()
 	.transform((v) => (v.length ? Number(v) : null))
 	.nullable();
+// Optional money/number: '' -> null, otherwise coerced to a number (rejects non-numeric).
+const optionalNumeric = (label: string) =>
+	z
+		.string()
+		.trim()
+		.transform((v) => (v.length ? Number(v) : null))
+		.refine((v) => v === null || !Number.isNaN(v), `${label} must be a number`);
 
 export const propertySchema = z.object({
 	name: required('Name'),
@@ -80,11 +87,30 @@ export const paymentSchema = z.object({
 export const expenseSchema = z.object({
 	description: required('Description'),
 	amount: numericString('Amount'),
+	subtotal: optionalNumeric('Subtotal'),
+	taxAmount: optionalNumeric('Tax'),
 	incurredAt: required('Incurred date'),
+	dueDate: optionalText,
+	paidAt: optionalText,
 	category: z.string(),
 	status: z.string(),
 	propertyId: idString,
 	vendorId: idString,
+	workOrderId: idString,
+	billableToOwner: z.boolean(),
+	notes: optionalText,
+	// Receipt detail (the accounting page nests these into receiptData JSON before submit).
+	vendorAddress: optionalText,
+	vendorPhone: optionalText,
+	vendorWebsite: optionalText,
+	vendorTaxId: optionalText,
+	receiptNumber: optionalText,
+	paymentMethod: optionalText,
+	cardLast4: optionalText,
+	taxRate: optionalNumeric('Tax rate'),
+	tip: optionalNumeric('Tip'),
+	discount: optionalNumeric('Discount'),
+	shipping: optionalNumeric('Shipping'),
 });
 
 export const workOrderSchema = z.object({
