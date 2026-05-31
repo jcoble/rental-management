@@ -178,10 +178,28 @@ public class JwtTokenService : IJwtTokenService
             return null;
         }
 
-        // Single-use + revocation: a reused or revoked token is rejected (fail closed).
+        // Single-use + revocation: a reused or revoked token signals a possible token theft/replay.
+        // Invalidate the entire token family (all active refresh tokens for the user) and force re-auth.
         if (storedToken.IsUsed || storedToken.IsRevoked)
         {
-            _logger.LogWarning("Refresh token reuse/revoked detected for user {UserId}", storedToken.UserId);
+            _logger.LogWarning(
+                "Refresh token reuse/revoked detected for user {UserId}; revoking all active refresh tokens for the user (token-family invalidation).",
+                storedToken.UserId);
+
+            var activeTokens = await _dbContext.RefreshTokens
+                .Where(rt => rt.UserId == storedToken.UserId && !rt.IsRevoked)
+                .ToListAsync();
+
+            foreach (var activeToken in activeTokens)
+            {
+                activeToken.IsRevoked = true;
+            }
+
+            if (activeTokens.Count > 0)
+            {
+                await _dbContext.SaveChangesAsync();
+            }
+
             return null;
         }
 
