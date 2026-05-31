@@ -78,4 +78,4 @@
 	});
 </script>
 
-<AppShell {children} />
+<AppShell>{@render children()}</AppShell>
