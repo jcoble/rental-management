@@ -21,6 +21,19 @@ public class Expense
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>Subtotal before tax, tip, and other charges; populated from scanned receipts.</summary>
+    public decimal? Subtotal { get; set; }
+
+    /// <summary>Tax amount charged; populated from scanned receipts.</summary>
+    public decimal? TaxAmount { get; set; }
+
+    /// <summary>
+    /// JSON object (stored as jsonb) holding the full receipt details that did not promote to
+    /// first-class columns: vendor contact, receipt number, payment info, tax rate, tip, discount,
+    /// shipping, line items, and any extra extracted fields.
+    /// </summary>
+    public string? ReceiptData { get; set; }
+
     /// <summary>Soft-delete marker; null means active.</summary>
     public DateTime? DeletedAt { get; set; }
 

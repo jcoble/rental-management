@@ -107,15 +107,21 @@ public sealed class ScanService : IScanService
         var dto = BuildReceiptDto(draft.ExtractedFields);
         ApplyOverrides(dto, overridesJson);
 
+        // Build ReceiptData JSON for the non-promoted details.
+        var receiptDataJson = BuildReceiptDataJson(dto);
+
         var request = new CreateExpenseRequest
         {
-            Category = dto.Category ?? ScheduleECategory.Other,
+            Category    = dto.Category ?? ScheduleECategory.Other,
             Description = string.IsNullOrWhiteSpace(dto.VendorName) ? "Scanned receipt" : dto.VendorName!,
-            Status = ExpenseStatus.Pending,
-            Amount = dto.Amount ?? 0m,
-            IncurredAt = dto.TransactionDate ?? DateTime.UtcNow,
+            Status      = ExpenseStatus.Pending,
+            Amount      = dto.Total ?? dto.Subtotal ?? 0m,
+            Subtotal    = dto.Subtotal,
+            TaxAmount   = dto.Tax,
+            IncurredAt  = dto.TransactionDate ?? DateTime.UtcNow,
             BillableToOwner = false,
-            Notes = dto.Notes,
+            Notes       = dto.Notes,
+            ReceiptData = receiptDataJson,
         };
 
         ExpenseResponse? expense;
@@ -155,11 +161,14 @@ public sealed class ScanService : IScanService
         // Audit the values actually applied (post-override), with the raw extraction as the prior state.
         var appliedJson = JsonSerializer.Serialize(new
         {
-            vendorName = dto.VendorName,
-            amount = dto.Amount,
+            vendorName      = dto.VendorName,
+            total           = dto.Total,
+            subtotal        = dto.Subtotal,
+            tax             = dto.Tax,
             transactionDate = dto.TransactionDate,
-            category = dto.Category?.ToString(),
-            notes = dto.Notes,
+            category        = dto.Category?.ToString(),
+            notes           = dto.Notes,
+            lineItemCount   = dto.LineItems.Count,
         });
 
         await _audit.LogAsync(
@@ -219,7 +228,7 @@ public sealed class ScanService : IScanService
 
     /// <summary>
     /// Deserializes the worker-written JSON shape
-    /// <c>{"vendor_name":{"value":"...","confidence":0.9}, "amount":{...}, ...}</c>
+    /// <c>{"vendor_name":{"value":"...","confidence":0.9}, "total":{...}, "line_items":{"value":"[...]","confidence":0.9}, ...}</c>
     /// into an <see cref="ExtractedReceiptDto"/>. Never throws on null/empty/malformed JSON.
     /// </summary>
     private ExtractedReceiptDto BuildReceiptDto(string? extractedFieldsJson)
@@ -234,15 +243,15 @@ public sealed class ScanService : IScanService
             using var doc = JsonDocument.Parse(extractedFieldsJson);
             var root = doc.RootElement;
 
-            dto.VendorName = ReadFieldValue(root, "vendor_name");
+            // ---- Vendor ----
+            dto.VendorName    = ReadFieldValue(root, "vendor_name");
+            dto.VendorAddress = ReadFieldValue(root, "vendor_address");
+            dto.VendorPhone   = ReadFieldValue(root, "vendor_phone");
+            dto.VendorWebsite = ReadFieldValue(root, "vendor_website");
+            dto.VendorTaxId   = ReadFieldValue(root, "vendor_tax_id");
 
-            var amountStr = ReadFieldValue(root, "amount");
-            if (!string.IsNullOrWhiteSpace(amountStr) &&
-                decimal.TryParse(amountStr, System.Globalization.NumberStyles.Any,
-                    System.Globalization.CultureInfo.InvariantCulture, out var amount))
-            {
-                dto.Amount = amount;
-            }
+            // ---- Receipt header ----
+            dto.ReceiptNumber = ReadFieldValue(root, "receipt_number");
 
             var dateStr = ReadFieldValue(root, "transaction_date");
             if (!string.IsNullOrWhiteSpace(dateStr) &&
@@ -253,6 +262,20 @@ public sealed class ScanService : IScanService
                 dto.TransactionDate = date;
             }
 
+            // ---- Money breakdown ----
+            dto.Subtotal = ParseDecimalField(root, "subtotal");
+            dto.Tax      = ParseDecimalField(root, "tax");
+            dto.TaxRate  = ParseDecimalField(root, "tax_rate");
+            dto.Tip      = ParseDecimalField(root, "tip");
+            dto.Discount = ParseDecimalField(root, "discount");
+            dto.Shipping = ParseDecimalField(root, "shipping");
+            dto.Total    = ParseDecimalField(root, "total");
+
+            // ---- Payment ----
+            dto.PaymentMethod = ReadFieldValue(root, "payment_method");
+            dto.CardLast4     = ReadFieldValue(root, "card_last4");
+
+            // ---- Classification ----
             var categoryStr = ReadFieldValue(root, "category");
             if (!string.IsNullOrWhiteSpace(categoryStr) &&
                 Enum.TryParse<ScheduleECategory>(categoryStr, ignoreCase: true, out var category))
@@ -261,13 +284,141 @@ public sealed class ScanService : IScanService
             }
 
             dto.Notes = ReadFieldValue(root, "notes");
+
+            // ---- Line items ----
+            // line_items is stored as {"value":"[...]","confidence":0.9} where value is a JSON array string.
+            dto.LineItems = ParseLineItems(root, "line_items");
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Could not parse extractedFieldsJson; returning empty ReceiptDto.");
+            _logger.LogWarning(ex, "Could not parse extractedFieldsJson; returning partial ReceiptDto.");
         }
 
         return dto;
+    }
+
+    /// <summary>Parses a decimal from a field's "value" sub-property. Returns null on any failure.</summary>
+    private static decimal? ParseDecimalField(JsonElement root, string key)
+    {
+        var str = ReadFieldValue(root, key);
+        if (string.IsNullOrWhiteSpace(str)) return null;
+        return decimal.TryParse(str, System.Globalization.NumberStyles.Any,
+            System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
+    }
+
+    /// <summary>
+    /// Parses the line_items array stored as a JSON string in the extraction JSON.
+    /// Tolerates missing or malformed data, always returns a list (never throws).
+    /// </summary>
+    private List<ReceiptLineItem> ParseLineItems(JsonElement root, string key)
+    {
+        var result = new List<ReceiptLineItem>();
+        try
+        {
+            if (!root.TryGetProperty(key, out var fieldEl))
+                return result;
+
+            // The value may be a JSON array string (stored by the parser), or a nested object.
+            string? arrayJson = null;
+            if (fieldEl.ValueKind == JsonValueKind.Object &&
+                fieldEl.TryGetProperty("value", out var valueEl))
+            {
+                arrayJson = valueEl.ValueKind == JsonValueKind.String
+                    ? valueEl.GetString()
+                    : valueEl.ValueKind == JsonValueKind.Array
+                        ? valueEl.GetRawText()
+                        : null;
+            }
+            else if (fieldEl.ValueKind == JsonValueKind.Array)
+            {
+                arrayJson = fieldEl.GetRawText();
+            }
+
+            if (string.IsNullOrWhiteSpace(arrayJson))
+                return result;
+
+            using var arrDoc = JsonDocument.Parse(arrayJson);
+            if (arrDoc.RootElement.ValueKind != JsonValueKind.Array)
+                return result;
+
+            foreach (var item in arrDoc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                string? desc = item.TryGetProperty("description", out var d) && d.ValueKind == JsonValueKind.String
+                    ? d.GetString() : null;
+
+                decimal? qty = null, unitPrice = null, amount = null;
+                if (item.TryGetProperty("quantity", out var qEl) && qEl.ValueKind == JsonValueKind.Number)
+                    qEl.TryGetDecimal(out var q); // assignment handled below to avoid CS0165
+
+                // Re-parse each numeric property safely.
+                qty       = TryGetItemDecimal(item, "quantity");
+                unitPrice = TryGetItemDecimal(item, "unit_price");
+                amount    = TryGetItemDecimal(item, "amount");
+
+                result.Add(new ReceiptLineItem(desc, qty, unitPrice, amount));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse line_items from extraction JSON; ignoring.");
+        }
+        return result;
+    }
+
+    private static decimal? TryGetItemDecimal(JsonElement item, string key)
+    {
+        if (!item.TryGetProperty(key, out var el)) return null;
+        if (el.ValueKind == JsonValueKind.Number && el.TryGetDecimal(out var v)) return v;
+        if (el.ValueKind == JsonValueKind.String &&
+            decimal.TryParse(el.GetString(), System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var vs)) return vs;
+        return null;
+    }
+
+    /// <summary>
+    /// Builds the ReceiptData JSON string that captures non-promoted details from the extraction DTO.
+    /// </summary>
+    private static string BuildReceiptDataJson(ExtractedReceiptDto dto)
+    {
+        try
+        {
+            var lineItems = dto.LineItems.Select(li => new
+            {
+                description = li.Description,
+                quantity    = li.Quantity,
+                unitPrice   = li.UnitPrice,
+                amount      = li.Amount,
+            }).ToArray();
+
+            var obj = new
+            {
+                vendor = new
+                {
+                    address = dto.VendorAddress,
+                    phone   = dto.VendorPhone,
+                    website = dto.VendorWebsite,
+                    taxId   = dto.VendorTaxId,
+                },
+                receiptNumber = dto.ReceiptNumber,
+                paymentMethod = dto.PaymentMethod,
+                cardLast4     = dto.CardLast4,
+                taxRate       = dto.TaxRate,
+                tip           = dto.Tip,
+                discount      = dto.Discount,
+                shipping      = dto.Shipping,
+                lineItems,
+                extra         = dto.Extra,
+            };
+
+            return JsonSerializer.Serialize(obj);
+        }
+        catch
+        {
+            return "{}";
+        }
     }
 
     /// <summary>
@@ -295,8 +446,9 @@ public sealed class ScanService : IScanService
     }
 
     /// <summary>
-    /// Merges a flat override JSON <c>{"vendorName":"...","amount":12.34,"transactionDate":"...","category":"...","notes":"..."}</c>
-    /// into the DTO, overwriting any present key. Never throws on null/empty/malformed JSON.
+    /// Merges a flat override JSON into the DTO, overwriting any present key.
+    /// Accepts both camelCase (web) and snake_case (field names) keys.
+    /// Never throws on null/empty/malformed JSON. Line items are not editable via overrides.
     /// </summary>
     private void ApplyOverrides(ExtractedReceiptDto dto, string overridesJson)
     {
@@ -315,8 +467,17 @@ public sealed class ScanService : IScanService
             if (TryGetOverrideString(root, out var vendor, "vendorName", "vendor_name"))
                 dto.VendorName = vendor;
 
-            if (TryGetOverrideDecimal(root, out var amount, "amount"))
-                dto.Amount = amount;
+            if (TryGetOverrideString(root, out var vendorAddress, "vendorAddress", "vendor_address"))
+                dto.VendorAddress = vendorAddress;
+
+            if (TryGetOverrideString(root, out var vendorPhone, "vendorPhone", "vendor_phone"))
+                dto.VendorPhone = vendorPhone;
+
+            if (TryGetOverrideString(root, out var vendorWebsite, "vendorWebsite", "vendor_website"))
+                dto.VendorWebsite = vendorWebsite;
+
+            if (TryGetOverrideString(root, out var receiptNumber, "receiptNumber", "receipt_number"))
+                dto.ReceiptNumber = receiptNumber;
 
             if (TryGetOverrideString(root, out var dateStr, "transactionDate", "transaction_date") &&
                 DateTime.TryParse(dateStr, System.Globalization.CultureInfo.InvariantCulture,
@@ -326,14 +487,26 @@ public sealed class ScanService : IScanService
                 dto.TransactionDate = parsedDate;
             }
 
+            if (TryGetOverrideDecimal(root, out var subtotal, "subtotal"))
+                dto.Subtotal = subtotal;
+
+            if (TryGetOverrideDecimal(root, out var tax, "tax"))
+                dto.Tax = tax;
+
+            if (TryGetOverrideDecimal(root, out var total, "total"))
+                dto.Total = total;
+
+            if (TryGetOverrideString(root, out var paymentMethod, "paymentMethod", "payment_method"))
+                dto.PaymentMethod = paymentMethod;
+
+            if (TryGetOverrideString(root, out var notes, "notes"))
+                dto.Notes = notes;
+
             if (TryGetOverrideString(root, out var catStr, "category") &&
                 Enum.TryParse<ScheduleECategory>(catStr, ignoreCase: true, out var parsedCat))
             {
                 dto.Category = parsedCat;
             }
-
-            if (TryGetOverrideString(root, out var notes, "notes"))
-                dto.Notes = notes;
         }
         catch (Exception ex)
         {
