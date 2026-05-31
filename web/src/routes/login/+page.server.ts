@@ -2,7 +2,7 @@
  * Login page server action.
  *
  * Posts credentials to the API, then stores the access token + expiration and
- * copies the rotated refresh_token from the API's Set-Cookie header into
+ * copies the rotated refresh-token cookie from the API's Set-Cookie header into
  * first-party httpOnly cookies on the SvelteKit origin.
  */
 
@@ -10,6 +10,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import type { LoginResponse } from '$lib/types/user';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { AUTH_COOKIE_NAMES, deleteLegacyAuthCookies } from '$lib/server/auth-cookies';
 
 function safeRedirectPath(path: string | null, fallback: string): string {
 	if (!path) return fallback;
@@ -79,14 +80,14 @@ export const actions: Actions = {
 			data = (await response.json()) as LoginResponse;
 
 			// Access token cookie (used for SSR Authorization headers).
-			cookies.set('access_token', data.accessToken, {
+			cookies.set(AUTH_COOKIE_NAMES.accessToken, data.accessToken, {
 				path: '/',
 				httpOnly: true,
 				secure: true,
 				sameSite: 'lax',
 				expires: new Date(data.accessTokenExpiration)
 			});
-			cookies.set('access_token_expiration', data.accessTokenExpiration, {
+			cookies.set(AUTH_COOKIE_NAMES.accessTokenExpiration, data.accessTokenExpiration, {
 				path: '/',
 				httpOnly: true,
 				secure: true,
@@ -98,13 +99,15 @@ export const actions: Actions = {
 			// cookie on this origin so client JS can refresh via our proxy.
 			const setCookieHeader = response.headers.get('set-cookie');
 			if (setCookieHeader) {
-				const refreshMatch = setCookieHeader.match(/refresh_token=([^;]+)/);
+				const refreshMatch = setCookieHeader.match(
+					new RegExp(`${AUTH_COOKIE_NAMES.refreshToken}=([^;]+)`)
+				);
 				if (refreshMatch) {
 					const expiresMatch = setCookieHeader.match(/expires=([^;]+)/i);
 					const expires = expiresMatch
 						? new Date(expiresMatch[1])
 						: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-					cookies.set('refresh_token', refreshMatch[1], {
+					cookies.set(AUTH_COOKIE_NAMES.refreshToken, refreshMatch[1], {
 						path: '/',
 						httpOnly: true,
 						secure: true,
@@ -113,6 +116,7 @@ export const actions: Actions = {
 					});
 				}
 			}
+			deleteLegacyAuthCookies(cookies);
 		} catch (err) {
 			console.error('Login error:', err);
 			const message = err instanceof Error ? err.message : 'An unexpected error occurred';
