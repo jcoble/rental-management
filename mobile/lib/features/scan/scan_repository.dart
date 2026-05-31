@@ -152,9 +152,19 @@ class ScanRepository {
 }
 
 // ---------------------------------------------------------------------------
-// Riverpod provider
+// Riverpod providers
 // ---------------------------------------------------------------------------
 
 final scanRepositoryProvider = Provider<ScanRepository>((ref) {
   return ScanRepository(dio: ref.watch(dioProvider));
 });
+
+/// Public, auto-dispose scan-list provider keyed by an optional status filter.
+///
+/// Exposed at the repository level so the realtime watcher can invalidate all
+/// active variants (e.g. [ScanListScreen] mounted with filter = null) without
+/// importing the screen file.
+final scanListFamilyProvider =
+    FutureProvider.autoDispose.family<List<ScanDraft>, String?>(
+  (ref, status) => ref.read(scanRepositoryProvider).listDrafts(status: status),
+);

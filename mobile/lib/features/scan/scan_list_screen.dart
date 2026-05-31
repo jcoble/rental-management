@@ -21,11 +21,8 @@ class _ScanFilterNotifier extends Notifier<String?> {
 final _scanFilterProvider =
     NotifierProvider<_ScanFilterNotifier, String?>(_ScanFilterNotifier.new);
 
-/// Async list of drafts, re-fetched when the filter changes.
-final _scanListProvider =
-    FutureProvider.autoDispose.family<List<ScanDraft>, String?>(
-  (ref, status) => ref.read(scanRepositoryProvider).listDrafts(status: status),
-);
+// Re-export the public provider under a local alias for readability.
+final _scanListProvider = scanListFamilyProvider;
 
 // ---------------------------------------------------------------------------
 // ScanListScreen
