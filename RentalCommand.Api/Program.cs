@@ -20,6 +20,13 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
 builder.Services.Configure<ApiKeySettings>(builder.Configuration.GetSection(ApiKeySettings.SectionName));
 builder.Services.Configure<SeedSettings>(builder.Configuration.GetSection(SeedSettings.SectionName));
+builder.Services.Configure<RentalCommand.Core.Configuration.AssistantConfig>(
+    builder.Configuration.GetSection(RentalCommand.Core.Configuration.AssistantConfig.SectionName));
+builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.ILlmProvider, RentalCommand.Api.Scanning.AnthropicLlmProvider>(c =>
+{
+    c.BaseAddress = new Uri("https://api.anthropic.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
 
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
 
