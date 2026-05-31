@@ -1,10 +1,10 @@
-@import 'tailwindcss';
+@import 'tailwindcss' source("./");
 
 @import 'tw-animate-css';
 
 @custom-variant dark (&:is(.dark *));
 
-/* Shadcn theme (ported from EdiPlatform — dark mode default) */
+/* Lifecycle-style dark theme - dark mode is the default */
 :root {
   --radius: 0.75rem;
 
@@ -59,7 +59,7 @@
   --info-foreground: #07111f;
 }
 
-/* Light mode override (optional) */
+/* Light mode override (optional, but keeping for accessibility) */
 .light {
   --background: oklch(0.98 0 0);
   --foreground: oklch(0.14 0.005 285);
@@ -146,15 +146,34 @@
   }
 }
 
-html, body {
-  height: 100%;
-  overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, system-ui, 'Inter', sans-serif;
+@layer components {
+  .customer-app-theme-surface {
+    @apply h-full;
+  }
+
+  .auth-page-wrap {
+    @apply flex min-h-screen items-center justify-center bg-background p-4;
+  }
+
+  .auth-google-button {
+    @apply flex w-full items-center justify-center gap-3 rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-secondary;
+  }
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
-* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+/* Custom scrollbar for dark theme */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #27272a;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3f3f46;
+  }
+}
