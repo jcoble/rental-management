@@ -35,38 +35,58 @@ public sealed class RoutingNotificationChannel : INotificationChannel
 
     public async Task SendSmsAsync(string toPhoneNumber, string message, CancellationToken ct = default)
     {
-        var twilio = _cfg.Twilio;
-
-        if (!twilio.Enabled)
+        // SignalWire (Twilio-compatible, cheaper) takes precedence when configured; Twilio is the fallback.
+        var sw = _cfg.SignalWire;
+        if (sw.Enabled)
         {
-            _logger.LogInformation(
-                "[SMS suppressed — Twilio not configured] to {To}: {Message}",
-                toPhoneNumber, message);
+            var space = sw.SpaceUrl!.Trim().TrimEnd('/');
+            if (!space.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                space = "https://" + space;
+            }
+            var swUrl = $"{space}/api/laml/2010-04-01/Accounts/{sw.ProjectId}/Messages.json";
+            await PostCompatMessageAsync(swUrl, sw.ProjectId!, sw.Token!, sw.FromNumber!, toPhoneNumber, message, "SignalWire", ct);
             return;
         }
 
-        var url = $"https://api.twilio.com/2010-04-01/Accounts/{twilio.AccountSid}/Messages.json";
+        var twilio = _cfg.Twilio;
+        if (twilio.Enabled)
+        {
+            var url = $"https://api.twilio.com/2010-04-01/Accounts/{twilio.AccountSid}/Messages.json";
+            await PostCompatMessageAsync(url, twilio.AccountSid!, twilio.AuthToken!, twilio.FromNumber!, toPhoneNumber, message, "Twilio", ct);
+            return;
+        }
 
-        var credentials = Convert.ToBase64String(
-            Encoding.ASCII.GetBytes($"{twilio.AccountSid}:{twilio.AuthToken}"));
+        _logger.LogInformation(
+            "[SMS suppressed — no SMS provider configured] to {To}: {Message}",
+            toPhoneNumber, message);
+    }
+
+    // Twilio and SignalWire share the same Compatibility (LaML) API shape: HTTP Basic auth plus a
+    // From/To/Body form POST. One helper covers both; only the URL + credentials differ.
+    private async Task PostCompatMessageAsync(
+        string url, string basicUser, string basicPass,
+        string from, string to, string body, string provider, CancellationToken ct)
+    {
+        var credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{basicUser}:{basicPass}"));
 
         var request = new HttpRequestMessage(HttpMethod.Post, url)
         {
             Content = new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["From"] = twilio.FromNumber!,
-                ["To"]   = toPhoneNumber,
-                ["Body"] = message,
+                ["From"] = from,
+                ["To"]   = to,
+                ["Body"] = body,
             })
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
 
         var response = await _http.SendAsync(request, ct);
-        await EnsureSuccessAsync(response, "Twilio", ct);
+        await EnsureSuccessAsync(response, provider, ct);
 
         _logger.LogInformation(
-            "[SMS sent via Twilio] To={To} Status={Status}",
-            toPhoneNumber, (int)response.StatusCode);
+            "[SMS sent via {Provider}] To={To} Status={Status}",
+            provider, to, (int)response.StatusCode);
     }
 
     // ------------------------------------------------------------------ Email (SendGrid)
