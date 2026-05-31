@@ -149,6 +149,188 @@ public sealed class AnthropicLlmProvider : ILlmProvider
         return ParseToolResult(json, fields);
     }
 
+    public async Task<LlmToolResult> ChatWithToolsAsync(
+        string systemPrompt,
+        IReadOnlyList<LlmChatMessage> messages,
+        IReadOnlyList<LlmToolSpec> tools,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_config.ApiKey))
+        {
+            WarnNoKeyOnce();
+            return new LlmToolResult("noop", "AI is unavailable because no API key is configured.",
+                Array.Empty<LlmToolCall>(), 0, 0, "noop");
+        }
+
+        // Build Anthropic-style tool definitions.
+        var toolDefs = tools.Select(t => new
+        {
+            name         = t.Name,
+            description  = t.Description,
+            input_schema = ParseJsonSchema(t.ParametersJsonSchema)
+        }).ToArray();
+
+        // Convert messages to Anthropic content blocks.
+        var msgList = new List<object>();
+        foreach (var m in messages)
+        {
+            switch (m.Role)
+            {
+                case "user":
+                    msgList.Add(new
+                    {
+                        role    = "user",
+                        content = new object[] { new { type = "text", text = m.Content } }
+                    });
+                    break;
+
+                case "assistant" when m.ToolCalls is { Count: > 0 }:
+                    msgList.Add(new
+                    {
+                        role    = "assistant",
+                        content = m.ToolCalls.Select(tc => (object)new
+                        {
+                            type  = "tool_use",
+                            id    = tc.Id,
+                            name  = tc.Name,
+                            input = ParseJsonNode(tc.ArgumentsJson)
+                        }).ToArray()
+                    });
+                    break;
+
+                case "assistant":
+                    msgList.Add(new
+                    {
+                        role    = "assistant",
+                        content = new object[] { new { type = "text", text = m.Content } }
+                    });
+                    break;
+
+                case "tool":
+                    // Tool results are sent as user turns in the Anthropic protocol.
+                    msgList.Add(new
+                    {
+                        role    = "user",
+                        content = new object[]
+                        {
+                            new { type = "tool_result", tool_use_id = m.ToolCallId, content = m.Content }
+                        }
+                    });
+                    break;
+
+                default:
+                    msgList.Add(new
+                    {
+                        role    = m.Role,
+                        content = new object[] { new { type = "text", text = m.Content } }
+                    });
+                    break;
+            }
+        }
+
+        var body = new
+        {
+            model      = _config.ModelId,
+            max_tokens = 1024,
+            system     = systemPrompt,
+            messages   = msgList,
+            tools      = toolDefs
+        };
+
+        using var resp = await SendAsync(body, ct);
+        var json = await resp.Content.ReadAsStringAsync(ct);
+        return ParseChatWithToolsResult(json);
+    }
+
+    private static LlmToolResult ParseChatWithToolsResult(string responseJson)
+    {
+        using var doc = JsonDocument.Parse(responseJson);
+        var root = doc.RootElement;
+
+        int inputTokens = 0, outputTokens = 0;
+        if (root.TryGetProperty("usage", out var u))
+        {
+            if (u.TryGetProperty("input_tokens",  out var it)) inputTokens  = it.GetInt32();
+            if (u.TryGetProperty("output_tokens", out var ot)) outputTokens = ot.GetInt32();
+        }
+        var modelId    = root.TryGetProperty("model",       out var m)  ? m.GetString()  ?? "" : "";
+        var stopReason = root.TryGetProperty("stop_reason", out var sr) ? sr.GetString() ?? "" : "";
+
+        if (!root.TryGetProperty("content", out var content)
+            || content.ValueKind != JsonValueKind.Array)
+        {
+            return new LlmToolResult("error", null, Array.Empty<LlmToolCall>(),
+                inputTokens, outputTokens, modelId);
+        }
+
+        var toolCalls = new List<LlmToolCall>();
+        var textParts = new List<string>();
+
+        foreach (var block in content.EnumerateArray())
+        {
+            if (!block.TryGetProperty("type", out var typeEl)) continue;
+            var blockType = typeEl.GetString();
+
+            if (blockType == "tool_use")
+            {
+                var id   = block.TryGetProperty("id",   out var bid)  ? bid.GetString()  ?? "" : "";
+                var name = block.TryGetProperty("name", out var bname) ? bname.GetString() ?? "" : "";
+                // Anthropic returns "input" as a JSON object; capture it as a raw JSON string.
+                var argsJson = block.TryGetProperty("input", out var inp)
+                    ? inp.GetRawText()
+                    : "{}";
+                toolCalls.Add(new LlmToolCall(id, name, argsJson));
+            }
+            else if (blockType == "text")
+            {
+                if (block.TryGetProperty("text", out var t))
+                    textParts.Add(t.GetString() ?? "");
+            }
+        }
+
+        if (toolCalls.Count > 0)
+            return new LlmToolResult("tool_use", null, toolCalls, inputTokens, outputTokens, modelId);
+
+        var finalText = textParts.Count > 0 ? string.Join("\n", textParts) : null;
+        // Normalise Anthropic's "end_turn" to "end".
+        var resolvedStop = stopReason is "end_turn" or "end" ? "end" : stopReason;
+        return new LlmToolResult(resolvedStop, finalText, Array.Empty<LlmToolCall>(),
+            inputTokens, outputTokens, modelId);
+    }
+
+    /// <summary>
+    /// Parses a JSON Schema string into a <see cref="JsonElement"/> for embedding as a
+    /// JSON object in a request body. Falls back to an empty object on parse failure.
+    /// </summary>
+    private static JsonElement ParseJsonSchema(string jsonSchema)
+    {
+        try
+        {
+            return JsonDocument.Parse(jsonSchema).RootElement.Clone();
+        }
+        catch
+        {
+            return JsonDocument.Parse("{}").RootElement.Clone();
+        }
+    }
+
+    /// <summary>
+    /// Parses a JSON string into a <see cref="JsonElement"/> so that it serialises as a
+    /// JSON object (used for Anthropic's <c>input</c> field on <c>tool_use</c> blocks).
+    /// Falls back to an empty object on parse failure.
+    /// </summary>
+    private static JsonElement ParseJsonNode(string json)
+    {
+        try
+        {
+            return JsonDocument.Parse(json).RootElement.Clone();
+        }
+        catch
+        {
+            return JsonDocument.Parse("{}").RootElement.Clone();
+        }
+    }
+
     // ---- Anthropic tool schema: every field PLUS a sibling "<name>_confidence" number 0–1 ----
     private static object BuildTool(IReadOnlyList<ExtractionFieldSpec> fields)
     {

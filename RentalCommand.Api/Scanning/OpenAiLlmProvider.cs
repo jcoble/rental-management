@@ -164,6 +164,149 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         return ParseToolResult(json, fields);
     }
 
+    public async Task<LlmToolResult> ChatWithToolsAsync(
+        string systemPrompt,
+        IReadOnlyList<LlmChatMessage> messages,
+        IReadOnlyList<LlmToolSpec> tools,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_config.ApiKey))
+        {
+            WarnNoKeyOnce();
+            return new LlmToolResult("noop", "AI is unavailable because no API key is configured.",
+                Array.Empty<LlmToolCall>(), 0, 0, "noop");
+        }
+
+        // Build the messages array for chat/completions.
+        var msgList = new List<object>();
+
+        if (!string.IsNullOrEmpty(systemPrompt))
+            msgList.Add(new { role = "system", content = systemPrompt });
+
+        foreach (var m in messages)
+        {
+            switch (m.Role)
+            {
+                case "user":
+                    msgList.Add(new { role = "user", content = m.Content });
+                    break;
+
+                case "assistant" when m.ToolCalls is { Count: > 0 }:
+                    msgList.Add(new
+                    {
+                        role = "assistant",
+                        tool_calls = m.ToolCalls.Select(tc => new
+                        {
+                            id   = tc.Id,
+                            type = "function",
+                            function = new { name = tc.Name, arguments = tc.ArgumentsJson }
+                        }).ToArray()
+                    });
+                    break;
+
+                case "assistant":
+                    msgList.Add(new { role = "assistant", content = m.Content });
+                    break;
+
+                case "tool":
+                    msgList.Add(new { role = "tool", tool_call_id = m.ToolCallId, content = m.Content });
+                    break;
+
+                default:
+                    msgList.Add(new { role = m.Role, content = m.Content });
+                    break;
+            }
+        }
+
+        // Build the tools array. Parse the JSON-schema string so it serialises as a JSON object.
+        var toolDefs = tools.Select(t => new
+        {
+            type     = "function",
+            function = new
+            {
+                name        = t.Name,
+                description = t.Description,
+                parameters  = ParseJsonSchema(t.ParametersJsonSchema)
+            }
+        }).ToArray();
+
+        var body = new
+        {
+            model                 = _config.ModelId,
+            max_completion_tokens = 1024,
+            messages              = msgList,
+            tools                 = toolDefs,
+            tool_choice           = "auto"
+        };
+
+        using var resp = await SendChecked(BuildRequest(body), ct);
+        var json = await resp.Content.ReadAsStringAsync(ct);
+        return ParseChatWithToolsResult(json);
+    }
+
+    private static LlmToolResult ParseChatWithToolsResult(string responseJson)
+    {
+        using var doc = JsonDocument.Parse(responseJson);
+        var root = doc.RootElement;
+
+        int inputTokens = 0, outputTokens = 0;
+        if (root.TryGetProperty("usage", out var u))
+        {
+            if (u.TryGetProperty("prompt_tokens",     out var pt))  inputTokens  = pt.GetInt32();
+            if (u.TryGetProperty("completion_tokens", out var ct2)) outputTokens = ct2.GetInt32();
+        }
+        var modelId = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "";
+
+        if (!root.TryGetProperty("choices", out var choices)
+            || choices.ValueKind != JsonValueKind.Array
+            || choices.GetArrayLength() == 0)
+        {
+            return new LlmToolResult("error", null, Array.Empty<LlmToolCall>(),
+                inputTokens, outputTokens, modelId);
+        }
+
+        var message = choices[0].GetProperty("message");
+
+        // Tool calls path.
+        if (message.TryGetProperty("tool_calls", out var toolCallsEl)
+            && toolCallsEl.ValueKind == JsonValueKind.Array
+            && toolCallsEl.GetArrayLength() > 0)
+        {
+            var calls = new List<LlmToolCall>();
+            foreach (var tc in toolCallsEl.EnumerateArray())
+            {
+                var id       = tc.TryGetProperty("id",       out var tid)  ? tid.GetString()  ?? "" : "";
+                var fn       = tc.GetProperty("function");
+                var name     = fn.TryGetProperty("name",      out var tn)   ? tn.GetString()   ?? "" : "";
+                var argsJson = fn.TryGetProperty("arguments", out var targs) ? targs.GetString() ?? "{}" : "{}";
+                calls.Add(new LlmToolCall(id, name, argsJson));
+            }
+            return new LlmToolResult("tool_use", null, calls, inputTokens, outputTokens, modelId);
+        }
+
+        // Text-answer path.
+        var text = message.TryGetProperty("content", out var c) ? c.GetString() : null;
+        return new LlmToolResult("end", text, Array.Empty<LlmToolCall>(),
+            inputTokens, outputTokens, modelId);
+    }
+
+    /// <summary>
+    /// Parses a JSON Schema string into a <see cref="JsonElement"/> so it serialises
+    /// as a JSON object rather than an escaped string when embedded in a request body.
+    /// Falls back to an empty object on parse failure.
+    /// </summary>
+    private static JsonElement ParseJsonSchema(string jsonSchema)
+    {
+        try
+        {
+            return JsonDocument.Parse(jsonSchema).RootElement.Clone();
+        }
+        catch
+        {
+            return JsonDocument.Parse("{}").RootElement.Clone();
+        }
+    }
+
     // ---- OpenAI function schema: every field PLUS a sibling "<name>_confidence" number 0–1 ----
     private static object BuildInputSchema(IReadOnlyList<ExtractionFieldSpec> fields)
     {
