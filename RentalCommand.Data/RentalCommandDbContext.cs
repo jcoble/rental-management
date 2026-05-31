@@ -42,6 +42,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
     public DbSet<SecurityDepositHolding> SecurityDepositHoldings => Set<SecurityDepositHolding>();
 
+    // Stripe payment groundwork
+    public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
+    public DbSet<StripeWebhookEvent> StripeWebhookEvents => Set<StripeWebhookEvent>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Configures the ASP.NET Identity schema (AspNetUsers/Roles/etc.) with int keys.
@@ -614,6 +618,36 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.LeaseId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // --- Stripe payment groundwork ---
+
+        modelBuilder.Entity<PaymentTransaction>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.Currency).IsRequired().HasMaxLength(10);
+            entity.Property(e => e.Provider).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ProviderPaymentIntentId).HasMaxLength(200);
+            entity.Property(e => e.FailureReason).HasMaxLength(1000);
+            // Unique index on ProviderPaymentIntentId — filtered so nulls don't collide.
+            entity.HasIndex(e => e.ProviderPaymentIntentId)
+                  .IsUnique()
+                  .HasFilter("\"ProviderPaymentIntentId\" IS NOT NULL");
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.PaymentId);
+            entity.HasOne(e => e.Payment)
+                .WithMany()
+                .HasForeignKey(e => e.PaymentId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<StripeWebhookEvent>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.EventId).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.EventType).IsRequired().HasMaxLength(200);
+            entity.HasIndex(e => e.EventId).IsUnique();
         });
     }
 }
