@@ -156,13 +156,7 @@ public sealed class AnthropicLlmProvider : ILlmProvider
         var required = new List<string>();
         foreach (var f in fields)
         {
-            object schema = f.Type switch
-            {
-                "number" => new { type = "number", description = f.Description },
-                "date"   => new { type = "string", description = f.Description + " (ISO 8601 date)" },
-                "enum"   => new { type = "string", @enum = f.EnumValues ?? Array.Empty<string>(), description = f.Description },
-                _        => new { type = "string", description = f.Description }
-            };
+            object schema = BuildFieldSchema(f);
             props[f.Name] = schema;
             props[f.Name + "_confidence"] = new
             {
@@ -180,6 +174,35 @@ public sealed class AnthropicLlmProvider : ILlmProvider
             input_schema = new { type = "object", properties = props, required = required.ToArray() }
         };
     }
+
+    private static object BuildFieldSchema(ExtractionFieldSpec f)
+    {
+        if (f.Type == "array" && f.ItemFields is { Count: > 0 })
+        {
+            var itemProps = new Dictionary<string, object>();
+            var itemRequired = new List<string>();
+            foreach (var item in f.ItemFields)
+            {
+                itemProps[item.Name] = BuildScalarSchema(item);
+                if (item.Required) itemRequired.Add(item.Name);
+            }
+            return new
+            {
+                type = "array",
+                description = f.Description,
+                items = new { type = "object", properties = itemProps, required = itemRequired.ToArray() }
+            };
+        }
+        return BuildScalarSchema(f);
+    }
+
+    private static object BuildScalarSchema(ExtractionFieldSpec f) => f.Type switch
+    {
+        "number" => new { type = "number", description = f.Description },
+        "date"   => new { type = "string", description = f.Description + " (ISO 8601 date)" },
+        "enum"   => new { type = "string", @enum = f.EnumValues ?? Array.Empty<string>(), description = f.Description },
+        _        => new { type = "string", description = f.Description }
+    };
 
     private static ExtractedFields ParseToolResult(string responseJson, IReadOnlyList<ExtractionFieldSpec> fields)
     {
@@ -224,7 +247,10 @@ public sealed class AnthropicLlmProvider : ILlmProvider
             {
                 if (input.TryGetProperty(f.Name, out var v) && v.ValueKind != JsonValueKind.Null)
                 {
-                    value = v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : v.GetRawText();
+                    // For array fields: store the raw JSON of the returned array so it round-trips as a JSON string.
+                    value = f.Type == "array" && v.ValueKind == JsonValueKind.Array
+                        ? v.GetRawText()
+                        : v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : v.GetRawText();
                 }
                 if (input.TryGetProperty(f.Name + "_confidence", out var c)
                     && c.ValueKind == JsonValueKind.Number)
