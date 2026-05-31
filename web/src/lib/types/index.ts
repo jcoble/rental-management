@@ -328,12 +328,14 @@ export interface ActivityLog {
 	id: number;
 	portfolioId: number;
 	type: string;
+	typeName: string;
 	entityType?: string;
 	entityId?: number;
 	action?: string;
 	description?: string;
 	actor?: string;
 	createdAt: string;
+	testId?: string;
 }
 
 export interface Dashboard {
