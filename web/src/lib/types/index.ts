@@ -458,3 +458,42 @@ export interface TeamMember {
 export interface CreateTeamMemberResponse extends TeamMember {
 	generatedPassword?: string;
 }
+
+// --- Analytics / Insights types ---
+
+export interface MonthlyPoint {
+	/** "yyyy-MM" */
+	month: string;
+	income: number;
+	expenses: number;
+	net: number;
+}
+
+export interface CountAmount {
+	count: number;
+	amount: number;
+}
+
+export interface PriorityCount {
+	priority: string;
+	count: number;
+}
+
+export interface AnalyticsOverview {
+	totalUnits: number;
+	occupiedUnits: number;
+	/** 0–100 */
+	occupancyRate: number;
+	monthRentScheduled: number;
+	monthRentCollected: number;
+	/** 0–100 */
+	collectionRate: number;
+	overdue: CountAmount;
+	/** Last 12 months */
+	trend: MonthlyPoint[];
+	leasesExpiring30: number;
+	leasesExpiring60: number;
+	leasesExpiring90: number;
+	openWorkOrders: PriorityCount[];
+	monthlyRecurringRent: number;
+}

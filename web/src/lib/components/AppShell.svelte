@@ -24,7 +24,8 @@
 		Receipt,
 		Landmark,
 		FileBarChart,
-		History
+		History,
+		BarChart3
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -72,6 +73,7 @@
 		{ href: '/tenants', label: 'Tenants', icon: Users, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/leases', label: 'Leases', icon: FileText, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/maintenance', label: 'Maintenance', icon: Wrench, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/analytics', label: 'Insights', icon: BarChart3, roles: ['Admin', 'Manager'] },
 		{ href: '/accounting', label: 'Accounting', icon: Calculator, roles: ['Admin', 'Manager'] },
 		{ href: '/deposits', label: 'Deposits', icon: Landmark, roles: ['Admin', 'Manager'] },
 		{ href: '/tax', label: 'Tax', icon: Receipt, roles: ['Admin', 'Manager'] },
