@@ -107,6 +107,36 @@ public sealed class ScanService : IScanService
         var dto = BuildReceiptDto(draft.ExtractedFields);
         ApplyOverrides(dto, overridesJson);
 
+        // Determine paid vs unpaid.
+        // The review UI may send is_paid explicitly; if absent, derive from document_kind.
+        bool isPaid;
+        try
+        {
+            using var overrideDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(overridesJson) ? "{}" : overridesJson);
+            var overrideRoot = overrideDoc.RootElement;
+            if (overrideRoot.TryGetProperty("is_paid", out var isPaidEl) &&
+                (isPaidEl.ValueKind == JsonValueKind.True || isPaidEl.ValueKind == JsonValueKind.False))
+            {
+                isPaid = isPaidEl.GetBoolean();
+            }
+            else
+            {
+                isPaid = dto.DocumentKind is null or "Receipt" or "Other"
+                    ? true
+                    : dto.DocumentKind is "Bill" or "Invoice" or "UtilityBill" or "PropertyTax"
+                        ? false
+                        : true; // fallback to paid for unknown kinds
+            }
+        }
+        catch
+        {
+            isPaid = dto.DocumentKind is null or "Receipt" or "Other"
+                ? true
+                : dto.DocumentKind is "Bill" or "Invoice" or "UtilityBill" or "PropertyTax"
+                    ? false
+                    : true;
+        }
+
         // Build ReceiptData JSON for the non-promoted details.
         var receiptDataJson = BuildReceiptDataJson(dto);
 
@@ -114,7 +144,6 @@ public sealed class ScanService : IScanService
         {
             Category    = dto.Category ?? ScheduleECategory.Other,
             Description = string.IsNullOrWhiteSpace(dto.VendorName) ? "Scanned receipt" : dto.VendorName!,
-            Status      = ExpenseStatus.Pending,
             Amount      = dto.Total ?? dto.Subtotal ?? 0m,
             Subtotal    = dto.Subtotal,
             TaxAmount   = dto.Tax,
@@ -123,6 +152,19 @@ public sealed class ScanService : IScanService
             Notes       = dto.Notes,
             ReceiptData = receiptDataJson,
         };
+
+        if (isPaid)
+        {
+            request.Status  = ExpenseStatus.Paid;
+            request.PaidAt  = dto.TransactionDate ?? DateTime.UtcNow;
+            request.DueDate = null;
+        }
+        else
+        {
+            request.Status  = ExpenseStatus.Pending;
+            request.DueDate = dto.DueDate;
+            request.PaidAt  = null;
+        }
 
         ExpenseResponse? expense;
         try
@@ -283,6 +325,17 @@ public sealed class ScanService : IScanService
                 dto.Category = category;
             }
 
+            dto.DocumentKind = ReadFieldValue(root, "document_kind");
+
+            var dueDateStr = ReadFieldValue(root, "due_date");
+            if (!string.IsNullOrWhiteSpace(dueDateStr) &&
+                DateTime.TryParse(dueDateStr, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var dueDate))
+            {
+                dto.DueDate = dueDate;
+            }
+
             dto.Notes = ReadFieldValue(root, "notes");
 
             // ---- Line items ----
@@ -395,6 +448,8 @@ public sealed class ScanService : IScanService
 
             var obj = new
             {
+                documentKind  = dto.DocumentKind,
+                dueDate       = dto.DueDate,
                 vendor = new
                 {
                     address = dto.VendorAddress,
@@ -507,6 +562,17 @@ public sealed class ScanService : IScanService
             {
                 dto.Category = parsedCat;
             }
+
+            if (TryGetOverrideString(root, out var dueDateStr2, "dueDate", "due_date") &&
+                DateTime.TryParse(dueDateStr2, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var overrideDueDate))
+            {
+                dto.DueDate = overrideDueDate;
+            }
+
+            if (TryGetOverrideString(root, out var documentKind, "documentKind", "document_kind"))
+                dto.DocumentKind = documentKind;
         }
         catch (Exception ex)
         {

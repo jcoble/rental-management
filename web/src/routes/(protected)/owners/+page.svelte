@@ -7,7 +7,7 @@
 	import { ownerSchema, vendorSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
-	import Dialog from '$lib/components/ui/Dialog.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
@@ -226,50 +226,60 @@
 	</div>
 </div>
 
-<Dialog open={showOwnerForm} title={editingOwnerId == null ? 'New Owner' : 'Edit Owner'} class="max-w-md" onclose={closeOwnerForm}>
-	<div class="space-y-2" data-testid="owner-form">
-		<div>
-			<input data-testid="owner-name-input" bind:value={ownerForm.name} class="{inputClass} w-full" placeholder="Owner name" />
-			{#if ownerErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="owner-name-error">{ownerErrors.name}</p>{/if}
+<Dialog.Root open={showOwnerForm} onOpenChange={(v) => { if (!v) closeOwnerForm(); }}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>{editingOwnerId == null ? 'New Owner' : 'Edit Owner'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="space-y-2" data-testid="owner-form">
+			<div>
+				<input data-testid="owner-name-input" bind:value={ownerForm.name} class="{inputClass} w-full" placeholder="Owner name" />
+				{#if ownerErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="owner-name-error">{ownerErrors.name}</p>{/if}
+			</div>
+			<div>
+				<input data-testid="owner-email-input" bind:value={ownerForm.email} class="{inputClass} w-full" placeholder="Owner email" />
+				{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="owner-email-error">{ownerErrors.email}</p>{/if}
+			</div>
+			<input data-testid="owner-phone-input" bind:value={ownerForm.phone} class="{inputClass} w-full" placeholder="Owner phone" />
 		</div>
-		<div>
-			<input data-testid="owner-email-input" bind:value={ownerForm.email} class="{inputClass} w-full" placeholder="Owner email" />
-			{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="owner-email-error">{ownerErrors.email}</p>{/if}
+		<div class="mt-4 flex justify-end gap-2">
+			<button data-testid="owner-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeOwnerForm}>Cancel</button>
+			<button data-testid="owner-form-save" onclick={submitOwner} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveOwnerMutation.isPending}>{saveOwnerMutation.isPending ? 'Saving…' : 'Save Owner'}</button>
 		</div>
-		<input data-testid="owner-phone-input" bind:value={ownerForm.phone} class="{inputClass} w-full" placeholder="Owner phone" />
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="owner-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeOwnerForm}>Cancel</button>
-		<button data-testid="owner-form-save" onclick={submitOwner} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveOwnerMutation.isPending}>{saveOwnerMutation.isPending ? 'Saving…' : 'Save Owner'}</button>
-	</div>
-</Dialog>
+	</Dialog.Content>
+</Dialog.Root>
 
-<Dialog open={showVendorForm} title={editingVendorId == null ? 'New Vendor' : 'Edit Vendor'} class="max-w-md" onclose={closeVendorForm}>
-	<div class="space-y-2" data-testid="vendor-form">
-		<div>
-			<input data-testid="vendor-name-input" bind:value={vendorForm.name} class="{inputClass} w-full" placeholder="Vendor name" />
-			{#if vendorErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="vendor-name-error">{vendorErrors.name}</p>{/if}
+<Dialog.Root open={showVendorForm} onOpenChange={(v) => { if (!v) closeVendorForm(); }}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>{editingVendorId == null ? 'New Vendor' : 'Edit Vendor'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="space-y-2" data-testid="vendor-form">
+			<div>
+				<input data-testid="vendor-name-input" bind:value={vendorForm.name} class="{inputClass} w-full" placeholder="Vendor name" />
+				{#if vendorErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="vendor-name-error">{vendorErrors.name}</p>{/if}
+			</div>
+			<div>
+				<input data-testid="vendor-service-input" bind:value={vendorForm.serviceType} class="{inputClass} w-full" placeholder="Service type" />
+				{#if vendorErrors.serviceType}<p class="mt-1 text-xs text-destructive" data-testid="vendor-service-error">{vendorErrors.serviceType}</p>{/if}
+			</div>
+			<div>
+				<input data-testid="vendor-email-input" bind:value={vendorForm.email} class="{inputClass} w-full" placeholder="Vendor email" />
+				{#if vendorErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="vendor-email-error">{vendorErrors.email}</p>{/if}
+			</div>
+			<input data-testid="vendor-phone-input" bind:value={vendorForm.phone} class="{inputClass} w-full" placeholder="Vendor phone" />
+			<div class="flex flex-wrap gap-4 text-sm">
+				<label class="flex items-center gap-1.5"><input data-testid="vendor-1099-input" type="checkbox" bind:checked={vendorForm.is1099Eligible} /> 1099 eligible</label>
+				<label class="flex items-center gap-1.5"><input data-testid="vendor-w9-input" type="checkbox" bind:checked={vendorForm.w9OnFile} /> W-9 on file</label>
+				<label class="flex items-center gap-1.5"><input data-testid="vendor-preferred-input" type="checkbox" bind:checked={vendorForm.preferred} /> Preferred</label>
+			</div>
 		</div>
-		<div>
-			<input data-testid="vendor-service-input" bind:value={vendorForm.serviceType} class="{inputClass} w-full" placeholder="Service type" />
-			{#if vendorErrors.serviceType}<p class="mt-1 text-xs text-destructive" data-testid="vendor-service-error">{vendorErrors.serviceType}</p>{/if}
+		<div class="mt-4 flex justify-end gap-2">
+			<button data-testid="vendor-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeVendorForm}>Cancel</button>
+			<button data-testid="vendor-form-save" onclick={submitVendor} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveVendorMutation.isPending}>{saveVendorMutation.isPending ? 'Saving…' : 'Save Vendor'}</button>
 		</div>
-		<div>
-			<input data-testid="vendor-email-input" bind:value={vendorForm.email} class="{inputClass} w-full" placeholder="Vendor email" />
-			{#if vendorErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="vendor-email-error">{vendorErrors.email}</p>{/if}
-		</div>
-		<input data-testid="vendor-phone-input" bind:value={vendorForm.phone} class="{inputClass} w-full" placeholder="Vendor phone" />
-		<div class="flex flex-wrap gap-4 text-sm">
-			<label class="flex items-center gap-1.5"><input data-testid="vendor-1099-input" type="checkbox" bind:checked={vendorForm.is1099Eligible} /> 1099 eligible</label>
-			<label class="flex items-center gap-1.5"><input data-testid="vendor-w9-input" type="checkbox" bind:checked={vendorForm.w9OnFile} /> W-9 on file</label>
-			<label class="flex items-center gap-1.5"><input data-testid="vendor-preferred-input" type="checkbox" bind:checked={vendorForm.preferred} /> Preferred</label>
-		</div>
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="vendor-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeVendorForm}>Cancel</button>
-		<button data-testid="vendor-form-save" onclick={submitVendor} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveVendorMutation.isPending}>{saveVendorMutation.isPending ? 'Saving…' : 'Save Vendor'}</button>
-	</div>
-</Dialog>
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	open={ownerDeleteTarget !== null}

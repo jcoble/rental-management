@@ -2,6 +2,7 @@
 	import { page } from '$app/stores';
 	import {
 		LayoutDashboard,
+		ScanLine,
 		Building,
 		Users,
 		FileText,
@@ -27,6 +28,7 @@
 
 	const navItems: { href: string; label: string; icon: typeof Building; roles?: string[] }[] = [
 		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
+		{ href: '/scan', label: 'Scan', icon: ScanLine, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/properties', label: 'Properties', icon: Building, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/tenants', label: 'Tenants', icon: Users, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/leases', label: 'Leases', icon: FileText, roles: ['Admin', 'Manager', 'Agent'] },

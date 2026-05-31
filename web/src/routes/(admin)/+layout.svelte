@@ -4,4 +4,4 @@
 	let { children }: { children: import('svelte').Snippet } = $props();
 </script>
 
-<AppShell {children} />
+<AppShell>{@render children()}</AppShell>

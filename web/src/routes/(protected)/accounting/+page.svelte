@@ -11,7 +11,7 @@
 	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
-	import Dialog from '$lib/components/ui/Dialog.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
@@ -297,66 +297,82 @@
 	</div>
 </div>
 
-<Dialog open={showPaymentForm} title={editingPaymentId == null ? 'New Payment' : 'Edit Payment'} class="max-w-lg" onclose={closePaymentForm}>
-	<div class="space-y-2" data-testid="payment-form">
-		<div>
-			<select data-testid="payment-lease-input" bind:value={paymentForm.leaseId} class="{inputClass} w-full">
-				<option value="">Select lease</option>
-				{#each leasesQuery.data || [] as lease}<option value={lease.id}>{lease.leaseNumber} · {lease.tenantName}</option>{/each}
-			</select>
-			{#if paymentErrors.leaseId}<p class="mt-1 text-xs text-destructive" data-testid="payment-lease-error">{paymentErrors.leaseId}</p>{/if}
-		</div>
-		<div class="grid grid-cols-2 gap-2">
+<Dialog.Root
+	open={showPaymentForm}
+	onOpenChange={(v) => { if (!v) closePaymentForm(); }}
+>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>{editingPaymentId == null ? 'New Payment' : 'Edit Payment'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="space-y-2" data-testid="payment-form">
 			<div>
-				<input data-testid="payment-amount-input" bind:value={paymentForm.amount} class="{inputClass} w-full" placeholder="Amount" />
-				{#if paymentErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-error">{paymentErrors.amount}</p>{/if}
+				<select data-testid="payment-lease-input" bind:value={paymentForm.leaseId} class="{inputClass} w-full">
+					<option value="">Select lease</option>
+					{#each leasesQuery.data || [] as lease}<option value={lease.id}>{lease.leaseNumber} · {lease.tenantName}</option>{/each}
+				</select>
+				{#if paymentErrors.leaseId}<p class="mt-1 text-xs text-destructive" data-testid="payment-lease-error">{paymentErrors.leaseId}</p>{/if}
 			</div>
-			<div>
-				<input data-testid="payment-due-date-input" type="date" bind:value={paymentForm.dueDate} class="{inputClass} w-full" />
-				{#if paymentErrors.dueDate}<p class="mt-1 text-xs text-destructive" data-testid="payment-due-date-error">{paymentErrors.dueDate}</p>{/if}
+			<div class="grid grid-cols-2 gap-2">
+				<div>
+					<input data-testid="payment-amount-input" bind:value={paymentForm.amount} class="{inputClass} w-full" placeholder="Amount" />
+					{#if paymentErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-error">{paymentErrors.amount}</p>{/if}
+				</div>
+				<div>
+					<input data-testid="payment-due-date-input" type="date" bind:value={paymentForm.dueDate} class="{inputClass} w-full" />
+					{#if paymentErrors.dueDate}<p class="mt-1 text-xs text-destructive" data-testid="payment-due-date-error">{paymentErrors.dueDate}</p>{/if}
+				</div>
+			</div>
+			<div class="grid grid-cols-2 gap-2">
+				<select data-testid="payment-type-input" bind:value={paymentForm.type} class={inputClass}>{#each PAYMENT_TYPES as t}<option value={t}>{t}</option>{/each}</select>
+				<select data-testid="payment-status-input" bind:value={paymentForm.status} class={inputClass}>{#each PAYMENT_STATUSES as s}<option value={s}>{s}</option>{/each}</select>
 			</div>
 		</div>
-		<div class="grid grid-cols-2 gap-2">
-			<select data-testid="payment-type-input" bind:value={paymentForm.type} class={inputClass}>{#each PAYMENT_TYPES as t}<option value={t}>{t}</option>{/each}</select>
-			<select data-testid="payment-status-input" bind:value={paymentForm.status} class={inputClass}>{#each PAYMENT_STATUSES as s}<option value={s}>{s}</option>{/each}</select>
-		</div>
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="payment-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closePaymentForm}>Cancel</button>
-		<button data-testid="payment-form-save" onclick={submitPayment} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save Payment'}</button>
-	</div>
-</Dialog>
+		<Dialog.Footer>
+			<button data-testid="payment-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closePaymentForm}>Cancel</button>
+			<button data-testid="payment-form-save" onclick={submitPayment} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save Payment'}</button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
-<Dialog open={showExpenseForm} title={editingExpenseId == null ? 'New Expense' : 'Edit Expense'} class="max-w-lg" onclose={closeExpenseForm}>
-	<div class="space-y-2" data-testid="expense-form">
-		<div>
-			<input data-testid="expense-description-input" bind:value={expenseForm.description} class="{inputClass} w-full" placeholder="Description" />
-			{#if expenseErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expense-description-error">{expenseErrors.description}</p>{/if}
-		</div>
-		<div class="grid grid-cols-2 gap-2">
+<Dialog.Root
+	open={showExpenseForm}
+	onOpenChange={(v) => { if (!v) closeExpenseForm(); }}
+>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>{editingExpenseId == null ? 'New Expense' : 'Edit Expense'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="space-y-2" data-testid="expense-form">
 			<div>
-				<input data-testid="expense-amount-input" bind:value={expenseForm.amount} class="{inputClass} w-full" placeholder="Amount" />
-				{#if expenseErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expense-amount-error">{expenseErrors.amount}</p>{/if}
+				<input data-testid="expense-description-input" bind:value={expenseForm.description} class="{inputClass} w-full" placeholder="Description" />
+				{#if expenseErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expense-description-error">{expenseErrors.description}</p>{/if}
 			</div>
-			<div>
-				<input data-testid="expense-incurred-input" type="date" bind:value={expenseForm.incurredAt} class="{inputClass} w-full" />
-				{#if expenseErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expense-incurred-error">{expenseErrors.incurredAt}</p>{/if}
+			<div class="grid grid-cols-2 gap-2">
+				<div>
+					<input data-testid="expense-amount-input" bind:value={expenseForm.amount} class="{inputClass} w-full" placeholder="Amount" />
+					{#if expenseErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expense-amount-error">{expenseErrors.amount}</p>{/if}
+				</div>
+				<div>
+					<input data-testid="expense-incurred-input" type="date" bind:value={expenseForm.incurredAt} class="{inputClass} w-full" />
+					{#if expenseErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expense-incurred-error">{expenseErrors.incurredAt}</p>{/if}
+				</div>
+			</div>
+			<div class="grid grid-cols-2 gap-2">
+				<select data-testid="expense-category-input" bind:value={expenseForm.category} class={inputClass}><option>Repairs</option><option>Utilities</option><option>Landscaping</option><option>Cleaning</option><option>Management</option><option>Other</option></select>
+				<select data-testid="expense-status-input" bind:value={expenseForm.status} class={inputClass}><option>Pending</option><option>Approved</option><option>Paid</option></select>
+			</div>
+			<div class="grid grid-cols-2 gap-2">
+				<select data-testid="expense-property-input" bind:value={expenseForm.propertyId} class={inputClass}><option value="">No property</option>{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}</select>
+				<select data-testid="expense-vendor-input" bind:value={expenseForm.vendorId} class={inputClass}><option value="">No vendor</option>{#each vendorsQuery.data || [] as vendor}<option value={vendor.id}>{vendor.name}</option>{/each}</select>
 			</div>
 		</div>
-		<div class="grid grid-cols-2 gap-2">
-			<select data-testid="expense-category-input" bind:value={expenseForm.category} class={inputClass}><option>Repairs</option><option>Utilities</option><option>Landscaping</option><option>Cleaning</option><option>Management</option><option>Other</option></select>
-			<select data-testid="expense-status-input" bind:value={expenseForm.status} class={inputClass}><option>Pending</option><option>Approved</option><option>Paid</option></select>
-		</div>
-		<div class="grid grid-cols-2 gap-2">
-			<select data-testid="expense-property-input" bind:value={expenseForm.propertyId} class={inputClass}><option value="">No property</option>{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}</select>
-			<select data-testid="expense-vendor-input" bind:value={expenseForm.vendorId} class={inputClass}><option value="">No vendor</option>{#each vendorsQuery.data || [] as vendor}<option value={vendor.id}>{vendor.name}</option>{/each}</select>
-		</div>
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="expense-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeExpenseForm}>Cancel</button>
-		<button data-testid="expense-form-save" onclick={submitExpense} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save Expense'}</button>
-	</div>
-</Dialog>
+		<Dialog.Footer>
+			<button data-testid="expense-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeExpenseForm}>Cancel</button>
+			<button data-testid="expense-form-save" onclick={submitExpense} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save Expense'}</button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	open={paymentDeleteTarget !== null}
