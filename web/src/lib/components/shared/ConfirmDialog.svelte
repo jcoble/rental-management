@@ -26,12 +26,12 @@
 
 <Dialog {open} {title} onclose={oncancel}>
 	<div data-testid="{testid}-dialog">
-		<p class="text-sm text-text-secondary">{message}</p>
+		<p class="text-sm text-muted-foreground">{message}</p>
 		<div class="mt-4 flex justify-end gap-2">
 			<button
 				type="button"
 				data-testid="{testid}-cancel"
-				class="rounded-md border border-border px-3 py-2 text-sm text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+				class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 				onclick={oncancel}
 				disabled={busy}
 			>
@@ -40,7 +40,7 @@
 			<button
 				type="button"
 				data-testid="{testid}-confirm"
-				class="rounded-md bg-danger px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-60"
+				class="rounded-md bg-destructive px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-60"
 				onclick={onconfirm}
 				disabled={busy}
 			>

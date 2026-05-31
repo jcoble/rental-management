@@ -116,7 +116,7 @@
 	}
 
 	const list = $derived((appointmentsQuery.data ?? []).filter((a) => !typeFilter || a.type === typeFilter));
-	const inputClass = 'rounded border border-border bg-bg px-3 py-2 text-sm';
+	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
 </script>
 
 <svelte:head>
@@ -127,9 +127,9 @@
 	<div class="mb-4 flex items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold">Appointments</h1>
-			<p class="text-sm text-text-secondary">Showings, move-ins, inspections, and service visits.</p>
+			<p class="text-sm text-muted-foreground">Showings, move-ins, inspections, and service visits.</p>
 		</div>
-		<button data-testid="appointment-create-button" class="inline-flex items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm text-white" onclick={openCreate}>
+		<button data-testid="appointment-create-button" class="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-white" onclick={openCreate}>
 			<Plus class="h-4 w-4" />
 			New Appointment
 		</button>
@@ -145,27 +145,27 @@
 
 	<div class="grid gap-3" data-testid="appointments-list">
 		{#if appointmentsQuery.isLoading}
-			<div class="rounded-lg border border-border bg-surface p-6 text-center text-text-secondary" data-testid="appointments-loading">Loading…</div>
+			<div class="rounded-lg border border-border bg-card p-6 text-center text-muted-foreground" data-testid="appointments-loading">Loading…</div>
 		{:else if list.length === 0}
-			<div class="rounded-lg border border-border bg-surface p-6 text-center text-text-secondary" data-testid="appointments-empty">No appointments found.</div>
+			<div class="rounded-lg border border-border bg-card p-6 text-center text-muted-foreground" data-testid="appointments-empty">No appointments found.</div>
 		{:else}
 			{#each list as appointment (appointment.id)}
-				<div class="rounded-lg border border-border bg-surface p-4" data-testid="appointment-row" data-appointment-id={appointment.id}>
+				<div class="rounded-lg border border-border bg-card p-4" data-testid="appointment-row" data-appointment-id={appointment.id}>
 					<div class="flex items-center justify-between gap-2">
 						<div class="min-w-0">
 							<p class="truncate font-medium" data-testid="appointment-title">{appointment.title}</p>
-							<p class="text-xs text-text-secondary">{new Date(appointment.scheduledStart).toLocaleString()} · {appointment.type}</p>
+							<p class="text-xs text-muted-foreground">{new Date(appointment.scheduledStart).toLocaleString()} · {appointment.type}</p>
 						</div>
 						<div class="flex shrink-0 items-center gap-1">
-							<span class="rounded border border-border bg-bg px-2 py-0.5 text-xs">{appointment.status}</span>
+							<span class="rounded border border-border bg-background px-2 py-0.5 text-xs">{appointment.status}</span>
 							{#if appointment.status !== 'Completed'}
 								<button data-testid="appointment-complete" class="rounded border border-border px-2 py-1 text-xs" onclick={() => statusMutation.mutate({ id: appointment.id, status: 'Completed' })}>Complete</button>
 							{/if}
-							<button data-testid="appointment-edit" aria-label="Edit appointment" class="rounded p-1.5 text-text-tertiary hover:bg-surface-hover hover:text-text-primary" onclick={() => openEdit(appointment)}><Pencil class="h-4 w-4" /></button>
-							<button data-testid="appointment-delete" aria-label="Delete appointment" class="rounded p-1.5 text-text-tertiary hover:bg-surface-hover hover:text-danger" onclick={() => (deleteTarget = appointment)}><Trash2 class="h-4 w-4" /></button>
+							<button data-testid="appointment-edit" aria-label="Edit appointment" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" onclick={() => openEdit(appointment)}><Pencil class="h-4 w-4" /></button>
+							<button data-testid="appointment-delete" aria-label="Delete appointment" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive" onclick={() => (deleteTarget = appointment)}><Trash2 class="h-4 w-4" /></button>
 						</div>
 					</div>
-					<p class="mt-1 text-xs text-text-secondary">{appointment.propertyName || 'No property'} · {appointment.tenantName || appointment.prospectName || 'No contact'}</p>
+					<p class="mt-1 text-xs text-muted-foreground">{appointment.propertyName || 'No property'} · {appointment.tenantName || appointment.prospectName || 'No contact'}</p>
 				</div>
 			{/each}
 		{/if}
@@ -180,12 +180,12 @@
 	<div class="grid gap-3 md:grid-cols-3" data-testid="appointment-form">
 		<div class="md:col-span-2">
 			<input data-testid="appointment-title-input" bind:value={form.title} class="{inputClass} w-full" placeholder="Appointment title" />
-			{#if formErrors.title}<p class="mt-1 text-xs text-danger" data-testid="appointment-title-error">{formErrors.title}</p>{/if}
+			{#if formErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="appointment-title-error">{formErrors.title}</p>{/if}
 		</div>
 		<select data-testid="appointment-type-input" bind:value={form.type} class={inputClass}>{#each APPT_TYPES as t}<option value={t}>{t}</option>{/each}</select>
 		<div>
 			<input data-testid="appointment-start-input" type="datetime-local" bind:value={form.scheduledStart} class="{inputClass} w-full" />
-			{#if formErrors.scheduledStart}<p class="mt-1 text-xs text-danger" data-testid="appointment-start-error">{formErrors.scheduledStart}</p>{/if}
+			{#if formErrors.scheduledStart}<p class="mt-1 text-xs text-destructive" data-testid="appointment-start-error">{formErrors.scheduledStart}</p>{/if}
 		</div>
 		<input data-testid="appointment-end-input" type="datetime-local" bind:value={form.scheduledEnd} class={inputClass} />
 		<select data-testid="appointment-status-input" bind:value={form.status} class={inputClass}>{#each APPT_STATUSES as s}<option value={s}>{s}</option>{/each}</select>
@@ -195,12 +195,12 @@
 		<input data-testid="appointment-prospect-name-input" bind:value={form.prospectName} class={inputClass} placeholder="Prospect name" />
 		<div>
 			<input data-testid="appointment-prospect-email-input" bind:value={form.prospectEmail} class="{inputClass} w-full" placeholder="Prospect email" />
-			{#if formErrors.prospectEmail}<p class="mt-1 text-xs text-danger" data-testid="appointment-prospect-email-error">{formErrors.prospectEmail}</p>{/if}
+			{#if formErrors.prospectEmail}<p class="mt-1 text-xs text-destructive" data-testid="appointment-prospect-email-error">{formErrors.prospectEmail}</p>{/if}
 		</div>
 	</div>
 	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="appointment-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover" onclick={closeForm}>Cancel</button>
-		<button data-testid="appointment-form-save" onclick={submit} class="rounded bg-accent px-3 py-2 text-sm text-white" disabled={saveMutation.isPending}>{saveMutation.isPending ? 'Saving…' : 'Save Appointment'}</button>
+		<button data-testid="appointment-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
+		<button data-testid="appointment-form-save" onclick={submit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveMutation.isPending}>{saveMutation.isPending ? 'Saving…' : 'Save Appointment'}</button>
 	</div>
 </Dialog>
 

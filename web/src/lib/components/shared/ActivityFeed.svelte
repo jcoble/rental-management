@@ -28,9 +28,9 @@
 	function getIconColor(action: string | undefined) {
 		switch (action) {
 			case 'created': return 'text-success';
-			case 'deleted': return 'text-danger';
+			case 'deleted': return 'text-destructive';
 			case 'completed': return 'text-success';
-			default: return 'text-text-tertiary';
+			default: return 'text-muted-foreground';
 		}
 	}
 
@@ -56,28 +56,28 @@
 		{#if href}
 			<a
 				{href}
-				class="flex items-start gap-3 rounded-md px-2 py-1.5 transition-colors {compact ? '' : 'hover:bg-surface-hover'} group"
+				class="flex items-start gap-3 rounded-md px-2 py-1.5 transition-colors {compact ? '' : 'hover:bg-secondary'} group"
 			>
 				<div class="mt-0.5 {getIconColor(item.action)}">
 					<Icon class="h-3.5 w-3.5" />
 				</div>
 				<div class="min-w-0 flex-1">
-					<p class="text-sm text-text-secondary truncate group-hover:text-accent transition-colors">{item.description || `${item.action} ${item.entityType}`}</p>
-					<p class="text-xs text-text-tertiary">{formatRelative(item.createdAt)}</p>
+					<p class="text-sm text-muted-foreground truncate group-hover:text-primary transition-colors">{item.description || `${item.action} ${item.entityType}`}</p>
+					<p class="text-xs text-muted-foreground">{formatRelative(item.createdAt)}</p>
 				</div>
 			</a>
 		{:else}
-			<div class="flex items-start gap-3 rounded-md px-2 py-1.5 {compact ? '' : 'hover:bg-surface-hover'}">
+			<div class="flex items-start gap-3 rounded-md px-2 py-1.5 {compact ? '' : 'hover:bg-secondary'}">
 				<div class="mt-0.5 {getIconColor(item.action)}">
 					<Icon class="h-3.5 w-3.5" />
 				</div>
 				<div class="min-w-0 flex-1">
-					<p class="text-sm text-text-secondary truncate">{item.description || `${item.action} ${item.entityType}`}</p>
-					<p class="text-xs text-text-tertiary">{formatRelative(item.createdAt)}</p>
+					<p class="text-sm text-muted-foreground truncate">{item.description || `${item.action} ${item.entityType}`}</p>
+					<p class="text-xs text-muted-foreground">{formatRelative(item.createdAt)}</p>
 				</div>
 			</div>
 		{/if}
 	{:else}
-		<p class="px-2 py-4 text-center text-sm text-text-tertiary">No recent activity</p>
+		<p class="px-2 py-4 text-center text-sm text-muted-foreground">No recent activity</p>
 	{/each}
 </div>

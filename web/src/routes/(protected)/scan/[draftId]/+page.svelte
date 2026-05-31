@@ -80,9 +80,9 @@
 
 	function fieldInputClass(field: ScanFieldDto): string {
 		const level = confidenceLevel(field.confidence);
-		const base = 'w-full rounded border px-3 py-2 text-sm bg-bg text-text focus:outline-none focus:ring-1 focus:ring-accent';
+		const base = 'w-full rounded border px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring';
 		if (level === 'low') return `${base} border-red-400 dark:border-red-500`;
-		if (level === 'medium') return `${base} border-border text-text-secondary`;
+		if (level === 'medium') return `${base} border-border text-muted-foreground`;
 		return `${base} border-border`;
 	}
 
@@ -157,11 +157,11 @@
 			<div class="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent"></div>
 		</div>
 	{:else if !data}
-		<p class="text-sm text-text-secondary">Scan draft not found.</p>
+		<p class="text-sm text-muted-foreground">Scan draft not found.</p>
 	{:else}
 		<div class="mb-4 flex items-center gap-3">
-			<a href="/scan" class="text-sm text-text-secondary hover:text-text">&larr; Back to Scans</a>
-			<span class="text-text-secondary">/</span>
+			<a href="/scan" class="text-sm text-muted-foreground hover:text-foreground">&larr; Back to Scans</a>
+			<span class="text-muted-foreground">/</span>
 			<h1 class="text-xl font-bold">Review Scan #{data.id}</h1>
 			<span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium
 				{data.status === 'Pending' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' : ''}
@@ -186,7 +186,7 @@
 
 		<div class="grid gap-6 lg:grid-cols-2">
 			<!-- Left: document preview -->
-			<div class="flex flex-col rounded-lg border border-border bg-surface">
+			<div class="flex flex-col rounded-lg border border-border bg-card">
 				<div class="border-b border-border px-4 py-3">
 					<span class="font-semibold text-sm">Document Preview</span>
 				</div>
@@ -215,29 +215,29 @@
 									href={fileUrl}
 									target="_blank"
 									rel="noopener noreferrer"
-									class="text-xs text-accent hover:underline"
+									class="text-xs text-primary hover:underline"
 								>
 									Open in new tab
 								</a>
 							</div>
 						</div>
 					{:else}
-						<p class="text-sm text-text-secondary">No preview available.</p>
+						<p class="text-sm text-muted-foreground">No preview available.</p>
 					{/if}
 				</div>
 			</div>
 
 			<!-- Right: extracted fields form -->
-			<div class="flex flex-col rounded-lg border border-border bg-surface">
+			<div class="flex flex-col rounded-lg border border-border bg-card">
 				<div class="border-b border-border px-4 py-3">
 					<span class="font-semibold text-sm">Extracted Fields</span>
 					{#if data.modelId}
-						<span class="ml-2 text-xs text-text-secondary">via {data.modelId}</span>
+						<span class="ml-2 text-xs text-muted-foreground">via {data.modelId}</span>
 					{/if}
 				</div>
 				<div class="flex-1 space-y-4 overflow-y-auto p-4">
 					{#if data.fields.length === 0}
-						<p class="text-sm text-text-secondary">
+						<p class="text-sm text-muted-foreground">
 							{#if data.status === 'Pending'}
 								Fields will appear once extraction completes.
 							{:else}
@@ -248,7 +248,7 @@
 						<div class="space-y-3">
 							{#each ['vendor_name', 'amount', 'transaction_date', 'category', 'notes'] as fieldName}
 								<div>
-									<label class="mb-1 block text-xs font-medium text-text-secondary capitalize" for="field-{fieldName}">
+									<label class="mb-1 block text-xs font-medium text-muted-foreground capitalize" for="field-{fieldName}">
 										{fieldName.replace(/_/g, ' ')}
 									</label>
 									{#if fieldName === 'category'}
@@ -256,7 +256,7 @@
 											id="field-{fieldName}"
 											data-testid="scan-field-{fieldName}"
 											bind:value={editedFields[fieldName]}
-											class="w-full rounded border border-border bg-bg px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent"
+											class="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
 										>
 											<option value="">Select category</option>
 											{#each SCHEDULE_E_CATEGORIES as cat}
@@ -269,7 +269,7 @@
 											data-testid="scan-field-{fieldName}"
 											type="text"
 											bind:value={editedFields[fieldName]}
-											class="w-full rounded border border-border bg-bg px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent"
+											class="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
 										/>
 									{/if}
 								</div>
@@ -281,13 +281,13 @@
 							<div>
 								<div class="mb-1 flex items-center justify-between">
 									<label
-										class="text-xs font-medium capitalize {level === 'medium' ? 'text-text-secondary' : 'text-text'}"
+										class="text-xs font-medium capitalize {level === 'medium' ? 'text-muted-foreground' : 'text-foreground'}"
 										for="field-{field.name}"
 									>
 										{field.name.replace(/_/g, ' ')}
 									</label>
 									{#if level !== 'high'}
-										<span class="text-xs {level === 'low' ? 'text-red-500' : 'text-text-secondary'}">
+										<span class="text-xs {level === 'low' ? 'text-red-500' : 'text-muted-foreground'}">
 											{confidenceLabel(field.confidence)}
 										</span>
 									{/if}
@@ -326,7 +326,7 @@
 							data-testid="scan-confirm"
 							onclick={() => confirmMutation.mutate()}
 							disabled={confirmMutation.isPending || data.status === 'Rejected'}
-							class="flex-1 rounded bg-accent px-4 py-2 text-sm font-medium text-white hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+							class="flex-1 rounded bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
 						>
 							{confirmMutation.isPending ? 'Confirming…' : 'Confirm & Create Expense'}
 						</button>
@@ -334,7 +334,7 @@
 							data-testid="scan-reject"
 							onclick={handleReject}
 							disabled={rejectMutation.isPending || data.status === 'Rejected' || data.status === 'Confirmed'}
-							class="rounded border border-border px-4 py-2 text-sm font-medium text-text-secondary hover:bg-surface-hover hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+							class="rounded border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
 						>
 							{rejectMutation.isPending ? 'Rejecting…' : 'Reject'}
 						</button>
@@ -343,7 +343,7 @@
 						<p class="mt-2 text-center text-xs text-green-600 dark:text-green-400">This scan has already been confirmed.</p>
 					{/if}
 					{#if data.status === 'Rejected'}
-						<p class="mt-2 text-center text-xs text-text-secondary">This scan has been rejected.</p>
+						<p class="mt-2 text-center text-xs text-muted-foreground">This scan has been rejected.</p>
 					{/if}
 				</div>
 			</div>

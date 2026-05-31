@@ -143,7 +143,7 @@
 	}
 
 	const list = $derived((leasesQuery.data ?? []).filter((l) => !statusFilter || l.status === statusFilter));
-	const inputClass = 'rounded border border-border bg-bg px-3 py-2 text-sm';
+	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
 </script>
 
 <svelte:head>
@@ -154,9 +154,9 @@
 	<div class="mb-4 flex items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold">Leases</h1>
-			<p class="text-sm text-text-secondary">Lease lifecycle, rent terms, and status updates.</p>
+			<p class="text-sm text-muted-foreground">Lease lifecycle, rent terms, and status updates.</p>
 		</div>
-		<button data-testid="lease-create-button" class="inline-flex items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm text-white" onclick={openCreate}>
+		<button data-testid="lease-create-button" class="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-white" onclick={openCreate}>
 			<Plus class="h-4 w-4" />
 			New Lease
 		</button>
@@ -170,10 +170,10 @@
 		</select>
 	</div>
 
-	<div class="rounded-lg border border-border bg-surface">
+	<div class="rounded-lg border border-border bg-card">
 		<div class="overflow-x-auto">
 			<table class="min-w-full text-sm">
-				<thead class="border-b border-border bg-bg text-left text-xs uppercase text-text-tertiary">
+				<thead class="border-b border-border bg-background text-left text-xs uppercase text-muted-foreground">
 					<tr>
 						<th class="px-3 py-2">Lease</th>
 						<th class="px-3 py-2">Tenant</th>
@@ -186,9 +186,9 @@
 				</thead>
 				<tbody data-testid="leases-list">
 					{#if leasesQuery.isLoading}
-						<tr><td colspan="7" class="px-3 py-6 text-center text-text-secondary" data-testid="leases-loading">Loading…</td></tr>
+						<tr><td colspan="7" class="px-3 py-6 text-center text-muted-foreground" data-testid="leases-loading">Loading…</td></tr>
 					{:else if list.length === 0}
-						<tr><td colspan="7" class="px-3 py-6 text-center text-text-secondary" data-testid="leases-empty">No leases found.</td></tr>
+						<tr><td colspan="7" class="px-3 py-6 text-center text-muted-foreground" data-testid="leases-empty">No leases found.</td></tr>
 					{:else}
 						{#each list as lease (lease.id)}
 							<tr class="border-b border-border/70" data-testid="lease-row" data-lease-id={lease.id}>
@@ -196,7 +196,7 @@
 								<td class="px-3 py-2">{lease.tenantName || '—'}</td>
 								<td class="px-3 py-2">{lease.propertyName} · {lease.unitNumber}</td>
 								<td class="px-3 py-2">${lease.monthlyRent}</td>
-								<td class="px-3 py-2 text-text-secondary">{new Date(lease.startDate).toLocaleDateString()} - {new Date(lease.endDate).toLocaleDateString()}</td>
+								<td class="px-3 py-2 text-muted-foreground">{new Date(lease.startDate).toLocaleDateString()} - {new Date(lease.endDate).toLocaleDateString()}</td>
 								<td class="px-3 py-2" data-testid="lease-status">{lease.status}</td>
 								<td class="px-3 py-2">
 									<div class="flex justify-end gap-1">
@@ -205,10 +205,10 @@
 										{:else}
 											<button data-testid="lease-give-notice" class="rounded border border-border px-2 py-1 text-xs" onclick={() => statusMutation.mutate({ id: lease.id, status: 'NoticeGiven' })}>Give Notice</button>
 										{/if}
-										<button data-testid="lease-edit" aria-label="Edit lease" class="rounded p-1.5 text-text-tertiary hover:bg-surface-hover hover:text-text-primary" onclick={() => openEdit(lease)}>
+										<button data-testid="lease-edit" aria-label="Edit lease" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" onclick={() => openEdit(lease)}>
 											<Pencil class="h-4 w-4" />
 										</button>
-										<button data-testid="lease-delete" aria-label="Delete lease" class="rounded p-1.5 text-text-tertiary hover:bg-surface-hover hover:text-danger" onclick={() => (deleteTarget = lease)}>
+										<button data-testid="lease-delete" aria-label="Delete lease" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive" onclick={() => (deleteTarget = lease)}>
 											<Trash2 class="h-4 w-4" />
 										</button>
 									</div>
@@ -236,33 +236,33 @@
 				<option value="">Select unit</option>
 				{#each unitsForPropertyQuery.data || [] as unit}<option value={unit.id}>Unit {unit.unitNumber} ({unit.status})</option>{/each}
 			</select>
-			{#if formErrors.unitId}<p class="mt-1 text-xs text-danger" data-testid="lease-unit-error">{formErrors.unitId}</p>{/if}
+			{#if formErrors.unitId}<p class="mt-1 text-xs text-destructive" data-testid="lease-unit-error">{formErrors.unitId}</p>{/if}
 		</div>
 		<div>
 			<select data-testid="lease-tenant-input" bind:value={form.tenantId} class="{inputClass} w-full">
 				<option value="">Select tenant</option>
 				{#each tenantsQuery.data || [] as tenant}<option value={tenant.id}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</option>{/each}
 			</select>
-			{#if formErrors.tenantId}<p class="mt-1 text-xs text-danger" data-testid="lease-tenant-error">{formErrors.tenantId}</p>{/if}
+			{#if formErrors.tenantId}<p class="mt-1 text-xs text-destructive" data-testid="lease-tenant-error">{formErrors.tenantId}</p>{/if}
 		</div>
 		<div>
 			<input data-testid="lease-start-input" type="date" bind:value={form.startDate} class="{inputClass} w-full" />
-			{#if formErrors.startDate}<p class="mt-1 text-xs text-danger" data-testid="lease-start-error">{formErrors.startDate}</p>{/if}
+			{#if formErrors.startDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-start-error">{formErrors.startDate}</p>{/if}
 		</div>
 		<div>
 			<input data-testid="lease-end-input" type="date" bind:value={form.endDate} class="{inputClass} w-full" />
-			{#if formErrors.endDate}<p class="mt-1 text-xs text-danger" data-testid="lease-end-error">{formErrors.endDate}</p>{/if}
+			{#if formErrors.endDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-end-error">{formErrors.endDate}</p>{/if}
 		</div>
 		<select data-testid="lease-status-input" bind:value={form.status} class={inputClass}>
 			{#each LEASE_STATUSES as s}<option value={s}>{s}</option>{/each}
 		</select>
 		<div>
 			<input data-testid="lease-rent-input" bind:value={form.monthlyRent} class="{inputClass} w-full" placeholder="Monthly rent" />
-			{#if formErrors.monthlyRent}<p class="mt-1 text-xs text-danger" data-testid="lease-rent-error">{formErrors.monthlyRent}</p>{/if}
+			{#if formErrors.monthlyRent}<p class="mt-1 text-xs text-destructive" data-testid="lease-rent-error">{formErrors.monthlyRent}</p>{/if}
 		</div>
 		<div>
 			<input data-testid="lease-deposit-input" bind:value={form.securityDeposit} class="{inputClass} w-full" placeholder="Security deposit" />
-			{#if formErrors.securityDeposit}<p class="mt-1 text-xs text-danger" data-testid="lease-deposit-error">{formErrors.securityDeposit}</p>{/if}
+			{#if formErrors.securityDeposit}<p class="mt-1 text-xs text-destructive" data-testid="lease-deposit-error">{formErrors.securityDeposit}</p>{/if}
 		</div>
 		<div class="grid grid-cols-2 gap-2">
 			<input data-testid="lease-late-fee-input" bind:value={form.lateFeeAmount} class={inputClass} placeholder="Late fee" />
@@ -270,8 +270,8 @@
 		</div>
 	</div>
 	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="lease-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover" onclick={closeForm}>Cancel</button>
-		<button data-testid="lease-form-save" onclick={submit} class="rounded bg-accent px-3 py-2 text-sm text-white" disabled={saveMutation.isPending}>
+		<button data-testid="lease-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
+		<button data-testid="lease-form-save" onclick={submit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveMutation.isPending}>
 			{saveMutation.isPending ? 'Saving…' : 'Save Lease'}
 		</button>
 	</div>

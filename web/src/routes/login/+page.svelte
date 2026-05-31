@@ -29,13 +29,13 @@
 	<title>Sign in - Rental Command</title>
 </svelte:head>
 
-<div class="flex h-full items-center justify-center bg-bg p-6">
-	<div class="w-full max-w-md rounded-xl border border-border bg-surface p-6 shadow-xl">
+<div class="flex h-full items-center justify-center bg-background p-6">
+	<div class="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-xl">
 		<div class="mb-5 flex items-center gap-2">
-			<Building class="h-6 w-6 text-accent" />
-			<h1 class="text-xl font-bold text-text-primary">Rental Command</h1>
+			<Building class="h-6 w-6 text-primary" />
+			<h1 class="text-xl font-bold text-foreground">Rental Command</h1>
 		</div>
-		<p class="mb-4 text-sm text-text-secondary">Sign in to your account.</p>
+		<p class="mb-4 text-sm text-muted-foreground">Sign in to your account.</p>
 
 		<form
 			method="POST"
@@ -54,7 +54,7 @@
 			{/if}
 
 			<div>
-				<label for="login-email" class="mb-1 block text-xs text-text-tertiary">Email</label>
+				<label for="login-email" class="mb-1 block text-xs text-muted-foreground">Email</label>
 				<input
 					id="login-email"
 					name="email"
@@ -63,13 +63,13 @@
 					autocomplete="email"
 					bind:value={email}
 					required
-					class="w-full rounded border border-border bg-bg px-3 py-2 text-sm text-text-primary"
+					class="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
 					placeholder="you@example.com"
 				/>
 			</div>
 
 			<div>
-				<label for="login-password" class="mb-1 block text-xs text-text-tertiary">Password</label>
+				<label for="login-password" class="mb-1 block text-xs text-muted-foreground">Password</label>
 				<input
 					id="login-password"
 					name="password"
@@ -78,7 +78,7 @@
 					autocomplete="current-password"
 					bind:value={password}
 					required
-					class="w-full rounded border border-border bg-bg px-3 py-2 text-sm text-text-primary"
+					class="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
 					placeholder="••••••••"
 				/>
 			</div>
@@ -87,7 +87,7 @@
 				type="submit"
 				data-testid="login-submit"
 				disabled={submitting}
-				class="w-full rounded bg-accent px-3 py-2 text-sm font-medium text-white transition-opacity disabled:opacity-60"
+				class="w-full rounded bg-primary px-3 py-2 text-sm font-medium text-white transition-opacity disabled:opacity-60"
 			>
 				{submitting ? 'Signing in…' : 'Sign In'}
 			</button>
@@ -97,14 +97,14 @@
 					type="button"
 					data-testid="login-fill-dev"
 					onclick={fillDevCredentials}
-					class="w-full rounded border border-dashed border-border px-3 py-2 text-xs text-text-tertiary transition-colors hover:text-text-secondary"
+					class="w-full rounded border border-dashed border-border px-3 py-2 text-xs text-muted-foreground transition-colors hover:text-muted-foreground"
 				>
 					Fill dev login (admin)
 				</button>
 			{/if}
 
 			{#if form?.error}
-				<p class="text-sm text-danger" role="alert" data-testid="login-error">{form.error}</p>
+				<p class="text-sm text-destructive" role="alert" data-testid="login-error">{form.error}</p>
 			{/if}
 		</form>
 	</div>
