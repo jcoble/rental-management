@@ -19,12 +19,31 @@ public class AuthController : ControllerBase
 
     private readonly IAuthService _authService;
     private readonly IJwtTokenService _tokenService;
+    private readonly IWebHostEnvironment _environment;
+    private readonly IConfiguration _configuration;
+    private readonly ILogger<AuthController> _logger;
 
-    public AuthController(IAuthService authService, IJwtTokenService tokenService)
+    public AuthController(
+        IAuthService authService,
+        IJwtTokenService tokenService,
+        IWebHostEnvironment environment,
+        IConfiguration configuration,
+        ILogger<AuthController> logger)
     {
         _authService = authService;
         _tokenService = tokenService;
+        _environment = environment;
+        _configuration = configuration;
+        _logger = logger;
     }
+
+    /// <summary>
+    /// True only when running in Development AND the explicit, non-default opt-in flag
+    /// <c>Auth:ExposeDevTokens</c> is set to <c>true</c>. Used to gate exposing email-confirmation
+    /// and password-reset tokens in API responses for local dev convenience. Defaults to closed.
+    /// </summary>
+    private bool ShouldExposeDevTokens =>
+        _environment.IsDevelopment() && _configuration.GetValue("Auth:ExposeDevTokens", false);
 
     [HttpPost("login")]
     [AllowAnonymous]
@@ -58,13 +77,24 @@ public class AuthController : ControllerBase
             return Unauthorized(new { error = result.Error ?? "Registration failed" });
         }
 
-        // Phase 0 has no email transport: return the confirmation token so the flow is exercisable.
-        return Ok(new
+        const string genericMessage = "Registration successful. Please check your email to verify your account.";
+
+        // Tokens are sensitive: only expose for local dev convenience under an explicit opt-in.
+        if (ShouldExposeDevTokens)
         {
-            message = "Registration successful. Please check your email to verify your account.",
-            userId = result.UserId,
-            emailConfirmationToken = result.EmailConfirmationToken
-        });
+            _logger.LogWarning(
+                "Auth:ExposeDevTokens is enabled: returning emailConfirmationToken for user {UserId} in the registration response. This must never be enabled outside local development.",
+                result.UserId);
+
+            return Ok(new
+            {
+                message = genericMessage,
+                userId = result.UserId,
+                emailConfirmationToken = result.EmailConfirmationToken
+            });
+        }
+
+        return Ok(new { message = genericMessage });
     }
 
     [HttpPost("refresh")]
@@ -109,13 +139,25 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request)
     {
-        // Reset-password stub: no email transport in Phase 0. Token is returned for dev convenience.
+        const string genericMessage = "If an account exists with that email, a password reset link has been sent.";
+
         var token = await _authService.GeneratePasswordResetTokenAsync(request.Email);
-        return Ok(new
+
+        // The reset token must never be returned in the response by default (account-takeover risk).
+        // Only expose it for local dev convenience under an explicit opt-in, and warn when doing so.
+        if (ShouldExposeDevTokens)
         {
-            message = "If an account exists with that email, a password reset link has been sent.",
-            resetToken = token
-        });
+            _logger.LogWarning(
+                "Auth:ExposeDevTokens is enabled: returning a password reset token in the forgot-password response. This must never be enabled outside local development.");
+
+            return Ok(new
+            {
+                message = genericMessage,
+                resetToken = token
+            });
+        }
+
+        return Ok(new { message = genericMessage });
     }
 
     [HttpPost("reset-password")]
