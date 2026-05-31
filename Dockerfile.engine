@@ -1,0 +1,47 @@
+# RentalCommand.Engine - Background Worker Service (outbox dispatch)
+#
+# The Engine is a Microsoft.NET.Sdk.Worker host (Host.CreateApplicationBuilder)
+# with NO Kestrel/HTTP endpoint, so it has no /health URL. The healthcheck below
+# is therefore process-based: it confirms the worker process is still running.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
+WORKDIR /app
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+# Copy solution and project files first (better layer caching).
+COPY ["RentalCommand.sln", "."]
+COPY ["Directory.Build.props", "."]
+COPY [".runsettings", "."]
+COPY ["RentalCommand.Engine/RentalCommand.Engine.csproj", "RentalCommand.Engine/"]
+COPY ["RentalCommand.Core/RentalCommand.Core.csproj", "RentalCommand.Core/"]
+COPY ["RentalCommand.Data/RentalCommand.Data.csproj", "RentalCommand.Data/"]
+
+# Restore just the Engine and its transitive project references.
+RUN dotnet restore "RentalCommand.Engine/RentalCommand.Engine.csproj"
+
+# Copy everything else and publish.
+COPY . .
+WORKDIR "/src/RentalCommand.Engine"
+RUN dotnet publish "RentalCommand.Engine.csproj" -c Release -o /app/publish \
+    /p:UseAppHost=false /p:ErrorOnDuplicatePublishOutputFiles=false
+
+FROM base AS final
+WORKDIR /app
+
+# procps provides pgrep for the process-based healthcheck (the Worker has no HTTP).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends procps \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /app/publish .
+
+# Run as the non-root `app` user baked into the aspnet image.
+USER app
+
+ENV DOTNET_ENVIRONMENT=Production
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=45s --retries=3 \
+  CMD pgrep -f RentalCommand.Engine.dll > /dev/null || exit 1
+
+ENTRYPOINT ["dotnet", "RentalCommand.Engine.dll"]

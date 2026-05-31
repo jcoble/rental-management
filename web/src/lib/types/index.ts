@@ -160,6 +160,28 @@ export interface Expense {
 	updatedAt: string;
 }
 
+/** Read-only financial rollup from GET /api/v1/accounting/summary (AccountingSummaryResponse). */
+export interface AccountingSummary {
+	portfolioId: number;
+	expensesByCategory: ScheduleECategoryTotal[];
+	totalExpenses: number;
+	payments: PaymentRollup;
+}
+
+export interface ScheduleECategoryTotal {
+	category: number;
+	categoryName: string;
+	total: number;
+	count: number;
+}
+
+export interface PaymentRollup {
+	collected: number;
+	outstanding: number;
+	overdue: number;
+	overdueCount: number;
+}
+
 export interface Vendor {
 	id: number;
 	portfolioId: number;

@@ -1,0 +1,71 @@
+using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
+
+namespace RentalCommand.Api.Controllers;
+
+/// <summary>
+/// CRUD for maintenance work orders within the caller's portfolio. Scope comes from the JWT
+/// <c>portfolioId</c> claim; list supports <c>?propertyId&amp;vendorId&amp;skip&amp;take&amp;search&amp;sort</c>.
+/// Create validates the referenced property/unit/tenant/lease/vendor are in the portfolio. Work orders
+/// have no soft-delete column, so removal is a hard delete.
+/// </summary>
+[ApiController]
+[Route("api/v1/work-orders")]
+[Produces("application/json")]
+public class WorkOrderController : AuthenticatedPortfolioControllerBase
+{
+    private readonly IWorkOrderService _service;
+
+    public WorkOrderController(IWorkOrderService service)
+    {
+        _service = service;
+    }
+
+    [HttpGet]
+    [ProducesResponseType(typeof(IReadOnlyList<WorkOrderResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<WorkOrderResponse>>> List(
+        [FromQuery] ListQuery query, [FromQuery] int? propertyId, [FromQuery] int? vendorId, CancellationToken ct)
+    {
+        var items = await _service.ListAsync(GetPortfolioId(), propertyId, vendorId, query, ct);
+        return Ok(items);
+    }
+
+    [HttpGet("{id:int}")]
+    [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<WorkOrderResponse>> Get(int id, CancellationToken ct)
+    {
+        var item = await _service.GetAsync(GetPortfolioId(), id, ct);
+        return item == null ? NotFound(new { error = "Work order not found" }) : Ok(item);
+    }
+
+    [HttpPost]
+    [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<WorkOrderResponse>> Create([FromBody] CreateWorkOrderRequest request, CancellationToken ct)
+    {
+        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        return created == null
+            ? NotFound(new { error = "Referenced property, unit, tenant, lease, or vendor not found in this portfolio" })
+            : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
+    }
+
+    [HttpPatch("{id:int}")]
+    [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<WorkOrderResponse>> Update(int id, [FromBody] UpdateWorkOrderRequest request, CancellationToken ct)
+    {
+        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        return updated == null ? NotFound(new { error = "Work order not found" }) : Ok(updated);
+    }
+
+    [HttpDelete("{id:int}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    {
+        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        return deleted ? NoContent() : NotFound(new { error = "Work order not found" });
+    }
+}

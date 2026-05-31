@@ -1,0 +1,30 @@
+using RentalCommand.Core.Enums;
+
+namespace RentalCommand.Core.Entities;
+
+public class Appointment
+{
+    public int Id { get; set; }
+    public int PortfolioId { get; set; }
+    public int? PropertyId { get; set; }
+    public int? UnitId { get; set; }
+    public int? LeaseId { get; set; }
+    public int? TenantId { get; set; }
+    public string Title { get; set; } = string.Empty;
+    public string? ProspectName { get; set; }
+    public string? ProspectEmail { get; set; }
+    public AppointmentType Type { get; set; } = AppointmentType.Showing;
+    public AppointmentStatus Status { get; set; } = AppointmentStatus.Scheduled;
+    public DateTime ScheduledStart { get; set; }
+    public DateTime? ScheduledEnd { get; set; }
+    public string? AssignedTo { get; set; }
+    public string? Notes { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+
+    public Portfolio? Portfolio { get; set; }
+    public Property? Property { get; set; }
+    public Unit? Unit { get; set; }
+    public Lease? Lease { get; set; }
+    public Tenant? Tenant { get; set; }
+}

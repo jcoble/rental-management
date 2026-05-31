@@ -1,141 +1,96 @@
-# Lifecycle Tracker
+# Rental Command
 
-A project management tool with kanban board, test plans, and team orchestration. Running on Hetzner via Docker.
+Residential property-management platform. Primary user is a **non-technical landlord**
+(owns ~15–40 units, runs the business from a phone + paper), then co-owners/employees,
+then a potential SaaS for other small landlords. Design rule: **simple on the surface,
+full management system underneath.** The flagship is *"the computer does the typing for
+you"* — scan/capture a document → LLM extracts fields with confidence → user confirms a
+**draft** → record is created.
 
-## Access
+Architecture mirrors the sister project **EdiPlatform** (`/Users/blackcolours/dev/work/EdiPlatform`):
+.NET 10 multi-project on PostgreSQL, ASP.NET Identity + JWT/rotated-refresh auth, light
+messaging (DB outbox + Engine workers + SignalR — **no RabbitMQ**), SvelteKit web,
+and a planned **Flutter** mobile app over the same API.
 
-| Service | URL (Tailscale) | URL (Local Dev) |
-|---------|----------------|-----------------|
-| Web UI  | https://redacted-host.example.invalid | https://localhost:5667 |
-| API     | https://redacted-host.example.invalid/api | https://localhost:5666 |
+## Project layout
 
-## MCP Server
+| Project | Role |
+|---------|------|
+| `RentalCommand.Core` | Entities, enums, interfaces, config — no infra dependencies |
+| `RentalCommand.Data` | `RentalCommandDbContext` (EF Core + Npgsql) + `Migrations/` |
+| `RentalCommand.Api` | Controllers under `/api/v1/*`, auth, SignalR hub at `/api/v1/hubs/updates` |
+| `RentalCommand.Engine` | Background workers (`OutboxDispatchWorker`); no HTTP port |
+| `RentalCommand.*Tests`, `IntegrationTests`, `TestCommon` | Test suites + scaffolding |
+| `web/` | SvelteKit 5 (runes) + TanStack Query + Tailwind + SignalR client |
+| `mcp/` | **Legacy Lifecycle MCP server.** Kept as-is; to be *repurposed* in Phase 3 for the Portfolio Q&A moat. Do not treat its current tools as part of Rental Command. |
+| `Docs/` | `superpowers/specs/` (vision), `superpowers/plans/` (per-phase), `Research/` |
 
-The MCP server lets any Claude session manage tasks, phases, and tests programmatically.
-
-### Setup (Claude Code CLI)
-
-```bash
-# Build first
-cd mcp && npm install && npm run build && cd ..
-
-# Register with Claude Code (points at Hetzner shared instance)
-claude mcp add lifecycle -s user \
-  -e LIFECYCLE_API_URL=https://redacted-host.example.invalid/api \
-  -e LIFECYCLE_API_KEY=<your-api-key> \
-  -- node /path/to/lifecycle-tracker/mcp/build/index.js
-```
-
-For local dev:
-```bash
-claude mcp add lifecycle -s user \
-  -e LIFECYCLE_API_URL=http://localhost:5665 \
-  -e LIFECYCLE_API_KEY=<your-api-key> \
-  -- node /path/to/lifecycle-tracker/mcp/build/index.js
-```
-
-### Available MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `get_project_context` | Load full project state: milestone, phases, tasks, activity |
-| `search_tasks` | Search tasks by title/description, filter by status/priority/phase |
-| `get_activity` | Get recent activity feed |
-| `get_metrics` | Dashboard metrics: task counts, test stats, phase progress |
-| `create_tasks` | Bulk-create tasks from a conversation breakdown |
-| `start_task` | Move a task to InProgress |
-| `complete_task` | Move a task to Done (optionally with commit SHA) |
-| `create_phase` | Create a new phase within a milestone |
-| `breakdown_phase` | Create a phase + all its tasks in one call |
-| `record_test` | Record that a test was created for a task |
-| `record_test_result` | Record pass/fail result of running a test |
-| `upload_screenshot` | Upload a base64 screenshot to a task |
-
-### Example Workflows
-
-**Starting work on a task:**
-```
-1. get_project_context → see what needs doing
-2. start_task(taskId: 5) → mark it InProgress
-3. ... do the work ...
-4. complete_task(taskId: 5, commitSha: "abc123", gitBranch: "feature/x")
-```
-
-**Planning a new phase:**
-```
-1. breakdown_phase(milestoneId: 1, phase: { name: "Auth System", ... }, tasks: [...])
-   → creates phase + all tasks in one call
-```
-
-**After writing tests:**
-```
-1. record_test(taskId: 5, testType: "Unit", testName: "OrderTests", testFile: "tests/OrderTests.cs")
-2. record_test_result(testId: 1, passed: true, output: "3 passed, 0 failed")
-```
-
-## API Quick Reference
-
-All endpoints are under `/api`. Use `Origin: https://localhost:5667` header to bypass API key auth, or set `X-API-Key` header.
-
-### Tasks
-```
-GET    /api/tasks?status=Todo&priority=P1&search=auth
-POST   /api/tasks                    { title, phaseId?, status?, priority?, type? }
-GET    /api/tasks/{id}               Full detail with comments, attachments, tests
-PATCH  /api/tasks/{id}               Update any field
-DELETE /api/tasks/{id}
-POST   /api/tasks/{id}/move          { status, orderInColumn }
-```
-
-### Phases & Milestones
-```
-GET    /api/milestones/{id}/phases
-POST   /api/milestones/{id}/phases   { name, goal?, phaseNumber, orderIndex }
-PATCH  /api/phases/{id}              { status?, name?, goal? }
-```
-
-### Test Plans
-```
-POST   /api/tasks/{id}/test-plans    { name, requiredLevel, steps: [...] }
-GET    /api/tasks/{id}/test-plans
-POST   /api/test-plans/{id}/execute  { executionMode }
-GET    /api/tasks/{id}/can-complete  Check if testing requirements met
-```
-
-### Team
-```
-GET    /api/teams?projectId=1
-POST   /api/teams                    { projectId, role, agentName, modelName }
-POST   /api/teams/{id}/spawn
-POST   /api/teams/{id}/shutdown
-POST   /api/tasks/{id}/assign        { teamMemberId }
-POST   /api/agents/escalations       { projectId, description, taskId? }
-```
-
-### Real-time
-```
-GET    /api/events?projectId=1       SSE stream (task:created, task:updated, etc.)
-```
-
-## Server Management
+## Local development
 
 ```bash
-# SSH to Hetzner
-ssh hetzner-claude
-
-# Check status
-docker ps | grep lifecycle
-
-# View logs
-docker logs lifecycle-tracker-api-1 --tail 20
-docker logs lifecycle-tracker-web-1 --tail 20
-
-# Restart
-cd ~/lifecycle-tracker && docker compose restart
-
-# Update from repo
-cd ~/lifecycle-tracker && git pull && docker compose up -d --build
-
-# Start fresh (wipes data)
-cd ~/lifecycle-tracker && docker compose down -v && docker compose up -d
+./scripts/start-dev.sh
 ```
+
+Generates mkcert certs, reuses any Postgres on `:5432` (else starts one), then runs
+Engine + API + web. Requires `dotnet`, `pnpm`, `docker`, and `mkcert` (`mkcert -install`).
+
+| Service | URL |
+|---------|-----|
+| Web | https://localhost:5667 |
+| API | https://localhost:5666 (http: http://localhost:5665) |
+| DB  | localhost:5432 / db `rentalcommand` |
+
+- **DB connection** comes from **.NET User Secrets** in Development (not committed). Do
+  NOT export `ConnectionStrings__DefaultConnection` in the dev script — it would override
+  the secret. Set it via `dotnet user-secrets set "ConnectionStrings:DefaultConnection" "<conn>" --project RentalCommand.Api`.
+- **HTTPS** is real mkcert TLS for both web and API; Node trusts the API cert via
+  `NODE_EXTRA_CA_CERTS` (set by the dev script). **Never disable TLS verification**
+  (`NODE_TLS_REJECT_UNAUTHORIZED=0`) — use the mkcert CA instead.
+- Seeded dev admin on first API start: **`admin@rentalcommand.local` / `Admin123!`**.
+  The login page shows a dev-only "Fill dev login" button in `DEV` builds.
+
+Logs: `/tmp/rentalcommand-api.log`, `/tmp/rentalcommand-engine.log`.
+
+## Auth model
+
+- ASP.NET Identity with **int keys** (`ApplicationUser : IdentityUser<int>`), matching the
+  int-keyed domain entities. JWT access tokens (~15 min) + single-use **rotated** refresh
+  tokens. `ApiKeyAuthenticationHandler` covers webhook/server callers.
+- The web app stores tokens in **httpOnly cookies first-party to the SvelteKit origin**.
+  `web/src/hooks.server.ts` validates `access_token` via `GET /auth/me` (refreshing on 401)
+  and populates `locals.user` for SSR guards. Route groups `(protected)`/`(admin)`/`(portal)`
+  guard via `+layout.server.ts`.
+- Client refresh goes through the **same-origin proxy** `POST /api/auth/refresh`
+  (`web/src/routes/api/auth/refresh/+server.ts`); the Vite proxy `bypass` in
+  `web/vite.config.ts` keeps that path on SvelteKit instead of forwarding it to the API.
+  `clearAuth()` navigates to `/logout` (which clears cookies) — never straight to `/login`.
+- Refresh-token **reuse revokes the whole token family** (server-side). The shared
+  single-flight + brief cache in `web/src/lib/server/token-refresh.ts` dedupes concurrent
+  refreshes so a normal session never double-uses a token.
+
+## API surface
+
+All under `/api/v1`. Controllers: Auth, Portfolio (incl. `/{id}/dashboard`), Property, Unit,
+OwnerEntity, Vendor, Tenant, Lease, Payment, Expense, Accounting (`/summary`), WorkOrder,
+Appointment, Inspection, Activity (`/activities`), Portal. Most inherit
+`AuthenticatedPortfolioControllerBase` and are **portfolio-scoped** — inbound FK references
+are validated to be in-portfolio (cross-tenant IDOR guard). SignalR hub: `/api/v1/hubs/updates`.
+
+## Conventions & known gotchas
+
+- **PostgreSQL only** (Npgsql). No SQLite, no SQL Server. There is one baseline migration;
+  add migrations with `dotnet ef migrations add <Name> --project RentalCommand.Data --startup-project RentalCommand.Api`.
+- Web client API calls go through `web/src/lib/api/client.ts` (`fetchApi`/`api`), which
+  attaches the bearer token, refreshes-and-retries once on 401, and throws `ApiError`.
+- **Known open issue:** the API has no `JsonStringEnumConverter`, so it binds enums as
+  numbers while the web client sends string enum values → some create/update/status calls
+  return 400. Fix is to register the converter app-wide (read+write enums as strings).
+- Testing posture (per project direction): a few UI/E2E tests now (~3–5), defer broad
+  regression/unit suites until the system stabilizes. Run heavy spec/code review **per
+  phase**, not per task.
+
+## Phased roadmap
+
+Phase 0 (this re-platform) → Phase 1+2 (upload + scan→draft→confirm) → Phase 3 (real AI:
+Daily Briefing + Portfolio Q&A) and Phase 4 (automation/notifications). Plans live in
+`Docs/superpowers/plans/2026-05-30-phase-*.md`; the master spec is in `Docs/superpowers/specs/`.

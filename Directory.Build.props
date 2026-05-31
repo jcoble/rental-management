@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <RunSettingsFilePath>$(MSBuildThisFileDirectory).runsettings</RunSettingsFilePath>
+  </PropertyGroup>
+
+  <PropertyGroup Label="BuildPerf">
+    <!-- Skip analyzers during local command-line builds. CI runs them (CI=true is set by GitHub Actions). -->
+    <RunAnalyzersDuringBuild Condition="'$(CI)' != 'true'">false</RunAnalyzersDuringBuild>
+    <!-- Reference assemblies enable incremental builds: downstream projects only rebuild if public API changes. -->
+    <ProduceReferenceAssembly>true</ProduceReferenceAssembly>
+  </PropertyGroup>
+</Project>
