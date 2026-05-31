@@ -130,12 +130,13 @@ echo ""
 echo "  Press Ctrl+C to stop API/Engine/Web."
 echo ""
 
-# Point the web client at the API's plain-HTTP URL for local dev so we never
-# need to disable TLS verification for the self-signed dev cert. Override
-# VITE_API_URL if you want the web app to talk to the HTTPS endpoint (in which
-# case add the dev cert's CA to your trust store rather than disabling TLS).
+# SSR reaches the API over plain HTTP at $API_URL (no self-signed-cert hassle);
+# the browser uses the same-origin /api/v1 path that the Vite proxy forwards to
+# $API_URL. Set API_URL (the API ROOT) — NOT VITE_API_URL, which would force the
+# browser to call the API cross-origin (mixed content) and bypass the proxy, and
+# would land the server on a base missing the /api/v1 prefix.
 cd web
-VITE_API_URL="${VITE_API_URL:-$API_HTTP_URL}" \
+API_URL="${API_URL:-$API_HTTP_URL}" \
     pnpm dev --host localhost --port "$WEB_PORT" &
 WEB_PID=$!
 
