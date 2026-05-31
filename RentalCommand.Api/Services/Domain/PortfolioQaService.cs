@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -13,6 +14,7 @@ public class PortfolioQaService : IPortfolioQaService
     private readonly RentalCommandDbContext _db;
     private readonly ILlmProvider _llm;
     private readonly IAccountingService _accounting;
+    private readonly ILogger<PortfolioQaService> _logger;
 
     // Compact JSON serializer — no indentation to minimise tokens.
     private static readonly JsonSerializerOptions _json = new()
@@ -73,11 +75,13 @@ public class PortfolioQaService : IPortfolioQaService
     public PortfolioQaService(
         RentalCommandDbContext db,
         ILlmProvider llm,
-        IAccountingService accounting)
+        IAccountingService accounting,
+        ILogger<PortfolioQaService> logger)
     {
         _db = db;
         _llm = llm;
         _accounting = accounting;
+        _logger = logger;
     }
 
     // ---------------------------------------------------------------------------
@@ -127,8 +131,9 @@ public class PortfolioQaService : IPortfolioQaService
             }
             catch (Exception ex)
             {
+                _logger.LogError(ex, "Portfolio Q&A failed for portfolio {PortfolioId}", portfolioId);
                 return new AskResponse(
-                    Answer: $"An error occurred while contacting the AI: {ex.Message}",
+                    Answer: "The assistant is temporarily unavailable. Please try again in a moment.",
                     ToolsUsed: toolsUsed.Distinct().ToList(),
                     LlmAvailable: false,
                     TokensUsed: totalTokens,
@@ -222,7 +227,8 @@ public class PortfolioQaService : IPortfolioQaService
         }
         catch (Exception ex)
         {
-            return $"Error executing tool '{call.Name}': {ex.Message}";
+            _logger.LogError(ex, "Q&A tool {Tool} failed for portfolio {PortfolioId}", call.Name, portfolioId);
+            return $"Error: tool '{call.Name}' could not retrieve data right now. Tell the user this information is temporarily unavailable.";
         }
     }
 
