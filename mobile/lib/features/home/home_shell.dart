@@ -6,6 +6,7 @@ import '../../core/auth/auth_models.dart';
 import '../ai/ai_tab.dart';
 import '../properties/properties_tab.dart';
 import '../scan/scan_tab.dart';
+import 'more_tab.dart';
 
 /// Bottom-navigation app shell.
 ///
@@ -38,7 +39,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       icon: Icons.auto_awesome_outlined,
       activeIcon: Icons.auto_awesome,
     ),
-    _TabItem(label: 'More', icon: Icons.more_horiz),
+    _TabItem(label: 'More', icon: Icons.more_horiz, activeIcon: Icons.menu),
   ];
 
   @override
@@ -54,7 +55,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           const ScanTab(),
           const PropertiesTab(),
           const AiTab(),
-          _PlaceholderTab(label: _tabs[4].label),
+          const MoreTab(),
         ],
       ),
       bottomNavigationBar: NavigationBar(
@@ -144,28 +145,6 @@ class _HomeTab extends ConsumerWidget {
               ),
             ],
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PlaceholderTab extends StatelessWidget {
-  const _PlaceholderTab({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(label)),
-      body: Center(
-        child: Text(
-          '$label\n(coming soon)',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
         ),
       ),
     );

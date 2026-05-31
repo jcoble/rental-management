@@ -1,0 +1,495 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/api/api_exception.dart';
+import '../../core/models/models.dart';
+import 'leases_list_screen.dart';
+import 'leases_repository.dart';
+
+const _monthNames = [
+  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+String _fmt(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
+
+String _formatCurrency(double amount) {
+  final rounded = amount.round();
+  final s = rounded.toString();
+  final buf = StringBuffer(r'$');
+  final start = s.length % 3;
+  if (start > 0) buf.write(s.substring(0, start));
+  for (var i = start; i < s.length; i += 3) {
+    if (i > 0) buf.write(',');
+    buf.write(s.substring(i, i + 3));
+  }
+  return buf.toString();
+}
+
+/// Detail screen for a single lease.
+///
+/// Shows full lease information with edit support and status action buttons.
+class LeaseDetailScreen extends ConsumerStatefulWidget {
+  const LeaseDetailScreen({super.key, required this.lease});
+
+  final Lease lease;
+
+  @override
+  ConsumerState<LeaseDetailScreen> createState() =>
+      _LeaseDetailScreenState();
+}
+
+class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
+  late Lease _lease;
+  bool _updatingStatus = false;
+  String? _statusError;
+
+  @override
+  void initState() {
+    super.initState();
+    _lease = widget.lease;
+  }
+
+  Future<void> _refresh() async {
+    await ref.read(leaseDetailProvider(_lease.id).notifier).refresh();
+    final updated = ref.read(leaseDetailProvider(_lease.id));
+    updated.whenData((l) {
+      if (mounted) setState(() => _lease = l);
+    });
+  }
+
+  void _showEditSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => LeaseFormSheet(
+        existing: _lease,
+        onSaved: _refresh,
+      ),
+    );
+  }
+
+  Future<void> _updateStatus(String newStatus) async {
+    setState(() {
+      _updatingStatus = true;
+      _statusError = null;
+    });
+    try {
+      final updated = await ref
+          .read(leasesRepositoryProvider)
+          .updateStatus(_lease.id, newStatus);
+      if (mounted) setState(() => _lease = updated);
+      // Also refresh the list provider so it stays consistent.
+      ref.read(leasesProvider.notifier).refresh();
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _statusError = e.message);
+    } finally {
+      if (mounted) setState(() => _updatingStatus = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(
+          'Lease #${_lease.leaseNumber}',
+          overflow: TextOverflow.ellipsis,
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.edit_outlined),
+            tooltip: 'Edit lease',
+            onPressed: () => _showEditSheet(context),
+          ),
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        child: ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            // ── Header card ────────────────────────────────────────────────
+            _LeaseHeaderCard(
+              lease: _lease,
+              theme: theme,
+              colorScheme: colorScheme,
+            ),
+            const SizedBox(height: 16),
+
+            // ── Financial details ──────────────────────────────────────────
+            _SectionCard(
+              title: 'Financials',
+              theme: theme,
+              colorScheme: colorScheme,
+              children: [
+                _RowKV(
+                  label: 'Monthly rent',
+                  value: _formatCurrency(_lease.monthlyRent),
+                ),
+                _RowKV(
+                  label: 'Security deposit',
+                  value: _formatCurrency(_lease.securityDeposit),
+                ),
+                _RowKV(
+                  label: 'Late fee',
+                  value: _formatCurrency(_lease.lateFeeAmount),
+                ),
+                _RowKV(
+                  label: 'Rent due day',
+                  value: 'Day ${_lease.rentDueDay}',
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+
+            // ── Dates ──────────────────────────────────────────────────────
+            _SectionCard(
+              title: 'Dates',
+              theme: theme,
+              colorScheme: colorScheme,
+              children: [
+                _RowKV(
+                  label: 'Start date',
+                  value: _fmt(_lease.startDate),
+                ),
+                _RowKV(
+                  label: 'End date',
+                  value: _fmt(_lease.endDate),
+                ),
+                if (_lease.moveInDate != null)
+                  _RowKV(
+                    label: 'Move-in',
+                    value: _fmt(_lease.moveInDate!),
+                  ),
+                if (_lease.moveOutDate != null)
+                  _RowKV(
+                    label: 'Move-out',
+                    value: _fmt(_lease.moveOutDate!),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // ── Status actions ─────────────────────────────────────────────
+            _StatusActions(
+              currentStatus: _lease.status,
+              loading: _updatingStatus,
+              error: _statusError,
+              onSetStatus: _updateStatus,
+              theme: theme,
+              colorScheme: colorScheme,
+            ),
+
+            const SizedBox(height: 32),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Lease header card ─────────────────────────────────────────────────────────
+
+class _LeaseHeaderCard extends StatelessWidget {
+  const _LeaseHeaderCard({
+    required this.lease,
+    required this.theme,
+    required this.colorScheme,
+  });
+
+  final Lease lease;
+  final ThemeData theme;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        lease.tenantName ?? 'Lease #${lease.leaseNumber}',
+                        style: theme.textTheme.titleLarge
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
+                      if (lease.propertyName != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          '${lease.propertyName}'
+                          '${lease.unitNumber != null ? ' · Unit ${lease.unitNumber}' : ''}',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                              color: colorScheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                _StatusBadge(
+                    status: lease.status, colorScheme: colorScheme),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Lease #${lease.leaseNumber}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                      Text(
+                        _formatCurrency(lease.monthlyRent),
+                        style: theme.textTheme.headlineSmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: colorScheme.primary,
+                        ),
+                      ),
+                      Text(
+                        'per month',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      '${_fmt(lease.startDate)} –',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    Text(
+                      _fmt(lease.endDate),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusBadge extends StatelessWidget {
+  const _StatusBadge({required this.status, required this.colorScheme});
+
+  final String status;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final isActive = status.toLowerCase() == 'active';
+    final isNotice = status.toLowerCase() == 'noticegiven';
+    Color bgColor;
+    Color fgColor;
+
+    if (isActive) {
+      bgColor = colorScheme.primaryContainer;
+      fgColor = colorScheme.onPrimaryContainer;
+    } else if (isNotice) {
+      bgColor = colorScheme.tertiaryContainer;
+      fgColor = colorScheme.onTertiaryContainer;
+    } else {
+      bgColor = colorScheme.surfaceContainerHighest;
+      fgColor = colorScheme.onSurfaceVariant;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        status,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: fgColor,
+        ),
+      ),
+    );
+  }
+}
+
+// ── Section card ──────────────────────────────────────────────────────────────
+
+class _SectionCard extends StatelessWidget {
+  const _SectionCard({
+    required this.title,
+    required this.children,
+    required this.theme,
+    required this.colorScheme,
+  });
+
+  final String title;
+  final List<Widget> children;
+  final ThemeData theme;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: theme.textTheme.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 12),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RowKV extends StatelessWidget {
+  const _RowKV({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 140,
+            child: Text(
+              label,
+              style: TextStyle(
+                  fontSize: 13, color: colorScheme.onSurfaceVariant),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Status actions ────────────────────────────────────────────────────────────
+
+class _StatusActions extends StatelessWidget {
+  const _StatusActions({
+    required this.currentStatus,
+    required this.loading,
+    required this.onSetStatus,
+    required this.theme,
+    required this.colorScheme,
+    this.error,
+  });
+
+  final String currentStatus;
+  final bool loading;
+  final String? error;
+  final Future<void> Function(String) onSetStatus;
+  final ThemeData theme;
+  final ColorScheme colorScheme;
+
+  static const _transitions = {
+    'Draft': ['Active'],
+    'Active': ['NoticeGiven', 'Terminated'],
+    'NoticeGiven': ['Expired', 'Terminated'],
+    'Expired': <String>[],
+    'Terminated': <String>[],
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final available =
+        _transitions[currentStatus] ?? <String>[];
+
+    if (available.isEmpty && error == null) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Status Actions',
+          style: theme.textTheme.titleSmall
+              ?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        const SizedBox(height: 8),
+        if (available.isNotEmpty)
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: available.map((status) {
+              return OutlinedButton(
+                onPressed: loading ? null : () => onSetStatus(status),
+                child: loading
+                    ? const SizedBox(
+                        height: 16,
+                        width: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text('Mark $status'),
+              );
+            }).toList(),
+          ),
+        if (error != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            error!,
+            style: TextStyle(color: colorScheme.error, fontSize: 13),
+          ),
+        ],
+      ],
+    );
+  }
+}
