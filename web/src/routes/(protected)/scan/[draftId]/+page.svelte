@@ -132,11 +132,19 @@
 	}));
 
 	function buildOverridesJson(): string {
-		// Build flat overrides object mirroring the API's ApplyOverrides expected shape
-		// Map camelCase field names to the override format
+		// The form keys edits by the extraction field names (snake_case: vendor_name,
+		// transaction_date, …). The API's ApplyOverrides expects the flat camelCase override
+		// schema, so map the names here — otherwise edits to vendor/date are silently dropped.
+		const keyMap: Record<string, string> = {
+			vendor_name: 'vendorName',
+			amount: 'amount',
+			transaction_date: 'transactionDate',
+			category: 'category',
+			notes: 'notes'
+		};
 		const overrides: Record<string, unknown> = {};
 		for (const [name, value] of Object.entries(editedFields)) {
-			overrides[name] = value;
+			overrides[keyMap[name] ?? name] = value;
 		}
 		return JSON.stringify(overrides);
 	}

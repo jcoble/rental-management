@@ -308,39 +308,68 @@ public sealed class ScanService : IScanService
             using var doc = JsonDocument.Parse(overridesJson);
             var root = doc.RootElement;
 
-            if (root.TryGetProperty("vendorName", out var vn) && vn.ValueKind == JsonValueKind.String)
-                dto.VendorName = vn.GetString();
+            // Accept BOTH the documented camelCase override schema AND the snake_case field
+            // names the review UI keys edits by (vendor_name/transaction_date). The web maps to
+            // camelCase, but tolerating both here guarantees a corrected vendor/date is never
+            // silently dropped on confirm — a trust-critical guarantee for the review gate.
+            if (TryGetOverrideString(root, out var vendor, "vendorName", "vendor_name"))
+                dto.VendorName = vendor;
 
-            if (root.TryGetProperty("amount", out var amt))
-            {
-                if (amt.ValueKind == JsonValueKind.Number && amt.TryGetDecimal(out var d))
-                    dto.Amount = d;
-                else if (amt.ValueKind == JsonValueKind.String &&
-                         decimal.TryParse(amt.GetString(), System.Globalization.NumberStyles.Any,
-                             System.Globalization.CultureInfo.InvariantCulture, out var ds))
-                    dto.Amount = ds;
-            }
+            if (TryGetOverrideDecimal(root, out var amount, "amount"))
+                dto.Amount = amount;
 
-            if (root.TryGetProperty("transactionDate", out var td) && td.ValueKind == JsonValueKind.String &&
-                DateTime.TryParse(td.GetString(), System.Globalization.CultureInfo.InvariantCulture,
+            if (TryGetOverrideString(root, out var dateStr, "transactionDate", "transaction_date") &&
+                DateTime.TryParse(dateStr, System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.AdjustToUniversal |
                     System.Globalization.DateTimeStyles.AssumeUniversal, out var parsedDate))
             {
                 dto.TransactionDate = parsedDate;
             }
 
-            if (root.TryGetProperty("category", out var cat) && cat.ValueKind == JsonValueKind.String &&
-                Enum.TryParse<ScheduleECategory>(cat.GetString(), ignoreCase: true, out var parsedCat))
+            if (TryGetOverrideString(root, out var catStr, "category") &&
+                Enum.TryParse<ScheduleECategory>(catStr, ignoreCase: true, out var parsedCat))
             {
                 dto.Category = parsedCat;
             }
 
-            if (root.TryGetProperty("notes", out var notes) && notes.ValueKind == JsonValueKind.String)
-                dto.Notes = notes.GetString();
+            if (TryGetOverrideString(root, out var notes, "notes"))
+                dto.Notes = notes;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Could not parse overridesJson; skipping overrides.");
         }
+    }
+
+    /// <summary>First present key wins. Accepts JSON string or number (number returned as text).</summary>
+    private static bool TryGetOverrideString(JsonElement root, out string? value, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (root.TryGetProperty(key, out var el))
+            {
+                if (el.ValueKind == JsonValueKind.String) { value = el.GetString(); return true; }
+                if (el.ValueKind == JsonValueKind.Number) { value = el.GetRawText(); return true; }
+            }
+        }
+        value = null;
+        return false;
+    }
+
+    /// <summary>First present key wins. Accepts a JSON number or a numeric string.</summary>
+    private static bool TryGetOverrideDecimal(JsonElement root, out decimal value, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (root.TryGetProperty(key, out var el))
+            {
+                if (el.ValueKind == JsonValueKind.Number && el.TryGetDecimal(out value)) return true;
+                if (el.ValueKind == JsonValueKind.String &&
+                    decimal.TryParse(el.GetString(), System.Globalization.NumberStyles.Any,
+                        System.Globalization.CultureInfo.InvariantCulture, out value)) return true;
+            }
+        }
+        value = 0m;
+        return false;
     }
 }
