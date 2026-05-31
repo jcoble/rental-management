@@ -8,7 +8,7 @@
 	import { appointmentSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
-	import Dialog from '$lib/components/ui/Dialog.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
@@ -176,33 +176,41 @@
 	</div>
 </div>
 
-<Dialog open={showForm} title={editingId == null ? 'New Appointment' : 'Edit Appointment'} class="max-w-2xl" onclose={closeForm}>
-	<div class="grid gap-3 md:grid-cols-3" data-testid="appointment-form">
-		<div class="md:col-span-2">
-			<input data-testid="appointment-title-input" bind:value={form.title} class="{inputClass} w-full" placeholder="Appointment title" />
-			{#if formErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="appointment-title-error">{formErrors.title}</p>{/if}
+<Dialog.Root
+	open={showForm}
+	onOpenChange={(v) => { if (!v) closeForm(); }}
+>
+	<Dialog.Content class="max-w-2xl">
+		<Dialog.Header>
+			<Dialog.Title>{editingId == null ? 'New Appointment' : 'Edit Appointment'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="grid gap-3 md:grid-cols-3" data-testid="appointment-form">
+			<div class="md:col-span-2">
+				<input data-testid="appointment-title-input" bind:value={form.title} class="{inputClass} w-full" placeholder="Appointment title" />
+				{#if formErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="appointment-title-error">{formErrors.title}</p>{/if}
+			</div>
+			<select data-testid="appointment-type-input" bind:value={form.type} class={inputClass}>{#each APPT_TYPES as t}<option value={t}>{t}</option>{/each}</select>
+			<div>
+				<input data-testid="appointment-start-input" type="datetime-local" bind:value={form.scheduledStart} class="{inputClass} w-full" />
+				{#if formErrors.scheduledStart}<p class="mt-1 text-xs text-destructive" data-testid="appointment-start-error">{formErrors.scheduledStart}</p>{/if}
+			</div>
+			<input data-testid="appointment-end-input" type="datetime-local" bind:value={form.scheduledEnd} class={inputClass} />
+			<select data-testid="appointment-status-input" bind:value={form.status} class={inputClass}>{#each APPT_STATUSES as s}<option value={s}>{s}</option>{/each}</select>
+			<select data-testid="appointment-property-input" bind:value={form.propertyId} class={inputClass}><option value="">No property</option>{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}</select>
+			<select data-testid="appointment-tenant-input" bind:value={form.tenantId} class={inputClass}><option value="">No tenant</option>{#each tenantsQuery.data || [] as tenant}<option value={tenant.id}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</option>{/each}</select>
+			<input data-testid="appointment-assigned-input" bind:value={form.assignedTo} class={inputClass} placeholder="Assigned to" />
+			<input data-testid="appointment-prospect-name-input" bind:value={form.prospectName} class={inputClass} placeholder="Prospect name" />
+			<div>
+				<input data-testid="appointment-prospect-email-input" bind:value={form.prospectEmail} class="{inputClass} w-full" placeholder="Prospect email" />
+				{#if formErrors.prospectEmail}<p class="mt-1 text-xs text-destructive" data-testid="appointment-prospect-email-error">{formErrors.prospectEmail}</p>{/if}
+			</div>
 		</div>
-		<select data-testid="appointment-type-input" bind:value={form.type} class={inputClass}>{#each APPT_TYPES as t}<option value={t}>{t}</option>{/each}</select>
-		<div>
-			<input data-testid="appointment-start-input" type="datetime-local" bind:value={form.scheduledStart} class="{inputClass} w-full" />
-			{#if formErrors.scheduledStart}<p class="mt-1 text-xs text-destructive" data-testid="appointment-start-error">{formErrors.scheduledStart}</p>{/if}
-		</div>
-		<input data-testid="appointment-end-input" type="datetime-local" bind:value={form.scheduledEnd} class={inputClass} />
-		<select data-testid="appointment-status-input" bind:value={form.status} class={inputClass}>{#each APPT_STATUSES as s}<option value={s}>{s}</option>{/each}</select>
-		<select data-testid="appointment-property-input" bind:value={form.propertyId} class={inputClass}><option value="">No property</option>{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}</select>
-		<select data-testid="appointment-tenant-input" bind:value={form.tenantId} class={inputClass}><option value="">No tenant</option>{#each tenantsQuery.data || [] as tenant}<option value={tenant.id}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</option>{/each}</select>
-		<input data-testid="appointment-assigned-input" bind:value={form.assignedTo} class={inputClass} placeholder="Assigned to" />
-		<input data-testid="appointment-prospect-name-input" bind:value={form.prospectName} class={inputClass} placeholder="Prospect name" />
-		<div>
-			<input data-testid="appointment-prospect-email-input" bind:value={form.prospectEmail} class="{inputClass} w-full" placeholder="Prospect email" />
-			{#if formErrors.prospectEmail}<p class="mt-1 text-xs text-destructive" data-testid="appointment-prospect-email-error">{formErrors.prospectEmail}</p>{/if}
-		</div>
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="appointment-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
-		<button data-testid="appointment-form-save" onclick={submit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveMutation.isPending}>{saveMutation.isPending ? 'Saving…' : 'Save Appointment'}</button>
-	</div>
-</Dialog>
+		<Dialog.Footer>
+			<button data-testid="appointment-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
+			<button data-testid="appointment-form-save" onclick={submit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveMutation.isPending}>{saveMutation.isPending ? 'Saving…' : 'Save Appointment'}</button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	open={deleteTarget !== null}
