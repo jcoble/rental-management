@@ -70,9 +70,7 @@ public class PaymentService : IPaymentService
     public async Task<PaymentResponse?> CreateAsync(int portfolioId, CreatePaymentRequest request, CancellationToken ct = default)
     {
         // Verify the referenced lease belongs to the caller's portfolio.
-        var leaseInScope = await _db.Leases
-            .AnyAsync(l => l.Id == request.LeaseId && l.PortfolioId == portfolioId, ct);
-        if (!leaseInScope)
+        if (!await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId, ct))
         {
             return null;
         }

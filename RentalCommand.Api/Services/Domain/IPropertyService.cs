@@ -11,7 +11,7 @@ public interface IPropertyService
 {
     Task<IReadOnlyList<PropertyResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
     Task<PropertyResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
-    Task<PropertyResponse> CreateAsync(int portfolioId, CreatePropertyRequest request, CancellationToken ct = default);
+    Task<PropertyResponse?> CreateAsync(int portfolioId, CreatePropertyRequest request, CancellationToken ct = default);
     Task<PropertyResponse?> UpdateAsync(int portfolioId, int id, UpdatePropertyRequest request, CancellationToken ct = default);
     Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
 }

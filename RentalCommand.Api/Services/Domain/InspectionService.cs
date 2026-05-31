@@ -69,21 +69,19 @@ public class InspectionService : IInspectionService
 
     public async Task<InspectionResponse?> CreateAsync(int portfolioId, CreateInspectionRequest request, CancellationToken ct = default)
     {
-        var propertyInScope = await _db.Properties
-            .AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct);
-        if (!propertyInScope)
+        if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
         {
             return null;
         }
 
         if (request.UnitId.HasValue &&
-            !await _db.Units.AnyAsync(u => u.Id == request.UnitId.Value && u.PropertyId == request.PropertyId, ct))
+            !await _db.EnsureUnitInPortfolioAsync(portfolioId, request.UnitId.Value, request.PropertyId, ct))
         {
             return null;
         }
 
         if (request.LeaseId.HasValue &&
-            !await _db.Leases.AnyAsync(l => l.Id == request.LeaseId.Value && l.PortfolioId == portfolioId, ct))
+            !await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
         {
             return null;
         }
@@ -123,13 +121,13 @@ public class InspectionService : IInspectionService
         }
 
         if (request.UnitId.HasValue &&
-            !await _db.Units.AnyAsync(u => u.Id == request.UnitId.Value && u.PropertyId == entity.PropertyId, ct))
+            !await _db.EnsureUnitInPortfolioAsync(portfolioId, request.UnitId.Value, entity.PropertyId, ct))
         {
             return null;
         }
 
         if (request.LeaseId.HasValue &&
-            !await _db.Leases.AnyAsync(l => l.Id == request.LeaseId.Value && l.PortfolioId == portfolioId, ct))
+            !await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
         {
             return null;
         }

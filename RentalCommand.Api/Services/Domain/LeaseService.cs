@@ -73,23 +73,17 @@ public class LeaseService : ILeaseService
     public async Task<LeaseResponse?> CreateAsync(int portfolioId, CreateLeaseRequest request, CancellationToken ct = default)
     {
         // Verify the referenced property, unit, and tenant all live in the caller's portfolio.
-        var propertyInScope = await _db.Properties
-            .AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct);
-        if (!propertyInScope)
+        if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
         {
             return null;
         }
 
-        var unitInScope = await _db.Units
-            .AnyAsync(u => u.Id == request.UnitId && u.PropertyId == request.PropertyId, ct);
-        if (!unitInScope)
+        if (!await _db.EnsureUnitInPortfolioAsync(portfolioId, request.UnitId, request.PropertyId, ct))
         {
             return null;
         }
 
-        var tenantInScope = await _db.Tenants
-            .AnyAsync(t => t.Id == request.TenantId && t.PortfolioId == portfolioId, ct);
-        if (!tenantInScope)
+        if (!await _db.EnsureTenantInPortfolioAsync(portfolioId, request.TenantId, ct))
         {
             return null;
         }

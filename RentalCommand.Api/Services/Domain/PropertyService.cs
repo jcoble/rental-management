@@ -62,8 +62,21 @@ public class PropertyService : IPropertyService
         return entity == null ? null : PropertyResponse.FromEntity(entity);
     }
 
-    public async Task<PropertyResponse> CreateAsync(int portfolioId, CreatePropertyRequest request, CancellationToken ct = default)
+    public async Task<PropertyResponse?> CreateAsync(int portfolioId, CreatePropertyRequest request, CancellationToken ct = default)
     {
+        // Verify any supplied owner/owner-entity references belong to the caller's portfolio (no cross-tenant linking).
+        if (request.OwnerId.HasValue &&
+            !await _db.EnsureOwnerInPortfolioAsync(portfolioId, request.OwnerId.Value, ct))
+        {
+            return null;
+        }
+
+        if (request.OwnerEntityId.HasValue &&
+            !await _db.EnsureOwnerEntityInPortfolioAsync(portfolioId, request.OwnerEntityId.Value, ct))
+        {
+            return null;
+        }
+
         var now = DateTime.UtcNow;
         var entity = new Property
         {
@@ -98,6 +111,19 @@ public class PropertyService : IPropertyService
         var entity = await _db.Properties
             .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
         if (entity == null)
+        {
+            return null;
+        }
+
+        // Verify any supplied owner/owner-entity references belong to the caller's portfolio (no cross-tenant linking).
+        if (request.OwnerId.HasValue &&
+            !await _db.EnsureOwnerInPortfolioAsync(portfolioId, request.OwnerId.Value, ct))
+        {
+            return null;
+        }
+
+        if (request.OwnerEntityId.HasValue &&
+            !await _db.EnsureOwnerEntityInPortfolioAsync(portfolioId, request.OwnerEntityId.Value, ct))
         {
             return null;
         }

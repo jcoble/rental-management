@@ -39,10 +39,13 @@ public class PropertyController : AuthenticatedPortfolioControllerBase
 
     [HttpPost]
     [ProducesResponseType(typeof(PropertyResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<PropertyResponse>> Create([FromBody] CreatePropertyRequest request, CancellationToken ct)
     {
         var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
-        return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
+        return created == null
+            ? NotFound(new { error = "Referenced owner or owner entity not found in this portfolio" })
+            : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
     [HttpPatch("{id:int}")]
