@@ -8,7 +8,7 @@
 	import { leaseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
-	import Dialog from '$lib/components/ui/Dialog.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
@@ -225,57 +225,65 @@
 	</div>
 </div>
 
-<Dialog open={showForm} title={editingId == null ? 'New Lease' : 'Edit Lease'} class="max-w-2xl" onclose={closeForm}>
-	<div class="grid gap-3 md:grid-cols-3" data-testid="lease-form">
-		<select data-testid="lease-property-input" bind:value={form.propertyId} class={inputClass}>
-			<option value="">Select property</option>
-			{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}
-		</select>
-		<div>
-			<select data-testid="lease-unit-input" bind:value={form.unitId} class="{inputClass} w-full" disabled={!form.propertyId}>
-				<option value="">Select unit</option>
-				{#each unitsForPropertyQuery.data || [] as unit}<option value={unit.id}>Unit {unit.unitNumber} ({unit.status})</option>{/each}
+<Dialog.Root
+	open={showForm}
+	onOpenChange={(v) => { if (!v) closeForm(); }}
+>
+	<Dialog.Content class="max-w-2xl">
+		<Dialog.Header>
+			<Dialog.Title>{editingId == null ? 'New Lease' : 'Edit Lease'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="grid gap-3 md:grid-cols-3" data-testid="lease-form">
+			<select data-testid="lease-property-input" bind:value={form.propertyId} class={inputClass}>
+				<option value="">Select property</option>
+				{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}
 			</select>
-			{#if formErrors.unitId}<p class="mt-1 text-xs text-destructive" data-testid="lease-unit-error">{formErrors.unitId}</p>{/if}
-		</div>
-		<div>
-			<select data-testid="lease-tenant-input" bind:value={form.tenantId} class="{inputClass} w-full">
-				<option value="">Select tenant</option>
-				{#each tenantsQuery.data || [] as tenant}<option value={tenant.id}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</option>{/each}
+			<div>
+				<select data-testid="lease-unit-input" bind:value={form.unitId} class="{inputClass} w-full" disabled={!form.propertyId}>
+					<option value="">Select unit</option>
+					{#each unitsForPropertyQuery.data || [] as unit}<option value={unit.id}>Unit {unit.unitNumber} ({unit.status})</option>{/each}
+				</select>
+				{#if formErrors.unitId}<p class="mt-1 text-xs text-destructive" data-testid="lease-unit-error">{formErrors.unitId}</p>{/if}
+			</div>
+			<div>
+				<select data-testid="lease-tenant-input" bind:value={form.tenantId} class="{inputClass} w-full">
+					<option value="">Select tenant</option>
+					{#each tenantsQuery.data || [] as tenant}<option value={tenant.id}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</option>{/each}
+				</select>
+				{#if formErrors.tenantId}<p class="mt-1 text-xs text-destructive" data-testid="lease-tenant-error">{formErrors.tenantId}</p>{/if}
+			</div>
+			<div>
+				<input data-testid="lease-start-input" type="date" bind:value={form.startDate} class="{inputClass} w-full" />
+				{#if formErrors.startDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-start-error">{formErrors.startDate}</p>{/if}
+			</div>
+			<div>
+				<input data-testid="lease-end-input" type="date" bind:value={form.endDate} class="{inputClass} w-full" />
+				{#if formErrors.endDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-end-error">{formErrors.endDate}</p>{/if}
+			</div>
+			<select data-testid="lease-status-input" bind:value={form.status} class={inputClass}>
+				{#each LEASE_STATUSES as s}<option value={s}>{s}</option>{/each}
 			</select>
-			{#if formErrors.tenantId}<p class="mt-1 text-xs text-destructive" data-testid="lease-tenant-error">{formErrors.tenantId}</p>{/if}
+			<div>
+				<input data-testid="lease-rent-input" bind:value={form.monthlyRent} class="{inputClass} w-full" placeholder="Monthly rent" />
+				{#if formErrors.monthlyRent}<p class="mt-1 text-xs text-destructive" data-testid="lease-rent-error">{formErrors.monthlyRent}</p>{/if}
+			</div>
+			<div>
+				<input data-testid="lease-deposit-input" bind:value={form.securityDeposit} class="{inputClass} w-full" placeholder="Security deposit" />
+				{#if formErrors.securityDeposit}<p class="mt-1 text-xs text-destructive" data-testid="lease-deposit-error">{formErrors.securityDeposit}</p>{/if}
+			</div>
+			<div class="grid grid-cols-2 gap-2">
+				<input data-testid="lease-late-fee-input" bind:value={form.lateFeeAmount} class={inputClass} placeholder="Late fee" />
+				<input data-testid="lease-due-day-input" bind:value={form.rentDueDay} class={inputClass} placeholder="Due day" />
+			</div>
 		</div>
-		<div>
-			<input data-testid="lease-start-input" type="date" bind:value={form.startDate} class="{inputClass} w-full" />
-			{#if formErrors.startDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-start-error">{formErrors.startDate}</p>{/if}
-		</div>
-		<div>
-			<input data-testid="lease-end-input" type="date" bind:value={form.endDate} class="{inputClass} w-full" />
-			{#if formErrors.endDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-end-error">{formErrors.endDate}</p>{/if}
-		</div>
-		<select data-testid="lease-status-input" bind:value={form.status} class={inputClass}>
-			{#each LEASE_STATUSES as s}<option value={s}>{s}</option>{/each}
-		</select>
-		<div>
-			<input data-testid="lease-rent-input" bind:value={form.monthlyRent} class="{inputClass} w-full" placeholder="Monthly rent" />
-			{#if formErrors.monthlyRent}<p class="mt-1 text-xs text-destructive" data-testid="lease-rent-error">{formErrors.monthlyRent}</p>{/if}
-		</div>
-		<div>
-			<input data-testid="lease-deposit-input" bind:value={form.securityDeposit} class="{inputClass} w-full" placeholder="Security deposit" />
-			{#if formErrors.securityDeposit}<p class="mt-1 text-xs text-destructive" data-testid="lease-deposit-error">{formErrors.securityDeposit}</p>{/if}
-		</div>
-		<div class="grid grid-cols-2 gap-2">
-			<input data-testid="lease-late-fee-input" bind:value={form.lateFeeAmount} class={inputClass} placeholder="Late fee" />
-			<input data-testid="lease-due-day-input" bind:value={form.rentDueDay} class={inputClass} placeholder="Due day" />
-		</div>
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="lease-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
-		<button data-testid="lease-form-save" onclick={submit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveMutation.isPending}>
-			{saveMutation.isPending ? 'Saving…' : 'Save Lease'}
-		</button>
-	</div>
-</Dialog>
+		<Dialog.Footer>
+			<button data-testid="lease-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
+			<button data-testid="lease-form-save" onclick={submit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveMutation.isPending}>
+				{saveMutation.isPending ? 'Saving…' : 'Save Lease'}
+			</button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	open={deleteTarget !== null}

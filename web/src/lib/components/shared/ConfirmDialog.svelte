@@ -1,5 +1,6 @@
 <script lang="ts">
-	import Dialog from '$lib/components/ui/Dialog.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { Button } from '$lib/components/ui/button';
 
 	let {
 		open = false,
@@ -24,28 +25,32 @@
 	} = $props();
 </script>
 
-<Dialog {open} {title} onclose={oncancel}>
-	<div data-testid="{testid}-dialog">
+<Dialog.Root
+	{open}
+	onOpenChange={(v) => { if (!v) oncancel?.(); }}
+>
+	<Dialog.Content data-testid="{testid}-dialog">
+		<Dialog.Header>
+			<Dialog.Title>{title}</Dialog.Title>
+		</Dialog.Header>
 		<p class="text-sm text-muted-foreground">{message}</p>
-		<div class="mt-4 flex justify-end gap-2">
-			<button
-				type="button"
+		<Dialog.Footer>
+			<Button
+				variant="outline"
 				data-testid="{testid}-cancel"
-				class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 				onclick={oncancel}
 				disabled={busy}
 			>
 				{cancelLabel}
-			</button>
-			<button
-				type="button"
+			</Button>
+			<Button
+				variant="destructive"
 				data-testid="{testid}-confirm"
-				class="rounded-md bg-destructive px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-60"
 				onclick={onconfirm}
 				disabled={busy}
 			>
 				{busy ? 'Working…' : confirmLabel}
-			</button>
-		</div>
-	</div>
-</Dialog>
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
