@@ -77,33 +77,45 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
             var name = CsvField(prop.PropertyName);
 
             // Rental income row
-            sb.AppendLine($"{name},Rental Income,{prop.RentalIncome:F2}");
+            sb.AppendLine($"{name},Rental Income,{CsvField(prop.RentalIncome.ToString("F2"))}");
 
             // One row per expense category
             foreach (var cat in prop.ExpensesByCategory)
             {
-                sb.AppendLine($"{name},{CsvField(cat.Category)},{cat.Amount:F2}");
+                sb.AppendLine($"{name},{CsvField(cat.Category)},{CsvField(cat.Amount.ToString("F2"))}");
             }
 
-            // Net row
-            sb.AppendLine($"{name},Net Income,{prop.NetIncome:F2}");
+            // Net row (may be negative — guarded against a leading '-')
+            sb.AppendLine($"{name},Net Income,{CsvField(prop.NetIncome.ToString("F2"))}");
 
             // Blank separator between properties
             sb.AppendLine();
         }
 
         // Grand totals block
-        sb.AppendLine($"{CsvField("TOTAL")},Rental Income,{report.TotalRentalIncome:F2}");
-        sb.AppendLine($"{CsvField("TOTAL")},Total Expenses,{report.TotalExpenses:F2}");
-        sb.AppendLine($"{CsvField("TOTAL")},Net Income,{report.NetIncome:F2}");
+        sb.AppendLine($"{CsvField("TOTAL")},Rental Income,{CsvField(report.TotalRentalIncome.ToString("F2"))}");
+        sb.AppendLine($"{CsvField("TOTAL")},Total Expenses,{CsvField(report.TotalExpenses.ToString("F2"))}");
+        sb.AppendLine($"{CsvField("TOTAL")},Net Income,{CsvField(report.NetIncome.ToString("F2"))}");
 
         return sb.ToString();
     }
 
-    /// <summary>Quotes a CSV field if it contains a comma, double-quote, or newline.</summary>
-    private static string CsvField(string value)
+    /// <summary>
+    /// Quotes a CSV field when needed and guards against spreadsheet formula injection: values that
+    /// begin with = + - @ (or a tab/CR) are prefixed with a single quote so Excel/Sheets treats them
+    /// as text rather than executing them. Property names are user-controlled, so this matters.
+    /// </summary>
+    private static string CsvField(string? value)
     {
-        if (value.Contains(',') || value.Contains('"') || value.Contains('\n'))
+        value ??= string.Empty;
+        var needsFormulaGuard = value.Length > 0 && "=+-@\t\r".IndexOf(value[0]) >= 0;
+        if (needsFormulaGuard)
+        {
+            value = "'" + value;
+        }
+
+        if (needsFormulaGuard ||
+            value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
         {
             return $"\"{value.Replace("\"", "\"\"")}\"";
         }
