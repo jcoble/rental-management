@@ -21,6 +21,9 @@ final _draftProvider =
 /// Holds the authed image bytes for the document preview.
 final _imageProvider =
     FutureProvider.autoDispose.family<Uint8List, int>((ref, id) async {
+  // Cache the fetched bytes for the session so scrolling the preview out of and
+  // back into view does not re-download the full image every time.
+  ref.keepAlive();
   return ref.read(scanRepositoryProvider).downloadFile(id);
 });
 
@@ -628,6 +631,9 @@ class _DocumentPreview extends ConsumerWidget {
           child: Image.memory(
             bytes,
             fit: BoxFit.contain,
+            // Decode at preview scale (not full sensor resolution) so a large
+            // stored image doesn't pin the CPU on lower-end / throttled devices.
+            cacheHeight: 1080,
             errorBuilder: (ctx, e, _) => Center(
               child: Icon(Icons.picture_as_pdf_outlined,
                   size: 64, color: Colors.grey.shade400),
