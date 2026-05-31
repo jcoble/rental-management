@@ -52,7 +52,14 @@ export function updateToken(newToken: string, expiration: Date) {
 
 /**
  * Clear auth state on logout / session expiry. In the browser, fires the
- * cleared callback and navigates to /login.
+ * cleared callback and navigates to /logout.
+ *
+ * We go to /logout (not /login) on purpose: the access/refresh tokens are
+ * httpOnly cookies the client can't delete, so navigating straight to /login
+ * would leave a still-valid access_token cookie behind — the /login load would
+ * see locals.user and bounce the user back to the dashboard, looping until the
+ * access token expires. /logout clears all session cookies (and best-effort
+ * revokes the refresh token) server-side, then redirects to /login cleanly.
  */
 export function clearAuth() {
 	user = null;
@@ -68,7 +75,7 @@ export function clearAuth() {
 				/* best effort */
 			}
 		}
-		void goto('/login');
+		void goto('/logout');
 	}
 }
 

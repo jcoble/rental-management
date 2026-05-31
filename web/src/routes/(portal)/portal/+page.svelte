@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { goto } from '$app/navigation';
 	import { auth } from '$lib/api/endpoints/auth';
 	import { portal } from '$lib/api/endpoints/portal';
 	import { clearAuth, getCurrentUser, hasAnyRole, setCurrentUser } from '$lib/stores/auth.svelte';
@@ -16,8 +15,9 @@
 	$effect(() => {
 		if (meQuery.data) setCurrentUser(meQuery.data);
 		if (meQuery.isError) {
+			// clearAuth() handles navigation (to /logout, which clears cookies
+			// then redirects to /login) — no extra goto needed.
 			clearAuth();
-			goto('/login');
 		}
 	});
 
