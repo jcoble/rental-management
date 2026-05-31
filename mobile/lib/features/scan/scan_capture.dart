@@ -28,9 +28,11 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
     final picker = ImagePicker();
     final XFile? picked = await picker.pickImage(
       source: source,
-      imageQuality: 90,
-      maxWidth: 2048,
-      maxHeight: 2048,
+      // Documents only need enough resolution for legible text + extraction;
+      // smaller files upload/store/retrieve faster and decode cheaper on-device.
+      imageQuality: 80,
+      maxWidth: 1600,
+      maxHeight: 1600,
     );
     if (picked == null) return; // user cancelled
 
