@@ -1,0 +1,242 @@
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/api/api_exception.dart';
+import '../../core/api/dio_client.dart';
+import '../../core/models/models.dart';
+
+/// Repository for properties, units, and (read-only) leases.
+///
+/// Endpoints used:
+///   GET    /properties                       — list all properties (JWT-scoped)
+///   GET    /properties/{id}                  — single property
+///   POST   /properties                       — create property
+///   PATCH  /properties/{id}                  — update property
+///   DELETE /properties/{id}                  — delete property
+///   GET    /properties/{id}/units            — list units for a property
+///   POST   /properties/{id}/units            — add a unit
+///   PATCH  /units/{id}                       — update a unit
+///   GET    /leases?propertyId={id}           — leases filtered by property
+class PropertiesRepository {
+  PropertiesRepository(this._dio);
+
+  final Dio _dio;
+
+  // ── Properties ─────────────────────────────────────────────────────────────
+
+  Future<List<Property>> listProperties() async {
+    try {
+      final response = await _dio.get<List<dynamic>>('/properties');
+      final data = response.data ?? [];
+      return data
+          .whereType<Map<String, dynamic>>()
+          .map(Property.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<Property> getProperty(int id) async {
+    try {
+      final response =
+          await _dio.get<Map<String, dynamic>>('/properties/$id');
+      return Property.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Create body: { name, type, addressLine1, city, state, postalCode, ownerId? }
+  Future<Property> createProperty(Map<String, dynamic> data) async {
+    try {
+      final response =
+          await _dio.post<Map<String, dynamic>>('/properties', data: data);
+      return Property.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Update body: same optional fields as create (partial PATCH)
+  Future<Property> updateProperty(int id, Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/properties/$id',
+        data: data,
+      );
+      return Property.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> deleteProperty(int id) async {
+    try {
+      await _dio.delete<dynamic>('/properties/$id');
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  // ── Units ──────────────────────────────────────────────────────────────────
+
+  Future<List<Unit>> listUnits(int propertyId) async {
+    try {
+      final response =
+          await _dio.get<List<dynamic>>('/properties/$propertyId/units');
+      final data = response.data ?? [];
+      return data
+          .whereType<Map<String, dynamic>>()
+          .map(Unit.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Create body: { unitNumber, bedrooms, bathrooms, marketRent, status? }
+  Future<Unit> createUnit(int propertyId, Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/properties/$propertyId/units',
+        data: data,
+      );
+      return Unit.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Update body: same optional fields as create (partial PATCH)
+  Future<Unit> updateUnit(int id, Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/units/$id',
+        data: data,
+      );
+      return Unit.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  // ── Leases (read-only) ─────────────────────────────────────────────────────
+
+  /// Returns all leases for a given property, using the server-side
+  /// `propertyId` query param (same as the web client).
+  Future<List<Lease>> listLeasesForProperty(int propertyId) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/leases',
+        queryParameters: {'propertyId': propertyId},
+      );
+      final data = response.data ?? [];
+      return data
+          .whereType<Map<String, dynamic>>()
+          .map(Lease.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+}
+
+// ── Providers ─────────────────────────────────────────────────────────────────
+
+final propertiesRepositoryProvider = Provider<PropertiesRepository>((ref) {
+  return PropertiesRepository(ref.watch(dioProvider));
+});
+
+// ── Properties list ───────────────────────────────────────────────────────────
+
+class PropertiesNotifier extends Notifier<AsyncValue<List<Property>>> {
+  @override
+  AsyncValue<List<Property>> build() => const AsyncValue.loading();
+
+  PropertiesRepository get _repo => ref.read(propertiesRepositoryProvider);
+
+  Future<void> load() async {
+    state = const AsyncValue.loading();
+    try {
+      final list = await _repo.listProperties();
+      state = AsyncValue.data(list);
+    } on ApiException catch (e) {
+      state = AsyncValue.error(e, StackTrace.current);
+    }
+  }
+
+  Future<void> refresh() => load();
+}
+
+final propertiesProvider =
+    NotifierProvider<PropertiesNotifier, AsyncValue<List<Property>>>(
+  PropertiesNotifier.new,
+);
+
+// ── Units for a specific property ─────────────────────────────────────────────
+
+class UnitsNotifier extends Notifier<AsyncValue<List<Unit>>> {
+  UnitsNotifier(this._propertyId);
+
+  final int _propertyId;
+
+  @override
+  AsyncValue<List<Unit>> build() {
+    Future.microtask(load);
+    return const AsyncValue.loading();
+  }
+
+  PropertiesRepository get _repo => ref.read(propertiesRepositoryProvider);
+
+  Future<void> load() async {
+    state = const AsyncValue.loading();
+    try {
+      final list = await _repo.listUnits(_propertyId);
+      state = AsyncValue.data(list);
+    } on ApiException catch (e) {
+      state = AsyncValue.error(e, StackTrace.current);
+    }
+  }
+
+  Future<void> refresh() => load();
+}
+
+final unitsProvider =
+    NotifierProvider.family<UnitsNotifier, AsyncValue<List<Unit>>, int>(
+  UnitsNotifier.new,
+);
+
+// ── Leases for a specific property ────────────────────────────────────────────
+
+class PropertyLeasesNotifier extends Notifier<AsyncValue<List<Lease>>> {
+  PropertyLeasesNotifier(this._propertyId);
+
+  final int _propertyId;
+
+  @override
+  AsyncValue<List<Lease>> build() {
+    Future.microtask(load);
+    return const AsyncValue.loading();
+  }
+
+  PropertiesRepository get _repo => ref.read(propertiesRepositoryProvider);
+
+  Future<void> load() async {
+    state = const AsyncValue.loading();
+    try {
+      final list = await _repo.listLeasesForProperty(_propertyId);
+      state = AsyncValue.data(list);
+    } on ApiException catch (e) {
+      state = AsyncValue.error(e, StackTrace.current);
+    }
+  }
+
+  Future<void> refresh() => load();
+}
+
+final propertyLeasesProvider =
+    NotifierProvider.family<PropertyLeasesNotifier, AsyncValue<List<Lease>>,
+        int>(
+  PropertyLeasesNotifier.new,
+);
