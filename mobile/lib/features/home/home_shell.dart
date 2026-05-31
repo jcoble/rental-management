@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
+import '../ai/ai_tab.dart';
+import '../properties/properties_tab.dart';
+import '../scan/scan_tab.dart';
 
 /// Bottom-navigation app shell.
 ///
@@ -48,9 +51,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         index: _selectedIndex,
         children: [
           _HomeTab(user: user),
-          _PlaceholderTab(label: _tabs[1].label),
-          _PlaceholderTab(label: _tabs[2].label),
-          _PlaceholderTab(label: _tabs[3].label),
+          const ScanTab(),
+          const PropertiesTab(),
+          const AiTab(),
           _PlaceholderTab(label: _tabs[4].label),
         ],
       ),

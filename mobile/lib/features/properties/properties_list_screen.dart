@@ -1,0 +1,512 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/models/models.dart';
+import '../../core/api/api_exception.dart';
+import 'properties_repository.dart';
+import 'property_detail_screen.dart';
+
+/// Full-page list of properties with pull-to-refresh and an add-property FAB.
+class PropertiesListScreen extends ConsumerStatefulWidget {
+  const PropertiesListScreen({super.key});
+
+  @override
+  ConsumerState<PropertiesListScreen> createState() =>
+      _PropertiesListScreenState();
+}
+
+class _PropertiesListScreenState
+    extends ConsumerState<PropertiesListScreen> {
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(
+      () => ref.read(propertiesProvider.notifier).load(),
+    );
+  }
+
+  Future<void> _refresh() =>
+      ref.read(propertiesProvider.notifier).refresh();
+
+  void _openDetail(BuildContext context, Property property) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => PropertyDetailScreen(property: property),
+      ),
+    );
+  }
+
+  void _showAddSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _AddPropertySheet(
+        onSaved: () => ref.read(propertiesProvider.notifier).refresh(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final propertiesAsync = ref.watch(propertiesProvider);
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Properties'),
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => _showAddSheet(context),
+        tooltip: 'Add property',
+        child: const Icon(Icons.add),
+      ),
+      body: RefreshIndicator(
+        onRefresh: _refresh,
+        child: propertiesAsync.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (e, _) => _ErrorBody(
+            message: e is ApiException ? e.message : e.toString(),
+            onRetry: _refresh,
+          ),
+          data: (list) {
+            if (list.isEmpty) {
+              return const _EmptyBody();
+            }
+            return ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
+              itemCount: list.length,
+              separatorBuilder: (context, index) => const SizedBox(height: 8),
+              itemBuilder: (context, index) {
+                final property = list[index];
+                return _PropertyCard(
+                  property: property,
+                  colorScheme: colorScheme,
+                  theme: theme,
+                  onTap: () => _openDetail(context, property),
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+// ── Property Card ─────────────────────────────────────────────────────────────
+
+class _PropertyCard extends StatelessWidget {
+  const _PropertyCard({
+    required this.property,
+    required this.colorScheme,
+    required this.theme,
+    required this.onTap,
+  });
+
+  final Property property;
+  final ColorScheme colorScheme;
+  final ThemeData theme;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final unitCount = property.unitCount ?? 0;
+    final occupied = property.occupiedUnits ?? 0;
+
+    return Card(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      property.name,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _StatusChip(status: property.status, colorScheme: colorScheme),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${property.addressLine1}, ${property.city}, ${property.state} ${property.postalCode}',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  _MetaChip(
+                    icon: Icons.apartment_outlined,
+                    label: '$unitCount ${unitCount == 1 ? 'unit' : 'units'}',
+                  ),
+                  const SizedBox(width: 8),
+                  _MetaChip(
+                    icon: Icons.person_outline,
+                    label: '$occupied occupied',
+                  ),
+                  const SizedBox(width: 8),
+                  _MetaChip(
+                    icon: Icons.home_outlined,
+                    label: property.type,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({required this.status, required this.colorScheme});
+
+  final String status;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final isActive = status.toLowerCase() == 'active';
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: isActive
+            ? colorScheme.primaryContainer
+            : colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        status,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: isActive
+              ? colorScheme.onPrimaryContainer
+              : colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+}
+
+class _MetaChip extends StatelessWidget {
+  const _MetaChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(width: 3),
+        Text(
+          label,
+          style: TextStyle(fontSize: 12, color: color),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Empty / Error ─────────────────────────────────────────────────────────────
+
+class _EmptyBody extends StatelessWidget {
+  const _EmptyBody();
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.apartment_outlined, size: 48,
+              color: colorScheme.onSurfaceVariant),
+          const SizedBox(height: 12),
+          Text(
+            'No properties yet',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Tap + to add your first property.',
+            style: TextStyle(color: colorScheme.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ErrorBody extends StatelessWidget {
+  const _ErrorBody({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, size: 40, color: colorScheme.error),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style:
+                  TextStyle(color: colorScheme.error),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.tonal(
+              onPressed: onRetry,
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Add Property Bottom Sheet ─────────────────────────────────────────────────
+
+class _AddPropertySheet extends ConsumerStatefulWidget {
+  const _AddPropertySheet({required this.onSaved});
+
+  final VoidCallback onSaved;
+
+  @override
+  ConsumerState<_AddPropertySheet> createState() => _AddPropertySheetState();
+}
+
+class _AddPropertySheetState extends ConsumerState<_AddPropertySheet> {
+  final _formKey = GlobalKey<FormState>();
+
+  final _nameCtrl = TextEditingController();
+  final _addressCtrl = TextEditingController();
+  final _cityCtrl = TextEditingController();
+  final _stateCtrl = TextEditingController();
+  final _zipCtrl = TextEditingController();
+
+  static const _types = [
+    'SingleFamily',
+    'MultiFamily',
+    'Condo',
+    'Townhome',
+    'Commercial',
+    'MixedUse',
+  ];
+  String _selectedType = 'MultiFamily';
+
+  bool _saving = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _addressCtrl.dispose();
+    _cityCtrl.dispose();
+    _stateCtrl.dispose();
+    _zipCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+
+    try {
+      await ref.read(propertiesRepositoryProvider).createProperty({
+        'name': _nameCtrl.text.trim(),
+        'type': _selectedType,
+        'addressLine1': _addressCtrl.text.trim(),
+        'city': _cityCtrl.text.trim(),
+        'state': _stateCtrl.text.trim(),
+        'postalCode': _zipCtrl.text.trim(),
+      });
+
+      widget.onSaved();
+      if (mounted) Navigator.of(context).pop();
+    } on ApiException catch (e) {
+      setState(() => _error = e.message);
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
+      child: Form(
+        key: _formKey,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'New Property',
+                      style: theme.textTheme.titleLarge
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+
+              // Name
+              TextFormField(
+                controller: _nameCtrl,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(labelText: 'Property name'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Name is required' : null,
+              ),
+              const SizedBox(height: 12),
+
+              // Type dropdown
+              DropdownButtonFormField<String>(
+                initialValue: _selectedType,
+                decoration: const InputDecoration(labelText: 'Type'),
+                items: _types
+                    .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                    .toList(),
+                onChanged: (v) {
+                  if (v != null) setState(() => _selectedType = v);
+                },
+              ),
+              const SizedBox(height: 12),
+
+              // Address
+              TextFormField(
+                controller: _addressCtrl,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(labelText: 'Address'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'Address is required' : null,
+              ),
+              const SizedBox(height: 12),
+
+              // City
+              TextFormField(
+                controller: _cityCtrl,
+                textInputAction: TextInputAction.next,
+                decoration: const InputDecoration(labelText: 'City'),
+                validator: (v) =>
+                    (v == null || v.trim().isEmpty) ? 'City is required' : null,
+              ),
+              const SizedBox(height: 12),
+
+              // State + ZIP row
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: _stateCtrl,
+                      textInputAction: TextInputAction.next,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: const InputDecoration(labelText: 'State'),
+                      validator: (v) =>
+                          (v == null || v.trim().isEmpty)
+                              ? 'Required'
+                              : null,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextFormField(
+                      controller: _zipCtrl,
+                      textInputAction: TextInputAction.done,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(labelText: 'ZIP'),
+                      validator: (v) =>
+                          (v == null || v.trim().isEmpty) ? 'Required' : null,
+                      onFieldSubmitted: (_) => _saving ? null : _submit(),
+                    ),
+                  ),
+                ],
+              ),
+
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: colorScheme.errorContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    _error!,
+                    style: TextStyle(
+                        color: colorScheme.onErrorContainer, fontSize: 13),
+                  ),
+                ),
+              ],
+
+              const SizedBox(height: 20),
+
+              FilledButton(
+                onPressed: _saving ? null : _submit,
+                child: _saving
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Save Property'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
