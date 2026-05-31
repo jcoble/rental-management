@@ -27,6 +27,7 @@ public class ScanServiceTests : IDisposable
     private readonly RentalCommandDbContext _db;
     private readonly Mock<IScanFileService> _filesMock;
     private readonly RecordingExpenseService _expenses;
+    private readonly Mock<IPaymentService> _paymentsMock;
     private readonly RecordingAuditService _audit;
     private readonly ScanService _sut;
 
@@ -55,14 +56,16 @@ public class ScanServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _filesMock = new Mock<IScanFileService>(MockBehavior.Strict);
-        _expenses   = new RecordingExpenseService();
-        _audit      = new RecordingAuditService();
+        _filesMock    = new Mock<IScanFileService>(MockBehavior.Strict);
+        _expenses     = new RecordingExpenseService();
+        _paymentsMock = new Mock<IPaymentService>();
+        _audit        = new RecordingAuditService();
 
         _sut = new ScanService(
             _db,
             _filesMock.Object,
             _expenses,
+            _paymentsMock.Object,
             _audit,
             NullLogger<ScanService>.Instance);
     }
