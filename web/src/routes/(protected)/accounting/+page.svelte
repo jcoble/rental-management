@@ -12,10 +12,12 @@
 	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
+	import { DataGrid } from '$lib/components/data-grid';
+	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
-	import Pagination from '$lib/components/shared/Pagination.svelte';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Pencil, Trash2, Plus } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -25,7 +27,7 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
-	const PAGE_SIZE = 20;
+	const PAGE_SIZE = 200; // fetch a full window; DataGrid paginates client-side
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
 	// Schedule E categories (mirrors RentalCommand.Core.Enums.ScheduleECategory — the values the API accepts).
@@ -37,11 +39,21 @@
 	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
 
 	let paymentSearch = $state('');
+	let paymentStatusFilter = $state('');
 	let paymentSkip = $state(0);
 	const debouncedPaymentSearch = debounced(() => paymentSearch, 300);
 	$effect(() => {
 		debouncedPaymentSearch.value;
+		paymentStatusFilter;
 		paymentSkip = 0;
+	});
+
+	let expenseSearch = $state('');
+	let expenseStatusFilter = $state('');
+	const debouncedExpenseSearch = debounced(() => expenseSearch, 300);
+	$effect(() => {
+		debouncedExpenseSearch.value;
+		expenseStatusFilter;
 	});
 
 	const paymentsQuery = createQuery(() => ({
@@ -262,8 +274,24 @@
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
 	}
-	const paymentsList = $derived(paymentsQuery.data ?? []);
-	const expensesList = $derived(expensesQuery.data ?? []);
+	const paymentsList = $derived(
+		(paymentsQuery.data ?? []).filter((p) => !paymentStatusFilter || p.status === paymentStatusFilter)
+	);
+	const expensesList = $derived(
+		(expensesQuery.data ?? []).filter((e) => {
+			if (expenseStatusFilter && e.status !== expenseStatusFilter) return false;
+			if (debouncedExpenseSearch.value) {
+				const q = debouncedExpenseSearch.value.toLowerCase();
+				return (
+					e.description.toLowerCase().includes(q) ||
+					(e.propertyName ?? '').toLowerCase().includes(q) ||
+					(e.vendorName ?? '').toLowerCase().includes(q) ||
+					e.category.toLowerCase().includes(q)
+				);
+			}
+			return true;
+		})
+	);
 	const summary = $derived(accountingSummaryQuery.data as AccountingSummary | undefined);
 
 	// Derived labels for Select triggers
@@ -281,7 +309,197 @@
 	const selectedWorkOrderLabel = $derived(
 		(workOrdersQuery.data || []).find((w) => String(w.id) === expenseForm.workOrderId)?.title ?? null
 	);
+
+	// ── DataGrid column definitions ───────────────────────────────────────────────
+
+	const paymentColumns: ColumnDef<Payment>[] = [
+		{
+			key: 'dueDate',
+			title: 'Due Date',
+			format: 'date',
+			sortable: true,
+			mobileRole: 'meta',
+		},
+		{
+			key: 'tenantName',
+			title: 'Tenant / Lease',
+			sortable: true,
+			mobileRole: 'title',
+			accessor: (p) => p.tenantName || p.leaseNumber || '—',
+		},
+		{
+			key: 'leaseNumber',
+			title: 'Lease #',
+			mobileRole: 'subtitle',
+			accessor: (p) => p.leaseNumber ?? '—',
+		},
+		{
+			key: 'type',
+			title: 'Type',
+			mobileRole: 'meta',
+		},
+		{
+			key: 'amount',
+			title: 'Amount',
+			format: 'currency',
+			sortable: true,
+			mobileRole: 'metric',
+		},
+		{
+			key: 'status',
+			title: 'Status',
+			mobileRole: 'badge',
+			cell: paymentStatusCell,
+		},
+		{
+			key: 'actions',
+			title: '',
+			mobileRole: 'hidden',
+			width: '8rem',
+			cell: paymentActionsCell,
+		},
+	];
+
+	const expenseColumns: ColumnDef<Expense>[] = [
+		{
+			key: 'incurredAt',
+			title: 'Incurred',
+			format: 'date',
+			sortable: true,
+			mobileRole: 'meta',
+		},
+		{
+			key: 'description',
+			title: 'Description',
+			sortable: true,
+			mobileRole: 'title',
+		},
+		{
+			key: 'category',
+			title: 'Category',
+			mobileRole: 'meta',
+		},
+		{
+			key: 'amount',
+			title: 'Amount',
+			format: 'currency',
+			sortable: true,
+			mobileRole: 'metric',
+		},
+		{
+			key: 'propertyName',
+			title: 'Property',
+			mobileRole: 'meta',
+			accessor: (e) => e.propertyName ?? 'General',
+		},
+		{
+			key: 'status',
+			title: 'Status',
+			mobileRole: 'badge',
+			cell: expenseStatusCell,
+		},
+		{
+			key: 'receipt',
+			title: 'Receipt',
+			mobileRole: 'hidden',
+			width: '5rem',
+			align: 'center',
+			cell: expenseReceiptCell,
+		},
+		{
+			key: 'actions',
+			title: '',
+			mobileRole: 'hidden',
+			width: '6rem',
+			cell: expenseActionsCell,
+		},
+	];
 </script>
+
+{#snippet paymentStatusCell(p: Payment)}
+	<StatusBadge status={p.status} />
+{/snippet}
+
+{#snippet paymentActionsCell(p: Payment)}
+	<div class="flex items-center gap-1">
+		{#if p.status !== 'Paid'}
+			<Button
+				data-testid="payment-mark-paid"
+				variant="outline"
+				size="sm"
+				onclick={(e) => { e.stopPropagation(); markPaidMutation.mutate(p.id); }}
+			>Mark Paid</Button>
+		{/if}
+		<Button
+			data-testid="payment-edit"
+			aria-label="Edit payment"
+			variant="outline"
+			size="icon"
+			onclick={(e) => { e.stopPropagation(); openEditPayment(p); }}
+		><Pencil class="h-3.5 w-3.5" /></Button>
+		<Button
+			data-testid="payment-delete"
+			aria-label="Delete payment"
+			variant="outline"
+			size="icon"
+			onclick={(e) => { e.stopPropagation(); paymentDeleteTarget = p; }}
+		><Trash2 class="h-3.5 w-3.5" /></Button>
+	</div>
+{/snippet}
+
+{#snippet expenseStatusCell(e: Expense)}
+	<StatusBadge status={e.status} />
+{/snippet}
+
+{#snippet expenseReceiptCell(e: Expense)}
+	{#if e.hasReceipt}
+		{#if e.receiptIsImage}
+			<a
+				href="/expense-file/{e.id}"
+				target="_blank"
+				rel="noopener noreferrer"
+				data-testid="expense-receipt-{e.id}"
+				aria-label="View receipt"
+				onclick={(ev) => ev.stopPropagation()}
+			>
+				<img
+					src="/expense-file/{e.id}?thumb=true"
+					alt="Receipt thumbnail"
+					class="h-10 w-10 rounded object-cover ring-1 ring-border"
+					loading="lazy"
+				/>
+			</a>
+		{:else}
+			<a
+				href="/expense-file/{e.id}"
+				target="_blank"
+				rel="noopener noreferrer"
+				data-testid="expense-receipt-{e.id}"
+				class="text-xs text-primary underline underline-offset-2 hover:text-primary/80"
+				onclick={(ev) => ev.stopPropagation()}
+			>PDF</a>
+		{/if}
+	{/if}
+{/snippet}
+
+{#snippet expenseActionsCell(e: Expense)}
+	<div class="flex items-center gap-1">
+		<Button
+			data-testid="expense-edit"
+			aria-label="Edit expense"
+			variant="outline"
+			size="icon"
+			onclick={(ev) => { ev.stopPropagation(); openEditExpense(e); }}
+		><Pencil class="h-3.5 w-3.5" /></Button>
+		<Button
+			data-testid="expense-delete"
+			aria-label="Delete expense"
+			variant="outline"
+			size="icon"
+			onclick={(ev) => { ev.stopPropagation(); expenseDeleteTarget = e; }}
+		><Trash2 class="h-3.5 w-3.5" /></Button>
+	</div>
+{/snippet}
 
 <svelte:head>
 	<title>Accounting - Rental Command</title>
@@ -320,100 +538,76 @@
 		</Card.Root>
 	</div>
 
-	<div class="grid gap-4 lg:grid-cols-2">
-		<Card.Root class="gap-0 py-0">
-			<Card.Header class="flex-row items-center justify-between border-b border-border px-4 py-3 space-y-0">
-				<Card.Title class="text-base font-semibold">Payments</Card.Title>
-				<Card.Action>
-					<Button data-testid="payment-create-button" size="sm" onclick={openCreatePayment}><Plus class="h-3.5 w-3.5" /> Add</Button>
-				</Card.Action>
-			</Card.Header>
-			<div class="border-b border-border px-3 py-2"><SearchInput bind:value={paymentSearch} placeholder="Search payments…" testid="payment-search" /></div>
-			<Card.Content class="max-h-[40vh] space-y-2 overflow-y-auto p-3" data-testid="payments-list">
-				{#if paymentsQuery.isLoading}
-					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="payments-loading">Loading…</p>
-				{:else if paymentsList.length === 0}
-					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="payments-empty">No payments found.</p>
-				{:else}
-					{#each paymentsList as payment (payment.id)}
-						<div class="rounded border border-border bg-background p-3 text-sm" data-testid="payment-row" data-payment-id={payment.id}>
-							<div class="flex items-center justify-between">
-								<p class="font-medium">{payment.tenantName || payment.leaseNumber}</p>
-								<span>{payment.status}</span>
-							</div>
-							<p class="text-xs text-muted-foreground">{payment.type} · {money(payment.amount)} · Due {new Date(payment.dueDate).toLocaleDateString()}</p>
-							<div class="mt-2 flex gap-2">
-								{#if payment.status !== 'Paid'}
-									<Button data-testid="payment-mark-paid" variant="outline" size="sm" onclick={() => markPaidMutation.mutate(payment.id)}>Mark Paid</Button>
-								{/if}
-								<Button data-testid="payment-edit" aria-label="Edit payment" variant="outline" size="icon" onclick={() => openEditPayment(payment)}><Pencil class="h-3.5 w-3.5" /></Button>
-								<Button data-testid="payment-delete" aria-label="Delete payment" variant="outline" size="icon" onclick={() => (paymentDeleteTarget = payment)}><Trash2 class="h-3.5 w-3.5" /></Button>
-							</div>
-						</div>
-					{/each}
-				{/if}
-			</Card.Content>
-			<Card.Footer class="border-t border-border px-3 py-2">
-				<Pagination bind:skip={paymentSkip} take={PAGE_SIZE} count={paymentsList.length} testid="payment-pagination" />
-			</Card.Footer>
-		</Card.Root>
+	<div class="space-y-6">
+		<!-- Payments DataGrid -->
+		<DataGrid
+			data={paymentsList}
+			columns={paymentColumns}
+			loading={paymentsQuery.isLoading}
+			emptyMessage="No payments found."
+			getRowKey={(p) => p.id}
+			getRowTestId={(p) => `payment-row`}
+			data-testid="payments-list"
+			pageSize={PAGE_SIZE}
+		>
+			{#snippet toolbar()}
+				<div class="flex flex-1 flex-wrap items-center gap-2">
+					<div class="max-w-sm flex-1">
+						<SearchInput bind:value={paymentSearch} placeholder="Search payments…" testid="payment-search" />
+					</div>
+					<Select.Root type="single" bind:value={paymentStatusFilter}>
+						<Select.Trigger class="w-[160px]" data-testid="payment-status-filter">
+							{paymentStatusFilter || 'All statuses'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="All statuses">All statuses</Select.Item>
+							{#each PAYMENT_STATUSES as s}
+								<Select.Item value={s} label={s}>{s}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+				<Button data-testid="payment-create-button" class="shrink-0 gap-2" onclick={openCreatePayment}>
+					<Plus class="h-4 w-4" />
+					Add Payment
+				</Button>
+			{/snippet}
+		</DataGrid>
 
-		<Card.Root class="gap-0 py-0">
-			<Card.Header class="flex-row items-center justify-between border-b border-border px-4 py-3 space-y-0">
-				<Card.Title class="text-base font-semibold">Expenses</Card.Title>
-				<Card.Action>
-					<Button data-testid="expense-create-button" size="sm" onclick={openCreateExpense}><Plus class="h-3.5 w-3.5" /> Add</Button>
-				</Card.Action>
-			</Card.Header>
-			<Card.Content class="max-h-[46vh] space-y-2 overflow-y-auto p-3" data-testid="expenses-list">
-				{#if expensesQuery.isLoading}
-					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="expenses-loading">Loading…</p>
-				{:else if expensesList.length === 0}
-					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="expenses-empty">No expenses found.</p>
-				{:else}
-					{#each expensesList as expense (expense.id)}
-						<div class="rounded border border-border bg-background p-3 text-sm" data-testid="expense-row" data-expense-id={expense.id}>
-							<div class="flex items-center justify-between">
-								<p class="font-medium">{expense.description}</p>
-								<span>{expense.status}</span>
-							</div>
-							<p class="text-xs text-muted-foreground">{expense.category} · {money(expense.amount)} · {expense.propertyName || 'General'}</p>
-							<div class="mt-2 flex items-center gap-2">
-								<Button data-testid="expense-edit" aria-label="Edit expense" variant="outline" size="icon" onclick={() => openEditExpense(expense)}><Pencil class="h-3.5 w-3.5" /></Button>
-								<Button data-testid="expense-delete" aria-label="Delete expense" variant="outline" size="icon" onclick={() => (expenseDeleteTarget = expense)}><Trash2 class="h-3.5 w-3.5" /></Button>
-								{#if expense.hasReceipt}
-									{#if expense.receiptIsImage}
-										<a
-											href="/expense-file/{expense.id}"
-											target="_blank"
-											rel="noopener noreferrer"
-											data-testid="expense-receipt-{expense.id}"
-											class="ml-auto shrink-0"
-											aria-label="View receipt"
-										>
-											<img
-												src="/expense-file/{expense.id}?thumb=true"
-												alt="Receipt thumbnail"
-												class="h-10 w-10 rounded object-cover ring-1 ring-border"
-												loading="lazy"
-											/>
-										</a>
-									{:else}
-										<a
-											href="/expense-file/{expense.id}"
-											target="_blank"
-											rel="noopener noreferrer"
-											data-testid="expense-receipt-{expense.id}"
-											class="ml-auto text-xs text-primary underline underline-offset-2 hover:text-primary/80"
-										>Receipt (PDF)</a>
-									{/if}
-								{/if}
-							</div>
-						</div>
-					{/each}
-				{/if}
-			</Card.Content>
-		</Card.Root>
+		<!-- Expenses DataGrid -->
+		<DataGrid
+			data={expensesList}
+			columns={expenseColumns}
+			loading={expensesQuery.isLoading}
+			emptyMessage="No expenses found."
+			getRowKey={(e) => e.id}
+			getRowTestId={(e) => `expense-row`}
+			data-testid="expenses-list"
+			pageSize={PAGE_SIZE}
+		>
+			{#snippet toolbar()}
+				<div class="flex flex-1 flex-wrap items-center gap-2">
+					<div class="max-w-sm flex-1">
+						<SearchInput bind:value={expenseSearch} placeholder="Search expenses…" testid="expense-search" />
+					</div>
+					<Select.Root type="single" bind:value={expenseStatusFilter}>
+						<Select.Trigger class="w-[160px]" data-testid="expense-status-filter">
+							{expenseStatusFilter || 'All statuses'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="All statuses">All statuses</Select.Item>
+							{#each EXPENSE_STATUSES as s}
+								<Select.Item value={s} label={s}>{s}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+				<Button data-testid="expense-create-button" class="shrink-0 gap-2" onclick={openCreateExpense}>
+					<Plus class="h-4 w-4" />
+					Add Expense
+				</Button>
+			{/snippet}
+		</DataGrid>
 	</div>
 </div>
 

@@ -17,6 +17,7 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import { Pencil, Trash2 } from '@lucide/svelte';
+	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -256,6 +257,11 @@
 				</dl>
 			</Card.Content>
 		</Card.Root>
+
+		<!-- Documents section -->
+		<div class="mt-6" data-testid="work-order-detail-documents">
+			<DocumentsPanel entityType="WorkOrder" entityId={id} />
+		</div>
 	{/if}
 </div>
 

@@ -459,6 +459,19 @@ export interface CreateTeamMemberResponse extends TeamMember {
 	generatedPassword?: string;
 }
 
+/** Matches DocumentDto from GET /api/v1/documents and POST /api/v1/documents. */
+export interface DocumentItem {
+	id: number;
+	fileName: string;
+	contentType: string;
+	sizeBytes?: number;
+	entityType: string;
+	entityId: number;
+	isImage: boolean;
+	uploadedAt: string;
+	category?: string;
+}
+
 // --- Analytics / Insights types ---
 
 export interface MonthlyPoint {
