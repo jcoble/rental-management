@@ -14,4 +14,16 @@ export const payments = {
 	delete: (id: number) => api.delete(`/payments/${id}`),
 	// Payment collection rollups (collected/outstanding/overdue) live on the accounting
 	// summary; use the `accounting` endpoint module rather than a payments-only summary route.
+
+	/**
+	 * Initiate an online payment for a scheduled/owed payment record.
+	 *
+	 * 200 → { clientSecret: string, publishableKey: string, transactionId: number }
+	 * 503 → ApiError with status 503 when Stripe is not yet configured (expected default).
+	 */
+	createIntent: (id: number) =>
+		api.post<{ clientSecret: string; publishableKey: string; transactionId: number }>(
+			`/payments/${id}/create-intent`,
+			{}
+		),
 };
