@@ -46,3 +46,34 @@ them to the **actual** codebase and scopes the autonomous run for safety + value
    late-fee / lease-expiry financial workers, Twilio inbound.
 
 Each task: build (`dotnet build`) / `svelte-check` green, then commit. Per-phase review at the end.
+
+---
+
+## Status — 2026-05-31 (autonomous run)
+
+**Delivered (Phase 3 — the two brains), merged to main:**
+- Daily Briefing: `IDailyBriefingService`/`DailyBriefingService` (rules engine over leases/payments/
+  work-orders/appointments/inspections + optional LLM prose) → `GET /api/v1/ai/briefing`.
+- Tool-calling: `ChatWithToolsAsync` on `ILlmProvider` (OpenAI + Anthropic + no-op fallback).
+- Portfolio Q&A: `IPortfolioQaService` with 6 read-only, portfolio-scoped DB tools →
+  `POST /api/v1/ai/ask`.
+- Web `/ai` page: Daily Briefing card + Q&A chat (degrades to an "AI off" banner with no key).
+- End-of-phase review applied: blocked injected `system` history turns, capped Q&A input size,
+  logged-not-leaked tool/LLM exceptions, added the inspection date lower bound.
+
+**Deferred (Phase 4 + secondary Phase 3) — intentionally NOT built unsupervised:**
+- **Financial automation** (RentChargeWorker, LateFeeWorker) — creates/mutates financial records;
+  must be built with supervision + idempotency unique constraints + state-specific late-fee caps.
+- **External delivery** (Twilio SMS / SendGrid email) — no provider keys configured, so any
+  outbox-dispatch worker would enqueue messages that cannot send. The outbox table +
+  `OutboxDispatchWorker` + `INotificationChannel` already exist; what's missing is provider
+  config + a `DailyBriefingWorker`/`LeaseExpiryReminderWorker` that enqueue to it.
+- **Engine → client SignalR push** is currently a no-op (`EngineDataUpdateService`); cross-process
+  push must be wired before Engine workers can notify the web in real time.
+- **Other Phase 3 features**: Voice capture, Lease-FAQ bot, Maintenance photo triage — larger,
+  some need extra providers (speech-to-text); deferred.
+
+**Recommended next (supervised):** 1) configure Twilio/SendGrid; 2) wire Engine→SignalR push;
+3) `DailyBriefingWorker` (hourly poll, idempotent per portfolio+date via an outbox marker, enqueue
+to owner email/SMS); 4) `LeaseExpiryReminderWorker` (safe, non-financial); 5) then the financial
+workers with unique-constraint idempotency.
