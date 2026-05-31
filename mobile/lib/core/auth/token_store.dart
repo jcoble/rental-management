@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -20,13 +21,33 @@ class TokenStore {
 
   final FlutterSecureStorage _storage;
 
-  Future<String?> getAccessToken() => _storage.read(key: _keyAccessToken);
+  // In-memory cache. Secure storage (Android Keystore / iOS Keychain) is for
+  // PERSISTENCE across app launches — NOT for per-request reads. The auth
+  // interceptor calls getAccessToken() on every HTTP request, and Keystore reads
+  // can intermittently stall for seconds. Read once, then serve from memory.
+  String? _accessToken;
+  bool _accessLoaded = false;
+
+  Future<String?> getAccessToken() async {
+    if (_accessLoaded) return _accessToken;
+    final sw = Stopwatch()..start();
+    _accessToken = await _storage.read(key: _keyAccessToken);
+    sw.stop();
+    _accessLoaded = true;
+    if (sw.elapsedMilliseconds > 40) {
+      debugPrint('[TokenStore] first secure-storage read took ${sw.elapsedMilliseconds}ms');
+    }
+    return _accessToken;
+  }
+
   Future<String?> getRefreshToken() => _storage.read(key: _keyRefreshToken);
 
   Future<void> saveTokens({
     required String accessToken,
     required String refreshToken,
   }) async {
+    _accessToken = accessToken;
+    _accessLoaded = true;
     await Future.wait([
       _storage.write(key: _keyAccessToken, value: accessToken),
       _storage.write(key: _keyRefreshToken, value: refreshToken),
@@ -34,6 +55,8 @@ class TokenStore {
   }
 
   Future<void> clearTokens() async {
+    _accessToken = null;
+    _accessLoaded = true;
     await Future.wait([
       _storage.delete(key: _keyAccessToken),
       _storage.delete(key: _keyRefreshToken),
