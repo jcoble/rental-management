@@ -151,6 +151,9 @@ public class ExpenseService : IExpenseService
             PaidAt = request.PaidAt.ToUtc(),
             BillableToOwner = request.BillableToOwner,
             Notes = request.Notes,
+            Subtotal = request.Subtotal,
+            TaxAmount = request.TaxAmount,
+            ReceiptData = request.ReceiptData,
             CreatedAt = now,
             UpdatedAt = now,
         };
