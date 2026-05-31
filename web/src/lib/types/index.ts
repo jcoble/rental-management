@@ -165,6 +165,34 @@ export interface Expense {
 	receiptIsImage?: boolean;
 }
 
+// --- Owner statement types ---
+
+export interface OwnerStatementSummary {
+	ownerId: number;
+	ownerName: string;
+	netToOwner: number;
+}
+
+export interface OwnerStatementPropertyLine {
+	propertyId: number;
+	propertyName: string;
+	rentalIncome: number;
+	expenses: number;
+	managementFee: number;
+	netToOwner: number;
+}
+
+export interface OwnerStatementReport {
+	ownerId: number;
+	ownerName: string;
+	year: number;
+	properties: OwnerStatementPropertyLine[];
+	totalIncome: number;
+	totalExpenses: number;
+	totalManagementFee: number;
+	totalNetToOwner: number;
+}
+
 // --- Schedule E tax report types ---
 
 export interface ScheduleECategoryAmount {
