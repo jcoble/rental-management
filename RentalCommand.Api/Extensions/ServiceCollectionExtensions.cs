@@ -46,6 +46,7 @@ public static class ServiceCollectionExtensions
 
         // --- AI (phase 3) ---
         services.AddScoped<IDailyBriefingService, DailyBriefingService>();
+        services.AddScoped<IPortfolioQaService, PortfolioQaService>();
 
         return services;
     }
