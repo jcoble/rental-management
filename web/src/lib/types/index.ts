@@ -373,6 +373,29 @@ export interface AuthUser {
 	lastLoginAt?: string;
 }
 
+export type SecurityDepositStatus = 'Held' | 'PartiallyReturned' | 'Returned';
+
+export interface DepositDeduction {
+	reason: string;
+	amount: number;
+	notes?: string;
+}
+
+export interface SecurityDepositHolding {
+	id: number;
+	leaseId: number;
+	leaseNumber?: string;
+	amount: number;
+	status: SecurityDepositStatus;
+	heldAt: string;
+	returnedAt?: string;
+	returnedAmount?: number;
+	deductions: DepositDeduction[];
+	totalDeductions: number;
+	netRefund: number;
+	notes?: string;
+}
+
 export interface PortalMessage {
 	id: number;
 	portfolioId: number;
