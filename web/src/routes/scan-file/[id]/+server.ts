@@ -25,12 +25,19 @@ export const GET: RequestHandler = async ({ params, locals, fetch }) => {
 		throw error(upstream.status === 404 ? 404 : 502, 'Scan file not available');
 	}
 
+	// Defense-in-depth: this route serves on the APP origin, so it must not trust the
+	// upstream content-type. Render only known-safe types inline; force everything else to
+	// download as octet-stream so an uploaded html/svg can't execute here. (The API already
+	// neutralizes risky types, but the proxy must not depend on that.)
+	const INLINE_SAFE = new Set([
+		'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'application/pdf'
+	]);
+	const upstreamType = (upstream.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
+	const isSafe = INLINE_SAFE.has(upstreamType);
+
 	const headers = new Headers();
-	const contentType = upstream.headers.get('content-type');
-	if (contentType) headers.set('content-type', contentType);
-	const disposition = upstream.headers.get('content-disposition');
-	if (disposition) headers.set('content-disposition', disposition);
-	// Preserve the API's defensive headers; never sniff user-uploaded content.
+	headers.set('content-type', isSafe ? upstreamType : 'application/octet-stream');
+	headers.set('content-disposition', `${isSafe ? 'inline' : 'attachment'}; filename="scan-${params.id}"`);
 	headers.set('x-content-type-options', 'nosniff');
 	headers.set('cache-control', 'private, max-age=60');
 
