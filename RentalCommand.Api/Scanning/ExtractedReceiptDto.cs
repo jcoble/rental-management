@@ -50,6 +50,11 @@ public sealed class ExtractedReceiptDto
     // ---- Line items ----
     public List<ReceiptLineItem> LineItems { get; set; } = new();
 
+    // ---- Rent check fields (only populated when DocumentKind == "RentCheck") ----
+    public string? PayerName   { get; set; }
+    public string? CheckNumber { get; set; }
+    public string? BankName    { get; set; }
+
     // ---- Catch-all for any extra fields not in the schema ----
     public Dictionary<string, string> Extra { get; set; } = new();
 }
