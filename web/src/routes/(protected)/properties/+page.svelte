@@ -12,6 +12,10 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import { Plus, Home, Pencil, Trash2 } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
+	import * as Card from '$lib/components/ui/card';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -158,7 +162,9 @@
 	}
 
 	const list = $derived(propertiesQuery.data ?? []);
-	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
+
+	// Label helpers for Select triggers
+	const propertyTypes = ['SingleFamily', 'MultiFamily', 'Condo', 'Townhome', 'Commercial', 'MixedUse'];
 </script>
 
 <svelte:head>
@@ -171,14 +177,13 @@
 			<h1 class="text-2xl font-bold">Properties</h1>
 			<p class="text-sm text-muted-foreground">Portfolio, units, and occupancy setup.</p>
 		</div>
-		<button
+		<Button
 			data-testid="property-create-button"
-			class="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-white"
 			onclick={openCreate}
 		>
 			<Plus class="h-4 w-4" />
 			New Property
-		</button>
+		</Button>
 	</div>
 
 	<div class="mb-4 max-w-sm">
@@ -188,7 +193,9 @@
 	<div class="grid gap-5 lg:grid-cols-5">
 		<div class="space-y-3 lg:col-span-3">
 			{#if propertiesQuery.isLoading}
-				<div class="rounded-lg border border-border bg-card p-6 text-center text-muted-foreground" data-testid="properties-loading">Loading…</div>
+				<Card.Root class="gap-0 py-0" data-testid="properties-loading">
+					<Card.Content class="p-6 text-center text-muted-foreground">Loading…</Card.Content>
+				</Card.Root>
 			{:else if list.length}
 				<ul data-testid="properties-list" class="space-y-3">
 					{#each list as property (property.id)}
@@ -198,82 +205,91 @@
 							class="rounded-lg border border-border bg-card p-4 transition-colors hover:border-border {selectedProperty === property.id ? 'ring-1 ring-ring' : ''}"
 						>
 							<div class="flex items-start justify-between gap-2">
-								<button
+								<Button
 									data-testid="property-select"
-									class="min-w-0 flex-1 text-left"
+									variant="ghost"
+									class="min-w-0 flex-1 justify-start text-left h-auto py-0 px-0 hover:bg-transparent"
 									onclick={() => (selectedProperty = property.id)}
 								>
-									<p class="truncate font-medium" data-testid="property-name">{property.name}</p>
-									<p class="truncate text-xs text-muted-foreground">{property.addressLine1}, {property.city}, {property.state} {property.postalCode}</p>
-									<div class="mt-2 flex gap-4 text-xs text-muted-foreground">
-										<span>{property.unitCount || 0} units</span>
-										<span>{property.occupiedUnits || 0} occupied</span>
-										<span>{property.type}</span>
+									<div>
+										<p class="truncate font-medium" data-testid="property-name">{property.name}</p>
+										<p class="truncate text-xs text-muted-foreground">{property.addressLine1}, {property.city}, {property.state} {property.postalCode}</p>
+										<div class="mt-2 flex gap-4 text-xs text-muted-foreground">
+											<span>{property.unitCount || 0} units</span>
+											<span>{property.occupiedUnits || 0} occupied</span>
+											<span>{property.type}</span>
+										</div>
 									</div>
-								</button>
+								</Button>
 								<div class="flex shrink-0 items-center gap-1">
 									<span class="rounded border border-border bg-background px-2 py-0.5 text-xs">{property.status}</span>
-									<button
+									<Button
 										data-testid="property-edit"
 										aria-label="Edit property"
-										class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+										variant="ghost"
+										size="icon"
 										onclick={() => openEdit(property)}
 									>
 										<Pencil class="h-4 w-4" />
-									</button>
-									<button
+									</Button>
+									<Button
 										data-testid="property-delete"
 										aria-label="Delete property"
-										class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive"
+										variant="ghost"
+										size="icon"
 										onclick={() => (deleteTarget = property)}
 									>
 										<Trash2 class="h-4 w-4" />
-									</button>
+									</Button>
 								</div>
 							</div>
 						</li>
 					{/each}
 				</ul>
 			{:else}
-				<div class="rounded-lg border border-border bg-card p-6 text-center text-muted-foreground" data-testid="properties-empty">No properties found.</div>
+				<Card.Root class="gap-0 py-0" data-testid="properties-empty">
+					<Card.Content class="p-6 text-center text-muted-foreground">No properties found.</Card.Content>
+				</Card.Root>
 			{/if}
 
 			<Pagination bind:skip take={PAGE_SIZE} count={list.length} testid="property-pagination" />
 		</div>
 
-		<div class="rounded-lg border border-border bg-card p-4 lg:col-span-2">
-			<div class="mb-3 flex items-center gap-2"><Home class="h-4 w-4 text-primary" /><h2 class="font-semibold">Units</h2></div>
-			{#if !selectedProperty}
-				<p class="text-sm text-muted-foreground">Select a property to manage units.</p>
-			{:else}
-				<div class="mb-3 grid gap-2" data-testid="unit-form">
-					<input data-testid="unit-number-input" bind:value={unitForm.unitNumber} class={inputClass} placeholder="Unit number" />
-					{#if unitErrors.unitNumber}<p class="text-xs text-destructive" data-testid="unit-number-error">{unitErrors.unitNumber}</p>{/if}
-					<div class="grid grid-cols-3 gap-2">
-						<input data-testid="unit-bedrooms-input" bind:value={unitForm.bedrooms} class={inputClass} placeholder="Beds" />
-						<input data-testid="unit-bathrooms-input" bind:value={unitForm.bathrooms} class={inputClass} placeholder="Baths" />
-						<input data-testid="unit-rent-input" bind:value={unitForm.marketRent} class={inputClass} placeholder="Rent" />
+		<Card.Root class="gap-0 py-0 lg:col-span-2">
+			<Card.Content class="p-4">
+				<div class="mb-3 flex items-center gap-2"><Home class="h-4 w-4 text-primary" /><h2 class="font-semibold">Units</h2></div>
+				{#if !selectedProperty}
+					<p class="text-sm text-muted-foreground">Select a property to manage units.</p>
+				{:else}
+					<div class="mb-3 grid gap-2" data-testid="unit-form">
+						<Input data-testid="unit-number-input" bind:value={unitForm.unitNumber} placeholder="Unit number" />
+						{#if unitErrors.unitNumber}<p class="text-xs text-destructive" data-testid="unit-number-error">{unitErrors.unitNumber}</p>{/if}
+						<div class="grid grid-cols-3 gap-2">
+							<Input data-testid="unit-bedrooms-input" bind:value={unitForm.bedrooms} placeholder="Beds" />
+							<Input data-testid="unit-bathrooms-input" bind:value={unitForm.bathrooms} placeholder="Baths" />
+							<Input data-testid="unit-rent-input" bind:value={unitForm.marketRent} placeholder="Rent" />
+						</div>
+						<Button data-testid="unit-save-button" onclick={submitUnit} disabled={createUnitMutation.isPending}>Add Unit</Button>
 					</div>
-					<button data-testid="unit-save-button" onclick={submitUnit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={createUnitMutation.isPending}>Add Unit</button>
-				</div>
-				<ul class="space-y-2" data-testid="units-list">
-					{#each unitsQuery.data || [] as unit (unit.id)}
-						<li class="rounded border border-border bg-background px-3 py-2 text-sm" data-testid="unit-row">
-							<div class="flex items-center justify-between">
-								<p class="font-medium">Unit {unit.unitNumber}</p>
-								<div class="flex items-center gap-2">
-									<span class="text-xs text-muted-foreground">{unit.status}</span>
-									<button data-testid="unit-delete" aria-label="Remove unit" class="rounded p-1 text-muted-foreground hover:text-destructive" onclick={() => deleteUnitMutation.mutate(unit.id)}>
-										<Trash2 class="h-3.5 w-3.5" />
-									</button>
+					<ul class="space-y-2" data-testid="units-list">
+						{#each unitsQuery.data || [] as unit (unit.id)}
+							<li class="rounded border border-border bg-background px-3 py-2 text-sm" data-testid="unit-row">
+								<div class="flex items-center justify-between">
+									<p class="font-medium">Unit {unit.unitNumber}</p>
+									<div class="flex items-center gap-2">
+										<span class="text-xs text-muted-foreground">{unit.status}</span>
+										<Button data-testid="unit-delete" aria-label="Remove unit" variant="ghost" size="icon" class="h-6 w-6" onclick={() => deleteUnitMutation.mutate(unit.id)}>
+											<Trash2 class="h-3.5 w-3.5" />
+										</Button>
+									</div>
 								</div>
-							</div>
-							<p class="text-xs text-muted-foreground">{unit.bedrooms}bd / {unit.bathrooms}ba · ${unit.marketRent}/mo</p>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-		</div>
+								<p class="text-xs text-muted-foreground">{unit.bedrooms}bd / {unit.bathrooms}ba · ${unit.marketRent}/mo</p>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</Card.Content>
+		</Card.Root>
 	</div>
 </div>
 
@@ -284,42 +300,54 @@
 		</Dialog.Header>
 		<div class="grid gap-3 md:grid-cols-2" data-testid="property-form">
 			<div class="md:col-span-2">
-				<input data-testid="property-name-input" bind:value={form.name} class="{inputClass} w-full" placeholder="Property name" />
+				<Input data-testid="property-name-input" bind:value={form.name} placeholder="Property name" />
 				{#if formErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="property-name-error">{formErrors.name}</p>{/if}
 			</div>
-			<select data-testid="property-type-input" bind:value={form.type} class={inputClass}>
-				<option>SingleFamily</option><option>MultiFamily</option><option>Condo</option><option>Townhome</option><option>Commercial</option><option>MixedUse</option>
-			</select>
-			<select data-testid="property-owner-input" bind:value={form.ownerId} class={inputClass}>
-				<option value="">No owner assigned</option>
-				{#each ownersQuery.data || [] as owner}
-					<option value={owner.id}>{owner.name}</option>
-				{/each}
-			</select>
+			<Select.Root type="single" bind:value={form.type}>
+				<Select.Trigger class="w-full" data-testid="property-type-input">
+					{form.type ? form.type : 'Select type'}
+				</Select.Trigger>
+				<Select.Content>
+					{#each propertyTypes as pt}
+						<Select.Item value={pt} label={pt}>{pt}</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
+			<Select.Root type="single" bind:value={form.ownerId}>
+				<Select.Trigger class="w-full" data-testid="property-owner-input">
+					{form.ownerId ? ((ownersQuery.data || []).find(o => String(o.id) === form.ownerId)?.name ?? 'No owner assigned') : 'No owner assigned'}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>
+					{#each ownersQuery.data || [] as owner}
+						<Select.Item value={String(owner.id)} label={owner.name}>{owner.name}</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
 			<div class="md:col-span-2">
-				<input data-testid="property-address-input" bind:value={form.addressLine1} class="{inputClass} w-full" placeholder="Address" />
+				<Input data-testid="property-address-input" bind:value={form.addressLine1} placeholder="Address" />
 				{#if formErrors.addressLine1}<p class="mt-1 text-xs text-destructive" data-testid="property-address-error">{formErrors.addressLine1}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="property-city-input" bind:value={form.city} class="{inputClass} w-full" placeholder="City" />
+				<Input data-testid="property-city-input" bind:value={form.city} placeholder="City" />
 				{#if formErrors.city}<p class="mt-1 text-xs text-destructive" data-testid="property-city-error">{formErrors.city}</p>{/if}
 			</div>
 			<div class="grid grid-cols-2 gap-2">
 				<div>
-					<input data-testid="property-state-input" bind:value={form.state} class="{inputClass} w-full" placeholder="State" />
+					<Input data-testid="property-state-input" bind:value={form.state} placeholder="State" />
 					{#if formErrors.state}<p class="mt-1 text-xs text-destructive" data-testid="property-state-error">{formErrors.state}</p>{/if}
 				</div>
 				<div>
-					<input data-testid="property-zip-input" bind:value={form.postalCode} class="{inputClass} w-full" placeholder="ZIP" />
+					<Input data-testid="property-zip-input" bind:value={form.postalCode} placeholder="ZIP" />
 					{#if formErrors.postalCode}<p class="mt-1 text-xs text-destructive" data-testid="property-zip-error">{formErrors.postalCode}</p>{/if}
 				</div>
 			</div>
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
-			<button data-testid="property-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
-			<button data-testid="property-form-save" onclick={submitProperty} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={savePropertyMutation.isPending}>
+			<Button data-testid="property-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
+			<Button data-testid="property-form-save" onclick={submitProperty} disabled={savePropertyMutation.isPending}>
 				{savePropertyMutation.isPending ? 'Saving…' : 'Save Property'}
-			</button>
+			</Button>
 		</div>
 	</Dialog.Content>
 </Dialog.Root>
@@ -327,7 +355,7 @@
 <ConfirmDialog
 	open={deleteTarget !== null}
 	title="Delete property"
-	message={deleteTarget ? `Delete “${deleteTarget.name}”? This also removes its units.` : ''}
+	message={deleteTarget ? `Delete "${deleteTarget.name}"? This also removes its units.` : ''}
 	busy={deletePropertyMutation.isPending}
 	testid="property-delete"
 	onconfirm={() => deleteTarget && deletePropertyMutation.mutate(deleteTarget.id)}

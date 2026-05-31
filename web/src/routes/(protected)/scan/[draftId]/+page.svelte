@@ -11,6 +11,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Table from '$lib/components/ui/table';
+	import * as Select from '$lib/components/ui/select';
 
 	// ScheduleECategory enum values (mirrors RentalCommand.Core.Enums.ScheduleECategory)
 	const SCHEDULE_E_CATEGORIES = [
@@ -74,14 +75,25 @@
 	// Whether this draft targets a Payment (rent check) rather than an Expense
 	const isPayment = $derived(data?.targetEntityType === 'Payment');
 
-	// Lease selector state (only used when isPayment)
-	let selectedLeaseId = $state<number | null>(null);
+	// Lease selector state (only used when isPayment).
+	// String-backed for the shadcn Select; converted to a number at confirm time.
+	let selectedLeaseId = $state<string>('');
 
 	const leasesQuery = createQuery(() => ({
 		queryKey: ['leases', getCurrentPortfolioId()],
 		queryFn: () => leases.list(getCurrentPortfolioId()),
 		enabled: isPayment
 	}));
+
+	function leaseLabel(lease: { leaseNumber: string; tenantName?: string | null; unitNumber?: string | null }): string {
+		return `#${lease.leaseNumber}${lease.tenantName ? ` — ${lease.tenantName}` : ''}${lease.unitNumber ? ` · Unit ${lease.unitNumber}` : ''}`;
+	}
+
+	const selectedLeaseLabel = $derived.by(() => {
+		if (!selectedLeaseId) return '— Select a lease —';
+		const sel = leasesQuery.data?.find((l) => String(l.id) === selectedLeaseId);
+		return sel ? leaseLabel(sel) : '— Select a lease —';
+	});
 
 	// Editable field values (keyed by field name, scalars only)
 	let editedFields = $state<Record<string, string>>({});
@@ -287,7 +299,7 @@
 		}
 		if (isPayment) {
 			// Payment drafts require leaseId; omit the paid/unpaid toggle (a received check is always paid)
-			overrides['leaseId'] = selectedLeaseId;
+			overrides['leaseId'] = selectedLeaseId ? Number(selectedLeaseId) : null;
 		} else {
 			// Expense drafts: always include the paid/unpaid toggle decision
 			overrides['is_paid'] = isPaid;
@@ -395,21 +407,20 @@
 							<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-select">
 								Which lease is this payment for? <span class="text-red-500">*</span>
 							</label>
-							<select
-								id="scan-lease-select"
-								data-testid="scan-lease-select"
-								bind:value={selectedLeaseId}
-								class="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-							>
-								<option value={null}>— Select a lease —</option>
-								{#if leasesQuery.data}
-									{#each leasesQuery.data as lease (lease.id)}
-										<option value={lease.id}>
-											#{lease.leaseNumber}{lease.tenantName ? ` — ${lease.tenantName}` : ''}{lease.unitNumber ? ` · Unit ${lease.unitNumber}` : ''}
-										</option>
-									{/each}
-								{/if}
-							</select>
+							<Select.Root type="single" bind:value={selectedLeaseId}>
+								<Select.Trigger id="scan-lease-select" data-testid="scan-lease-select" class="w-full">
+									{selectedLeaseLabel}
+								</Select.Trigger>
+								<Select.Content>
+									{#if leasesQuery.data}
+										{#each leasesQuery.data as lease (lease.id)}
+											<Select.Item value={String(lease.id)} label={leaseLabel(lease)}>
+												{leaseLabel(lease)}
+											</Select.Item>
+										{/each}
+									{/if}
+								</Select.Content>
+							</Select.Root>
 							{#if leasesQuery.isLoading}
 								<p class="mt-1 text-xs text-muted-foreground">Loading leases…</p>
 							{/if}
@@ -432,18 +443,17 @@
 										{fieldName.replace(/_/g, ' ')}
 									</label>
 									{#if fieldName === 'category'}
-										<!-- Native <select> kept for clean bind:value -->
-										<select
-											id="field-{fieldName}"
-											data-testid="scan-field-{fieldName}"
-											bind:value={editedFields[fieldName]}
-											class="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
-										>
-											<option value="">Select category</option>
-											{#each SCHEDULE_E_CATEGORIES as cat}
-												<option value={cat}>{cat}</option>
-											{/each}
-										</select>
+										<!-- Category dropdown -->
+										<Select.Root type="single" bind:value={editedFields[fieldName]}>
+											<Select.Trigger id="field-{fieldName}" data-testid="scan-field-{fieldName}" class="w-full">
+												{editedFields[fieldName] || 'Select category'}
+											</Select.Trigger>
+											<Select.Content>
+												{#each SCHEDULE_E_CATEGORIES as cat}
+													<Select.Item value={cat} label={cat}>{cat}</Select.Item>
+												{/each}
+											</Select.Content>
+										</Select.Root>
 									{:else}
 										<Input
 											id="field-{fieldName}"
@@ -480,20 +490,17 @@
 													{/if}
 												</div>
 												{#if field.name === 'category'}
-													<!-- Native <select> kept for clean bind:value -->
-													<select
-														id="field-{field.name}"
-														data-testid="scan-field-{field.name}"
-														bind:value={editedFields[field.name]}
-														class="w-full rounded border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring
-															border-border
-															"
-													>
-														<option value="">Select category</option>
-														{#each SCHEDULE_E_CATEGORIES as cat}
-															<option value={cat}>{cat}</option>
-														{/each}
-													</select>
+													<!-- Category dropdown -->
+													<Select.Root type="single" bind:value={editedFields[field.name]}>
+														<Select.Trigger id="field-{field.name}" data-testid="scan-field-{field.name}" class="w-full">
+															{editedFields[field.name] || 'Select category'}
+														</Select.Trigger>
+														<Select.Content>
+															{#each SCHEDULE_E_CATEGORIES as cat}
+																<Select.Item value={cat} label={cat}>{cat}</Select.Item>
+															{/each}
+														</Select.Content>
+													</Select.Root>
 												{:else}
 													<!-- Raw <input> needed here to support the use:focusFirstLow action (actions cannot be placed on components) -->
 													<input
