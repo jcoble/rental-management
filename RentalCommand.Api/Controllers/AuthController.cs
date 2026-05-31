@@ -2,9 +2,11 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
+using RentalCommand.Core.Configuration;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -18,6 +20,8 @@ public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
     private readonly IJwtTokenService _tokenService;
+    private readonly IGoogleAuthService _googleAuthService;
+    private readonly GoogleAuthOptions _googleOptions;
     private readonly IWebHostEnvironment _environment;
     private readonly IConfiguration _configuration;
     private readonly ILogger<AuthController> _logger;
@@ -25,12 +29,16 @@ public class AuthController : ControllerBase
     public AuthController(
         IAuthService authService,
         IJwtTokenService tokenService,
+        IGoogleAuthService googleAuthService,
+        IOptions<GoogleAuthOptions> googleOptions,
         IWebHostEnvironment environment,
         IConfiguration configuration,
         ILogger<AuthController> logger)
     {
         _authService = authService;
         _tokenService = tokenService;
+        _googleAuthService = googleAuthService;
+        _googleOptions = googleOptions.Value;
         _environment = environment;
         _configuration = configuration;
         _logger = logger;
@@ -203,6 +211,32 @@ public class AuthController : ControllerBase
 
         ClearRefreshTokenCookies();
         return Ok(new { message = "Logged out successfully" });
+    }
+
+    /// <summary>
+    /// Sign in with Google. Accepts the authorization <c>code</c> from the frontend OAuth flow,
+    /// exchanges it with Google, validates the returned id_token, finds or creates the local user,
+    /// and issues our own JWT pair. Returns 501 when Google credentials are not configured.
+    /// </summary>
+    [HttpPost("google")]
+    [AllowAnonymous]
+    public async Task<ActionResult<LoginResponse>> GoogleSignIn([FromBody] GoogleAuthRequest request)
+    {
+        if (!_googleOptions.Enabled)
+        {
+            return StatusCode(StatusCodes.Status501NotImplemented, new { error = "Google sign-in is not configured." });
+        }
+
+        var result = await _googleAuthService.AuthenticateAsync(request.Code, request.RedirectUri);
+        if (!result.Success)
+        {
+            // Log detail is already emitted by GoogleAuthService; only return a safe generic message.
+            _logger.LogInformation("Google sign-in attempt failed: {Error}", result.Error);
+            return Unauthorized(new { error = "Google sign-in failed." });
+        }
+
+        SetRefreshTokenCookie(result.Tokens!.RefreshToken, result.Tokens.RefreshTokenExpiration);
+        return Ok(result.Response);
     }
 
     private void SetRefreshTokenCookie(string token, DateTime expiration)
