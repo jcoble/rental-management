@@ -1,0 +1,35 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RentalCommand.Api</RootNamespace>
+    <UserSecretsId>d8bc1294-85ff-4b1a-a8c9-dea769437ed8</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.1" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="PdfPig" Version="0.1.14" />
+    <PackageReference Include="SkiaSharp" Version="3.119.4" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux" Version="3.119.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\RentalCommand.Core\RentalCommand.Core.csproj" />
+    <ProjectReference Include="..\RentalCommand.Data\RentalCommand.Data.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="RentalCommand.Api.Tests" />
+    <InternalsVisibleTo Include="RentalCommand.TestCommon" />
+    <InternalsVisibleTo Include="RentalCommand.IntegrationTests" />
+  </ItemGroup>
+
+</Project>

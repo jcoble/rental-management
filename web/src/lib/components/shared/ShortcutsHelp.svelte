@@ -17,8 +17,8 @@
 	<div class="space-y-1">
 		{#each shortcuts as shortcut}
 			<div class="flex items-center justify-between py-1">
-				<span class="text-sm text-text-secondary">{shortcut.label}</span>
-				<kbd class="rounded border border-border bg-surface-hover px-1.5 py-0.5 font-mono text-xs text-text-tertiary">
+				<span class="text-sm text-muted-foreground">{shortcut.label}</span>
+				<kbd class="rounded border border-border bg-secondary px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
 					{formatKey(shortcut)}
 				</kbd>
 			</div>

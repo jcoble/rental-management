@@ -1,0 +1,23 @@
+# Traefik dynamic configuration (file provider).
+#
+# Supplies the local/dev TLS certificate so the websecure entrypoint can serve
+# HTTPS. Generate a self-signed pair into ./certs before `docker compose up`:
+#
+#   mkdir -p certs
+#   openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+#     -keyout certs/key.pem -out certs/cert.pem \
+#     -subj "/CN=localhost" \
+#     -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+#
+# For production, swap in real certs (or replace this with an ACME resolver on
+# the traefik service command, as in deploy/docker-compose.prod.yml of the
+# mirror project).
+tls:
+  certificates:
+    - certFile: /certs/cert.pem
+      keyFile: /certs/key.pem
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/cert.pem
+        keyFile: /certs/key.pem

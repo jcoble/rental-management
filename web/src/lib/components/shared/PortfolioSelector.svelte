@@ -55,7 +55,7 @@
 	{#if collapsed}
 		<button
 			onclick={() => (open = !open)}
-			class="flex w-full items-center justify-center rounded-md px-3 py-2 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+			class="flex w-full items-center justify-center rounded-md px-3 py-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 			title={currentPortfolio?.name || 'Select portfolio'}
 		>
 			<Building2 class="h-4 w-4 shrink-0" />
@@ -63,26 +63,26 @@
 	{:else}
 		<button
 			onclick={() => (open = !open)}
-			class="flex w-full items-center gap-2 rounded-md border border-border bg-bg px-3 py-1.5 text-sm text-text-primary transition-colors hover:border-border-hover"
+			class="flex w-full items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm text-foreground transition-colors hover:border-border"
 		>
-			<Building2 class="h-3.5 w-3.5 shrink-0 text-text-tertiary" />
+			<Building2 class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
 			<span class="flex-1 truncate text-left">{currentPortfolio?.name || 'Select portfolio'}</span>
-			<ChevronDown class="h-3.5 w-3.5 shrink-0 text-text-tertiary" />
+			<ChevronDown class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
 		</button>
 	{/if}
 
 	{#if open}
-		<div class="absolute left-2 right-2 top-full z-50 mt-1 rounded-md border border-border bg-surface shadow-lg">
+		<div class="absolute left-2 right-2 top-full z-50 mt-1 rounded-md border border-border bg-card shadow-lg">
 			{#if portfoliosQuery.data}
 				<div class="max-h-48 overflow-y-auto py-1">
 					{#each portfoliosQuery.data as portfolio}
 						<button
 							onclick={() => selectPortfolio(portfolio.id)}
-							class="flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors hover:bg-surface-hover {portfolio.id === getCurrentPortfolioId() ? 'text-accent' : 'text-text-primary'}"
+							class="flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors hover:bg-secondary {portfolio.id === getCurrentPortfolioId() ? 'text-primary' : 'text-foreground'}"
 						>
 							<span class="truncate">{portfolio.name}</span>
 							{#if portfolio.id === getCurrentPortfolioId()}
-								<span class="ml-auto text-[10px] text-accent">current</span>
+								<span class="ml-auto text-[10px] text-primary">current</span>
 							{/if}
 						</button>
 					{/each}
@@ -91,7 +91,7 @@
 			<div class="border-t border-border py-1">
 				<button
 					onclick={() => { open = false; showCreateDialog = true; }}
-					class="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+					class="flex w-full items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 				>
 					<Plus class="h-3.5 w-3.5" />
 					New Portfolio
