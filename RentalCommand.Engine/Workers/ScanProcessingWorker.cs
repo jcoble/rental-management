@@ -75,7 +75,7 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                 draft.ExtractedFields = fieldJson;
                 draft.ModelId = extracted.ModelId;
                 draft.TokensUsed = extracted.TokensUsed;
-                draft.CostUsd = EstimateCost(extracted.ModelId, extracted.TokensUsed);
+                draft.CostUsd = EstimateCost(extracted.ModelId, extracted.InputTokens, extracted.OutputTokens);
                 draft.Status = "Reviewing";
                 draft.ReviewedAt = DateTime.UtcNow;
                 await db.SaveChangesAsync(ct);
@@ -109,7 +109,23 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
             _ => "image/jpeg"
         };
 
-    // Rough Haiku-tier estimate; refined in Phase 5 budgeting. $0 when no real tokens (no-op).
-    private static decimal EstimateCost(string modelId, int tokens) =>
-        tokens == 0 ? 0m : Math.Round(tokens / 1_000_000m * 2.0m, 6);
+    // Approximate list-price estimates (USD per 1M tokens) for display only — not billing-accurate.
+    // Rates are for common hosted models; unknown models use a conservative 1.00/3.00 default.
+    private static decimal EstimateCost(string modelId, int inputTokens, int outputTokens)
+    {
+        if (inputTokens == 0 && outputTokens == 0) return 0m;
+        var id = modelId ?? string.Empty;
+        decimal inRate, outRate;
+        if (id.Contains("gpt-4o-mini", StringComparison.OrdinalIgnoreCase))
+            { inRate = 0.15m; outRate = 0.60m; }
+        else if (id.Contains("gpt-4o", StringComparison.OrdinalIgnoreCase))
+            { inRate = 2.50m; outRate = 10.00m; }
+        else if (id.Contains("claude", StringComparison.OrdinalIgnoreCase))
+            { inRate = 3.00m; outRate = 15.00m; }
+        else if (id.Equals("noop", StringComparison.OrdinalIgnoreCase))
+            return 0m;
+        else
+            { inRate = 1.00m; outRate = 3.00m; }
+        return Math.Round(inputTokens / 1_000_000m * inRate + outputTokens / 1_000_000m * outRate, 6);
+    }
 }

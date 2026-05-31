@@ -30,8 +30,14 @@ public class ExtractedFields
     /// <summary>Identifier of the model that produced the extraction.</summary>
     public string ModelId { get; set; } = string.Empty;
 
-    /// <summary>Total tokens consumed by the extraction call.</summary>
+    /// <summary>Total tokens consumed by the extraction call (input + output, kept for back-compat).</summary>
     public int TokensUsed { get; set; }
+
+    /// <summary>Input (prompt) tokens consumed by the extraction call.</summary>
+    public int InputTokens { get; set; }
+
+    /// <summary>Output (completion) tokens consumed by the extraction call.</summary>
+    public int OutputTokens { get; set; }
 }
 
 /// <summary>A single extracted field value, its confidence, and where it was found in the source.</summary>
