@@ -13,6 +13,10 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
+	import * as Card from '$lib/components/ui/card';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -143,7 +147,22 @@
 	}
 
 	const list = $derived((leasesQuery.data ?? []).filter((l) => !statusFilter || l.status === statusFilter));
-	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
+
+	// Derived labels for select triggers
+	const selectedPropertyLabel = $derived(
+		propertiesQuery.data?.find((p) => String(p.id) === form.propertyId)?.name ?? ''
+	);
+	const selectedUnitLabel = $derived(
+		unitsForPropertyQuery.data?.find((u) => String(u.id) === form.unitId)
+			? `Unit ${unitsForPropertyQuery.data?.find((u) => String(u.id) === form.unitId)?.unitNumber} (${unitsForPropertyQuery.data?.find((u) => String(u.id) === form.unitId)?.status})`
+			: ''
+	);
+	const selectedTenantLabel = $derived(
+		tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)
+			? (tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.fullName ||
+				`${tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.firstName} ${tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.lastName}`)
+			: ''
+	);
 </script>
 
 <svelte:head>
@@ -156,73 +175,82 @@
 			<h1 class="text-2xl font-bold">Leases</h1>
 			<p class="text-sm text-muted-foreground">Lease lifecycle, rent terms, and status updates.</p>
 		</div>
-		<button data-testid="lease-create-button" class="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-white" onclick={openCreate}>
+		<Button data-testid="lease-create-button" onclick={openCreate} class="gap-2">
 			<Plus class="h-4 w-4" />
 			New Lease
-		</button>
+		</Button>
 	</div>
 
 	<div class="mb-4 flex flex-wrap items-center gap-3">
 		<div class="max-w-sm flex-1"><SearchInput bind:value={search} placeholder="Search leases…" testid="lease-search" /></div>
-		<select data-testid="lease-status-filter" bind:value={statusFilter} class="{inputClass} h-9">
-			<option value="">All statuses</option>
-			{#each LEASE_STATUSES as s}<option value={s}>{s}</option>{/each}
-		</select>
+		<Select.Root type="single" bind:value={statusFilter}>
+			<Select.Trigger class="w-[180px]" data-testid="lease-status-filter">
+				{statusFilter ? statusFilter : 'All statuses'}
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="" label="All statuses">All statuses</Select.Item>
+				{#each LEASE_STATUSES as s}
+					<Select.Item value={s} label={s}>{s}</Select.Item>
+				{/each}
+			</Select.Content>
+		</Select.Root>
 	</div>
 
-	<div class="rounded-lg border border-border bg-card">
-		<div class="overflow-x-auto">
-			<table class="min-w-full text-sm">
-				<thead class="border-b border-border bg-background text-left text-xs uppercase text-muted-foreground">
-					<tr>
-						<th class="px-3 py-2">Lease</th>
-						<th class="px-3 py-2">Tenant</th>
-						<th class="px-3 py-2">Unit</th>
-						<th class="px-3 py-2">Rent</th>
-						<th class="px-3 py-2">Term</th>
-						<th class="px-3 py-2">Status</th>
-						<th class="px-3 py-2 text-right">Actions</th>
-					</tr>
-				</thead>
-				<tbody data-testid="leases-list">
-					{#if leasesQuery.isLoading}
-						<tr><td colspan="7" class="px-3 py-6 text-center text-muted-foreground" data-testid="leases-loading">Loading…</td></tr>
-					{:else if list.length === 0}
-						<tr><td colspan="7" class="px-3 py-6 text-center text-muted-foreground" data-testid="leases-empty">No leases found.</td></tr>
-					{:else}
-						{#each list as lease (lease.id)}
-							<tr class="border-b border-border/70" data-testid="lease-row" data-lease-id={lease.id}>
-								<td class="px-3 py-2 font-medium" data-testid="lease-number">{lease.leaseNumber}</td>
-								<td class="px-3 py-2">{lease.tenantName || '—'}</td>
-								<td class="px-3 py-2">{lease.propertyName} · {lease.unitNumber}</td>
-								<td class="px-3 py-2">${lease.monthlyRent}</td>
-								<td class="px-3 py-2 text-muted-foreground">{new Date(lease.startDate).toLocaleDateString()} - {new Date(lease.endDate).toLocaleDateString()}</td>
-								<td class="px-3 py-2" data-testid="lease-status">{lease.status}</td>
-								<td class="px-3 py-2">
-									<div class="flex justify-end gap-1">
-										{#if lease.status !== 'Active'}
-											<button data-testid="lease-set-active" class="rounded border border-border px-2 py-1 text-xs" onclick={() => statusMutation.mutate({ id: lease.id, status: 'Active' })}>Set Active</button>
-										{:else}
-											<button data-testid="lease-give-notice" class="rounded border border-border px-2 py-1 text-xs" onclick={() => statusMutation.mutate({ id: lease.id, status: 'NoticeGiven' })}>Give Notice</button>
-										{/if}
-										<button data-testid="lease-edit" aria-label="Edit lease" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" onclick={() => openEdit(lease)}>
-											<Pencil class="h-4 w-4" />
-										</button>
-										<button data-testid="lease-delete" aria-label="Delete lease" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive" onclick={() => (deleteTarget = lease)}>
-											<Trash2 class="h-4 w-4" />
-										</button>
-									</div>
-								</td>
-							</tr>
-						{/each}
-					{/if}
-				</tbody>
-			</table>
-		</div>
-		<div class="border-t border-border px-3 py-2">
-			<Pagination bind:skip take={PAGE_SIZE} count={leasesQuery.data?.length ?? 0} testid="lease-pagination" />
-		</div>
-	</div>
+	<Card.Root class="gap-0 py-0">
+		<Card.Content class="p-0">
+			<div class="overflow-x-auto">
+				<table class="min-w-full text-sm">
+					<thead class="border-b border-border bg-background text-left text-xs uppercase text-muted-foreground">
+						<tr>
+							<th class="px-3 py-2">Lease</th>
+							<th class="px-3 py-2">Tenant</th>
+							<th class="px-3 py-2">Unit</th>
+							<th class="px-3 py-2">Rent</th>
+							<th class="px-3 py-2">Term</th>
+							<th class="px-3 py-2">Status</th>
+							<th class="px-3 py-2 text-right">Actions</th>
+						</tr>
+					</thead>
+					<tbody data-testid="leases-list">
+						{#if leasesQuery.isLoading}
+							<tr><td colspan="7" class="px-3 py-6 text-center text-muted-foreground" data-testid="leases-loading">Loading…</td></tr>
+						{:else if list.length === 0}
+							<tr><td colspan="7" class="px-3 py-6 text-center text-muted-foreground" data-testid="leases-empty">No leases found.</td></tr>
+						{:else}
+							{#each list as lease (lease.id)}
+								<tr class="border-b border-border/70" data-testid="lease-row" data-lease-id={lease.id}>
+									<td class="px-3 py-2 font-medium" data-testid="lease-number">{lease.leaseNumber}</td>
+									<td class="px-3 py-2">{lease.tenantName || '—'}</td>
+									<td class="px-3 py-2">{lease.propertyName} · {lease.unitNumber}</td>
+									<td class="px-3 py-2">${lease.monthlyRent}</td>
+									<td class="px-3 py-2 text-muted-foreground">{new Date(lease.startDate).toLocaleDateString()} - {new Date(lease.endDate).toLocaleDateString()}</td>
+									<td class="px-3 py-2" data-testid="lease-status">{lease.status}</td>
+									<td class="px-3 py-2">
+										<div class="flex justify-end gap-1">
+											{#if lease.status !== 'Active'}
+												<Button data-testid="lease-set-active" variant="outline" size="sm" onclick={() => statusMutation.mutate({ id: lease.id, status: 'Active' })}>Set Active</Button>
+											{:else}
+												<Button data-testid="lease-give-notice" variant="outline" size="sm" onclick={() => statusMutation.mutate({ id: lease.id, status: 'NoticeGiven' })}>Give Notice</Button>
+											{/if}
+											<Button data-testid="lease-edit" variant="ghost" size="icon" aria-label="Edit lease" onclick={() => openEdit(lease)}>
+												<Pencil class="h-4 w-4" />
+											</Button>
+											<Button data-testid="lease-delete" variant="ghost" size="icon" aria-label="Delete lease" onclick={() => (deleteTarget = lease)}>
+												<Trash2 class="h-4 w-4" />
+											</Button>
+										</div>
+									</td>
+								</tr>
+							{/each}
+						{/if}
+					</tbody>
+				</table>
+			</div>
+			<div class="border-t border-border px-3 py-2">
+				<Pagination bind:skip take={PAGE_SIZE} count={leasesQuery.data?.length ?? 0} testid="lease-pagination" />
+			</div>
+		</Card.Content>
+	</Card.Root>
 </div>
 
 <Dialog.Root
@@ -234,53 +262,81 @@
 			<Dialog.Title>{editingId == null ? 'New Lease' : 'Edit Lease'}</Dialog.Title>
 		</Dialog.Header>
 		<div class="grid gap-3 md:grid-cols-3" data-testid="lease-form">
-			<select data-testid="lease-property-input" bind:value={form.propertyId} class={inputClass}>
-				<option value="">Select property</option>
-				{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}
-			</select>
+			<Select.Root type="single" bind:value={form.propertyId}>
+				<Select.Trigger class="w-full" data-testid="lease-property-input">
+					{selectedPropertyLabel ? selectedPropertyLabel : 'Select property'}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="" label="Select property">Select property</Select.Item>
+					{#each propertiesQuery.data || [] as property}
+						<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
 			<div>
-				<select data-testid="lease-unit-input" bind:value={form.unitId} class="{inputClass} w-full" disabled={!form.propertyId}>
-					<option value="">Select unit</option>
-					{#each unitsForPropertyQuery.data || [] as unit}<option value={unit.id}>Unit {unit.unitNumber} ({unit.status})</option>{/each}
-				</select>
+				<Select.Root type="single" bind:value={form.unitId} disabled={!form.propertyId}>
+					<Select.Trigger class="w-full" data-testid="lease-unit-input" disabled={!form.propertyId}>
+						{selectedUnitLabel ? selectedUnitLabel : 'Select unit'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="Select unit">Select unit</Select.Item>
+						{#each unitsForPropertyQuery.data || [] as unit}
+							<Select.Item value={String(unit.id)} label="Unit {unit.unitNumber} ({unit.status})">Unit {unit.unitNumber} ({unit.status})</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
 				{#if formErrors.unitId}<p class="mt-1 text-xs text-destructive" data-testid="lease-unit-error">{formErrors.unitId}</p>{/if}
 			</div>
 			<div>
-				<select data-testid="lease-tenant-input" bind:value={form.tenantId} class="{inputClass} w-full">
-					<option value="">Select tenant</option>
-					{#each tenantsQuery.data || [] as tenant}<option value={tenant.id}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</option>{/each}
-				</select>
+				<Select.Root type="single" bind:value={form.tenantId}>
+					<Select.Trigger class="w-full" data-testid="lease-tenant-input">
+						{selectedTenantLabel ? selectedTenantLabel : 'Select tenant'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="Select tenant">Select tenant</Select.Item>
+						{#each tenantsQuery.data || [] as tenant}
+							<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
 				{#if formErrors.tenantId}<p class="mt-1 text-xs text-destructive" data-testid="lease-tenant-error">{formErrors.tenantId}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="lease-start-input" type="date" bind:value={form.startDate} class="{inputClass} w-full" />
+				<Input data-testid="lease-start-input" type="date" bind:value={form.startDate} />
 				{#if formErrors.startDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-start-error">{formErrors.startDate}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="lease-end-input" type="date" bind:value={form.endDate} class="{inputClass} w-full" />
+				<Input data-testid="lease-end-input" type="date" bind:value={form.endDate} />
 				{#if formErrors.endDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-end-error">{formErrors.endDate}</p>{/if}
 			</div>
-			<select data-testid="lease-status-input" bind:value={form.status} class={inputClass}>
-				{#each LEASE_STATUSES as s}<option value={s}>{s}</option>{/each}
-			</select>
+			<Select.Root type="single" bind:value={form.status}>
+				<Select.Trigger class="w-full" data-testid="lease-status-input">
+					{form.status ? form.status : 'Select status'}
+				</Select.Trigger>
+				<Select.Content>
+					{#each LEASE_STATUSES as s}
+						<Select.Item value={s} label={s}>{s}</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
 			<div>
-				<input data-testid="lease-rent-input" bind:value={form.monthlyRent} class="{inputClass} w-full" placeholder="Monthly rent" />
+				<Input data-testid="lease-rent-input" bind:value={form.monthlyRent} placeholder="Monthly rent" />
 				{#if formErrors.monthlyRent}<p class="mt-1 text-xs text-destructive" data-testid="lease-rent-error">{formErrors.monthlyRent}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="lease-deposit-input" bind:value={form.securityDeposit} class="{inputClass} w-full" placeholder="Security deposit" />
+				<Input data-testid="lease-deposit-input" bind:value={form.securityDeposit} placeholder="Security deposit" />
 				{#if formErrors.securityDeposit}<p class="mt-1 text-xs text-destructive" data-testid="lease-deposit-error">{formErrors.securityDeposit}</p>{/if}
 			</div>
 			<div class="grid grid-cols-2 gap-2">
-				<input data-testid="lease-late-fee-input" bind:value={form.lateFeeAmount} class={inputClass} placeholder="Late fee" />
-				<input data-testid="lease-due-day-input" bind:value={form.rentDueDay} class={inputClass} placeholder="Due day" />
+				<Input data-testid="lease-late-fee-input" bind:value={form.lateFeeAmount} placeholder="Late fee" />
+				<Input data-testid="lease-due-day-input" bind:value={form.rentDueDay} placeholder="Due day" />
 			</div>
 		</div>
 		<Dialog.Footer>
-			<button data-testid="lease-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
-			<button data-testid="lease-form-save" onclick={submit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveMutation.isPending}>
+			<Button data-testid="lease-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
+			<Button data-testid="lease-form-save" onclick={submit} disabled={saveMutation.isPending}>
 				{saveMutation.isPending ? 'Saving…' : 'Save Lease'}
-			</button>
+			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

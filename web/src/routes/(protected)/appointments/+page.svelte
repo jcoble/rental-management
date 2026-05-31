@@ -13,6 +13,10 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
+	import * as Card from '$lib/components/ui/card';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -116,7 +120,6 @@
 	}
 
 	const list = $derived((appointmentsQuery.data ?? []).filter((a) => !typeFilter || a.type === typeFilter));
-	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
 </script>
 
 <svelte:head>
@@ -129,44 +132,51 @@
 			<h1 class="text-2xl font-bold">Appointments</h1>
 			<p class="text-sm text-muted-foreground">Showings, move-ins, inspections, and service visits.</p>
 		</div>
-		<button data-testid="appointment-create-button" class="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-white" onclick={openCreate}>
+		<Button data-testid="appointment-create-button" class="gap-2" onclick={openCreate}>
 			<Plus class="h-4 w-4" />
 			New Appointment
-		</button>
+		</Button>
 	</div>
 
 	<div class="mb-4 flex flex-wrap items-center gap-3">
 		<div class="max-w-sm flex-1"><SearchInput bind:value={search} placeholder="Search appointments…" testid="appointment-search" /></div>
-		<select data-testid="appointment-type-filter" bind:value={typeFilter} class="{inputClass} h-9">
-			<option value="">All types</option>
-			{#each APPT_TYPES as t}<option value={t}>{t}</option>{/each}
-		</select>
+		<Select.Root type="single" bind:value={typeFilter}>
+			<Select.Trigger class="w-full max-w-[180px]" data-testid="appointment-type-filter">
+				{typeFilter ? typeFilter : 'All types'}
+			</Select.Trigger>
+			<Select.Content>
+				<Select.Item value="" label="All types">All types</Select.Item>
+				{#each APPT_TYPES as t}<Select.Item value={t} label={t}>{t}</Select.Item>{/each}
+			</Select.Content>
+		</Select.Root>
 	</div>
 
 	<div class="grid gap-3" data-testid="appointments-list">
 		{#if appointmentsQuery.isLoading}
-			<div class="rounded-lg border border-border bg-card p-6 text-center text-muted-foreground" data-testid="appointments-loading">Loading…</div>
+			<Card.Root data-testid="appointments-loading"><Card.Content class="p-6 text-center text-muted-foreground">Loading…</Card.Content></Card.Root>
 		{:else if list.length === 0}
-			<div class="rounded-lg border border-border bg-card p-6 text-center text-muted-foreground" data-testid="appointments-empty">No appointments found.</div>
+			<Card.Root data-testid="appointments-empty"><Card.Content class="p-6 text-center text-muted-foreground">No appointments found.</Card.Content></Card.Root>
 		{:else}
 			{#each list as appointment (appointment.id)}
-				<div class="rounded-lg border border-border bg-card p-4" data-testid="appointment-row" data-appointment-id={appointment.id}>
-					<div class="flex items-center justify-between gap-2">
-						<div class="min-w-0">
-							<p class="truncate font-medium" data-testid="appointment-title">{appointment.title}</p>
-							<p class="text-xs text-muted-foreground">{new Date(appointment.scheduledStart).toLocaleString()} · {appointment.type}</p>
+				<Card.Root class="gap-0 py-0" data-testid="appointment-row" data-appointment-id={appointment.id}>
+					<Card.Content class="p-4">
+						<div class="flex items-center justify-between gap-2">
+							<div class="min-w-0">
+								<p class="truncate font-medium" data-testid="appointment-title">{appointment.title}</p>
+								<p class="text-xs text-muted-foreground">{new Date(appointment.scheduledStart).toLocaleString()} · {appointment.type}</p>
+							</div>
+							<div class="flex shrink-0 items-center gap-1">
+								<span class="rounded border border-border bg-background px-2 py-0.5 text-xs">{appointment.status}</span>
+								{#if appointment.status !== 'Completed'}
+									<Button variant="outline" size="sm" data-testid="appointment-complete" onclick={() => statusMutation.mutate({ id: appointment.id, status: 'Completed' })}>Complete</Button>
+								{/if}
+								<Button variant="ghost" size="icon" data-testid="appointment-edit" aria-label="Edit appointment" onclick={() => openEdit(appointment)}><Pencil class="h-4 w-4" /></Button>
+								<Button variant="ghost" size="icon" data-testid="appointment-delete" aria-label="Delete appointment" onclick={() => (deleteTarget = appointment)}><Trash2 class="h-4 w-4" /></Button>
+							</div>
 						</div>
-						<div class="flex shrink-0 items-center gap-1">
-							<span class="rounded border border-border bg-background px-2 py-0.5 text-xs">{appointment.status}</span>
-							{#if appointment.status !== 'Completed'}
-								<button data-testid="appointment-complete" class="rounded border border-border px-2 py-1 text-xs" onclick={() => statusMutation.mutate({ id: appointment.id, status: 'Completed' })}>Complete</button>
-							{/if}
-							<button data-testid="appointment-edit" aria-label="Edit appointment" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" onclick={() => openEdit(appointment)}><Pencil class="h-4 w-4" /></button>
-							<button data-testid="appointment-delete" aria-label="Delete appointment" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive" onclick={() => (deleteTarget = appointment)}><Trash2 class="h-4 w-4" /></button>
-						</div>
-					</div>
-					<p class="mt-1 text-xs text-muted-foreground">{appointment.propertyName || 'No property'} · {appointment.tenantName || appointment.prospectName || 'No contact'}</p>
-				</div>
+						<p class="mt-1 text-xs text-muted-foreground">{appointment.propertyName || 'No property'} · {appointment.tenantName || appointment.prospectName || 'No contact'}</p>
+					</Card.Content>
+				</Card.Root>
 			{/each}
 		{/if}
 	</div>
@@ -186,28 +196,62 @@
 		</Dialog.Header>
 		<div class="grid gap-3 md:grid-cols-3" data-testid="appointment-form">
 			<div class="md:col-span-2">
-				<input data-testid="appointment-title-input" bind:value={form.title} class="{inputClass} w-full" placeholder="Appointment title" />
+				<Input data-testid="appointment-title-input" bind:value={form.title} placeholder="Appointment title" />
 				{#if formErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="appointment-title-error">{formErrors.title}</p>{/if}
 			</div>
-			<select data-testid="appointment-type-input" bind:value={form.type} class={inputClass}>{#each APPT_TYPES as t}<option value={t}>{t}</option>{/each}</select>
+			<Select.Root type="single" bind:value={form.type}>
+				<Select.Trigger class="w-full" data-testid="appointment-type-input">
+					{form.type ? form.type : 'Select type'}
+				</Select.Trigger>
+				<Select.Content>
+					{#each APPT_TYPES as t}<Select.Item value={t} label={t}>{t}</Select.Item>{/each}
+				</Select.Content>
+			</Select.Root>
 			<div>
-				<input data-testid="appointment-start-input" type="datetime-local" bind:value={form.scheduledStart} class="{inputClass} w-full" />
+				<Input data-testid="appointment-start-input" type="datetime-local" bind:value={form.scheduledStart} />
 				{#if formErrors.scheduledStart}<p class="mt-1 text-xs text-destructive" data-testid="appointment-start-error">{formErrors.scheduledStart}</p>{/if}
 			</div>
-			<input data-testid="appointment-end-input" type="datetime-local" bind:value={form.scheduledEnd} class={inputClass} />
-			<select data-testid="appointment-status-input" bind:value={form.status} class={inputClass}>{#each APPT_STATUSES as s}<option value={s}>{s}</option>{/each}</select>
-			<select data-testid="appointment-property-input" bind:value={form.propertyId} class={inputClass}><option value="">No property</option>{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}</select>
-			<select data-testid="appointment-tenant-input" bind:value={form.tenantId} class={inputClass}><option value="">No tenant</option>{#each tenantsQuery.data || [] as tenant}<option value={tenant.id}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</option>{/each}</select>
-			<input data-testid="appointment-assigned-input" bind:value={form.assignedTo} class={inputClass} placeholder="Assigned to" />
-			<input data-testid="appointment-prospect-name-input" bind:value={form.prospectName} class={inputClass} placeholder="Prospect name" />
+			<Input data-testid="appointment-end-input" type="datetime-local" bind:value={form.scheduledEnd} />
+			<Select.Root type="single" bind:value={form.status}>
+				<Select.Trigger class="w-full" data-testid="appointment-status-input">
+					{form.status ? form.status : 'Select status'}
+				</Select.Trigger>
+				<Select.Content>
+					{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
+				</Select.Content>
+			</Select.Root>
+			<Select.Root type="single" bind:value={form.propertyId}>
+				<Select.Trigger class="w-full" data-testid="appointment-property-input">
+					{form.propertyId ? (propertiesQuery.data?.find((p) => String(p.id) === form.propertyId)?.name ?? form.propertyId) : 'No property'}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="" label="No property">No property</Select.Item>
+					{#each propertiesQuery.data || [] as property}<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>{/each}
+				</Select.Content>
+			</Select.Root>
+			<Select.Root type="single" bind:value={form.tenantId}>
+				<Select.Trigger class="w-full" data-testid="appointment-tenant-input">
+					{#if form.tenantId}
+						{tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.fullName || (() => { const t = tenantsQuery.data?.find((t) => String(t.id) === form.tenantId); return t ? `${t.firstName} ${t.lastName}` : form.tenantId; })()}
+					{:else}
+						No tenant
+					{/if}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="" label="No tenant">No tenant</Select.Item>
+					{#each tenantsQuery.data || [] as tenant}<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>{/each}
+				</Select.Content>
+			</Select.Root>
+			<Input data-testid="appointment-assigned-input" bind:value={form.assignedTo} placeholder="Assigned to" />
+			<Input data-testid="appointment-prospect-name-input" bind:value={form.prospectName} placeholder="Prospect name" />
 			<div>
-				<input data-testid="appointment-prospect-email-input" bind:value={form.prospectEmail} class="{inputClass} w-full" placeholder="Prospect email" />
+				<Input data-testid="appointment-prospect-email-input" bind:value={form.prospectEmail} placeholder="Prospect email" />
 				{#if formErrors.prospectEmail}<p class="mt-1 text-xs text-destructive" data-testid="appointment-prospect-email-error">{formErrors.prospectEmail}</p>{/if}
 			</div>
 		</div>
 		<Dialog.Footer>
-			<button data-testid="appointment-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
-			<button data-testid="appointment-form-save" onclick={submit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveMutation.isPending}>{saveMutation.isPending ? 'Saving…' : 'Save Appointment'}</button>
+			<Button variant="outline" data-testid="appointment-form-cancel" onclick={closeForm}>Cancel</Button>
+			<Button data-testid="appointment-form-save" onclick={submit} disabled={saveMutation.isPending}>{saveMutation.isPending ? 'Saving…' : 'Save Appointment'}</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

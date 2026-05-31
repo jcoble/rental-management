@@ -4,6 +4,7 @@
 	import type { Dashboard } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building } from '@lucide/svelte';
+	import * as Card from '$lib/components/ui/card';
 
 	const dashboardQuery = createQuery(() => ({
 		queryKey: ['dashboard', getCurrentPortfolioId()],
@@ -32,92 +33,116 @@
 		</div>
 
 		<div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-			<div class="rounded-lg border border-border bg-card p-4">
-				<div class="flex items-center gap-2 text-muted-foreground"><Building class="h-4 w-4" /> Occupancy</div>
-				<p class="mt-2 text-2xl font-bold">{data.occupancy.occupancyRate}%</p>
-				<p class="text-xs text-muted-foreground">{data.occupancy.occupiedUnits}/{data.occupancy.totalUnits} occupied</p>
-			</div>
-			<div class="rounded-lg border border-border bg-card p-4">
-				<div class="flex items-center gap-2 text-warning"><AlertTriangle class="h-4 w-4" /> Overdue</div>
-				<p class="mt-2 text-2xl font-bold">{money(data.accounting.overdueAmount)}</p>
-				<p class="text-xs text-muted-foreground">Receivables past due</p>
-			</div>
-			<div class="rounded-lg border border-border bg-card p-4">
-				<div class="flex items-center gap-2 text-success"><Wallet class="h-4 w-4" /> Net This Month</div>
-				<p class="mt-2 text-2xl font-bold">{money(data.accounting.netThisMonth)}</p>
-				<p class="text-xs text-muted-foreground">Paid - expenses</p>
-			</div>
-			<div class="rounded-lg border border-border bg-card p-4">
-				<div class="flex items-center gap-2 text-destructive"><Wrench class="h-4 w-4" /> Open Work Orders</div>
-				<p class="mt-2 text-2xl font-bold">{data.maintenance.openCount}</p>
-				<p class="text-xs text-muted-foreground">{data.maintenance.emergencyCount} emergency</p>
-			</div>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<div class="flex items-center gap-2 text-muted-foreground"><Building class="h-4 w-4" /> Occupancy</div>
+					<p class="mt-2 text-2xl font-bold">{data.occupancy.occupancyRate}%</p>
+					<p class="text-xs text-muted-foreground">{data.occupancy.occupiedUnits}/{data.occupancy.totalUnits} occupied</p>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<div class="flex items-center gap-2 text-warning"><AlertTriangle class="h-4 w-4" /> Overdue</div>
+					<p class="mt-2 text-2xl font-bold">{money(data.accounting.overdueAmount)}</p>
+					<p class="text-xs text-muted-foreground">Receivables past due</p>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<div class="flex items-center gap-2 text-success"><Wallet class="h-4 w-4" /> Net This Month</div>
+					<p class="mt-2 text-2xl font-bold">{money(data.accounting.netThisMonth)}</p>
+					<p class="text-xs text-muted-foreground">Paid - expenses</p>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<div class="flex items-center gap-2 text-destructive"><Wrench class="h-4 w-4" /> Open Work Orders</div>
+					<p class="mt-2 text-2xl font-bold">{data.maintenance.openCount}</p>
+					<p class="text-xs text-muted-foreground">{data.maintenance.emergencyCount} emergency</p>
+				</Card.Content>
+			</Card.Root>
 		</div>
 
 		<div class="grid gap-6 lg:grid-cols-3">
 			<div class="space-y-6 lg:col-span-2">
-				<div class="rounded-lg border border-border bg-card p-4">
-					<h2 class="mb-3 font-semibold">Leases Expiring in 60 Days</h2>
-					{#if data.leasing.expiringSoon.length === 0}
-						<p class="text-sm text-muted-foreground">No active leases expiring soon.</p>
-					{:else}
-						<div class="space-y-2">
-							{#each data.leasing.expiringSoon as lease}
-								<div class="rounded border border-border bg-background p-3">
-									<div class="flex items-center justify-between gap-2">
-										<div>
-											<p class="text-sm font-medium">{lease.leaseNumber} · {lease.tenant}</p>
-											<p class="text-xs text-muted-foreground">{lease.property} · Unit {lease.unit}</p>
+				<Card.Root class="gap-0 py-0">
+					<Card.Header class="px-4 pt-4 pb-3">
+						<Card.Title class="text-base font-semibold">Leases Expiring in 60 Days</Card.Title>
+					</Card.Header>
+					<Card.Content class="px-4 pb-4 pt-0">
+						{#if data.leasing.expiringSoon.length === 0}
+							<p class="text-sm text-muted-foreground">No active leases expiring soon.</p>
+						{:else}
+							<div class="space-y-2">
+								{#each data.leasing.expiringSoon as lease}
+									<div class="rounded border border-border bg-background p-3">
+										<div class="flex items-center justify-between gap-2">
+											<div>
+												<p class="text-sm font-medium">{lease.leaseNumber} · {lease.tenant}</p>
+												<p class="text-xs text-muted-foreground">{lease.property} · Unit {lease.unit}</p>
+											</div>
+											<p class="text-xs text-warning">Ends {new Date(lease.endDate).toLocaleDateString()}</p>
 										</div>
-										<p class="text-xs text-warning">Ends {new Date(lease.endDate).toLocaleDateString()}</p>
 									</div>
+								{/each}
+							</div>
+						{/if}
+					</Card.Content>
+				</Card.Root>
+
+				<Card.Root class="gap-0 py-0">
+					<Card.Header class="px-4 pt-4 pb-3">
+						<Card.Title class="text-base font-semibold">Recent Activity</Card.Title>
+					</Card.Header>
+					<Card.Content class="px-4 pb-4 pt-0">
+						<div class="space-y-2">
+							{#each data.recentActivity.slice(0, 8) as activity}
+								<div class="rounded border border-border bg-background px-3 py-2 text-sm">
+									<p class="text-foreground">{activity.description || activity.action || activity.type}</p>
+									<p class="text-xs text-muted-foreground">{new Date(activity.createdAt).toLocaleString()}</p>
 								</div>
 							{/each}
 						</div>
-					{/if}
-				</div>
-
-				<div class="rounded-lg border border-border bg-card p-4">
-					<h2 class="mb-3 font-semibold">Recent Activity</h2>
-					<div class="space-y-2">
-						{#each data.recentActivity.slice(0, 8) as activity}
-							<div class="rounded border border-border bg-background px-3 py-2 text-sm">
-								<p class="text-foreground">{activity.description || activity.action || activity.type}</p>
-								<p class="text-xs text-muted-foreground">{new Date(activity.createdAt).toLocaleString()}</p>
-							</div>
-						{/each}
-					</div>
-				</div>
+					</Card.Content>
+				</Card.Root>
 			</div>
 
 			<div class="space-y-6">
-				<div class="rounded-lg border border-border bg-card p-4">
-					<div class="mb-2 flex items-center gap-2"><CalendarClock class="h-4 w-4 text-primary" /><h2 class="font-semibold">Upcoming Appointments</h2></div>
-					{#if data.upcomingAppointments.length === 0}
-						<p class="text-sm text-muted-foreground">No upcoming appointments.</p>
-					{:else}
-						<div class="space-y-2">
-							{#each data.upcomingAppointments as appt}
-								<div class="rounded border border-border bg-background p-2 text-sm">
-									<p>{appt.title}</p>
-									<p class="text-xs text-muted-foreground">{new Date(appt.scheduledStart).toLocaleString()} · {appt.type}</p>
+				<Card.Root class="gap-0 py-0">
+					<Card.Header class="px-4 pt-4 pb-2">
+						<Card.Title class="flex items-center gap-2 text-base font-semibold"><CalendarClock class="h-4 w-4 text-primary" />Upcoming Appointments</Card.Title>
+					</Card.Header>
+					<Card.Content class="px-4 pb-4 pt-0">
+						{#if data.upcomingAppointments.length === 0}
+							<p class="text-sm text-muted-foreground">No upcoming appointments.</p>
+						{:else}
+							<div class="space-y-2">
+								{#each data.upcomingAppointments as appt}
+									<div class="rounded border border-border bg-background p-2 text-sm">
+										<p>{appt.title}</p>
+										<p class="text-xs text-muted-foreground">{new Date(appt.scheduledStart).toLocaleString()} · {appt.type}</p>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</Card.Content>
+				</Card.Root>
+
+				<Card.Root class="gap-0 py-0">
+					<Card.Header class="px-4 pt-4 pb-2">
+						<Card.Title class="flex items-center gap-2 text-base font-semibold"><Home class="h-4 w-4 text-primary" />Leasing Mix</Card.Title>
+					</Card.Header>
+					<Card.Content class="px-4 pb-4 pt-0">
+						<div class="space-y-2 text-sm">
+							{#each Object.entries(data.leasing.byStatus) as [status, count]}
+								<div class="flex items-center justify-between rounded border border-border bg-background px-2 py-1">
+									<span>{status}</span>
+									<span class="text-muted-foreground">{count}</span>
 								</div>
 							{/each}
 						</div>
-					{/if}
-				</div>
-
-				<div class="rounded-lg border border-border bg-card p-4">
-					<div class="mb-2 flex items-center gap-2"><Home class="h-4 w-4 text-primary" /><h2 class="font-semibold">Leasing Mix</h2></div>
-					<div class="space-y-2 text-sm">
-						{#each Object.entries(data.leasing.byStatus) as [status, count]}
-							<div class="flex items-center justify-between rounded border border-border bg-background px-2 py-1">
-								<span>{status}</span>
-								<span class="text-muted-foreground">{count}</span>
-							</div>
-						{/each}
-					</div>
-				</div>
+					</Card.Content>
+				</Card.Root>
 			</div>
 		</div>
 	{/if}
