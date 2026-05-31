@@ -19,7 +19,63 @@ public interface ILlmProvider
         IReadOnlyList<ExtractionFieldSpec> fields,   // the schema the model must fill
         string? groundingContext = null,    // optional JSON of vendors/properties/units to match against
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Multi-turn chat with tool-calling support. The model may call tools zero or more
+    /// times; the caller handles each <see cref="LlmToolResult"/> with
+    /// <c>StopReason == "tool_use"</c>, executes the tools, appends assistant + tool-result
+    /// messages to the conversation, and calls this method again until
+    /// <c>StopReason == "end"</c>.
+    /// </summary>
+    Task<LlmToolResult> ChatWithToolsAsync(
+        string systemPrompt,
+        IReadOnlyList<LlmChatMessage> messages,
+        IReadOnlyList<LlmToolSpec> tools,
+        CancellationToken ct = default);
 }
+
+// ---------------------------------------------------------------------------
+// Tool-calling records
+// ---------------------------------------------------------------------------
+
+/// <summary>A tool the model may call, described by its name, description, and a JSON Schema string.</summary>
+public sealed record LlmToolSpec(
+    string Name,
+    string Description,
+    /// <summary>
+    /// A JSON Schema object string, e.g.
+    /// <c>{"type":"object","properties":{...},"required":[...]}</c>.
+    /// </summary>
+    string ParametersJsonSchema);
+
+/// <summary>A single tool invocation requested by the model.</summary>
+public sealed record LlmToolCall(
+    string Id,
+    string Name,
+    /// <summary>Raw JSON string of the arguments object.</summary>
+    string ArgumentsJson);
+
+/// <summary>A single message in a multi-turn tool-calling conversation.</summary>
+public sealed record LlmChatMessage(
+    /// <summary>"user" | "assistant" | "tool"</summary>
+    string Role,
+    /// <summary>Text content for user/assistant turns, or the tool-result text for role="tool".</summary>
+    string? Content = null,
+    /// <summary>Present on an assistant turn that requested tool calls.</summary>
+    IReadOnlyList<LlmToolCall>? ToolCalls = null,
+    /// <summary>For role="tool": the <see cref="LlmToolCall.Id"/> this result answers.</summary>
+    string? ToolCallId = null);
+
+/// <summary>Result of a <see cref="ILlmProvider.ChatWithToolsAsync"/> call.</summary>
+public sealed record LlmToolResult(
+    /// <summary>"tool_use" when the model called tools; "end" for a final text answer; "error"/"noop" allowed.</summary>
+    string StopReason,
+    /// <summary>Final assistant text when <see cref="StopReason"/> is "end".</summary>
+    string? Text,
+    IReadOnlyList<LlmToolCall> ToolCalls,
+    int InputTokens,
+    int OutputTokens,
+    string ModelId);
 
 /// <summary>Result of an <see cref="ILlmProvider.ExtractAsync"/> call.</summary>
 public class ExtractedFields
