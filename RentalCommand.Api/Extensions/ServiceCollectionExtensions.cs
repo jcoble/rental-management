@@ -28,6 +28,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IExpenseService, ExpenseService>();
         services.AddScoped<IAccountingService, AccountingService>();
+        services.AddScoped<IScheduleEService, ScheduleEService>();
 
         // --- controllers-ops-misc sub-unit ---
         services.AddScoped<IWorkOrderService, WorkOrderService>();
