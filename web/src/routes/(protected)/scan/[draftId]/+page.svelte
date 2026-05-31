@@ -4,6 +4,11 @@
 	import { page } from '$app/stores';
 	import { toast } from 'svelte-sonner';
 	import { scan, type ScanFieldDto } from '$lib/api/scan';
+	import * as Card from '$lib/components/ui/card';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import * as Table from '$lib/components/ui/table';
 
 	// ScheduleECategory enum values (mirrors RentalCommand.Core.Enums.ScheduleECategory)
 	const SCHEDULE_E_CATEGORIES = [
@@ -134,12 +139,28 @@
 		}
 	}
 
+	function statusBadgeClass(status: string): string {
+		switch (status) {
+			case 'Pending':
+				return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-800';
+			case 'Reviewing':
+				return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200 dark:border-blue-800';
+			case 'Confirmed':
+				return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 border-green-200 dark:border-green-800';
+			case 'Failed':
+			case 'Rejected':
+				return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300 border-red-200 dark:border-red-800';
+			default:
+				return '';
+		}
+	}
+
 	function fieldInputClass(field: ScanFieldDto): string {
 		const level = confidenceLevel(field.confidence);
-		const base = 'w-full rounded border px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring';
-		if (level === 'low') return `${base} border-red-400 dark:border-red-500`;
-		if (level === 'medium') return `${base} border-border text-muted-foreground`;
-		return `${base} border-border`;
+		// Extra border colour classes layered on top of the Input component's base styles
+		if (level === 'low') return 'border-red-400 dark:border-red-500';
+		if (level === 'medium') return 'text-muted-foreground';
+		return '';
 	}
 
 	function isFirstLowField(fields: ScanFieldDto[], field: ScanFieldDto): boolean {
@@ -276,13 +297,9 @@
 			<a href="/scan" class="text-sm text-muted-foreground hover:text-foreground">&larr; Back to Scans</a>
 			<span class="text-muted-foreground">/</span>
 			<h1 class="text-xl font-bold">Review Scan #{data.id}</h1>
-			<span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium
-				{data.status === 'Pending' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' : ''}
-				{data.status === 'Reviewing' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' : ''}
-				{data.status === 'Confirmed' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' : ''}
-				{data.status === 'Failed' || data.status === 'Rejected' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' : ''}">
+			<Badge variant="outline" class={statusBadgeClass(data.status)}>
 				{statusLabel(data.status)}
-			</span>
+			</Badge>
 		</div>
 
 		{#if data.status === 'Failed'}
@@ -299,11 +316,11 @@
 
 		<div class="grid gap-6 lg:grid-cols-2">
 			<!-- Left: document preview -->
-			<div class="flex flex-col rounded-lg border border-border bg-card">
-				<div class="border-b border-border px-4 py-3">
-					<span class="font-semibold text-sm">Document Preview</span>
-				</div>
-				<div class="flex flex-1 items-center justify-center overflow-hidden p-4">
+			<Card.Root class="flex flex-col gap-0 py-0">
+				<Card.Header class="border-b border-border px-4 py-3 [.border-b]:pb-3">
+					<Card.Title class="text-sm">Document Preview</Card.Title>
+				</Card.Header>
+				<Card.Content class="flex flex-1 items-center justify-center overflow-hidden p-4">
 					{#if fileUrl}
 						<!-- Try img first; for PDFs it won't render but we also show an iframe/link -->
 						<div class="w-full">
@@ -324,37 +341,34 @@
 								class="h-[60vh] w-full rounded border-0"
 							></iframe>
 							<div class="mt-2 text-center">
-								<a
-									href={fileUrl}
-									target="_blank"
-									rel="noopener noreferrer"
-									class="text-xs text-primary hover:underline"
-								>
+								<Button variant="link" href={fileUrl} target="_blank" rel="noopener noreferrer" class="h-auto p-0 text-xs">
 									Open in new tab
-								</a>
+								</Button>
 							</div>
 						</div>
 					{:else}
 						<p class="text-sm text-muted-foreground">No preview available.</p>
 					{/if}
-				</div>
-			</div>
+				</Card.Content>
+			</Card.Root>
 
 			<!-- Right: extracted fields form -->
-			<div class="flex flex-col rounded-lg border border-border bg-card">
-				<div class="border-b border-border px-4 py-3">
-					<span class="font-semibold text-sm">Extracted Fields</span>
-					{#if data.modelId}
-						<span class="ml-2 text-xs text-muted-foreground">via {data.modelId}</span>
-					{/if}
-					{#if data.tokensUsed != null}
-						<span class="ml-1 text-xs text-muted-foreground">· {data.tokensUsed.toLocaleString()} tokens</span>
-					{/if}
-					{#if data.costUsd != null}
-						<span class="ml-1 text-xs text-muted-foreground">· ~${data.costUsd.toFixed(4)}</span>
-					{/if}
-				</div>
-				<div class="flex-1 overflow-y-auto p-4">
+			<Card.Root class="flex flex-col gap-0 py-0">
+				<Card.Header class="border-b border-border px-4 py-3 [.border-b]:pb-3">
+					<div class="flex items-baseline gap-1 flex-wrap">
+						<Card.Title class="text-sm">Extracted Fields</Card.Title>
+						{#if data.modelId}
+							<span class="text-xs text-muted-foreground">via {data.modelId}</span>
+						{/if}
+						{#if data.tokensUsed != null}
+							<span class="text-xs text-muted-foreground">· {data.tokensUsed.toLocaleString()} tokens</span>
+						{/if}
+						{#if data.costUsd != null}
+							<span class="text-xs text-muted-foreground">· ~${data.costUsd.toFixed(4)}</span>
+						{/if}
+					</div>
+				</Card.Header>
+				<Card.Content class="flex-1 overflow-y-auto p-4">
 					{#if data.fields.length === 0}
 						<p class="text-sm text-muted-foreground">
 							{#if data.status === 'Pending'}
@@ -371,6 +385,7 @@
 										{fieldName.replace(/_/g, ' ')}
 									</label>
 									{#if fieldName === 'category'}
+										<!-- Native <select> kept for clean bind:value -->
 										<select
 											id="field-{fieldName}"
 											data-testid="scan-field-{fieldName}"
@@ -383,12 +398,11 @@
 											{/each}
 										</select>
 									{:else}
-										<input
+										<Input
 											id="field-{fieldName}"
 											data-testid="scan-field-{fieldName}"
 											type="text"
 											bind:value={editedFields[fieldName]}
-											class="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
 										/>
 									{/if}
 								</div>
@@ -419,11 +433,14 @@
 													{/if}
 												</div>
 												{#if field.name === 'category'}
+													<!-- Native <select> kept for clean bind:value -->
 													<select
 														id="field-{field.name}"
 														data-testid="scan-field-{field.name}"
 														bind:value={editedFields[field.name]}
-														class={fieldInputClass(field)}
+														class="w-full rounded border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring
+															{level === 'low' ? 'border-red-400 dark:border-red-500' : 'border-border'}
+															{level === 'medium' ? 'text-muted-foreground' : ''}"
 													>
 														<option value="">Select category</option>
 														{#each SCHEDULE_E_CATEGORIES as cat}
@@ -431,12 +448,13 @@
 														{/each}
 													</select>
 												{:else}
+													<!-- Raw <input> needed here to support the use:focusFirstLow action (actions cannot be placed on components) -->
 													<input
 														id="field-{field.name}"
 														data-testid="scan-field-{field.name}"
 														type="text"
 														bind:value={editedFields[field.name]}
-														class={fieldInputClass(field)}
+														class="border-input bg-background selection:bg-primary dark:bg-input/30 selection:text-primary-foreground ring-offset-background placeholder:text-muted-foreground flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] {fieldInputClass(field)}"
 														use:focusFirstLow={level === 'low' && isFirstLowField(data.fields, field)}
 													/>
 												{/if}
@@ -452,89 +470,90 @@
 								{#if lineItems.length === 0}
 									<p class="text-sm text-muted-foreground">No line items.</p>
 								{:else}
-									<div class="overflow-x-auto rounded border border-border" data-testid="scan-line-items">
-										<table class="w-full text-sm">
-											<thead>
-												<tr class="border-b border-border bg-muted/40">
-													<th class="px-3 py-2 text-left text-xs font-medium text-muted-foreground">Description</th>
-													<th class="px-3 py-2 text-right text-xs font-medium text-muted-foreground">Qty</th>
-													<th class="px-3 py-2 text-right text-xs font-medium text-muted-foreground">Unit Price</th>
-													<th class="px-3 py-2 text-right text-xs font-medium text-muted-foreground">Amount</th>
-												</tr>
-											</thead>
-											<tbody>
+									<div data-testid="scan-line-items">
+										<Table.Root>
+											<Table.Header>
+												<Table.Row class="bg-muted/40">
+													<Table.Head class="px-3 py-2 text-xs">Description</Table.Head>
+													<Table.Head class="px-3 py-2 text-right text-xs">Qty</Table.Head>
+													<Table.Head class="px-3 py-2 text-right text-xs">Unit Price</Table.Head>
+													<Table.Head class="px-3 py-2 text-right text-xs">Amount</Table.Head>
+												</Table.Row>
+											</Table.Header>
+											<Table.Body>
 												{#each lineItems as item, i}
-													<tr class="border-b border-border last:border-0 {i % 2 === 1 ? 'bg-muted/20' : ''}">
-														<td class="px-3 py-2 text-foreground">{item.description ?? ''}</td>
-														<td class="px-3 py-2 text-right text-foreground">{formatQty(item.quantity)}</td>
-														<td class="px-3 py-2 text-right text-foreground">{item.unit_price != null ? formatMoney(item.unit_price) : ''}</td>
-														<td class="px-3 py-2 text-right text-foreground">{item.amount != null ? formatMoney(item.amount) : ''}</td>
-													</tr>
+													<Table.Row class={i % 2 === 1 ? 'bg-muted/20' : ''}>
+														<Table.Cell class="px-3 py-2">{item.description ?? ''}</Table.Cell>
+														<Table.Cell class="px-3 py-2 text-right">{formatQty(item.quantity)}</Table.Cell>
+														<Table.Cell class="px-3 py-2 text-right">{item.unit_price != null ? formatMoney(item.unit_price) : ''}</Table.Cell>
+														<Table.Cell class="px-3 py-2 text-right">{item.amount != null ? formatMoney(item.amount) : ''}</Table.Cell>
+													</Table.Row>
 												{/each}
-											</tbody>
-										</table>
+											</Table.Body>
+										</Table.Root>
 									</div>
 								{/if}
 							</section>
 						</div>
 					{/if}
-				</div>
+				</Card.Content>
 
 				<!-- Paid / Unpaid toggle -->
 				<div class="border-t border-border px-4 py-3" data-testid="scan-paid-toggle">
 					<div class="flex items-center gap-3">
 						<span class="text-xs font-medium text-muted-foreground">Payment status:</span>
-						<button
+						<Button
 							type="button"
+							size="sm"
+							variant={isPaid ? 'default' : 'outline'}
 							onclick={() => { isPaid = true; }}
-							class="rounded-l border px-3 py-1.5 text-xs font-medium transition-colors
-								{isPaid
-									? 'border-primary bg-primary text-white'
-									: 'border-border bg-background text-muted-foreground hover:bg-secondary'}"
+							class="rounded-r-none"
 						>
 							Already paid (receipt)
-						</button>
-						<button
+						</Button>
+						<Button
 							type="button"
+							size="sm"
+							variant={!isPaid ? 'default' : 'outline'}
 							onclick={() => { isPaid = false; }}
-							class="rounded-r border-y border-r px-3 py-1.5 text-xs font-medium transition-colors
-								{!isPaid
-									? 'border-primary bg-primary text-white'
-									: 'border-border bg-background text-muted-foreground hover:bg-secondary'}"
+							class="-ml-3 rounded-l-none border-l-0"
 						>
 							Unpaid bill{editedFields['due_date'] ? ` — due ${editedFields['due_date']}` : ''}
-						</button>
+						</Button>
 					</div>
 				</div>
 
 				<!-- Action buttons -->
-				<div class="border-t border-border px-4 py-3">
-					<div class="flex gap-3">
-						<button
-							data-testid="scan-confirm"
-							onclick={() => confirmMutation.mutate()}
-							disabled={confirmMutation.isPending || data.status === 'Rejected' || data.status === 'Confirmed'}
-							class="flex-1 rounded bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-						>
-							{confirmMutation.isPending ? 'Confirming…' : 'Confirm & Create Expense'}
-						</button>
-						<button
-							data-testid="scan-reject"
-							onclick={handleReject}
-							disabled={rejectMutation.isPending || data.status === 'Rejected' || data.status === 'Confirmed'}
-							class="rounded border border-border px-4 py-2 text-sm font-medium text-muted-foreground hover:bg-secondary hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
-						>
-							{rejectMutation.isPending ? 'Rejecting…' : 'Reject'}
-						</button>
+				<Card.Footer class="border-t border-border px-4 py-3 [.border-t]:pt-3">
+					<div class="flex w-full flex-col gap-2">
+						<div class="flex gap-3">
+							<Button
+								data-testid="scan-confirm"
+								onclick={() => confirmMutation.mutate()}
+								disabled={confirmMutation.isPending || data.status === 'Rejected' || data.status === 'Confirmed'}
+								class="flex-1"
+							>
+								{confirmMutation.isPending ? 'Confirming…' : 'Confirm & Create Expense'}
+							</Button>
+							<Button
+								data-testid="scan-reject"
+								variant="outline"
+								onclick={handleReject}
+								disabled={rejectMutation.isPending || data.status === 'Rejected' || data.status === 'Confirmed'}
+								class="hover:text-destructive"
+							>
+								{rejectMutation.isPending ? 'Rejecting…' : 'Reject'}
+							</Button>
+						</div>
+						{#if data.status === 'Confirmed'}
+							<p class="text-center text-xs text-green-600 dark:text-green-400">This scan has already been confirmed.</p>
+						{/if}
+						{#if data.status === 'Rejected'}
+							<p class="text-center text-xs text-muted-foreground">This scan has been rejected.</p>
+						{/if}
 					</div>
-					{#if data.status === 'Confirmed'}
-						<p class="mt-2 text-center text-xs text-green-600 dark:text-green-400">This scan has already been confirmed.</p>
-					{/if}
-					{#if data.status === 'Rejected'}
-						<p class="mt-2 text-center text-xs text-muted-foreground">This scan has been rejected.</p>
-					{/if}
-				</div>
-			</div>
+				</Card.Footer>
+			</Card.Root>
 		</div>
 	{/if}
 </div>
