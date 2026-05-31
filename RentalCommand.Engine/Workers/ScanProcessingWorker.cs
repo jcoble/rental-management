@@ -19,7 +19,10 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
     private const int BatchSize = 10;
 
     protected override string WorkerName => "ScanProcessingWorker";
-    protected override TimeSpan PollInterval => TimeSpan.FromSeconds(5);
+    // Poll quickly: the user is actively waiting on extraction, so pick up a
+    // freshly-uploaded scan within ~2s instead of up to 5s. The OpenAI call is
+    // the only unavoidable latency after pickup.
+    protected override TimeSpan PollInterval => TimeSpan.FromSeconds(2);
     protected override TimeSpan StepTimeout => TimeSpan.FromSeconds(90);
 
     public ScanProcessingWorker(IServiceProvider serviceProvider, ILogger<ScanProcessingWorker> logger)
