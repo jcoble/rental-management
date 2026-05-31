@@ -1,51 +1,174 @@
+# Rental Command — full stack: Postgres + API + Engine + Web behind Traefik.
+#
+# Routing (single host, path-based so it works locally without subdomain DNS):
+#   - /api/*  -> api   (StripPrefix removed: the API serves routes under /api/... and /health)
+#   - else    -> web   (SvelteKit adapter-node)
+#
+# Copy .env.example to .env and fill values before `docker compose up`.
 services:
-  caddy:
-    image: caddy:2-alpine
+  # Reverse proxy / TLS terminator.
+  traefik:
+    image: traefik:v3.3
+    container_name: rentalcommand-traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.filename=/etc/traefik/dynamic.yml"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
     ports:
-      - "${CADDY_HTTPS_PORT:-443}:443"
-      - "${CADDY_HTTP_PORT:-80}:80"
+      - "${TRAEFIK_HTTP_PORT:-80}:80"
+      - "${TRAEFIK_HTTPS_PORT:-443}:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./certs:/certs:ro
-      - caddy-data:/data
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./certs:/certs:ro"
+      - "./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro"
     depends_on:
       - api
+      - web
+    networks:
       - web
     deploy:
       resources:
         limits:
           memory: 128M
           cpus: "0.25"
-    restart: unless-stopped
 
-  api:
-    build: ./api
-    volumes:
-      - api-data:/app/data
-      - api-uploads:/app/uploads
+  # PostgreSQL 16.
+  postgres:
+    image: postgres:16-alpine
+    container_name: rentalcommand-postgres
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
-      - ConnectionStrings__Default=Data Source=/app/data/lifecycle.db
-      - ApiKey=${API_KEY:-}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-rentalcommand}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-rentalcommand}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+  # REST API.
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: rentalcommand-api
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres}
+      - Jwt__SecretKey=${JWT_SECRET_KEY}
+      - Jwt__Issuer=${JWT_ISSUER:-RentalCommand}
+      - Jwt__Audience=${JWT_AUDIENCE:-RentalCommandWeb}
+      - Cors__AllowedOrigins__0=${WEB_ORIGIN:-http://localhost}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - web
+      - internal
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     deploy:
       resources:
         limits:
           memory: 512M
-          cpus: "1"
-    restart: unless-stopped
+          cpus: "1.0"
+    labels:
+      - "traefik.enable=true"
+      # /api/* (and the /health probe) route to the API.
+      - "traefik.http.routers.api.rule=PathPrefix(`/api`) || PathPrefix(`/health`)"
+      - "traefik.http.routers.api.entrypoints=web,websecure"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.routers.api.priority=10"
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
 
-  web:
-    build: ./web
+  # Background worker (outbox dispatch). No HTTP entrypoint, so no Traefik labels.
+  engine:
+    build:
+      context: .
+      dockerfile: Dockerfile.engine
+    container_name: rentalcommand-engine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
-      - API_URL=http://api:5556
-      - ORIGIN=${ORIGIN:-http://localhost}
+      - DOTNET_ENVIRONMENT=${ASPNETCORE_ENVIRONMENT:-Production}
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-postgres}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+  # SvelteKit frontend.
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        # Client bundle talks to the API through Traefik on the same host.
+        VITE_API_URL: ${VITE_API_URL:-/api}
+    container_name: rentalcommand-web
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - ORIGIN=${WEB_ORIGIN:-http://localhost}
+    depends_on:
+      - api
+    networks:
+      - web
     deploy:
       resources:
         limits:
           memory: 256M
           cpus: "0.5"
-    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      # Catch-all (lowest priority): everything that is not /api goes to web.
+      - "traefik.http.routers.web.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.web.entrypoints=web,websecure"
+      - "traefik.http.routers.web.tls=true"
+      - "traefik.http.routers.web.priority=1"
+      - "traefik.http.services.web.loadbalancer.server.port=3000"
+
+networks:
+  web:
+    name: rentalcommand-web
+  internal:
+    name: rentalcommand-internal
+    internal: true
 
 volumes:
-  api-data:
-  api-uploads:
-  caddy-data:
+  postgres_data:
