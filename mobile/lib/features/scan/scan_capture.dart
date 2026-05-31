@@ -1,0 +1,180 @@
+import 'dart:typed_data';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
+
+import '../../core/api/api_exception.dart';
+import 'scan_repository.dart';
+
+/// Handles picking an image (camera or gallery), uploading it, then navigating
+/// to the review screen for the newly created draft.
+///
+/// This is a helper widget — host it as a modal bottom sheet or call the static
+/// helpers directly from [ScanListScreen].
+class ScanCaptureSheet extends ConsumerStatefulWidget {
+  const ScanCaptureSheet({super.key});
+
+  @override
+  ConsumerState<ScanCaptureSheet> createState() => _ScanCaptureSheetState();
+}
+
+class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
+  bool _uploading = false;
+  double _uploadProgress = 0;
+  String? _error;
+
+  Future<void> _pick(ImageSource source) async {
+    final picker = ImagePicker();
+    final XFile? picked = await picker.pickImage(
+      source: source,
+      imageQuality: 90,
+      maxWidth: 2048,
+      maxHeight: 2048,
+    );
+    if (picked == null) return; // user cancelled
+
+    setState(() {
+      _uploading = true;
+      _uploadProgress = 0;
+      _error = null;
+    });
+
+    try {
+      final bytes = Uint8List.fromList(await picked.readAsBytes());
+      final contentType = _mimeFromExtension(picked.name);
+
+      final created = await ref.read(scanRepositoryProvider).uploadImage(
+            bytes,
+            picked.name,
+            contentType,
+            targetEntityType: 'Expense',
+            onSendProgress: (progress) {
+              if (mounted) setState(() => _uploadProgress = progress);
+            },
+          );
+
+      if (!mounted) return;
+      // Close the sheet and pass the new draft id back.
+      Navigator.of(context).pop(created.draftId);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _uploading = false;
+        _error = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _uploading = false;
+        _error = 'Something went wrong. Please try again.';
+      });
+    }
+  }
+
+  String _mimeFromExtension(String filename) {
+    final lower = filename.toLowerCase();
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.heic')) return 'image/heic';
+    if (lower.endsWith('.pdf')) return 'application/pdf';
+    return 'image/jpeg'; // safe fallback for camera shots
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    if (_uploading) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Text('Uploading…', style: theme.textTheme.titleMedium),
+            const SizedBox(height: 20),
+            LinearProgressIndicator(value: _uploadProgress > 0 ? _uploadProgress : null),
+            const SizedBox(height: 8),
+            Text(
+              _uploadProgress > 0
+                  ? '${(_uploadProgress * 100).toStringAsFixed(0)}%'
+                  : 'Preparing…',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      );
+    }
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Scan a document',
+              style: theme.textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Take a photo of a receipt, bill, or check.\nThe app will read the details for you.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colorScheme.errorContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: colorScheme.onErrorContainer),
+                ),
+              ),
+            ],
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              icon: const Icon(Icons.camera_alt_outlined),
+              label: const Text('Take a photo'),
+              onPressed: () => _pick(ImageSource.camera),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.photo_library_outlined),
+              label: const Text('Choose from gallery'),
+              onPressed: () => _pick(ImageSource.gallery),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Shows [ScanCaptureSheet] as a modal bottom sheet and returns the new
+/// draft id, or null if the user cancelled.
+Future<int?> showScanCaptureSheet(BuildContext context) {
+  return showModalBottomSheet<int>(
+    context: context,
+    isScrollControlled: true,
+    useSafeArea: true,
+    builder: (_) => const ScanCaptureSheet(),
+  );
+}
