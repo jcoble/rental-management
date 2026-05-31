@@ -4,6 +4,11 @@
 	import { toast } from 'svelte-sonner';
 	import { scan, type ScanDraftResponse } from '$lib/api/scan';
 	import FileDrop from '$lib/components/FileDrop.svelte';
+	import * as Card from '$lib/components/ui/card';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
+	import * as Table from '$lib/components/ui/table';
+	import * as Tabs from '$lib/components/ui/tabs';
 
 	const queryClient = useQueryClient();
 
@@ -32,19 +37,34 @@
 		uploadMutation.mutate(file);
 	}
 
+	function statusBadgeVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
+		switch (status) {
+			case 'Confirmed':
+				return 'default';
+			case 'Reviewing':
+				return 'secondary';
+			case 'Failed':
+			case 'Rejected':
+				return 'destructive';
+			default:
+				return 'outline';
+		}
+	}
+
+	// Keep custom colour classes for statuses that don't map to a variant cleanly
 	function statusBadgeClass(status: string): string {
 		switch (status) {
 			case 'Pending':
-				return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300';
+				return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-800';
 			case 'Reviewing':
-				return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
+				return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200 dark:border-blue-800';
 			case 'Confirmed':
-				return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300';
+				return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 border-green-200 dark:border-green-800';
 			case 'Failed':
 			case 'Rejected':
-				return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300';
+				return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300 border-red-200 dark:border-red-800';
 			default:
-				return 'bg-card text-muted-foreground';
+				return '';
 		}
 	}
 
@@ -64,72 +84,71 @@
 	<!-- Upload zone -->
 	<div class="mb-6" data-testid="scan-upload">
 		{#if uploadMutation.isPending}
-			<div class="flex items-center justify-center rounded-lg border-2 border-dashed border-border bg-card px-6 py-8">
-				<div class="text-center">
-					<div class="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent"></div>
-					<p class="text-sm text-muted-foreground">Uploading…</p>
-				</div>
-			</div>
+			<Card.Root class="flex items-center justify-center px-6 py-8 border-2 border-dashed">
+				<Card.Content class="p-0">
+					<div class="text-center">
+						<div class="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent"></div>
+						<p class="text-sm text-muted-foreground">Uploading…</p>
+					</div>
+				</Card.Content>
+			</Card.Root>
 		{:else}
 			<FileDrop onselected={handleFileSelected} />
 		{/if}
 	</div>
 
 	<!-- Filter tabs -->
-	<div class="mb-4 flex gap-1 border-b border-border">
-		{#each FILTER_TABS as tab}
-			<button
-				class="rounded-t px-4 py-2 text-sm font-medium transition-colors
-					{activeFilter === tab
-					? 'border-b-2 border-accent text-primary'
-					: 'text-muted-foreground hover:text-foreground'}"
-				onclick={() => (activeFilter = tab)}
-			>
-				{tab}
-			</button>
-		{/each}
-	</div>
+	<Tabs.Root
+		value={activeFilter}
+		onValueChange={(v) => { if (v) activeFilter = v as FilterTab; }}
+		class="mb-4"
+	>
+		<Tabs.List>
+			{#each FILTER_TABS as tab}
+				<Tabs.Trigger value={tab}>{tab}</Tabs.Trigger>
+			{/each}
+		</Tabs.List>
 
-	<!-- Drafts table -->
-	{#if scansQuery.isLoading}
-		<p class="py-8 text-center text-sm text-muted-foreground">Loading…</p>
-	{:else if draftsList.length === 0}
-		<p class="py-8 text-center text-sm text-muted-foreground">No scan drafts found.</p>
-	{:else}
-		<div class="overflow-hidden rounded-lg border border-border bg-card">
-			<table class="w-full text-sm">
-				<thead class="border-b border-border bg-background">
-					<tr>
-						<th class="px-4 py-3 text-left font-medium text-muted-foreground">Status</th>
-						<th class="px-4 py-3 text-left font-medium text-muted-foreground">Type</th>
-						<th class="px-4 py-3 text-left font-medium text-muted-foreground">Created</th>
-						<th class="px-4 py-3 text-left font-medium text-muted-foreground">Action</th>
-					</tr>
-				</thead>
-				<tbody class="divide-y divide-border">
-					{#each draftsList as draft (draft.id)}
-						<tr class="hover:bg-secondary" data-testid="scan-row" data-draft-id={draft.id}>
-							<td class="px-4 py-3">
-								<span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {statusBadgeClass(draft.status)}">
-									{draft.status}
-								</span>
-							</td>
-							<td class="px-4 py-3 text-muted-foreground">{draft.targetEntityType}</td>
-							<td class="px-4 py-3 text-muted-foreground">
-								{new Date(draft.createdAt).toLocaleDateString()}
-							</td>
-							<td class="px-4 py-3">
-								<a
-									href="/scan/{draft.id}"
-									class="text-primary hover:underline"
-								>
-									Review
-								</a>
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
-	{/if}
+		<!-- Drafts table — rendered once, inside a shared content area -->
+		<Tabs.Content value={activeFilter} class="mt-4">
+			{#if scansQuery.isLoading}
+				<p class="py-8 text-center text-sm text-muted-foreground">Loading…</p>
+			{:else if draftsList.length === 0}
+				<p class="py-8 text-center text-sm text-muted-foreground">No scan drafts found.</p>
+			{:else}
+				<Card.Root class="overflow-hidden py-0 gap-0">
+					<Table.Root>
+						<Table.Header>
+							<Table.Row>
+								<Table.Head class="px-4 py-3">Status</Table.Head>
+								<Table.Head class="px-4 py-3">Type</Table.Head>
+								<Table.Head class="px-4 py-3">Created</Table.Head>
+								<Table.Head class="px-4 py-3">Action</Table.Head>
+							</Table.Row>
+						</Table.Header>
+						<Table.Body>
+							{#each draftsList as draft (draft.id)}
+								<Table.Row data-testid="scan-row" data-draft-id={draft.id}>
+									<Table.Cell class="px-4 py-3">
+										<Badge variant="outline" class={statusBadgeClass(draft.status)}>
+											{draft.status}
+										</Badge>
+									</Table.Cell>
+									<Table.Cell class="px-4 py-3 text-muted-foreground">{draft.targetEntityType}</Table.Cell>
+									<Table.Cell class="px-4 py-3 text-muted-foreground">
+										{new Date(draft.createdAt).toLocaleDateString()}
+									</Table.Cell>
+									<Table.Cell class="px-4 py-3">
+										<Button variant="link" href="/scan/{draft.id}" class="h-auto p-0">
+											Review
+										</Button>
+									</Table.Cell>
+								</Table.Row>
+							{/each}
+						</Table.Body>
+					</Table.Root>
+				</Card.Root>
+			{/if}
+		</Tabs.Content>
+	</Tabs.Root>
 </div>
