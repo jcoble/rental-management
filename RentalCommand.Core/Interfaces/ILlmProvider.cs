@@ -66,7 +66,13 @@ public class Box
 /// <summary>One field the model is asked to extract, used to build the tool schema.</summary>
 public sealed record ExtractionFieldSpec(
     string Name,            // JSON key, e.g. "vendor_name"
-    string Type,            // "string" | "number" | "date" | "enum"
+    string Type,            // "string" | "number" | "date" | "enum" | "array"
     string Description,     // guidance shown to the model
     bool Required = false,
-    IReadOnlyList<string>? EnumValues = null);
+    IReadOnlyList<string>? EnumValues = null,
+    /// <summary>
+    /// For <c>Type == "array"</c>: the object schema for each item in the array.
+    /// Each element describes a property of the item object (Name = property key,
+    /// Type = "string" | "number" | etc.). <see langword="null"/> for non-array fields.
+    /// </summary>
+    IReadOnlyList<ExtractionFieldSpec>? ItemFields = null);
