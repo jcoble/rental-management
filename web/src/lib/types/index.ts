@@ -148,11 +148,14 @@ export interface Expense {
 	description: string;
 	status: ExpenseStatus;
 	amount: number;
+	subtotal?: number;
+	taxAmount?: number;
 	incurredAt: string;
 	dueDate?: string;
 	paidAt?: string;
 	billableToOwner: boolean;
 	notes?: string;
+	receiptData?: string;
 	propertyName?: string;
 	vendorName?: string;
 	workOrderTitle?: string;
