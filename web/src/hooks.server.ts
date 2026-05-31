@@ -1,7 +1,7 @@
 /**
  * Server hooks for authentication.
  *
- * On every request we validate the access_token cookie against the API
+ * On every request we validate the app-namespaced access-token cookie against the API
  * (GET /auth/me), refreshing on 401, and populate event.locals.user /
  * event.locals.accessToken for downstream load functions and guards.
  *
@@ -14,6 +14,12 @@ import type { Cookies } from '@sveltejs/kit';
 import type { User } from '$lib/types/user';
 import { serverRefreshToken, applyRefreshCookies } from '$lib/server/token-refresh';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
+import {
+	deleteAccessCookies,
+	getAccessToken,
+	getAccessTokenExpiration,
+	getRefreshToken
+} from '$lib/server/auth-cookies';
 
 const API_URL = new URL(SERVER_API_BASE_URL);
 const AUTH_FETCH_TIMEOUT_MS = 10_000;
@@ -32,7 +38,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 	event.locals.user = null;
 	event.locals.accessToken = null;
 
-	const accessToken = event.cookies.get('access_token');
+	const accessToken = getAccessToken(event.cookies);
 
 	if (accessToken) {
 		try {
@@ -44,7 +50,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 				const user: User = await response.json();
 				event.locals.user = user;
 				event.locals.accessToken = accessToken;
-				const storedExpiration = event.cookies.get('access_token_expiration');
+				const storedExpiration = getAccessTokenExpiration(event.cookies);
 				if (storedExpiration) {
 					event.locals.accessTokenExpiration = storedExpiration;
 				}
@@ -56,8 +62,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 					event.locals.accessToken = refreshed.accessToken;
 					event.locals.accessTokenExpiration = refreshed.accessTokenExpiration;
 				} else {
-					event.cookies.delete('access_token', { path: '/' });
-					event.cookies.delete('access_token_expiration', { path: '/' });
+					deleteAccessCookies(event.cookies);
 				}
 			} else {
 				// Transient server error (429/500/...) — keep the session and
@@ -66,7 +71,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 					`Auth /me returned ${response.status} — preserving existing token for this request`
 				);
 				event.locals.accessToken = accessToken;
-				const storedExpiration = event.cookies.get('access_token_expiration');
+				const storedExpiration = getAccessTokenExpiration(event.cookies);
 				if (storedExpiration) {
 					event.locals.accessTokenExpiration = storedExpiration;
 				}
@@ -75,14 +80,14 @@ export const handle: Handle = async ({ event, resolve }) => {
 			// Network error — keep the session and forward the existing token.
 			console.warn('Auth validation error (keeping session):', error);
 			event.locals.accessToken = accessToken;
-			const storedExpiration = event.cookies.get('access_token_expiration');
+			const storedExpiration = getAccessTokenExpiration(event.cookies);
 			if (storedExpiration) {
 				event.locals.accessTokenExpiration = storedExpiration;
 			}
 		}
 	} else {
 		// No access token — fall back to the refresh token if present.
-		const refreshToken = event.cookies.get('refresh_token');
+		const refreshToken = getRefreshToken(event.cookies);
 		if (refreshToken) {
 			const refreshed = await tryRefreshToken(event.cookies);
 			if (refreshed) {
@@ -97,13 +102,13 @@ export const handle: Handle = async ({ event, resolve }) => {
 };
 
 /**
- * Refresh the access token from the refresh_token cookie, using the shared
+ * Refresh the access token from the app-namespaced refresh cookie, using the shared
  * single-flight to avoid racing with the /api/auth/refresh proxy endpoint.
  */
 async function tryRefreshToken(
 	cookies: Cookies
 ): Promise<{ user: User; accessToken: string; accessTokenExpiration: string } | null> {
-	const refreshTokenValue = cookies.get('refresh_token');
+	const refreshTokenValue = getRefreshToken(cookies);
 	if (!refreshTokenValue) return null;
 
 	const result = await serverRefreshToken(refreshTokenValue);
@@ -125,7 +130,7 @@ async function tryRefreshToken(
  */
 export const handleFetch: HandleFetch = async ({ event, request, fetch }) => {
 	const url = new URL(request.url);
-	const accessToken = event.locals.accessToken ?? event.cookies.get('access_token');
+	const accessToken = event.locals.accessToken ?? getAccessToken(event.cookies);
 
 	if (
 		accessToken &&

@@ -10,7 +10,7 @@
  *    ASP.NET ValidationProblemDetails) into a structured {@link ApiError},
  *  - throws on any non-2xx.
  *
- * The refresh_token cookie is httpOnly and first-party to the SvelteKit origin,
+ * The refresh-token cookie is httpOnly and first-party to the SvelteKit origin,
  * so refreshes must go through our own /api/auth/refresh endpoint (same origin)
  * rather than calling the API directly.
  */

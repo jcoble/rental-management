@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
 
@@ -9,14 +10,12 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// JWT-based authentication endpoints for the SvelteKit frontend. Access tokens are returned in the
-/// response body; refresh tokens are set as an httpOnly, SameSite=Strict cookie and rotated on refresh.
+/// response body; refresh tokens are set as an app-namespaced httpOnly, SameSite=Strict cookie and rotated on refresh.
 /// </summary>
 [ApiController]
 [Route("api/v1/auth")]
 public class AuthController : ControllerBase
 {
-    private const string RefreshCookieName = "refresh_token";
-
     private readonly IAuthService _authService;
     private readonly IJwtTokenService _tokenService;
     private readonly IWebHostEnvironment _environment;
@@ -101,7 +100,7 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<ActionResult<LoginResponse>> Refresh()
     {
-        var refreshToken = Request.Cookies[RefreshCookieName];
+        var refreshToken = Request.Cookies[AuthCookieNames.RefreshToken];
         if (string.IsNullOrEmpty(refreshToken))
         {
             return Unauthorized(new { error = "Refresh token not found" });
@@ -110,7 +109,7 @@ public class AuthController : ControllerBase
         var result = await _authService.RefreshAsync(refreshToken, GetIpAddress(), GetUserAgent());
         if (!result.Success)
         {
-            Response.Cookies.Delete(RefreshCookieName);
+            ClearRefreshTokenCookies();
             return Unauthorized(new { error = result.Error ?? "Token refresh failed" });
         }
 
@@ -196,25 +195,32 @@ public class AuthController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> Logout()
     {
-        var refreshToken = Request.Cookies[RefreshCookieName];
+        var refreshToken = Request.Cookies[AuthCookieNames.RefreshToken];
         if (!string.IsNullOrEmpty(refreshToken))
         {
             await _tokenService.RevokeRefreshTokenAsync(refreshToken);
         }
 
-        Response.Cookies.Delete(RefreshCookieName);
+        ClearRefreshTokenCookies();
         return Ok(new { message = "Logged out successfully" });
     }
 
     private void SetRefreshTokenCookie(string token, DateTime expiration)
     {
-        Response.Cookies.Append(RefreshCookieName, token, new CookieOptions
+        Response.Cookies.Append(AuthCookieNames.RefreshToken, token, new CookieOptions
         {
             HttpOnly = true,
             Secure = true,
             SameSite = SameSiteMode.Strict,
             Expires = expiration
         });
+        Response.Cookies.Delete(AuthCookieNames.LegacyRefreshToken);
+    }
+
+    private void ClearRefreshTokenCookies()
+    {
+        Response.Cookies.Delete(AuthCookieNames.RefreshToken);
+        Response.Cookies.Delete(AuthCookieNames.LegacyRefreshToken);
     }
 
     private string? GetIpAddress() => HttpContext.Connection.RemoteIpAddress?.ToString();

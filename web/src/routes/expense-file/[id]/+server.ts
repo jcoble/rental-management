@@ -1,6 +1,7 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { getAccessToken } from '$lib/server/auth-cookies';
 
 // Only these render inline; anything else downloads as octet-stream so an uploaded
 // html/svg can't execute on the app origin (defense-in-depth; the API does this too).
@@ -21,7 +22,7 @@ const INLINE_SAFE = new Set([
  * return a resized JPEG thumbnail rather than the full original.
  */
 export const GET: RequestHandler = async ({ params, cookies, url }) => {
-	const token = cookies.get('access_token');
+	const token = getAccessToken(cookies);
 	if (!token) {
 		throw error(401, 'Unauthorized');
 	}
