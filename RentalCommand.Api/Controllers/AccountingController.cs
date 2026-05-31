@@ -16,11 +16,13 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
 {
     private readonly IAccountingService _service;
     private readonly IScheduleEService _scheduleE;
+    private readonly IOwnerStatementService _ownerStatements;
 
-    public AccountingController(IAccountingService service, IScheduleEService scheduleE)
+    public AccountingController(IAccountingService service, IScheduleEService scheduleE, IOwnerStatementService ownerStatements)
     {
         _service = service;
         _scheduleE = scheduleE;
+        _ownerStatements = ownerStatements;
     }
 
     /// <summary>Expense totals by Schedule E category plus collected/outstanding/overdue payment rollups.</summary>
@@ -63,7 +65,91 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
         return File(bytes, "text/csv", $"schedule-e-{reportYear}.csv");
     }
 
+    // ── Owner Statement endpoints ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Lists all owners that have at least one property in the portfolio, with their net distribution
+    /// for <paramref name="year"/>. Defaults to the current UTC year when omitted.
+    /// </summary>
+    [HttpGet("owner-statements")]
+    [ProducesResponseType(typeof(IReadOnlyList<OwnerStatementSummary>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<OwnerStatementSummary>>> OwnerStatements(
+        [FromQuery] int? year, CancellationToken ct)
+    {
+        var reportYear = year ?? DateTime.UtcNow.Year;
+        var summaries = await _ownerStatements.ListOwnersWithNetAsync(GetPortfolioId(), reportYear, ct);
+        return Ok(summaries);
+    }
+
+    /// <summary>
+    /// Full owner statement for a single owner: per-property income, expenses, management fee, and
+    /// net distribution, plus portfolio-level totals. Defaults to the current UTC year when omitted.
+    /// Returns 404 if <paramref name="ownerId"/> is not found in the portfolio.
+    /// </summary>
+    [HttpGet("owner-statement")]
+    [ProducesResponseType(typeof(OwnerStatementReport), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<OwnerStatementReport>> OwnerStatement(
+        [FromQuery] int ownerId, [FromQuery] int? year, CancellationToken ct)
+    {
+        var reportYear = year ?? DateTime.UtcNow.Year;
+        var report = await _ownerStatements.GetForOwnerAsync(GetPortfolioId(), ownerId, reportYear, ct);
+        if (report is null)
+            return NotFound();
+        return Ok(report);
+    }
+
+    /// <summary>
+    /// Downloads the owner statement as a CSV. Columns: Property, Income, Expenses, ManagementFee,
+    /// NetToOwner. A TOTAL row is appended at the end. Returns 404 if the owner is not found.
+    /// Defaults to the current UTC year when <paramref name="year"/> is omitted.
+    /// </summary>
+    [HttpGet("owner-statement/export")]
+    [Produces("text/csv")]
+    [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> OwnerStatementExport(
+        [FromQuery] int ownerId, [FromQuery] int? year, CancellationToken ct)
+    {
+        var reportYear = year ?? DateTime.UtcNow.Year;
+        var report = await _ownerStatements.GetForOwnerAsync(GetPortfolioId(), ownerId, reportYear, ct);
+        if (report is null)
+            return NotFound();
+
+        var csv = BuildOwnerStatementCsv(report);
+        var bytes = Encoding.UTF8.GetBytes(csv);
+        return File(bytes, "text/csv", $"owner-statement-{ownerId}-{reportYear}.csv");
+    }
+
     // ── CSV helpers ─────────────────────────────────────────────────────────────────────────────
+
+    private static string BuildOwnerStatementCsv(OwnerStatementReport report)
+    {
+        var sb = new StringBuilder();
+
+        // Header
+        sb.AppendLine("Property,Income,Expenses,ManagementFee,NetToOwner");
+
+        foreach (var line in report.Properties)
+        {
+            sb.AppendLine(
+                $"{CsvField(line.PropertyName)}," +
+                $"{CsvField(line.RentalIncome.ToString("F2"))}," +
+                $"{CsvField(line.Expenses.ToString("F2"))}," +
+                $"{CsvField(line.ManagementFee.ToString("F2"))}," +
+                $"{CsvField(line.NetToOwner.ToString("F2"))}");
+        }
+
+        // TOTAL row
+        sb.AppendLine(
+            $"{CsvField("TOTAL")}," +
+            $"{CsvField(report.TotalIncome.ToString("F2"))}," +
+            $"{CsvField(report.TotalExpenses.ToString("F2"))}," +
+            $"{CsvField(report.TotalManagementFee.ToString("F2"))}," +
+            $"{CsvField(report.TotalNetToOwner.ToString("F2"))}");
+
+        return sb.ToString();
+    }
 
     private static string BuildCsv(ScheduleEReport report)
     {
