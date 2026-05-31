@@ -137,6 +137,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.FilePath).IsRequired().HasMaxLength(1024);
+            entity.Property(e => e.ThumbnailPath).HasMaxLength(1024);
             entity.Property(e => e.TargetEntityType).IsRequired().HasMaxLength(120);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
             entity.Property(e => e.ModelId).HasMaxLength(120);

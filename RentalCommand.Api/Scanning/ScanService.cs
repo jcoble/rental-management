@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Imaging;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -57,10 +58,29 @@ public sealed class ScanService : IScanService
             contentType,
             ct);
 
+        // Generate a small JPEG preview so clients (especially mobile) never fetch the
+        // full-resolution original just to render the review thumbnail. Best-effort:
+        // ResizeToJpeg returns null for non-images (e.g. PDFs); the file endpoint then
+        // falls back to serving the original.
+        string? thumbnailPath = null;
+        var thumbBytes = ThumbnailResizer.ResizeToJpeg(fileBytes, maxDim: 1000, quality: 72);
+        if (thumbBytes is not null)
+        {
+            var thumbStored = await _files.StoreAsync(
+                portfolioId,
+                targetEntityType,
+                thumbBytes,
+                $"scan-thumb-{DateTime.UtcNow:yyyyMMddHHmmss}",
+                "image/jpeg",
+                ct);
+            thumbnailPath = thumbStored.FilePath;
+        }
+
         var draft = new ScanDraft
         {
             PortfolioId = portfolioId,
             FilePath = stored.FilePath,
+            ThumbnailPath = thumbnailPath,
             TargetEntityType = targetEntityType,
             Status = "Pending",
             CreatedAt = DateTime.UtcNow,
