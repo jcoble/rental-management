@@ -1,197 +1,352 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { goto } from '$app/navigation';
-	import { auth } from '$lib/api/endpoints/auth';
-	import { owners } from '$lib/api/endpoints/owners';
-	import { tenants } from '$lib/api/endpoints/tenants';
-	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { clearAuth, hasAnyRole, setCurrentUser } from '$lib/stores/auth.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
+	import { adminUsers } from '$lib/api/endpoints/adminUsers';
+	import type { TeamMember, UserRole, CreateTeamMemberResponse } from '$lib/types';
+	import { getCurrentUser } from '$lib/stores/auth.svelte';
+	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
+	import * as Table from '$lib/components/ui/table';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import { Plus } from '@lucide/svelte';
+
+	const ROLES: UserRole[] = ['Admin', 'Manager', 'Agent', 'Owner', 'Tenant'];
 
 	const queryClient = useQueryClient();
-	const portfolioId = $derived(getCurrentPortfolioId());
+	const currentUser = $derived(getCurrentUser());
 
-	const meQuery = createQuery(() => ({
-		queryKey: ['auth-me'],
-		queryFn: () => auth.me(),
-		retry: false,
+	// ---- Query ----
+
+	const membersQuery = createQuery(() => ({
+		queryKey: ['admin-users'],
+		queryFn: () => adminUsers.list()
 	}));
 
-	$effect(() => {
-		if (meQuery.data) {
-			setCurrentUser(meQuery.data);
-			if (!hasAnyRole('Admin', 'Manager')) goto('/portal');
-		}
-		if (meQuery.isError) {
-			// clearAuth() handles navigation (to /logout, which clears cookies
-			// then redirects to /login) — no extra goto needed.
-			clearAuth();
-		}
-	});
+	const members = $derived((membersQuery.data ?? []) as TeamMember[]);
 
-	const usersQuery = createQuery(() => ({
-		queryKey: ['auth-users', portfolioId],
-		enabled: !!meQuery.data && hasAnyRole('Admin', 'Manager'),
-		queryFn: () => auth.listUsers(portfolioId),
-		retry: false,
-	}));
+	function invalidate() {
+		queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+	}
 
-	const ownersQuery = createQuery(() => ({
-		queryKey: ['owners', portfolioId],
-		enabled: !!meQuery.data && hasAnyRole('Admin', 'Manager'),
-		queryFn: () => owners.list(portfolioId),
-		retry: false,
-	}));
+	// ---- Role mutation ----
 
-	const tenantsQuery = createQuery(() => ({
-		queryKey: ['tenants', portfolioId],
-		enabled: !!meQuery.data && hasAnyRole('Admin', 'Manager'),
-		queryFn: () => tenants.list(portfolioId),
-		retry: false,
-	}));
-
-	let form = $state({ displayName: '', email: '', password: '', role: 'Tenant', ownerId: '', tenantId: '' });
-
-	const selectedOwnerLabel = $derived(
-		form.ownerId
-			? (ownersQuery.data || []).find((o: any) => String(o.id) === form.ownerId)?.name ?? form.ownerId
-			: null
-	);
-
-	const selectedTenantLabel = $derived(
-		form.tenantId
-			? (tenantsQuery.data || []).find((t: any) => String(t.id) === form.tenantId)?.fullName
-				?? (() => {
-					const t = (tenantsQuery.data || []).find((t: any) => String(t.id) === form.tenantId);
-					return t ? `${t.firstName} ${t.lastName}` : form.tenantId;
-				})()
-			: null
-	);
-
-	const createUserMutation = createMutation(() => ({
-		mutationFn: () => auth.createUser({
-			portfolioId,
-			displayName: form.displayName,
-			email: form.email,
-			password: form.password,
-			role: form.role,
-			ownerId: form.ownerId ? Number(form.ownerId) : null,
-			tenantId: form.tenantId ? Number(form.tenantId) : null,
-		}),
+	const setRoleMutation = createMutation(() => ({
+		mutationFn: ({ id, role }: { id: number; role: UserRole }) => adminUsers.setRole(id, role),
 		onSuccess: () => {
-			form = { displayName: '', email: '', password: '', role: 'Tenant', ownerId: '', tenantId: '' };
-			queryClient.invalidateQueries({ queryKey: ['auth-users', portfolioId] });
+			showSuccess('Role updated.');
+			invalidate();
 		},
+		onError: (err) => showError(apiErrorMessage(err))
 	}));
 
-	const updateUserMutation = createMutation(() => ({
-		mutationFn: ({ id, role, isActive }: { id: number; role?: string; isActive?: boolean }) =>
-			auth.updateUser(id, { role, isActive }),
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: ['auth-users', portfolioId] }),
+	// ---- Active toggle mutation ----
+
+	const setActiveMutation = createMutation(() => ({
+		mutationFn: ({ id, isActive }: { id: number; isActive: boolean }) =>
+			adminUsers.setActive(id, isActive),
+		onSuccess: (_r, vars) => {
+			showSuccess(vars.isActive ? 'Member re-activated.' : 'Member deactivated.');
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
 	}));
 
-	function submit() {
-		if (!form.displayName || !form.email || !form.password) return;
-		createUserMutation.mutate();
+	// ---- Invite / add member dialog ----
+
+	const emptyForm = { email: '', displayName: '', role: 'Manager' as UserRole, temporaryPassword: '' };
+	let showInviteDialog = $state(false);
+	let inviteForm = $state({ ...emptyForm });
+
+	const createMemberMutation = createMutation(() => ({
+		mutationFn: () =>
+			adminUsers.create({
+				email: inviteForm.email,
+				displayName: inviteForm.displayName || undefined,
+				role: inviteForm.role,
+				temporaryPassword: inviteForm.temporaryPassword || undefined
+			}),
+		onSuccess: (result: CreateTeamMemberResponse) => {
+			showSuccess(`${result.email} added to the team.`);
+			inviteForm = { ...emptyForm };
+			showInviteDialog = false;
+			invalidate();
+			if (result.generatedPassword) {
+				// Small delay so the invite dialog closes before the password dialog opens.
+				setTimeout(() => {
+					generatedPasswordInfo = { email: result.email, password: result.generatedPassword! };
+					showPasswordDialog = true;
+				}, 100);
+			}
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	function submitInvite() {
+		if (!inviteForm.email) return;
+		createMemberMutation.mutate();
+	}
+
+	// ---- One-time generated password dialog ----
+
+	let showPasswordDialog = $state(false);
+	let generatedPasswordInfo = $state<{ email: string; password: string } | null>(null);
+
+	// ---- Helpers ----
+
+	/** True when a control on this row would self-lock: this is the current user's own row. */
+	function isSelf(member: TeamMember): boolean {
+		return !!currentUser && currentUser.id === member.id;
+	}
+
+	function formatDate(iso: string) {
+		try {
+			return new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'short', day: 'numeric' }).format(
+				new Date(iso)
+			);
+		} catch {
+			return iso;
+		}
 	}
 </script>
 
 <svelte:head>
-	<title>User Access - Rental Command</title>
+	<title>Team - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6">
-	{#if meQuery.isPending}
-		<div class="flex h-40 items-center justify-center text-muted-foreground">Checking access...</div>
-	{:else if hasAnyRole('Admin', 'Manager')}
-		<h1 class="mb-1 text-2xl font-bold">User Access Control</h1>
-		<p class="mb-5 text-sm text-muted-foreground">Role-based user management for admin/manager operations.</p>
+<div class="h-full overflow-y-auto p-6" data-testid="team-page">
+	<div class="mb-5 flex items-start justify-between">
+		<div>
+			<h1 class="text-2xl font-bold">Team</h1>
+			<p class="text-sm text-muted-foreground">Manage team members, roles, and access.</p>
+		</div>
+		<Button data-testid="invite-member-button" onclick={() => (showInviteDialog = true)}>
+			<Plus class="h-4 w-4" /> Invite member
+		</Button>
+	</div>
 
-		<Card.Root class="mb-5 gap-0 py-0">
-			<Card.Content class="p-4">
-				<h2 class="mb-2 font-semibold">Create User</h2>
-				<div class="grid gap-3 md:grid-cols-3">
-					<Input bind:value={form.displayName} placeholder="Display name" />
-					<Input bind:value={form.email} placeholder="Email" />
-					<Input bind:value={form.password} placeholder="Password" />
-					<Select.Root type="single" bind:value={form.role}>
-						<Select.Trigger class="w-full">
-							{form.role || 'Select role'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="Admin" label="Admin">Admin</Select.Item>
-							<Select.Item value="Manager" label="Manager">Manager</Select.Item>
-							<Select.Item value="Agent" label="Agent">Agent</Select.Item>
-							<Select.Item value="Owner" label="Owner">Owner</Select.Item>
-							<Select.Item value="Tenant" label="Tenant">Tenant</Select.Item>
-						</Select.Content>
-					</Select.Root>
-					<Select.Root type="single" bind:value={form.ownerId}>
-						<Select.Trigger class="w-full">
-							{selectedOwnerLabel ?? 'No owner link'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="" label="No owner link">No owner link</Select.Item>
-							{#each ownersQuery.data || [] as owner}
-								<Select.Item value={String(owner.id)} label={owner.name}>{owner.name}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-					<Select.Root type="single" bind:value={form.tenantId}>
-						<Select.Trigger class="w-full">
-							{selectedTenantLabel ?? 'No tenant link'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="" label="No tenant link">No tenant link</Select.Item>
-							{#each tenantsQuery.data || [] as tenant}
-								<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-				</div>
-				<div class="mt-3">
-					<Button onclick={submit} disabled={createUserMutation.isPending}>Create User</Button>
-				</div>
-			</Card.Content>
-		</Card.Root>
-
-		<Card.Root class="gap-0 py-0">
-			<Card.Content class="p-0">
-				<div class="overflow-x-auto">
-					<table class="min-w-full text-sm">
-						<thead class="border-b border-border bg-background text-left text-xs uppercase text-muted-foreground">
-							<tr>
-								<th class="px-3 py-2">Name</th>
-								<th class="px-3 py-2">Email</th>
-								<th class="px-3 py-2">Role</th>
-								<th class="px-3 py-2">Status</th>
-								<th class="px-3 py-2">Actions</th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each (usersQuery.data as any[]) || [] as user}
-								<tr class="border-b border-border/70">
-									<td class="px-3 py-2 font-medium">{user.displayName}</td>
-									<td class="px-3 py-2">{user.email}</td>
-									<td class="px-3 py-2">{user.role}</td>
-									<td class="px-3 py-2">{user.isActive ? 'Active' : 'Disabled'}</td>
-									<td class="px-3 py-2">
-										<div class="flex gap-2">
-											<Button variant="outline" size="sm" onclick={() => updateUserMutation.mutate({ id: user.id, isActive: !user.isActive })}>{user.isActive ? 'Disable' : 'Enable'}</Button>
-											{#if user.role !== 'Manager'}
-												<Button variant="outline" size="sm" onclick={() => updateUserMutation.mutate({ id: user.id, role: user.role === 'Agent' ? 'Manager' : 'Agent' })}>Toggle Agent/Manager</Button>
+	<Card.Root class="gap-0 py-0" data-testid="team-members-card">
+		<Card.Content class="p-0">
+			{#if membersQuery.isPending}
+				<p class="py-10 text-center text-sm text-muted-foreground" data-testid="team-loading">
+					Loading team…
+				</p>
+			{:else if membersQuery.isError}
+				<p class="py-10 text-center text-sm text-destructive" data-testid="team-error">
+					Failed to load team members.
+				</p>
+			{:else if members.length === 0}
+				<p class="py-10 text-center text-sm text-muted-foreground" data-testid="team-empty">
+					No team members yet.
+				</p>
+			{:else}
+				<Table.Root>
+					<Table.Header>
+						<Table.Row>
+							<Table.Head>Member</Table.Head>
+							<Table.Head>Role</Table.Head>
+							<Table.Head>Status</Table.Head>
+							<Table.Head>Joined</Table.Head>
+						</Table.Row>
+					</Table.Header>
+					<Table.Body data-testid="team-members-list">
+						{#each members as member (member.id)}
+							<Table.Row data-testid="team-member-row" data-member-id={member.id}>
+								<Table.Cell>
+									<div>
+										<p class="font-medium" data-testid="member-name">
+											{member.displayName || '—'}
+											{#if isSelf(member)}
+												<span class="ml-1 text-xs text-muted-foreground">(you)</span>
 											{/if}
-										</div>
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			</Card.Content>
-		</Card.Root>
-	{/if}
+										</p>
+										<p class="text-xs text-muted-foreground" data-testid="member-email">
+											{member.email}
+										</p>
+									</div>
+								</Table.Cell>
+
+								<Table.Cell>
+									<Select.Root
+										type="single"
+										value={member.role}
+										disabled={isSelf(member) || setRoleMutation.isPending || setActiveMutation.isPending}
+										onValueChange={(role) => {
+											if (role && role !== member.role) {
+												setRoleMutation.mutate({ id: member.id, role: role as UserRole });
+											}
+										}}
+									>
+										<Select.Trigger
+											class="h-8 w-36 text-xs"
+											data-testid="member-role-select"
+											disabled={isSelf(member)}
+										>
+											<Select.Value />
+										</Select.Trigger>
+										<Select.Content>
+											{#each ROLES as r}
+												<Select.Item value={r} label={r}>{r}</Select.Item>
+											{/each}
+										</Select.Content>
+									</Select.Root>
+								</Table.Cell>
+
+								<Table.Cell>
+									<Button
+										variant={member.isActive ? 'outline' : 'secondary'}
+										size="sm"
+										class="h-7 text-xs"
+										disabled={isSelf(member) || setActiveMutation.isPending || setRoleMutation.isPending}
+										data-testid="member-active-toggle"
+										onclick={() => setActiveMutation.mutate({ id: member.id, isActive: !member.isActive })}
+									>
+										{member.isActive ? 'Active' : 'Inactive'}
+									</Button>
+								</Table.Cell>
+
+								<Table.Cell class="text-xs text-muted-foreground" data-testid="member-created-at">
+									{formatDate(member.createdAt)}
+								</Table.Cell>
+							</Table.Row>
+						{/each}
+					</Table.Body>
+				</Table.Root>
+			{/if}
+		</Card.Content>
+	</Card.Root>
 </div>
+
+<!-- Invite member dialog -->
+<Dialog.Root
+	open={showInviteDialog}
+	onOpenChange={(v) => {
+		if (!v) {
+			showInviteDialog = false;
+			inviteForm = { ...emptyForm };
+		}
+	}}
+>
+	<Dialog.Content class="max-w-md" data-testid="invite-dialog">
+		<Dialog.Header>
+			<Dialog.Title>Invite team member</Dialog.Title>
+			<Dialog.Description>
+				Add a new person to your team. They can sign in with the email and password you provide.
+			</Dialog.Description>
+		</Dialog.Header>
+
+		<div class="space-y-3">
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Email <span class="text-destructive">*</span></span>
+				<Input
+					data-testid="invite-email-input"
+					type="email"
+					bind:value={inviteForm.email}
+					placeholder="team@example.com"
+				/>
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Display name</span>
+				<Input
+					data-testid="invite-name-input"
+					bind:value={inviteForm.displayName}
+					placeholder="Jane Smith"
+				/>
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Role</span>
+				<Select.Root type="single" bind:value={inviteForm.role}>
+					<Select.Trigger class="w-full" data-testid="invite-role-select">
+						{inviteForm.role}
+					</Select.Trigger>
+					<Select.Content>
+						{#each ROLES as r}
+							<Select.Item value={r} label={r}>{r}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">
+					Temporary password <span class="text-muted-foreground">(leave blank to auto-generate)</span>
+				</span>
+				<Input
+					data-testid="invite-password-input"
+					type="password"
+					bind:value={inviteForm.temporaryPassword}
+					placeholder="Optional"
+					autocomplete="new-password"
+				/>
+			</div>
+		</div>
+
+		<Dialog.Footer>
+			<Button
+				variant="outline"
+				data-testid="invite-cancel"
+				onclick={() => {
+					showInviteDialog = false;
+					inviteForm = { ...emptyForm };
+				}}
+			>
+				Cancel
+			</Button>
+			<Button
+				data-testid="invite-submit"
+				disabled={!inviteForm.email || createMemberMutation.isPending}
+				onclick={submitInvite}
+			>
+				{createMemberMutation.isPending ? 'Adding…' : 'Add member'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- One-time generated password dialog -->
+<Dialog.Root
+	open={showPasswordDialog}
+	onOpenChange={(v) => {
+		if (!v) {
+			showPasswordDialog = false;
+			generatedPasswordInfo = null;
+		}
+	}}
+>
+	<Dialog.Content class="max-w-md" data-testid="generated-password-dialog">
+		<Dialog.Header>
+			<Dialog.Title>Temporary password — save it now</Dialog.Title>
+			<Dialog.Description>
+				This password will <strong>not be shown again</strong>. Copy it and share it with the new
+				member securely.
+			</Dialog.Description>
+		</Dialog.Header>
+
+		{#if generatedPasswordInfo}
+			<div class="rounded-md border border-border bg-muted/40 p-4 space-y-2 text-sm">
+				<div>
+					<span class="text-xs text-muted-foreground">Email</span>
+					<p class="font-medium" data-testid="generated-email">{generatedPasswordInfo.email}</p>
+				</div>
+				<div>
+					<span class="text-xs text-muted-foreground">Temporary password</span>
+					<p
+						class="mt-0.5 rounded bg-background px-2 py-1.5 font-mono text-base tracking-wide border border-border"
+						data-testid="generated-password"
+					>
+						{generatedPasswordInfo.password}
+					</p>
+				</div>
+			</div>
+		{/if}
+
+		<Dialog.Footer>
+			<Button data-testid="generated-password-close" onclick={() => {
+				showPasswordDialog = false;
+				generatedPasswordInfo = null;
+			}}>
+				I've copied the password
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
