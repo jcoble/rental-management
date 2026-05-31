@@ -19,7 +19,7 @@ cd "$ROOT_DIR"
 
 # ─── Config (override via env) ───────────────────────────────────────────────
 PG_CONTAINER="${PG_CONTAINER:-rentalcommand-dev-db}"
-PG_PORT="${PG_PORT:-5434}"          # host port; matches the dev DB convention
+PG_PORT="${PG_PORT:-5432}"          # shared dev Postgres (e.g. edi-postgres); reused if already up
 PG_USER="${PG_USER:-postgres}"
 PG_PASSWORD="${PG_PASSWORD:-postgres}"
 PG_DB="${PG_DB:-rentalcommand}"
@@ -84,9 +84,12 @@ else
 fi
 
 # ─── .NET environment ────────────────────────────────────────────────────────
+# The DB connection comes from .NET User Secrets in Development — do NOT export
+# ConnectionStrings__DefaultConnection here or it would override the secret. Set
+# it once with:
+#   dotnet user-secrets set "ConnectionStrings:DefaultConnection" "<conn>" --project RentalCommand.Api
 export ASPNETCORE_ENVIRONMENT=Development
 export DOTNET_ENVIRONMENT=Development
-export ConnectionStrings__DefaultConnection="$CONN_STR"
 
 # ─── Engine (background worker) ──────────────────────────────────────────────
 echo "Starting Engine (RentalCommand.Engine)..."

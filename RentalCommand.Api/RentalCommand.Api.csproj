@@ -1,10 +1,11 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>RentalCommand.Api</RootNamespace>
+    <UserSecretsId>d8bc1294-85ff-4b1a-a8c9-dea769437ed8</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
