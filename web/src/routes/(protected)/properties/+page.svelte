@@ -7,7 +7,7 @@
 	import { propertySchema, unitSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
-	import Dialog from '$lib/components/ui/Dialog.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
@@ -277,47 +277,52 @@
 	</div>
 </div>
 
-<Dialog open={showForm} title={editingId == null ? 'New Property' : 'Edit Property'} class="max-w-2xl" onclose={closeForm}>
-	<div class="grid gap-3 md:grid-cols-2" data-testid="property-form">
-		<div class="md:col-span-2">
-			<input data-testid="property-name-input" bind:value={form.name} class="{inputClass} w-full" placeholder="Property name" />
-			{#if formErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="property-name-error">{formErrors.name}</p>{/if}
-		</div>
-		<select data-testid="property-type-input" bind:value={form.type} class={inputClass}>
-			<option>SingleFamily</option><option>MultiFamily</option><option>Condo</option><option>Townhome</option><option>Commercial</option><option>MixedUse</option>
-		</select>
-		<select data-testid="property-owner-input" bind:value={form.ownerId} class={inputClass}>
-			<option value="">No owner assigned</option>
-			{#each ownersQuery.data || [] as owner}
-				<option value={owner.id}>{owner.name}</option>
-			{/each}
-		</select>
-		<div class="md:col-span-2">
-			<input data-testid="property-address-input" bind:value={form.addressLine1} class="{inputClass} w-full" placeholder="Address" />
-			{#if formErrors.addressLine1}<p class="mt-1 text-xs text-destructive" data-testid="property-address-error">{formErrors.addressLine1}</p>{/if}
-		</div>
-		<div>
-			<input data-testid="property-city-input" bind:value={form.city} class="{inputClass} w-full" placeholder="City" />
-			{#if formErrors.city}<p class="mt-1 text-xs text-destructive" data-testid="property-city-error">{formErrors.city}</p>{/if}
-		</div>
-		<div class="grid grid-cols-2 gap-2">
-			<div>
-				<input data-testid="property-state-input" bind:value={form.state} class="{inputClass} w-full" placeholder="State" />
-				{#if formErrors.state}<p class="mt-1 text-xs text-destructive" data-testid="property-state-error">{formErrors.state}</p>{/if}
+<Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
+	<Dialog.Content class="max-w-2xl">
+		<Dialog.Header>
+			<Dialog.Title>{editingId == null ? 'New Property' : 'Edit Property'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="grid gap-3 md:grid-cols-2" data-testid="property-form">
+			<div class="md:col-span-2">
+				<input data-testid="property-name-input" bind:value={form.name} class="{inputClass} w-full" placeholder="Property name" />
+				{#if formErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="property-name-error">{formErrors.name}</p>{/if}
+			</div>
+			<select data-testid="property-type-input" bind:value={form.type} class={inputClass}>
+				<option>SingleFamily</option><option>MultiFamily</option><option>Condo</option><option>Townhome</option><option>Commercial</option><option>MixedUse</option>
+			</select>
+			<select data-testid="property-owner-input" bind:value={form.ownerId} class={inputClass}>
+				<option value="">No owner assigned</option>
+				{#each ownersQuery.data || [] as owner}
+					<option value={owner.id}>{owner.name}</option>
+				{/each}
+			</select>
+			<div class="md:col-span-2">
+				<input data-testid="property-address-input" bind:value={form.addressLine1} class="{inputClass} w-full" placeholder="Address" />
+				{#if formErrors.addressLine1}<p class="mt-1 text-xs text-destructive" data-testid="property-address-error">{formErrors.addressLine1}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="property-zip-input" bind:value={form.postalCode} class="{inputClass} w-full" placeholder="ZIP" />
-				{#if formErrors.postalCode}<p class="mt-1 text-xs text-destructive" data-testid="property-zip-error">{formErrors.postalCode}</p>{/if}
+				<input data-testid="property-city-input" bind:value={form.city} class="{inputClass} w-full" placeholder="City" />
+				{#if formErrors.city}<p class="mt-1 text-xs text-destructive" data-testid="property-city-error">{formErrors.city}</p>{/if}
+			</div>
+			<div class="grid grid-cols-2 gap-2">
+				<div>
+					<input data-testid="property-state-input" bind:value={form.state} class="{inputClass} w-full" placeholder="State" />
+					{#if formErrors.state}<p class="mt-1 text-xs text-destructive" data-testid="property-state-error">{formErrors.state}</p>{/if}
+				</div>
+				<div>
+					<input data-testid="property-zip-input" bind:value={form.postalCode} class="{inputClass} w-full" placeholder="ZIP" />
+					{#if formErrors.postalCode}<p class="mt-1 text-xs text-destructive" data-testid="property-zip-error">{formErrors.postalCode}</p>{/if}
+				</div>
 			</div>
 		</div>
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="property-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
-		<button data-testid="property-form-save" onclick={submitProperty} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={savePropertyMutation.isPending}>
-			{savePropertyMutation.isPending ? 'Saving…' : 'Save Property'}
-		</button>
-	</div>
-</Dialog>
+		<div class="mt-4 flex justify-end gap-2">
+			<button data-testid="property-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
+			<button data-testid="property-form-save" onclick={submitProperty} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={savePropertyMutation.isPending}>
+				{savePropertyMutation.isPending ? 'Saving…' : 'Save Property'}
+			</button>
+		</div>
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	open={deleteTarget !== null}
