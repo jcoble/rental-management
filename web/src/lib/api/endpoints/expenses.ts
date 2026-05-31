@@ -1,13 +1,15 @@
 import type { Expense } from '$lib/types';
 import { api } from '../client';
+import { buildListQuery, type ListParams } from '../list-params';
 
 export const expenses = {
-	list: (portfolioId: number, status?: string) => {
-		const query = new URLSearchParams({ portfolioId: String(portfolioId) });
-		if (status) query.set('status', status);
-		return api.get<Expense[]>(`/expenses?${query.toString()}`);
+	list: (portfolioId: number, params?: ListParams & { propertyId?: number }) => {
+		const { propertyId, ...list } = params ?? {};
+		return api.get<Expense[]>(`/expenses${buildListQuery(list, { portfolioId, propertyId })}`);
 	},
+	get: (id: number) => api.get<Expense>(`/expenses/${id}`),
 	create: (data: Record<string, unknown>) => api.post<Expense>('/expenses', data),
 	update: (id: number, data: Record<string, unknown>) => api.patch<Expense>(`/expenses/${id}`, data),
+	delete: (id: number) => api.delete(`/expenses/${id}`),
 	summary: (portfolioId: number) => api.get(`/expenses/summary?portfolioId=${portfolioId}`),
 };
