@@ -18,6 +18,7 @@ public sealed class ScanService : IScanService
     private readonly RentalCommandDbContext _db;
     private readonly IScanFileService _files;
     private readonly IExpenseService _expenses;
+    private readonly IPaymentService _payments;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<ScanService> _logger;
 
@@ -25,12 +26,14 @@ public sealed class ScanService : IScanService
         RentalCommandDbContext db,
         IScanFileService files,
         IExpenseService expenses,
+        IPaymentService payments,
         IAuditTrailService audit,
         ILogger<ScanService> logger)
     {
         _db = db;
         _files = files;
         _expenses = expenses;
+        _payments = payments;
         _audit = audit;
         _logger = logger;
     }
@@ -89,10 +92,10 @@ public sealed class ScanService : IScanService
         if (draft.Status is "Confirmed" or "Rejected")
             return new ScanConfirmResult(false, null, $"Draft is already {draft.Status.ToLowerInvariant()}");
 
-        if (draft.TargetEntityType != "Expense")
+        if (draft.TargetEntityType is not ("Expense" or "Payment"))
             return new ScanConfirmResult(false, null, $"Unsupported target '{draft.TargetEntityType}'");
 
-        // Atomically claim the draft so two concurrent confirms can't both create an Expense.
+        // Atomically claim the draft so two concurrent confirms can't both create an entity.
         // The conditional UPDATE only matches a not-yet-finalized, not-in-flight draft; the DB
         // serializes concurrent callers so exactly one wins (affected == 1).
         var claimed = await _db.ScanDrafts
@@ -107,6 +110,57 @@ public sealed class ScanService : IScanService
         var dto = BuildReceiptDto(draft.ExtractedFields);
         ApplyOverrides(dto, overridesJson);
 
+        // ---- ROUTER ----
+        if (draft.TargetEntityType == "Payment")
+            return await ConfirmAsPaymentAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct);
+
+        // Default: Expense path (unchanged).
+        return await ConfirmAsExpenseAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct);
+    }
+
+    // -------------------------------------------------------------------------
+    // ConfirmAsExpenseAsync  (called by the router)
+    // -------------------------------------------------------------------------
+
+    private async Task<ScanConfirmResult> ConfirmAsExpenseAsync(
+        int portfolioId,
+        int draftId,
+        int userId,
+        ScanDraft draft,
+        ExtractedReceiptDto dto,
+        string overridesJson,
+        CancellationToken ct)
+    {
+        // Determine paid vs unpaid.
+        // The review UI may send is_paid explicitly; if absent, derive from document_kind.
+        bool isPaid;
+        try
+        {
+            using var overrideDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(overridesJson) ? "{}" : overridesJson);
+            var overrideRoot = overrideDoc.RootElement;
+            if (overrideRoot.TryGetProperty("is_paid", out var isPaidEl) &&
+                (isPaidEl.ValueKind == JsonValueKind.True || isPaidEl.ValueKind == JsonValueKind.False))
+            {
+                isPaid = isPaidEl.GetBoolean();
+            }
+            else
+            {
+                isPaid = dto.DocumentKind is null or "Receipt" or "Other"
+                    ? true
+                    : dto.DocumentKind is "Bill" or "Invoice" or "UtilityBill" or "PropertyTax"
+                        ? false
+                        : true; // fallback to paid for unknown kinds
+            }
+        }
+        catch
+        {
+            isPaid = dto.DocumentKind is null or "Receipt" or "Other"
+                ? true
+                : dto.DocumentKind is "Bill" or "Invoice" or "UtilityBill" or "PropertyTax"
+                    ? false
+                    : true;
+        }
+
         // Build ReceiptData JSON for the non-promoted details.
         var receiptDataJson = BuildReceiptDataJson(dto);
 
@@ -114,7 +168,6 @@ public sealed class ScanService : IScanService
         {
             Category    = dto.Category ?? ScheduleECategory.Other,
             Description = string.IsNullOrWhiteSpace(dto.VendorName) ? "Scanned receipt" : dto.VendorName!,
-            Status      = ExpenseStatus.Pending,
             Amount      = dto.Total ?? dto.Subtotal ?? 0m,
             Subtotal    = dto.Subtotal,
             TaxAmount   = dto.Tax,
@@ -123,6 +176,19 @@ public sealed class ScanService : IScanService
             Notes       = dto.Notes,
             ReceiptData = receiptDataJson,
         };
+
+        if (isPaid)
+        {
+            request.Status  = ExpenseStatus.Paid;
+            request.PaidAt  = dto.TransactionDate ?? DateTime.UtcNow;
+            request.DueDate = null;
+        }
+        else
+        {
+            request.Status  = ExpenseStatus.Pending;
+            request.DueDate = dto.DueDate;
+            request.PaidAt  = null;
+        }
 
         ExpenseResponse? expense;
         try
@@ -137,28 +203,12 @@ public sealed class ScanService : IScanService
 
         if (expense is null)
         {
-            // Release the claim so the user can retry from the review page.
-            await _db.ScanDrafts
-                .Where(d => d.Id == draftId && d.PortfolioId == portfolioId && d.Status == "Confirming")
-                .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, "Reviewing"), ct);
+            await ReleaseClaim(portfolioId, draftId, ct);
             return new ScanConfirmResult(false, null, "Expense creation failed");
         }
 
-        // Re-key the uploaded file to the new Expense and finalize the draft.
-        await _db.StoredFiles
-            .Where(f => f.PortfolioId == portfolioId && f.FilePath == draft.FilePath)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(f => f.EntityType, "Expense")
-                .SetProperty(f => f.EntityId, (int?)expense.Id), ct);
+        await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "Expense", expense.Id, ct);
 
-        await _db.ScanDrafts
-            .Where(d => d.Id == draftId && d.PortfolioId == portfolioId)
-            .ExecuteUpdateAsync(s => s
-                .SetProperty(d => d.Status, "Confirmed")
-                .SetProperty(d => d.ConfirmedAt, (DateTime?)DateTime.UtcNow)
-                .SetProperty(d => d.ReviewedBy, userId.ToString()), ct);
-
-        // Audit the values actually applied (post-override), with the raw extraction as the prior state.
         var appliedJson = JsonSerializer.Serialize(new
         {
             vendorName      = dto.VendorName,
@@ -183,6 +233,136 @@ public sealed class ScanService : IScanService
             ct: ct);
 
         return new ScanConfirmResult(true, expense.Id, null);
+    }
+
+    // -------------------------------------------------------------------------
+    // ConfirmAsPaymentAsync  (called by the router)
+    // -------------------------------------------------------------------------
+
+    private async Task<ScanConfirmResult> ConfirmAsPaymentAsync(
+        int portfolioId,
+        int draftId,
+        int userId,
+        ScanDraft draft,
+        ExtractedReceiptDto dto,
+        string overridesJson,
+        CancellationToken ct)
+    {
+        // The review UI must supply a leaseId for payment routing.
+        int leaseId = 0;
+        try
+        {
+            using var overrideDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(overridesJson) ? "{}" : overridesJson);
+            var overrideRoot = overrideDoc.RootElement;
+            if (TryGetOverrideInt(overrideRoot, out var lid, "leaseId", "lease_id"))
+                leaseId = lid;
+        }
+        catch { /* leave leaseId == 0 */ }
+
+        if (leaseId <= 0)
+        {
+            await ReleaseClaim(portfolioId, draftId, ct);
+            return new ScanConfirmResult(false, null, "Select a lease for this payment");
+        }
+
+        // Build notes from payer name + any free-text notes on the document.
+        var notes = string.Join(" — ",
+            new[] { dto.PayerName, dto.Notes }
+                .Where(s => !string.IsNullOrWhiteSpace(s)));
+
+        var paymentDate = dto.TransactionDate ?? DateTime.UtcNow;
+
+        var paymentRequest = new CreatePaymentRequest
+        {
+            LeaseId           = leaseId,
+            PaymentType       = PaymentType.Rent,
+            Status            = PaymentStatus.Paid,
+            Amount            = dto.Total ?? dto.Subtotal ?? 0m,
+            DueDate           = paymentDate,
+            PaidDate          = paymentDate,
+            Method            = "Check",
+            ExternalReference = dto.CheckNumber,
+            Notes             = string.IsNullOrWhiteSpace(notes) ? null : notes,
+        };
+
+        PaymentResponse? payment;
+        try
+        {
+            payment = await _payments.CreateAsync(portfolioId, paymentRequest, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Payment creation threw while confirming scan draft {DraftId}", draftId);
+            payment = null;
+        }
+
+        if (payment is null)
+        {
+            await ReleaseClaim(portfolioId, draftId, ct);
+            return new ScanConfirmResult(false, null, "Payment creation failed");
+        }
+
+        await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "Payment", payment.Id, ct);
+
+        var appliedJson = JsonSerializer.Serialize(new
+        {
+            payerName         = dto.PayerName,
+            checkNumber       = dto.CheckNumber,
+            bankName          = dto.BankName,
+            amount            = dto.Total ?? dto.Subtotal,
+            transactionDate   = dto.TransactionDate,
+            leaseId,
+        });
+
+        await _audit.LogAsync(
+            portfolioId,
+            "Payment",
+            payment.Id,
+            AuditLogOperation.Created,
+            userId: userId,
+            oldValues: draft.ExtractedFields,
+            newValues: appliedJson,
+            changeReason: "Created from scan draft #" + draftId,
+            ct: ct);
+
+        return new ScanConfirmResult(true, payment.Id, null);
+    }
+
+    // -------------------------------------------------------------------------
+    // Shared finalize helpers
+    // -------------------------------------------------------------------------
+
+    /// <summary>Releases the "Confirming" claim back to "Reviewing" so the user can retry.</summary>
+    private Task ReleaseClaim(int portfolioId, int draftId, CancellationToken ct) =>
+        _db.ScanDrafts
+            .Where(d => d.Id == draftId && d.PortfolioId == portfolioId && d.Status == "Confirming")
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, "Reviewing"), ct);
+
+    /// <summary>
+    /// Re-keys the StoredFile to the newly created entity, then marks the draft Confirmed.
+    /// Called by both Expense and Payment branches after successful entity creation.
+    /// </summary>
+    private async Task FinalizeDraft(
+        int portfolioId,
+        int draftId,
+        int userId,
+        string filePath,
+        string entityType,
+        int entityId,
+        CancellationToken ct)
+    {
+        await _db.StoredFiles
+            .Where(f => f.PortfolioId == portfolioId && f.FilePath == filePath)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(f => f.EntityType, entityType)
+                .SetProperty(f => f.EntityId, (int?)entityId), ct);
+
+        await _db.ScanDrafts
+            .Where(d => d.Id == draftId && d.PortfolioId == portfolioId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(d => d.Status, "Confirmed")
+                .SetProperty(d => d.ConfirmedAt, (DateTime?)DateTime.UtcNow)
+                .SetProperty(d => d.ReviewedBy, userId.ToString()), ct);
     }
 
     // -------------------------------------------------------------------------
@@ -283,7 +463,23 @@ public sealed class ScanService : IScanService
                 dto.Category = category;
             }
 
+            dto.DocumentKind = ReadFieldValue(root, "document_kind");
+
+            var dueDateStr = ReadFieldValue(root, "due_date");
+            if (!string.IsNullOrWhiteSpace(dueDateStr) &&
+                DateTime.TryParse(dueDateStr, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var dueDate))
+            {
+                dto.DueDate = dueDate;
+            }
+
             dto.Notes = ReadFieldValue(root, "notes");
+
+            // ---- Rent check fields ----
+            dto.PayerName   = ReadFieldValue(root, "payer_name");
+            dto.CheckNumber = ReadFieldValue(root, "check_number");
+            dto.BankName    = ReadFieldValue(root, "bank_name");
 
             // ---- Line items ----
             // line_items is stored as {"value":"[...]","confidence":0.9} where value is a JSON array string.
@@ -395,6 +591,8 @@ public sealed class ScanService : IScanService
 
             var obj = new
             {
+                documentKind  = dto.DocumentKind,
+                dueDate       = dto.DueDate,
                 vendor = new
                 {
                     address = dto.VendorAddress,
@@ -507,6 +705,27 @@ public sealed class ScanService : IScanService
             {
                 dto.Category = parsedCat;
             }
+
+            if (TryGetOverrideString(root, out var dueDateStr2, "dueDate", "due_date") &&
+                DateTime.TryParse(dueDateStr2, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var overrideDueDate))
+            {
+                dto.DueDate = overrideDueDate;
+            }
+
+            if (TryGetOverrideString(root, out var documentKind, "documentKind", "document_kind"))
+                dto.DocumentKind = documentKind;
+
+            // ---- Rent check fields ----
+            if (TryGetOverrideString(root, out var payerName, "payerName", "payer_name"))
+                dto.PayerName = payerName;
+
+            if (TryGetOverrideString(root, out var checkNumber, "checkNumber", "check_number"))
+                dto.CheckNumber = checkNumber;
+
+            if (TryGetOverrideString(root, out var bankName, "bankName", "bank_name"))
+                dto.BankName = bankName;
         }
         catch (Exception ex)
         {
@@ -543,6 +762,22 @@ public sealed class ScanService : IScanService
             }
         }
         value = 0m;
+        return false;
+    }
+
+    /// <summary>First present key wins. Accepts a JSON integer number or a numeric string.</summary>
+    private static bool TryGetOverrideInt(JsonElement root, out int value, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (root.TryGetProperty(key, out var el))
+            {
+                if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out value)) return true;
+                if (el.ValueKind == JsonValueKind.String &&
+                    int.TryParse(el.GetString(), out value)) return true;
+            }
+        }
+        value = 0;
         return false;
     }
 }
