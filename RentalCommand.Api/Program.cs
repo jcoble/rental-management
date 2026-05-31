@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -21,6 +22,20 @@ builder.Services.Configure<ApiKeySettings>(builder.Configuration.GetSection(ApiK
 builder.Services.Configure<SeedSettings>(builder.Configuration.GetSection(SeedSettings.SectionName));
 
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
+
+// Fail fast on an unconfigured signing key. HS256 needs >= 256 bits (32 chars), and the
+// committed placeholder must never be used outside local dev — otherwise anyone could
+// forge tokens. The placeholder stays usable in Development so local dev needs no secret.
+if (string.IsNullOrWhiteSpace(jwtSettings.SecretKey) || jwtSettings.SecretKey.Length < 32)
+{
+    throw new InvalidOperationException(
+        "Jwt:SecretKey is missing or too short (need >= 32 chars). Set it via configuration or a secret store.");
+}
+if (!builder.Environment.IsDevelopment() && jwtSettings.SecretKey.Contains("CHANGE_ME_IN_PRODUCTION"))
+{
+    throw new InvalidOperationException(
+        "Jwt:SecretKey is still the committed placeholder. Set a real secret (env Jwt__SecretKey or a secret store) before deploying.");
+}
 
 // --- Database ---
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
@@ -114,11 +129,22 @@ builder.Services.AddCors(options =>
     });
 });
 
-builder.Services.AddControllers();
+// Serialize/accept enums as their string names (e.g. "InProgress", "Normal") rather than
+// integers, matching what the SvelteKit client sends and renders. Without this the API
+// binds enums as numbers and 400s on the client's string enum values.
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    });
 builder.Services.AddHealthChecks();
 
 // --- SignalR (realtime hubs) + DataUpdateService broadcaster ---
-builder.Services.AddSignalR().AddJsonProtocol();
+// Mirror the REST enum-as-string convention on realtime payloads too.
+builder.Services.AddSignalR().AddJsonProtocol(options =>
+{
+    options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+});
 builder.Services.AddScoped<IDataUpdateService, DataUpdateService>();
 builder.Services.AddScoped<INotificationHubService, NotificationHubService>();
 
