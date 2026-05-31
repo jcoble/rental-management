@@ -256,6 +256,12 @@
 					{#if data.modelId}
 						<span class="ml-2 text-xs text-muted-foreground">via {data.modelId}</span>
 					{/if}
+					{#if data.tokensUsed != null}
+						<span class="ml-1 text-xs text-muted-foreground">· {data.tokensUsed.toLocaleString()} tokens</span>
+					{/if}
+					{#if data.costUsd != null}
+						<span class="ml-1 text-xs text-muted-foreground">· ~${data.costUsd.toFixed(4)}</span>
+					{/if}
 				</div>
 				<div class="flex-1 space-y-4 overflow-y-auto p-4">
 					{#if data.fields.length === 0}
