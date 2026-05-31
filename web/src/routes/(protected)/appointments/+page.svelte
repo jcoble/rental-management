@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { goto } from '$app/navigation';
 	import { appointments } from '$lib/api/endpoints/appointments';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
@@ -11,12 +12,13 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
-	import Pagination from '$lib/components/shared/Pagination.svelte';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import { DataGrid } from '$lib/components/data-grid';
+	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import * as Card from '$lib/components/ui/card';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -26,11 +28,13 @@
 	const PAGE_SIZE = 20;
 	let search = $state('');
 	let typeFilter = $state('');
+	let statusFilter = $state('');
 	let skip = $state(0);
 	const debouncedSearch = debounced(() => search, 300);
 	$effect(() => {
 		debouncedSearch.value;
 		typeFilter;
+		statusFilter;
 		skip = 0;
 	});
 
@@ -119,8 +123,31 @@
 		saveMutation.mutate({ id: editingId, data: { portfolioId, ...result.data } });
 	}
 
-	const list = $derived((appointmentsQuery.data ?? []).filter((a) => !typeFilter || a.type === typeFilter));
+	const list = $derived((appointmentsQuery.data ?? []).filter((a) =>
+		(!typeFilter || a.type === typeFilter) && (!statusFilter || a.status === statusFilter)
+	));
+
+	// Default sort by scheduledStart ascending
+	let gridPage = $state(1);
+
+	const columns: ColumnDef<Appointment>[] = [
+		{ key: 'title', title: 'Title', sortable: true, mobileRole: 'title' },
+		{ key: 'type', title: 'Type', mobileRole: 'meta' },
+		{ key: 'scheduledStart', title: 'When', format: 'datetime', sortable: true, mobileRole: 'subtitle' },
+		{ key: 'propertyName', title: 'Property', mobileRole: 'meta' },
+		{ key: 'tenantName', title: 'Tenant', mobileRole: 'meta' },
+		{
+			key: 'status',
+			title: 'Status',
+			mobileRole: 'badge',
+			cell: statusCellSnippet,
+		},
+	];
 </script>
+
+{#snippet statusCellSnippet(appt: Appointment)}
+	<StatusBadge status={appt.status} />
+{/snippet}
 
 <svelte:head>
 	<title>Appointments - Rental Command</title>
@@ -132,58 +159,47 @@
 			<h1 class="text-2xl font-bold">Appointments</h1>
 			<p class="text-sm text-muted-foreground">Showings, move-ins, inspections, and service visits.</p>
 		</div>
-		<Button data-testid="appointment-create-button" class="gap-2" onclick={openCreate}>
-			<Plus class="h-4 w-4" />
-			New Appointment
-		</Button>
 	</div>
 
-	<div class="mb-4 flex flex-wrap items-center gap-3">
-		<div class="max-w-sm flex-1"><SearchInput bind:value={search} placeholder="Search appointments…" testid="appointment-search" /></div>
-		<Select.Root type="single" bind:value={typeFilter}>
-			<Select.Trigger class="w-full max-w-[180px]" data-testid="appointment-type-filter">
-				{typeFilter ? typeFilter : 'All types'}
-			</Select.Trigger>
-			<Select.Content>
-				<Select.Item value="" label="All types">All types</Select.Item>
-				{#each APPT_TYPES as t}<Select.Item value={t} label={t}>{t}</Select.Item>{/each}
-			</Select.Content>
-		</Select.Root>
-	</div>
-
-	<div class="grid gap-3" data-testid="appointments-list">
-		{#if appointmentsQuery.isLoading}
-			<Card.Root data-testid="appointments-loading"><Card.Content class="p-6 text-center text-muted-foreground">Loading…</Card.Content></Card.Root>
-		{:else if list.length === 0}
-			<Card.Root data-testid="appointments-empty"><Card.Content class="p-6 text-center text-muted-foreground">No appointments found.</Card.Content></Card.Root>
-		{:else}
-			{#each list as appointment (appointment.id)}
-				<Card.Root class="gap-0 py-0" data-testid="appointment-row" data-appointment-id={appointment.id}>
-					<Card.Content class="p-4">
-						<div class="flex items-center justify-between gap-2">
-							<div class="min-w-0">
-								<p class="truncate font-medium" data-testid="appointment-title">{appointment.title}</p>
-								<p class="text-xs text-muted-foreground">{new Date(appointment.scheduledStart).toLocaleString()} · {appointment.type}</p>
-							</div>
-							<div class="flex shrink-0 items-center gap-1">
-								<span class="rounded border border-border bg-background px-2 py-0.5 text-xs">{appointment.status}</span>
-								{#if appointment.status !== 'Completed'}
-									<Button variant="outline" size="sm" data-testid="appointment-complete" onclick={() => statusMutation.mutate({ id: appointment.id, status: 'Completed' })}>Complete</Button>
-								{/if}
-								<Button variant="ghost" size="icon" data-testid="appointment-edit" aria-label="Edit appointment" onclick={() => openEdit(appointment)}><Pencil class="h-4 w-4" /></Button>
-								<Button variant="ghost" size="icon" data-testid="appointment-delete" aria-label="Delete appointment" onclick={() => (deleteTarget = appointment)}><Trash2 class="h-4 w-4" /></Button>
-							</div>
-						</div>
-						<p class="mt-1 text-xs text-muted-foreground">{appointment.propertyName || 'No property'} · {appointment.tenantName || appointment.prospectName || 'No contact'}</p>
-					</Card.Content>
-				</Card.Root>
-			{/each}
-		{/if}
-	</div>
-
-	<div class="mt-4">
-		<Pagination bind:skip take={PAGE_SIZE} count={appointmentsQuery.data?.length ?? 0} testid="appointment-pagination" />
-	</div>
+	<DataGrid
+		data={list}
+		{columns}
+		loading={appointmentsQuery.isLoading}
+		emptyMessage="No appointments found."
+		getRowKey={(a) => a.id}
+		onRowClick={(a) => goto('/appointments/' + a.id)}
+		bind:page={gridPage}
+		pageSize={PAGE_SIZE}
+		data-testid="appointments-list"
+	>
+		{#snippet toolbar()}
+			<div class="max-w-sm flex-1">
+				<SearchInput bind:value={search} placeholder="Search appointments…" testid="appointment-search" />
+			</div>
+			<Select.Root type="single" bind:value={typeFilter}>
+				<Select.Trigger class="w-full max-w-[180px]" data-testid="appointment-type-filter">
+					{typeFilter ? typeFilter : 'All types'}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="" label="All types">All types</Select.Item>
+					{#each APPT_TYPES as t}<Select.Item value={t} label={t}>{t}</Select.Item>{/each}
+				</Select.Content>
+			</Select.Root>
+			<Select.Root type="single" bind:value={statusFilter}>
+				<Select.Trigger class="w-full max-w-[180px]" data-testid="appointment-status-filter">
+					{statusFilter ? statusFilter : 'All statuses'}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="" label="All statuses">All statuses</Select.Item>
+					{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
+				</Select.Content>
+			</Select.Root>
+			<Button data-testid="appointment-create-button" class="ml-auto gap-2" onclick={openCreate}>
+				<Plus class="h-4 w-4" />
+				New Appointment
+			</Button>
+		{/snippet}
+	</DataGrid>
 </div>
 
 <Dialog.Root
@@ -259,7 +275,7 @@
 <ConfirmDialog
 	open={deleteTarget !== null}
 	title="Delete appointment"
-	message={deleteTarget ? `Delete “${deleteTarget.title}”?` : ''}
+	message={deleteTarget ? `Delete "${deleteTarget.title}"?` : ''}
 	busy={deleteMutation.isPending}
 	testid="appointment-delete"
 	onconfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}

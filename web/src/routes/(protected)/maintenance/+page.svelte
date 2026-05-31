@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { goto } from '$app/navigation';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import { inspections } from '$lib/api/endpoints/inspections';
 	import { properties } from '$lib/api/endpoints/properties';
@@ -11,7 +12,10 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
-	import { Plus, ShieldCheck, Pencil, Trash2 } from '@lucide/svelte';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import { DataGrid } from '$lib/components/data-grid';
+	import type { ColumnDef } from '$lib/components/data-grid/types';
+	import { Plus, ShieldCheck } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -24,6 +28,7 @@
 
 	let woSearch = $state('');
 	let woStatusFilter = $state('');
+	let woPriorityFilter = $state('');
 	const debouncedWoSearch = debounced(() => woSearch, 300);
 
 	const workOrdersQuery = createQuery(() => ({
@@ -51,15 +56,6 @@
 		onSuccess: (_r, vars) => {
 			showSuccess(vars.id == null ? 'Work order created.' : 'Work order updated.');
 			closeWoForm();
-			invalidateWo();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	const woStatusMutation = createMutation(() => ({
-		mutationFn: ({ id, status }: { id: number; status: string }) => workOrders.updateStatus(id, status),
-		onSuccess: () => {
-			showSuccess('Work order status updated.');
 			invalidateWo();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -129,15 +125,72 @@
 		createInspectionMutation.mutate({ portfolioId, ...result.data });
 	}
 
-	const woList = $derived((workOrdersQuery.data ?? []).filter((w) => !woStatusFilter || w.status === woStatusFilter));
+	// Work orders with client-side status + priority filter
+	const woList = $derived.by(() => {
+		const all = workOrdersQuery.data ?? [];
+		return all.filter((w) => {
+			if (woStatusFilter && w.status !== woStatusFilter) return false;
+			if (woPriorityFilter && w.priority !== woPriorityFilter) return false;
+			return true;
+		});
+	});
+
+	// DataGrid column definitions — cell snippets referenced below in template
+	const woColumns: ColumnDef<WorkOrder>[] = [
+		{
+			key: 'title',
+			title: 'Title',
+			sortable: true,
+			mobileRole: 'title',
+			cell: titleCellSnippet,
+		},
+		{
+			key: 'propertyName',
+			title: 'Property',
+			sortable: true,
+			mobileRole: 'subtitle',
+			accessor: (wo) => wo.propertyName ?? '—',
+		},
+		{
+			key: 'priority',
+			title: 'Priority',
+			mobileRole: 'badge',
+			cell: priorityCellSnippet,
+		},
+		{
+			key: 'status',
+			title: 'Status',
+			mobileRole: 'badge',
+			cell: statusCellSnippet,
+		},
+		{
+			key: 'requestedAt',
+			title: 'Requested',
+			format: 'date',
+			sortable: true,
+			mobileRole: 'meta',
+		},
+	];
 </script>
+
+{#snippet titleCellSnippet(wo: WorkOrder)}
+	<span data-testid="work-order-title">{wo.title}</span>
+{/snippet}
+
+{#snippet priorityCellSnippet(wo: WorkOrder)}
+	<StatusBadge status={wo.priority} />
+{/snippet}
+
+{#snippet statusCellSnippet(wo: WorkOrder)}
+	<StatusBadge status={wo.status} />
+{/snippet}
 
 <svelte:head>
 	<title>Maintenance - Rental Command</title>
 </svelte:head>
 
 <div class="h-full overflow-y-auto p-6" data-testid="maintenance-page">
-	<div class="mb-4 flex items-center justify-between gap-3">
+	<div class="mb-6 flex items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold">Maintenance & Inspections</h1>
 			<p class="text-sm text-muted-foreground">Track resident requests, vendor execution, and compliance checks.</p>
@@ -148,51 +201,50 @@
 		</div>
 	</div>
 
-	<div class="mb-4 flex flex-wrap items-center gap-3">
-		<div class="max-w-sm flex-1"><SearchInput bind:value={woSearch} placeholder="Search work orders…" testid="work-order-search" /></div>
-		<Select.Root type="single" bind:value={woStatusFilter}>
-			<Select.Trigger class="w-40" data-testid="work-order-status-filter">
-				{woStatusFilter ? woStatusFilter : 'All statuses'}
-			</Select.Trigger>
-			<Select.Content>
-				<Select.Item value="" label="All statuses">All statuses</Select.Item>
-				{#each WO_STATUSES as s}
-					<Select.Item value={s} label={s}>{s}</Select.Item>
-				{/each}
-			</Select.Content>
-		</Select.Root>
-	</div>
-
-	<div class="grid gap-4 lg:grid-cols-2">
-		<Card.Root class="gap-0 py-0">
-			<Card.Header class="border-b border-border px-4 py-3">
-				<Card.Title class="text-base font-semibold">Work Orders</Card.Title>
-			</Card.Header>
-			<Card.Content class="max-h-[55vh] space-y-2 overflow-y-auto p-3" data-testid="work-orders-list">
-				{#if workOrdersQuery.isLoading}
-					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="work-orders-loading">Loading…</p>
-				{:else if woList.length === 0}
-					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="work-orders-empty">No work orders found.</p>
-				{:else}
-					{#each woList as wo (wo.id)}
-						<div class="rounded border border-border bg-background p-3 text-sm" data-testid="work-order-row" data-work-order-id={wo.id}>
-							<div class="flex items-center justify-between gap-2">
-								<p class="font-medium" data-testid="work-order-title">{wo.title}</p>
-								<span class="text-xs">{wo.priority}</span>
-							</div>
-							<p class="text-xs text-muted-foreground">{wo.propertyName} · {wo.category} · {wo.status}</p>
-							<div class="mt-2 flex flex-wrap gap-2">
-								<Button data-testid="work-order-set-progress" variant="outline" size="sm" onclick={() => woStatusMutation.mutate({ id: wo.id, status: 'InProgress' })}>In Progress</Button>
-								<Button data-testid="work-order-set-complete" variant="outline" size="sm" onclick={() => woStatusMutation.mutate({ id: wo.id, status: 'Completed' })}>Complete</Button>
-								<Button data-testid="work-order-edit" variant="outline" size="icon" aria-label="Edit work order" onclick={() => openEditWo(wo)}><Pencil class="h-3.5 w-3.5" /></Button>
-								<Button data-testid="work-order-delete" variant="outline" size="icon" aria-label="Delete work order" class="hover:text-destructive" onclick={() => (woDeleteTarget = wo)}><Trash2 class="h-3.5 w-3.5" /></Button>
-							</div>
-						</div>
+	<!-- Work Orders DataGrid -->
+	<DataGrid
+		data={woList}
+		columns={woColumns}
+		loading={workOrdersQuery.isLoading}
+		emptyMessage="No work orders found."
+		onRowClick={(wo) => goto('/maintenance/' + wo.id)}
+		getRowKey={(wo) => wo.id}
+		data-testid="work-orders-list"
+	>
+		{#snippet toolbar()}
+			<div class="flex flex-1 items-center gap-2 min-w-0">
+				<SearchInput bind:value={woSearch} placeholder="Search work orders…" testid="work-order-search" />
+			</div>
+			<Select.Root type="single" bind:value={woStatusFilter}>
+				<Select.Trigger class="w-40 shrink-0" data-testid="work-order-status-filter">
+					{woStatusFilter ? woStatusFilter : 'All statuses'}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="" label="All statuses">All statuses</Select.Item>
+					{#each WO_STATUSES as s}
+						<Select.Item value={s} label={s}>{s}</Select.Item>
 					{/each}
-				{/if}
-			</Card.Content>
-		</Card.Root>
+				</Select.Content>
+			</Select.Root>
+			<Select.Root type="single" bind:value={woPriorityFilter}>
+				<Select.Trigger class="w-36 shrink-0" data-testid="work-order-priority-filter">
+					{woPriorityFilter ? woPriorityFilter : 'All priorities'}
+				</Select.Trigger>
+				<Select.Content>
+					<Select.Item value="" label="All priorities">All priorities</Select.Item>
+					{#each WO_PRIORITIES as p}
+						<Select.Item value={p} label={p}>{p}</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
+			<Button data-testid="work-order-create-button-toolbar" class="shrink-0" onclick={openCreateWo}>
+				<Plus class="h-4 w-4" /> New work order
+			</Button>
+		{/snippet}
+	</DataGrid>
 
+	<!-- Inspections section (unchanged) -->
+	<div class="mt-6">
 		<Card.Root class="gap-0 py-0">
 			<Card.Header class="border-b border-border px-4 py-3">
 				<Card.Title class="text-base font-semibold">Inspections</Card.Title>
@@ -212,6 +264,7 @@
 	</div>
 </div>
 
+<!-- Work order create/edit dialog -->
 <Dialog.Root
 	open={showWoForm}
 	onOpenChange={(v) => { if (!v) closeWoForm(); }}
@@ -266,6 +319,7 @@
 	</Dialog.Content>
 </Dialog.Root>
 
+<!-- Inspection create dialog -->
 <Dialog.Root
 	open={showInspectionForm}
 	onOpenChange={(v) => { if (!v) showInspectionForm = false; }}

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { goto } from '$app/navigation';
 	import { leases } from '$lib/api/endpoints/leases';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
@@ -8,15 +9,16 @@
 	import { leaseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
+	import { DataGrid } from '$lib/components/data-grid';
+	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
-	import Pagination from '$lib/components/shared/Pagination.svelte';
-	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import { Plus } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import * as Card from '$lib/components/ui/card';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -163,7 +165,61 @@
 				`${tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.firstName} ${tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.lastName}`)
 			: ''
 	);
+
+	// DataGrid column definitions
+	const columns: ColumnDef<Lease>[] = [
+		{
+			key: 'leaseNumber',
+			title: 'Lease #',
+			sortable: true,
+			mobileRole: 'title',
+		},
+		{
+			key: 'tenantName',
+			title: 'Tenant',
+			sortable: true,
+			mobileRole: 'subtitle',
+			accessor: (l) => l.tenantName ?? '—',
+		},
+		{
+			key: 'unitNumber',
+			title: 'Unit',
+			mobileRole: 'meta',
+			accessor: (l) => l.unitNumber ?? '—',
+		},
+		{
+			key: 'monthlyRent',
+			title: 'Rent',
+			format: 'currency',
+			sortable: true,
+			mobileRole: 'metric',
+		},
+		{
+			key: 'startDate',
+			title: 'Start',
+			format: 'date',
+			sortable: true,
+			mobileRole: 'meta',
+		},
+		{
+			key: 'endDate',
+			title: 'End',
+			format: 'date',
+			sortable: true,
+			mobileRole: 'meta',
+		},
+		{
+			key: 'status',
+			title: 'Status',
+			mobileRole: 'badge',
+			cell: statusCell,
+		},
+	];
 </script>
+
+{#snippet statusCell(lease: Lease)}
+	<StatusBadge status={lease.status} />
+{/snippet}
 
 <svelte:head>
 	<title>Leases - Rental Command</title>
@@ -175,82 +231,40 @@
 			<h1 class="text-2xl font-bold">Leases</h1>
 			<p class="text-sm text-muted-foreground">Lease lifecycle, rent terms, and status updates.</p>
 		</div>
-		<Button data-testid="lease-create-button" onclick={openCreate} class="gap-2">
-			<Plus class="h-4 w-4" />
-			New Lease
-		</Button>
 	</div>
 
-	<div class="mb-4 flex flex-wrap items-center gap-3">
-		<div class="max-w-sm flex-1"><SearchInput bind:value={search} placeholder="Search leases…" testid="lease-search" /></div>
-		<Select.Root type="single" bind:value={statusFilter}>
-			<Select.Trigger class="w-[180px]" data-testid="lease-status-filter">
-				{statusFilter ? statusFilter : 'All statuses'}
-			</Select.Trigger>
-			<Select.Content>
-				<Select.Item value="" label="All statuses">All statuses</Select.Item>
-				{#each LEASE_STATUSES as s}
-					<Select.Item value={s} label={s}>{s}</Select.Item>
-				{/each}
-			</Select.Content>
-		</Select.Root>
-	</div>
-
-	<Card.Root class="gap-0 py-0">
-		<Card.Content class="p-0">
-			<div class="overflow-x-auto">
-				<table class="min-w-full text-sm">
-					<thead class="border-b border-border bg-background text-left text-xs uppercase text-muted-foreground">
-						<tr>
-							<th class="px-3 py-2">Lease</th>
-							<th class="px-3 py-2">Tenant</th>
-							<th class="px-3 py-2">Unit</th>
-							<th class="px-3 py-2">Rent</th>
-							<th class="px-3 py-2">Term</th>
-							<th class="px-3 py-2">Status</th>
-							<th class="px-3 py-2 text-right">Actions</th>
-						</tr>
-					</thead>
-					<tbody data-testid="leases-list">
-						{#if leasesQuery.isLoading}
-							<tr><td colspan="7" class="px-3 py-6 text-center text-muted-foreground" data-testid="leases-loading">Loading…</td></tr>
-						{:else if list.length === 0}
-							<tr><td colspan="7" class="px-3 py-6 text-center text-muted-foreground" data-testid="leases-empty">No leases found.</td></tr>
-						{:else}
-							{#each list as lease (lease.id)}
-								<tr class="border-b border-border/70" data-testid="lease-row" data-lease-id={lease.id}>
-									<td class="px-3 py-2 font-medium" data-testid="lease-number">{lease.leaseNumber}</td>
-									<td class="px-3 py-2">{lease.tenantName || '—'}</td>
-									<td class="px-3 py-2">{lease.propertyName} · {lease.unitNumber}</td>
-									<td class="px-3 py-2">${lease.monthlyRent}</td>
-									<td class="px-3 py-2 text-muted-foreground">{new Date(lease.startDate).toLocaleDateString()} - {new Date(lease.endDate).toLocaleDateString()}</td>
-									<td class="px-3 py-2" data-testid="lease-status">{lease.status}</td>
-									<td class="px-3 py-2">
-										<div class="flex justify-end gap-1">
-											{#if lease.status !== 'Active'}
-												<Button data-testid="lease-set-active" variant="outline" size="sm" onclick={() => statusMutation.mutate({ id: lease.id, status: 'Active' })}>Set Active</Button>
-											{:else}
-												<Button data-testid="lease-give-notice" variant="outline" size="sm" onclick={() => statusMutation.mutate({ id: lease.id, status: 'NoticeGiven' })}>Give Notice</Button>
-											{/if}
-											<Button data-testid="lease-edit" variant="ghost" size="icon" aria-label="Edit lease" onclick={() => openEdit(lease)}>
-												<Pencil class="h-4 w-4" />
-											</Button>
-											<Button data-testid="lease-delete" variant="ghost" size="icon" aria-label="Delete lease" onclick={() => (deleteTarget = lease)}>
-												<Trash2 class="h-4 w-4" />
-											</Button>
-										</div>
-									</td>
-								</tr>
-							{/each}
-						{/if}
-					</tbody>
-				</table>
+	<DataGrid
+		data={list}
+		{columns}
+		loading={leasesQuery.isLoading}
+		emptyMessage="No leases found."
+		onRowClick={(lease) => goto('/leases/' + lease.id)}
+		getRowKey={(l) => l.id}
+		data-testid="leases-list"
+	>
+		{#snippet toolbar()}
+			<div class="flex flex-1 flex-wrap items-center gap-2">
+				<div class="max-w-sm flex-1">
+					<SearchInput bind:value={search} placeholder="Search leases…" testid="lease-search" />
+				</div>
+				<Select.Root type="single" bind:value={statusFilter}>
+					<Select.Trigger class="w-[180px]" data-testid="lease-status-filter">
+						{statusFilter ? statusFilter : 'All statuses'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="All statuses">All statuses</Select.Item>
+						{#each LEASE_STATUSES as s}
+							<Select.Item value={s} label={s}>{s}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
 			</div>
-			<div class="border-t border-border px-3 py-2">
-				<Pagination bind:skip take={PAGE_SIZE} count={leasesQuery.data?.length ?? 0} testid="lease-pagination" />
-			</div>
-		</Card.Content>
-	</Card.Root>
+			<Button data-testid="lease-create-button" class="shrink-0 gap-2" onclick={openCreate}>
+				<Plus class="h-4 w-4" />
+				New Lease
+			</Button>
+		{/snippet}
+	</DataGrid>
 </div>
 
 <Dialog.Root
