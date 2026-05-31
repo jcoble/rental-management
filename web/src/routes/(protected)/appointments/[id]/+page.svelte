@@ -18,6 +18,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { Pencil, Trash2, CalendarCheck, CheckCircle, XCircle, UserX } from '@lucide/svelte';
+	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -304,6 +305,11 @@
 				</dl>
 			</Card.Content>
 		</Card.Root>
+
+		<!-- Documents section -->
+		<div class="mt-6" data-testid="appointment-detail-documents">
+			<DocumentsPanel entityType="Appointment" entityId={id} />
+		</div>
 	{/if}
 </div>
 
