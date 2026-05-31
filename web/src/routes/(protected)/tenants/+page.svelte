@@ -96,7 +96,7 @@
 	}
 
 	const list = $derived(tenantsQuery.data ?? []);
-	const inputClass = 'rounded border border-border bg-bg px-3 py-2 text-sm';
+	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
 </script>
 
 <svelte:head>
@@ -107,9 +107,9 @@
 	<div class="mb-4 flex items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold">Tenants</h1>
-			<p class="text-sm text-text-secondary">Resident contacts and lease participation.</p>
+			<p class="text-sm text-muted-foreground">Resident contacts and lease participation.</p>
 		</div>
-		<button data-testid="tenant-create-button" class="inline-flex items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm text-white" onclick={openCreate}>
+		<button data-testid="tenant-create-button" class="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-white" onclick={openCreate}>
 			<Plus class="h-4 w-4" />
 			New Tenant
 		</button>
@@ -119,10 +119,10 @@
 		<SearchInput bind:value={search} placeholder="Search tenants…" testid="tenant-search" />
 	</div>
 
-	<div class="rounded-lg border border-border bg-surface">
+	<div class="rounded-lg border border-border bg-card">
 		<div class="overflow-x-auto">
 			<table class="min-w-full text-sm">
-				<thead class="border-b border-border bg-bg text-left text-xs uppercase text-text-tertiary">
+				<thead class="border-b border-border bg-background text-left text-xs uppercase text-muted-foreground">
 					<tr>
 						<th class="px-3 py-2">Name</th>
 						<th class="px-3 py-2">Email</th>
@@ -134,23 +134,23 @@
 				</thead>
 				<tbody data-testid="tenants-list">
 					{#if tenantsQuery.isLoading}
-						<tr><td colspan="6" class="px-3 py-6 text-center text-text-secondary" data-testid="tenants-loading">Loading…</td></tr>
+						<tr><td colspan="6" class="px-3 py-6 text-center text-muted-foreground" data-testid="tenants-loading">Loading…</td></tr>
 					{:else if list.length === 0}
-						<tr><td colspan="6" class="px-3 py-6 text-center text-text-secondary" data-testid="tenants-empty">No tenants found.</td></tr>
+						<tr><td colspan="6" class="px-3 py-6 text-center text-muted-foreground" data-testid="tenants-empty">No tenants found.</td></tr>
 					{:else}
 						{#each list as tenant (tenant.id)}
 							<tr class="border-b border-border/70" data-testid="tenant-row" data-tenant-id={tenant.id}>
 								<td class="px-3 py-2 font-medium" data-testid="tenant-name">{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</td>
-								<td class="px-3 py-2 text-text-secondary">{tenant.email || '—'}</td>
-								<td class="px-3 py-2 text-text-secondary">{tenant.phone || '—'}</td>
-								<td class="px-3 py-2 text-text-secondary">{tenant.emergencyContact || '—'}</td>
+								<td class="px-3 py-2 text-muted-foreground">{tenant.email || '—'}</td>
+								<td class="px-3 py-2 text-muted-foreground">{tenant.phone || '—'}</td>
+								<td class="px-3 py-2 text-muted-foreground">{tenant.emergencyContact || '—'}</td>
 								<td class="px-3 py-2">{tenant.activeLeaseCount || 0}</td>
 								<td class="px-3 py-2">
 									<div class="flex justify-end gap-1">
-										<button data-testid="tenant-edit" aria-label="Edit tenant" class="rounded p-1.5 text-text-tertiary hover:bg-surface-hover hover:text-text-primary" onclick={() => openEdit(tenant)}>
+										<button data-testid="tenant-edit" aria-label="Edit tenant" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" onclick={() => openEdit(tenant)}>
 											<Pencil class="h-4 w-4" />
 										</button>
-										<button data-testid="tenant-delete" aria-label="Delete tenant" class="rounded p-1.5 text-text-tertiary hover:bg-surface-hover hover:text-danger" onclick={() => (deleteTarget = tenant)}>
+										<button data-testid="tenant-delete" aria-label="Delete tenant" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive" onclick={() => (deleteTarget = tenant)}>
 											<Trash2 class="h-4 w-4" />
 										</button>
 									</div>
@@ -171,22 +171,22 @@
 	<div class="grid gap-3 md:grid-cols-2" data-testid="tenant-form">
 		<div>
 			<input data-testid="tenant-first-name-input" bind:value={form.firstName} class="{inputClass} w-full" placeholder="First name" />
-			{#if formErrors.firstName}<p class="mt-1 text-xs text-danger" data-testid="tenant-first-name-error">{formErrors.firstName}</p>{/if}
+			{#if formErrors.firstName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-first-name-error">{formErrors.firstName}</p>{/if}
 		</div>
 		<div>
 			<input data-testid="tenant-last-name-input" bind:value={form.lastName} class="{inputClass} w-full" placeholder="Last name" />
-			{#if formErrors.lastName}<p class="mt-1 text-xs text-danger" data-testid="tenant-last-name-error">{formErrors.lastName}</p>{/if}
+			{#if formErrors.lastName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-last-name-error">{formErrors.lastName}</p>{/if}
 		</div>
 		<div>
 			<input data-testid="tenant-email-input" bind:value={form.email} class="{inputClass} w-full" placeholder="Email" />
-			{#if formErrors.email}<p class="mt-1 text-xs text-danger" data-testid="tenant-email-error">{formErrors.email}</p>{/if}
+			{#if formErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="tenant-email-error">{formErrors.email}</p>{/if}
 		</div>
 		<input data-testid="tenant-phone-input" bind:value={form.phone} class={inputClass} placeholder="Phone" />
 		<input data-testid="tenant-emergency-input" bind:value={form.emergencyContact} class="{inputClass} md:col-span-2" placeholder="Emergency contact" />
 	</div>
 	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="tenant-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover" onclick={closeForm}>Cancel</button>
-		<button data-testid="tenant-form-save" onclick={submit} class="rounded bg-accent px-3 py-2 text-sm text-white" disabled={saveMutation.isPending}>
+		<button data-testid="tenant-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
+		<button data-testid="tenant-form-save" onclick={submit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveMutation.isPending}>
 			{saveMutation.isPending ? 'Saving…' : 'Save Tenant'}
 		</button>
 	</div>

@@ -11,12 +11,12 @@
 </svelte:head>
 
 <div class="flex h-full items-center justify-center p-6" data-testid="ai-page">
-	<div class="max-w-md rounded-lg border border-border bg-surface p-8 text-center" data-testid="ai-coming-soon">
-		<div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-accent/10 text-accent">
+	<div class="max-w-md rounded-lg border border-border bg-card p-8 text-center" data-testid="ai-coming-soon">
+		<div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
 			<Sparkles class="h-6 w-6" />
 		</div>
 		<h1 class="text-xl font-bold">AI Assistant</h1>
-		<p class="mt-2 text-sm text-text-secondary">
+		<p class="mt-2 text-sm text-muted-foreground">
 			AI features are coming in a later phase. Intake triage, portfolio risk summaries, and notice
 			drafting will live here once they're ready.
 		</p>

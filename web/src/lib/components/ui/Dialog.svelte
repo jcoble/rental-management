@@ -34,13 +34,13 @@
 	></button>
 
 	<!-- Dialog -->
-	<div class={cn('fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-bg shadow-xl', className)}>
+	<div class={cn('fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-background shadow-xl', className)}>
 		{#if title}
 			<div class="flex items-center justify-between border-b border-border px-4 py-3">
-				<h2 class="text-sm font-semibold text-text-primary">{title}</h2>
+				<h2 class="text-sm font-semibold text-foreground">{title}</h2>
 				<button
 					onclick={onclose}
-					class="rounded p-1 text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
+					class="rounded p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 				>
 					<X class="h-4 w-4" />
 				</button>
