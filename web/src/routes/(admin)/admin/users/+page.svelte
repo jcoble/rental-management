@@ -22,8 +22,9 @@
 			if (!hasAnyRole('Admin', 'Manager')) goto('/portal');
 		}
 		if (meQuery.isError) {
+			// clearAuth() handles navigation (to /logout, which clears cookies
+			// then redirects to /login) — no extra goto needed.
 			clearAuth();
-			goto('/login');
 		}
 	});
 
