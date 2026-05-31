@@ -346,6 +346,14 @@
 			</div>
 		{/if}
 
+		{#if data.modelId === 'noop'}
+			<div class="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200" data-testid="scan-noop-banner">
+				<strong>AI extraction is off.</strong> No OpenAI API key is configured, so this document's fields
+				weren't filled in automatically. Enter them manually below, or set
+				<code class="rounded bg-amber-100 px-1 dark:bg-amber-900/40">Assistant:ApiKey</code> and re-scan.
+			</div>
+		{/if}
+
 		<div class="grid gap-6 lg:grid-cols-2">
 			<!-- Left: document preview -->
 			<Card.Root class="flex flex-col gap-0 py-0">
