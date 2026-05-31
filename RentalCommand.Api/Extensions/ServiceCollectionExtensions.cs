@@ -54,6 +54,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDailyBriefingService, DailyBriefingService>();
         services.AddScoped<IPortfolioQaService, PortfolioQaService>();
 
+        // --- document hub ---
+        services.AddScoped<IDocumentService, DocumentService>();
+
         // --- mobile push registration ---
         services.AddScoped<IDeviceService, DeviceService>();
 

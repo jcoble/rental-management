@@ -1,36 +1,41 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { goto } from '$app/navigation';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import type { Tenant } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { tenantSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { debounced } from '$lib/utils/debounce.svelte';
+	import { DataGrid } from '$lib/components/data-grid';
+	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import * as Card from '$lib/components/ui/card';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
-	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 
-	const PAGE_SIZE = 20;
 	let search = $state('');
-	let skip = $state(0);
-	const debouncedSearch = debounced(() => search, 300);
-	$effect(() => {
-		debouncedSearch.value;
-		skip = 0;
-	});
 
 	const tenantsQuery = createQuery(() => ({
-		queryKey: ['tenants', portfolioId, debouncedSearch.value, skip],
-		queryFn: () => tenants.list(portfolioId, { search: debouncedSearch.value, skip, take: PAGE_SIZE }),
+		queryKey: ['tenants', portfolioId],
+		queryFn: () => tenants.list(portfolioId, { take: 500 }),
 	}));
+
+	// Client-side filter by name / email
+	const list = $derived.by(() => {
+		const all = tenantsQuery.data ?? [];
+		if (!search.trim()) return all;
+		const q = search.trim().toLowerCase();
+		return all.filter(
+			(t) =>
+				`${t.firstName} ${t.lastName}`.toLowerCase().includes(q) ||
+				(t.email ?? '').toLowerCase().includes(q)
+		);
+	});
 
 	const empty = { firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' };
 	let showForm = $state(false);
@@ -98,8 +103,81 @@
 		saveMutation.mutate({ id: editingId, data: { portfolioId, ...result.data } });
 	}
 
-	const list = $derived(tenantsQuery.data ?? []);
+	// DataGrid column definitions
+	const columns: ColumnDef<Tenant>[] = [
+		{
+			key: 'name',
+			title: 'Name',
+			sortable: true,
+			mobileRole: 'title',
+			accessor: (t) => t.fullName ?? `${t.firstName} ${t.lastName}`,
+			cell: nameCellSnippet,
+		},
+		{
+			key: 'email',
+			title: 'Email',
+			sortable: true,
+			mobileRole: 'subtitle',
+			accessor: (t) => t.email ?? '',
+		},
+		{
+			key: 'phone',
+			title: 'Phone',
+			mobileRole: 'meta',
+			accessor: (t) => t.phone ?? '',
+		},
+		{
+			key: 'activeLeaseCount',
+			title: 'Active Leases',
+			format: 'number',
+			sortable: true,
+			mobileRole: 'metric',
+			accessor: (t) => t.activeLeaseCount ?? 0,
+		},
+		{
+			key: 'createdAt',
+			title: 'Created',
+			format: 'date',
+			sortable: true,
+			mobileRole: 'meta',
+		},
+		{
+			key: 'actions',
+			title: '',
+			mobileRole: 'hidden',
+			align: 'right',
+			width: '6rem',
+			cell: actionsCellSnippet,
+		},
+	];
 </script>
+
+{#snippet nameCellSnippet(t: Tenant)}
+	<span data-testid="tenant-name">{t.fullName ?? `${t.firstName} ${t.lastName}`}</span>
+{/snippet}
+
+{#snippet actionsCellSnippet(t: Tenant)}
+	<div class="flex items-center justify-end gap-1" onclick={(e) => e.stopPropagation()} role="none">
+		<button
+			type="button"
+			data-testid="tenant-edit"
+			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+			aria-label="Edit tenant"
+			onclick={(e) => { e.stopPropagation(); openEdit(t); }}
+		>
+			<Pencil class="h-3.5 w-3.5" />
+		</button>
+		<button
+			type="button"
+			data-testid="tenant-delete-row"
+			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+			aria-label="Delete tenant"
+			onclick={(e) => { e.stopPropagation(); deleteTarget = t; }}
+		>
+			<Trash2 class="h-3.5 w-3.5" />
+		</button>
+	</div>
+{/snippet}
 
 <svelte:head>
 	<title>Tenants - Rental Command</title>
@@ -111,65 +189,32 @@
 			<h1 class="text-2xl font-bold">Tenants</h1>
 			<p class="text-sm text-muted-foreground">Resident contacts and lease participation.</p>
 		</div>
-		<Button data-testid="tenant-create-button" class="gap-2" onclick={openCreate}>
-			<Plus class="h-4 w-4" />
-			New Tenant
-		</Button>
 	</div>
 
-	<div class="mb-4 max-w-sm">
-		<SearchInput bind:value={search} placeholder="Search tenants…" testid="tenant-search" />
-	</div>
-
-	<Card.Root class="gap-0 py-0">
-		<Card.Content class="p-0">
-			<div class="overflow-x-auto">
-				<table class="min-w-full text-sm">
-					<thead class="border-b border-border bg-background text-left text-xs uppercase text-muted-foreground">
-						<tr>
-							<th class="px-3 py-2">Name</th>
-							<th class="px-3 py-2">Email</th>
-							<th class="px-3 py-2">Phone</th>
-							<th class="px-3 py-2">Emergency Contact</th>
-							<th class="px-3 py-2">Active Leases</th>
-							<th class="px-3 py-2 text-right">Actions</th>
-						</tr>
-					</thead>
-					<tbody data-testid="tenants-list">
-						{#if tenantsQuery.isLoading}
-							<tr><td colspan="6" class="px-3 py-6 text-center text-muted-foreground" data-testid="tenants-loading">Loading…</td></tr>
-						{:else if list.length === 0}
-							<tr><td colspan="6" class="px-3 py-6 text-center text-muted-foreground" data-testid="tenants-empty">No tenants found.</td></tr>
-						{:else}
-							{#each list as tenant (tenant.id)}
-								<tr class="border-b border-border/70" data-testid="tenant-row" data-tenant-id={tenant.id}>
-									<td class="px-3 py-2 font-medium" data-testid="tenant-name">{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</td>
-									<td class="px-3 py-2 text-muted-foreground">{tenant.email || '—'}</td>
-									<td class="px-3 py-2 text-muted-foreground">{tenant.phone || '—'}</td>
-									<td class="px-3 py-2 text-muted-foreground">{tenant.emergencyContact || '—'}</td>
-									<td class="px-3 py-2">{tenant.activeLeaseCount || 0}</td>
-									<td class="px-3 py-2">
-										<div class="flex justify-end gap-1">
-											<Button data-testid="tenant-edit" aria-label="Edit tenant" variant="ghost" size="icon" onclick={() => openEdit(tenant)}>
-												<Pencil class="h-4 w-4" />
-											</Button>
-											<Button data-testid="tenant-delete" aria-label="Delete tenant" variant="ghost" size="icon" onclick={() => (deleteTarget = tenant)}>
-												<Trash2 class="h-4 w-4" />
-											</Button>
-										</div>
-									</td>
-								</tr>
-							{/each}
-						{/if}
-					</tbody>
-				</table>
+	<DataGrid
+		data={list}
+		{columns}
+		loading={tenantsQuery.isLoading}
+		emptyMessage="No tenants found."
+		onRowClick={(t) => goto(`/tenants/${t.id}`)}
+		getRowKey={(t) => t.id}
+		getRowTestId={() => 'tenant-row'}
+		data-testid="tenants-list"
+	>
+		{#snippet toolbar()}
+			<div class="flex flex-1 items-center gap-2">
+				<SearchInput bind:value={search} placeholder="Search tenants…" testid="tenant-search" />
 			</div>
-			<div class="border-t border-border px-3 py-2">
-				<Pagination bind:skip take={PAGE_SIZE} count={list.length} testid="tenant-pagination" />
-			</div>
-		</Card.Content>
-	</Card.Root>
+			<Button data-testid="tenant-create-button" class="gap-2 shrink-0" onclick={openCreate}>
+				<Plus class="h-4 w-4" />
+				New Tenant
+			</Button>
+		{/snippet}
+	</DataGrid>
 </div>
+
+<!-- Edit/Create dialog — actions column kept inside the row via the edit button -->
+<!-- Row-level edit / delete: rendered via an actions column snippet -->
 
 <Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
 	<Dialog.Content class="max-w-lg">
@@ -204,7 +249,7 @@
 <ConfirmDialog
 	open={deleteTarget !== null}
 	title="Delete tenant"
-	message={deleteTarget ? `Delete “${deleteTarget.fullName || `${deleteTarget.firstName} ${deleteTarget.lastName}`}”?` : ''}
+	message={deleteTarget ? `Delete "${deleteTarget.fullName || `${deleteTarget.firstName} ${deleteTarget.lastName}`}"?` : ''}
 	busy={deleteMutation.isPending}
 	testid="tenant-delete"
 	onconfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
