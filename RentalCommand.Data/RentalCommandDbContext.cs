@@ -165,6 +165,12 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Error).HasMaxLength(4000);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.SentAt);
+            // PortfolioId is optional: system/auth emails are not scoped to any portfolio.
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<QueuedJob>(entity =>

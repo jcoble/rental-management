@@ -5,10 +5,12 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
+using RentalCommand.Core.Configuration;
 
 namespace RentalCommand.Api.Tests.Auth;
 
@@ -67,6 +69,8 @@ public class AuthControllerCookieTests
     private static AuthController CreateController(IAuthService authService)
     {
         var tokenService = new Mock<IJwtTokenService>();
+        var googleAuthService = new Mock<IGoogleAuthService>();
+        var googleOptions = Options.Create(new GoogleAuthOptions());
         var environment = new Mock<IWebHostEnvironment>();
         environment.SetupGet(env => env.EnvironmentName).Returns(Environments.Development);
         var configuration = new ConfigurationBuilder().Build();
@@ -74,6 +78,8 @@ public class AuthControllerCookieTests
         return new AuthController(
             authService,
             tokenService.Object,
+            googleAuthService.Object,
+            googleOptions,
             environment.Object,
             configuration,
             NullLogger<AuthController>.Instance)

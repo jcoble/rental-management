@@ -24,6 +24,8 @@ builder.Services.Configure<RentalCommand.Core.Configuration.AssistantConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.AssistantConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.UploadSettings>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.UploadSettings.SectionName));
+builder.Services.Configure<RentalCommand.Core.Configuration.GoogleAuthOptions>(
+    builder.Configuration.GetSection(RentalCommand.Core.Configuration.GoogleAuthOptions.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
@@ -132,9 +134,12 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddAuthorization();
 
 // --- Auth services ---
+builder.Services.AddHttpClient("GoogleAuth");
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IUserMigrationService, UserMigrationService>();
+builder.Services.AddScoped<IAuthEmailSender, OutboxAuthEmailSender>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IGoogleAuthService, GoogleAuthService>();
 builder.Services.AddScoped<IdentitySeeder>();
 
 // --- CORS (restrict to the web app origin) ---
