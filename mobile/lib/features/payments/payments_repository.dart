@@ -52,14 +52,14 @@ class ExpenseCategoryTotal {
     required this.count,
   });
 
-  final int category;
+  final String category;
   final String categoryName;
   final double total;
   final int count;
 
   factory ExpenseCategoryTotal.fromJson(Map<String, dynamic> json) {
     return ExpenseCategoryTotal(
-      category: (json['category'] as num?)?.toInt() ?? 0,
+      category: json['category'] as String? ?? '',
       categoryName: json['categoryName'] as String? ?? '',
       total: (json['total'] as num?)?.toDouble() ?? 0,
       count: (json['count'] as num?)?.toInt() ?? 0,
