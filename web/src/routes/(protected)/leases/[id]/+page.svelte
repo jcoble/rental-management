@@ -21,6 +21,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { Pencil, Trash2 } from '@lucide/svelte';
+	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -356,6 +357,11 @@
 			getRowKey={(p) => p.id}
 			data-testid="lease-payments-grid"
 		/>
+
+		<!-- Documents section -->
+		<div class="mt-6" data-testid="lease-detail-documents">
+			<DocumentsPanel entityType="Lease" entityId={leaseId} />
+		</div>
 	{/if}
 </div>
 
