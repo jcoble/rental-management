@@ -14,10 +14,12 @@ namespace RentalCommand.Api.Controllers;
 public class PortfolioController : AuthenticatedPortfolioControllerBase
 {
     private readonly IPortfolioService _service;
+    private readonly IDashboardService _dashboard;
 
-    public PortfolioController(IPortfolioService service)
+    public PortfolioController(IPortfolioService service, IDashboardService dashboard)
     {
         _service = service;
+        _dashboard = dashboard;
     }
 
     /// <summary>List the caller's portfolio(s) (their claim-scoped portfolio in Phase 0).</summary>
@@ -36,6 +38,20 @@ public class PortfolioController : AuthenticatedPortfolioControllerBase
     {
         var item = await _service.GetAsync(GetPortfolioId(), id, ct);
         return item == null ? NotFound(new { error = "Portfolio not found" }) : Ok(item);
+    }
+
+    /// <summary>
+    /// Aggregated KPI rollup the web dashboard renders. The <paramref name="id"/> route segment exists to
+    /// match the client URL but is ignored for scoping — data is always scoped to the caller's
+    /// <c>portfolioId</c> claim.
+    /// </summary>
+    [HttpGet("{id:int}/dashboard")]
+    [ProducesResponseType(typeof(DashboardResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<DashboardResponse>> Dashboard(int id, CancellationToken ct)
+    {
+        var dashboard = await _dashboard.GetDashboardAsync(GetPortfolioId(), ct);
+        return dashboard == null ? NotFound(new { error = "Portfolio not found" }) : Ok(dashboard);
     }
 
     [HttpPost]
