@@ -67,8 +67,27 @@ public class ExpenseService : IExpenseService
         return entity == null ? null : ExpenseResponse.FromEntity(entity);
     }
 
-    public async Task<ExpenseResponse> CreateAsync(int portfolioId, CreateExpenseRequest request, CancellationToken ct = default)
+    public async Task<ExpenseResponse?> CreateAsync(int portfolioId, CreateExpenseRequest request, CancellationToken ct = default)
     {
+        // Verify any supplied property/vendor/work-order references belong to the caller's portfolio (no cross-tenant linking).
+        if (request.PropertyId.HasValue &&
+            !await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId.Value, ct))
+        {
+            return null;
+        }
+
+        if (request.VendorId.HasValue &&
+            !await _db.EnsureVendorInPortfolioAsync(portfolioId, request.VendorId.Value, ct))
+        {
+            return null;
+        }
+
+        if (request.WorkOrderId.HasValue &&
+            !await _db.EnsureWorkOrderInPortfolioAsync(portfolioId, request.WorkOrderId.Value, ct))
+        {
+            return null;
+        }
+
         var now = DateTime.UtcNow;
         var entity = new Expense
         {
@@ -102,6 +121,25 @@ public class ExpenseService : IExpenseService
         var entity = await _db.Expenses
             .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
         if (entity == null)
+        {
+            return null;
+        }
+
+        // Verify any supplied property/vendor/work-order references belong to the caller's portfolio (no cross-tenant linking).
+        if (request.PropertyId.HasValue &&
+            !await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId.Value, ct))
+        {
+            return null;
+        }
+
+        if (request.VendorId.HasValue &&
+            !await _db.EnsureVendorInPortfolioAsync(portfolioId, request.VendorId.Value, ct))
+        {
+            return null;
+        }
+
+        if (request.WorkOrderId.HasValue &&
+            !await _db.EnsureWorkOrderInPortfolioAsync(portfolioId, request.WorkOrderId.Value, ct))
         {
             return null;
         }

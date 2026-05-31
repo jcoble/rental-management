@@ -166,26 +166,25 @@ public class AppointmentService : IAppointmentService
     private async Task<bool> ReferencesInScopeAsync(int portfolioId, int? propertyId, int? unitId, int? leaseId, int? tenantId, CancellationToken ct)
     {
         if (propertyId.HasValue &&
-            !await _db.Properties.AnyAsync(p => p.Id == propertyId.Value && p.PortfolioId == portfolioId, ct))
+            !await _db.EnsurePropertyInPortfolioAsync(portfolioId, propertyId.Value, ct))
         {
             return false;
         }
 
         if (unitId.HasValue &&
-            !await _db.Units.AnyAsync(u => u.Id == unitId.Value &&
-                _db.Properties.Any(p => p.Id == u.PropertyId && p.PortfolioId == portfolioId), ct))
+            !await _db.EnsureUnitInPortfolioAsync(portfolioId, unitId.Value, null, ct))
         {
             return false;
         }
 
         if (leaseId.HasValue &&
-            !await _db.Leases.AnyAsync(l => l.Id == leaseId.Value && l.PortfolioId == portfolioId, ct))
+            !await _db.EnsureLeaseInPortfolioAsync(portfolioId, leaseId.Value, ct))
         {
             return false;
         }
 
         if (tenantId.HasValue &&
-            !await _db.Tenants.AnyAsync(t => t.Id == tenantId.Value && t.PortfolioId == portfolioId, ct))
+            !await _db.EnsureTenantInPortfolioAsync(portfolioId, tenantId.Value, ct))
         {
             return false;
         }

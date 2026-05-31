@@ -40,10 +40,13 @@ public class ExpenseController : AuthenticatedPortfolioControllerBase
 
     [HttpPost]
     [ProducesResponseType(typeof(ExpenseResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ExpenseResponse>> Create([FromBody] CreateExpenseRequest request, CancellationToken ct)
     {
         var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
-        return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
+        return created == null
+            ? NotFound(new { error = "Referenced property, vendor, or work order not found in this portfolio" })
+            : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
     [HttpPatch("{id:int}")]

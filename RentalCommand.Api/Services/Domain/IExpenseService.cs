@@ -11,7 +11,7 @@ public interface IExpenseService
 {
     Task<IReadOnlyList<ExpenseResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default);
     Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
-    Task<ExpenseResponse> CreateAsync(int portfolioId, CreateExpenseRequest request, CancellationToken ct = default);
+    Task<ExpenseResponse?> CreateAsync(int portfolioId, CreateExpenseRequest request, CancellationToken ct = default);
     Task<ExpenseResponse?> UpdateAsync(int portfolioId, int id, UpdateExpenseRequest request, CancellationToken ct = default);
     Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
 }

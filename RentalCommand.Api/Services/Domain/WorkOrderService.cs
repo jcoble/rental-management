@@ -76,33 +76,31 @@ public class WorkOrderService : IWorkOrderService
     public async Task<WorkOrderResponse?> CreateAsync(int portfolioId, CreateWorkOrderRequest request, CancellationToken ct = default)
     {
         // Verify the referenced property (required) and optional unit/tenant/lease/vendor are in scope.
-        var propertyInScope = await _db.Properties
-            .AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct);
-        if (!propertyInScope)
+        if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
         {
             return null;
         }
 
         if (request.UnitId.HasValue &&
-            !await _db.Units.AnyAsync(u => u.Id == request.UnitId.Value && u.PropertyId == request.PropertyId, ct))
+            !await _db.EnsureUnitInPortfolioAsync(portfolioId, request.UnitId.Value, request.PropertyId, ct))
         {
             return null;
         }
 
         if (request.TenantId.HasValue &&
-            !await _db.Tenants.AnyAsync(t => t.Id == request.TenantId.Value && t.PortfolioId == portfolioId, ct))
+            !await _db.EnsureTenantInPortfolioAsync(portfolioId, request.TenantId.Value, ct))
         {
             return null;
         }
 
         if (request.LeaseId.HasValue &&
-            !await _db.Leases.AnyAsync(l => l.Id == request.LeaseId.Value && l.PortfolioId == portfolioId, ct))
+            !await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
         {
             return null;
         }
 
         if (request.VendorId.HasValue &&
-            !await _db.Vendors.AnyAsync(v => v.Id == request.VendorId.Value && v.PortfolioId == portfolioId, ct))
+            !await _db.EnsureVendorInPortfolioAsync(portfolioId, request.VendorId.Value, ct))
         {
             return null;
         }
@@ -148,25 +146,25 @@ public class WorkOrderService : IWorkOrderService
         }
 
         if (request.UnitId.HasValue &&
-            !await _db.Units.AnyAsync(u => u.Id == request.UnitId.Value && u.PropertyId == entity.PropertyId, ct))
+            !await _db.EnsureUnitInPortfolioAsync(portfolioId, request.UnitId.Value, entity.PropertyId, ct))
         {
             return null;
         }
 
         if (request.TenantId.HasValue &&
-            !await _db.Tenants.AnyAsync(t => t.Id == request.TenantId.Value && t.PortfolioId == portfolioId, ct))
+            !await _db.EnsureTenantInPortfolioAsync(portfolioId, request.TenantId.Value, ct))
         {
             return null;
         }
 
         if (request.LeaseId.HasValue &&
-            !await _db.Leases.AnyAsync(l => l.Id == request.LeaseId.Value && l.PortfolioId == portfolioId, ct))
+            !await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
         {
             return null;
         }
 
         if (request.VendorId.HasValue &&
-            !await _db.Vendors.AnyAsync(v => v.Id == request.VendorId.Value && v.PortfolioId == portfolioId, ct))
+            !await _db.EnsureVendorInPortfolioAsync(portfolioId, request.VendorId.Value, ct))
         {
             return null;
         }
