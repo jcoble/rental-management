@@ -19,4 +19,16 @@ public interface IScanService
         string contentType,
         string targetEntityType,
         CancellationToken ct = default);
+
+    /// <summary>Confirm a reviewed draft, creating the real record (Receipt→Expense in Phase 2).</summary>
+    Task<ScanConfirmResult> ConfirmAndCreateAsync(
+        int portfolioId, int draftId, int userId,
+        string overridesJson, CancellationToken ct = default);
+
+    /// <summary>Reject a draft; no record is created.</summary>
+    Task<bool> RejectDraftAsync(
+        int portfolioId, int draftId, int userId, string? reason, CancellationToken ct = default);
 }
+
+/// <summary>Result returned from <see cref="IScanService.ConfirmAndCreateAsync"/>.</summary>
+public sealed record ScanConfirmResult(bool Success, int? CreatedEntityId, string? Error);

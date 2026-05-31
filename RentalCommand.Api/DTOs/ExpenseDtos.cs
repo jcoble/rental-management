@@ -24,6 +24,24 @@ public class ExpenseResponse
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>Subtotal before tax, tip, and other charges (from scanned receipt).</summary>
+    public decimal? Subtotal { get; set; }
+
+    /// <summary>Tax amount charged (from scanned receipt).</summary>
+    public decimal? TaxAmount { get; set; }
+
+    /// <summary>
+    /// Raw JSON string holding full receipt details (vendor contact, payment info, line items, etc.).
+    /// Populated when the expense was created from a scan draft.
+    /// </summary>
+    public string? ReceiptData { get; set; }
+
+    /// <summary>True when a <see cref="Core.Entities.StoredFile"/> is linked to this expense.</summary>
+    public bool HasReceipt { get; set; }
+
+    /// <summary>True when the linked file's content type starts with <c>image/</c>.</summary>
+    public bool ReceiptIsImage { get; set; }
+
     /// <summary>Stable selector for frontend tests, e.g. <c>expense-1</c>.</summary>
     public string TestId => $"expense-{Id}";
 
@@ -45,6 +63,9 @@ public class ExpenseResponse
         Notes = e.Notes,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
+        Subtotal = e.Subtotal,
+        TaxAmount = e.TaxAmount,
+        ReceiptData = e.ReceiptData,
     };
 }
 
@@ -73,6 +94,15 @@ public class CreateExpenseRequest
 
     [MaxLength(2000)]
     public string? Notes { get; set; }
+
+    /// <summary>Subtotal before tax/tip; populated when creating from a scan draft.</summary>
+    public decimal? Subtotal { get; set; }
+
+    /// <summary>Tax amount; populated when creating from a scan draft.</summary>
+    public decimal? TaxAmount { get; set; }
+
+    /// <summary>Full receipt details JSON (jsonb); populated when creating from a scan draft.</summary>
+    public string? ReceiptData { get; set; }
 }
 
 public class UpdateExpenseRequest

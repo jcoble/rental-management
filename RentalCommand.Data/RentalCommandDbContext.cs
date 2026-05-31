@@ -328,6 +328,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Category).HasConversion<int>();
             entity.Property(e => e.Description).IsRequired().HasMaxLength(500);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.Subtotal).HasPrecision(18, 2);
+            entity.Property(e => e.TaxAmount).HasPrecision(18, 2);
+            entity.Property(e => e.ReceiptData).HasColumnType("jsonb");
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);

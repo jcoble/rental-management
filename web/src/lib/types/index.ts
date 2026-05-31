@@ -158,6 +158,8 @@ export interface Expense {
 	workOrderTitle?: string;
 	createdAt: string;
 	updatedAt: string;
+	hasReceipt?: boolean;
+	receiptIsImage?: boolean;
 }
 
 /** Read-only financial rollup from GET /api/v1/accounting/summary (AccountingSummaryResponse). */

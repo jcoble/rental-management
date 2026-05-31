@@ -38,7 +38,8 @@ const entityQueryKeys: Record<string, string[][]> = {
 	Appointment: [['appointments'], ['dashboard']],
 	Vendor: [['vendors']],
 	OwnerEntity: [['owners'], ['dashboard']],
-	Portfolio: [['portfolio'], ['portfolios'], ['dashboard']]
+	Portfolio: [['portfolio'], ['portfolios'], ['dashboard']],
+	ScanDraft: [['scans'], ['scan']]
 };
 
 /** Detail query-key prefix for an entity, used to drop a deleted entity's cache. */
@@ -54,7 +55,8 @@ const entityDetailKey: Record<string, string> = {
 	Appointment: 'appointment',
 	Vendor: 'vendor',
 	OwnerEntity: 'owner',
-	Portfolio: 'portfolio'
+	Portfolio: 'portfolio',
+	ScanDraft: 'scan'
 };
 
 function invalidateForEntity(queryClient: QueryClient, entityType: string): void {

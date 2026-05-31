@@ -517,8 +517,19 @@ namespace RentalCommand.Data.Migrations
                     b.Property<int?>("PropertyId")
                         .HasColumnType("integer");
 
+                    b.Property<string>("ReceiptData")
+                        .HasColumnType("jsonb");
+
                     b.Property<int>("Status")
                         .HasColumnType("integer");
+
+                    b.Property<decimal?>("Subtotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
+                    b.Property<decimal?>("TaxAmount")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");

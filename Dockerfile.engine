@@ -30,8 +30,9 @@ FROM base AS final
 WORKDIR /app
 
 # procps provides pgrep for the process-based healthcheck (the Worker has no HTTP).
+# tesseract-ocr is used by ImageTextExtractor when Assistant:UseImageOcr=true (off by default).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends procps \
+ && apt-get install -y --no-install-recommends procps tesseract-ocr \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/publish .

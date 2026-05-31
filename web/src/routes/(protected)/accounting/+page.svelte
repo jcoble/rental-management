@@ -186,7 +186,7 @@
 	const paymentsList = $derived(paymentsQuery.data ?? []);
 	const expensesList = $derived(expensesQuery.data ?? []);
 	const summary = $derived(accountingSummaryQuery.data as AccountingSummary | undefined);
-	const inputClass = 'rounded border border-border bg-bg px-3 py-2 text-sm';
+	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
 </script>
 
 <svelte:head>
@@ -196,42 +196,42 @@
 <div class="h-full overflow-y-auto p-6" data-testid="accounting-page">
 	<div class="mb-4">
 		<h1 class="text-2xl font-bold">Accounting</h1>
-		<p class="text-sm text-text-secondary">Rent ledger, receivables, expenses, and owner-facing books.</p>
+		<p class="text-sm text-muted-foreground">Rent ledger, receivables, expenses, and owner-facing books.</p>
 	</div>
 
 	<div class="mb-5 grid gap-4 md:grid-cols-4">
-		<div class="rounded-lg border border-border bg-surface p-4" data-testid="accounting-collected"><p class="text-xs text-text-secondary">Collected</p><p class="text-2xl font-bold">{money(summary?.payments.collected || 0)}</p></div>
-		<div class="rounded-lg border border-border bg-surface p-4" data-testid="accounting-outstanding"><p class="text-xs text-text-secondary">Outstanding</p><p class="text-2xl font-bold">{money(summary?.payments.outstanding || 0)}</p></div>
-		<div class="rounded-lg border border-border bg-surface p-4" data-testid="accounting-overdue"><p class="text-xs text-text-secondary">Overdue</p><p class="text-2xl font-bold">{money(summary?.payments.overdue || 0)}</p></div>
-		<div class="rounded-lg border border-border bg-surface p-4" data-testid="accounting-expenses"><p class="text-xs text-text-secondary">Expenses</p><p class="text-2xl font-bold">{money(summary?.totalExpenses || 0)}</p></div>
+		<div class="rounded-lg border border-border bg-card p-4" data-testid="accounting-collected"><p class="text-xs text-muted-foreground">Collected</p><p class="text-2xl font-bold">{money(summary?.payments.collected || 0)}</p></div>
+		<div class="rounded-lg border border-border bg-card p-4" data-testid="accounting-outstanding"><p class="text-xs text-muted-foreground">Outstanding</p><p class="text-2xl font-bold">{money(summary?.payments.outstanding || 0)}</p></div>
+		<div class="rounded-lg border border-border bg-card p-4" data-testid="accounting-overdue"><p class="text-xs text-muted-foreground">Overdue</p><p class="text-2xl font-bold">{money(summary?.payments.overdue || 0)}</p></div>
+		<div class="rounded-lg border border-border bg-card p-4" data-testid="accounting-expenses"><p class="text-xs text-muted-foreground">Expenses</p><p class="text-2xl font-bold">{money(summary?.totalExpenses || 0)}</p></div>
 	</div>
 
 	<div class="grid gap-4 lg:grid-cols-2">
-		<div class="rounded-lg border border-border bg-surface">
+		<div class="rounded-lg border border-border bg-card">
 			<div class="flex items-center justify-between border-b border-border px-4 py-3">
 				<span class="font-semibold">Payments</span>
-				<button data-testid="payment-create-button" class="inline-flex items-center gap-1 rounded bg-accent px-2.5 py-1.5 text-xs text-white" onclick={openCreatePayment}><Plus class="h-3.5 w-3.5" /> Add</button>
+				<button data-testid="payment-create-button" class="inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1.5 text-xs text-white" onclick={openCreatePayment}><Plus class="h-3.5 w-3.5" /> Add</button>
 			</div>
 			<div class="border-b border-border px-3 py-2"><SearchInput bind:value={paymentSearch} placeholder="Search payments…" testid="payment-search" /></div>
 			<div class="max-h-[40vh] space-y-2 overflow-y-auto p-3" data-testid="payments-list">
 				{#if paymentsQuery.isLoading}
-					<p class="py-4 text-center text-sm text-text-secondary" data-testid="payments-loading">Loading…</p>
+					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="payments-loading">Loading…</p>
 				{:else if paymentsList.length === 0}
-					<p class="py-4 text-center text-sm text-text-secondary" data-testid="payments-empty">No payments found.</p>
+					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="payments-empty">No payments found.</p>
 				{:else}
 					{#each paymentsList as payment (payment.id)}
-						<div class="rounded border border-border bg-bg p-3 text-sm" data-testid="payment-row" data-payment-id={payment.id}>
+						<div class="rounded border border-border bg-background p-3 text-sm" data-testid="payment-row" data-payment-id={payment.id}>
 							<div class="flex items-center justify-between">
 								<p class="font-medium">{payment.tenantName || payment.leaseNumber}</p>
 								<span>{payment.status}</span>
 							</div>
-							<p class="text-xs text-text-secondary">{payment.type} · {money(payment.amount)} · Due {new Date(payment.dueDate).toLocaleDateString()}</p>
+							<p class="text-xs text-muted-foreground">{payment.type} · {money(payment.amount)} · Due {new Date(payment.dueDate).toLocaleDateString()}</p>
 							<div class="mt-2 flex gap-2">
 								{#if payment.status !== 'Paid'}
 									<button data-testid="payment-mark-paid" class="rounded border border-border px-2 py-1 text-xs" onclick={() => markPaidMutation.mutate(payment.id)}>Mark Paid</button>
 								{/if}
 								<button data-testid="payment-edit" aria-label="Edit payment" class="rounded border border-border px-2 py-1 text-xs" onclick={() => openEditPayment(payment)}><Pencil class="h-3.5 w-3.5" /></button>
-								<button data-testid="payment-delete" aria-label="Delete payment" class="rounded border border-border px-2 py-1 text-xs hover:text-danger" onclick={() => (paymentDeleteTarget = payment)}><Trash2 class="h-3.5 w-3.5" /></button>
+								<button data-testid="payment-delete" aria-label="Delete payment" class="rounded border border-border px-2 py-1 text-xs hover:text-destructive" onclick={() => (paymentDeleteTarget = payment)}><Trash2 class="h-3.5 w-3.5" /></button>
 							</div>
 						</div>
 					{/each}
@@ -240,27 +240,54 @@
 			<div class="border-t border-border px-3 py-2"><Pagination bind:skip={paymentSkip} take={PAGE_SIZE} count={paymentsList.length} testid="payment-pagination" /></div>
 		</div>
 
-		<div class="rounded-lg border border-border bg-surface">
+		<div class="rounded-lg border border-border bg-card">
 			<div class="flex items-center justify-between border-b border-border px-4 py-3">
 				<span class="font-semibold">Expenses</span>
-				<button data-testid="expense-create-button" class="inline-flex items-center gap-1 rounded bg-accent px-2.5 py-1.5 text-xs text-white" onclick={openCreateExpense}><Plus class="h-3.5 w-3.5" /> Add</button>
+				<button data-testid="expense-create-button" class="inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1.5 text-xs text-white" onclick={openCreateExpense}><Plus class="h-3.5 w-3.5" /> Add</button>
 			</div>
 			<div class="max-h-[46vh] space-y-2 overflow-y-auto p-3" data-testid="expenses-list">
 				{#if expensesQuery.isLoading}
-					<p class="py-4 text-center text-sm text-text-secondary" data-testid="expenses-loading">Loading…</p>
+					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="expenses-loading">Loading…</p>
 				{:else if expensesList.length === 0}
-					<p class="py-4 text-center text-sm text-text-secondary" data-testid="expenses-empty">No expenses found.</p>
+					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="expenses-empty">No expenses found.</p>
 				{:else}
 					{#each expensesList as expense (expense.id)}
-						<div class="rounded border border-border bg-bg p-3 text-sm" data-testid="expense-row" data-expense-id={expense.id}>
+						<div class="rounded border border-border bg-background p-3 text-sm" data-testid="expense-row" data-expense-id={expense.id}>
 							<div class="flex items-center justify-between">
 								<p class="font-medium">{expense.description}</p>
 								<span>{expense.status}</span>
 							</div>
-							<p class="text-xs text-text-secondary">{expense.category} · {money(expense.amount)} · {expense.propertyName || 'General'}</p>
-							<div class="mt-2 flex gap-2">
+							<p class="text-xs text-muted-foreground">{expense.category} · {money(expense.amount)} · {expense.propertyName || 'General'}</p>
+							<div class="mt-2 flex items-center gap-2">
 								<button data-testid="expense-edit" aria-label="Edit expense" class="rounded border border-border px-2 py-1 text-xs" onclick={() => openEditExpense(expense)}><Pencil class="h-3.5 w-3.5" /></button>
-								<button data-testid="expense-delete" aria-label="Delete expense" class="rounded border border-border px-2 py-1 text-xs hover:text-danger" onclick={() => (expenseDeleteTarget = expense)}><Trash2 class="h-3.5 w-3.5" /></button>
+								<button data-testid="expense-delete" aria-label="Delete expense" class="rounded border border-border px-2 py-1 text-xs hover:text-destructive" onclick={() => (expenseDeleteTarget = expense)}><Trash2 class="h-3.5 w-3.5" /></button>
+								{#if expense.hasReceipt}
+									{#if expense.receiptIsImage}
+										<a
+											href="/expense-file/{expense.id}"
+											target="_blank"
+											rel="noopener noreferrer"
+											data-testid="expense-receipt-{expense.id}"
+											class="ml-auto shrink-0"
+											aria-label="View receipt"
+										>
+											<img
+												src="/expense-file/{expense.id}?thumb=true"
+												alt="Receipt thumbnail"
+												class="h-10 w-10 rounded object-cover ring-1 ring-border"
+												loading="lazy"
+											/>
+										</a>
+									{:else}
+										<a
+											href="/expense-file/{expense.id}"
+											target="_blank"
+											rel="noopener noreferrer"
+											data-testid="expense-receipt-{expense.id}"
+											class="ml-auto text-xs text-primary underline underline-offset-2 hover:text-primary/80"
+										>Receipt (PDF)</a>
+									{/if}
+								{/if}
 							</div>
 						</div>
 					{/each}
@@ -277,16 +304,16 @@
 				<option value="">Select lease</option>
 				{#each leasesQuery.data || [] as lease}<option value={lease.id}>{lease.leaseNumber} · {lease.tenantName}</option>{/each}
 			</select>
-			{#if paymentErrors.leaseId}<p class="mt-1 text-xs text-danger" data-testid="payment-lease-error">{paymentErrors.leaseId}</p>{/if}
+			{#if paymentErrors.leaseId}<p class="mt-1 text-xs text-destructive" data-testid="payment-lease-error">{paymentErrors.leaseId}</p>{/if}
 		</div>
 		<div class="grid grid-cols-2 gap-2">
 			<div>
 				<input data-testid="payment-amount-input" bind:value={paymentForm.amount} class="{inputClass} w-full" placeholder="Amount" />
-				{#if paymentErrors.amount}<p class="mt-1 text-xs text-danger" data-testid="payment-amount-error">{paymentErrors.amount}</p>{/if}
+				{#if paymentErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-error">{paymentErrors.amount}</p>{/if}
 			</div>
 			<div>
 				<input data-testid="payment-due-date-input" type="date" bind:value={paymentForm.dueDate} class="{inputClass} w-full" />
-				{#if paymentErrors.dueDate}<p class="mt-1 text-xs text-danger" data-testid="payment-due-date-error">{paymentErrors.dueDate}</p>{/if}
+				{#if paymentErrors.dueDate}<p class="mt-1 text-xs text-destructive" data-testid="payment-due-date-error">{paymentErrors.dueDate}</p>{/if}
 			</div>
 		</div>
 		<div class="grid grid-cols-2 gap-2">
@@ -295,8 +322,8 @@
 		</div>
 	</div>
 	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="payment-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover" onclick={closePaymentForm}>Cancel</button>
-		<button data-testid="payment-form-save" onclick={submitPayment} class="rounded bg-accent px-3 py-2 text-sm text-white" disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save Payment'}</button>
+		<button data-testid="payment-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closePaymentForm}>Cancel</button>
+		<button data-testid="payment-form-save" onclick={submitPayment} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save Payment'}</button>
 	</div>
 </Dialog>
 
@@ -304,16 +331,16 @@
 	<div class="space-y-2" data-testid="expense-form">
 		<div>
 			<input data-testid="expense-description-input" bind:value={expenseForm.description} class="{inputClass} w-full" placeholder="Description" />
-			{#if expenseErrors.description}<p class="mt-1 text-xs text-danger" data-testid="expense-description-error">{expenseErrors.description}</p>{/if}
+			{#if expenseErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expense-description-error">{expenseErrors.description}</p>{/if}
 		</div>
 		<div class="grid grid-cols-2 gap-2">
 			<div>
 				<input data-testid="expense-amount-input" bind:value={expenseForm.amount} class="{inputClass} w-full" placeholder="Amount" />
-				{#if expenseErrors.amount}<p class="mt-1 text-xs text-danger" data-testid="expense-amount-error">{expenseErrors.amount}</p>{/if}
+				{#if expenseErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expense-amount-error">{expenseErrors.amount}</p>{/if}
 			</div>
 			<div>
 				<input data-testid="expense-incurred-input" type="date" bind:value={expenseForm.incurredAt} class="{inputClass} w-full" />
-				{#if expenseErrors.incurredAt}<p class="mt-1 text-xs text-danger" data-testid="expense-incurred-error">{expenseErrors.incurredAt}</p>{/if}
+				{#if expenseErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expense-incurred-error">{expenseErrors.incurredAt}</p>{/if}
 			</div>
 		</div>
 		<div class="grid grid-cols-2 gap-2">
@@ -326,8 +353,8 @@
 		</div>
 	</div>
 	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="expense-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover" onclick={closeExpenseForm}>Cancel</button>
-		<button data-testid="expense-form-save" onclick={submitExpense} class="rounded bg-accent px-3 py-2 text-sm text-white" disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save Expense'}</button>
+		<button data-testid="expense-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeExpenseForm}>Cancel</button>
+		<button data-testid="expense-form-save" onclick={submitExpense} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save Expense'}</button>
 	</div>
 </Dialog>
 
