@@ -55,7 +55,32 @@ public class ExpenseService : IExpenseService
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return items.Select(ExpenseResponse.FromEntity).ToList();
+        // One batched query for all expense ids in this page — avoids N+1.
+        var expenseIds = items.Select(e => e.Id).ToList();
+        var filesByExpenseId = await _db.StoredFiles
+            .AsNoTracking()
+            .Where(f =>
+                f.PortfolioId == portfolioId &&
+                f.EntityType == "Expense" &&
+                f.EntityId != null &&
+                expenseIds.Contains(f.EntityId.Value) &&
+                f.DeletedAt == null)
+            .GroupBy(f => f.EntityId!.Value)
+            .Select(g => new { EntityId = g.Key, ContentType = g.OrderByDescending(f => f.UploadedAt).First().ContentType })
+            .ToDictionaryAsync(x => x.EntityId, x => x.ContentType, ct);
+
+        var results = items.Select(e =>
+        {
+            var response = ExpenseResponse.FromEntity(e);
+            if (filesByExpenseId.TryGetValue(e.Id, out var ct2))
+            {
+                response.HasReceipt = true;
+                response.ReceiptIsImage = ct2.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+            }
+            return response;
+        }).ToList();
+
+        return results;
     }
 
     public async Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
@@ -64,7 +89,29 @@ public class ExpenseService : IExpenseService
             .AsNoTracking()
             .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
 
-        return entity == null ? null : ExpenseResponse.FromEntity(entity);
+        if (entity == null)
+            return null;
+
+        var response = ExpenseResponse.FromEntity(entity);
+
+        var storedFile = await _db.StoredFiles
+            .AsNoTracking()
+            .Where(f =>
+                f.PortfolioId == portfolioId &&
+                f.EntityType == "Expense" &&
+                f.EntityId == entity.Id &&
+                f.DeletedAt == null)
+            .OrderByDescending(f => f.UploadedAt)
+            .Select(f => new { f.ContentType })
+            .FirstOrDefaultAsync(ct);
+
+        if (storedFile != null)
+        {
+            response.HasReceipt = true;
+            response.ReceiptIsImage = storedFile.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return response;
     }
 
     public async Task<ExpenseResponse?> CreateAsync(int portfolioId, CreateExpenseRequest request, CancellationToken ct = default)
@@ -104,6 +151,9 @@ public class ExpenseService : IExpenseService
             PaidAt = request.PaidAt.ToUtc(),
             BillableToOwner = request.BillableToOwner,
             Notes = request.Notes,
+            Subtotal = request.Subtotal,
+            TaxAmount = request.TaxAmount,
+            ReceiptData = request.ReceiptData,
             CreatedAt = now,
             UpdatedAt = now,
         };

@@ -72,14 +72,14 @@
 
 <div class="flex h-screen">
 	<aside
-		class="flex flex-col border-r border-border bg-surface transition-all duration-200 {sidebarCollapsed
+		class="flex flex-col border-r border-border bg-card transition-all duration-200 {sidebarCollapsed
 			? 'w-16'
 			: 'w-60'} shrink-0"
 	>
 		<div class="flex items-center gap-2 border-b border-border px-4 py-4">
-			<Building class="h-5 w-5 shrink-0 text-accent" />
+			<Building class="h-5 w-5 shrink-0 text-primary" />
 			{#if !sidebarCollapsed}
-				<span class="font-semibold text-text-primary truncate">Rental Command</span>
+				<span class="font-semibold text-foreground truncate">Rental Command</span>
 			{/if}
 		</div>
 
@@ -96,8 +96,8 @@
 					onclick={handleNavClick}
 					class="flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors
 						{active
-						? 'bg-accent/10 text-accent'
-						: 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'}
+						? 'bg-primary/10 text-primary'
+						: 'text-muted-foreground hover:bg-secondary hover:text-foreground'}
 						{sidebarCollapsed ? 'justify-center' : ''}"
 					title={sidebarCollapsed ? item.label : undefined}
 				>
@@ -111,14 +111,14 @@
 
 		<div class="border-t border-border p-2">
 			{#if !sidebarCollapsed && currentUser}
-				<div class="mb-2 rounded-md border border-border bg-bg px-3 py-2">
-					<p class="truncate text-sm font-medium text-text-primary">{currentUser.displayName}</p>
-					<p class="text-xs text-text-secondary">{primaryRole}</p>
+				<div class="mb-2 rounded-md border border-border bg-background px-3 py-2">
+					<p class="truncate text-sm font-medium text-foreground">{currentUser.displayName}</p>
+					<p class="text-xs text-muted-foreground">{primaryRole}</p>
 				</div>
 				<form method="POST" action="/logout">
 					<button
 						type="submit"
-						class="mb-2 flex w-full items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+						class="mb-2 flex w-full items-center justify-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 					>
 						<LogOut class="h-3.5 w-3.5" />
 						<span>Sign out</span>
@@ -127,7 +127,7 @@
 			{/if}
 			<button
 				onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
-				class="flex w-full items-center justify-center rounded-md p-2 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+				class="flex w-full items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 				title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
 			>
 				{#if sidebarCollapsed}

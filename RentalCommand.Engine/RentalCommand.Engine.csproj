@@ -5,6 +5,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>RentalCommand.Engine</RootNamespace>
+    <!-- Share the API's User Secrets so the Engine reads the same dev DB connection in
+         Development (the real password lives only in User Secrets, never committed). -->
+    <UserSecretsId>d8bc1294-85ff-4b1a-a8c9-dea769437ed8</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,6 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\RentalCommand.Api\RentalCommand.Api.csproj" />
     <ProjectReference Include="..\RentalCommand.Core\RentalCommand.Core.csproj" />
     <ProjectReference Include="..\RentalCommand.Data\RentalCommand.Data.csproj" />
   </ItemGroup>

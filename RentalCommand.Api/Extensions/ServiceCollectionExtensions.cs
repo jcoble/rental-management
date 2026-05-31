@@ -1,4 +1,7 @@
+using RentalCommand.Api.Scanning;
+using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Api.Extensions;
 
@@ -35,6 +38,11 @@ public static class ServiceCollectionExtensions
 
         // Aggregated read-only KPI rollup for the web dashboard.
         services.AddScoped<IDashboardService, DashboardService>();
+
+        // --- scan upload pipeline ---
+        services.AddScoped<IScanFileService, ScanFileService>();
+        services.AddScoped<IScanService, ScanService>();
+        services.AddScoped<IAuditTrailService, AuditTrailService>();
 
         return services;
     }

@@ -82,12 +82,17 @@ are validated to be in-portfolio (cross-tenant IDOR guard). SignalR hub: `/api/v
   add migrations with `dotnet ef migrations add <Name> --project RentalCommand.Data --startup-project RentalCommand.Api`.
 - Web client API calls go through `web/src/lib/api/client.ts` (`fetchApi`/`api`), which
   attaches the bearer token, refreshes-and-retries once on 401, and throws `ApiError`.
-- **Known open issue:** the API has no `JsonStringEnumConverter`, so it binds enums as
-  numbers while the web client sends string enum values → some create/update/status calls
-  return 400. Fix is to register the converter app-wide (read+write enums as strings).
+- Enums serialize as **string names** app-wide: `JsonStringEnumConverter` is registered on
+  both the controllers' JSON options and the SignalR protocol, matching the string enum
+  values the web client sends/receives. Keep new enums working as strings.
 - Testing posture (per project direction): a few UI/E2E tests now (~3–5), defer broad
   regression/unit suites until the system stabilizes. Run heavy spec/code review **per
   phase**, not per task.
+
+## Commit conventions
+
+- Do **NOT** add a `Co-Authored-By: Claude …` trailer (or any AI-attribution line) to commit
+  messages. Keep messages to a clear subject + body only.
 
 ## Phased roadmap
 

@@ -19,11 +19,11 @@
 	} = $props();
 
 	const variants: Record<Variant, string> = {
-		default: 'bg-accent text-white hover:bg-accent-hover',
-		secondary: 'bg-surface-hover text-text-primary hover:bg-border',
-		ghost: 'text-text-secondary hover:bg-surface-hover hover:text-text-primary',
-		danger: 'bg-danger text-white hover:bg-red-600',
-		outline: 'border border-border text-text-secondary hover:bg-surface-hover hover:text-text-primary',
+		default: 'bg-primary text-white hover:bg-primary/90',
+		secondary: 'bg-secondary text-foreground hover:bg-border',
+		ghost: 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+		danger: 'bg-destructive text-white hover:bg-red-600',
+		outline: 'border border-border text-muted-foreground hover:bg-secondary hover:text-foreground',
 	};
 
 	const sizes: Record<Size, string> = {
@@ -36,7 +36,7 @@
 
 <button
 	class={cn(
-		'inline-flex items-center justify-center gap-1.5 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 disabled:opacity-50 disabled:pointer-events-none',
+		'inline-flex items-center justify-center gap-1.5 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-ring/50 disabled:opacity-50 disabled:pointer-events-none',
 		variants[variant],
 		sizes[size],
 		className,

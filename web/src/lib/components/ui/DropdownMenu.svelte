@@ -36,7 +36,7 @@
 	{#if open}
 		<div
 			class={cn(
-				'absolute z-50 mt-1 min-w-[160px] rounded-lg border border-border bg-surface-elevated py-1 shadow-xl',
+				'absolute z-50 mt-1 min-w-[160px] rounded-lg border border-border bg-secondary py-1 shadow-xl',
 				align === 'right' ? 'right-0' : 'left-0',
 			)}
 			role="menu"
