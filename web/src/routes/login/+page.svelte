@@ -6,6 +6,23 @@
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let submitting = $state(false);
+
+	// Field values are bound so the dev quick-fill button below can populate them.
+	let email = $state('');
+	let password = $state('');
+
+	// Repopulate the email after a failed submit (the action echoes it back).
+	$effect(() => {
+		if (form?.email) email = form.email;
+	});
+
+	// Dev-only convenience: prefill the seeded admin so manual testing doesn't
+	// require retyping credentials. Stripped from production builds via the DEV flag.
+	const isDev = import.meta.env.DEV;
+	function fillDevCredentials() {
+		email = 'admin@rentalcommand.local';
+		password = 'Admin123!';
+	}
 </script>
 
 <svelte:head>
@@ -44,7 +61,7 @@
 					type="email"
 					data-testid="login-email-input"
 					autocomplete="email"
-					value={form?.email ?? ''}
+					bind:value={email}
 					required
 					class="w-full rounded border border-border bg-bg px-3 py-2 text-sm text-text-primary"
 					placeholder="you@example.com"
@@ -59,6 +76,7 @@
 					type="password"
 					data-testid="login-password-input"
 					autocomplete="current-password"
+					bind:value={password}
 					required
 					class="w-full rounded border border-border bg-bg px-3 py-2 text-sm text-text-primary"
 					placeholder="••••••••"
@@ -73,6 +91,17 @@
 			>
 				{submitting ? 'Signing in…' : 'Sign In'}
 			</button>
+
+			{#if isDev}
+				<button
+					type="button"
+					data-testid="login-fill-dev"
+					onclick={fillDevCredentials}
+					class="w-full rounded border border-dashed border-border px-3 py-2 text-xs text-text-tertiary transition-colors hover:text-text-secondary"
+				>
+					Fill dev login (admin)
+				</button>
+			{/if}
 
 			{#if form?.error}
 				<p class="text-sm text-danger" role="alert" data-testid="login-error">{form.error}</p>
