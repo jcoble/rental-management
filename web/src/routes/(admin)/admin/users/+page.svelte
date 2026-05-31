@@ -6,6 +6,10 @@
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { clearAuth, hasAnyRole, setCurrentUser } from '$lib/stores/auth.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
+	import * as Card from '$lib/components/ui/card';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -51,6 +55,22 @@
 
 	let form = $state({ displayName: '', email: '', password: '', role: 'Tenant', ownerId: '', tenantId: '' });
 
+	const selectedOwnerLabel = $derived(
+		form.ownerId
+			? (ownersQuery.data || []).find((o: any) => String(o.id) === form.ownerId)?.name ?? form.ownerId
+			: null
+	);
+
+	const selectedTenantLabel = $derived(
+		form.tenantId
+			? (tenantsQuery.data || []).find((t: any) => String(t.id) === form.tenantId)?.fullName
+				?? (() => {
+					const t = (tenantsQuery.data || []).find((t: any) => String(t.id) === form.tenantId);
+					return t ? `${t.firstName} ${t.lastName}` : form.tenantId;
+				})()
+			: null
+	);
+
 	const createUserMutation = createMutation(() => ({
 		mutationFn: () => auth.createUser({
 			portfolioId,
@@ -90,55 +110,88 @@
 		<h1 class="mb-1 text-2xl font-bold">User Access Control</h1>
 		<p class="mb-5 text-sm text-muted-foreground">Role-based user management for admin/manager operations.</p>
 
-		<div class="mb-5 rounded-lg border border-border bg-card p-4">
-			<h2 class="mb-2 font-semibold">Create User</h2>
-			<div class="grid gap-3 md:grid-cols-3">
-				<input bind:value={form.displayName} class="rounded border border-border bg-background px-3 py-2 text-sm" placeholder="Display name" />
-				<input bind:value={form.email} class="rounded border border-border bg-background px-3 py-2 text-sm" placeholder="Email" />
-				<input bind:value={form.password} class="rounded border border-border bg-background px-3 py-2 text-sm" placeholder="Password" />
-				<select bind:value={form.role} class="rounded border border-border bg-background px-3 py-2 text-sm">
-					<option>Admin</option><option>Manager</option><option>Agent</option><option>Owner</option><option>Tenant</option>
-				</select>
-				<select bind:value={form.ownerId} class="rounded border border-border bg-background px-3 py-2 text-sm"><option value="">No owner link</option>{#each ownersQuery.data || [] as owner}<option value={owner.id}>{owner.name}</option>{/each}</select>
-				<select bind:value={form.tenantId} class="rounded border border-border bg-background px-3 py-2 text-sm"><option value="">No tenant link</option>{#each tenantsQuery.data || [] as tenant}<option value={tenant.id}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</option>{/each}</select>
-			</div>
-			<div class="mt-3">
-				<button onclick={submit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={createUserMutation.isPending}>Create User</button>
-			</div>
-		</div>
+		<Card.Root class="mb-5 gap-0 py-0">
+			<Card.Content class="p-4">
+				<h2 class="mb-2 font-semibold">Create User</h2>
+				<div class="grid gap-3 md:grid-cols-3">
+					<Input bind:value={form.displayName} placeholder="Display name" />
+					<Input bind:value={form.email} placeholder="Email" />
+					<Input bind:value={form.password} placeholder="Password" />
+					<Select.Root type="single" bind:value={form.role}>
+						<Select.Trigger class="w-full">
+							{form.role || 'Select role'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="Admin" label="Admin">Admin</Select.Item>
+							<Select.Item value="Manager" label="Manager">Manager</Select.Item>
+							<Select.Item value="Agent" label="Agent">Agent</Select.Item>
+							<Select.Item value="Owner" label="Owner">Owner</Select.Item>
+							<Select.Item value="Tenant" label="Tenant">Tenant</Select.Item>
+						</Select.Content>
+					</Select.Root>
+					<Select.Root type="single" bind:value={form.ownerId}>
+						<Select.Trigger class="w-full">
+							{selectedOwnerLabel ?? 'No owner link'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="No owner link">No owner link</Select.Item>
+							{#each ownersQuery.data || [] as owner}
+								<Select.Item value={String(owner.id)} label={owner.name}>{owner.name}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					<Select.Root type="single" bind:value={form.tenantId}>
+						<Select.Trigger class="w-full">
+							{selectedTenantLabel ?? 'No tenant link'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="No tenant link">No tenant link</Select.Item>
+							{#each tenantsQuery.data || [] as tenant}
+								<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+				<div class="mt-3">
+					<Button onclick={submit} disabled={createUserMutation.isPending}>Create User</Button>
+				</div>
+			</Card.Content>
+		</Card.Root>
 
-		<div class="rounded-lg border border-border bg-card">
-			<div class="overflow-x-auto">
-				<table class="min-w-full text-sm">
-					<thead class="border-b border-border bg-background text-left text-xs uppercase text-muted-foreground">
-						<tr>
-							<th class="px-3 py-2">Name</th>
-							<th class="px-3 py-2">Email</th>
-							<th class="px-3 py-2">Role</th>
-							<th class="px-3 py-2">Status</th>
-							<th class="px-3 py-2">Actions</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each (usersQuery.data as any[]) || [] as user}
-							<tr class="border-b border-border/70">
-								<td class="px-3 py-2 font-medium">{user.displayName}</td>
-								<td class="px-3 py-2">{user.email}</td>
-								<td class="px-3 py-2">{user.role}</td>
-								<td class="px-3 py-2">{user.isActive ? 'Active' : 'Disabled'}</td>
-								<td class="px-3 py-2">
-									<div class="flex gap-2">
-										<button class="rounded border border-border px-2 py-1 text-xs" onclick={() => updateUserMutation.mutate({ id: user.id, isActive: !user.isActive })}>{user.isActive ? 'Disable' : 'Enable'}</button>
-										{#if user.role !== 'Manager'}
-											<button class="rounded border border-border px-2 py-1 text-xs" onclick={() => updateUserMutation.mutate({ id: user.id, role: user.role === 'Agent' ? 'Manager' : 'Agent' })}>Toggle Agent/Manager</button>
-										{/if}
-									</div>
-								</td>
+		<Card.Root class="gap-0 py-0">
+			<Card.Content class="p-0">
+				<div class="overflow-x-auto">
+					<table class="min-w-full text-sm">
+						<thead class="border-b border-border bg-background text-left text-xs uppercase text-muted-foreground">
+							<tr>
+								<th class="px-3 py-2">Name</th>
+								<th class="px-3 py-2">Email</th>
+								<th class="px-3 py-2">Role</th>
+								<th class="px-3 py-2">Status</th>
+								<th class="px-3 py-2">Actions</th>
 							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-		</div>
+						</thead>
+						<tbody>
+							{#each (usersQuery.data as any[]) || [] as user}
+								<tr class="border-b border-border/70">
+									<td class="px-3 py-2 font-medium">{user.displayName}</td>
+									<td class="px-3 py-2">{user.email}</td>
+									<td class="px-3 py-2">{user.role}</td>
+									<td class="px-3 py-2">{user.isActive ? 'Active' : 'Disabled'}</td>
+									<td class="px-3 py-2">
+										<div class="flex gap-2">
+											<Button variant="outline" size="sm" onclick={() => updateUserMutation.mutate({ id: user.id, isActive: !user.isActive })}>{user.isActive ? 'Disable' : 'Enable'}</Button>
+											{#if user.role !== 'Manager'}
+												<Button variant="outline" size="sm" onclick={() => updateUserMutation.mutate({ id: user.id, role: user.role === 'Agent' ? 'Manager' : 'Agent' })}>Toggle Agent/Manager</Button>
+											{/if}
+										</div>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			</Card.Content>
+		</Card.Root>
 	{/if}
 </div>

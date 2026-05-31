@@ -41,10 +41,19 @@ public sealed class ExtractedReceiptDto
 
     // ---- Classification ----
     public RentalCommand.Core.Enums.ScheduleECategory? Category { get; set; }
+    public string? DocumentKind { get; set; }
     public string? Notes { get; set; }
+
+    // ---- Bill / invoice ----
+    public DateTime? DueDate { get; set; }
 
     // ---- Line items ----
     public List<ReceiptLineItem> LineItems { get; set; } = new();
+
+    // ---- Rent check fields (only populated when DocumentKind == "RentCheck") ----
+    public string? PayerName   { get; set; }
+    public string? CheckNumber { get; set; }
+    public string? BankName    { get; set; }
 
     // ---- Catch-all for any extra fields not in the schema ----
     public Dictionary<string, string> Extra { get; set; } = new();

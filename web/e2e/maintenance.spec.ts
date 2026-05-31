@@ -14,13 +14,12 @@ test.describe('Maintenance', () => {
 		await page.getByTestId('work-order-create-button').click();
 		await expect(page.getByTestId('work-order-form')).toBeVisible();
 
-		// Pick the first real property option (index 0 is the placeholder).
-		const propertySelect = page.getByTestId('work-order-property-input');
-		const optionValues = await propertySelect.locator('option').evaluateAll((opts) =>
-			(opts as HTMLOptionElement[]).map((o) => o.value).filter((v) => v !== '')
-		);
-		test.skip(optionValues.length === 0, 'No properties seeded to attach a work order to');
-		await propertySelect.selectOption(optionValues[0]);
+		// Pick the first real property from the shadcn Select dropdown.
+		await page.getByTestId('work-order-property-input').click();
+		const propertyOptions = page.getByRole('option');
+		const optionCount = await propertyOptions.count();
+		test.skip(optionCount === 0, 'No properties seeded to attach a work order to');
+		await propertyOptions.first().click();
 
 		await page.getByTestId('work-order-title-input').fill(title);
 		await page.getByTestId('work-order-description-input').fill('Kitchen sink drips overnight.');

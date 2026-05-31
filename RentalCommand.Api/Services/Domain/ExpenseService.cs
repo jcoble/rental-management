@@ -206,6 +206,9 @@ public class ExpenseService : IExpenseService
         if (request.PaidAt.HasValue) entity.PaidAt = request.PaidAt.ToUtc();
         if (request.BillableToOwner.HasValue) entity.BillableToOwner = request.BillableToOwner.Value;
         if (request.Notes != null) entity.Notes = request.Notes;
+        if (request.Subtotal.HasValue) entity.Subtotal = request.Subtotal;
+        if (request.TaxAmount.HasValue) entity.TaxAmount = request.TaxAmount;
+        if (request.ReceiptData != null) entity.ReceiptData = request.ReceiptData;
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);

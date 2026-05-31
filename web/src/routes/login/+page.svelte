@@ -2,6 +2,9 @@
 	import { enhance } from '$app/forms';
 	import { Building } from '@lucide/svelte';
 	import type { ActionData, PageData } from './$types';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import * as Card from '$lib/components/ui/card';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -30,82 +33,83 @@
 </svelte:head>
 
 <div class="flex h-full items-center justify-center bg-background p-6">
-	<div class="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-xl">
-		<div class="mb-5 flex items-center gap-2">
-			<Building class="h-6 w-6 text-primary" />
-			<h1 class="text-xl font-bold text-foreground">Rental Command</h1>
-		</div>
-		<p class="mb-4 text-sm text-muted-foreground">Sign in to your account.</p>
-
-		<form
-			method="POST"
-			data-testid="login-form"
-			use:enhance={() => {
-				submitting = true;
-				return async ({ update }) => {
-					await update();
-					submitting = false;
-				};
-			}}
-			class="space-y-3"
-		>
-			{#if data.redirectTo}
-				<input type="hidden" name="redirectTo" value={data.redirectTo} />
-			{/if}
-
-			<div>
-				<label for="login-email" class="mb-1 block text-xs text-muted-foreground">Email</label>
-				<input
-					id="login-email"
-					name="email"
-					type="email"
-					data-testid="login-email-input"
-					autocomplete="email"
-					bind:value={email}
-					required
-					class="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
-					placeholder="you@example.com"
-				/>
+	<Card.Root class="w-full max-w-md shadow-xl">
+		<Card.Content class="p-6">
+			<div class="mb-5 flex items-center gap-2">
+				<Building class="h-6 w-6 text-primary" />
+				<h1 class="text-xl font-bold text-foreground">Rental Command</h1>
 			</div>
+			<p class="mb-4 text-sm text-muted-foreground">Sign in to your account.</p>
 
-			<div>
-				<label for="login-password" class="mb-1 block text-xs text-muted-foreground">Password</label>
-				<input
-					id="login-password"
-					name="password"
-					type="password"
-					data-testid="login-password-input"
-					autocomplete="current-password"
-					bind:value={password}
-					required
-					class="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground"
-					placeholder="••••••••"
-				/>
-			</div>
-
-			<button
-				type="submit"
-				data-testid="login-submit"
-				disabled={submitting}
-				class="w-full rounded bg-primary px-3 py-2 text-sm font-medium text-white transition-opacity disabled:opacity-60"
+			<form
+				method="POST"
+				data-testid="login-form"
+				use:enhance={() => {
+					submitting = true;
+					return async ({ update }) => {
+						await update();
+						submitting = false;
+					};
+				}}
+				class="space-y-3"
 			>
-				{submitting ? 'Signing in…' : 'Sign In'}
-			</button>
+				{#if data.redirectTo}
+					<input type="hidden" name="redirectTo" value={data.redirectTo} />
+				{/if}
 
-			{#if isDev}
-				<button
-					type="button"
-					data-testid="login-fill-dev"
-					onclick={fillDevCredentials}
-					class="w-full rounded border border-dashed border-border px-3 py-2 text-xs text-muted-foreground transition-colors hover:text-muted-foreground"
+				<div>
+					<label for="login-email" class="mb-1 block text-xs text-muted-foreground">Email</label>
+					<Input
+						id="login-email"
+						name="email"
+						type="email"
+						data-testid="login-email-input"
+						autocomplete="email"
+						bind:value={email}
+						required
+						placeholder="you@example.com"
+					/>
+				</div>
+
+				<div>
+					<label for="login-password" class="mb-1 block text-xs text-muted-foreground">Password</label>
+					<Input
+						id="login-password"
+						name="password"
+						type="password"
+						data-testid="login-password-input"
+						autocomplete="current-password"
+						bind:value={password}
+						required
+						placeholder="••••••••"
+					/>
+				</div>
+
+				<Button
+					type="submit"
+					data-testid="login-submit"
+					disabled={submitting}
+					class="w-full"
 				>
-					Fill dev login (admin)
-				</button>
-			{/if}
+					{submitting ? 'Signing in…' : 'Sign In'}
+				</Button>
 
-			{#if form?.error}
-				<p class="text-sm text-destructive" role="alert" data-testid="login-error">{form.error}</p>
-			{/if}
-		</form>
-	</div>
+				{#if isDev}
+					<Button
+						type="button"
+						variant="outline"
+						data-testid="login-fill-dev"
+						onclick={fillDevCredentials}
+						class="w-full border-dashed text-xs text-muted-foreground hover:text-muted-foreground"
+					>
+						Fill dev login (admin)
+					</Button>
+				{/if}
+
+				{#if form?.error}
+					<p class="text-sm text-destructive" role="alert" data-testid="login-error">{form.error}</p>
+				{/if}
+			</form>
+		</Card.Content>
+	</Card.Root>
 </div>

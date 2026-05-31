@@ -7,8 +7,12 @@ public static class ReceiptExtractionSchema
     public const string PromptId = "receipt-to-expense-v1";
 
     public const string Instructions =
-        "You are extracting fields from a vendor receipt or invoice for a US residential-rental " +
+        "You are extracting fields from a vendor receipt, bill, invoice, or tenant payment document for a US residential-rental " +
         "bookkeeping system. Read the document and fill every field you can. " +
+        "If the document is a tenant's rent check / cheque / payment stub, set document_kind=RentCheck and fill payer_name, check_number, bank_name, amount, transaction_date. " +
+        "For other documents, classify using 'document_kind': use 'Receipt' for a paid receipt, 'Bill' or 'Invoice' for an unpaid bill or invoice, " +
+        "'UtilityBill' for a utility bill, 'PropertyTax' for a property-tax bill, or 'Other' if none of the above apply. " +
+        "For 'due_date', capture the payment due date if the document is an unpaid bill or invoice; leave blank for an already-paid receipt. " +
         "For 'category', map the expense to the closest IRS Schedule E category. " +
         "For 'line_items', return one object per line item on the receipt (description, quantity, unit_price, amount). " +
         "Leave unknown or absent fields empty — never invent values not present on the document.";
@@ -44,6 +48,17 @@ public static class ReceiptExtractionSchema
         new ExtractionFieldSpec("category", "enum",
             "Closest IRS Schedule E expense category.", Required: true,
             EnumValues: Enum.GetNames<RentalCommand.Core.Enums.ScheduleECategory>()),
+        new ExtractionFieldSpec("due_date", "date",
+            "The payment due date if this is an unpaid bill or invoice; leave blank for an already-paid receipt."),
+        new ExtractionFieldSpec("document_kind", "enum",
+            "Classify the document: a paid Receipt, an unpaid Bill or Invoice, a Utility bill, a Property-tax bill, a tenant rent check / cheque / payment stub (RentCheck), or Other.",
+            EnumValues: new[] { "Receipt", "Bill", "Invoice", "UtilityBill", "PropertyTax", "RentCheck", "Other" }),
+        new ExtractionFieldSpec("payer_name", "string",
+            "Name of the person/tenant who wrote the check. Only set when document_kind=RentCheck."),
+        new ExtractionFieldSpec("check_number", "string",
+            "Check number as printed on the check. Only set when document_kind=RentCheck."),
+        new ExtractionFieldSpec("bank_name", "string",
+            "Name of the bank or financial institution that issued the check. Only set when document_kind=RentCheck."),
         new ExtractionFieldSpec("notes", "string",
             "Any short free-text note (e.g. purpose, job reference). Optional."),
         new ExtractionFieldSpec("line_items", "array",

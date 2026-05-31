@@ -7,10 +7,13 @@
 	import { ownerSchema, vendorSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
-	import Dialog from '$lib/components/ui/Dialog.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import * as Card from '$lib/components/ui/card';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -151,7 +154,6 @@
 
 	const ownersList = $derived(ownersQuery.data ?? []);
 	const vendorsList = $derived(vendorsQuery.data ?? []);
-	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
 </script>
 
 <svelte:head>
@@ -165,10 +167,10 @@
 	</div>
 
 	<div class="grid gap-4 lg:grid-cols-2">
-		<div class="rounded-lg border border-border bg-card">
+		<Card.Root class="gap-0 py-0">
 			<div class="flex items-center justify-between border-b border-border px-4 py-3">
 				<span class="font-semibold">Owners</span>
-				<button data-testid="owner-create-button" class="inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1.5 text-xs text-white" onclick={openCreateOwner}><Plus class="h-3.5 w-3.5" /> Add</button>
+				<Button data-testid="owner-create-button" size="sm" class="gap-1" onclick={openCreateOwner}><Plus class="h-3.5 w-3.5" /> Add</Button>
 			</div>
 			<div class="border-b border-border px-3 py-2"><SearchInput bind:value={ownerSearch} placeholder="Search owners…" testid="owner-search" /></div>
 			<div class="space-y-2 p-3" data-testid="owners-list">
@@ -176,28 +178,30 @@
 					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="owners-empty">No owners found.</p>
 				{:else}
 					{#each ownersList as owner (owner.id)}
-						<div class="rounded border border-border bg-background p-3 text-sm" data-testid="owner-row" data-owner-id={owner.id}>
-							<div class="flex items-start justify-between gap-2">
-								<div class="min-w-0">
-									<p class="truncate font-medium" data-testid="owner-name">{owner.name}</p>
-									<p class="text-xs text-muted-foreground">{owner.email || 'No email'} · {owner.phone || 'No phone'}</p>
-									<p class="text-xs text-muted-foreground">{owner.propertyCount || 0} properties</p>
+						<Card.Root class="gap-0 py-0" data-testid="owner-row" data-owner-id={owner.id}>
+							<Card.Content class="p-3 text-sm">
+								<div class="flex items-start justify-between gap-2">
+									<div class="min-w-0">
+										<p class="truncate font-medium" data-testid="owner-name">{owner.name}</p>
+										<p class="text-xs text-muted-foreground">{owner.email || 'No email'} · {owner.phone || 'No phone'}</p>
+										<p class="text-xs text-muted-foreground">{owner.propertyCount || 0} properties</p>
+									</div>
+									<div class="flex shrink-0 gap-1">
+										<Button data-testid="owner-edit" aria-label="Edit owner" variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground" onclick={() => openEditOwner(owner)}><Pencil class="h-4 w-4" /></Button>
+										<Button data-testid="owner-delete" aria-label="Delete owner" variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground" onclick={() => (ownerDeleteTarget = owner)}><Trash2 class="h-4 w-4" /></Button>
+									</div>
 								</div>
-								<div class="flex shrink-0 gap-1">
-									<button data-testid="owner-edit" aria-label="Edit owner" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" onclick={() => openEditOwner(owner)}><Pencil class="h-4 w-4" /></button>
-									<button data-testid="owner-delete" aria-label="Delete owner" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive" onclick={() => (ownerDeleteTarget = owner)}><Trash2 class="h-4 w-4" /></button>
-								</div>
-							</div>
-						</div>
+							</Card.Content>
+						</Card.Root>
 					{/each}
 				{/if}
 			</div>
-		</div>
+		</Card.Root>
 
-		<div class="rounded-lg border border-border bg-card">
+		<Card.Root class="gap-0 py-0">
 			<div class="flex items-center justify-between border-b border-border px-4 py-3">
 				<span class="font-semibold">Vendors</span>
-				<button data-testid="vendor-create-button" class="inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1.5 text-xs text-white" onclick={openCreateVendor}><Plus class="h-3.5 w-3.5" /> Add</button>
+				<Button data-testid="vendor-create-button" size="sm" class="gap-1" onclick={openCreateVendor}><Plus class="h-3.5 w-3.5" /> Add</Button>
 			</div>
 			<div class="border-b border-border px-3 py-2"><SearchInput bind:value={vendorSearch} placeholder="Search vendors…" testid="vendor-search" /></div>
 			<div class="space-y-2 p-3" data-testid="vendors-list">
@@ -205,71 +209,83 @@
 					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="vendors-empty">No vendors found.</p>
 				{:else}
 					{#each vendorsList as vendor (vendor.id)}
-						<div class="rounded border border-border bg-background p-3 text-sm" data-testid="vendor-row" data-vendor-id={vendor.id}>
-							<div class="flex items-start justify-between gap-2">
-								<div class="min-w-0">
-									<p class="truncate font-medium" data-testid="vendor-name">{vendor.name}</p>
-									<p class="text-xs text-muted-foreground">{vendor.serviceType}</p>
-									<p class="text-xs text-muted-foreground">{vendor.email || 'No email'} · {vendor.phone || 'No phone'}</p>
-									<p class="text-xs text-muted-foreground">1099: {vendor.is1099Eligible ? 'Yes' : 'No'} · W-9: {vendor.w9OnFile ? 'On file' : 'Missing'}</p>
+						<Card.Root class="gap-0 py-0" data-testid="vendor-row" data-vendor-id={vendor.id}>
+							<Card.Content class="p-3 text-sm">
+								<div class="flex items-start justify-between gap-2">
+									<div class="min-w-0">
+										<p class="truncate font-medium" data-testid="vendor-name">{vendor.name}</p>
+										<p class="text-xs text-muted-foreground">{vendor.serviceType}</p>
+										<p class="text-xs text-muted-foreground">{vendor.email || 'No email'} · {vendor.phone || 'No phone'}</p>
+										<p class="text-xs text-muted-foreground">1099: {vendor.is1099Eligible ? 'Yes' : 'No'} · W-9: {vendor.w9OnFile ? 'On file' : 'Missing'}</p>
+									</div>
+									<div class="flex shrink-0 gap-1">
+										<Button data-testid="vendor-edit" aria-label="Edit vendor" variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground" onclick={() => openEditVendor(vendor)}><Pencil class="h-4 w-4" /></Button>
+										<Button data-testid="vendor-delete" aria-label="Delete vendor" variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground" onclick={() => (vendorDeleteTarget = vendor)}><Trash2 class="h-4 w-4" /></Button>
+									</div>
 								</div>
-								<div class="flex shrink-0 gap-1">
-									<button data-testid="vendor-edit" aria-label="Edit vendor" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" onclick={() => openEditVendor(vendor)}><Pencil class="h-4 w-4" /></button>
-									<button data-testid="vendor-delete" aria-label="Delete vendor" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive" onclick={() => (vendorDeleteTarget = vendor)}><Trash2 class="h-4 w-4" /></button>
-								</div>
-							</div>
-						</div>
+							</Card.Content>
+						</Card.Root>
 					{/each}
 				{/if}
 			</div>
-		</div>
+		</Card.Root>
 	</div>
 </div>
 
-<Dialog open={showOwnerForm} title={editingOwnerId == null ? 'New Owner' : 'Edit Owner'} class="max-w-md" onclose={closeOwnerForm}>
-	<div class="space-y-2" data-testid="owner-form">
-		<div>
-			<input data-testid="owner-name-input" bind:value={ownerForm.name} class="{inputClass} w-full" placeholder="Owner name" />
-			{#if ownerErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="owner-name-error">{ownerErrors.name}</p>{/if}
+<Dialog.Root open={showOwnerForm} onOpenChange={(v) => { if (!v) closeOwnerForm(); }}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>{editingOwnerId == null ? 'New Owner' : 'Edit Owner'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="space-y-2" data-testid="owner-form">
+			<div>
+				<Input data-testid="owner-name-input" bind:value={ownerForm.name} placeholder="Owner name" />
+				{#if ownerErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="owner-name-error">{ownerErrors.name}</p>{/if}
+			</div>
+			<div>
+				<Input data-testid="owner-email-input" bind:value={ownerForm.email} placeholder="Owner email" />
+				{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="owner-email-error">{ownerErrors.email}</p>{/if}
+			</div>
+			<Input data-testid="owner-phone-input" bind:value={ownerForm.phone} placeholder="Owner phone" />
 		</div>
-		<div>
-			<input data-testid="owner-email-input" bind:value={ownerForm.email} class="{inputClass} w-full" placeholder="Owner email" />
-			{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="owner-email-error">{ownerErrors.email}</p>{/if}
+		<div class="mt-4 flex justify-end gap-2">
+			<Button data-testid="owner-form-cancel" variant="outline" onclick={closeOwnerForm}>Cancel</Button>
+			<Button data-testid="owner-form-save" onclick={submitOwner} disabled={saveOwnerMutation.isPending}>{saveOwnerMutation.isPending ? 'Saving…' : 'Save Owner'}</Button>
 		</div>
-		<input data-testid="owner-phone-input" bind:value={ownerForm.phone} class="{inputClass} w-full" placeholder="Owner phone" />
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="owner-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeOwnerForm}>Cancel</button>
-		<button data-testid="owner-form-save" onclick={submitOwner} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveOwnerMutation.isPending}>{saveOwnerMutation.isPending ? 'Saving…' : 'Save Owner'}</button>
-	</div>
-</Dialog>
+	</Dialog.Content>
+</Dialog.Root>
 
-<Dialog open={showVendorForm} title={editingVendorId == null ? 'New Vendor' : 'Edit Vendor'} class="max-w-md" onclose={closeVendorForm}>
-	<div class="space-y-2" data-testid="vendor-form">
-		<div>
-			<input data-testid="vendor-name-input" bind:value={vendorForm.name} class="{inputClass} w-full" placeholder="Vendor name" />
-			{#if vendorErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="vendor-name-error">{vendorErrors.name}</p>{/if}
+<Dialog.Root open={showVendorForm} onOpenChange={(v) => { if (!v) closeVendorForm(); }}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>{editingVendorId == null ? 'New Vendor' : 'Edit Vendor'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="space-y-2" data-testid="vendor-form">
+			<div>
+				<Input data-testid="vendor-name-input" bind:value={vendorForm.name} placeholder="Vendor name" />
+				{#if vendorErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="vendor-name-error">{vendorErrors.name}</p>{/if}
+			</div>
+			<div>
+				<Input data-testid="vendor-service-input" bind:value={vendorForm.serviceType} placeholder="Service type" />
+				{#if vendorErrors.serviceType}<p class="mt-1 text-xs text-destructive" data-testid="vendor-service-error">{vendorErrors.serviceType}</p>{/if}
+			</div>
+			<div>
+				<Input data-testid="vendor-email-input" bind:value={vendorForm.email} placeholder="Vendor email" />
+				{#if vendorErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="vendor-email-error">{vendorErrors.email}</p>{/if}
+			</div>
+			<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" />
+			<div class="flex flex-wrap gap-4 text-sm">
+				<label class="flex items-center gap-1.5"><input data-testid="vendor-1099-input" type="checkbox" bind:checked={vendorForm.is1099Eligible} /> 1099 eligible</label>
+				<label class="flex items-center gap-1.5"><input data-testid="vendor-w9-input" type="checkbox" bind:checked={vendorForm.w9OnFile} /> W-9 on file</label>
+				<label class="flex items-center gap-1.5"><input data-testid="vendor-preferred-input" type="checkbox" bind:checked={vendorForm.preferred} /> Preferred</label>
+			</div>
 		</div>
-		<div>
-			<input data-testid="vendor-service-input" bind:value={vendorForm.serviceType} class="{inputClass} w-full" placeholder="Service type" />
-			{#if vendorErrors.serviceType}<p class="mt-1 text-xs text-destructive" data-testid="vendor-service-error">{vendorErrors.serviceType}</p>{/if}
+		<div class="mt-4 flex justify-end gap-2">
+			<Button data-testid="vendor-form-cancel" variant="outline" onclick={closeVendorForm}>Cancel</Button>
+			<Button data-testid="vendor-form-save" onclick={submitVendor} disabled={saveVendorMutation.isPending}>{saveVendorMutation.isPending ? 'Saving…' : 'Save Vendor'}</Button>
 		</div>
-		<div>
-			<input data-testid="vendor-email-input" bind:value={vendorForm.email} class="{inputClass} w-full" placeholder="Vendor email" />
-			{#if vendorErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="vendor-email-error">{vendorErrors.email}</p>{/if}
-		</div>
-		<input data-testid="vendor-phone-input" bind:value={vendorForm.phone} class="{inputClass} w-full" placeholder="Vendor phone" />
-		<div class="flex flex-wrap gap-4 text-sm">
-			<label class="flex items-center gap-1.5"><input data-testid="vendor-1099-input" type="checkbox" bind:checked={vendorForm.is1099Eligible} /> 1099 eligible</label>
-			<label class="flex items-center gap-1.5"><input data-testid="vendor-w9-input" type="checkbox" bind:checked={vendorForm.w9OnFile} /> W-9 on file</label>
-			<label class="flex items-center gap-1.5"><input data-testid="vendor-preferred-input" type="checkbox" bind:checked={vendorForm.preferred} /> Preferred</label>
-		</div>
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="vendor-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeVendorForm}>Cancel</button>
-		<button data-testid="vendor-form-save" onclick={submitVendor} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveVendorMutation.isPending}>{saveVendorMutation.isPending ? 'Saving…' : 'Save Vendor'}</button>
-	</div>
-</Dialog>
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	open={ownerDeleteTarget !== null}

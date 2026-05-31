@@ -6,22 +6,35 @@
 	import { leases } from '$lib/api/endpoints/leases';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { properties } from '$lib/api/endpoints/properties';
+	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Payment, Expense, AccountingSummary } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
-	import Dialog from '$lib/components/ui/Dialog.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import { Pencil, Trash2, Plus } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
+	import * as Card from '$lib/components/ui/card';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 20;
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
+	// Schedule E categories (mirrors RentalCommand.Core.Enums.ScheduleECategory — the values the API accepts).
+	const EXPENSE_CATEGORIES = [
+		'Advertising', 'AutoTravel', 'CleaningMaintenance', 'Commissions', 'Insurance',
+		'LegalProfessional', 'ManagementFees', 'MortgageInterest', 'Repairs', 'Supplies',
+		'Taxes', 'Utilities', 'Depreciation', 'Other'
+	];
+	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
 
 	let paymentSearch = $state('');
 	let paymentSkip = $state(0);
@@ -44,6 +57,7 @@
 	const leasesQuery = createQuery(() => ({ queryKey: ['leases', portfolioId], queryFn: () => leases.list(portfolioId, { take: 200 }) }));
 	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }) }));
 	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
+	const workOrdersQuery = createQuery(() => ({ queryKey: ['work-orders', portfolioId], queryFn: () => workOrders.list(portfolioId, { take: 200 }) }));
 
 	// --- Payment form/dialog ---
 	const emptyPayment = { leaseId: '', amount: '', dueDate: '', type: 'Rent', status: 'Scheduled' };
@@ -116,12 +130,20 @@
 	}
 
 	// --- Expense form/dialog ---
-	const emptyExpense = { category: 'Repairs', description: '', amount: '', incurredAt: '', propertyId: '', vendorId: '', status: 'Pending' };
+	const emptyExpense = {
+		category: 'Repairs', description: '', amount: '', subtotal: '', taxAmount: '',
+		incurredAt: '', dueDate: '', paidAt: '', propertyId: '', vendorId: '', workOrderId: '',
+		status: 'Pending', billableToOwner: false, notes: '',
+		vendorAddress: '', vendorPhone: '', vendorWebsite: '', vendorTaxId: '',
+		receiptNumber: '', paymentMethod: '', cardLast4: '', taxRate: '', tip: '', discount: '', shipping: ''
+	};
 	let showExpenseForm = $state(false);
 	let editingExpenseId = $state<number | null>(null);
 	let expenseForm = $state({ ...emptyExpense });
 	let expenseErrors = $state<Record<string, string>>({});
 	let expenseDeleteTarget = $state<Expense | null>(null);
+	// Holds the parsed ReceiptData of the expense being edited, so line items / extra survive a re-save.
+	let editingReceipt = $state<Record<string, any> | null>(null);
 
 	function invalidateExpenses() {
 		queryClient.invalidateQueries({ queryKey: ['expenses', portfolioId] });
@@ -151,16 +173,40 @@
 
 	function openCreateExpense() {
 		editingExpenseId = null;
+		editingReceipt = null;
 		expenseForm = { ...emptyExpense };
 		expenseErrors = {};
 		showExpenseForm = true;
 	}
 	function openEditExpense(e: Expense) {
 		editingExpenseId = e.id;
+		let rd: Record<string, any> | null = null;
+		try { rd = e.receiptData ? JSON.parse(e.receiptData) : null; } catch { rd = null; }
+		editingReceipt = rd;
 		expenseForm = {
 			category: e.category, description: e.description, amount: String(e.amount),
-			incurredAt: e.incurredAt?.slice(0, 10) ?? '', propertyId: e.propertyId != null ? String(e.propertyId) : '',
-			vendorId: e.vendorId != null ? String(e.vendorId) : '', status: e.status,
+			subtotal: e.subtotal != null ? String(e.subtotal) : '',
+			taxAmount: e.taxAmount != null ? String(e.taxAmount) : '',
+			incurredAt: e.incurredAt?.slice(0, 10) ?? '',
+			dueDate: e.dueDate?.slice(0, 10) ?? '',
+			paidAt: e.paidAt?.slice(0, 10) ?? '',
+			propertyId: e.propertyId != null ? String(e.propertyId) : '',
+			vendorId: e.vendorId != null ? String(e.vendorId) : '',
+			workOrderId: e.workOrderId != null ? String(e.workOrderId) : '',
+			status: e.status,
+			billableToOwner: !!e.billableToOwner,
+			notes: e.notes ?? '',
+			vendorAddress: rd?.vendor?.address ?? '',
+			vendorPhone: rd?.vendor?.phone ?? '',
+			vendorWebsite: rd?.vendor?.website ?? '',
+			vendorTaxId: rd?.vendor?.taxId ?? '',
+			receiptNumber: rd?.receiptNumber ?? '',
+			paymentMethod: rd?.paymentMethod ?? '',
+			cardLast4: rd?.cardLast4 ?? '',
+			taxRate: rd?.taxRate != null ? String(rd.taxRate) : '',
+			tip: rd?.tip != null ? String(rd.tip) : '',
+			discount: rd?.discount != null ? String(rd.discount) : '',
+			shipping: rd?.shipping != null ? String(rd.shipping) : ''
 		};
 		expenseErrors = {};
 		showExpenseForm = true;
@@ -177,7 +223,40 @@
 			return;
 		}
 		expenseErrors = {};
-		saveExpenseMutation.mutate({ id: editingExpenseId, data: { portfolioId, ...result.data } });
+		const d = result.data;
+		// Nest the receipt-detail fields into the same ReceiptData JSON shape the scan path produces,
+		// preserving any line items / extra that came from a prior scan of this expense.
+		const hasReceiptDetail = !!(
+			d.vendorAddress || d.vendorPhone || d.vendorWebsite || d.vendorTaxId || d.receiptNumber ||
+			d.paymentMethod || d.cardLast4 || d.taxRate != null || d.tip != null || d.discount != null ||
+			d.shipping != null || (editingReceipt?.lineItems?.length ?? 0) > 0
+		);
+		const receiptData = hasReceiptDetail
+			? JSON.stringify({
+					documentKind: editingReceipt?.documentKind ?? null,
+					dueDate: d.dueDate,
+					vendor: { address: d.vendorAddress, phone: d.vendorPhone, website: d.vendorWebsite, taxId: d.vendorTaxId },
+					receiptNumber: d.receiptNumber,
+					paymentMethod: d.paymentMethod,
+					cardLast4: d.cardLast4,
+					taxRate: d.taxRate,
+					tip: d.tip,
+					discount: d.discount,
+					shipping: d.shipping,
+					lineItems: editingReceipt?.lineItems ?? [],
+					extra: editingReceipt?.extra ?? {}
+				})
+			: null;
+		const data: Record<string, unknown> = {
+			portfolioId,
+			description: d.description, amount: d.amount, subtotal: d.subtotal, taxAmount: d.taxAmount,
+			category: d.category, status: d.status,
+			incurredAt: d.incurredAt, dueDate: d.dueDate, paidAt: d.paidAt,
+			propertyId: d.propertyId, vendorId: d.vendorId, workOrderId: d.workOrderId,
+			billableToOwner: d.billableToOwner, notes: d.notes
+		};
+		if (receiptData != null) data.receiptData = receiptData;
+		saveExpenseMutation.mutate({ id: editingExpenseId, data });
 	}
 
 	function money(value: number) {
@@ -186,7 +265,22 @@
 	const paymentsList = $derived(paymentsQuery.data ?? []);
 	const expensesList = $derived(expensesQuery.data ?? []);
 	const summary = $derived(accountingSummaryQuery.data as AccountingSummary | undefined);
-	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
+
+	// Derived labels for Select triggers
+	const selectedLeaseLabel = $derived(
+		(leasesQuery.data || []).find((l) => String(l.id) === paymentForm.leaseId)
+			? `${(leasesQuery.data || []).find((l) => String(l.id) === paymentForm.leaseId)!.leaseNumber} · ${(leasesQuery.data || []).find((l) => String(l.id) === paymentForm.leaseId)!.tenantName}`
+			: null
+	);
+	const selectedPropertyLabel = $derived(
+		(propertiesQuery.data || []).find((p) => String(p.id) === expenseForm.propertyId)?.name ?? null
+	);
+	const selectedVendorLabel = $derived(
+		(vendorsQuery.data || []).find((v) => String(v.id) === expenseForm.vendorId)?.name ?? null
+	);
+	const selectedWorkOrderLabel = $derived(
+		(workOrdersQuery.data || []).find((w) => String(w.id) === expenseForm.workOrderId)?.title ?? null
+	);
 </script>
 
 <svelte:head>
@@ -200,20 +294,42 @@
 	</div>
 
 	<div class="mb-5 grid gap-4 md:grid-cols-4">
-		<div class="rounded-lg border border-border bg-card p-4" data-testid="accounting-collected"><p class="text-xs text-muted-foreground">Collected</p><p class="text-2xl font-bold">{money(summary?.payments.collected || 0)}</p></div>
-		<div class="rounded-lg border border-border bg-card p-4" data-testid="accounting-outstanding"><p class="text-xs text-muted-foreground">Outstanding</p><p class="text-2xl font-bold">{money(summary?.payments.outstanding || 0)}</p></div>
-		<div class="rounded-lg border border-border bg-card p-4" data-testid="accounting-overdue"><p class="text-xs text-muted-foreground">Overdue</p><p class="text-2xl font-bold">{money(summary?.payments.overdue || 0)}</p></div>
-		<div class="rounded-lg border border-border bg-card p-4" data-testid="accounting-expenses"><p class="text-xs text-muted-foreground">Expenses</p><p class="text-2xl font-bold">{money(summary?.totalExpenses || 0)}</p></div>
+		<Card.Root class="gap-0 py-0" data-testid="accounting-collected">
+			<Card.Content class="p-4">
+				<p class="text-xs text-muted-foreground">Collected</p>
+				<p class="text-2xl font-bold">{money(summary?.payments.collected || 0)}</p>
+			</Card.Content>
+		</Card.Root>
+		<Card.Root class="gap-0 py-0" data-testid="accounting-outstanding">
+			<Card.Content class="p-4">
+				<p class="text-xs text-muted-foreground">Outstanding</p>
+				<p class="text-2xl font-bold">{money(summary?.payments.outstanding || 0)}</p>
+			</Card.Content>
+		</Card.Root>
+		<Card.Root class="gap-0 py-0" data-testid="accounting-overdue">
+			<Card.Content class="p-4">
+				<p class="text-xs text-muted-foreground">Overdue</p>
+				<p class="text-2xl font-bold">{money(summary?.payments.overdue || 0)}</p>
+			</Card.Content>
+		</Card.Root>
+		<Card.Root class="gap-0 py-0" data-testid="accounting-expenses">
+			<Card.Content class="p-4">
+				<p class="text-xs text-muted-foreground">Expenses</p>
+				<p class="text-2xl font-bold">{money(summary?.totalExpenses || 0)}</p>
+			</Card.Content>
+		</Card.Root>
 	</div>
 
 	<div class="grid gap-4 lg:grid-cols-2">
-		<div class="rounded-lg border border-border bg-card">
-			<div class="flex items-center justify-between border-b border-border px-4 py-3">
-				<span class="font-semibold">Payments</span>
-				<button data-testid="payment-create-button" class="inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1.5 text-xs text-white" onclick={openCreatePayment}><Plus class="h-3.5 w-3.5" /> Add</button>
-			</div>
+		<Card.Root class="gap-0 py-0">
+			<Card.Header class="flex-row items-center justify-between border-b border-border px-4 py-3 space-y-0">
+				<Card.Title class="text-base font-semibold">Payments</Card.Title>
+				<Card.Action>
+					<Button data-testid="payment-create-button" size="sm" onclick={openCreatePayment}><Plus class="h-3.5 w-3.5" /> Add</Button>
+				</Card.Action>
+			</Card.Header>
 			<div class="border-b border-border px-3 py-2"><SearchInput bind:value={paymentSearch} placeholder="Search payments…" testid="payment-search" /></div>
-			<div class="max-h-[40vh] space-y-2 overflow-y-auto p-3" data-testid="payments-list">
+			<Card.Content class="max-h-[40vh] space-y-2 overflow-y-auto p-3" data-testid="payments-list">
 				{#if paymentsQuery.isLoading}
 					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="payments-loading">Loading…</p>
 				{:else if paymentsList.length === 0}
@@ -228,24 +344,28 @@
 							<p class="text-xs text-muted-foreground">{payment.type} · {money(payment.amount)} · Due {new Date(payment.dueDate).toLocaleDateString()}</p>
 							<div class="mt-2 flex gap-2">
 								{#if payment.status !== 'Paid'}
-									<button data-testid="payment-mark-paid" class="rounded border border-border px-2 py-1 text-xs" onclick={() => markPaidMutation.mutate(payment.id)}>Mark Paid</button>
+									<Button data-testid="payment-mark-paid" variant="outline" size="sm" onclick={() => markPaidMutation.mutate(payment.id)}>Mark Paid</Button>
 								{/if}
-								<button data-testid="payment-edit" aria-label="Edit payment" class="rounded border border-border px-2 py-1 text-xs" onclick={() => openEditPayment(payment)}><Pencil class="h-3.5 w-3.5" /></button>
-								<button data-testid="payment-delete" aria-label="Delete payment" class="rounded border border-border px-2 py-1 text-xs hover:text-destructive" onclick={() => (paymentDeleteTarget = payment)}><Trash2 class="h-3.5 w-3.5" /></button>
+								<Button data-testid="payment-edit" aria-label="Edit payment" variant="outline" size="icon" onclick={() => openEditPayment(payment)}><Pencil class="h-3.5 w-3.5" /></Button>
+								<Button data-testid="payment-delete" aria-label="Delete payment" variant="outline" size="icon" onclick={() => (paymentDeleteTarget = payment)}><Trash2 class="h-3.5 w-3.5" /></Button>
 							</div>
 						</div>
 					{/each}
 				{/if}
-			</div>
-			<div class="border-t border-border px-3 py-2"><Pagination bind:skip={paymentSkip} take={PAGE_SIZE} count={paymentsList.length} testid="payment-pagination" /></div>
-		</div>
+			</Card.Content>
+			<Card.Footer class="border-t border-border px-3 py-2">
+				<Pagination bind:skip={paymentSkip} take={PAGE_SIZE} count={paymentsList.length} testid="payment-pagination" />
+			</Card.Footer>
+		</Card.Root>
 
-		<div class="rounded-lg border border-border bg-card">
-			<div class="flex items-center justify-between border-b border-border px-4 py-3">
-				<span class="font-semibold">Expenses</span>
-				<button data-testid="expense-create-button" class="inline-flex items-center gap-1 rounded bg-primary px-2.5 py-1.5 text-xs text-white" onclick={openCreateExpense}><Plus class="h-3.5 w-3.5" /> Add</button>
-			</div>
-			<div class="max-h-[46vh] space-y-2 overflow-y-auto p-3" data-testid="expenses-list">
+		<Card.Root class="gap-0 py-0">
+			<Card.Header class="flex-row items-center justify-between border-b border-border px-4 py-3 space-y-0">
+				<Card.Title class="text-base font-semibold">Expenses</Card.Title>
+				<Card.Action>
+					<Button data-testid="expense-create-button" size="sm" onclick={openCreateExpense}><Plus class="h-3.5 w-3.5" /> Add</Button>
+				</Card.Action>
+			</Card.Header>
+			<Card.Content class="max-h-[46vh] space-y-2 overflow-y-auto p-3" data-testid="expenses-list">
 				{#if expensesQuery.isLoading}
 					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="expenses-loading">Loading…</p>
 				{:else if expensesList.length === 0}
@@ -259,8 +379,8 @@
 							</div>
 							<p class="text-xs text-muted-foreground">{expense.category} · {money(expense.amount)} · {expense.propertyName || 'General'}</p>
 							<div class="mt-2 flex items-center gap-2">
-								<button data-testid="expense-edit" aria-label="Edit expense" class="rounded border border-border px-2 py-1 text-xs" onclick={() => openEditExpense(expense)}><Pencil class="h-3.5 w-3.5" /></button>
-								<button data-testid="expense-delete" aria-label="Delete expense" class="rounded border border-border px-2 py-1 text-xs hover:text-destructive" onclick={() => (expenseDeleteTarget = expense)}><Trash2 class="h-3.5 w-3.5" /></button>
+								<Button data-testid="expense-edit" aria-label="Edit expense" variant="outline" size="icon" onclick={() => openEditExpense(expense)}><Pencil class="h-3.5 w-3.5" /></Button>
+								<Button data-testid="expense-delete" aria-label="Delete expense" variant="outline" size="icon" onclick={() => (expenseDeleteTarget = expense)}><Trash2 class="h-3.5 w-3.5" /></Button>
 								{#if expense.hasReceipt}
 									{#if expense.receiptIsImage}
 										<a
@@ -292,71 +412,263 @@
 						</div>
 					{/each}
 				{/if}
-			</div>
-		</div>
+			</Card.Content>
+		</Card.Root>
 	</div>
 </div>
 
-<Dialog open={showPaymentForm} title={editingPaymentId == null ? 'New Payment' : 'Edit Payment'} class="max-w-lg" onclose={closePaymentForm}>
-	<div class="space-y-2" data-testid="payment-form">
-		<div>
-			<select data-testid="payment-lease-input" bind:value={paymentForm.leaseId} class="{inputClass} w-full">
-				<option value="">Select lease</option>
-				{#each leasesQuery.data || [] as lease}<option value={lease.id}>{lease.leaseNumber} · {lease.tenantName}</option>{/each}
-			</select>
-			{#if paymentErrors.leaseId}<p class="mt-1 text-xs text-destructive" data-testid="payment-lease-error">{paymentErrors.leaseId}</p>{/if}
-		</div>
-		<div class="grid grid-cols-2 gap-2">
+<Dialog.Root
+	open={showPaymentForm}
+	onOpenChange={(v) => { if (!v) closePaymentForm(); }}
+>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>{editingPaymentId == null ? 'New Payment' : 'Edit Payment'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="space-y-2" data-testid="payment-form">
 			<div>
-				<input data-testid="payment-amount-input" bind:value={paymentForm.amount} class="{inputClass} w-full" placeholder="Amount" />
-				{#if paymentErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-error">{paymentErrors.amount}</p>{/if}
+				<Select.Root type="single" bind:value={paymentForm.leaseId}>
+					<Select.Trigger class="w-full" data-testid="payment-lease-input">
+						{selectedLeaseLabel ?? 'Select lease'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="Select lease">Select lease</Select.Item>
+						{#each leasesQuery.data || [] as lease}
+							<Select.Item value={String(lease.id)} label="{lease.leaseNumber} · {lease.tenantName}">{lease.leaseNumber} · {lease.tenantName}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+				{#if paymentErrors.leaseId}<p class="mt-1 text-xs text-destructive" data-testid="payment-lease-error">{paymentErrors.leaseId}</p>{/if}
 			</div>
-			<div>
-				<input data-testid="payment-due-date-input" type="date" bind:value={paymentForm.dueDate} class="{inputClass} w-full" />
-				{#if paymentErrors.dueDate}<p class="mt-1 text-xs text-destructive" data-testid="payment-due-date-error">{paymentErrors.dueDate}</p>{/if}
+			<div class="grid grid-cols-2 gap-2">
+				<div>
+					<Input data-testid="payment-amount-input" bind:value={paymentForm.amount} placeholder="Amount" />
+					{#if paymentErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-error">{paymentErrors.amount}</p>{/if}
+				</div>
+				<div>
+					<Input data-testid="payment-due-date-input" type="date" bind:value={paymentForm.dueDate} />
+					{#if paymentErrors.dueDate}<p class="mt-1 text-xs text-destructive" data-testid="payment-due-date-error">{paymentErrors.dueDate}</p>{/if}
+				</div>
+			</div>
+			<div class="grid grid-cols-2 gap-2">
+				<Select.Root type="single" bind:value={paymentForm.type}>
+					<Select.Trigger class="w-full" data-testid="payment-type-input">
+						{paymentForm.type || 'Select type'}
+					</Select.Trigger>
+					<Select.Content>
+						{#each PAYMENT_TYPES as t}
+							<Select.Item value={t} label={t}>{t}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+				<Select.Root type="single" bind:value={paymentForm.status}>
+					<Select.Trigger class="w-full" data-testid="payment-status-input">
+						{paymentForm.status || 'Select status'}
+					</Select.Trigger>
+					<Select.Content>
+						{#each PAYMENT_STATUSES as s}
+							<Select.Item value={s} label={s}>{s}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
 			</div>
 		</div>
-		<div class="grid grid-cols-2 gap-2">
-			<select data-testid="payment-type-input" bind:value={paymentForm.type} class={inputClass}>{#each PAYMENT_TYPES as t}<option value={t}>{t}</option>{/each}</select>
-			<select data-testid="payment-status-input" bind:value={paymentForm.status} class={inputClass}>{#each PAYMENT_STATUSES as s}<option value={s}>{s}</option>{/each}</select>
-		</div>
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="payment-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closePaymentForm}>Cancel</button>
-		<button data-testid="payment-form-save" onclick={submitPayment} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save Payment'}</button>
-	</div>
-</Dialog>
+		<Dialog.Footer>
+			<Button data-testid="payment-form-cancel" variant="outline" onclick={closePaymentForm}>Cancel</Button>
+			<Button data-testid="payment-form-save" onclick={submitPayment} disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save Payment'}</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
-<Dialog open={showExpenseForm} title={editingExpenseId == null ? 'New Expense' : 'Edit Expense'} class="max-w-lg" onclose={closeExpenseForm}>
-	<div class="space-y-2" data-testid="expense-form">
-		<div>
-			<input data-testid="expense-description-input" bind:value={expenseForm.description} class="{inputClass} w-full" placeholder="Description" />
-			{#if expenseErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expense-description-error">{expenseErrors.description}</p>{/if}
-		</div>
-		<div class="grid grid-cols-2 gap-2">
+<Dialog.Root
+	open={showExpenseForm}
+	onOpenChange={(v) => { if (!v) closeExpenseForm(); }}
+>
+	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto">
+		<Dialog.Header>
+			<Dialog.Title>{editingExpenseId == null ? 'New Expense' : 'Edit Expense'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="space-y-4" data-testid="expense-form">
 			<div>
-				<input data-testid="expense-amount-input" bind:value={expenseForm.amount} class="{inputClass} w-full" placeholder="Amount" />
-				{#if expenseErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expense-amount-error">{expenseErrors.amount}</p>{/if}
+				<span class="mb-1 block text-xs text-muted-foreground">Description</span>
+				<Input data-testid="expense-description-input" bind:value={expenseForm.description} placeholder="Description" />
+				{#if expenseErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expense-description-error">{expenseErrors.description}</p>{/if}
 			</div>
+			<div class="grid grid-cols-3 gap-2">
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
+					<Input data-testid="expense-amount-input" bind:value={expenseForm.amount} placeholder="0.00" />
+					{#if expenseErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expense-amount-error">{expenseErrors.amount}</p>{/if}
+				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Subtotal</span>
+					<Input data-testid="expense-subtotal-input" bind:value={expenseForm.subtotal} placeholder="0.00" />
+					{#if expenseErrors.subtotal}<p class="mt-1 text-xs text-destructive">{expenseErrors.subtotal}</p>{/if}
+				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Tax</span>
+					<Input data-testid="expense-tax-input" bind:value={expenseForm.taxAmount} placeholder="0.00" />
+					{#if expenseErrors.taxAmount}<p class="mt-1 text-xs text-destructive">{expenseErrors.taxAmount}</p>{/if}
+				</div>
+			</div>
+			<div class="grid grid-cols-3 gap-2">
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Incurred</span>
+					<Input data-testid="expense-incurred-input" type="date" bind:value={expenseForm.incurredAt} />
+					{#if expenseErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expense-incurred-error">{expenseErrors.incurredAt}</p>{/if}
+				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Due date</span>
+					<Input data-testid="expense-due-input" type="date" bind:value={expenseForm.dueDate} />
+				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Paid date</span>
+					<Input data-testid="expense-paid-input" type="date" bind:value={expenseForm.paidAt} />
+				</div>
+			</div>
+			<div class="grid grid-cols-2 gap-2">
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Category</span>
+					<Select.Root type="single" bind:value={expenseForm.category}>
+						<Select.Trigger class="w-full" data-testid="expense-category-input">
+							{expenseForm.category || 'Select category'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each EXPENSE_CATEGORIES as cat}
+								<Select.Item value={cat} label={cat}>{cat}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Status</span>
+					<Select.Root type="single" bind:value={expenseForm.status}>
+						<Select.Trigger class="w-full" data-testid="expense-status-input">
+							{expenseForm.status || 'Select status'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each EXPENSE_STATUSES as s}
+								<Select.Item value={s} label={s}>{s}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+			</div>
+			<div class="grid grid-cols-3 gap-2">
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Property</span>
+					<Select.Root type="single" bind:value={expenseForm.propertyId}>
+						<Select.Trigger class="w-full" data-testid="expense-property-input">
+							{selectedPropertyLabel ?? 'No property'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="No property">No property</Select.Item>
+							{#each propertiesQuery.data || [] as property}
+								<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Vendor</span>
+					<Select.Root type="single" bind:value={expenseForm.vendorId}>
+						<Select.Trigger class="w-full" data-testid="expense-vendor-input">
+							{selectedVendorLabel ?? 'No vendor'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="No vendor">No vendor</Select.Item>
+							{#each vendorsQuery.data || [] as vendor}
+								<Select.Item value={String(vendor.id)} label={vendor.name}>{vendor.name}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+				<div>
+					<span class="mb-1 block text-xs text-muted-foreground">Work order</span>
+					<Select.Root type="single" bind:value={expenseForm.workOrderId}>
+						<Select.Trigger class="w-full" data-testid="expense-workorder-input">
+							{selectedWorkOrderLabel ?? 'No work order'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="No work order">No work order</Select.Item>
+							{#each workOrdersQuery.data || [] as wo}
+								<Select.Item value={String(wo.id)} label={wo.title}>{wo.title}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+			</div>
+			<label class="flex items-center gap-2 text-sm">
+				<Checkbox bind:checked={expenseForm.billableToOwner} data-testid="expense-billable-input" />
+				Billable to owner
+			</label>
 			<div>
-				<input data-testid="expense-incurred-input" type="date" bind:value={expenseForm.incurredAt} class="{inputClass} w-full" />
-				{#if expenseErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expense-incurred-error">{expenseErrors.incurredAt}</p>{/if}
+				<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
+				<textarea data-testid="expense-notes-input" bind:value={expenseForm.notes} rows="2" class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"></textarea>
+			</div>
+			<div class="border-t border-border pt-3">
+				<h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Receipt details (optional)</h3>
+				<div class="space-y-2">
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Vendor address</span>
+						<Input data-testid="expense-vendor-address-input" bind:value={expenseForm.vendorAddress} />
+					</div>
+					<div class="grid grid-cols-3 gap-2">
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Vendor phone</span>
+							<Input data-testid="expense-vendor-phone-input" bind:value={expenseForm.vendorPhone} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Vendor website</span>
+							<Input data-testid="expense-vendor-website-input" bind:value={expenseForm.vendorWebsite} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Vendor tax ID</span>
+							<Input data-testid="expense-vendor-taxid-input" bind:value={expenseForm.vendorTaxId} />
+						</div>
+					</div>
+					<div class="grid grid-cols-3 gap-2">
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Receipt #</span>
+							<Input data-testid="expense-receipt-number-input" bind:value={expenseForm.receiptNumber} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Payment method</span>
+							<Input data-testid="expense-payment-method-input" bind:value={expenseForm.paymentMethod} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Card last 4</span>
+							<Input data-testid="expense-card-last4-input" bind:value={expenseForm.cardLast4} />
+						</div>
+					</div>
+					<div class="grid grid-cols-4 gap-2">
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Tax rate</span>
+							<Input data-testid="expense-tax-rate-input" bind:value={expenseForm.taxRate} />
+							{#if expenseErrors.taxRate}<p class="mt-1 text-xs text-destructive">{expenseErrors.taxRate}</p>{/if}
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Tip</span>
+							<Input data-testid="expense-tip-input" bind:value={expenseForm.tip} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Discount</span>
+							<Input data-testid="expense-discount-input" bind:value={expenseForm.discount} />
+						</div>
+						<div>
+							<span class="mb-1 block text-xs text-muted-foreground">Shipping</span>
+							<Input data-testid="expense-shipping-input" bind:value={expenseForm.shipping} />
+						</div>
+					</div>
+				</div>
 			</div>
 		</div>
-		<div class="grid grid-cols-2 gap-2">
-			<select data-testid="expense-category-input" bind:value={expenseForm.category} class={inputClass}><option>Repairs</option><option>Utilities</option><option>Landscaping</option><option>Cleaning</option><option>Management</option><option>Other</option></select>
-			<select data-testid="expense-status-input" bind:value={expenseForm.status} class={inputClass}><option>Pending</option><option>Approved</option><option>Paid</option></select>
-		</div>
-		<div class="grid grid-cols-2 gap-2">
-			<select data-testid="expense-property-input" bind:value={expenseForm.propertyId} class={inputClass}><option value="">No property</option>{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}</select>
-			<select data-testid="expense-vendor-input" bind:value={expenseForm.vendorId} class={inputClass}><option value="">No vendor</option>{#each vendorsQuery.data || [] as vendor}<option value={vendor.id}>{vendor.name}</option>{/each}</select>
-		</div>
-	</div>
-	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="expense-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeExpenseForm}>Cancel</button>
-		<button data-testid="expense-form-save" onclick={submitExpense} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save Expense'}</button>
-	</div>
-</Dialog>
+		<Dialog.Footer>
+			<Button data-testid="expense-form-cancel" variant="outline" onclick={closeExpenseForm}>Cancel</Button>
+			<Button data-testid="expense-form-save" onclick={submitExpense} disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save Expense'}</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	open={paymentDeleteTarget !== null}
@@ -370,7 +682,7 @@
 <ConfirmDialog
 	open={expenseDeleteTarget !== null}
 	title="Delete expense"
-	message={expenseDeleteTarget ? `Delete “${expenseDeleteTarget.description}”?` : ''}
+	message={expenseDeleteTarget ? `Delete "${expenseDeleteTarget.description}"?` : ''}
 	busy={deleteExpenseMutation.isPending}
 	testid="expense-delete"
 	onconfirm={() => expenseDeleteTarget && deleteExpenseMutation.mutate(expenseDeleteTarget.id)}
