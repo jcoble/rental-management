@@ -34,6 +34,24 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   return res.json();
 }
 
+export async function uploadRequest<T>(path: string, formData: FormData): Promise<T> {
+  const res = await fetch(`${API_URL}/api${path}`, {
+    method: 'POST',
+    headers: {
+      'X-API-Key': API_KEY,
+      // Do NOT set Content-Type — let fetch set multipart/form-data boundary automatically
+    },
+    body: formData,
+  });
+
+  if (res.status === 204) return undefined as T;
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API error ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
 export const api = {
   get: <T>(path: string) => apiRequest<T>(path),
   post: <T>(path: string, data?: unknown) =>
@@ -43,4 +61,5 @@ export const api = {
   put: <T>(path: string, data: unknown) =>
     apiRequest<T>(path, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (path: string) => apiRequest(path, { method: 'DELETE' }),
+  upload: <T>(path: string, formData: FormData) => uploadRequest<T>(path, formData),
 };
