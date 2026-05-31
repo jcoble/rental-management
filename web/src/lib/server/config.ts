@@ -13,7 +13,13 @@
 
 import { env } from '$env/dynamic/private';
 
-const DEFAULT_API_BASE_URL = 'https://localhost:5666/api/v1';
+// VITE_API_URL: an explicit FULL base including /api/v1 (e.g. a cross-origin API
+// in prod) — used verbatim. Otherwise treat API_URL as the API ROOT (the same
+// variable the Vite proxy uses) and append /api/v1; default to the dev API.
+function resolveServerApiBase(): string {
+	if (env.VITE_API_URL) return env.VITE_API_URL.replace(/\/+$/, '');
+	const root = (env.API_URL || 'https://localhost:5666').replace(/\/+$/, '');
+	return `${root}/api/v1`;
+}
 
-export const SERVER_API_BASE_URL: string =
-	env.VITE_API_URL || env.API_URL || DEFAULT_API_BASE_URL;
+export const SERVER_API_BASE_URL: string = resolveServerApiBase();
