@@ -49,33 +49,39 @@ command -v dotnet >/dev/null 2>&1 || { echo "dotnet not found"; exit 1; }
 command -v pnpm   >/dev/null 2>&1 || { echo "pnpm not found";   exit 1; }
 command -v docker >/dev/null 2>&1 || { echo "docker not found"; exit 1; }
 
-# ─── PostgreSQL (Docker) ─────────────────────────────────────────────────────
-if docker ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
-    echo "Postgres container '$PG_CONTAINER' already running on :$PG_PORT"
-elif docker ps -a --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
-    echo "Starting existing Postgres container '$PG_CONTAINER'..."
-    docker start "$PG_CONTAINER" >/dev/null
-else
-    echo "Creating Postgres container '$PG_CONTAINER' on :$PG_PORT..."
-    docker run -d \
-        --name "$PG_CONTAINER" \
-        -e POSTGRES_USER="$PG_USER" \
-        -e POSTGRES_PASSWORD="$PG_PASSWORD" \
-        -e POSTGRES_DB="$PG_DB" \
-        -p "$PG_PORT:5432" \
-        -v rentalcommand_dev_pgdata:/var/lib/postgresql/data \
-        postgres:16-alpine >/dev/null
-fi
+# ─── PostgreSQL ──────────────────────────────────────────────────────────────
+# Reuse whatever Postgres is already listening on :$PG_PORT (a container under a
+# different name like `rc-postgres`, or a host install) instead of trying to bind
+# the port a second time — that double-bind was a hard crash.
+pg_port_in_use() { (exec 3<>"/dev/tcp/localhost/$PG_PORT") 2>/dev/null && { exec 3>&-; return 0; } || return 1; }
 
-printf "Waiting for Postgres"
-for _ in $(seq 1 60); do
-    if docker exec "$PG_CONTAINER" pg_isready -U "$PG_USER" -d "$PG_DB" >/dev/null 2>&1; then
-        printf " ready\n"
-        break
+if pg_port_in_use; then
+    echo "Postgres already listening on :$PG_PORT — reusing it (leaving container management alone)."
+else
+    if docker ps -a --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
+        echo "Starting existing Postgres container '$PG_CONTAINER'..."
+        docker start "$PG_CONTAINER" >/dev/null
+    else
+        echo "Creating Postgres container '$PG_CONTAINER' on :$PG_PORT..."
+        docker run -d \
+            --name "$PG_CONTAINER" \
+            -e POSTGRES_USER="$PG_USER" \
+            -e POSTGRES_PASSWORD="$PG_PASSWORD" \
+            -e POSTGRES_DB="$PG_DB" \
+            -p "$PG_PORT:5432" \
+            -v rentalcommand_dev_pgdata:/var/lib/postgresql/data \
+            postgres:16-alpine >/dev/null
     fi
-    printf "."
-    sleep 1
-done
+    printf "Waiting for Postgres"
+    for _ in $(seq 1 60); do
+        if docker exec "$PG_CONTAINER" pg_isready -U "$PG_USER" -d "$PG_DB" >/dev/null 2>&1; then
+            printf " ready\n"
+            break
+        fi
+        printf "."
+        sleep 1
+    done
+fi
 
 # ─── .NET environment ────────────────────────────────────────────────────────
 export ASPNETCORE_ENVIRONMENT=Development
