@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using RentalCommand.Api.Scanning;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Engine.Services;
@@ -25,8 +27,20 @@ builder.Services.AddDbContext<RentalCommandDbContext>(options => options.UseNpgs
 builder.Services.AddScoped<IMessagePublisher, OutboxMessagePublisher>();
 builder.Services.AddSingleton<INotificationChannel, LoggingNotificationChannel>();
 
+// Scan pipeline: config, LLM provider, file storage, no-op data-update, worker.
+builder.Services.Configure<AssistantConfig>(builder.Configuration.GetSection(AssistantConfig.SectionName));
+builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(UploadSettings.SectionName));
+builder.Services.AddHttpClient<ILlmProvider, AnthropicLlmProvider>(c =>
+{
+    c.BaseAddress = new Uri("https://api.anthropic.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
+builder.Services.AddScoped<IFileStorage, DiskFileStorage>();
+builder.Services.AddSingleton<IDataUpdateService, EngineDataUpdateService>();
+
 // Workers (each is its own BackgroundService).
 builder.Services.AddHostedService<OutboxDispatchWorker>();
+builder.Services.AddHostedService<ScanProcessingWorker>();
 
 var host = builder.Build();
 
