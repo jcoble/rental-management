@@ -4,6 +4,8 @@
 	import { page } from '$app/stores';
 	import { toast } from 'svelte-sonner';
 	import { scan, type ScanFieldDto } from '$lib/api/scan';
+	import { leases } from '$lib/api/endpoints/leases';
+	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -68,6 +70,18 @@
 	}));
 
 	const data = $derived(draftQuery.data);
+
+	// Whether this draft targets a Payment (rent check) rather than an Expense
+	const isPayment = $derived(data?.targetEntityType === 'Payment');
+
+	// Lease selector state (only used when isPayment)
+	let selectedLeaseId = $state<number | null>(null);
+
+	const leasesQuery = createQuery(() => ({
+		queryKey: ['leases', getCurrentPortfolioId()],
+		queryFn: () => leases.list(getCurrentPortfolioId()),
+		enabled: isPayment
+	}));
 
 	// Editable field values (keyed by field name, scalars only)
 	let editedFields = $state<Record<string, string>>({});
@@ -233,7 +247,11 @@
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			queryClient.invalidateQueries({ queryKey: ['scan', draftId] });
-			toast.success('Expense created');
+			if (isPayment) {
+				toast.success('Payment recorded');
+			} else {
+				toast.success('Expense created');
+			}
 			goto('/accounting');
 		},
 		onError: (err) => {
@@ -270,8 +288,13 @@
 			if (name === LINE_ITEMS_FIELD) continue;
 			overrides[keyMap[name] ?? name] = value;
 		}
-		// Always include the paid/unpaid toggle decision
-		overrides['is_paid'] = isPaid;
+		if (isPayment) {
+			// Payment drafts require leaseId; omit the paid/unpaid toggle (a received check is always paid)
+			overrides['leaseId'] = selectedLeaseId;
+		} else {
+			// Expense drafts: always include the paid/unpaid toggle decision
+			overrides['is_paid'] = isPaid;
+		}
 		return JSON.stringify(overrides);
 	}
 
@@ -369,6 +392,32 @@
 					</div>
 				</Card.Header>
 				<Card.Content class="flex-1 overflow-y-auto p-4">
+					{#if isPayment}
+						<!-- Lease selector — required for Payment drafts -->
+						<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
+							<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-select">
+								Which lease is this payment for? <span class="text-red-500">*</span>
+							</label>
+							<select
+								id="scan-lease-select"
+								data-testid="scan-lease-select"
+								bind:value={selectedLeaseId}
+								class="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+							>
+								<option value={null}>— Select a lease —</option>
+								{#if leasesQuery.data}
+									{#each leasesQuery.data as lease (lease.id)}
+										<option value={lease.id}>
+											#{lease.leaseNumber}{lease.tenantName ? ` — ${lease.tenantName}` : ''}{lease.unitNumber ? ` · Unit ${lease.unitNumber}` : ''}
+										</option>
+									{/each}
+								{/if}
+							</select>
+							{#if leasesQuery.isLoading}
+								<p class="mt-1 text-xs text-muted-foreground">Loading leases…</p>
+							{/if}
+						</div>
+					{/if}
 					{#if data.fields.length === 0}
 						<p class="text-sm text-muted-foreground">
 							{#if data.status === 'Pending'}
@@ -498,7 +547,8 @@
 					{/if}
 				</Card.Content>
 
-				<!-- Paid / Unpaid toggle -->
+				<!-- Paid / Unpaid toggle — hidden for Payment drafts (received check is always paid) -->
+				{#if !isPayment}
 				<div class="border-t border-border px-4 py-3" data-testid="scan-paid-toggle">
 					<div class="flex items-center gap-3">
 						<span class="text-xs font-medium text-muted-foreground">Payment status:</span>
@@ -522,6 +572,7 @@
 						</Button>
 					</div>
 				</div>
+				{/if}
 
 				<!-- Action buttons -->
 				<Card.Footer class="border-t border-border px-4 py-3 [.border-t]:pt-3">
@@ -530,10 +581,10 @@
 							<Button
 								data-testid="scan-confirm"
 								onclick={() => confirmMutation.mutate()}
-								disabled={confirmMutation.isPending || data.status === 'Rejected' || data.status === 'Confirmed'}
+								disabled={confirmMutation.isPending || data.status === 'Rejected' || data.status === 'Confirmed' || (isPayment && !selectedLeaseId)}
 								class="flex-1"
 							>
-								{confirmMutation.isPending ? 'Confirming…' : 'Confirm & Create Expense'}
+								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : 'Confirm & Create Expense'}
 							</Button>
 							<Button
 								data-testid="scan-reject"
@@ -545,6 +596,9 @@
 								{rejectMutation.isPending ? 'Rejecting…' : 'Reject'}
 							</Button>
 						</div>
+						{#if isPayment && !selectedLeaseId && data.status !== 'Confirmed' && data.status !== 'Rejected'}
+							<p class="text-center text-xs text-amber-600 dark:text-amber-400">Select a lease above to enable payment creation.</p>
+						{/if}
 						{#if data.status === 'Confirmed'}
 							<p class="text-center text-xs text-green-600 dark:text-green-400">This scan has already been confirmed.</p>
 						{/if}
