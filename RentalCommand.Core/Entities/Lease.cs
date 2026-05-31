@@ -26,6 +26,9 @@ public class Lease
     /// <summary>Soft-delete marker; null means active.</summary>
     public DateTime? DeletedAt { get; set; }
 
+    /// <summary>When a lease-expiry reminder was last sent (idempotency for the reminder worker).</summary>
+    public DateTime? ExpiryReminderSentAt { get; set; }
+
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }

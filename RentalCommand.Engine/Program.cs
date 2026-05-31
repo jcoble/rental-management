@@ -23,13 +23,14 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 
 builder.Services.AddDbContext<RentalCommandDbContext>(options => options.UseNpgsql(connectionString));
 
-// DB-outbox publisher + Phase 0 stub notification channel.
+// DB-outbox publisher + notification channel (Twilio SMS / SendGrid email; logs when unconfigured).
 builder.Services.AddScoped<IMessagePublisher, OutboxMessagePublisher>();
-builder.Services.AddSingleton<INotificationChannel, LoggingNotificationChannel>();
+builder.Services.AddHttpClient<INotificationChannel, RoutingNotificationChannel>();
 
 // Scan pipeline: config, LLM provider, file storage, no-op data-update, worker.
 builder.Services.Configure<AssistantConfig>(builder.Configuration.GetSection(AssistantConfig.SectionName));
 builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(UploadSettings.SectionName));
+builder.Services.Configure<NotificationsConfig>(builder.Configuration.GetSection(NotificationsConfig.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
@@ -50,9 +51,17 @@ else // default: openai
 builder.Services.AddScoped<IFileStorage, DiskFileStorage>();
 builder.Services.AddSingleton<IDataUpdateService, EngineDataUpdateService>();
 
+// Phase 4 automation services (gated by Notifications flags; financial ones default OFF).
+builder.Services.AddScoped<IRentChargeService, RentChargeService>();
+builder.Services.AddScoped<ILateFeeService, LateFeeService>();
+builder.Services.AddScoped<ILeaseExpiryReminderService, LeaseExpiryReminderService>();
+
 // Workers (each is its own BackgroundService).
 builder.Services.AddHostedService<OutboxDispatchWorker>();
 builder.Services.AddHostedService<ScanProcessingWorker>();
+builder.Services.AddHostedService<RentChargeWorker>();
+builder.Services.AddHostedService<LateFeeWorker>();
+builder.Services.AddHostedService<LeaseExpiryReminderWorker>();
 
 var host = builder.Build();
 
