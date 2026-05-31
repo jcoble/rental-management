@@ -258,9 +258,36 @@
 								<span>{expense.status}</span>
 							</div>
 							<p class="text-xs text-muted-foreground">{expense.category} · {money(expense.amount)} · {expense.propertyName || 'General'}</p>
-							<div class="mt-2 flex gap-2">
+							<div class="mt-2 flex items-center gap-2">
 								<button data-testid="expense-edit" aria-label="Edit expense" class="rounded border border-border px-2 py-1 text-xs" onclick={() => openEditExpense(expense)}><Pencil class="h-3.5 w-3.5" /></button>
 								<button data-testid="expense-delete" aria-label="Delete expense" class="rounded border border-border px-2 py-1 text-xs hover:text-destructive" onclick={() => (expenseDeleteTarget = expense)}><Trash2 class="h-3.5 w-3.5" /></button>
+								{#if expense.hasReceipt}
+									{#if expense.receiptIsImage}
+										<a
+											href="/expense-file/{expense.id}"
+											target="_blank"
+											rel="noopener noreferrer"
+											data-testid="expense-receipt-{expense.id}"
+											class="ml-auto shrink-0"
+											aria-label="View receipt"
+										>
+											<img
+												src="/expense-file/{expense.id}?thumb=true"
+												alt="Receipt thumbnail"
+												class="h-10 w-10 rounded object-cover ring-1 ring-border"
+												loading="lazy"
+											/>
+										</a>
+									{:else}
+										<a
+											href="/expense-file/{expense.id}"
+											target="_blank"
+											rel="noopener noreferrer"
+											data-testid="expense-receipt-{expense.id}"
+											class="ml-auto text-xs text-primary underline underline-offset-2 hover:text-primary/80"
+										>Receipt (PDF)</a>
+									{/if}
+								{/if}
 							</div>
 						</div>
 					{/each}
