@@ -15,6 +15,8 @@ public class Payment
     public string? Method { get; set; }
     public string? ExternalReference { get; set; }
     public string? Notes { get; set; }
+    /// <summary>Billing period ("yyyy-MM") for auto-generated rent/late-fee rows; null for manual/one-off payments. Used for idempotency.</summary>
+    public string? PeriodKey { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
