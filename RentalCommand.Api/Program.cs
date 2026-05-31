@@ -22,11 +22,14 @@ builder.Services.Configure<ApiKeySettings>(builder.Configuration.GetSection(ApiK
 builder.Services.Configure<SeedSettings>(builder.Configuration.GetSection(SeedSettings.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.AssistantConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.AssistantConfig.SectionName));
+builder.Services.Configure<RentalCommand.Core.Configuration.UploadSettings>(
+    builder.Configuration.GetSection(RentalCommand.Core.Configuration.UploadSettings.SectionName));
 builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.ILlmProvider, RentalCommand.Api.Scanning.AnthropicLlmProvider>(c =>
 {
     c.BaseAddress = new Uri("https://api.anthropic.com/");
     c.Timeout = TimeSpan.FromSeconds(90);
 });
+builder.Services.AddScoped<RentalCommand.Core.Interfaces.IFileStorage, RentalCommand.Api.Scanning.DiskFileStorage>();
 
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
 
