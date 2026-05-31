@@ -4,6 +4,6 @@
 	let { children }: { children: import('svelte').Snippet } = $props();
 </script>
 
-<main class="h-screen overflow-y-auto bg-bg">
+<main class="h-screen overflow-y-auto bg-background">
 	{@render children()}
 </main>

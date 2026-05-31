@@ -11,7 +11,7 @@
 	} = $props();
 </script>
 
-<div class={cn('rounded-lg border border-border bg-surface', className)}>
+<div class={cn('rounded-lg border border-border bg-card', className)}>
 	{#if children}
 		{@render children()}
 	{/if}

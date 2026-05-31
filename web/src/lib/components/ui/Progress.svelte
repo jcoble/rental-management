@@ -14,9 +14,9 @@
 	let pct = $derived(max > 0 ? Math.min(100, (value / max) * 100) : 0);
 </script>
 
-<div class={cn('h-2 w-full rounded-full bg-surface-hover', className)}>
+<div class={cn('h-2 w-full rounded-full bg-secondary', className)}>
 	<div
-		class="h-full rounded-full bg-accent transition-all duration-300"
+		class="h-full rounded-full bg-primary transition-all duration-300"
 		style="width: {pct}%"
 		role="progressbar"
 		aria-valuenow={value}
