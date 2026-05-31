@@ -31,11 +31,11 @@
 		},
 		{
 			label: 'Amounts',
-			fields: ['subtotal', 'tax', 'tax_rate', 'tip', 'discount', 'shipping', 'total', 'payment_method', 'card_last4']
+			fields: ['subtotal', 'tax', 'tax_rate', 'tip', 'discount', 'shipping', 'total', 'payment_method', 'card_last4', 'due_date']
 		},
 		{
 			label: 'Details',
-			fields: ['category', 'notes']
+			fields: ['document_kind', 'category', 'notes']
 		}
 	];
 
@@ -67,6 +67,15 @@
 	// Editable field values (keyed by field name, scalars only)
 	let editedFields = $state<Record<string, string>>({});
 
+	// Paid / Unpaid toggle — true = already paid (receipt), false = unpaid bill
+	let isPaid = $state(true);
+	let isPaidInitialized = $state(false);
+
+	function defaultIsPaidFromKind(kind: string | undefined): boolean {
+		if (!kind) return true;
+		return !['Bill', 'Invoice', 'UtilityBill', 'PropertyTax'].includes(kind);
+	}
+
 	// Initialize editable fields when data arrives
 	$effect(() => {
 		if (data?.fields) {
@@ -79,6 +88,12 @@
 			}
 			if (Object.keys(initial).length > 0) {
 				editedFields = { ...editedFields, ...initial };
+			}
+			// Initialize isPaid from document_kind once on first data arrival
+			if (!isPaidInitialized) {
+				const kindField = data.fields.find((f) => f.name === 'document_kind');
+				isPaid = defaultIsPaidFromKind(kindField?.value);
+				isPaidInitialized = true;
 			}
 		}
 	});
@@ -234,6 +249,8 @@
 			if (name === LINE_ITEMS_FIELD) continue;
 			overrides[keyMap[name] ?? name] = value;
 		}
+		// Always include the paid/unpaid toggle decision
+		overrides['is_paid'] = isPaid;
 		return JSON.stringify(overrides);
 	}
 
@@ -461,6 +478,33 @@
 							</section>
 						</div>
 					{/if}
+				</div>
+
+				<!-- Paid / Unpaid toggle -->
+				<div class="border-t border-border px-4 py-3" data-testid="scan-paid-toggle">
+					<div class="flex items-center gap-3">
+						<span class="text-xs font-medium text-muted-foreground">Payment status:</span>
+						<button
+							type="button"
+							onclick={() => { isPaid = true; }}
+							class="rounded-l border px-3 py-1.5 text-xs font-medium transition-colors
+								{isPaid
+									? 'border-primary bg-primary text-white'
+									: 'border-border bg-background text-muted-foreground hover:bg-secondary'}"
+						>
+							Already paid (receipt)
+						</button>
+						<button
+							type="button"
+							onclick={() => { isPaid = false; }}
+							class="rounded-r border-y border-r px-3 py-1.5 text-xs font-medium transition-colors
+								{!isPaid
+									? 'border-primary bg-primary text-white'
+									: 'border-border bg-background text-muted-foreground hover:bg-secondary'}"
+						>
+							Unpaid bill{editedFields['due_date'] ? ` — due ${editedFields['due_date']}` : ''}
+						</button>
+					</div>
 				</div>
 
 				<!-- Action buttons -->
