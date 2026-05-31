@@ -6,7 +6,7 @@ namespace RentalCommand.Core.Entities;
 public class OutboxMessage
 {
     public long Id { get; set; }
-    public int PortfolioId { get; set; }
+    public int? PortfolioId { get; set; }
     public string MessageType { get; set; } = string.Empty;
 
     /// <summary>JSON payload for the message.</summary>

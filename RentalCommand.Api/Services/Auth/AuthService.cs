@@ -79,6 +79,7 @@ public class AuthService : IAuthService
     private readonly SignInManager<ApplicationUser> _signInManager;
     private readonly IJwtTokenService _tokenService;
     private readonly IUserMigrationService _userMigration;
+    private readonly IAuthEmailSender _emailSender;
     private readonly ILogger<AuthService> _logger;
 
     public AuthService(
@@ -86,12 +87,14 @@ public class AuthService : IAuthService
         SignInManager<ApplicationUser> signInManager,
         IJwtTokenService tokenService,
         IUserMigrationService userMigration,
+        IAuthEmailSender emailSender,
         ILogger<AuthService> logger)
     {
         _userManager = userManager;
         _signInManager = signInManager;
         _tokenService = tokenService;
         _userMigration = userMigration;
+        _emailSender = emailSender;
         _logger = logger;
     }
 
@@ -169,6 +172,8 @@ public class AuthService : IAuthService
         }
 
         var emailToken = await _userManager.GenerateEmailConfirmationTokenAsync(user);
+
+        await _emailSender.SendEmailConfirmationAsync(user, emailToken);
 
         _logger.LogInformation("New user registered: {Email} (id {UserId}). Awaiting email verification.", request.Email, user.Id);
 
@@ -248,8 +253,8 @@ public class AuthService : IAuthService
         }
 
         var token = await _userManager.GeneratePasswordResetTokenAsync(user);
-        // Phase 0: no email transport. A later phase sends this via INotificationChannel.
-        _logger.LogInformation("Password reset token generated for {Email} (id {UserId}).", email, user.Id);
+        await _emailSender.SendPasswordResetAsync(user, token);
+        _logger.LogInformation("Password reset token generated for {Email} (id {UserId}). Reset email enqueued.", email, user.Id);
         return token;
     }
 

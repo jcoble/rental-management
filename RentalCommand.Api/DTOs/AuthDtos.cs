@@ -71,6 +71,17 @@ public class ResetPasswordRequest
     public string NewPassword { get; set; } = string.Empty;
 }
 
+public class GoogleAuthRequest
+{
+    [Required]
+    [MaxLength(4000)]
+    public string Code { get; set; } = string.Empty;
+
+    [Required]
+    [MaxLength(2000)]
+    public string RedirectUri { get; set; } = string.Empty;
+}
+
 public class UserDto
 {
     public int Id { get; set; }
