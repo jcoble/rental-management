@@ -110,6 +110,11 @@ export DOTNET_ENVIRONMENT=Development
 # Serve the API's HTTPS endpoint with the locally-trusted mkcert cert.
 export Kestrel__Certificates__Default__Path="$CERT_DIR/api-cert.pem"
 export Kestrel__Certificates__Default__KeyPath="$CERT_DIR/api-key.pem"
+# Shared upload directory (ABSOLUTE). The API and Engine are separate processes with
+# different working directories, so a relative "./uploads" resolves to two different
+# folders and the Engine can't read what the API wrote (scan extraction then fails).
+# Pin BOTH to one absolute path so the blob written on upload is the blob the worker reads.
+export Upload__BasePath="$ROOT_DIR/uploads"
 
 # ─── Engine (background worker) ──────────────────────────────────────────────
 echo "Starting Engine (RentalCommand.Engine)..."
