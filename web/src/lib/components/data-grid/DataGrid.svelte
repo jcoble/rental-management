@@ -31,7 +31,7 @@
   </DataGrid>
 -->
 
-<script lang="ts" generics="T extends Record<string, unknown>">
+<script lang="ts" generics="T extends object">
 	import type { Snippet } from 'svelte';
 	import type { ColumnDef, SortDirection } from './types.js';
 	import { cn } from '$lib/utils.js';
@@ -67,6 +67,8 @@
 		toolbar?: Snippet;
 		class?: string;
 		'data-testid'?: string;
+		/** Optional per-row testid generator. When provided, each row element receives this as `data-testid`. */
+		getRowTestId?: (item: T) => string;
 	};
 
 	let {
@@ -76,6 +78,7 @@
 		emptyMessage = 'No results found.',
 		onRowClick,
 		getRowKey,
+		getRowTestId,
 		page = $bindable(1),
 		pageSize = 20,
 		totalCount,
@@ -353,7 +356,7 @@
 									: undefined}
 								onclick={onRowClick ? () => onRowClick(item) : undefined}
 								onkeydown={onRowClick ? (e) => handleRowKeydown(e, item) : undefined}
-								data-testid="datagrid-row"
+								data-testid={getRowTestId ? getRowTestId(item) : 'datagrid-row'}
 							>
 								{#each columns as col}
 									{@const align = effectiveAlign(col)}
@@ -441,7 +444,7 @@
 					aria-label={onRowClick ? `Open row ${i + 1}` : undefined}
 					onclick={onRowClick ? () => onRowClick(item) : undefined}
 					onkeydown={onRowClick ? (e) => handleRowKeydown(e, item) : undefined}
-					data-testid="datagrid-mobile-card"
+					data-testid={getRowTestId ? getRowTestId(item) : 'datagrid-mobile-card'}
 				>
 					<!-- Title + subtitle -->
 					<div class="space-y-1">
