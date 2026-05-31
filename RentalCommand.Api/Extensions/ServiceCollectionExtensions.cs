@@ -42,6 +42,9 @@ public static class ServiceCollectionExtensions
         // Aggregated read-only KPI rollup for the web dashboard.
         services.AddScoped<IDashboardService, DashboardService>();
 
+        // Portfolio analytics overview (occupancy, rent collection, trend, work orders, lease expiry).
+        services.AddScoped<IAnalyticsService, AnalyticsService>();
+
         // --- scan upload pipeline ---
         services.AddScoped<IScanFileService, ScanFileService>();
         services.AddScoped<IScanService, ScanService>();
