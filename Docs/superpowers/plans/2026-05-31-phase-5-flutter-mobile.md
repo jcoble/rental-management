@@ -106,6 +106,23 @@ sends the stored refresh token as a `Cookie:` header and reads the rotated token
 (works, but fragile). Recommended: add a **body-based refresh** option to `AuthController.Refresh` for
 non-browser clients. Marked `TODO(api)` in the mobile auth code.
 
-**Next (per the task list above):** T3 models → T4 realtime → **T5 scan capture (flagship)** → T6
-briefing/Q&A → T7 management → T8 push (DeviceToken endpoint already exists; needs the FCM outbox channel)
-→ T9 polish.
+### Update — Phase 5 feature-complete (2026-05-31)
+Built + verified (`flutter analyze` clean, `flutter build web` compiles), all merged:
+- Shared models (`core/models`).
+- **Scan capture (flagship):** camera/gallery → multipart upload → poll → review (authed image via
+  `Image.memory`, grouped confidence fields, line items, Expense paid/unpaid toggle, Payment lease
+  selector, no-op banner) → confirm/reject.
+- **AI:** Daily Briefing + Q&A chat (example prompts, tools-used, AI-off banner).
+- **Management:** Properties+Units, Tenants, Leases, Payments (mark-paid + summary), Work Orders,
+  Appointments — list/detail/create/edit, wired via a "More" menu; Scan/Properties/AI on main tabs.
+- **Realtime:** SignalR `/hubs/updates` → invalidates the matching Riverpod providers.
+- **Home dashboard:** AI briefing "Today" + quick actions.
+
+**Remaining (need external setup, deferred):**
+- **Push (T8):** the `DeviceToken` API exists; still needs a **Firebase project** (`google-services.json`/
+  `GoogleService-Info.plist`) + `firebase_messaging` on the client + an FCM **"push" outbox channel** on
+  the backend (no-op without a service-account key, like Twilio/SendGrid).
+- **Body-based auth refresh** for non-browser clients (mobile uses a `Cookie:`-header workaround today) —
+  small `AuthController.Refresh` tweak (`TODO(api)` in the mobile auth code).
+- Native run/release (iOS/Android) needs Xcode/Android SDK + signing; only `flutter analyze`/`build web`
+  are verified in CI here.
