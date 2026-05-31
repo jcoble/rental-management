@@ -18,6 +18,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Mail, Phone, AlertCircle, Pencil, Trash2, User } from '@lucide/svelte';
+	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -294,6 +295,11 @@
 				pageSize={10}
 				data-testid="tenant-leases-grid"
 			/>
+		</div>
+
+		<!-- Documents section -->
+		<div class="mt-6" data-testid="tenant-detail-documents">
+			<DocumentsPanel entityType="Tenant" entityId={id} />
 		</div>
 	{/if}
 </div>

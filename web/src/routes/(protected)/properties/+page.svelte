@@ -1,39 +1,33 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { goto } from '$app/navigation';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { owners } from '$lib/api/endpoints/owners';
-	import type { Property, Unit } from '$lib/types';
+	import type { Property } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { propertySchema, unitSchema, parseForm } from '$lib/schemas';
+	import { propertySchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { debounced } from '$lib/utils/debounce.svelte';
+	import { DataGrid } from '$lib/components/data-grid';
+	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Select from '$lib/components/ui/select';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
-	import Pagination from '$lib/components/shared/Pagination.svelte';
-	import { Plus, Home, Pencil, Trash2 } from '@lucide/svelte';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import * as Select from '$lib/components/ui/select';
-	import * as Card from '$lib/components/ui/card';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 
-	const PAGE_SIZE = 20;
 	let search = $state('');
-	let skip = $state(0);
-	const debouncedSearch = debounced(() => search, 300);
-
-	// Reset to the first page whenever the search term changes.
-	$effect(() => {
-		debouncedSearch.value;
-		skip = 0;
-	});
+	let typeFilter = $state('');
+	let statusFilter = $state('');
 
 	const propertiesQuery = createQuery(() => ({
-		queryKey: ['properties', portfolioId, debouncedSearch.value, skip],
-		queryFn: () => properties.list(portfolioId, { search: debouncedSearch.value, skip, take: PAGE_SIZE }),
+		queryKey: ['properties', portfolioId],
+		queryFn: () => properties.list(portfolioId, { take: 500 }),
 	}));
 
 	const ownersQuery = createQuery(() => ({
@@ -41,19 +35,27 @@
 		queryFn: () => owners.list(portfolioId, { take: 200 }),
 	}));
 
-	let selectedProperty = $state<number | null>(null);
-	const unitsQuery = createQuery(() => ({
-		queryKey: ['units', selectedProperty],
-		enabled: selectedProperty !== null,
-		queryFn: () => properties.listUnits(selectedProperty!),
-	}));
+	// Client-side filter
+	const list = $derived.by(() => {
+		const all = propertiesQuery.data ?? [];
+		const q = search.trim().toLowerCase();
+		return all.filter((p) => {
+			if (typeFilter && p.type !== typeFilter) return false;
+			if (statusFilter && p.status !== statusFilter) return false;
+			if (!q) return true;
+			return (
+				p.name.toLowerCase().includes(q) ||
+				p.addressLine1.toLowerCase().includes(q) ||
+				p.city.toLowerCase().includes(q)
+			);
+		});
+	});
 
 	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', city: '', state: '', postalCode: '', ownerId: '' };
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
 	let form = $state({ ...emptyProperty });
 	let formErrors = $state<Record<string, string>>({});
-
 	let deleteTarget = $state<Property | null>(null);
 
 	function invalidateList() {
@@ -73,10 +75,9 @@
 
 	const deletePropertyMutation = createMutation(() => ({
 		mutationFn: (id: number) => properties.delete(id),
-		onSuccess: (_res, deletedId) => {
+		onSuccess: () => {
 			showSuccess('Property deleted.');
 			deleteTarget = null;
-			if (selectedProperty === deletedId) selectedProperty = null;
 			invalidateList();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -123,49 +124,94 @@
 		});
 	}
 
-	// --- Units (inline panel) ---
-	const emptyUnit = { unitNumber: '', bedrooms: '1', bathrooms: '1', marketRent: '1200' };
-	let unitForm = $state({ ...emptyUnit });
-	let unitErrors = $state<Record<string, string>>({});
-
-	const createUnitMutation = createMutation(() => ({
-		mutationFn: ({ propertyId: pid, data }: { propertyId: number; data: Record<string, unknown> }) =>
-			properties.createUnit(pid, data),
-		onSuccess: () => {
-			showSuccess('Unit added.');
-			unitForm = { ...emptyUnit };
-			queryClient.invalidateQueries({ queryKey: ['units', selectedProperty] });
-			invalidateList();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	const deleteUnitMutation = createMutation(() => ({
-		mutationFn: (id: number) => properties.deleteUnit(id),
-		onSuccess: () => {
-			showSuccess('Unit removed.');
-			queryClient.invalidateQueries({ queryKey: ['units', selectedProperty] });
-			invalidateList();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	function submitUnit() {
-		if (!selectedProperty) return;
-		const result = parseForm(unitSchema, unitForm);
-		if (result.errors) {
-			unitErrors = result.errors;
-			return;
-		}
-		unitErrors = {};
-		createUnitMutation.mutate({ propertyId: selectedProperty, data: result.data });
-	}
-
-	const list = $derived(propertiesQuery.data ?? []);
-
-	// Label helpers for Select triggers
 	const propertyTypes = ['SingleFamily', 'MultiFamily', 'Condo', 'Townhome', 'Commercial', 'MixedUse'];
+	const propertyStatuses = ['Active', 'UnderMaintenance', 'Inactive'];
+
+	// DataGrid column definitions
+	const columns: ColumnDef<Property>[] = [
+		{
+			key: 'name',
+			title: 'Name',
+			sortable: true,
+			mobileRole: 'title',
+			cell: nameCellSnippet,
+		},
+		{
+			key: 'address',
+			title: 'Address',
+			sortable: false,
+			mobileRole: 'subtitle',
+			accessor: (p) => `${p.addressLine1}, ${p.city}, ${p.state}`,
+		},
+		{
+			key: 'type',
+			title: 'Type',
+			sortable: true,
+			mobileRole: 'meta',
+		},
+		{
+			key: 'status',
+			title: 'Status',
+			mobileRole: 'badge',
+			cell: statusCellSnippet,
+		},
+		{
+			key: 'unitCount',
+			title: 'Units',
+			format: 'number',
+			sortable: true,
+			mobileRole: 'metric',
+			accessor: (p) => p.unitCount ?? 0,
+		},
+		{
+			key: 'occupiedUnits',
+			title: 'Occupied',
+			format: 'number',
+			sortable: true,
+			mobileRole: 'meta',
+			accessor: (p) => p.occupiedUnits ?? 0,
+		},
+		{
+			key: 'actions',
+			title: '',
+			mobileRole: 'hidden',
+			align: 'right',
+			width: '6rem',
+			cell: actionsCellSnippet,
+		},
+	];
 </script>
+
+{#snippet nameCellSnippet(p: Property)}
+	<span data-testid="property-name">{p.name}</span>
+{/snippet}
+
+{#snippet statusCellSnippet(p: Property)}
+	<StatusBadge status={p.status} />
+{/snippet}
+
+{#snippet actionsCellSnippet(p: Property)}
+	<div class="flex items-center justify-end gap-1" onclick={(e) => e.stopPropagation()} role="none">
+		<button
+			type="button"
+			data-testid="property-edit"
+			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+			aria-label="Edit property"
+			onclick={(e) => { e.stopPropagation(); openEdit(p); }}
+		>
+			<Pencil class="h-3.5 w-3.5" />
+		</button>
+		<button
+			type="button"
+			data-testid="property-delete"
+			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+			aria-label="Delete property"
+			onclick={(e) => { e.stopPropagation(); deleteTarget = p; }}
+		>
+			<Trash2 class="h-3.5 w-3.5" />
+		</button>
+	</div>
+{/snippet}
 
 <svelte:head>
 	<title>Properties - Rental Command</title>
@@ -177,120 +223,50 @@
 			<h1 class="text-2xl font-bold">Properties</h1>
 			<p class="text-sm text-muted-foreground">Portfolio, units, and occupancy setup.</p>
 		</div>
-		<Button
-			data-testid="property-create-button"
-			onclick={openCreate}
-		>
-			<Plus class="h-4 w-4" />
-			New Property
-		</Button>
 	</div>
 
-	<div class="mb-4 max-w-sm">
-		<SearchInput bind:value={search} placeholder="Search properties…" testid="property-search" />
-	</div>
-
-	<div class="grid gap-5 lg:grid-cols-5">
-		<div class="space-y-3 lg:col-span-3">
-			{#if propertiesQuery.isLoading}
-				<Card.Root class="gap-0 py-0" data-testid="properties-loading">
-					<Card.Content class="p-6 text-center text-muted-foreground">Loading…</Card.Content>
-				</Card.Root>
-			{:else if list.length}
-				<ul data-testid="properties-list" class="space-y-3">
-					{#each list as property (property.id)}
-						<li
-							data-testid="property-row"
-							data-property-id={property.id}
-							class="rounded-lg border border-border bg-card p-4 transition-colors hover:border-border {selectedProperty === property.id ? 'ring-1 ring-ring' : ''}"
-						>
-							<div class="flex items-start justify-between gap-2">
-								<Button
-									data-testid="property-select"
-									variant="ghost"
-									class="min-w-0 flex-1 justify-start text-left h-auto py-0 px-0 hover:bg-transparent"
-									onclick={() => (selectedProperty = property.id)}
-								>
-									<div>
-										<p class="truncate font-medium" data-testid="property-name">{property.name}</p>
-										<p class="truncate text-xs text-muted-foreground">{property.addressLine1}, {property.city}, {property.state} {property.postalCode}</p>
-										<div class="mt-2 flex gap-4 text-xs text-muted-foreground">
-											<span>{property.unitCount || 0} units</span>
-											<span>{property.occupiedUnits || 0} occupied</span>
-											<span>{property.type}</span>
-										</div>
-									</div>
-								</Button>
-								<div class="flex shrink-0 items-center gap-1">
-									<span class="rounded border border-border bg-background px-2 py-0.5 text-xs">{property.status}</span>
-									<Button
-										data-testid="property-edit"
-										aria-label="Edit property"
-										variant="ghost"
-										size="icon"
-										onclick={() => openEdit(property)}
-									>
-										<Pencil class="h-4 w-4" />
-									</Button>
-									<Button
-										data-testid="property-delete"
-										aria-label="Delete property"
-										variant="ghost"
-										size="icon"
-										onclick={() => (deleteTarget = property)}
-									>
-										<Trash2 class="h-4 w-4" />
-									</Button>
-								</div>
-							</div>
-						</li>
-					{/each}
-				</ul>
-			{:else}
-				<Card.Root class="gap-0 py-0" data-testid="properties-empty">
-					<Card.Content class="p-6 text-center text-muted-foreground">No properties found.</Card.Content>
-				</Card.Root>
-			{/if}
-
-			<Pagination bind:skip take={PAGE_SIZE} count={list.length} testid="property-pagination" />
-		</div>
-
-		<Card.Root class="gap-0 py-0 lg:col-span-2">
-			<Card.Content class="p-4">
-				<div class="mb-3 flex items-center gap-2"><Home class="h-4 w-4 text-primary" /><h2 class="font-semibold">Units</h2></div>
-				{#if !selectedProperty}
-					<p class="text-sm text-muted-foreground">Select a property to manage units.</p>
-				{:else}
-					<div class="mb-3 grid gap-2" data-testid="unit-form">
-						<Input data-testid="unit-number-input" bind:value={unitForm.unitNumber} placeholder="Unit number" />
-						{#if unitErrors.unitNumber}<p class="text-xs text-destructive" data-testid="unit-number-error">{unitErrors.unitNumber}</p>{/if}
-						<div class="grid grid-cols-3 gap-2">
-							<Input data-testid="unit-bedrooms-input" bind:value={unitForm.bedrooms} placeholder="Beds" />
-							<Input data-testid="unit-bathrooms-input" bind:value={unitForm.bathrooms} placeholder="Baths" />
-							<Input data-testid="unit-rent-input" bind:value={unitForm.marketRent} placeholder="Rent" />
-						</div>
-						<Button data-testid="unit-save-button" onclick={submitUnit} disabled={createUnitMutation.isPending}>Add Unit</Button>
-					</div>
-					<ul class="space-y-2" data-testid="units-list">
-						{#each unitsQuery.data || [] as unit (unit.id)}
-							<li class="rounded border border-border bg-background px-3 py-2 text-sm" data-testid="unit-row">
-								<div class="flex items-center justify-between">
-									<p class="font-medium">Unit {unit.unitNumber}</p>
-									<div class="flex items-center gap-2">
-										<span class="text-xs text-muted-foreground">{unit.status}</span>
-										<Button data-testid="unit-delete" aria-label="Remove unit" variant="ghost" size="icon" class="h-6 w-6" onclick={() => deleteUnitMutation.mutate(unit.id)}>
-											<Trash2 class="h-3.5 w-3.5" />
-										</Button>
-									</div>
-								</div>
-								<p class="text-xs text-muted-foreground">{unit.bedrooms}bd / {unit.bathrooms}ba · ${unit.marketRent}/mo</p>
-							</li>
+	<DataGrid
+		data={list}
+		{columns}
+		loading={propertiesQuery.isLoading}
+		emptyMessage="No properties found."
+		onRowClick={(p) => goto(`/properties/${p.id}`)}
+		getRowKey={(p) => p.id}
+		getRowTestId={() => 'property-row'}
+		data-testid="properties-list"
+	>
+		{#snippet toolbar()}
+			<div class="flex flex-1 flex-wrap items-center gap-2">
+				<SearchInput bind:value={search} placeholder="Search properties…" testid="property-search" />
+				<Select.Root type="single" bind:value={typeFilter}>
+					<Select.Trigger class="h-9 w-40 text-sm" data-testid="property-type-filter">
+						{typeFilter || 'All types'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="All types">All types</Select.Item>
+						{#each propertyTypes as pt}
+							<Select.Item value={pt} label={pt}>{pt}</Select.Item>
 						{/each}
-					</ul>
-				{/if}
-			</Card.Content>
-		</Card.Root>
-	</div>
+					</Select.Content>
+				</Select.Root>
+				<Select.Root type="single" bind:value={statusFilter}>
+					<Select.Trigger class="h-9 w-44 text-sm" data-testid="property-status-filter">
+						{statusFilter || 'All statuses'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="All statuses">All statuses</Select.Item>
+						{#each propertyStatuses as ps}
+							<Select.Item value={ps} label={ps}>{ps}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</div>
+			<Button data-testid="property-create-button" class="gap-2 shrink-0" onclick={openCreate}>
+				<Plus class="h-4 w-4" />
+				New Property
+			</Button>
+		{/snippet}
+	</DataGrid>
 </div>
 
 <Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
