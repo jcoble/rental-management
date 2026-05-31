@@ -17,6 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\RentalCommand.Api\RentalCommand.Api.csproj" />
     <ProjectReference Include="..\RentalCommand.Core\RentalCommand.Core.csproj" />
     <ProjectReference Include="..\RentalCommand.Data\RentalCommand.Data.csproj" />
   </ItemGroup>
