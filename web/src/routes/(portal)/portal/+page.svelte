@@ -2,11 +2,46 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { auth } from '$lib/api/endpoints/auth';
 	import { portal } from '$lib/api/endpoints/portal';
+	import { payments as paymentsApi } from '$lib/api/endpoints/payments';
+	import { ApiError } from '$lib/api/client';
 	import { clearAuth, getCurrentUser, hasAnyRole, setCurrentUser } from '$lib/stores/auth.svelte';
+	import { showSuccess, showError, showWarning } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
+	import type { Payment } from '$lib/types';
+
+	/** Payment IDs currently being submitted to create-intent. */
+	let payingIds = $state<Set<number>>(new Set());
+
+	/** Per-payment inline notice shown when Stripe is not configured (503). */
+	let unavailableIds = $state<Set<number>>(new Set());
+
+	async function payNow(payment: Payment) {
+		payingIds = new Set([...payingIds, payment.id]);
+		unavailableIds = new Set([...unavailableIds].filter((id) => id !== payment.id));
+
+		try {
+			const result = await paymentsApi.createIntent(payment.id);
+			// Stripe Elements is not wired yet — acknowledge the round-trip and stub.
+			console.log('[pay-now] intent created, transactionId:', result.transactionId);
+			showSuccess('Secure card payment is coming soon.');
+		} catch (err) {
+			if (err instanceof ApiError && err.status === 503) {
+				unavailableIds = new Set([...unavailableIds, payment.id]);
+				showWarning("Online payments aren't available yet — please pay by your usual method.");
+			} else {
+				showError(
+					err instanceof ApiError && err.message
+						? err.message
+						: 'Something went wrong. Please try again.'
+				);
+			}
+		} finally {
+			payingIds = new Set([...payingIds].filter((id) => id !== payment.id));
+		}
+	}
 
 	const queryClient = useQueryClient();
 
@@ -128,6 +163,41 @@
 					</Card.Content>
 				</Card.Root>
 			</div>
+
+			<!-- Payments: show owed/scheduled rent with online Pay now buttons. -->
+			{#if (data.ledger?.upcomingPayments || []).length > 0}
+				<Card.Root class="mb-5 gap-0 py-0">
+					<Card.Content class="p-4">
+						<h2 class="mb-3 font-semibold">Upcoming & Owed Payments</h2>
+						<div class="space-y-3">
+							{#each data.ledger.upcomingPayments as payment (payment.id)}
+								<div class="flex items-center justify-between rounded border border-border bg-background px-3 py-2 text-sm">
+									<div>
+										<p class="font-medium">{payment.type} — ${payment.amount}</p>
+										<p class="text-xs text-muted-foreground">
+											Due {new Date(payment.dueDate).toLocaleDateString()} · {payment.status}
+											{#if payment.leaseNumber}· {payment.leaseNumber}{/if}
+										</p>
+										{#if unavailableIds.has(payment.id)}
+											<p class="mt-1 text-xs text-amber-600">
+												Online payments aren't available yet — please pay by your usual method.
+											</p>
+										{/if}
+									</div>
+									<Button
+										size="sm"
+										variant={unavailableIds.has(payment.id) ? 'outline' : 'default'}
+										disabled={payingIds.has(payment.id)}
+										onclick={() => payNow(payment)}
+									>
+										{payingIds.has(payment.id) ? 'Processing…' : 'Pay now'}
+									</Button>
+								</div>
+							{/each}
+						</div>
+					</Card.Content>
+				</Card.Root>
+			{/if}
 		{/if}
 
 		{#if data.role === 'Owner'}
