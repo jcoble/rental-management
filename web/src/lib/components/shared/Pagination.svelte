@@ -30,14 +30,14 @@
 </script>
 
 <div class="flex items-center justify-between gap-3 text-sm" data-testid="{testid}">
-	<span class="text-text-tertiary" data-testid="{testid}-status">
+	<span class="text-muted-foreground" data-testid="{testid}-status">
 		Page {page}{count ? ` · ${count} shown` : ''}
 	</span>
 	<div class="flex items-center gap-2">
 		<button
 			type="button"
 			data-testid="{testid}-prev"
-			class="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-40 disabled:pointer-events-none"
+			class="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40 disabled:pointer-events-none"
 			onclick={prev}
 			disabled={!hasPrev}
 		>
@@ -46,7 +46,7 @@
 		<button
 			type="button"
 			data-testid="{testid}-next"
-			class="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-40 disabled:pointer-events-none"
+			class="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:opacity-40 disabled:pointer-events-none"
 			onclick={next}
 			disabled={!hasNext}
 		>

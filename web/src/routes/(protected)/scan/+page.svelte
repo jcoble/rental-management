@@ -44,7 +44,7 @@
 			case 'Rejected':
 				return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300';
 			default:
-				return 'bg-surface text-text-secondary';
+				return 'bg-card text-muted-foreground';
 		}
 	}
 
@@ -58,16 +58,16 @@
 <div class="h-full overflow-y-auto p-6" data-testid="scan-page">
 	<div class="mb-4">
 		<h1 class="text-2xl font-bold">Scan Receipts</h1>
-		<p class="text-sm text-text-secondary">Upload a receipt or invoice to extract and create an expense record.</p>
+		<p class="text-sm text-muted-foreground">Upload a receipt or invoice to extract and create an expense record.</p>
 	</div>
 
 	<!-- Upload zone -->
 	<div class="mb-6" data-testid="scan-upload">
 		{#if uploadMutation.isPending}
-			<div class="flex items-center justify-center rounded-lg border-2 border-dashed border-border bg-surface px-6 py-8">
+			<div class="flex items-center justify-center rounded-lg border-2 border-dashed border-border bg-card px-6 py-8">
 				<div class="text-center">
 					<div class="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent"></div>
-					<p class="text-sm text-text-secondary">Uploading…</p>
+					<p class="text-sm text-muted-foreground">Uploading…</p>
 				</div>
 			</div>
 		{:else}
@@ -81,8 +81,8 @@
 			<button
 				class="rounded-t px-4 py-2 text-sm font-medium transition-colors
 					{activeFilter === tab
-					? 'border-b-2 border-accent text-accent'
-					: 'text-text-secondary hover:text-text'}"
+					? 'border-b-2 border-accent text-primary'
+					: 'text-muted-foreground hover:text-foreground'}"
 				onclick={() => (activeFilter = tab)}
 			>
 				{tab}
@@ -92,36 +92,36 @@
 
 	<!-- Drafts table -->
 	{#if scansQuery.isLoading}
-		<p class="py-8 text-center text-sm text-text-secondary">Loading…</p>
+		<p class="py-8 text-center text-sm text-muted-foreground">Loading…</p>
 	{:else if draftsList.length === 0}
-		<p class="py-8 text-center text-sm text-text-secondary">No scan drafts found.</p>
+		<p class="py-8 text-center text-sm text-muted-foreground">No scan drafts found.</p>
 	{:else}
-		<div class="overflow-hidden rounded-lg border border-border bg-surface">
+		<div class="overflow-hidden rounded-lg border border-border bg-card">
 			<table class="w-full text-sm">
-				<thead class="border-b border-border bg-bg">
+				<thead class="border-b border-border bg-background">
 					<tr>
-						<th class="px-4 py-3 text-left font-medium text-text-secondary">Status</th>
-						<th class="px-4 py-3 text-left font-medium text-text-secondary">Type</th>
-						<th class="px-4 py-3 text-left font-medium text-text-secondary">Created</th>
-						<th class="px-4 py-3 text-left font-medium text-text-secondary">Action</th>
+						<th class="px-4 py-3 text-left font-medium text-muted-foreground">Status</th>
+						<th class="px-4 py-3 text-left font-medium text-muted-foreground">Type</th>
+						<th class="px-4 py-3 text-left font-medium text-muted-foreground">Created</th>
+						<th class="px-4 py-3 text-left font-medium text-muted-foreground">Action</th>
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-border">
 					{#each draftsList as draft (draft.id)}
-						<tr class="hover:bg-surface-hover" data-testid="scan-row" data-draft-id={draft.id}>
+						<tr class="hover:bg-secondary" data-testid="scan-row" data-draft-id={draft.id}>
 							<td class="px-4 py-3">
 								<span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {statusBadgeClass(draft.status)}">
 									{draft.status}
 								</span>
 							</td>
-							<td class="px-4 py-3 text-text-secondary">{draft.targetEntityType}</td>
-							<td class="px-4 py-3 text-text-secondary">
+							<td class="px-4 py-3 text-muted-foreground">{draft.targetEntityType}</td>
+							<td class="px-4 py-3 text-muted-foreground">
 								{new Date(draft.createdAt).toLocaleDateString()}
 							</td>
 							<td class="px-4 py-3">
 								<a
 									href="/scan/{draft.id}"
-									class="text-accent hover:underline"
+									class="text-primary hover:underline"
 								>
 									Review
 								</a>

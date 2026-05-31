@@ -158,7 +158,7 @@
 	}
 
 	const list = $derived(propertiesQuery.data ?? []);
-	const inputClass = 'rounded border border-border bg-bg px-3 py-2 text-sm';
+	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
 </script>
 
 <svelte:head>
@@ -169,11 +169,11 @@
 	<div class="mb-4 flex items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold">Properties</h1>
-			<p class="text-sm text-text-secondary">Portfolio, units, and occupancy setup.</p>
+			<p class="text-sm text-muted-foreground">Portfolio, units, and occupancy setup.</p>
 		</div>
 		<button
 			data-testid="property-create-button"
-			class="inline-flex items-center gap-2 rounded-md bg-accent px-3 py-2 text-sm text-white"
+			class="inline-flex items-center gap-2 rounded-md bg-primary px-3 py-2 text-sm text-white"
 			onclick={openCreate}
 		>
 			<Plus class="h-4 w-4" />
@@ -188,14 +188,14 @@
 	<div class="grid gap-5 lg:grid-cols-5">
 		<div class="space-y-3 lg:col-span-3">
 			{#if propertiesQuery.isLoading}
-				<div class="rounded-lg border border-border bg-surface p-6 text-center text-text-secondary" data-testid="properties-loading">Loading…</div>
+				<div class="rounded-lg border border-border bg-card p-6 text-center text-muted-foreground" data-testid="properties-loading">Loading…</div>
 			{:else if list.length}
 				<ul data-testid="properties-list" class="space-y-3">
 					{#each list as property (property.id)}
 						<li
 							data-testid="property-row"
 							data-property-id={property.id}
-							class="rounded-lg border border-border bg-surface p-4 transition-colors hover:border-border-hover {selectedProperty === property.id ? 'ring-1 ring-accent' : ''}"
+							class="rounded-lg border border-border bg-card p-4 transition-colors hover:border-border {selectedProperty === property.id ? 'ring-1 ring-ring' : ''}"
 						>
 							<div class="flex items-start justify-between gap-2">
 								<button
@@ -204,19 +204,19 @@
 									onclick={() => (selectedProperty = property.id)}
 								>
 									<p class="truncate font-medium" data-testid="property-name">{property.name}</p>
-									<p class="truncate text-xs text-text-secondary">{property.addressLine1}, {property.city}, {property.state} {property.postalCode}</p>
-									<div class="mt-2 flex gap-4 text-xs text-text-secondary">
+									<p class="truncate text-xs text-muted-foreground">{property.addressLine1}, {property.city}, {property.state} {property.postalCode}</p>
+									<div class="mt-2 flex gap-4 text-xs text-muted-foreground">
 										<span>{property.unitCount || 0} units</span>
 										<span>{property.occupiedUnits || 0} occupied</span>
 										<span>{property.type}</span>
 									</div>
 								</button>
 								<div class="flex shrink-0 items-center gap-1">
-									<span class="rounded border border-border bg-bg px-2 py-0.5 text-xs">{property.status}</span>
+									<span class="rounded border border-border bg-background px-2 py-0.5 text-xs">{property.status}</span>
 									<button
 										data-testid="property-edit"
 										aria-label="Edit property"
-										class="rounded p-1.5 text-text-tertiary hover:bg-surface-hover hover:text-text-primary"
+										class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
 										onclick={() => openEdit(property)}
 									>
 										<Pencil class="h-4 w-4" />
@@ -224,7 +224,7 @@
 									<button
 										data-testid="property-delete"
 										aria-label="Delete property"
-										class="rounded p-1.5 text-text-tertiary hover:bg-surface-hover hover:text-danger"
+										class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive"
 										onclick={() => (deleteTarget = property)}
 									>
 										<Trash2 class="h-4 w-4" />
@@ -235,40 +235,40 @@
 					{/each}
 				</ul>
 			{:else}
-				<div class="rounded-lg border border-border bg-surface p-6 text-center text-text-secondary" data-testid="properties-empty">No properties found.</div>
+				<div class="rounded-lg border border-border bg-card p-6 text-center text-muted-foreground" data-testid="properties-empty">No properties found.</div>
 			{/if}
 
 			<Pagination bind:skip take={PAGE_SIZE} count={list.length} testid="property-pagination" />
 		</div>
 
-		<div class="rounded-lg border border-border bg-surface p-4 lg:col-span-2">
-			<div class="mb-3 flex items-center gap-2"><Home class="h-4 w-4 text-accent" /><h2 class="font-semibold">Units</h2></div>
+		<div class="rounded-lg border border-border bg-card p-4 lg:col-span-2">
+			<div class="mb-3 flex items-center gap-2"><Home class="h-4 w-4 text-primary" /><h2 class="font-semibold">Units</h2></div>
 			{#if !selectedProperty}
-				<p class="text-sm text-text-secondary">Select a property to manage units.</p>
+				<p class="text-sm text-muted-foreground">Select a property to manage units.</p>
 			{:else}
 				<div class="mb-3 grid gap-2" data-testid="unit-form">
 					<input data-testid="unit-number-input" bind:value={unitForm.unitNumber} class={inputClass} placeholder="Unit number" />
-					{#if unitErrors.unitNumber}<p class="text-xs text-danger" data-testid="unit-number-error">{unitErrors.unitNumber}</p>{/if}
+					{#if unitErrors.unitNumber}<p class="text-xs text-destructive" data-testid="unit-number-error">{unitErrors.unitNumber}</p>{/if}
 					<div class="grid grid-cols-3 gap-2">
 						<input data-testid="unit-bedrooms-input" bind:value={unitForm.bedrooms} class={inputClass} placeholder="Beds" />
 						<input data-testid="unit-bathrooms-input" bind:value={unitForm.bathrooms} class={inputClass} placeholder="Baths" />
 						<input data-testid="unit-rent-input" bind:value={unitForm.marketRent} class={inputClass} placeholder="Rent" />
 					</div>
-					<button data-testid="unit-save-button" onclick={submitUnit} class="rounded bg-accent px-3 py-2 text-sm text-white" disabled={createUnitMutation.isPending}>Add Unit</button>
+					<button data-testid="unit-save-button" onclick={submitUnit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={createUnitMutation.isPending}>Add Unit</button>
 				</div>
 				<ul class="space-y-2" data-testid="units-list">
 					{#each unitsQuery.data || [] as unit (unit.id)}
-						<li class="rounded border border-border bg-bg px-3 py-2 text-sm" data-testid="unit-row">
+						<li class="rounded border border-border bg-background px-3 py-2 text-sm" data-testid="unit-row">
 							<div class="flex items-center justify-between">
 								<p class="font-medium">Unit {unit.unitNumber}</p>
 								<div class="flex items-center gap-2">
-									<span class="text-xs text-text-secondary">{unit.status}</span>
-									<button data-testid="unit-delete" aria-label="Remove unit" class="rounded p-1 text-text-tertiary hover:text-danger" onclick={() => deleteUnitMutation.mutate(unit.id)}>
+									<span class="text-xs text-muted-foreground">{unit.status}</span>
+									<button data-testid="unit-delete" aria-label="Remove unit" class="rounded p-1 text-muted-foreground hover:text-destructive" onclick={() => deleteUnitMutation.mutate(unit.id)}>
 										<Trash2 class="h-3.5 w-3.5" />
 									</button>
 								</div>
 							</div>
-							<p class="text-xs text-text-secondary">{unit.bedrooms}bd / {unit.bathrooms}ba · ${unit.marketRent}/mo</p>
+							<p class="text-xs text-muted-foreground">{unit.bedrooms}bd / {unit.bathrooms}ba · ${unit.marketRent}/mo</p>
 						</li>
 					{/each}
 				</ul>
@@ -281,7 +281,7 @@
 	<div class="grid gap-3 md:grid-cols-2" data-testid="property-form">
 		<div class="md:col-span-2">
 			<input data-testid="property-name-input" bind:value={form.name} class="{inputClass} w-full" placeholder="Property name" />
-			{#if formErrors.name}<p class="mt-1 text-xs text-danger" data-testid="property-name-error">{formErrors.name}</p>{/if}
+			{#if formErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="property-name-error">{formErrors.name}</p>{/if}
 		</div>
 		<select data-testid="property-type-input" bind:value={form.type} class={inputClass}>
 			<option>SingleFamily</option><option>MultiFamily</option><option>Condo</option><option>Townhome</option><option>Commercial</option><option>MixedUse</option>
@@ -294,26 +294,26 @@
 		</select>
 		<div class="md:col-span-2">
 			<input data-testid="property-address-input" bind:value={form.addressLine1} class="{inputClass} w-full" placeholder="Address" />
-			{#if formErrors.addressLine1}<p class="mt-1 text-xs text-danger" data-testid="property-address-error">{formErrors.addressLine1}</p>{/if}
+			{#if formErrors.addressLine1}<p class="mt-1 text-xs text-destructive" data-testid="property-address-error">{formErrors.addressLine1}</p>{/if}
 		</div>
 		<div>
 			<input data-testid="property-city-input" bind:value={form.city} class="{inputClass} w-full" placeholder="City" />
-			{#if formErrors.city}<p class="mt-1 text-xs text-danger" data-testid="property-city-error">{formErrors.city}</p>{/if}
+			{#if formErrors.city}<p class="mt-1 text-xs text-destructive" data-testid="property-city-error">{formErrors.city}</p>{/if}
 		</div>
 		<div class="grid grid-cols-2 gap-2">
 			<div>
 				<input data-testid="property-state-input" bind:value={form.state} class="{inputClass} w-full" placeholder="State" />
-				{#if formErrors.state}<p class="mt-1 text-xs text-danger" data-testid="property-state-error">{formErrors.state}</p>{/if}
+				{#if formErrors.state}<p class="mt-1 text-xs text-destructive" data-testid="property-state-error">{formErrors.state}</p>{/if}
 			</div>
 			<div>
 				<input data-testid="property-zip-input" bind:value={form.postalCode} class="{inputClass} w-full" placeholder="ZIP" />
-				{#if formErrors.postalCode}<p class="mt-1 text-xs text-danger" data-testid="property-zip-error">{formErrors.postalCode}</p>{/if}
+				{#if formErrors.postalCode}<p class="mt-1 text-xs text-destructive" data-testid="property-zip-error">{formErrors.postalCode}</p>{/if}
 			</div>
 		</div>
 	</div>
 	<div class="mt-4 flex justify-end gap-2">
-		<button data-testid="property-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-text-secondary hover:bg-surface-hover" onclick={closeForm}>Cancel</button>
-		<button data-testid="property-form-save" onclick={submitProperty} class="rounded bg-accent px-3 py-2 text-sm text-white" disabled={savePropertyMutation.isPending}>
+		<button data-testid="property-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>
+		<button data-testid="property-form-save" onclick={submitProperty} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={savePropertyMutation.isPending}>
 			{savePropertyMutation.isPending ? 'Saving…' : 'Save Property'}
 		</button>
 	</div>
