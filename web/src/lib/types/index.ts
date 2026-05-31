@@ -441,3 +441,20 @@ export interface PortalMessage {
 	createdAt: string;
 	updatedAt: string;
 }
+
+/** Matches the AdminUsersController TeamMemberDto. */
+export interface TeamMember {
+	id: number;
+	email: string;
+	displayName?: string;
+	role: UserRole;
+	isActive: boolean;
+	ownerId?: number;
+	tenantId?: number;
+	createdAt: string;
+}
+
+/** Returned from POST /api/v1/admin/users — includes the one-time generated password. */
+export interface CreateTeamMemberResponse extends TeamMember {
+	generatedPassword?: string;
+}
