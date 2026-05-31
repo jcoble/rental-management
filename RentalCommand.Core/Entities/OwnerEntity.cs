@@ -1,0 +1,26 @@
+using RentalCommand.Core.Enums;
+
+namespace RentalCommand.Core.Entities;
+
+/// <summary>
+/// The legal owner of properties/income — a Person, LLC, or Trust.
+/// Distinct from the legacy <see cref="Owner"/> contact record; referenced
+/// from Property/Tenant/Payment/Expense in later phases.
+/// </summary>
+public class OwnerEntity
+{
+    public int Id { get; set; }
+    public int PortfolioId { get; set; }
+    public OwnerEntityType OwnerEntityType { get; set; } = OwnerEntityType.Person;
+    public string Name { get; set; } = string.Empty;
+    public string? TaxId { get; set; }
+    public string? Address { get; set; }
+    public string? Phone { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>Soft-delete marker; null means active.</summary>
+    public DateTime? DeletedAt { get; set; }
+
+    public Portfolio? Portfolio { get; set; }
+}

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RunSettings>
+  <RunConfiguration>
+    <TestCaseFilter>Tier!=3-Slow&amp;Legacy!=PendingAudit&amp;Legacy!=Archived</TestCaseFilter>
+  </RunConfiguration>
+</RunSettings>

@@ -6,6 +6,7 @@ export { vendors } from './endpoints/vendors';
 export { leases } from './endpoints/leases';
 export { payments } from './endpoints/payments';
 export { expenses } from './endpoints/expenses';
+export { accounting } from './endpoints/accounting';
 export { workOrders } from './endpoints/workOrders';
 export { appointments } from './endpoints/appointments';
 export { inspections } from './endpoints/inspections';
