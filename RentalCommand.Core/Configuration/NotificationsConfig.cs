@@ -17,6 +17,7 @@ public class NotificationsConfig
     public int LeaseExpiryReminderDays { get; set; } = 60;
 
     public TwilioOptions Twilio { get; set; } = new();
+    public SignalWireOptions SignalWire { get; set; } = new();
     public SendGridOptions SendGrid { get; set; } = new();
 
     // Keyed by 2-letter US state (e.g. "CA"); caps the late fee. Missing state = no cap (use lease amount).
@@ -29,6 +30,23 @@ public class TwilioOptions
     public string? AuthToken { get; set; }
     public string? FromNumber { get; set; }
     public bool Enabled => !string.IsNullOrWhiteSpace(AccountSid) && !string.IsNullOrWhiteSpace(AuthToken) && !string.IsNullOrWhiteSpace(FromNumber);
+}
+
+/// <summary>
+/// SignalWire SMS via its Twilio-compatible "Compatibility" (LaML) API — a cheaper drop-in for
+/// Twilio. Basic auth uses ProjectId as username and the API token as password; messages POST to
+/// <c>https://{SpaceUrl}/api/laml/2010-04-01/Accounts/{ProjectId}/Messages.json</c>.
+/// </summary>
+public class SignalWireOptions
+{
+    public string? ProjectId { get; set; }
+    public string? Token { get; set; }
+    /// <summary>Space host, e.g. <c>your-space.signalwire.com</c> (scheme optional).</summary>
+    public string? SpaceUrl { get; set; }
+    public string? FromNumber { get; set; }
+    public bool Enabled =>
+        !string.IsNullOrWhiteSpace(ProjectId) && !string.IsNullOrWhiteSpace(Token)
+        && !string.IsNullOrWhiteSpace(SpaceUrl) && !string.IsNullOrWhiteSpace(FromNumber);
 }
 
 public class SendGridOptions
