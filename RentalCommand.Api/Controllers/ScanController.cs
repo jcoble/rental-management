@@ -19,6 +19,13 @@ public class ScanController : AuthenticatedPortfolioControllerBase
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
 
+    // Content types we trust to render inline (non-active: no script execution). Anything else
+    // is forced to download as octet-stream so an uploaded html/svg/etc. can't run on our origin.
+    private static readonly HashSet<string> InlineSafeContentTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic"
+    };
+
     public ScanController(IScanService scan, RentalCommandDbContext db, IFileStorage files)
     {
         _scan = scan;
@@ -138,7 +145,18 @@ public class ScanController : AuthenticatedPortfolioControllerBase
             return NotFound(new { error = "File not found on storage" });
         }
 
-        return File(stream, storedFile.ContentType);
+        // Serve user-uploaded content defensively: never let the browser render active content
+        // (html/svg/…) on our own origin. Known-safe types (images + PDF) render inline so the
+        // review page preview works; everything else downloads as octet-stream. nosniff always.
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        if (InlineSafeContentTypes.Contains(storedFile.ContentType))
+        {
+            Response.Headers["Content-Disposition"] = $"inline; filename=\"scan-{id}\"";
+            return File(stream, storedFile.ContentType);
+        }
+
+        Response.Headers["Content-Disposition"] = $"attachment; filename=\"scan-{id}\"";
+        return File(stream, "application/octet-stream");
     }
 
     // -------------------------------------------------------------------------

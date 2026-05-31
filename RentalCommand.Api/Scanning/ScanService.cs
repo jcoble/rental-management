@@ -80,16 +80,28 @@ public sealed class ScanService : IScanService
         CancellationToken ct = default)
     {
         var draft = await _db.ScanDrafts
+            .AsNoTracking()
             .FirstOrDefaultAsync(d => d.Id == draftId && d.PortfolioId == portfolioId, ct);
 
         if (draft is null)
             return new ScanConfirmResult(false, null, "Draft not found");
 
-        if (draft.Status == "Confirmed")
-            return new ScanConfirmResult(false, null, "Draft already confirmed");
+        if (draft.Status is "Confirmed" or "Rejected")
+            return new ScanConfirmResult(false, null, $"Draft is already {draft.Status.ToLowerInvariant()}");
 
         if (draft.TargetEntityType != "Expense")
             return new ScanConfirmResult(false, null, $"Unsupported target '{draft.TargetEntityType}'");
+
+        // Atomically claim the draft so two concurrent confirms can't both create an Expense.
+        // The conditional UPDATE only matches a not-yet-finalized, not-in-flight draft; the DB
+        // serializes concurrent callers so exactly one wins (affected == 1).
+        var claimed = await _db.ScanDrafts
+            .Where(d => d.Id == draftId && d.PortfolioId == portfolioId
+                && d.Status != "Confirmed" && d.Status != "Rejected" && d.Status != "Confirming")
+            .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, "Confirming"), ct);
+
+        if (claimed == 0)
+            return new ScanConfirmResult(false, null, "Draft is already being confirmed or finalized");
 
         // Start from the extracted fields, then apply the user's reviewed overrides (overrides win).
         var dto = BuildReceiptDto(draft.ExtractedFields);
@@ -106,23 +118,49 @@ public sealed class ScanService : IScanService
             Notes = dto.Notes,
         };
 
-        var expense = await _expenses.CreateAsync(portfolioId, request, ct);
-        if (expense is null)
-            return new ScanConfirmResult(false, null, "Expense creation failed");
-
-        // Re-key the uploaded file to the new Expense.
-        var file = await _db.StoredFiles.FirstOrDefaultAsync(
-            f => f.PortfolioId == portfolioId && f.FilePath == draft.FilePath, ct);
-        if (file is not null)
+        ExpenseResponse? expense;
+        try
         {
-            file.EntityType = "Expense";
-            file.EntityId = expense.Id;
+            expense = await _expenses.CreateAsync(portfolioId, request, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Expense creation threw while confirming scan draft {DraftId}", draftId);
+            expense = null;
         }
 
-        draft.Status = "Confirmed";
-        draft.ConfirmedAt = DateTime.UtcNow;
-        draft.ReviewedBy = userId.ToString();
-        await _db.SaveChangesAsync(ct);
+        if (expense is null)
+        {
+            // Release the claim so the user can retry from the review page.
+            await _db.ScanDrafts
+                .Where(d => d.Id == draftId && d.PortfolioId == portfolioId && d.Status == "Confirming")
+                .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, "Reviewing"), ct);
+            return new ScanConfirmResult(false, null, "Expense creation failed");
+        }
+
+        // Re-key the uploaded file to the new Expense and finalize the draft.
+        await _db.StoredFiles
+            .Where(f => f.PortfolioId == portfolioId && f.FilePath == draft.FilePath)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(f => f.EntityType, "Expense")
+                .SetProperty(f => f.EntityId, (int?)expense.Id), ct);
+
+        await _db.ScanDrafts
+            .Where(d => d.Id == draftId && d.PortfolioId == portfolioId)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(d => d.Status, "Confirmed")
+                .SetProperty(d => d.ConfirmedAt, (DateTime?)DateTime.UtcNow)
+                .SetProperty(d => d.ReviewedBy, userId.ToString()), ct);
+
+        // Audit the values actually applied (post-override), with the raw extraction as the prior state.
+        var appliedJson = JsonSerializer.Serialize(new
+        {
+            vendorName = dto.VendorName,
+            amount = dto.Amount,
+            transactionDate = dto.TransactionDate,
+            category = dto.Category?.ToString(),
+            notes = dto.Notes,
+        });
 
         await _audit.LogAsync(
             portfolioId,
@@ -130,8 +168,9 @@ public sealed class ScanService : IScanService
             expense.Id,
             AuditLogOperation.Created,
             userId: userId,
+            oldValues: draft.ExtractedFields,
+            newValues: appliedJson,
             changeReason: "Created from scan draft #" + draftId,
-            newValues: draft.ExtractedFields,
             ct: ct);
 
         return new ScanConfirmResult(true, expense.Id, null);
@@ -153,6 +192,9 @@ public sealed class ScanService : IScanService
 
         if (draft is null)
             return false;
+
+        if (draft.Status is "Confirmed" or "Rejected")
+            return false; // already finalized — don't reject a confirmed (already-created) record
 
         draft.Status = "Rejected";
         draft.ReviewedAt = DateTime.UtcNow;
