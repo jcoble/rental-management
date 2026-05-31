@@ -12,8 +12,20 @@ import type { LoginResponse } from '$lib/types/user';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 
 function safeRedirectPath(path: string | null, fallback: string): string {
-	if (!path || !path.startsWith('/') || path.startsWith('//')) return fallback;
-	return path;
+	if (!path) return fallback;
+	// Same-origin path only: must start with a single '/' followed by a non-slash,
+	// non-backslash char. Rejects protocol-relative ('//host') and backslash tricks
+	// ('/\\host') that browsers normalize into an external origin.
+	if (!/^\/[^/\\]/.test(path)) return fallback;
+	// Double-check by parsing against a throwaway origin; anything that resolves
+	// off-origin (scheme, host, normalized backslashes, control chars) is rejected.
+	try {
+		const parsed = new URL(path, 'https://placeholder.invalid');
+		if (parsed.origin !== 'https://placeholder.invalid') return fallback;
+		return parsed.pathname + parsed.search + parsed.hash;
+	} catch {
+		return fallback;
+	}
 }
 
 /** Where to send a user after login when no explicit redirect is requested. */
