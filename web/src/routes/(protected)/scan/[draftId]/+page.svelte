@@ -78,6 +78,18 @@
 		return '';
 	}
 
+	// User-facing status wording. "Reviewing" really means "waiting for you to review".
+	function statusLabel(s: string): string {
+		switch (s) {
+			case 'Pending': return 'Processing';
+			case 'Reviewing': return 'Ready to review';
+			case 'Confirmed': return 'Confirmed';
+			case 'Failed': return 'Extraction failed';
+			case 'Rejected': return 'Rejected';
+			default: return s;
+		}
+	}
+
 	function fieldInputClass(field: ScanFieldDto): string {
 		const level = confidenceLevel(field.confidence);
 		const base = 'w-full rounded border px-3 py-2 text-sm bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring';
@@ -99,7 +111,9 @@
 		return true; // default to image; <img> won't crash on PDFs
 	});
 
-	const fileUrl = $derived(data ? `/api/v1/scans/${data.id}/file` : '');
+	// Preview goes through a same-origin, cookie-authed SvelteKit route (the API's
+	// /file endpoint needs a JWT bearer an <img>/<iframe> can't send).
+	const fileUrl = $derived(data ? `/scan-file/${data.id}` : '');
 
 	// Confirm mutation
 	const confirmMutation = createMutation(() => ({
@@ -176,7 +190,7 @@
 				{data.status === 'Reviewing' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' : ''}
 				{data.status === 'Confirmed' ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' : ''}
 				{data.status === 'Failed' || data.status === 'Rejected' ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' : ''}">
-				{data.status}
+				{statusLabel(data.status)}
 			</span>
 		</div>
 
@@ -333,7 +347,7 @@
 						<button
 							data-testid="scan-confirm"
 							onclick={() => confirmMutation.mutate()}
-							disabled={confirmMutation.isPending || data.status === 'Rejected'}
+							disabled={confirmMutation.isPending || data.status === 'Rejected' || data.status === 'Confirmed'}
 							class="flex-1 rounded bg-primary px-4 py-2 text-sm font-medium text-white hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
 						>
 							{confirmMutation.isPending ? 'Confirming…' : 'Confirm & Create Expense'}
