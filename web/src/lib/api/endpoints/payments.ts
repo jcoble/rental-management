@@ -12,5 +12,6 @@ export const payments = {
 	update: (id: number, data: Record<string, unknown>) => api.patch<Payment>(`/payments/${id}`, data),
 	markPaid: (id: number, data: Record<string, unknown>) => api.post<Payment>(`/payments/${id}/mark-paid`, data),
 	delete: (id: number) => api.delete(`/payments/${id}`),
-	summary: (portfolioId: number) => api.get(`/payments/summary?portfolioId=${portfolioId}`),
+	// Payment collection rollups (collected/outstanding/overdue) live on the accounting
+	// summary; use the `accounting` endpoint module rather than a payments-only summary route.
 };
