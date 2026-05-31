@@ -1,0 +1,93 @@
+import 'package:dio/dio.dart';
+
+/// Typed exception for all API errors.
+///
+/// Maps Dio's error hierarchy and the API's error body shapes:
+///   - `{ "error": "message string" }` — plain error string
+///   - `{ "error": { "message": "..." } }` — nested error object
+///   - ASP.NET ProblemDetails — `{ "title": "...", "status": 4xx }`
+class ApiException implements Exception {
+  const ApiException({
+    required this.statusCode,
+    required this.message,
+  });
+
+  final int statusCode;
+  final String message;
+
+  @override
+  String toString() => 'ApiException($statusCode): $message';
+
+  /// Converts a [DioException] into an [ApiException].
+  factory ApiException.fromDioException(DioException e) {
+    final response = e.response;
+
+    if (response == null) {
+      // Network-level error (no connectivity, timeout, etc.)
+      switch (e.type) {
+        case DioExceptionType.connectionTimeout:
+        case DioExceptionType.sendTimeout:
+        case DioExceptionType.receiveTimeout:
+          return const ApiException(
+            statusCode: 408,
+            message: 'The request is taking longer than expected. Try again.',
+          );
+        case DioExceptionType.connectionError:
+          return const ApiException(
+            statusCode: 0,
+            message: 'Unable to connect. Check your network connection.',
+          );
+        default:
+          return ApiException(
+            statusCode: 0,
+            message: e.message ?? 'An unexpected network error occurred.',
+          );
+      }
+    }
+
+    final statusCode = response.statusCode ?? 0;
+    final body = response.data;
+    final message = _extractMessage(body, statusCode);
+    return ApiException(statusCode: statusCode, message: message);
+  }
+
+  static String _extractMessage(dynamic body, int statusCode) {
+    if (body is Map<String, dynamic>) {
+      // { "error": "string" }
+      final errorField = body['error'];
+      if (errorField is String && errorField.isNotEmpty) {
+        return errorField;
+      }
+      // { "error": { "message": "..." } }
+      if (errorField is Map<String, dynamic>) {
+        final msg = errorField['message'];
+        if (msg is String && msg.isNotEmpty) return msg;
+      }
+      // ASP.NET ProblemDetails — { "title": "...", "status": 4xx }
+      final title = body['title'];
+      if (title is String && title.isNotEmpty) return title;
+      // Generic message field
+      final message = body['message'];
+      if (message is String && message.isNotEmpty) return message;
+    }
+    return _fallbackMessage(statusCode);
+  }
+
+  static String _fallbackMessage(int statusCode) {
+    switch (statusCode) {
+      case 400:
+        return 'Invalid request.';
+      case 401:
+        return 'Session expired. Please sign in again.';
+      case 403:
+        return 'You do not have permission to perform this action.';
+      case 404:
+        return 'The requested resource was not found.';
+      case 429:
+        return 'Too many requests. Try again shortly.';
+      default:
+        if (statusCode >= 500) return 'The server encountered an error. Please try again.';
+        return 'Request failed ($statusCode).';
+    }
+  }
+}

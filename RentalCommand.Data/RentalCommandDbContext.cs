@@ -39,6 +39,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<QueuedJob> QueuedJobs => Set<QueuedJob>();
     public DbSet<StoredFile> StoredFiles => Set<StoredFile>();
     public DbSet<ScanDraft> ScanDrafts => Set<ScanDraft>();
+    public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -139,6 +140,20 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.ExtractedFields).HasColumnType("jsonb");
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.Status);
+        });
+
+        modelBuilder.Entity<DeviceToken>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Token).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.Platform).IsRequired().HasMaxLength(20);
+            // Each physical device token must be unique across all rows.
+            entity.HasIndex(e => e.Token).IsUnique();
+            entity.HasIndex(e => new { e.PortfolioId, e.UserId });
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<OutboxMessage>(entity =>

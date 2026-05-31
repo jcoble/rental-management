@@ -86,3 +86,26 @@ mobile/
 T1 → T2 → (T3, T4 parallel) → T5 (flagship, prioritize) → T6 → T7 (parallel per area) → T8 → T9.
 Each task: `flutter analyze` clean + the screen builds/runs against the dev API; widget tests for the
 flagship flows. Keep the API contract identical to web (no mobile-only divergence except `/devices`).
+
+---
+
+## Status — 2026-05-31 (started, merged to main)
+**Done + verified (`flutter analyze` clean, `flutter build web` succeeds):**
+- API groundwork: `DeviceToken` entity + `POST`/`DELETE /api/v1/devices` + migration `AddDeviceTokens`.
+- **T1 Scaffold** — `mobile/` (Flutter 3.44 / Dart 3.12), iOS/Android/web.
+- **T2 API client + auth** — Dio client (debug self-signed cert), secure token store, auth interceptor
+  (bearer + single-flight refresh on 401), Riverpod auth controller (sealed `AuthState`) + repository
+  against `/api/v1/auth`, `restoreSession` on startup, login screen (dev fill), go_router auth guard,
+  `NavigationBar` app shell (Home/Scan/Properties/AI/More), Material 3 theme.
+
+**Decisions:** plain Riverpod (no codegen) + plain model classes (no freezed) for a simple, analyze-clean
+toolchain; freezed can be adopted later. State via Riverpod 3 `Notifier`.
+
+**API follow-up needed (small):** the `/api/v1/auth/refresh` endpoint is **cookie-only**; mobile currently
+sends the stored refresh token as a `Cookie:` header and reads the rotated token from `Set-Cookie`
+(works, but fragile). Recommended: add a **body-based refresh** option to `AuthController.Refresh` for
+non-browser clients. Marked `TODO(api)` in the mobile auth code.
+
+**Next (per the task list above):** T3 models → T4 realtime → **T5 scan capture (flagship)** → T6
+briefing/Q&A → T7 management → T8 push (DeviceToken endpoint already exists; needs the FCM outbox channel)
+→ T9 polish.
