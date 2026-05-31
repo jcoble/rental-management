@@ -2,10 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/auth/auth_controller.dart';
+import 'core/realtime/signalr_service.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 
 void main() {
+  // Allow the mkcert self-signed certificate in debug builds so that both the
+  // Dio REST client and the SignalR WebSocket upgrade accept the local dev API.
+  installDebugCertBypass();
+
   runApp(const ProviderScope(child: _AppStartup()));
 }
 
