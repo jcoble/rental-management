@@ -99,22 +99,39 @@ public sealed class AnthropicLlmProvider : ILlmProvider
         }
         else
         {
-            var mediaType = isPdf ? "application/pdf" : contentType;
-            var blockType = isPdf ? "document" : "image";
-            userContent = new object[]
+            // For images (or scanned PDFs that yielded no born-digital text): optionally OCR locally
+            // first (cheap — avoids vision tokens); fall back to the vision block if OCR is disabled,
+            // unavailable, or returns too little text.
+            string? ocrText = null;
+            if (_config.UseImageOcr && !isPdf)
+                ocrText = ImageTextExtractor.TryExtractText(documentBytes, contentType);
+
+            if (ocrText is { Length: > 0 })
             {
-                new
+                userContent = new object[]
                 {
-                    type = blockType,
-                    source = new
+                    new { type = "text", text = "Document text follows. Extract the fields.\n\n" + ocrText }
+                };
+            }
+            else
+            {
+                var mediaType = isPdf ? "application/pdf" : contentType;
+                var blockType = isPdf ? "document" : "image";
+                userContent = new object[]
+                {
+                    new
                     {
-                        type = "base64",
-                        media_type = mediaType,
-                        data = Convert.ToBase64String(documentBytes)
-                    }
-                },
-                new { type = "text", text = "Extract the fields from the attached document." }
-            };
+                        type = blockType,
+                        source = new
+                        {
+                            type = "base64",
+                            media_type = mediaType,
+                            data = Convert.ToBase64String(documentBytes)
+                        }
+                    },
+                    new { type = "text", text = "Extract the fields from the attached document." }
+                };
+            }
         }
 
         var body = new

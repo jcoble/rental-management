@@ -109,18 +109,30 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         }
         else
         {
-            // Image — send as a vision image_url block.
-            var dataUri = $"data:{contentType};base64,{Convert.ToBase64String(documentBytes)}";
-            var imageDetail = string.IsNullOrWhiteSpace(_config.ImageDetail) ? "low" : _config.ImageDetail;
-            userContent = new object[]
+            // Image — optionally OCR locally first (cheap — avoids vision tokens); fall back to
+            // the vision image_url block if OCR is disabled, unavailable, or yields too little text.
+            string? ocrText = null;
+            if (_config.UseImageOcr)
+                ocrText = ImageTextExtractor.TryExtractText(documentBytes, contentType);
+
+            if (ocrText is { Length: > 0 })
             {
-                new { type = "text", text = "Extract the fields from the attached document." },
-                new
+                userContent = "Document text follows. Extract the fields.\n\n" + ocrText;
+            }
+            else
+            {
+                var dataUri = $"data:{contentType};base64,{Convert.ToBase64String(documentBytes)}";
+                var imageDetail = string.IsNullOrWhiteSpace(_config.ImageDetail) ? "low" : _config.ImageDetail;
+                userContent = new object[]
                 {
-                    type = "image_url",
-                    image_url = new { url = dataUri, detail = imageDetail }
-                }
-            };
+                    new { type = "text", text = "Extract the fields from the attached document." },
+                    new
+                    {
+                        type = "image_url",
+                        image_url = new { url = dataUri, detail = imageDetail }
+                    }
+                };
+            }
         }
 
         var functionTool = new
