@@ -11,5 +11,6 @@ export const expenses = {
 	create: (data: Record<string, unknown>) => api.post<Expense>('/expenses', data),
 	update: (id: number, data: Record<string, unknown>) => api.patch<Expense>(`/expenses/${id}`, data),
 	delete: (id: number) => api.delete(`/expenses/${id}`),
-	summary: (portfolioId: number) => api.get(`/expenses/summary?portfolioId=${portfolioId}`),
+	// Expense totals (by Schedule E category + grand total) live on the accounting summary;
+	// use the `accounting` endpoint module rather than an expenses-only summary route.
 };

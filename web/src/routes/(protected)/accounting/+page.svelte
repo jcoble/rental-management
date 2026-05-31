@@ -2,10 +2,11 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { payments } from '$lib/api/endpoints/payments';
 	import { expenses } from '$lib/api/endpoints/expenses';
+	import { accounting } from '$lib/api/endpoints/accounting';
 	import { leases } from '$lib/api/endpoints/leases';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { properties } from '$lib/api/endpoints/properties';
-	import type { Payment, Expense } from '$lib/types';
+	import type { Payment, Expense, AccountingSummary } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -38,8 +39,8 @@
 		queryKey: ['expenses', portfolioId],
 		queryFn: () => expenses.list(portfolioId, { take: 100 }),
 	}));
-	const paymentSummaryQuery = createQuery(() => ({ queryKey: ['payment-summary', portfolioId], queryFn: () => payments.summary(portfolioId) }));
-	const expenseSummaryQuery = createQuery(() => ({ queryKey: ['expense-summary', portfolioId], queryFn: () => expenses.summary(portfolioId) }));
+	// Single accounting rollup: payment collection (collected/outstanding/overdue) + expense totals.
+	const accountingSummaryQuery = createQuery(() => ({ queryKey: ['accounting-summary', portfolioId], queryFn: () => accounting.summary() }));
 	const leasesQuery = createQuery(() => ({ queryKey: ['leases', portfolioId], queryFn: () => leases.list(portfolioId, { take: 200 }) }));
 	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }) }));
 	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
@@ -54,7 +55,7 @@
 
 	function invalidatePayments() {
 		queryClient.invalidateQueries({ queryKey: ['payments', portfolioId] });
-		queryClient.invalidateQueries({ queryKey: ['payment-summary', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
 	}
 
 	const savePaymentMutation = createMutation(() => ({
@@ -124,7 +125,7 @@
 
 	function invalidateExpenses() {
 		queryClient.invalidateQueries({ queryKey: ['expenses', portfolioId] });
-		queryClient.invalidateQueries({ queryKey: ['expense-summary', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
 	}
 
 	const saveExpenseMutation = createMutation(() => ({
@@ -184,6 +185,7 @@
 	}
 	const paymentsList = $derived(paymentsQuery.data ?? []);
 	const expensesList = $derived(expensesQuery.data ?? []);
+	const summary = $derived(accountingSummaryQuery.data as AccountingSummary | undefined);
 	const inputClass = 'rounded border border-border bg-bg px-3 py-2 text-sm';
 </script>
 
@@ -198,10 +200,10 @@
 	</div>
 
 	<div class="mb-5 grid gap-4 md:grid-cols-4">
-		<div class="rounded-lg border border-border bg-surface p-4"><p class="text-xs text-text-secondary">Collected</p><p class="text-2xl font-bold">{money((paymentSummaryQuery.data as any)?.totalCollected || 0)}</p></div>
-		<div class="rounded-lg border border-border bg-surface p-4"><p class="text-xs text-text-secondary">Outstanding</p><p class="text-2xl font-bold">{money((paymentSummaryQuery.data as any)?.totalOutstanding || 0)}</p></div>
-		<div class="rounded-lg border border-border bg-surface p-4"><p class="text-xs text-text-secondary">Overdue</p><p class="text-2xl font-bold">{money((paymentSummaryQuery.data as any)?.overdueTotal || 0)}</p></div>
-		<div class="rounded-lg border border-border bg-surface p-4"><p class="text-xs text-text-secondary">Expenses</p><p class="text-2xl font-bold">{money((expenseSummaryQuery.data as any)?.thisMonth || 0)}</p></div>
+		<div class="rounded-lg border border-border bg-surface p-4" data-testid="accounting-collected"><p class="text-xs text-text-secondary">Collected</p><p class="text-2xl font-bold">{money(summary?.payments.collected || 0)}</p></div>
+		<div class="rounded-lg border border-border bg-surface p-4" data-testid="accounting-outstanding"><p class="text-xs text-text-secondary">Outstanding</p><p class="text-2xl font-bold">{money(summary?.payments.outstanding || 0)}</p></div>
+		<div class="rounded-lg border border-border bg-surface p-4" data-testid="accounting-overdue"><p class="text-xs text-text-secondary">Overdue</p><p class="text-2xl font-bold">{money(summary?.payments.overdue || 0)}</p></div>
+		<div class="rounded-lg border border-border bg-surface p-4" data-testid="accounting-expenses"><p class="text-xs text-text-secondary">Expenses</p><p class="text-2xl font-bold">{money(summary?.totalExpenses || 0)}</p></div>
 	</div>
 
 	<div class="grid gap-4 lg:grid-cols-2">

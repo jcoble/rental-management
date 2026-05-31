@@ -25,7 +25,18 @@ export default defineConfig(({ mode }) => {
 				'/api': {
 					target: apiTarget,
 					changeOrigin: true,
-					secure: false
+					secure: false,
+					// The SvelteKit route at src/routes/api/auth/refresh/+server.ts must handle
+					// POST /api/auth/refresh itself (it reads the httpOnly refresh_token cookie and
+					// forwards server-side to the API's /api/v1/auth/refresh). Without this bypass the
+					// '/api' proxy would forward it to the API, which has no /api/auth/refresh route
+					// (only /api/v1/...), 404ing. Returning the request path tells Vite to skip the
+					// proxy and let SvelteKit serve it. All other /api/* requests proxy as before.
+					bypass: (req) => {
+						if (req.url && req.url.split('?')[0] === '/api/auth/refresh') {
+							return req.url;
+						}
+					}
 				}
 			}
 		}
