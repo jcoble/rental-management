@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 
+import '../analytics/insights_screen.dart';
 import '../appointments/appointments_screen.dart';
+import '../deposits/deposits_screen.dart';
 import '../leases/leases_list_screen.dart';
 import '../maintenance/work_orders_screen.dart';
+import '../owner_reports/owner_reports_screen.dart';
 import '../payments/payments_screen.dart';
+import '../team/team_screen.dart';
 import '../tenants/tenants_list_screen.dart';
 
 /// "More" tab — hosts Payments and Maintenance (work orders) sub-screens
@@ -99,6 +103,59 @@ class _MoreMenu extends StatelessWidget {
             onTap: () {
               Navigator.of(context).push<void>(
                 MaterialPageRoute<void>(builder: (_) => const AppointmentsScreen()),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _MenuTile(
+            icon: Icons.insights_outlined,
+            activeIcon: Icons.insights,
+            label: 'Insights',
+            subtitle: 'Occupancy, collections and trends',
+            color: colorScheme.primary,
+            onTap: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(builder: (_) => const InsightsScreen()),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _MenuTile(
+            icon: Icons.shield_outlined,
+            activeIcon: Icons.shield,
+            label: 'Security Deposits',
+            subtitle: 'Holdings, deductions and returns',
+            color: colorScheme.secondary,
+            onTap: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(builder: (_) => const DepositsScreen()),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _MenuTile(
+            icon: Icons.bar_chart_outlined,
+            activeIcon: Icons.bar_chart,
+            label: 'Owner Reports',
+            subtitle: 'Annual statements by owner',
+            color: colorScheme.tertiary,
+            onTap: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                    builder: (_) => const OwnerReportsScreen()),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _MenuTile(
+            icon: Icons.group_outlined,
+            activeIcon: Icons.group,
+            label: 'Team',
+            subtitle: 'Members, roles and access',
+            color: colorScheme.primary,
+            onTap: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(builder: (_) => const TeamScreen()),
               );
             },
           ),
