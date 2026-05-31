@@ -21,7 +21,8 @@
 		ChevronDown,
 		Menu,
 		X,
-		Receipt
+		Receipt,
+		Landmark
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -70,6 +71,7 @@
 		{ href: '/leases', label: 'Leases', icon: FileText, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/maintenance', label: 'Maintenance', icon: Wrench, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/accounting', label: 'Accounting', icon: Calculator, roles: ['Admin', 'Manager'] },
+		{ href: '/deposits', label: 'Deposits', icon: Landmark, roles: ['Admin', 'Manager'] },
 		{ href: '/tax', label: 'Tax', icon: Receipt, roles: ['Admin', 'Manager'] },
 		{ href: '/appointments', label: 'Appointments', icon: Calendar, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/owners', label: 'Owners & Vendors', icon: BadgeDollarSign, roles: ['Admin', 'Manager'] },
