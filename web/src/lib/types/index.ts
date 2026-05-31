@@ -328,12 +328,14 @@ export interface ActivityLog {
 	id: number;
 	portfolioId: number;
 	type: string;
+	typeName: string;
 	entityType?: string;
 	entityId?: number;
 	action?: string;
 	description?: string;
 	actor?: string;
 	createdAt: string;
+	testId?: string;
 }
 
 export interface Dashboard {
@@ -438,4 +440,21 @@ export interface PortalMessage {
 	reply?: string;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** Matches the AdminUsersController TeamMemberDto. */
+export interface TeamMember {
+	id: number;
+	email: string;
+	displayName?: string;
+	role: UserRole;
+	isActive: boolean;
+	ownerId?: number;
+	tenantId?: number;
+	createdAt: string;
+}
+
+/** Returned from POST /api/v1/admin/users — includes the one-time generated password. */
+export interface CreateTeamMemberResponse extends TeamMember {
+	generatedPassword?: string;
 }

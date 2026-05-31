@@ -23,7 +23,8 @@
 		X,
 		Receipt,
 		Landmark,
-		FileBarChart
+		FileBarChart,
+		History
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -78,6 +79,7 @@
 		{ href: '/appointments', label: 'Appointments', icon: Calendar, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/owners', label: 'Owners & Vendors', icon: BadgeDollarSign, roles: ['Admin', 'Manager'] },
 		{ href: '/ai', label: 'AI Assistant', icon: Sparkles, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/activity', label: 'Activity', icon: History, roles: ['Admin', 'Manager'] },
 		{ href: '/portal', label: 'Portal', icon: UserCircle2 },
 		{ href: '/admin/users', label: 'User Access', icon: Shield, roles: ['Admin'] },
 		{ href: '/settings', label: 'Settings', icon: Settings, roles: ['Admin', 'Manager'] }
