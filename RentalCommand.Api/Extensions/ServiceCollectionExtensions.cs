@@ -19,6 +19,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOwnerEntityService, OwnerEntityService>();
         services.AddScoped<IVendorService, VendorService>();
 
+        // --- controllers-leasing-money sub-unit ---
+        services.AddScoped<ITenantService, TenantService>();
+        services.AddScoped<ILeaseService, LeaseService>();
+        services.AddScoped<IPaymentService, PaymentService>();
+        services.AddScoped<IExpenseService, ExpenseService>();
+        services.AddScoped<IAccountingService, AccountingService>();
+
         return services;
     }
 }
