@@ -40,6 +40,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<StoredFile> StoredFiles => Set<StoredFile>();
     public DbSet<ScanDraft> ScanDrafts => Set<ScanDraft>();
     public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
+    public DbSet<SecurityDepositHolding> SecurityDepositHoldings => Set<SecurityDepositHolding>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -587,6 +588,26 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.UnitId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<SecurityDepositHolding>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.ReturnedAmount).HasPrecision(18, 2);
+            entity.Property(e => e.DeductionsJson).IsRequired().HasColumnType("jsonb");
+            entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.LeaseId);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Lease)
+                .WithMany()
+                .HasForeignKey(e => e.LeaseId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
