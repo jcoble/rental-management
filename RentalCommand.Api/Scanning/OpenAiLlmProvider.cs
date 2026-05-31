@@ -2,7 +2,6 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
@@ -111,16 +110,15 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         else
         {
             // Image — send as a vision image_url block.
+            var dataUri = $"data:{contentType};base64,{Convert.ToBase64String(documentBytes)}";
+            var imageDetail = string.IsNullOrWhiteSpace(_config.ImageDetail) ? "low" : _config.ImageDetail;
             userContent = new object[]
             {
                 new { type = "text", text = "Extract the fields from the attached document." },
                 new
                 {
                     type = "image_url",
-                    image_url = new
-                    {
-                        url = $"data:{contentType};base64,{Convert.ToBase64String(documentBytes)}"
-                    }
+                    image_url = new { url = dataUri, detail = imageDetail }
                 }
             };
         }
@@ -275,28 +273,8 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         return resp;
     }
 
-    // Minimal born-digital text recovery: pull readable text segments out of the PDF stream.
-    // Good enough to detect text-PDFs and route them text-first; scanned PDFs return ~nothing
-    // and fall through to the best-effort notice path. (A richer extractor can replace this
-    // later without touching callers.)
-    private static string? TryExtractPdfText(byte[] bytes)
-    {
-        try
-        {
-            var raw = Encoding.Latin1.GetString(bytes);
-            var matches = Regex.Matches(raw, @"\(((?:\\.|[^()\\])*)\)");
-            if (matches.Count == 0) return null;
-            var sb = new StringBuilder();
-            foreach (Match mt in matches)
-            {
-                var s = mt.Groups[1].Value.Replace("\\(", "(").Replace("\\)", ")").Replace("\\\\", "\\");
-                if (s.Trim().Length > 0) sb.Append(s).Append(' ');
-            }
-            var text = sb.ToString().Trim();
-            return text.Length > 0 ? text : null;
-        }
-        catch { return null; }
-    }
+    private static string? TryExtractPdfText(byte[] bytes) =>
+        PdfTextExtractor.TryExtractText(bytes);
 
     private void WarnNoKeyOnce()
     {
