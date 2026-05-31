@@ -169,13 +169,18 @@ public sealed class AnthropicLlmProvider : ILlmProvider
         using var doc = JsonDocument.Parse(responseJson);
         var root = doc.RootElement;
 
+        int inputTokens = 0, outputTokens = 0;
+        if (root.TryGetProperty("usage", out var u))
+        {
+            if (u.TryGetProperty("input_tokens",  out var it)) inputTokens  = it.GetInt32();
+            if (u.TryGetProperty("output_tokens", out var ot)) outputTokens = ot.GetInt32();
+        }
         var result = new ExtractedFields
         {
-            ModelId = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "",
-            TokensUsed = root.TryGetProperty("usage", out var u)
-                ? (u.TryGetProperty("input_tokens", out var it) ? it.GetInt32() : 0)
-                  + (u.TryGetProperty("output_tokens", out var ot) ? ot.GetInt32() : 0)
-                : 0
+            ModelId      = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "",
+            InputTokens  = inputTokens,
+            OutputTokens = outputTokens,
+            TokensUsed   = inputTokens + outputTokens
         };
 
         // Find the tool_use content block and read its "input" object.

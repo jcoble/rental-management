@@ -190,13 +190,18 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         using var doc = JsonDocument.Parse(responseJson);
         var root = doc.RootElement;
 
+        int inputTokens = 0, outputTokens = 0;
+        if (root.TryGetProperty("usage", out var u))
+        {
+            if (u.TryGetProperty("prompt_tokens",     out var pt))  inputTokens  = pt.GetInt32();
+            if (u.TryGetProperty("completion_tokens", out var ct2)) outputTokens = ct2.GetInt32();
+        }
         var result = new ExtractedFields
         {
-            ModelId = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "",
-            TokensUsed = root.TryGetProperty("usage", out var u)
-                ? (u.TryGetProperty("prompt_tokens",     out var pt)  ? pt.GetInt32()  : 0)
-                  + (u.TryGetProperty("completion_tokens", out var ct2) ? ct2.GetInt32() : 0)
-                : 0
+            ModelId      = root.TryGetProperty("model", out var m) ? m.GetString() ?? "" : "",
+            InputTokens  = inputTokens,
+            OutputTokens = outputTokens,
+            TokensUsed   = inputTokens + outputTokens
         };
 
         // Find tool_calls[0].function.arguments — a JSON *string* containing the input object.
