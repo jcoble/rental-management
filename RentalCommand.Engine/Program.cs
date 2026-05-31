@@ -30,11 +30,23 @@ builder.Services.AddSingleton<INotificationChannel, LoggingNotificationChannel>(
 // Scan pipeline: config, LLM provider, file storage, no-op data-update, worker.
 builder.Services.Configure<AssistantConfig>(builder.Configuration.GetSection(AssistantConfig.SectionName));
 builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(UploadSettings.SectionName));
-builder.Services.AddHttpClient<ILlmProvider, AnthropicLlmProvider>(c =>
+var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
+if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
-    c.BaseAddress = new Uri("https://api.anthropic.com/");
-    c.Timeout = TimeSpan.FromSeconds(90);
-});
+    builder.Services.AddHttpClient<ILlmProvider, AnthropicLlmProvider>(c =>
+    {
+        c.BaseAddress = new Uri("https://api.anthropic.com/");
+        c.Timeout = TimeSpan.FromSeconds(90);
+    });
+}
+else // default: openai
+{
+    builder.Services.AddHttpClient<ILlmProvider, OpenAiLlmProvider>(c =>
+    {
+        c.BaseAddress = new Uri("https://api.openai.com/");
+        c.Timeout = TimeSpan.FromSeconds(90);
+    });
+}
 builder.Services.AddScoped<IFileStorage, DiskFileStorage>();
 builder.Services.AddSingleton<IDataUpdateService, EngineDataUpdateService>();
 
