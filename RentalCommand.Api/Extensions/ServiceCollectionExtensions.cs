@@ -1,5 +1,6 @@
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Api.Extensions;
 
@@ -39,6 +40,7 @@ public static class ServiceCollectionExtensions
 
         // --- scan upload pipeline ---
         services.AddScoped<IScanFileService, ScanFileService>();
+        services.AddScoped<IScanService, ScanService>();
 
         return services;
     }
