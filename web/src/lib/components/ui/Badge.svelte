@@ -15,12 +15,12 @@
 	} = $props();
 
 	const variants: Record<Variant, string> = {
-		default: 'bg-surface-hover text-text-secondary',
+		default: 'bg-secondary text-muted-foreground',
 		success: 'bg-success/20 text-success',
 		warning: 'bg-warning/20 text-warning',
-		danger: 'bg-danger/20 text-danger',
-		accent: 'bg-accent/20 text-accent',
-		muted: 'bg-text-tertiary/20 text-text-tertiary',
+		danger: 'bg-destructive/20 text-destructive',
+		accent: 'bg-primary/20 text-primary',
+		muted: 'bg-muted-foreground/20 text-muted-foreground',
 	};
 </script>
 

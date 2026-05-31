@@ -1,0 +1,35 @@
+# RentalCommand Web - SvelteKit frontend (adapter-node)
+FROM node:24-slim AS build
+
+# pnpm 8.7.5 via corepack matches web/.npmrc + web/pnpm-lock.yaml.
+RUN corepack enable && corepack prepare pnpm@8.7.5 --activate
+
+WORKDIR /app
+
+# Install deps first for better layer caching.
+COPY web/package.json web/pnpm-lock.yaml web/.npmrc ./
+RUN pnpm install --frozen-lockfile
+
+COPY web/ ./
+
+# VITE_API_URL is baked into the client bundle at build time.
+ARG VITE_API_URL
+ENV VITE_API_URL=${VITE_API_URL}
+
+RUN pnpm build
+
+FROM node:24-slim
+
+WORKDIR /app
+
+COPY --from=build --chown=node:node /app/build ./build
+COPY --from=build --chown=node:node /app/package.json ./
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+
+ENV NODE_ENV=production
+ENV PORT=3000
+EXPOSE 3000
+
+USER node
+
+CMD ["node", "build"]

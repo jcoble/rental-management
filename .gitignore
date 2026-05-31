@@ -4,13 +4,11 @@
 .pids
 
 # .NET
-api/bin/
-api/obj/
-api/lifecycle.db
-api/lifecycle.db-shm
-api/lifecycle.db-wal
-api/uploads/
-api/appsettings.Local.json
+[Bb]in/
+[Oo]bj/
+uploads/
+appsettings.Local.json
+TestResults/
 
 # Environment
 .env
@@ -33,3 +31,6 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Local mkcert dev certificates
+web/.cert/

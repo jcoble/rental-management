@@ -1,107 +1,101 @@
 # Rental Command
 
-Full-stack rental management web app for small property managers.
-Built from the Lifecycle template architecture (SvelteKit + .NET + SQLite + MCP), repurposed around leasing, maintenance, accounting, scheduling, and AI operations.
+Residential property-management platform for small landlords and property managers.
+Built to mirror the EdiPlatform architecture: a .NET 10 multi-project backend on
+PostgreSQL, a SvelteKit web app, and (planned) a Flutter mobile app over the same API.
 
-## What this app includes
+The product spine is **"the computer does the typing for you"** — capture a document
+(photo, scanned PDF, email, or a spoken sentence), have an LLM extract the fields with
+per-field confidence, present a **draft** the user confirms, and only then create the
+record. See the master spec under `Docs/superpowers/specs/` for the full vision.
 
-- Portfolio dashboard with occupancy, lease, accounting, maintenance, and activity KPIs
-- Property + unit inventory management
-- Tenant and lease lifecycle management
-- Payment ledger (charges + mark-paid workflow)
-- Expense tracking with vendor and property linkage
-- Work-order operations and status transitions
-- Appointment scheduling (showings, move-ins, inspections, maintenance visits)
-- Inspection scheduling and status tracking
-- Owner and vendor management (including 1099/W-9 metadata)
-- AI endpoints for intake triage, risk summary, and notice generation
-- MCP server exposing rental workflows as tools for AI agents
-- SSE real-time invalidation events
+## What's here today (Phase 0 — re-platform)
+
+- Portfolio dashboard (occupancy, leasing, accounting, maintenance, activity KPIs)
+- Property + unit inventory; owners / owner-entities (Person/LLC/Trust); vendors
+- Tenant + lease lifecycle; payment ledger; expense tracking; cash-basis accounting summary
+- Work orders, appointments, inspections
+- Tenant/owner portal endpoints
+- ASP.NET Identity + JWT (15-min access) + rotated refresh tokens; API-key auth for webhooks
+- Real-time updates via SignalR backed by a DB outbox dispatched by the Engine
+
+The flagship scan→draft→confirm intake and the AI "brains" land in later phases
+(see `Docs/superpowers/plans/`).
 
 ## Architecture
 
-- `api/`: .NET 10 Minimal API + EF Core + SQLite
-- `web/`: SvelteKit 5 frontend + TanStack Query + Tailwind
-- `mcp/`: MCP server with rental-management tools
-- `Docs/Research/rental-management-market-research.md`: market/feature research and sources
+| Project | Role |
+|---------|------|
+| `RentalCommand.Core` | Entities, enums, interfaces, configuration (no infra deps) |
+| `RentalCommand.Data` | `RentalCommandDbContext` (EF Core + Npgsql) + migrations |
+| `RentalCommand.Api`  | ASP.NET controllers under `/api/v1/*`, auth, SignalR hub |
+| `RentalCommand.Engine` | Background workers (outbox dispatch); no HTTP port |
+| `RentalCommand.TestCommon` + `*.Tests` / `IntegrationTests` | Test scaffolding + suites |
+| `web/` | SvelteKit 5 (runes) + TanStack Query + Tailwind + SignalR client |
+| `mcp/` | Legacy Lifecycle MCP server — retained, to be repurposed in Phase 3 for Portfolio Q&A |
+| `Docs/` | Specs, phase plans, and competitive research |
 
-## Quick start (local)
+Messaging is intentionally light: a DB-backed outbox + Engine workers + SignalR — **no RabbitMQ**.
 
-Prereqs:
+## Quick start (local dev)
 
-- .NET 10 SDK
-- Node.js 20+ with pnpm
-
-Run:
+Prereqs: **.NET 10 SDK**, **Node 20+ with pnpm**, **Docker**, and **mkcert**
+(`brew install mkcert && mkcert -install`) for locally-trusted HTTPS.
 
 ```bash
-./start.sh
+./scripts/start-dev.sh
 ```
 
-- Web: `https://localhost:5667`
-- API (HTTPS): `https://localhost:5666`
-- API (HTTP/internal tools): `http://localhost:5665`
+This generates mkcert certs, reuses any Postgres already listening on `:5432`
+(otherwise starts one), launches the Engine + API, and runs the web dev server.
 
-`start.sh` auto-seeds demo data on first run.
+| Service | URL |
+|---------|-----|
+| Web     | https://localhost:5667 |
+| API     | https://localhost:5666 (http: http://localhost:5665) |
+| Postgres | localhost:5432 / db `rentalcommand` |
+
+The DB connection string is read from **.NET User Secrets** in Development (not committed):
+
+```bash
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" \
+  "Host=localhost;Port=5432;Database=rentalcommand;Username=postgres;Password=..." \
+  --project RentalCommand.Api
+```
+
+On first API start the app seeds roles + a dev admin: **`admin@rentalcommand.local` / `Admin123!`**.
+(The login page has a dev-only "Fill dev login" button in `DEV` builds.)
 
 ## Manual setup
 
-### API
-
 ```bash
-cd api
-dotnet restore
-dotnet ef database update
-dotnet run
+# Backend
+dotnet build RentalCommand.sln
+dotnet run --project RentalCommand.Engine          # background workers
+dotnet run --project RentalCommand.Api -- --urls "https://localhost:5666;http://localhost:5665"
+
+# Web
+cd web && pnpm install && pnpm dev
 ```
 
-### Web
+EF migrations live in `RentalCommand.Data/Migrations`; apply with
+`dotnet ef database update --project RentalCommand.Data --startup-project RentalCommand.Api`.
+
+## Production (docker-compose)
+
+`docker-compose.yml` brings up Postgres + API + Engine + Web behind **Traefik**
+(see `traefik/dynamic.yml`). Configure secrets via environment — see `.env.example`
+(`JWT_SECRET_KEY`, `POSTGRES_*`, `ANTHROPIC_API_KEY`, `WEB_ORIGIN`, etc.).
+
+## Tests
 
 ```bash
-cd web
-pnpm install
-pnpm dev
+dotnet test RentalCommand.sln          # unit + integration
+cd web && pnpm exec svelte-check       # web typecheck
 ```
 
-### Seed demo data
+## Docs
 
-```bash
-./seed.sh
-```
-
-## MCP setup
-
-Build MCP:
-
-```bash
-cd mcp
-npm install
-npm run build
-```
-
-Register MCP server (example):
-
-```bash
-claude mcp add rental-command \
-  -s user \
-  -e RENTAL_API_URL=http://localhost:5665 \
-  -e RENTAL_API_KEY=your-api-key \
-  -e RENTAL_PORTFOLIO_ID=1 \
-  -- node /path/to/rental-management/mcp/build/index.js
-```
-
-## Environment variables
-
-### API
-
-- `ApiKey` in `api/appsettings.Local.json` (optional)
-
-### MCP
-
-- `RENTAL_API_URL` (fallback: `LIFECYCLE_API_URL`)
-- `RENTAL_API_KEY` (fallback: `LIFECYCLE_API_KEY`)
-- `RENTAL_PORTFOLIO_ID` (fallback: `LIFECYCLE_PROJECT_ID`)
-
-## Research basis
-
-See `Docs/Research/rental-management-market-research.md` for competitor and feature research that informed this implementation.
+- `Docs/superpowers/specs/` — master vision + phased spec
+- `Docs/superpowers/plans/` — per-phase implementation plans (0, 1+2, 3, 4)
+- `Docs/Research/` — competitive gap analysis

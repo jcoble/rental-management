@@ -2,6 +2,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { api, getActivePortfolioId } from '../api-client.js';
 
+interface ScanCreatedResponse {
+  draftId: number;
+  status: string;
+  fileUrl: string;
+}
+
 export function registerAiTools(server: McpServer) {
   server.tool(
     'ai_intake_triage',
@@ -51,6 +57,40 @@ export function registerAiTools(server: McpServer) {
         context,
       });
       return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    'scan_document',
+    'Upload a receipt/invoice (base64) to create a scan draft for human review.',
+    {
+      fileBase64: z.string().describe('Base64-encoded file contents'),
+      fileName: z.string().describe('Original file name, e.g. receipt.jpg'),
+      contentType: z.string().describe('MIME type, e.g. image/jpeg or application/pdf'),
+      targetEntityType: z.enum(['Expense']).default('Expense'),
+      portfolioId: z.number().optional(),
+    },
+    async ({ fileBase64, fileName, contentType, targetEntityType, portfolioId: _portfolioId }) => {
+      // Decode base64 to Buffer, wrap in Blob, add to FormData
+      const buffer = Buffer.from(fileBase64, 'base64');
+      const blob = new Blob([buffer], { type: contentType });
+      const fd = new FormData();
+      fd.append('file', blob, fileName);
+      fd.append('targetEntityType', targetEntityType);
+
+      const result = await api.upload<ScanCreatedResponse>('/v1/scans', fd);
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              { draftId: result.draftId, status: result.status, fileUrl: result.fileUrl },
+              null,
+              2
+            ),
+          },
+        ],
+      };
     }
   );
 }
