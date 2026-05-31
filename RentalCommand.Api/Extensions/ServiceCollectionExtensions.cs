@@ -48,6 +48,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDailyBriefingService, DailyBriefingService>();
         services.AddScoped<IPortfolioQaService, PortfolioQaService>();
 
+        // --- mobile push registration ---
+        services.AddScoped<IDeviceService, DeviceService>();
+
         return services;
     }
 }
