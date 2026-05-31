@@ -62,7 +62,7 @@ public sealed class RoutingNotificationChannel : INotificationChannel
         request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
 
         var response = await _http.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessAsync(response, "Twilio", ct);
 
         _logger.LogInformation(
             "[SMS sent via Twilio] To={To} Status={Status}",
@@ -106,10 +106,26 @@ public sealed class RoutingNotificationChannel : INotificationChannel
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", sg.ApiKey);
 
         var response = await _http.SendAsync(request, ct);
-        response.EnsureSuccessStatusCode();
+        await EnsureSuccessAsync(response, "SendGrid", ct);
 
         _logger.LogInformation(
             "[Email sent via SendGrid] To={To} Subject={Subject} Status={Status}",
             toEmail, subject, (int)response.StatusCode);
+    }
+
+    // On a non-success response, surface the provider's error body in the thrown exception so the
+    // outbox log shows *why* it failed (invalid number, rejected address, suspended account, …)
+    // instead of a bare status code. The exception still propagates so OutboxDispatchWorker retries.
+    private static async Task EnsureSuccessAsync(HttpResponseMessage response, string provider, CancellationToken ct)
+    {
+        if (response.IsSuccessStatusCode)
+            return;
+
+        string body;
+        try { body = await response.Content.ReadAsStringAsync(ct); }
+        catch { body = "(could not read response body)"; }
+
+        throw new HttpRequestException(
+            $"{provider} send failed: {(int)response.StatusCode} {response.ReasonPhrase}. Body: {body}");
     }
 }

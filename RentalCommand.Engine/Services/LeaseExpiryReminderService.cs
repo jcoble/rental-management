@@ -100,6 +100,9 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
             // --- Send or skip ---
             if (!string.IsNullOrWhiteSpace(email))
             {
+                // Set the marker BEFORE publishing so the publisher's SaveChanges commits the outbox
+                // row and the marker in one transaction — a crash can't leave one without the other.
+                lease.ExpiryReminderSentAt = DateTime.UtcNow;
                 try
                 {
                     await _publisher.PublishAsync(
@@ -114,21 +117,20 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
                                    + "Consider a renewal or move-out plan.",
                         },
                         ct);
-
-                    lease.ExpiryReminderSentAt = DateTime.UtcNow;
                     count++;
                 }
                 catch (Exception ex)
                 {
+                    lease.ExpiryReminderSentAt = null;   // publish failed/rolled back → retry next cycle
                     _logger.LogWarning(
                         ex,
                         "Failed to enqueue expiry-reminder email for portfolio {PortfolioId}, lease {LeaseId}",
                         lease.PortfolioId, lease.Id);
-                    // Do not set ExpiryReminderSentAt — the worker will retry next cycle.
                 }
             }
             else if (!string.IsNullOrWhiteSpace(phone))
             {
+                lease.ExpiryReminderSentAt = DateTime.UtcNow;   // committed atomically with the outbox row below
                 try
                 {
                     await _publisher.PublishAsync(
@@ -142,17 +144,15 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
                                       + "Consider a renewal or move-out plan.",
                         },
                         ct);
-
-                    lease.ExpiryReminderSentAt = DateTime.UtcNow;
                     count++;
                 }
                 catch (Exception ex)
                 {
+                    lease.ExpiryReminderSentAt = null;   // publish failed/rolled back → retry next cycle
                     _logger.LogWarning(
                         ex,
                         "Failed to enqueue expiry-reminder SMS for portfolio {PortfolioId}, lease {LeaseId}",
                         lease.PortfolioId, lease.Id);
-                    // Do not set ExpiryReminderSentAt — the worker will retry next cycle.
                 }
             }
             else
@@ -164,7 +164,9 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
             }
         }
 
-        // Persist all ExpiryReminderSentAt markers in one round-trip.
+        // Each successful publish already committed its marker atomically with the outbox row (the
+        // marker is set before PublishAsync, and the real publisher saves). This trailing save is a
+        // no-op in production but persists markers when the publisher is a test double that doesn't save.
         await _db.SaveChangesAsync(ct);
 
         return count;

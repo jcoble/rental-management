@@ -50,6 +50,7 @@ public sealed class LateFeeService : ILateFeeService
         var overdueRent = await _db.Payments
             .Where(p =>
                 p.PaymentType == PaymentType.Rent &&
+                p.PeriodKey != null &&   // only auto-generated rent charges carry a period; manual entries are excluded
                 (p.Status == PaymentStatus.Scheduled ||
                  p.Status == PaymentStatus.Late ||
                  p.Status == PaymentStatus.Partial) &&
@@ -77,9 +78,9 @@ public sealed class LateFeeService : ILateFeeService
                 continue;
             }
 
-            // Billing-period key: prefer the rent row's own PeriodKey (set by RentChargeWorker),
-            // fall back to yyyy-MM derived from the due date.
-            var periodKey = rp.PeriodKey ?? rp.DueDate.ToString("yyyy-MM");
+            // Billing-period key from the auto-generated rent row (the query excludes manual rows,
+            // so PeriodKey is always set here — keeps late fees paired 1:1 with the rent charge).
+            var periodKey = rp.PeriodKey!;
 
             // ---- Idempotency check (application-level; DB unique index is the backstop) ----
             var alreadyAssessed = await _db.Payments.AnyAsync(
@@ -160,9 +161,10 @@ public sealed class LateFeeService : ILateFeeService
                     "DbUpdateException (likely duplicate) for lease {LeaseId} period {Period}; skipping",
                     rp.LeaseId, periodKey);
 
-                // Detach the unsaved entities so the context is clean for the next iteration.
+                // Detach the unsaved fee and discard the in-memory rent-status change — the failed
+                // save rolled back, so reload restores rp to its persisted state.
                 _db.Entry(lateFeePayment).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
-                _db.Entry(rp).State = Microsoft.EntityFrameworkCore.EntityState.Detached;
+                await _db.Entry(rp).ReloadAsync(ct);
                 continue;
             }
 
