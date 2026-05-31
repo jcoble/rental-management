@@ -76,6 +76,13 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                 draft.ModelId = extracted.ModelId;
                 draft.TokensUsed = extracted.TokensUsed;
                 draft.CostUsd = EstimateCost(extracted.ModelId, extracted.InputTokens, extracted.OutputTokens);
+
+                // Route by classified document kind: rent checks become Payments, everything else Expenses.
+                var classifiedKind = extracted.Fields.TryGetValue("document_kind", out var kindField)
+                    ? kindField.Value ?? string.Empty
+                    : string.Empty;
+                draft.TargetEntityType = classifiedKind == "RentCheck" ? "Payment" : "Expense";
+
                 draft.Status = "Reviewing";
                 draft.ReviewedAt = DateTime.UtcNow;
                 await db.SaveChangesAsync(ct);
