@@ -41,7 +41,11 @@ public sealed class ExtractedReceiptDto
 
     // ---- Classification ----
     public RentalCommand.Core.Enums.ScheduleECategory? Category { get; set; }
+    public string? DocumentKind { get; set; }
     public string? Notes { get; set; }
+
+    // ---- Bill / invoice ----
+    public DateTime? DueDate { get; set; }
 
     // ---- Line items ----
     public List<ReceiptLineItem> LineItems { get; set; } = new();
