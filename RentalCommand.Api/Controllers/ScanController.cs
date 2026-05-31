@@ -119,7 +119,7 @@ public class ScanController : AuthenticatedPortfolioControllerBase
     [HttpGet("{id:int}/file")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> DownloadFile(int id, CancellationToken ct)
+    public async Task<IActionResult> DownloadFile(int id, [FromQuery] bool full, CancellationToken ct)
     {
         var portfolioId = GetPortfolioId();
 
@@ -128,6 +128,24 @@ public class ScanController : AuthenticatedPortfolioControllerBase
 
         if (draft is null)
             return NotFound(new { error = "Scan draft not found" });
+
+        // Serve the small JPEG preview by default so clients (esp. phones) don't pull the
+        // full-resolution original. The original is available on ?full=1. Fall back to the
+        // original if the thumbnail is missing/unreadable (older scans, PDFs, etc.).
+        if (!full && !string.IsNullOrEmpty(draft.ThumbnailPath))
+        {
+            try
+            {
+                var thumbStream = await _files.DownloadAsync(draft.ThumbnailPath, ct);
+                Response.Headers["X-Content-Type-Options"] = "nosniff";
+                Response.Headers["Content-Disposition"] = $"inline; filename=\"scan-{id}-preview\"";
+                return File(thumbStream, "image/jpeg");
+            }
+            catch
+            {
+                // Thumbnail unreadable — fall through and serve the original below.
+            }
+        }
 
         var storedFile = await _db.StoredFiles
             .FirstOrDefaultAsync(f => f.FilePath == draft.FilePath, ct);
