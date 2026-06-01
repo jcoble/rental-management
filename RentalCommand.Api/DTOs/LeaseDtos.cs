@@ -26,30 +26,55 @@ public class LeaseResponse
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>Tenant's full name, projected from the <see cref="Lease.Tenant"/> navigation. Null when not loaded.</summary>
+    public string? TenantName { get; set; }
+
+    /// <summary>Unit number, projected from the <see cref="Lease.Unit"/> navigation. Null when not loaded.</summary>
+    public string? UnitNumber { get; set; }
+
+    /// <summary>Property name, projected from the <see cref="Lease.Property"/> navigation. Null when not loaded.</summary>
+    public string? PropertyName { get; set; }
+
     /// <summary>Stable selector for frontend tests, e.g. <c>lease-1</c>.</summary>
     public string TestId => $"lease-{Id}";
 
-    public static LeaseResponse FromEntity(Lease e) => new()
+    public static LeaseResponse FromEntity(Lease e, bool includeNavigations = false)
     {
-        Id = e.Id,
-        PortfolioId = e.PortfolioId,
-        PropertyId = e.PropertyId,
-        UnitId = e.UnitId,
-        TenantId = e.TenantId,
-        LeaseNumber = e.LeaseNumber,
-        Status = e.Status,
-        StartDate = e.StartDate,
-        EndDate = e.EndDate,
-        MoveInDate = e.MoveInDate,
-        MoveOutDate = e.MoveOutDate,
-        MonthlyRent = e.MonthlyRent,
-        SecurityDeposit = e.SecurityDeposit,
-        LateFeeAmount = e.LateFeeAmount,
-        RentDueDay = e.RentDueDay,
-        Notes = e.Notes,
-        CreatedAt = e.CreatedAt,
-        UpdatedAt = e.UpdatedAt,
-    };
+        var response = new LeaseResponse
+        {
+            Id = e.Id,
+            PortfolioId = e.PortfolioId,
+            PropertyId = e.PropertyId,
+            UnitId = e.UnitId,
+            TenantId = e.TenantId,
+            LeaseNumber = e.LeaseNumber,
+            Status = e.Status,
+            StartDate = e.StartDate,
+            EndDate = e.EndDate,
+            MoveInDate = e.MoveInDate,
+            MoveOutDate = e.MoveOutDate,
+            MonthlyRent = e.MonthlyRent,
+            SecurityDeposit = e.SecurityDeposit,
+            LateFeeAmount = e.LateFeeAmount,
+            RentDueDay = e.RentDueDay,
+            Notes = e.Notes,
+            CreatedAt = e.CreatedAt,
+            UpdatedAt = e.UpdatedAt,
+        };
+
+        if (includeNavigations)
+        {
+            // Pickers (scan confirm, payment/deposit create) need human-readable labels,
+            // not just the bare lease number. Projected from existing navigations.
+            response.TenantName = e.Tenant == null
+                ? null
+                : $"{e.Tenant.FirstName} {e.Tenant.LastName}".Trim();
+            response.UnitNumber = e.Unit?.UnitNumber;
+            response.PropertyName = e.Property?.Name;
+        }
+
+        return response;
+    }
 }
 
 public class CreateLeaseRequest

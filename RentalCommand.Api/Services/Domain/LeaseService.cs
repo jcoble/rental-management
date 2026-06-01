@@ -24,6 +24,9 @@ public class LeaseService : ILeaseService
     {
         var q = _db.Leases
             .AsNoTracking()
+            .Include(l => l.Tenant)
+            .Include(l => l.Unit)
+            .Include(l => l.Property)
             .Where(l => l.PortfolioId == portfolioId);
 
         if (tenantId.HasValue)
@@ -58,16 +61,19 @@ public class LeaseService : ILeaseService
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return items.Select(LeaseResponse.FromEntity).ToList();
+        return items.Select(l => LeaseResponse.FromEntity(l, includeNavigations: true)).ToList();
     }
 
     public async Task<LeaseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
         var entity = await _db.Leases
             .AsNoTracking()
+            .Include(l => l.Tenant)
+            .Include(l => l.Unit)
+            .Include(l => l.Property)
             .FirstOrDefaultAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
 
-        return entity == null ? null : LeaseResponse.FromEntity(entity);
+        return entity == null ? null : LeaseResponse.FromEntity(entity, includeNavigations: true);
     }
 
     public async Task<LeaseResponse?> CreateAsync(int portfolioId, CreateLeaseRequest request, CancellationToken ct = default)

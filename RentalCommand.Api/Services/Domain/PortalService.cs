@@ -29,7 +29,7 @@ public class PortalService : IPortalService
             .OrderByDescending(l => l.StartDate)
             .ToListAsync(ct);
 
-        return leases.Select(LeaseResponse.FromEntity).ToList();
+        return leases.Select(l => LeaseResponse.FromEntity(l)).ToList();
     }
 
     public async Task<PortalBalanceResponse> GetBalanceAsync(int portfolioId, int tenantId, CancellationToken ct = default)
