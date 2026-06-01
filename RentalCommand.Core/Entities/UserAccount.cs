@@ -20,6 +20,5 @@ public class UserAccount
     public Portfolio? Portfolio { get; set; }
     public Owner? Owner { get; set; }
     public Tenant? Tenant { get; set; }
-    public List<AuthSession> Sessions { get; set; } = [];
     public List<PortalMessage> Messages { get; set; } = [];
 }
