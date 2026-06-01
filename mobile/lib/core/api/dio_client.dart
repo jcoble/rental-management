@@ -32,15 +32,15 @@ Dio _buildDio() {
     ),
   );
 
-  // Allow the mkcert self-signed cert for local dev (debug + profile builds).
-  // The !kReleaseMode guard keeps this out of release builds (tree-shaken), so a
+  // Allow the mkcert self-signed cert for local dev — active in !kReleaseMode
+  // (debug + profile builds). Kept out of release builds (tree-shaken), so a
   // shipped app still does full certificate validation.
   if (!kReleaseMode && kAllowSelfSignedCertInDebug) {
     dio.httpClientAdapter = IOHttpClientAdapter(
       createHttpClient: () {
         final client = HttpClient();
         // Accept self-signed / mkcert certificates for local dev.
-        // This is intentionally scoped to debug builds via the kDebugMode guard above.
+        // This is intentionally scoped to !kReleaseMode (debug + profile builds).
         client.badCertificateCallback =
             (X509Certificate cert, String host, int port) => true;
         return client;

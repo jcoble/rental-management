@@ -22,12 +22,12 @@ class AuthUser {
 
   factory AuthUser.fromJson(Map<String, dynamic> json) {
     return AuthUser(
-      id: json['id'] as int,
+      id: (json['id'] as num).toInt(),
       email: json['email'] as String,
       displayName: json['displayName'] as String,
-      portfolioId: json['portfolioId'] as int?,
-      ownerEntityId: json['ownerEntityId'] as int?,
-      tenantId: json['tenantId'] as int?,
+      portfolioId: (json['portfolioId'] as num?)?.toInt(),
+      ownerEntityId: (json['ownerEntityId'] as num?)?.toInt(),
+      tenantId: (json['tenantId'] as num?)?.toInt(),
       roles: (json['roles'] as List<dynamic>).cast<String>(),
       emailVerified: json['emailVerified'] as bool,
     );

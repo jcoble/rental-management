@@ -44,9 +44,16 @@ class AuthRepository {
       // Extract refresh token from Set-Cookie header.
       final refreshToken = _extractRefreshToken(response);
 
+      if (refreshToken == null || refreshToken.isEmpty) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Refresh token missing from login response.',
+        );
+      }
+
       await _tokenStore.saveTokens(
         accessToken: loginResponse.accessToken,
-        refreshToken: refreshToken ?? '',
+        refreshToken: refreshToken,
       );
 
       return loginResponse;
