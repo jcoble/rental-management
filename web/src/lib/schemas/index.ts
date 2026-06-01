@@ -146,6 +146,7 @@ export const ownerSchema = z.object({
 	taxId: optionalText,
 	address: optionalText,
 	phone: optionalText,
+	email: optionalEmail,
 });
 
 export const vendorSchema = z.object({

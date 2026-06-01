@@ -1,13 +1,14 @@
 <script lang="ts">
-	import { createQuery } from '@tanstack/svelte-query';
+	import { createMutation, createQuery } from '@tanstack/svelte-query';
 	import { accounting, downloadOwnerStatementCsv } from '$lib/api/endpoints/accounting';
+	import { owners as ownersApi } from '$lib/api/endpoints/owners';
 	import type { OwnerStatementSummary, OwnerStatementReport } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { showError } from '$lib/utils/toast';
+	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
-	import { FileBarChart } from '@lucide/svelte';
+	import { FileBarChart, Mail } from '@lucide/svelte';
 
 	const CURRENT_YEAR = new Date().getFullYear();
 	const YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - i);
@@ -63,6 +64,13 @@
 			downloading = false;
 		}
 	}
+
+	const emailStatementMutation = createMutation(() => ({
+		mutationFn: ({ ownerId, year }: { ownerId: number; year: number }) =>
+			ownersApi.emailStatement(ownerId, year),
+		onSuccess: () => showSuccess('Statement emailed.'),
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
 </script>
 
 <svelte:head>
@@ -147,14 +155,25 @@
 					<!-- Header + download -->
 					<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
 						<h2 class="text-lg font-semibold">{report.ownerName} — {report.year}</h2>
-						<Button
-							variant="outline"
-							onclick={handleDownload}
-							disabled={downloading}
-							data-testid="owners-report-download-csv"
-						>
-							{downloading ? 'Downloading…' : 'Download CSV'}
-						</Button>
+						<div class="flex items-center gap-2">
+							<Button
+								variant="outline"
+								onclick={() => selectedOwnerId !== null && emailStatementMutation.mutate({ ownerId: selectedOwnerId, year: Number(selectedYear) })}
+								disabled={emailStatementMutation.isPending}
+								data-testid="owner-statement-email-{report.ownerId}"
+							>
+								<Mail class="mr-1.5 h-4 w-4" />
+								{emailStatementMutation.isPending ? 'Sending…' : 'Email to owner'}
+							</Button>
+							<Button
+								variant="outline"
+								onclick={handleDownload}
+								disabled={downloading}
+								data-testid="owners-report-download-csv"
+							>
+								{downloading ? 'Downloading…' : 'Download CSV'}
+							</Button>
+						</div>
 					</div>
 
 					<!-- Grand-total cards -->
