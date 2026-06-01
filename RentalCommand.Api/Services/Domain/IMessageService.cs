@@ -26,4 +26,14 @@ public interface IMessageService
     /// on an unrecognised status string.
     /// </summary>
     Task<MessageResponse?> UpdateStatusAsync(int portfolioId, int id, string status, CancellationToken ct = default);
+
+    /// <summary>
+    /// Landlord → tenant: create a new message addressed to a tenant in the portfolio and fan it out
+    /// over the requested channels (Portal/Email/Sms). The message row, its <c>Channels</c> value, and
+    /// any email/SMS outbox entries are written in a single transaction. A requested channel for which
+    /// the tenant has no contact info is skipped (not an error) and omitted from <c>Channels</c>.
+    /// Returns null when the tenant is not in the portfolio (controller maps to 404).
+    /// </summary>
+    Task<MessageResponse?> CreateToTenantAsync(
+        int portfolioId, int senderUserId, CreateMessageRequest request, CancellationToken ct = default);
 }

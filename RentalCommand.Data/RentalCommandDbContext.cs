@@ -571,18 +571,27 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Body).IsRequired().HasMaxLength(5000);
             entity.Property(e => e.Reply).HasMaxLength(5000);
+            entity.Property(e => e.Channels).HasMaxLength(100);
             entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.UserAccountId);
+            entity.HasIndex(e => e.RecipientTenantId);
             entity.HasIndex(e => e.Status);
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.PortalMessages)
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
+            // UserAccountId is now optional (landlord-authored messages carry null + FromLandlord=true).
+            // SetNull rather than Cascade so deleting a portal account does not delete the thread.
             entity.HasOne(e => e.UserAccount)
                 .WithMany(u => u.Messages)
                 .HasForeignKey(e => e.UserAccountId)
-                .OnDelete(DeleteBehavior.Cascade);
+                .OnDelete(DeleteBehavior.SetNull);
+            // Recipient tenant of a landlord message — optional, no cascade (matches other optional FKs).
+            entity.HasOne(e => e.RecipientTenant)
+                .WithMany()
+                .HasForeignKey(e => e.RecipientTenantId)
+                .OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(e => e.Property)
                 .WithMany()
                 .HasForeignKey(e => e.PropertyId)
