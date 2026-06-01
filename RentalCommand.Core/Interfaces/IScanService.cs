@@ -31,4 +31,8 @@ public interface IScanService
 }
 
 /// <summary>Result returned from <see cref="IScanService.ConfirmAndCreateAsync"/>.</summary>
-public sealed record ScanConfirmResult(bool Success, int? CreatedEntityId, string? Error);
+/// <param name="Success">Whether the confirm succeeded.</param>
+/// <param name="CreatedEntityId">The id of the created entity, or null on failure.</param>
+/// <param name="Error">Human-readable error message, or null on success.</param>
+/// <param name="EntityType">The type of the created entity ("Expense" or "Payment"), or null on failure.</param>
+public sealed record ScanConfirmResult(bool Success, int? CreatedEntityId, string? Error, string? EntityType = null);

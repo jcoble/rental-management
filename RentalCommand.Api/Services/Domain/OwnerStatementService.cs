@@ -20,7 +20,7 @@ public class OwnerStatementService : IOwnerStatementService
         int portfolioId, int ownerId, int year, CancellationToken ct = default)
     {
         // ── Verify the owner exists in the portfolio ────────────────────────────────────────────
-        var owner = await _db.Owners
+        var owner = await _db.OwnerEntities
             .AsNoTracking()
             .Where(o => o.PortfolioId == portfolioId && o.Id == ownerId)
             .Select(o => new { o.Id, o.Name })
@@ -32,7 +32,7 @@ public class OwnerStatementService : IOwnerStatementService
         // ── Load this owner's properties ────────────────────────────────────────────────────────
         var properties = await _db.Properties
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.OwnerId == ownerId)
+            .Where(p => p.PortfolioId == portfolioId && p.OwnerEntityId == ownerId)
             .Select(p => new { p.Id, p.Name, p.ManagementFeePercent })
             .ToListAsync(ct);
 
@@ -129,11 +129,11 @@ public class OwnerStatementService : IOwnerStatementService
     public async Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetAsync(
         int portfolioId, int year, CancellationToken ct = default)
     {
-        // Load all owners that have at least one property in this portfolio.
-        var owners = await _db.Owners
+        // Load all OwnerEntities that have at least one property in this portfolio.
+        var owners = await _db.OwnerEntities
             .AsNoTracking()
             .Where(o => o.PortfolioId == portfolioId &&
-                        o.Properties.Any(p => p.PortfolioId == portfolioId))
+                        _db.Properties.Any(p => p.PortfolioId == portfolioId && p.OwnerEntityId == o.Id))
             .Select(o => new { o.Id, o.Name })
             .OrderBy(o => o.Name)
             .ToListAsync(ct);
@@ -147,9 +147,9 @@ public class OwnerStatementService : IOwnerStatementService
         var properties = await _db.Properties
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId &&
-                        p.OwnerId != null &&
-                        ownerIds.Contains(p.OwnerId!.Value))
-            .Select(p => new { p.Id, p.OwnerId, p.ManagementFeePercent })
+                        p.OwnerEntityId != null &&
+                        ownerIds.Contains(p.OwnerEntityId!.Value))
+            .Select(p => new { p.Id, OwnerId = p.OwnerEntityId, p.ManagementFeePercent })
             .ToListAsync(ct);
 
         var propertyIds = properties.Select(p => p.Id).ToHashSet();

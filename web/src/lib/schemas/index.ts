@@ -142,7 +142,9 @@ export const appointmentSchema = z.object({
 
 export const ownerSchema = z.object({
 	name: required('Name'),
-	email: optionalEmail,
+	ownerEntityType: z.string(),
+	taxId: optionalText,
+	address: optionalText,
 	phone: optionalText,
 });
 
