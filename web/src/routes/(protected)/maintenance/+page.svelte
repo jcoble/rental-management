@@ -254,9 +254,9 @@
 					<div class="rounded border border-border bg-background p-3 text-sm" data-testid="inspection-row">
 						<div class="flex items-center justify-between">
 							<p class="font-medium">{inspection.type} · {inspection.propertyName}</p>
-							<span class="text-xs">{inspection.status}</span>
+							<StatusBadge status={inspection.status} />
 						</div>
-						<p class="text-xs text-muted-foreground">{new Date(inspection.scheduledFor).toLocaleString()}</p>
+						<p class="font-mono tabular-nums text-xs text-muted-foreground">{new Date(inspection.scheduledFor).toLocaleString()}</p>
 					</div>
 				{/each}
 			</Card.Content>

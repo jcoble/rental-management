@@ -5,14 +5,15 @@
 	import type { SecurityDepositHolding } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { DataGrid } from '$lib/components/data-grid';
+	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import * as Card from '$lib/components/ui/card';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Plus, ChevronDown, ChevronRight } from '@lucide/svelte';
+	import { Plus } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -30,15 +31,6 @@
 
 	function invalidateDeposits() {
 		queryClient.invalidateQueries({ queryKey: ['deposits', portfolioId] });
-	}
-
-	// --- Expanded rows ---
-	let expandedIds = $state<Set<number>>(new Set());
-	function toggleExpand(id: number) {
-		const next = new Set(expandedIds);
-		if (next.has(id)) next.delete(id);
-		else next.add(id);
-		expandedIds = next;
 	}
 
 	// --- New holding dialog ---
@@ -160,26 +152,87 @@
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value ?? 0);
 	}
 
-	function formatDate(iso: string) {
-		return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-	}
-
-	type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline';
-
-	function statusVariant(status: string): BadgeVariant {
-		if (status === 'Held') return 'default';
-		if (status === 'PartiallyReturned') return 'secondary';
-		return 'outline';
-	}
-
-	function statusLabel(status: string) {
-		if (status === 'Held') return 'Held';
-		if (status === 'PartiallyReturned') return 'Partially Returned';
-		return 'Returned';
-	}
+	const depositStatusMap: Record<string, { label?: string; class: string }> = {
+		Held: { class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
+		PartiallyReturned: { label: 'Partially Returned', class: 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800' },
+		Returned: { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
+	};
 
 	const depositsList = $derived(depositsQuery.data ?? []);
+
+	// --- DataGrid columns ---
+	const columns: ColumnDef<SecurityDepositHolding>[] = [
+		{
+			key: 'lease',
+			title: 'Lease / Tenant',
+			sortable: true,
+			mobileRole: 'title',
+			accessor: (d) => d.leaseNumber ?? `Lease #${d.leaseId}`,
+			cell: leaseCell,
+		},
+		{
+			key: 'amount',
+			title: 'Amount',
+			format: 'currency',
+			sortable: true,
+			mobileRole: 'metric',
+			accessor: (d) => d.amount,
+		},
+		{
+			key: 'status',
+			title: 'Status',
+			mobileRole: 'badge',
+			cell: statusCell,
+		},
+		{
+			key: 'heldAt',
+			title: 'Held Since',
+			format: 'date',
+			sortable: true,
+			mobileRole: 'meta',
+		},
+		{
+			key: 'actions',
+			title: '',
+			mobileRole: 'hidden',
+			align: 'right',
+			width: '12rem',
+			cell: actionsCell,
+		},
+	];
 </script>
+
+{#snippet leaseCell(d: SecurityDepositHolding)}
+	<span data-testid="deposit-lease">{d.leaseNumber ?? `Lease #${d.leaseId}`}</span>
+{/snippet}
+
+{#snippet statusCell(d: SecurityDepositHolding)}
+	<StatusBadge status={d.status} map={depositStatusMap} />
+{/snippet}
+
+{#snippet actionsCell(d: SecurityDepositHolding)}
+	<div class="flex items-center justify-end gap-1" onclick={(e) => e.stopPropagation()} role="none">
+		<Button
+			size="sm"
+			variant="outline"
+			class="h-7 text-xs"
+			onclick={(e) => { e.stopPropagation(); openDeduction(d); }}
+			data-testid="add-deduction-{d.id}"
+		>
+			Add Deduction
+		</Button>
+		<Button
+			size="sm"
+			variant="outline"
+			class="h-7 text-xs"
+			onclick={(e) => { e.stopPropagation(); openReturn(d); }}
+			disabled={d.status !== 'Held'}
+			data-testid="process-return-{d.id}"
+		>
+			Return
+		</Button>
+	</div>
+{/snippet}
 
 <svelte:head>
 	<title>Security Deposits - Rental Command</title>
@@ -191,134 +244,25 @@
 			<h1 class="text-2xl font-bold">Security Deposits</h1>
 			<p class="text-sm text-muted-foreground">Track held deposits, deductions, and returns for each lease.</p>
 		</div>
-		<Button data-testid="new-holding-button" onclick={openNewHolding}><Plus class="h-4 w-4" /> New Holding</Button>
 	</div>
 
-	<Card.Root class="gap-0 py-0">
-		<Card.Content class="p-0">
-			{#if depositsQuery.isLoading}
-				<p class="py-10 text-center text-sm text-muted-foreground" data-testid="deposits-loading">Loading deposits…</p>
-			{:else if depositsQuery.isError}
-				<p class="py-10 text-center text-sm text-destructive" data-testid="deposits-error">Failed to load deposits. Please refresh.</p>
-			{:else if depositsList.length === 0}
-				<p class="py-10 text-center text-sm text-muted-foreground" data-testid="deposits-empty">No security deposits on record yet. Add a holding to get started.</p>
-			{:else}
-				<!-- Table header -->
-				<div class="hidden grid-cols-[2fr_1fr_1fr_1fr_1fr_auto] gap-4 border-b border-border px-4 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground md:grid">
-					<span>Lease</span>
-					<span>Deposit</span>
-					<span>Status</span>
-					<span>Deductions</span>
-					<span>Net Refund</span>
-					<span></span>
-				</div>
-				{#each depositsList as deposit (deposit.id)}
-					{@const expanded = expandedIds.has(deposit.id)}
-					{@const canReturn = deposit.status === 'Held'}
-					<div class="border-b border-border last:border-b-0" data-testid="deposit-row" data-deposit-id={deposit.id}>
-						<!-- Main row -->
-						<div class="grid grid-cols-[1fr_auto] gap-2 px-4 py-3 md:grid-cols-[2fr_1fr_1fr_1fr_1fr_auto]">
-							<div class="min-w-0">
-								<p class="truncate font-medium text-sm">{deposit.leaseNumber ?? `Lease #${deposit.leaseId}`}</p>
-								<p class="text-xs text-muted-foreground">Held {formatDate(deposit.heldAt)}{deposit.returnedAt ? ` · Returned ${formatDate(deposit.returnedAt)}` : ''}</p>
-							</div>
-							<p class="hidden text-sm md:block">{money(deposit.amount)}</p>
-							<div class="hidden md:block">
-								<Badge variant={statusVariant(deposit.status)} class={deposit.status === 'Held' ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' : deposit.status === 'PartiallyReturned' ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'}>
-									{statusLabel(deposit.status)}
-								</Badge>
-							</div>
-							<p class="hidden text-sm md:block">{deposit.deductions.length > 0 ? money(deposit.totalDeductions) : '—'}</p>
-							<p class="hidden text-sm md:block">{money(deposit.netRefund)}</p>
-							<div class="flex items-center gap-1">
-								<Button
-									variant="ghost"
-									size="icon"
-									aria-label={expanded ? 'Collapse details' : 'Expand details'}
-									onclick={() => toggleExpand(deposit.id)}
-									data-testid="deposit-expand-{deposit.id}"
-								>
-									{#if expanded}
-										<ChevronDown class="h-4 w-4" />
-									{:else}
-										<ChevronRight class="h-4 w-4" />
-									{/if}
-								</Button>
-							</div>
-						</div>
-
-						<!-- Expanded detail panel -->
-						{#if expanded}
-							<div class="border-t border-border bg-muted/20 px-4 pb-4 pt-3" data-testid="deposit-detail-{deposit.id}">
-								<!-- Mobile summary -->
-								<div class="mb-3 flex flex-wrap gap-4 text-sm md:hidden">
-									<div><span class="text-xs text-muted-foreground">Deposit</span><br />{money(deposit.amount)}</div>
-									<div>
-										<span class="text-xs text-muted-foreground">Status</span><br />
-										<Badge variant={statusVariant(deposit.status)} class={deposit.status === 'Held' ? 'bg-blue-100 text-blue-800' : deposit.status === 'PartiallyReturned' ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800'}>
-											{statusLabel(deposit.status)}
-										</Badge>
-									</div>
-									<div><span class="text-xs text-muted-foreground">Deductions</span><br />{deposit.deductions.length > 0 ? money(deposit.totalDeductions) : '—'}</div>
-									<div><span class="text-xs text-muted-foreground">Net Refund</span><br />{money(deposit.netRefund)}</div>
-								</div>
-
-								{#if deposit.notes}
-									<p class="mb-3 text-sm text-muted-foreground">{deposit.notes}</p>
-								{/if}
-
-								<!-- Deductions list -->
-								{#if deposit.deductions.length > 0}
-									<div class="mb-3">
-										<p class="mb-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Deductions</p>
-										<div class="space-y-1">
-											{#each deposit.deductions as d}
-												<div class="flex items-center justify-between rounded bg-background px-3 py-2 text-sm ring-1 ring-border">
-													<span class="font-medium">{d.reason}</span>
-													<span class="text-destructive">{money(d.amount)}</span>
-												</div>
-												{#if d.notes}
-													<p class="px-3 text-xs text-muted-foreground">{d.notes}</p>
-												{/if}
-											{/each}
-										</div>
-									</div>
-								{:else}
-									<p class="mb-3 text-sm text-muted-foreground">No deductions recorded.</p>
-								{/if}
-
-								<!-- Actions -->
-								<div class="flex flex-wrap gap-2">
-									<Button
-										size="sm"
-										variant="outline"
-										onclick={() => openDeduction(deposit)}
-										data-testid="add-deduction-{deposit.id}"
-									>
-										Add Deduction
-									</Button>
-									<Button
-										size="sm"
-										variant="outline"
-										onclick={() => openReturn(deposit)}
-										disabled={!canReturn}
-										data-testid="process-return-{deposit.id}"
-									>
-										Process Return
-									</Button>
-									{#if !canReturn}
-										<span class="self-center text-xs text-muted-foreground">
-											{deposit.status === 'PartiallyReturned' ? 'Return already partially processed' : 'Deposit already returned'}
-										</span>
-									{/if}
-								</div>
-							</div>
-						{/if}
-					</div>
-				{/each}
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<DataGrid
+		data={depositsList}
+		{columns}
+		loading={depositsQuery.isLoading}
+		emptyMessage="No security deposits on record yet. Add a holding to get started."
+		getRowKey={(d) => d.id}
+		getRowTestId={() => 'deposit-row'}
+		data-testid="deposits-list"
+	>
+		{#snippet toolbar()}
+			<div class="flex-1"></div>
+			<Button data-testid="new-holding-button" class="gap-2 shrink-0" onclick={openNewHolding}>
+				<Plus class="h-4 w-4" />
+				New Holding
+			</Button>
+		{/snippet}
+	</DataGrid>
 </div>
 
 <!-- New Holding Dialog -->

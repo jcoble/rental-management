@@ -515,99 +515,125 @@
 		<Card.Root class="gap-0 py-0" data-testid="accounting-collected">
 			<Card.Content class="p-4">
 				<p class="text-xs text-muted-foreground">Collected</p>
-				<p class="text-2xl font-bold">{money(summary?.payments.collected || 0)}</p>
+				{#if accountingSummaryQuery.isLoading}
+					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
+				{:else}
+					<p class="text-2xl font-bold font-mono tabular-nums">{money(summary?.payments.collected || 0)}</p>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 		<Card.Root class="gap-0 py-0" data-testid="accounting-outstanding">
 			<Card.Content class="p-4">
 				<p class="text-xs text-muted-foreground">Outstanding</p>
-				<p class="text-2xl font-bold">{money(summary?.payments.outstanding || 0)}</p>
+				{#if accountingSummaryQuery.isLoading}
+					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
+				{:else}
+					<p class="text-2xl font-bold font-mono tabular-nums">{money(summary?.payments.outstanding || 0)}</p>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 		<Card.Root class="gap-0 py-0" data-testid="accounting-overdue">
 			<Card.Content class="p-4">
 				<p class="text-xs text-muted-foreground">Overdue</p>
-				<p class="text-2xl font-bold">{money(summary?.payments.overdue || 0)}</p>
+				{#if accountingSummaryQuery.isLoading}
+					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
+				{:else}
+					<p class="text-2xl font-bold font-mono tabular-nums">{money(summary?.payments.overdue || 0)}</p>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 		<Card.Root class="gap-0 py-0" data-testid="accounting-expenses">
 			<Card.Content class="p-4">
 				<p class="text-xs text-muted-foreground">Expenses</p>
-				<p class="text-2xl font-bold">{money(summary?.totalExpenses || 0)}</p>
+				{#if accountingSummaryQuery.isLoading}
+					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
+				{:else}
+					<p class="text-2xl font-bold font-mono tabular-nums">{money(summary?.totalExpenses || 0)}</p>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 	</div>
 
 	<div class="space-y-6">
 		<!-- Payments DataGrid -->
-		<DataGrid
-			data={paymentsList}
-			columns={paymentColumns}
-			loading={paymentsQuery.isLoading}
-			emptyMessage="No payments found."
-			getRowKey={(p) => p.id}
-			getRowTestId={(p) => `payment-row`}
-			data-testid="payments-list"
-			pageSize={PAGE_SIZE}
-		>
-			{#snippet toolbar()}
-				<div class="flex flex-1 flex-wrap items-center gap-2">
-					<div class="max-w-sm flex-1">
-						<SearchInput bind:value={paymentSearch} placeholder="Search payments…" testid="payment-search" />
-					</div>
-					<Select.Root type="single" bind:value={paymentStatusFilter}>
-						<Select.Trigger class="w-[160px]" data-testid="payment-status-filter">
-							{paymentStatusFilter || 'All statuses'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="" label="All statuses">All statuses</Select.Item>
-							{#each PAYMENT_STATUSES as s}
-								<Select.Item value={s} label={s}>{s}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-				</div>
+		<div>
+			<div class="mb-3 flex items-center justify-between">
+				<h2 class="text-lg font-semibold">Payments</h2>
 				<Button data-testid="payment-create-button" class="shrink-0 gap-2" onclick={openCreatePayment}>
 					<Plus class="h-4 w-4" />
-					Add Payment
+					New Payment
 				</Button>
-			{/snippet}
-		</DataGrid>
+			</div>
+			<DataGrid
+				data={paymentsList}
+				columns={paymentColumns}
+				loading={paymentsQuery.isLoading}
+				emptyMessage="No payments found."
+				getRowKey={(p) => p.id}
+				getRowTestId={(p) => `payment-row`}
+				data-testid="payments-list"
+				pageSize={PAGE_SIZE}
+			>
+				{#snippet toolbar()}
+					<div class="flex flex-1 flex-wrap items-center gap-2">
+						<div class="max-w-sm flex-1">
+							<SearchInput bind:value={paymentSearch} placeholder="Search payments…" testid="payment-search" />
+						</div>
+						<Select.Root type="single" bind:value={paymentStatusFilter}>
+							<Select.Trigger class="w-[160px]" data-testid="payment-status-filter">
+								{paymentStatusFilter || 'All statuses'}
+							</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="" label="All statuses">All statuses</Select.Item>
+								{#each PAYMENT_STATUSES as s}
+									<Select.Item value={s} label={s}>{s}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+				{/snippet}
+			</DataGrid>
+		</div>
 
 		<!-- Expenses DataGrid -->
-		<DataGrid
-			data={expensesList}
-			columns={expenseColumns}
-			loading={expensesQuery.isLoading}
-			emptyMessage="No expenses found."
-			getRowKey={(e) => e.id}
-			getRowTestId={(e) => `expense-row`}
-			data-testid="expenses-list"
-			pageSize={PAGE_SIZE}
-		>
-			{#snippet toolbar()}
-				<div class="flex flex-1 flex-wrap items-center gap-2">
-					<div class="max-w-sm flex-1">
-						<SearchInput bind:value={expenseSearch} placeholder="Search expenses…" testid="expense-search" />
-					</div>
-					<Select.Root type="single" bind:value={expenseStatusFilter}>
-						<Select.Trigger class="w-[160px]" data-testid="expense-status-filter">
-							{expenseStatusFilter || 'All statuses'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="" label="All statuses">All statuses</Select.Item>
-							{#each EXPENSE_STATUSES as s}
-								<Select.Item value={s} label={s}>{s}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-				</div>
+		<div>
+			<div class="mb-3 flex items-center justify-between">
+				<h2 class="text-lg font-semibold">Expenses</h2>
 				<Button data-testid="expense-create-button" class="shrink-0 gap-2" onclick={openCreateExpense}>
 					<Plus class="h-4 w-4" />
-					Add Expense
+					New Expense
 				</Button>
-			{/snippet}
-		</DataGrid>
+			</div>
+			<DataGrid
+				data={expensesList}
+				columns={expenseColumns}
+				loading={expensesQuery.isLoading}
+				emptyMessage="No expenses found."
+				getRowKey={(e) => e.id}
+				getRowTestId={(e) => `expense-row`}
+				data-testid="expenses-list"
+				pageSize={PAGE_SIZE}
+			>
+				{#snippet toolbar()}
+					<div class="flex flex-1 flex-wrap items-center gap-2">
+						<div class="max-w-sm flex-1">
+							<SearchInput bind:value={expenseSearch} placeholder="Search expenses…" testid="expense-search" />
+						</div>
+						<Select.Root type="single" bind:value={expenseStatusFilter}>
+							<Select.Trigger class="w-[160px]" data-testid="expense-status-filter">
+								{expenseStatusFilter || 'All statuses'}
+							</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="" label="All statuses">All statuses</Select.Item>
+								{#each EXPENSE_STATUSES as s}
+									<Select.Item value={s} label={s}>{s}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+				{/snippet}
+			</DataGrid>
+		</div>
 	</div>
 </div>
 
