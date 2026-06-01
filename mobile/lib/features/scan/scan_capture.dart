@@ -24,6 +24,11 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
   double _uploadProgress = 0;
   String? _error;
 
+  /// What kind of record this scan will become: 'Expense' (receipt/bill) or
+  /// 'Payment' (rent check). Drives the LLM extraction + confirm flow. Defaults
+  /// to 'Expense' since receipts/bills are the most common capture.
+  String _targetEntityType = 'Expense';
+
   Future<void> _pick(ImageSource source) async {
     final picker = ImagePicker();
     final XFile? picked = await picker.pickImage(
@@ -50,7 +55,7 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
             bytes,
             picked.name,
             contentType,
-            targetEntityType: 'Expense',
+            targetEntityType: _targetEntityType,
             onSendProgress: (progress) {
               if (mounted) setState(() => _uploadProgress = progress);
             },
@@ -151,6 +156,18 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
               ),
             ],
             const SizedBox(height: 24),
+            Text(
+              'What are you scanning?',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            _DocTypeSelector(
+              selected: _targetEntityType,
+              onChanged: (value) => setState(() => _targetEntityType = value),
+            ),
+            const SizedBox(height: 24),
             FilledButton.icon(
               icon: const Icon(Icons.camera_alt_outlined),
               label: const Text('Take a photo'),
@@ -164,6 +181,98 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
             ),
             const SizedBox(height: 8),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Two large, thumb-friendly toggle buttons that pick what kind of record this
+/// scan should become: a Receipt/Bill ('Expense') or a Rent Check/Payment
+/// ('Payment'). The choice flows through to the upload's `targetEntityType`.
+class _DocTypeSelector extends StatelessWidget {
+  const _DocTypeSelector({required this.selected, required this.onChanged});
+
+  final String selected;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _DocTypeOption(
+            icon: Icons.receipt_long_outlined,
+            label: 'Receipt / Bill',
+            selected: selected == 'Expense',
+            onTap: () => onChanged('Expense'),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _DocTypeOption(
+            icon: Icons.payments_outlined,
+            label: 'Rent Check / Payment',
+            selected: selected == 'Payment',
+            onTap: () => onChanged('Payment'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DocTypeOption extends StatelessWidget {
+  const _DocTypeOption({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final fg = selected ? colorScheme.onPrimaryContainer : colorScheme.onSurface;
+
+    return Material(
+      color: selected ? colorScheme.primaryContainer : colorScheme.surface,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          // Tall enough for a comfortable thumb target.
+          constraints: const BoxConstraints(minHeight: 96),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: selected ? colorScheme.primary : colorScheme.outlineVariant,
+              width: selected ? 2 : 1,
+            ),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: fg, size: 28),
+              const SizedBox(height: 8),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: fg,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
