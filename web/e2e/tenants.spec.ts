@@ -6,6 +6,7 @@ test.describe('Tenants', () => {
 		await login(page);
 		await page.goto('/tenants');
 		await expect(page.getByTestId('tenants-page')).toBeVisible();
+		await page.waitForLoadState('networkidle');
 	});
 
 	test('creates then edits a tenant', async ({ page }) => {
@@ -19,7 +20,11 @@ test.describe('Tenants', () => {
 		await page.getByTestId('tenant-form-save').click();
 		await expect(page.getByTestId('tenant-form')).toBeHidden();
 
-		const row = page.getByTestId('tenant-row').filter({ hasText: last });
+		// Search to surface the new tenant on page 1 regardless of pagination, and scope to
+		// the desktop grid (the row testid also renders in the CSS-hidden mobile card).
+		await page.getByTestId('tenant-search-input').fill(last);
+		const desktop = page.getByTestId('datagrid-desktop');
+		const row = desktop.getByTestId('tenant-row').filter({ hasText: last });
 		await expect(row).toBeVisible();
 
 		// Edit the same tenant's first name.
@@ -30,7 +35,7 @@ test.describe('Tenants', () => {
 		await expect(page.getByTestId('tenant-form')).toBeHidden();
 
 		await expect(
-			page.getByTestId('tenant-name').filter({ hasText: 'Patricia' }).filter({ hasText: last })
+			desktop.getByTestId('tenant-name').filter({ hasText: 'Patricia' }).filter({ hasText: last })
 		).toBeVisible();
 	});
 });
