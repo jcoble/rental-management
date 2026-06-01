@@ -45,6 +45,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
     public DbSet<StripeWebhookEvent> StripeWebhookEvents => Set<StripeWebhookEvent>();
 
+    // Engine resilience — worker heartbeats written by each background worker every poll cycle
+    public DbSet<EngineWorkerHeartbeat> EngineWorkerHeartbeats => Set<EngineWorkerHeartbeat>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Configures the ASP.NET Identity schema (AspNetUsers/Roles/etc.) with int keys.
@@ -638,6 +641,16 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.EventId).IsRequired().HasMaxLength(200);
             entity.Property(e => e.EventType).IsRequired().HasMaxLength(200);
             entity.HasIndex(e => e.EventId).IsUnique();
+        });
+
+        modelBuilder.Entity<EngineWorkerHeartbeat>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.WorkerName).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.LastErrorMessage).HasMaxLength(2000);
+            entity.Property(e => e.Metadata).HasColumnType("jsonb");
+            entity.Property(e => e.Status).HasConversion<int>();
+            entity.HasIndex(e => e.WorkerName).IsUnique();
         });
     }
 }
