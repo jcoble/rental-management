@@ -1,3 +1,4 @@
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,6 +9,7 @@ using RentalCommand.Api.Scanning;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Engine.HealthChecks;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
 
@@ -56,6 +58,10 @@ builder.Services.AddScoped<IRentChargeService, RentChargeService>();
 builder.Services.AddScoped<ILateFeeService, LateFeeService>();
 builder.Services.AddScoped<ILeaseExpiryReminderService, LeaseExpiryReminderService>();
 
+// Engine resilience — persists worker heartbeats; consumed by the watchdog + health check.
+// Scoped (it opens its own scope per call to isolate DB access).
+builder.Services.AddScoped<EngineStatusReporter>();
+
 // Workers (each is its own BackgroundService).
 builder.Services.AddHostedService<OutboxDispatchWorker>();
 builder.Services.AddHostedService<ScanProcessingWorker>();
@@ -63,18 +69,59 @@ builder.Services.AddHostedService<RentChargeWorker>();
 builder.Services.AddHostedService<LateFeeWorker>();
 builder.Services.AddHostedService<LeaseExpiryReminderWorker>();
 
+// Watcher: monitors the advisory lock connection; triggers graceful shutdown if a newer Engine takes over.
+builder.Services.AddHostedService<AdvisoryLockWatcherService>();
+
+// Watchdog: monitors worker heartbeats; warns (and ultimately restarts) if any worker is stuck.
+builder.Services.AddHostedService<WorkerWatchdogService>();
+
+// Health check over the heartbeat table. The Engine has no HTTP port, so there is no
+// endpoint to scrape — the registration keeps parity with EdiPlatform and lets the check
+// be reused/inspected; the watchdog WARNING logs are the primary "is it alive" signal.
+builder.Services.AddHealthChecks()
+    .AddCheck<EngineWorkerHealthCheck>("workers");
+
 var host = builder.Build();
 
-// --- Single-instance safety: PostgreSQL advisory lock ---
-// Hold a dedicated, non-pooled connection open for the host's lifetime so the advisory
-// lock is held for as long as the Engine runs and released cleanly on shutdown.
+// --- Self-migrate ---
+// The Engine applies EF Core migrations itself so it no longer depends on the API having
+// created the schema. MigrateAsync() is idempotent, so it's safe for both API and Engine
+// to migrate. Done BEFORE acquiring the advisory lock so the schema (incl. the heartbeat
+// table the watcher/watchdog read) exists before any worker starts.
+{
+    var migrateLogger = host.Services.GetRequiredService<ILogger<Program>>();
+    const int maxMigrateAttempts = 30;
+    for (var attempt = 1; attempt <= maxMigrateAttempts; attempt++)
+    {
+        try
+        {
+            using var scope = host.Services.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            await db.Database.MigrateAsync();
+            migrateLogger.LogInformation("Engine applied database migrations (or none pending).");
+            break;
+        }
+        catch (Exception ex) when (attempt < maxMigrateAttempts)
+        {
+            migrateLogger.LogWarning(
+                "Database not ready for migration yet (attempt {Attempt}/{Max}): {Message}. Retrying in 2s…",
+                attempt, maxMigrateAttempts, ex.Message);
+            await Task.Delay(TimeSpan.FromSeconds(2));
+        }
+    }
+}
+
+// --- Single-instance safety: PostgreSQL advisory lock TAKEOVER ---
+// A new Engine instance KILLS any existing holder and wins the lock, so a restart/redeploy
+// always succeeds rather than getting stuck behind a zombie process. The dedicated, non-pooled
+// connection is held open for the host's lifetime; AdvisoryLockWatcherService monitors it and
+// triggers graceful shutdown if a still-newer Engine later terminates it.
 var logger = host.Services.GetRequiredService<ILogger<Program>>();
 
 var lockConnString = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false }.ToString();
 
-// Wait for the database to be reachable before acquiring the advisory lock / starting workers.
-// On a fresh/dropped database the Engine can boot before the API has created the schema (and in
-// production the DB may be briefly unavailable at startup), so retry instead of crashing.
+// Open the dedicated lock connection. Keep a DB-not-ready retry on the FIRST open so a
+// not-yet-up database still waits instead of crashing the process.
 NpgsqlConnection? lockConnection = null;
 const int maxDbAttempts = 30;
 for (var attempt = 1; attempt <= maxDbAttempts; attempt++)
@@ -100,21 +147,36 @@ if (lockConnection is null)
     return;
 }
 
-await using (var lockCmd = lockConnection.CreateCommand())
+// If another Engine currently holds the advisory lock, terminate its backend so we can take over.
+await using (var checkCmd = lockConnection.CreateCommand())
 {
-    // pg_try_advisory_lock returns immediately; if another Engine already holds the lock we abort
-    // rather than block forever.
-    lockCmd.CommandText = $"SELECT pg_try_advisory_lock({Program.AdvisoryLockKey})";
-    var acquired = (bool?)await lockCmd.ExecuteScalarAsync() ?? false;
-    if (!acquired)
+    checkCmd.CommandText =
+        $"SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND classid = 0 " +
+        $"AND objid = {Program.AdvisoryLockKey} AND granted = true";
+    var existingPid = await checkCmd.ExecuteScalarAsync();
+    if (existingPid != null)
     {
-        logger.LogError(
-            "Another Engine instance already holds advisory lock {LockKey}. Exiting.",
-            Program.AdvisoryLockKey);
-        await lockConnection.DisposeAsync();
-        return;
+        logger.LogWarning(
+            "Another Engine instance detected (DB PID {Pid}). Terminating it to take over the advisory lock…",
+            existingPid);
+        await using var killCmd = lockConnection.CreateCommand();
+        killCmd.CommandText = $"SELECT pg_terminate_backend({existingPid})";
+        await killCmd.ExecuteScalarAsync();
+        await Task.Delay(1000); // give the old backend time to die and release the lock
+        Program.LockContested = true;
     }
 }
+
+// Acquire the advisory lock (blocking — succeeds now that any prior holder is gone).
+await using (var lockCmd = lockConnection.CreateCommand())
+{
+    lockCmd.CommandText = $"SELECT pg_advisory_lock({Program.AdvisoryLockKey})";
+    await lockCmd.ExecuteScalarAsync();
+}
+
+// Publish the connection so AdvisoryLockWatcherService can monitor it.
+Program.AdvisoryLockConnection = lockConnection;
+Program.AdvisoryLockHeld = true;
 
 logger.LogInformation(
     "Engine advisory lock {LockKey} acquired (PID {Pid}) — this is the only running instance",
@@ -137,16 +199,43 @@ lifetime.ApplicationStopping.Register(() =>
     {
         // Best effort — the lock is released when the backend session ends regardless.
     }
+    Program.AdvisoryLockConnection = null;
+    Program.AdvisoryLockHeld = false;
 });
 
 await host.RunAsync();
 
 /// <summary>
-/// Hosts the advisory-lock key. Declared as a partial class so the Engine.Tests project can
-/// reference <c>Program</c> if needed.
+/// Hosts the advisory-lock key and the shared lock state read by the resilience services.
+/// Declared as a partial class so the Engine.Tests project can reference <c>Program</c> if needed.
 /// </summary>
 public partial class Program
 {
     /// <summary>RentalCommand Engine advisory lock key (distinct from EdiPlatform's).</summary>
     internal const int AdvisoryLockKey = 59484;
+
+    private static volatile bool _advisoryLockHeld;
+    private static volatile bool _lockContested;
+    private static DbConnection? _advisoryLockConnection;
+
+    /// <summary>True once this instance holds the advisory lock; false after shutdown/takeover.</summary>
+    internal static bool AdvisoryLockHeld
+    {
+        get => _advisoryLockHeld;
+        set => _advisoryLockHeld = value;
+    }
+
+    /// <summary>True if this instance had to terminate a prior holder to take over.</summary>
+    internal static bool LockContested
+    {
+        get => _lockContested;
+        set => _lockContested = value;
+    }
+
+    /// <summary>The dedicated connection holding the advisory lock; monitored by the watcher.</summary>
+    internal static DbConnection? AdvisoryLockConnection
+    {
+        get => Volatile.Read(ref _advisoryLockConnection);
+        set => Volatile.Write(ref _advisoryLockConnection, value);
+    }
 }
