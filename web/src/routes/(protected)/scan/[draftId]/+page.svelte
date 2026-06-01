@@ -12,6 +12,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Table from '$lib/components/ui/table';
 	import * as Select from '$lib/components/ui/select';
+	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 
 	// ScheduleECategory enum values (mirrors RentalCommand.Core.Enums.ScheduleECategory)
 	const SCHEDULE_E_CATEGORIES = [
@@ -325,9 +326,15 @@
 	{:else if !data}
 		<p class="text-sm text-muted-foreground">Scan draft not found.</p>
 	{:else}
+		<div class="mb-4">
+			<PageBreadcrumb
+				crumbs={[
+					{ label: 'Scans', href: '/scan' },
+					{ label: 'Review' },
+				]}
+			/>
+		</div>
 		<div class="mb-4 flex items-center gap-3">
-			<a href="/scan" class="text-sm text-muted-foreground hover:text-foreground">&larr; Back to Scans</a>
-			<span class="text-muted-foreground">/</span>
 			<h1 class="text-xl font-bold">Review Scan #{data.id}</h1>
 			<Badge variant="outline" class={statusBadgeClass(data.status)}>
 				{statusLabel(data.status)}
@@ -546,9 +553,9 @@
 												{#each lineItems as item, i}
 													<Table.Row class={i % 2 === 1 ? 'bg-muted/20' : ''}>
 														<Table.Cell class="px-3 py-2">{item.description ?? ''}</Table.Cell>
-														<Table.Cell class="px-3 py-2 text-right">{formatQty(item.quantity)}</Table.Cell>
-														<Table.Cell class="px-3 py-2 text-right">{item.unit_price != null ? formatMoney(item.unit_price) : ''}</Table.Cell>
-														<Table.Cell class="px-3 py-2 text-right">{item.amount != null ? formatMoney(item.amount) : ''}</Table.Cell>
+														<Table.Cell class="px-3 py-2 text-right font-mono tabular-nums">{formatQty(item.quantity)}</Table.Cell>
+														<Table.Cell class="px-3 py-2 text-right font-mono tabular-nums">{item.unit_price != null ? formatMoney(item.unit_price) : ''}</Table.Cell>
+														<Table.Cell class="px-3 py-2 text-right font-mono tabular-nums">{item.amount != null ? formatMoney(item.amount) : ''}</Table.Cell>
 													</Table.Row>
 												{/each}
 											</Table.Body>

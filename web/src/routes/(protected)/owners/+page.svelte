@@ -7,13 +7,14 @@
 	import { ownerSchema, vendorSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
+	import { DataGrid } from '$lib/components/data-grid';
+	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import * as Card from '$lib/components/ui/card';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -154,7 +155,141 @@
 
 	const ownersList = $derived(ownersQuery.data ?? []);
 	const vendorsList = $derived(vendorsQuery.data ?? []);
+
+	// --- Owner columns ---
+	const ownerColumns: ColumnDef<Owner>[] = [
+		{
+			key: 'name',
+			title: 'Name',
+			sortable: true,
+			mobileRole: 'title',
+			accessor: (o) => o.name,
+			cell: ownerNameCell,
+		},
+		{
+			key: 'email',
+			title: 'Email',
+			sortable: true,
+			mobileRole: 'subtitle',
+			accessor: (o) => o.email ?? '—',
+		},
+		{
+			key: 'phone',
+			title: 'Phone',
+			mobileRole: 'meta',
+			accessor: (o) => o.phone ?? '—',
+		},
+		{
+			key: 'propertyCount',
+			title: 'Properties',
+			format: 'number',
+			sortable: true,
+			mobileRole: 'metric',
+			accessor: (o) => o.propertyCount ?? 0,
+		},
+		{
+			key: 'actions',
+			title: '',
+			mobileRole: 'hidden',
+			align: 'right',
+			width: '6rem',
+			cell: ownerActionsCell,
+		},
+	];
+
+	// --- Vendor columns ---
+	const vendorColumns: ColumnDef<Vendor>[] = [
+		{
+			key: 'name',
+			title: 'Name',
+			sortable: true,
+			mobileRole: 'title',
+			accessor: (v) => v.name,
+			cell: vendorNameCell,
+		},
+		{
+			key: 'serviceType',
+			title: 'Category',
+			sortable: true,
+			mobileRole: 'subtitle',
+			accessor: (v) => v.serviceType,
+		},
+		{
+			key: 'contact',
+			title: 'Contact',
+			mobileRole: 'meta',
+			accessor: (v) => [v.email, v.phone].filter(Boolean).join(' · ') || '—',
+		},
+		{
+			key: 'compliance',
+			title: 'Compliance',
+			mobileRole: 'meta',
+			accessor: (v) => `1099: ${v.is1099Eligible ? 'Yes' : 'No'} · W-9: ${v.w9OnFile ? 'On file' : 'Missing'}`,
+		},
+		{
+			key: 'actions',
+			title: '',
+			mobileRole: 'hidden',
+			align: 'right',
+			width: '6rem',
+			cell: vendorActionsCell,
+		},
+	];
 </script>
+
+{#snippet ownerNameCell(o: Owner)}
+	<span data-testid="owner-name">{o.name}</span>
+{/snippet}
+
+{#snippet ownerActionsCell(o: Owner)}
+	<div class="flex items-center justify-end gap-1" onclick={(e) => e.stopPropagation()} role="none">
+		<button
+			type="button"
+			data-testid="owner-edit"
+			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+			aria-label="Edit owner"
+			onclick={(e) => { e.stopPropagation(); openEditOwner(o); }}
+		>
+			<Pencil class="h-3.5 w-3.5" />
+		</button>
+		<button
+			type="button"
+			data-testid="owner-delete"
+			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+			aria-label="Delete owner"
+			onclick={(e) => { e.stopPropagation(); ownerDeleteTarget = o; }}
+		>
+			<Trash2 class="h-3.5 w-3.5" />
+		</button>
+	</div>
+{/snippet}
+
+{#snippet vendorNameCell(v: Vendor)}
+	<span data-testid="vendor-name">{v.name}</span>
+{/snippet}
+
+{#snippet vendorActionsCell(v: Vendor)}
+	<div class="flex items-center justify-end gap-1" onclick={(e) => e.stopPropagation()} role="none">
+		<button
+			type="button"
+			data-testid="vendor-edit"
+			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+			aria-label="Edit vendor"
+			onclick={(e) => { e.stopPropagation(); openEditVendor(v); }}
+		>
+			<Pencil class="h-3.5 w-3.5" />
+		</button>
+		<button
+			type="button"
+			data-testid="vendor-delete"
+			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+			aria-label="Delete vendor"
+			onclick={(e) => { e.stopPropagation(); vendorDeleteTarget = v; }}
+		>
+			<Trash2 class="h-3.5 w-3.5" />
+		</button>
+	</div>
+{/snippet}
 
 <svelte:head>
 	<title>Owners & Vendors - Rental Command</title>
@@ -166,69 +301,46 @@
 		<p class="text-sm text-muted-foreground">Manage ownership contacts and service provider compliance data.</p>
 	</div>
 
-	<div class="grid gap-4 lg:grid-cols-2">
-		<Card.Root class="gap-0 py-0">
-			<div class="flex items-center justify-between border-b border-border px-4 py-3">
-				<span class="font-semibold">Owners</span>
-				<Button data-testid="owner-create-button" size="sm" class="gap-1" onclick={openCreateOwner}><Plus class="h-3.5 w-3.5" /> Add</Button>
-			</div>
-			<div class="border-b border-border px-3 py-2"><SearchInput bind:value={ownerSearch} placeholder="Search owners…" testid="owner-search" /></div>
-			<div class="space-y-2 p-3" data-testid="owners-list">
-				{#if ownersList.length === 0}
-					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="owners-empty">No owners found.</p>
-				{:else}
-					{#each ownersList as owner (owner.id)}
-						<Card.Root class="gap-0 py-0" data-testid="owner-row" data-owner-id={owner.id}>
-							<Card.Content class="p-3 text-sm">
-								<div class="flex items-start justify-between gap-2">
-									<div class="min-w-0">
-										<p class="truncate font-medium" data-testid="owner-name">{owner.name}</p>
-										<p class="text-xs text-muted-foreground">{owner.email || 'No email'} · {owner.phone || 'No phone'}</p>
-										<p class="text-xs text-muted-foreground">{owner.propertyCount || 0} properties</p>
-									</div>
-									<div class="flex shrink-0 gap-1">
-										<Button data-testid="owner-edit" aria-label="Edit owner" variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground" onclick={() => openEditOwner(owner)}><Pencil class="h-4 w-4" /></Button>
-										<Button data-testid="owner-delete" aria-label="Delete owner" variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground" onclick={() => (ownerDeleteTarget = owner)}><Trash2 class="h-4 w-4" /></Button>
-									</div>
-								</div>
-							</Card.Content>
-						</Card.Root>
-					{/each}
-				{/if}
-			</div>
-		</Card.Root>
+	<div class="space-y-6">
+		<DataGrid
+			data={ownersList}
+			columns={ownerColumns}
+			loading={ownersQuery.isLoading}
+			emptyMessage="No owners found."
+			getRowKey={(o) => o.id}
+			getRowTestId={() => 'owner-row'}
+			data-testid="owners-list"
+		>
+			{#snippet toolbar()}
+				<div class="flex flex-1 items-center gap-2">
+					<SearchInput bind:value={ownerSearch} placeholder="Search owners…" testid="owner-search" />
+				</div>
+				<Button data-testid="owner-create-button" class="gap-2 shrink-0" onclick={openCreateOwner}>
+					<Plus class="h-4 w-4" />
+					Add Owner
+				</Button>
+			{/snippet}
+		</DataGrid>
 
-		<Card.Root class="gap-0 py-0">
-			<div class="flex items-center justify-between border-b border-border px-4 py-3">
-				<span class="font-semibold">Vendors</span>
-				<Button data-testid="vendor-create-button" size="sm" class="gap-1" onclick={openCreateVendor}><Plus class="h-3.5 w-3.5" /> Add</Button>
-			</div>
-			<div class="border-b border-border px-3 py-2"><SearchInput bind:value={vendorSearch} placeholder="Search vendors…" testid="vendor-search" /></div>
-			<div class="space-y-2 p-3" data-testid="vendors-list">
-				{#if vendorsList.length === 0}
-					<p class="py-4 text-center text-sm text-muted-foreground" data-testid="vendors-empty">No vendors found.</p>
-				{:else}
-					{#each vendorsList as vendor (vendor.id)}
-						<Card.Root class="gap-0 py-0" data-testid="vendor-row" data-vendor-id={vendor.id}>
-							<Card.Content class="p-3 text-sm">
-								<div class="flex items-start justify-between gap-2">
-									<div class="min-w-0">
-										<p class="truncate font-medium" data-testid="vendor-name">{vendor.name}</p>
-										<p class="text-xs text-muted-foreground">{vendor.serviceType}</p>
-										<p class="text-xs text-muted-foreground">{vendor.email || 'No email'} · {vendor.phone || 'No phone'}</p>
-										<p class="text-xs text-muted-foreground">1099: {vendor.is1099Eligible ? 'Yes' : 'No'} · W-9: {vendor.w9OnFile ? 'On file' : 'Missing'}</p>
-									</div>
-									<div class="flex shrink-0 gap-1">
-										<Button data-testid="vendor-edit" aria-label="Edit vendor" variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground" onclick={() => openEditVendor(vendor)}><Pencil class="h-4 w-4" /></Button>
-										<Button data-testid="vendor-delete" aria-label="Delete vendor" variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground" onclick={() => (vendorDeleteTarget = vendor)}><Trash2 class="h-4 w-4" /></Button>
-									</div>
-								</div>
-							</Card.Content>
-						</Card.Root>
-					{/each}
-				{/if}
-			</div>
-		</Card.Root>
+		<DataGrid
+			data={vendorsList}
+			columns={vendorColumns}
+			loading={vendorsQuery.isLoading}
+			emptyMessage="No vendors found."
+			getRowKey={(v) => v.id}
+			getRowTestId={() => 'vendor-row'}
+			data-testid="vendors-list"
+		>
+			{#snippet toolbar()}
+				<div class="flex flex-1 items-center gap-2">
+					<SearchInput bind:value={vendorSearch} placeholder="Search vendors…" testid="vendor-search" />
+				</div>
+				<Button data-testid="vendor-create-button" class="gap-2 shrink-0" onclick={openCreateVendor}>
+					<Plus class="h-4 w-4" />
+					Add Vendor
+				</Button>
+			{/snippet}
+		</DataGrid>
 	</div>
 </div>
 
@@ -290,7 +402,7 @@
 <ConfirmDialog
 	open={ownerDeleteTarget !== null}
 	title="Delete owner"
-	message={ownerDeleteTarget ? `Delete “${ownerDeleteTarget.name}”?` : ''}
+	message={ownerDeleteTarget ? `Delete "${ownerDeleteTarget.name}"?` : ''}
 	busy={deleteOwnerMutation.isPending}
 	testid="owner-delete"
 	onconfirm={() => ownerDeleteTarget && deleteOwnerMutation.mutate(ownerDeleteTarget.id)}
@@ -299,7 +411,7 @@
 <ConfirmDialog
 	open={vendorDeleteTarget !== null}
 	title="Delete vendor"
-	message={vendorDeleteTarget ? `Delete “${vendorDeleteTarget.name}”?` : ''}
+	message={vendorDeleteTarget ? `Delete "${vendorDeleteTarget.name}"?` : ''}
 	busy={deleteVendorMutation.isPending}
 	testid="vendor-delete"
 	onconfirm={() => vendorDeleteTarget && deleteVendorMutation.mutate(vendorDeleteTarget.id)}
