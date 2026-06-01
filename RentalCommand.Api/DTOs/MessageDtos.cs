@@ -44,6 +44,7 @@ public class CreatePortalMessageRequest
 /// <summary>Tenant: update the status of their own message (e.g. re-open or close).</summary>
 public class UpdatePortalMessageStatusRequest
 {
+    [MaxLength(50)]
     public string? Status { get; set; }
 }
 
@@ -54,6 +55,7 @@ public class ReplyMessageRequest
     [MaxLength(5000)]
     public string Reply { get; set; } = string.Empty;
 
+    [MaxLength(50)]
     public string? Status { get; set; }
 }
 
@@ -61,5 +63,6 @@ public class ReplyMessageRequest
 public class UpdateMessageStatusRequest
 {
     [Required]
+    [MaxLength(50)]
     public string Status { get; set; } = string.Empty;
 }
