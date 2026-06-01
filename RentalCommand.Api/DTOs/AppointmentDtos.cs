@@ -52,9 +52,16 @@ public class AppointmentResponse
 
 public class CreateAppointmentRequest
 {
+    [Range(1, int.MaxValue)]
     public int? PropertyId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? UnitId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? TenantId { get; set; }
 
     [Required]
@@ -85,9 +92,16 @@ public class CreateAppointmentRequest
 
 public class UpdateAppointmentRequest
 {
+    [Range(1, int.MaxValue)]
     public int? PropertyId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? UnitId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? TenantId { get; set; }
 
     [MaxLength(200)]

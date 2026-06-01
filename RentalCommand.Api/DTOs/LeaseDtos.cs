@@ -55,12 +55,15 @@ public class LeaseResponse
 public class CreateLeaseRequest
 {
     [Required]
+    [Range(1, int.MaxValue)]
     public int PropertyId { get; set; }
 
     [Required]
+    [Range(1, int.MaxValue)]
     public int UnitId { get; set; }
 
     [Required]
+    [Range(1, int.MaxValue)]
     public int TenantId { get; set; }
 
     [Required]
@@ -78,8 +81,13 @@ public class CreateLeaseRequest
     public DateTime? MoveInDate { get; set; }
     public DateTime? MoveOutDate { get; set; }
 
+    [Range(0.01, 99999999)]
     public decimal MonthlyRent { get; set; }
+
+    [Range(0, 99999999)]
     public decimal SecurityDeposit { get; set; }
+
+    [Range(0, 99999999)]
     public decimal LateFeeAmount { get; set; }
 
     [Range(1, 31)]
@@ -101,8 +109,13 @@ public class UpdateLeaseRequest
     public DateTime? MoveInDate { get; set; }
     public DateTime? MoveOutDate { get; set; }
 
+    [Range(0.01, 99999999)]
     public decimal? MonthlyRent { get; set; }
+
+    [Range(0, 99999999)]
     public decimal? SecurityDeposit { get; set; }
+
+    [Range(0, 99999999)]
     public decimal? LateFeeAmount { get; set; }
 
     [Range(1, 31)]

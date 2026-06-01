@@ -3,6 +3,7 @@
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { settingsSchema, parseForm } from '$lib/schemas';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -12,6 +13,7 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 
 	let saveSucceeded = $state(false);
+	let formErrors = $state<Record<string, string>>({});
 
 	const portfolioQuery = createQuery(() => ({
 		queryKey: ['portfolio', portfolioId],
@@ -74,7 +76,8 @@
 			<div class="grid gap-3 md:grid-cols-2">
 				<div class="md:col-span-2">
 					<label for="settings-name" class="mb-1 block text-xs text-muted-foreground">Portfolio Name</label>
-					<Input id="settings-name" bind:value={form.name} />
+					<Input id="settings-name" bind:value={form.name} data-testid="settings-name-input" />
+					{#if formErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="settings-name-error">{formErrors.name}</p>{/if}
 				</div>
 				<div class="md:col-span-2">
 					<label for="settings-description" class="mb-1 block text-xs text-muted-foreground">Description</label>
@@ -112,7 +115,13 @@
 			</div>
 
 			<div class="mt-4 flex items-center gap-3">
-				<Button onclick={() => { saveSucceeded = false; updateMutation.mutate(); }} disabled={updateMutation.isPending}>Save Settings</Button>
+				<Button onclick={() => {
+				const result = parseForm(settingsSchema, form);
+				if (result.errors) { formErrors = result.errors; return; }
+				formErrors = {};
+				saveSucceeded = false;
+				updateMutation.mutate();
+			}} disabled={updateMutation.isPending}>Save Settings</Button>
 				{#if saveSucceeded && !updateMutation.isPending}
 					<span class="text-xs text-green-600">Settings saved successfully.</span>
 				{/if}

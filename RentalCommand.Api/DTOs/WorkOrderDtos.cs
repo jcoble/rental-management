@@ -57,11 +57,19 @@ public class WorkOrderResponse
 public class CreateWorkOrderRequest
 {
     [Required]
+    [Range(1, int.MaxValue)]
     public int PropertyId { get; set; }
 
+    [Range(1, int.MaxValue)]
     public int? UnitId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? TenantId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? VendorId { get; set; }
 
     [Required]
@@ -82,7 +90,10 @@ public class CreateWorkOrderRequest
     public DateTime? ScheduledFor { get; set; }
     public DateTime? CompletedAt { get; set; }
 
+    [Range(0, 99999999)]
     public decimal? EstimatedCost { get; set; }
+
+    [Range(0, 99999999)]
     public decimal? ActualCost { get; set; }
 
     [MaxLength(120)]
@@ -91,9 +102,16 @@ public class CreateWorkOrderRequest
 
 public class UpdateWorkOrderRequest
 {
+    [Range(1, int.MaxValue)]
     public int? UnitId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? TenantId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? VendorId { get; set; }
 
     [MaxLength(200)]
@@ -111,6 +129,9 @@ public class UpdateWorkOrderRequest
     public DateTime? ScheduledFor { get; set; }
     public DateTime? CompletedAt { get; set; }
 
+    [Range(0, 99999999)]
     public decimal? EstimatedCost { get; set; }
+
+    [Range(0, 99999999)]
     public decimal? ActualCost { get; set; }
 }

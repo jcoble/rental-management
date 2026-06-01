@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using RentalCommand.Core.Entities;
 
@@ -78,5 +79,16 @@ public sealed record ScanDraftResponse(
 }
 
 public sealed record ScanCreatedResponse(int DraftId, string Status, string FileUrl);
-public sealed record ConfirmScanRequest(string? OverridesJson);
-public sealed record RejectScanRequest(string? Reason);
+
+/// <summary>Optional field override JSON applied when confirming a scan draft.</summary>
+public sealed class ConfirmScanRequest
+{
+    public string? OverridesJson { get; set; }
+}
+
+/// <summary>Optional rejection reason when rejecting a scan draft.</summary>
+public sealed class RejectScanRequest
+{
+    [MaxLength(1000)]
+    public string? Reason { get; set; }
+}
