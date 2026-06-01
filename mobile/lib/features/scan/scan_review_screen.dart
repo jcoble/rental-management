@@ -216,8 +216,10 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       _isPaid = _defaultIsPaidFromKind(kindField?.value);
     }
 
-    // Start/stop polling based on status.
-    if (draft.status == 'Pending') {
+    // Start/stop polling based on status. The worker flips the draft
+    // Pending → Processing → Reviewing, so we must keep polling through BOTH
+    // Pending and Processing to catch the final Reviewing state.
+    if (draft.status == 'Pending' || draft.status == 'Processing') {
       _ensurePolling(draft.id);
     } else {
       _pollTimer?.cancel();
@@ -416,13 +418,18 @@ class _ReviewBody extends ConsumerWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
+    final isProcessing =
+        draft.status == 'Pending' || draft.status == 'Processing';
     final isTerminal =
         draft.status == 'Confirmed' || draft.status == 'Rejected';
-    final confirmEnabled = !confirming &&
+    // Confirm/Reject are disabled while the document is still being processed.
+    final confirmEnabled = !isProcessing &&
+        !confirming &&
         !rejecting &&
         !isTerminal &&
         (!draft.isPayment || selectedLeaseId != null);
-    final rejectEnabled = !confirming && !rejecting && !isTerminal;
+    final rejectEnabled =
+        !isProcessing && !confirming && !rejecting && !isTerminal;
 
     return Scaffold(
       appBar: AppBar(
@@ -432,32 +439,11 @@ class _ReviewBody extends ConsumerWidget {
           const SizedBox(width: 12),
         ],
       ),
-      body: ListView(
+      body: isProcessing
+          ? _ProcessingView(draftId: draft.id)
+          : ListView(
         padding: const EdgeInsets.only(bottom: 140),
         children: [
-          // ---- Status banners ----
-          if (draft.status == 'Pending')
-            _Banner(
-              color: Colors.amber.shade50,
-              borderColor: Colors.amber.shade200,
-              textColor: Colors.amber.shade900,
-              child: Row(
-                children: [
-                  const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'Processing your document… fields will appear once extraction completes.',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
           if (draft.status == 'Failed')
             _Banner(
               color: colorScheme.errorContainer,
@@ -601,6 +587,59 @@ class _ReviewBody extends ConsumerWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _ProcessingView — prominent full-page "scanning…" state
+// ---------------------------------------------------------------------------
+
+class _ProcessingView extends StatelessWidget {
+  const _ProcessingView({required this.draftId});
+
+  final int draftId;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        // Show the captured document so the user knows what's being read.
+        _DocumentPreview(draftId: draftId),
+        Expanded(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(
+                    width: 64,
+                    height: 64,
+                    child: CircularProgressIndicator(strokeWidth: 5),
+                  ),
+                  const SizedBox(height: 28),
+                  Text(
+                    'Reading your document…',
+                    style: theme.textTheme.titleLarge
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'The computer is pulling out the vendor, amounts, and dates '
+                    'for you. This usually takes just a few seconds.',
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
