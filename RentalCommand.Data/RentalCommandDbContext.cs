@@ -425,6 +425,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.VendorId);
             entity.HasIndex(e => e.Priority);
             entity.HasIndex(e => e.Status);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.WorkOrders)
                 .HasForeignKey(e => e.PortfolioId)
@@ -591,7 +592,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<SecurityDepositHolding>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(50).HasConversion<string>();
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.Property(e => e.ReturnedAmount).HasPrecision(18, 2);
             entity.Property(e => e.DeductionsJson).IsRequired().HasColumnType("jsonb");

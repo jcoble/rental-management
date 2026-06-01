@@ -200,8 +200,10 @@ public class WorkOrderService : IWorkOrderService
             return false;
         }
 
-        // No soft-delete column on WorkOrder; remove the row outright.
-        _db.WorkOrders.Remove(entity);
+        // Soft-delete: preserve the maintenance record (consistent with the other entities +
+        // keeps an audit trail). The global query filter hides it from all reads.
+        entity.DeletedAt = DateTime.UtcNow;
+        entity.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
