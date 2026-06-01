@@ -252,7 +252,7 @@ public sealed class ScanService : IScanService
             changeReason: "Created from scan draft #" + draftId,
             ct: ct);
 
-        return new ScanConfirmResult(true, expense.Id, null);
+        return new ScanConfirmResult(true, expense.Id, null, "Expense");
     }
 
     // -------------------------------------------------------------------------
@@ -345,7 +345,7 @@ public sealed class ScanService : IScanService
             changeReason: "Created from scan draft #" + draftId,
             ct: ct);
 
-        return new ScanConfirmResult(true, payment.Id, null);
+        return new ScanConfirmResult(true, payment.Id, null, "Payment");
     }
 
     // -------------------------------------------------------------------------

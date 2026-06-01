@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { goto } from '$app/navigation';
 	import { securityDeposits } from '$lib/api/endpoints/securityDeposits';
 	import { leases } from '$lib/api/endpoints/leases';
 	import type { SecurityDepositHolding } from '$lib/types';
@@ -253,6 +254,7 @@
 		emptyMessage="No security deposits on record yet. Add a holding to get started."
 		getRowKey={(d) => d.id}
 		getRowTestId={() => 'deposit-row'}
+		onRowClick={(d) => goto(`/deposits/${d.id}`)}
 		data-testid="deposits-list"
 	>
 		{#snippet toolbar()}

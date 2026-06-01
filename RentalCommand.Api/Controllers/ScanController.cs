@@ -192,9 +192,16 @@ public class ScanController : AuthenticatedPortfolioControllerBase
         var result = await _scan.ConfirmAndCreateAsync(
             GetPortfolioId(), id, GetUserId(), body?.OverridesJson ?? "{}", ct);
 
-        return result.Success
-            ? Ok(new { expenseId = result.CreatedEntityId })
-            : BadRequest(new { error = result.Error });
+        if (!result.Success)
+            return BadRequest(new { error = result.Error });
+
+        // Return a named id field that matches the created entity type so clients can
+        // navigate directly to the record. Both keys are included for backward compatibility
+        // (older clients that always read expenseId still get a value; newer clients use
+        // entityType + entityId for a generic approach).
+        return result.EntityType == "Payment"
+            ? Ok(new { paymentId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId })
+            : Ok(new { expenseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId });
     }
 
     // -------------------------------------------------------------------------
