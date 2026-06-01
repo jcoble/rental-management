@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -58,7 +59,7 @@ public class SecurityDepositService : ISecurityDepositService
             PortfolioId = portfolioId,
             LeaseId = request.LeaseId,
             Amount = request.Amount ?? lease.SecurityDeposit,
-            Status = "Held",
+            Status = SecurityDepositStatus.Held,
             HeldAt = now,
             DeductionsJson = "[]",
             Notes = request.Notes,
@@ -84,7 +85,7 @@ public class SecurityDepositService : ISecurityDepositService
             return null;
 
         // Reject if already returned.
-        if (entity.Status == "Returned" || entity.Status == "PartiallyReturned")
+        if (entity.Status is SecurityDepositStatus.Returned or SecurityDepositStatus.PartiallyReturned)
             return null;
 
         var deductions = string.IsNullOrWhiteSpace(entity.DeductionsJson)
@@ -110,7 +111,7 @@ public class SecurityDepositService : ISecurityDepositService
             return null;
 
         // Reject if already returned.
-        if (entity.Status == "Returned" || entity.Status == "PartiallyReturned")
+        if (entity.Status is SecurityDepositStatus.Returned or SecurityDepositStatus.PartiallyReturned)
             return null;
 
         var deductions = string.IsNullOrWhiteSpace(entity.DeductionsJson)
@@ -123,7 +124,7 @@ public class SecurityDepositService : ISecurityDepositService
         entity.ReturnedAmount = net;
         entity.ReturnedAt = DateTime.UtcNow;
         // "Returned" only when net == original amount (no deductions); otherwise "PartiallyReturned".
-        entity.Status = totalDeductions > 0m ? "PartiallyReturned" : "Returned";
+        entity.Status = totalDeductions > 0m ? SecurityDepositStatus.PartiallyReturned : SecurityDepositStatus.Returned;
         if (request.Notes != null)
             entity.Notes = request.Notes;
         entity.UpdatedAt = DateTime.UtcNow;

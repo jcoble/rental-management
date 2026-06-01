@@ -1,3 +1,5 @@
+using RentalCommand.Core.Enums;
+
 namespace RentalCommand.Core.Entities;
 
 public class SecurityDepositHolding
@@ -6,7 +8,7 @@ public class SecurityDepositHolding
     public int PortfolioId { get; set; }
     public int LeaseId { get; set; }
     public decimal Amount { get; set; }                 // original deposit held
-    public string Status { get; set; } = "Held";        // Held | PartiallyReturned | Returned
+    public SecurityDepositStatus Status { get; set; } = SecurityDepositStatus.Held;
     public DateTime HeldAt { get; set; }
     public DateTime? ReturnedAt { get; set; }
     public decimal? ReturnedAmount { get; set; }
