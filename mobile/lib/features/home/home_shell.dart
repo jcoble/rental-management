@@ -7,8 +7,12 @@ import '../../core/realtime/realtime_providers.dart';
 import '../ai/ai_models.dart';
 import '../ai/ai_repository.dart';
 import '../ai/ai_tab.dart';
+import '../leases/leases_list_screen.dart';
+import '../maintenance/work_order_detail_screen.dart';
+import '../payments/payments_screen.dart';
 import '../properties/properties_tab.dart';
 import '../scan/scan_tab.dart';
+import '../tenants/tenants_list_screen.dart';
 import 'more_tab.dart';
 
 // ---------------------------------------------------------------------------
@@ -442,49 +446,94 @@ class _BulletRow extends StatelessWidget {
     final cs = theme.colorScheme;
     final (iconData, iconColor, bgColor) = _severityStyle(bullet.severity, cs);
 
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: bgColor,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(iconData, color: iconColor, size: 16),
+    final destination = _destinationFor(bullet);
+
+    final content = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: bgColor,
+              borderRadius: BorderRadius.circular(8),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+            child: Icon(iconData, color: iconColor, size: 16),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  bullet.title,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: cs.onSurface,
+                  ),
+                ),
+                if (bullet.detail.isNotEmpty) ...[
+                  const SizedBox(height: 2),
                   Text(
-                    bullet.title,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: cs.onSurface,
+                    bullet.detail,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                      height: 1.4,
                     ),
                   ),
-                  if (bullet.detail.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      bullet.detail,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: cs.onSurfaceVariant,
-                        height: 1.4,
-                      ),
-                    ),
-                  ],
                 ],
-              ),
+              ],
             ),
+          ),
+          if (destination != null) ...[
+            const SizedBox(width: 8),
+            Icon(Icons.chevron_right, color: cs.onSurfaceVariant, size: 18),
           ],
-        ),
+        ],
       ),
     );
+
+    if (destination == null) {
+      return Card(child: content);
+    }
+
+    return Card(
+      child: InkWell(
+        onTap: () => Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(builder: destination),
+        ),
+        borderRadius: BorderRadius.circular(12),
+        child: content,
+      ),
+    );
+  }
+
+  /// Maps a briefing bullet's referenced entity to the screen that shows it.
+  ///
+  /// Returns `null` when the bullet has no entity reference or the type isn't
+  /// navigable, in which case the card is rendered without a tap handler.
+  /// Only [WorkOrder] has a detail screen that can be opened from an id alone;
+  /// the others (which need a fully-loaded model) fall back to their list
+  /// screen so the landlord still lands in the right place.
+  WidgetBuilder? _destinationFor(BriefingBullet bullet) {
+    final type = bullet.entityType;
+    final id = bullet.entityId;
+    if (type == null) return null;
+
+    switch (type) {
+      case 'WorkOrder':
+        if (id == null) return null;
+        return (_) => WorkOrderDetailScreen(workOrderId: id);
+      case 'Payment':
+        return (_) => const PaymentsScreen();
+      case 'Lease':
+        return (_) => const LeasesListScreen();
+      case 'Tenant':
+        return (_) => const TenantsListScreen();
+      default:
+        return null;
+    }
   }
 
   (IconData, Color, Color) _severityStyle(
