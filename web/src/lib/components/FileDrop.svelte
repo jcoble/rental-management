@@ -86,7 +86,6 @@
 		data-testid="file-drop-input"
 		type="file"
 		accept="application/pdf,image/*"
-		capture="environment"
 		class="sr-only hidden"
 		onchange={onInputChange}
 	/>
