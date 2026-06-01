@@ -175,7 +175,9 @@ public sealed class LateFeeService : ILateFeeService
             try
             {
                 // Fetch the tenant's contact details for this lease.
-                var tenant = await _db.Tenants.FindAsync([rp.Lease.TenantId], ct);
+                // FirstOrDefaultAsync respects the soft-delete global query filter;
+                // FindAsync bypasses it and would return deleted tenants.
+                var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == rp.Lease.TenantId, ct);
                 if (tenant is null)
                     continue;
 

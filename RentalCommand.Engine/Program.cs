@@ -11,10 +11,10 @@ using RentalCommand.Data;
 using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
 
-// Npgsql maps DateTime to `timestamp with time zone`; legacy behavior lets us write
-// Unspecified-kind DateTimes (matches the API host's configuration).
-AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
-
+// NOTE: EnableLegacyTimestampBehavior is intentionally NOT set here.
+// Every DB-written DateTime in the Engine is either DateTime.UtcNow-derived or
+// explicitly constructed with DateTimeKind.Utc (see RentChargeService). This matches
+// the API project which also runs without the legacy switch.
 var builder = Host.CreateApplicationBuilder(args);
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")

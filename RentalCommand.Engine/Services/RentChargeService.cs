@@ -56,8 +56,9 @@ public sealed class RentChargeService : IRentChargeService
             ct.ThrowIfCancellationRequested();
 
             // Clamp due-day to actual days in month (e.g. lease.RentDueDay = 31 in February → 28/29).
+            // Use the 7-arg constructor to pin Kind=Utc; the 3-arg form produces Kind=Unspecified.
             var dueDay = Math.Min(lease.RentDueDay, DateTime.DaysInMonth(today.Year, today.Month));
-            var dueDate = new DateTime(today.Year, today.Month, dueDay);
+            var dueDate = new DateTime(today.Year, today.Month, dueDay, 0, 0, 0, DateTimeKind.Utc);
 
             // Only act within the lead window: [dueDate - leadDays … dueDate].
             if (today < dueDate.AddDays(-_cfg.RentChargeLeadDays) || today > dueDate)
