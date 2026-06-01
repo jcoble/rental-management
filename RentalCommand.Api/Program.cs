@@ -144,6 +144,7 @@ builder.Services.AddScoped<IAuthEmailSender, OutboxAuthEmailSender>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IGoogleAuthService, GoogleAuthService>();
 builder.Services.AddScoped<IdentitySeeder>();
+builder.Services.AddScoped<DemoDataSeeder>();
 
 // --- CORS (restrict to the web app origin) ---
 var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
@@ -195,6 +196,14 @@ using (var scope = app.Services.CreateScope())
 
     var seeder = scope.ServiceProvider.GetRequiredService<IdentitySeeder>();
     await seeder.SeedAsync();
+
+    // Demo data seeder — creates realistic interlinked data for portfolio 1 when enabled.
+    // Idempotent: skips immediately if any properties already exist for portfolio 1.
+    if (app.Configuration.GetValue<bool>("Seed:DemoData", false))
+    {
+        var demoSeeder = scope.ServiceProvider.GetRequiredService<DemoDataSeeder>();
+        await demoSeeder.SeedAsync();
+    }
 }
 
 app.UseCors("WebApp");
