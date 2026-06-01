@@ -89,25 +89,39 @@ public class WorkerWatchdogService : BackgroundService
 
             var age = (now - hb.LastHeartbeatUtc).TotalSeconds;
 
-            if (age > stuckThreshold && hb.Status != EngineWorkerStatus.Error)
+            // A worker is unhealthy if either its heartbeat is stale (stalled) OR it has
+            // self-reported an Error status. A worker stuck in 'Error' must be flagged and
+            // restarted even if it is still emitting fresh heartbeats — otherwise an
+            // error-looping worker would never be caught.
+            var isStalled = age > stuckThreshold;
+            var isErrored = hb.Status == EngineWorkerStatus.Error;
+
+            if (isStalled || isErrored)
             {
                 _consecutiveStuckCounts.TryGetValue(hb.WorkerName, out var count);
                 count++;
                 _consecutiveStuckCounts[hb.WorkerName] = count;
 
+                // Describe WHY the worker is considered unhealthy for clearer logs.
+                var reason = isErrored
+                    ? (isStalled
+                        ? $"reported Error status and last heartbeat {age:F0}s ago (threshold: {stuckThreshold}s)"
+                        : "reported Error status")
+                    : $"last heartbeat {age:F0}s ago (threshold: {stuckThreshold}s)";
+
                 if (count < RequiredConsecutiveDetections)
                 {
                     _logger.LogWarning(
-                        "WorkerWatchdog: {WorkerName} appears stuck — last heartbeat {Age:F0}s ago " +
-                        "(threshold: {Threshold}s). Detection {Count}/{Required} before restart.",
-                        hb.WorkerName, age, stuckThreshold, count, RequiredConsecutiveDetections);
+                        "WorkerWatchdog: {WorkerName} appears unhealthy — {Reason}. " +
+                        "Detection {Count}/{Required} before restart.",
+                        hb.WorkerName, reason, count, RequiredConsecutiveDetections);
                     continue;
                 }
 
                 _logger.LogCritical(
-                    "WorkerWatchdog: {WorkerName} confirmed stuck after {Count} consecutive detections — " +
-                    "last heartbeat {Age:F0}s ago (threshold: {Threshold}s). Triggering engine restart.",
-                    hb.WorkerName, count, age, stuckThreshold);
+                    "WorkerWatchdog: {WorkerName} confirmed unhealthy after {Count} consecutive detections — " +
+                    "{Reason}. Triggering engine restart.",
+                    hb.WorkerName, count, reason);
 
                 _lifetime.StopApplication();
                 return;

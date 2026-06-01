@@ -112,8 +112,30 @@ public sealed class ScanService : IScanService
         if (draft.Status is "Confirmed" or "Rejected")
             return new ScanConfirmResult(false, null, $"Draft is already {draft.Status.ToLowerInvariant()}");
 
+        // Confirm is only valid once extraction has finished and the draft is awaiting review.
+        // Pending/Processing/Failed (and any other state) must be rejected even if a target was
+        // chosen at upload time — confirming a not-yet-reviewed draft would create a record from
+        // unreviewed (or absent) extraction data.
+        if (draft.Status != "Reviewing")
+            return new ScanConfirmResult(false, null, "Draft is not ready to confirm; it must be reviewed first.");
+
         if (draft.TargetEntityType is not ("Expense" or "Payment"))
             return new ScanConfirmResult(false, null, $"Unsupported target '{draft.TargetEntityType}'");
+
+        // Start from the extracted fields, then apply the user's reviewed overrides (overrides win).
+        var dto = BuildReceiptDto(draft.ExtractedFields);
+        ApplyOverrides(dto, overridesJson);
+
+        // Wrap the WHOLE confirm-and-create operation in a single transaction so it is all-or-nothing:
+        //   1. claim the draft (Reviewing → Confirming)
+        //   2. create the Expense/Payment
+        //   3. re-key the StoredFile and mark the draft Confirmed
+        // Any failure (exception, cancellation, or a service returning null) rolls the transaction back,
+        // leaving NO orphaned entity and the draft restored to its prior "Reviewing" status — never stuck
+        // in "Confirming". The conditional claim still prevents concurrent double-confirms: PostgreSQL row-
+        // locks the claimed draft for the transaction's lifetime, so a second confirm blocks then sees the
+        // committed "Confirmed" (or rolled-back "Reviewing") status.
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
 
         // Atomically claim the draft so two concurrent confirms can't both create an entity.
         // The conditional UPDATE only matches a not-yet-finalized, not-in-flight draft; the DB
@@ -124,18 +146,25 @@ public sealed class ScanService : IScanService
             .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, "Confirming"), ct);
 
         if (claimed == 0)
+        {
+            await tx.RollbackAsync(ct);
             return new ScanConfirmResult(false, null, "Draft is already being confirmed or finalized");
-
-        // Start from the extracted fields, then apply the user's reviewed overrides (overrides win).
-        var dto = BuildReceiptDto(draft.ExtractedFields);
-        ApplyOverrides(dto, overridesJson);
+        }
 
         // ---- ROUTER ----
-        if (draft.TargetEntityType == "Payment")
-            return await ConfirmAsPaymentAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct);
+        var result = draft.TargetEntityType == "Payment"
+            ? await ConfirmAsPaymentAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct)
+            : await ConfirmAsExpenseAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct);
 
-        // Default: Expense path (unchanged).
-        return await ConfirmAsExpenseAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct);
+        if (!result.Success)
+        {
+            // The entity work (or a guard) failed — discard the claim and everything else atomically.
+            await tx.RollbackAsync(ct);
+            return result;
+        }
+
+        await tx.CommitAsync(ct);
+        return result;
     }
 
     // -------------------------------------------------------------------------
@@ -151,9 +180,12 @@ public sealed class ScanService : IScanService
         string overridesJson,
         CancellationToken ct)
     {
-        // Determine paid vs unpaid.
+        // Determine paid vs unpaid, and pick up an optional property selection.
         // The review UI may send is_paid explicitly; if absent, derive from document_kind.
+        // It may also send propertyId so the expense is filed under a property; when absent
+        // the expense is left unlinked (we never fabricate a property).
         bool isPaid;
+        int? propertyId = null;
         try
         {
             using var overrideDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(overridesJson) ? "{}" : overridesJson);
@@ -171,6 +203,9 @@ public sealed class ScanService : IScanService
                         ? false
                         : true; // fallback to paid for unknown kinds
             }
+
+            if (TryGetOverrideInt(overrideRoot, out var pid, "propertyId", "property_id") && pid > 0)
+                propertyId = pid;
         }
         catch
         {
@@ -187,12 +222,13 @@ public sealed class ScanService : IScanService
         var expenseAmount = dto.Total ?? dto.Subtotal ?? 0m;
         if (expenseAmount <= 0m)
         {
-            await ReleaseClaim(portfolioId, draftId, ct);
+            // Transaction rollback in the caller releases the "Confirming" claim.
             return new ScanConfirmResult(false, null, "Confirmed amount must be greater than zero.");
         }
 
         var request = new CreateExpenseRequest
         {
+            PropertyId  = propertyId, // null when no property context; ExpenseService validates in-portfolio.
             Category    = dto.Category ?? ScheduleECategory.Other,
             Description = string.IsNullOrWhiteSpace(dto.VendorName) ? "Scanned receipt" : dto.VendorName!,
             Amount      = expenseAmount,
@@ -230,7 +266,8 @@ public sealed class ScanService : IScanService
 
         if (expense is null)
         {
-            await ReleaseClaim(portfolioId, draftId, ct);
+            // Null means the entity service rejected the request (e.g. a property not in this
+            // portfolio) or failed; the caller's transaction rollback releases the claim.
             return new ScanConfirmResult(false, null, "Expense creation failed");
         }
 
@@ -288,14 +325,14 @@ public sealed class ScanService : IScanService
 
         if (leaseId <= 0)
         {
-            await ReleaseClaim(portfolioId, draftId, ct);
+            // Transaction rollback in the caller releases the "Confirming" claim.
             return new ScanConfirmResult(false, null, "Select a lease for this payment");
         }
 
         var paymentAmount = dto.Total ?? dto.Subtotal ?? 0m;
         if (paymentAmount <= 0m)
         {
-            await ReleaseClaim(portfolioId, draftId, ct);
+            // Transaction rollback in the caller releases the "Confirming" claim.
             return new ScanConfirmResult(false, null, "Confirmed amount must be greater than zero.");
         }
 
@@ -332,7 +369,8 @@ public sealed class ScanService : IScanService
 
         if (payment is null)
         {
-            await ReleaseClaim(portfolioId, draftId, ct);
+            // Null means the entity service rejected the request (e.g. a lease not in this
+            // portfolio) or failed; the caller's transaction rollback releases the claim.
             return new ScanConfirmResult(false, null, "Payment creation failed");
         }
 
@@ -366,15 +404,16 @@ public sealed class ScanService : IScanService
     // Shared finalize helpers
     // -------------------------------------------------------------------------
 
-    /// <summary>Releases the "Confirming" claim back to "Reviewing" so the user can retry.</summary>
-    private Task ReleaseClaim(int portfolioId, int draftId, CancellationToken ct) =>
-        _db.ScanDrafts
-            .Where(d => d.Id == draftId && d.PortfolioId == portfolioId && d.Status == "Confirming")
-            .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, "Reviewing"), ct);
+    // NOTE: there is no longer a ReleaseClaim helper. The whole confirm-and-create runs inside
+    // a single transaction (see ConfirmAndCreateAsync); any failure path returns a non-Success
+    // result and the caller rolls the transaction back, which atomically restores the draft's
+    // prior "Reviewing" status. Writing "Reviewing" by hand here would be redundant — and risky
+    // if it ever ran outside the transaction.
 
     /// <summary>
     /// Re-keys the StoredFile to the newly created entity, then marks the draft Confirmed.
-    /// Called by both Expense and Payment branches after successful entity creation.
+    /// Called by both Expense and Payment branches after successful entity creation,
+    /// inside the confirm transaction so the file re-key and the status flip commit together.
     /// </summary>
     private async Task FinalizeDraft(
         int portfolioId,
