@@ -103,4 +103,51 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         var items = await _service.GetMessagesAsync(GetPortfolioId(), tenantId.Value, ct);
         return Ok(items);
     }
+
+    [HttpPost("messages")]
+    [ProducesResponseType(typeof(PortalMessageResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalMessageResponse>> CreateMessage(
+        [FromBody] CreatePortalMessageRequest request, CancellationToken ct)
+    {
+        var tenantId = GetTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Subject))
+        {
+            return BadRequest(new { error = "Subject cannot be empty" });
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Body))
+        {
+            return BadRequest(new { error = "Body cannot be empty" });
+        }
+
+        var created = await _service.CreateMessageAsync(GetPortfolioId(), tenantId.Value, request, ct);
+        return created == null
+            ? NotFound(new { error = "Referenced property not found in this portfolio, or tenant has no portal account" })
+            : CreatedAtAction(nameof(Messages), created);
+    }
+
+    [HttpPatch("messages/{id:int}")]
+    [ProducesResponseType(typeof(PortalMessageResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalMessageResponse>> UpdateMessageStatus(
+        int id, [FromBody] UpdatePortalMessageStatusRequest request, CancellationToken ct)
+    {
+        var tenantId = GetTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        var updated = await _service.UpdateMessageStatusAsync(GetPortfolioId(), tenantId.Value, id, request.Status, ct);
+        return updated == null ? NotFound(new { error = "Message not found" }) : Ok(updated);
+    }
 }
