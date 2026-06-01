@@ -30,15 +30,16 @@ export interface Portfolio {
 	updatedAt: string;
 }
 
+export type OwnerEntityType = 'Person' | 'LLC' | 'Trust';
+
 export interface Owner {
 	id: number;
 	portfolioId: number;
+	ownerEntityType: OwnerEntityType;
 	name: string;
-	email?: string;
+	taxId?: string;
+	address?: string;
 	phone?: string;
-	mailingAddress?: string;
-	notes?: string;
-	propertyCount?: number;
 	createdAt: string;
 	updatedAt: string;
 }

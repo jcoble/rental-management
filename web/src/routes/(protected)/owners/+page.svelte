@@ -15,9 +15,13 @@
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
+	import type { OwnerEntityType } from '$lib/types';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+
+	const OWNER_ENTITY_TYPES: OwnerEntityType[] = ['Person', 'LLC', 'Trust'];
 
 	let ownerSearch = $state('');
 	let vendorSearch = $state('');
@@ -34,7 +38,7 @@
 	}));
 
 	// --- Owner form/dialog ---
-	const emptyOwner = { name: '', email: '', phone: '' };
+	const emptyOwner = { name: '', ownerEntityType: 'Person' as OwnerEntityType, taxId: '', address: '', phone: '' };
 	let showOwnerForm = $state(false);
 	let editingOwnerId = $state<number | null>(null);
 	let ownerForm = $state({ ...emptyOwner });
@@ -74,7 +78,7 @@
 	}
 	function openEditOwner(o: Owner) {
 		editingOwnerId = o.id;
-		ownerForm = { name: o.name, email: o.email ?? '', phone: o.phone ?? '' };
+		ownerForm = { name: o.name, ownerEntityType: o.ownerEntityType, taxId: o.taxId ?? '', address: o.address ?? '', phone: o.phone ?? '' };
 		ownerErrors = {};
 		showOwnerForm = true;
 	}
@@ -167,25 +171,23 @@
 			cell: ownerNameCell,
 		},
 		{
-			key: 'email',
-			title: 'Email',
+			key: 'ownerEntityType',
+			title: 'Type',
 			sortable: true,
 			mobileRole: 'subtitle',
-			accessor: (o) => o.email ?? '—',
+			accessor: (o) => o.ownerEntityType,
+		},
+		{
+			key: 'taxId',
+			title: 'Tax ID',
+			mobileRole: 'meta',
+			accessor: (o) => o.taxId ?? '—',
 		},
 		{
 			key: 'phone',
 			title: 'Phone',
 			mobileRole: 'meta',
 			accessor: (o) => o.phone ?? '—',
-		},
-		{
-			key: 'propertyCount',
-			title: 'Properties',
-			format: 'number',
-			sortable: true,
-			mobileRole: 'metric',
-			accessor: (o) => o.propertyCount ?? 0,
 		},
 		{
 			key: 'actions',
@@ -355,10 +357,21 @@
 				{#if ownerErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="owner-name-error">{ownerErrors.name}</p>{/if}
 			</div>
 			<div>
-				<Input data-testid="owner-email-input" bind:value={ownerForm.email} placeholder="Owner email" />
-				{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="owner-email-error">{ownerErrors.email}</p>{/if}
+				<span class="mb-1 block text-xs text-muted-foreground">Type</span>
+				<Select.Root type="single" bind:value={ownerForm.ownerEntityType}>
+					<Select.Trigger class="w-full" data-testid="owner-type-input">
+						{ownerForm.ownerEntityType || 'Select type'}
+					</Select.Trigger>
+					<Select.Content>
+						{#each OWNER_ENTITY_TYPES as t}
+							<Select.Item value={t} label={t}>{t}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
 			</div>
-			<Input data-testid="owner-phone-input" bind:value={ownerForm.phone} placeholder="Owner phone" />
+			<Input data-testid="owner-taxid-input" bind:value={ownerForm.taxId} placeholder="Tax ID / EIN (optional)" />
+			<Input data-testid="owner-address-input" bind:value={ownerForm.address} placeholder="Address (optional)" />
+			<Input data-testid="owner-phone-input" bind:value={ownerForm.phone} placeholder="Phone (optional)" />
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button data-testid="owner-form-cancel" variant="outline" onclick={closeOwnerForm}>Cancel</Button>
