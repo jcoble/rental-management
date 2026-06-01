@@ -126,13 +126,17 @@ public class PortalService : IPortalService
             .AsNoTracking()
             .Where(m => m.PortfolioId == portfolioId &&
                 ((userAccountId != null && m.UserAccountId == userAccountId.Value) ||
-                 (m.PropertyId != null && propertyIds.Contains(m.PropertyId.Value))))
+                 (m.PropertyId != null && propertyIds.Contains(m.PropertyId.Value)) ||
+                 // Landlord messages addressed to this tenant, delivered via the Portal channel.
+                 (m.RecipientTenantId == tenantId && m.Channels != null &&
+                  EF.Functions.ILike(m.Channels, "%Portal%"))))
             .OrderByDescending(m => m.CreatedAt)
             .Select(m => new PortalMessageResponse
             {
                 Id = m.Id,
                 PortfolioId = m.PortfolioId,
                 UserAccountId = m.UserAccountId,
+                FromLandlord = m.FromLandlord,
                 PropertyId = m.PropertyId,
                 UnitId = m.UnitId,
                 Subject = m.Subject,
@@ -214,7 +218,10 @@ public class PortalService : IPortalService
                 m.Id == id &&
                 m.PortfolioId == portfolioId &&
                 ((userAccountId != null && m.UserAccountId == userAccountId.Value) ||
-                 (m.PropertyId != null && propertyIds.Contains(m.PropertyId.Value))), ct);
+                 (m.PropertyId != null && propertyIds.Contains(m.PropertyId.Value)) ||
+                 // Landlord messages addressed to this tenant via the Portal channel.
+                 (m.RecipientTenantId == tenantId && m.Channels != null &&
+                  EF.Functions.ILike(m.Channels, "%Portal%"))), ct);
 
         if (entity == null)
         {
@@ -243,6 +250,7 @@ public class PortalService : IPortalService
         Id = m.Id,
         PortfolioId = m.PortfolioId,
         UserAccountId = m.UserAccountId,
+        FromLandlord = m.FromLandlord,
         PropertyId = m.PropertyId,
         UnitId = m.UnitId,
         Subject = m.Subject,
