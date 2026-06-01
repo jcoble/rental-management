@@ -81,12 +81,18 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                     ? storedFile!.ContentType
                     : GuessContentType(draft.FilePath);
 
+                // Build grounding context (the landlord's known vendors/properties/units/tenants)
+                // so the LLM can normalise extracted names to the actual records on file
+                // (e.g. match "Apex Plumbing" to the vendor row). Bounded per list to keep the
+                // prompt small/cheap on large portfolios.
+                var groundingContext = await BuildGroundingContextAsync(db, draft.PortfolioId, ct);
+
                 // Receipt→Expense only this phase.
                 var extracted = await llm.ExtractAsync(
                     bytes, contentType,
                     ReceiptExtractionSchema.Instructions,
                     ReceiptExtractionSchema.Fields,
-                    groundingContext: null, ct);
+                    groundingContext, ct);
 
                 // Persist {name:{value,confidence}} JSON + provenance.
                 var fieldJson = JsonSerializer.Serialize(extracted.Fields.ToDictionary(
@@ -138,6 +144,60 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
             }
         }
         return processed;
+    }
+
+    // Per-list cap on grounding records so the prompt stays small/cheap even on large
+    // portfolios (a few hundred records ≈ a few KB of JSON). Most extractions only need
+    // a handful of candidate names to disambiguate; we order by most-recently-touched so
+    // the records a landlord actually transacts with are the ones included.
+    private const int GroundingCap = 150;
+
+    /// <summary>
+    /// Builds a compact JSON grounding object — { vendors, properties, units, tenants } — of the
+    /// portfolio's known record names so the LLM can normalise extracted names to the exact
+    /// spellings on file. Active (non-soft-deleted) rows only, capped per list, read no-tracking.
+    /// Returns null when the portfolio has no records to ground against (keeps the prompt
+    /// unchanged in that case).
+    /// </summary>
+    private static async Task<string?> BuildGroundingContextAsync(
+        RentalCommandDbContext db, int portfolioId, CancellationToken ct)
+    {
+        var vendors = await db.Vendors.AsNoTracking()
+            .Where(v => v.PortfolioId == portfolioId && v.DeletedAt == null)
+            .OrderByDescending(v => v.UpdatedAt)
+            .Select(v => v.Name)
+            .Take(GroundingCap)
+            .ToListAsync(ct);
+
+        var properties = await db.Properties.AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId && p.DeletedAt == null)
+            .OrderByDescending(p => p.UpdatedAt)
+            .Select(p => p.Name)
+            .Take(GroundingCap)
+            .ToListAsync(ct);
+
+        // Units are scoped through their Property (Unit has no PortfolioId of its own).
+        var units = await db.Units.AsNoTracking()
+            .Where(u => u.DeletedAt == null
+                        && db.Properties.Any(p => p.Id == u.PropertyId
+                                                  && p.PortfolioId == portfolioId
+                                                  && p.DeletedAt == null))
+            .OrderByDescending(u => u.UpdatedAt)
+            .Select(u => u.UnitNumber)
+            .Take(GroundingCap)
+            .ToListAsync(ct);
+
+        var tenants = await db.Tenants.AsNoTracking()
+            .Where(t => t.PortfolioId == portfolioId && t.DeletedAt == null)
+            .OrderByDescending(t => t.UpdatedAt)
+            .Select(t => (t.FirstName + " " + t.LastName).Trim())
+            .Take(GroundingCap)
+            .ToListAsync(ct);
+
+        if (vendors.Count == 0 && properties.Count == 0 && units.Count == 0 && tenants.Count == 0)
+            return null;
+
+        return JsonSerializer.Serialize(new { vendors, properties, units, tenants });
     }
 
     /// <summary>
