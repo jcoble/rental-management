@@ -6,6 +6,7 @@
 	import type { SecurityDepositHolding } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { newDepositHoldingSchema, depositDeductionSchema, parseForm } from '$lib/schemas';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -39,14 +40,17 @@
 	let newHoldingLeaseId = $state('');
 	let newHoldingAmount = $state('');
 	let newHoldingNotes = $state('');
+	let newHoldingErrors = $state<Record<string, string>>({});
 
 	function openNewHolding() {
 		newHoldingLeaseId = '';
 		newHoldingAmount = '';
 		newHoldingNotes = '';
+		newHoldingErrors = {};
 		showNewHolding = true;
 	}
 	function closeNewHolding() {
+		newHoldingErrors = {};
 		showNewHolding = false;
 	}
 
@@ -62,12 +66,20 @@
 	}));
 
 	function submitNewHolding() {
-		const lid = parseInt(newHoldingLeaseId, 10);
-		if (!lid) { showError('Please select a lease.'); return; }
-		const body: { leaseId: number; amount?: number; notes?: string } = { leaseId: lid };
-		const amt = parseFloat(newHoldingAmount);
-		if (!isNaN(amt) && amt > 0) body.amount = amt;
-		if (newHoldingNotes.trim()) body.notes = newHoldingNotes.trim();
+		const result = parseForm(newDepositHoldingSchema, {
+			leaseId: newHoldingLeaseId,
+			amount: newHoldingAmount,
+			notes: newHoldingNotes,
+		});
+		if (result.errors) {
+			newHoldingErrors = result.errors;
+			return;
+		}
+		newHoldingErrors = {};
+		const { leaseId, amount, notes } = result.data;
+		const body: { leaseId: number; amount?: number; notes?: string } = { leaseId };
+		if (amount != null) body.amount = amount;
+		if (notes) body.notes = notes;
 		createMut.mutate(body);
 	}
 
@@ -82,14 +94,17 @@
 	let deductionReason = $state('');
 	let deductionAmount = $state('');
 	let deductionNotes = $state('');
+	let deductionErrors = $state<Record<string, string>>({});
 
 	function openDeduction(deposit: SecurityDepositHolding) {
 		deductionTarget = deposit;
 		deductionReason = '';
 		deductionAmount = '';
 		deductionNotes = '';
+		deductionErrors = {};
 	}
 	function closeDeduction() {
+		deductionErrors = {};
 		deductionTarget = null;
 	}
 
@@ -106,12 +121,19 @@
 
 	function submitDeduction() {
 		if (!deductionTarget) return;
-		const reason = deductionReason.trim();
-		const amount = parseFloat(deductionAmount);
-		if (!reason) { showError('Please enter a reason.'); return; }
-		if (isNaN(amount) || amount <= 0) { showError('Please enter a valid amount.'); return; }
+		const result = parseForm(depositDeductionSchema, {
+			reason: deductionReason,
+			amount: deductionAmount,
+			notes: deductionNotes,
+		});
+		if (result.errors) {
+			deductionErrors = result.errors;
+			return;
+		}
+		deductionErrors = {};
+		const { reason, amount, notes } = result.data;
 		const body: { reason: string; amount: number; notes?: string } = { reason, amount };
-		if (deductionNotes.trim()) body.notes = deductionNotes.trim();
+		if (notes) body.notes = notes;
 		deductionMut.mutate({ id: deductionTarget.id, body });
 	}
 
@@ -290,6 +312,7 @@
 						{/each}
 					</Select.Content>
 				</Select.Root>
+				{#if newHoldingErrors.leaseId}<p class="mt-1 text-xs text-destructive" data-testid="holding-lease-error">{newHoldingErrors.leaseId}</p>{/if}
 			</div>
 			<div>
 				<span class="mb-1 block text-xs text-muted-foreground">Amount (optional)</span>
@@ -301,6 +324,7 @@
 					min="0"
 					step="0.01"
 				/>
+				{#if newHoldingErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="holding-amount-error">{newHoldingErrors.amount}</p>{/if}
 			</div>
 			<div>
 				<span class="mb-1 block text-xs text-muted-foreground">Notes (optional)</span>
@@ -338,6 +362,7 @@
 					bind:value={deductionReason}
 					placeholder="e.g. Carpet cleaning, Broken window"
 				/>
+				{#if deductionErrors.reason}<p class="mt-1 text-xs text-destructive" data-testid="deduction-reason-error">{deductionErrors.reason}</p>{/if}
 			</div>
 			<div>
 				<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
@@ -349,6 +374,7 @@
 					step="0.01"
 					placeholder="0.00"
 				/>
+				{#if deductionErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="deduction-amount-error">{deductionErrors.amount}</p>{/if}
 			</div>
 			<div>
 				<span class="mb-1 block text-xs text-muted-foreground">Notes (optional)</span>

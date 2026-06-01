@@ -45,11 +45,13 @@ public class PaymentResponse
 public class CreatePaymentRequest
 {
     [Required]
+    [Range(1, int.MaxValue)]
     public int LeaseId { get; set; }
 
     public PaymentType PaymentType { get; set; } = PaymentType.Rent;
     public PaymentStatus Status { get; set; } = PaymentStatus.Scheduled;
 
+    [Range(0.01, 99999999)]
     public decimal Amount { get; set; }
 
     [Required]
@@ -71,7 +73,10 @@ public class UpdatePaymentRequest
 {
     public PaymentType? PaymentType { get; set; }
     public PaymentStatus? Status { get; set; }
+
+    [Range(0.01, 99999999)]
     public decimal? Amount { get; set; }
+
     public DateTime? DueDate { get; set; }
     public DateTime? PaidDate { get; set; }
 

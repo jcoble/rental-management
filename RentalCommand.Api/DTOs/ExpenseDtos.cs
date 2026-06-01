@@ -71,8 +71,13 @@ public class ExpenseResponse
 
 public class CreateExpenseRequest
 {
+    [Range(1, int.MaxValue)]
     public int? PropertyId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? VendorId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? WorkOrderId { get; set; }
 
     public ScheduleECategory Category { get; set; } = ScheduleECategory.Other;
@@ -83,6 +88,7 @@ public class CreateExpenseRequest
 
     public ExpenseStatus Status { get; set; } = ExpenseStatus.Pending;
 
+    [Range(0, 99999999)]
     public decimal Amount { get; set; }
 
     [Required]
@@ -96,9 +102,11 @@ public class CreateExpenseRequest
     public string? Notes { get; set; }
 
     /// <summary>Subtotal before tax/tip; populated when creating from a scan draft.</summary>
+    [Range(0, 99999999)]
     public decimal? Subtotal { get; set; }
 
     /// <summary>Tax amount; populated when creating from a scan draft.</summary>
+    [Range(0, 99999999)]
     public decimal? TaxAmount { get; set; }
 
     /// <summary>Full receipt details JSON (jsonb); populated when creating from a scan draft.</summary>
@@ -107,8 +115,13 @@ public class CreateExpenseRequest
 
 public class UpdateExpenseRequest
 {
+    [Range(1, int.MaxValue)]
     public int? PropertyId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? VendorId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? WorkOrderId { get; set; }
 
     public ScheduleECategory? Category { get; set; }
@@ -117,7 +130,10 @@ public class UpdateExpenseRequest
     public string? Description { get; set; }
 
     public ExpenseStatus? Status { get; set; }
+
+    [Range(0, 99999999)]
     public decimal? Amount { get; set; }
+
     public DateTime? IncurredAt { get; set; }
     public DateTime? DueDate { get; set; }
     public DateTime? PaidAt { get; set; }
@@ -127,9 +143,11 @@ public class UpdateExpenseRequest
     public string? Notes { get; set; }
 
     /// <summary>Subtotal before tax/tip.</summary>
+    [Range(0, 99999999)]
     public decimal? Subtotal { get; set; }
 
     /// <summary>Tax amount.</summary>
+    [Range(0, 99999999)]
     public decimal? TaxAmount { get; set; }
 
     /// <summary>Full receipt details JSON (jsonb); rebuilt by the edit form from its receipt fields.</summary>

@@ -19,6 +19,13 @@ const optionalEmail = z
 	.transform((v) => (v.length ? v : null))
 	.nullable()
 	.refine((v) => v === null || z.string().email().safeParse(v).success, 'Enter a valid email');
+/** Required email field — non-empty and valid format. */
+const requiredEmail = (label: string) =>
+	z
+		.string()
+		.trim()
+		.min(1, `${label} is required`)
+		.email(`${label} must be a valid email address`);
 const numericString = (label: string) =>
 	z
 		.string()
@@ -38,6 +45,43 @@ const optionalNumeric = (label: string) =>
 		.trim()
 		.transform((v) => (v.length ? Number(v) : null))
 		.refine((v) => v === null || !Number.isNaN(v), `${label} must be a number`);
+/**
+ * Required numeric field that must be > 0 (use for money amounts that represent
+ * a real charge: monthly rent, payment amount, etc.).
+ */
+const positiveNumeric = (label: string) =>
+	z
+		.string()
+		.trim()
+		.min(1, `${label} is required`)
+		.refine((v) => !Number.isNaN(Number(v)), `${label} must be a number`)
+		.transform((v) => Number(v))
+		.refine((v) => v > 0, `${label} must be greater than zero`);
+/**
+ * Required numeric field that must be >= 0 (use for counts/amounts that may
+ * legitimately be zero: bedrooms, bathrooms, market rent on a vacant unit, fees).
+ */
+const nonNegativeNumeric = (label: string) =>
+	z
+		.string()
+		.trim()
+		.min(1, `${label} is required`)
+		.refine((v) => !Number.isNaN(Number(v)), `${label} must be a number`)
+		.transform((v) => Number(v))
+		.refine((v) => v >= 0, `${label} cannot be negative`);
+/**
+ * Optional numeric field that must be >= 0 when provided.
+ * '' → null; non-numeric or negative → validation error.
+ */
+const optionalNonNegative = (label: string) =>
+	z
+		.string()
+		.trim()
+		.transform((v) => (v.length ? Number(v) : null))
+		.refine(
+			(v) => v === null || (!Number.isNaN(v) && v >= 0),
+			`${label} must be a non-negative number`
+		);
 
 export const propertySchema = z.object({
 	name: required('Name'),
@@ -51,9 +95,11 @@ export const propertySchema = z.object({
 
 export const unitSchema = z.object({
 	unitNumber: required('Unit number'),
-	bedrooms: numericString('Bedrooms'),
-	bathrooms: numericString('Bathrooms'),
-	marketRent: numericString('Market rent'),
+	// bedrooms/bathrooms: server [Range(0, 99)] — non-negative
+	bedrooms: nonNegativeNumeric('Bedrooms'),
+	bathrooms: nonNegativeNumeric('Bathrooms'),
+	// marketRent: server [Range(0, 99999999)] — can be 0 for a vacant/unlisted unit
+	marketRent: nonNegativeNumeric('Market rent'),
 });
 
 export const tenantSchema = z.object({
@@ -69,16 +115,21 @@ export const leaseSchema = z.object({
 	tenantId: numericString('Tenant'),
 	startDate: required('Start date'),
 	endDate: required('End date'),
-	monthlyRent: numericString('Monthly rent'),
-	securityDeposit: numericString('Security deposit'),
-	lateFeeAmount: numericString('Late fee'),
-	rentDueDay: numericString('Due day'),
+	// monthlyRent: server [Range(0.01, 99999999)] — must be > 0
+	monthlyRent: positiveNumeric('Monthly rent'),
+	// securityDeposit: server [Range(0, 99999999)] — can be 0
+	securityDeposit: nonNegativeNumeric('Security deposit'),
+	// lateFeeAmount: server [Range(0, 99999999)] — can be 0
+	lateFeeAmount: nonNegativeNumeric('Late fee'),
+	// rentDueDay: server [Range(1, 31)]
+	rentDueDay: numericString('Due day').refine((v) => v >= 1 && v <= 31, 'Due day must be between 1 and 31'),
 	status: z.string(),
 });
 
 export const paymentSchema = z.object({
 	leaseId: numericString('Lease'),
-	amount: numericString('Amount'),
+	// amount: server [Range(0.01, 99999999)] — must be > 0
+	amount: positiveNumeric('Amount'),
 	dueDate: required('Due date'),
 	type: z.string(),
 	status: z.string(),
@@ -86,9 +137,10 @@ export const paymentSchema = z.object({
 
 export const expenseSchema = z.object({
 	description: required('Description'),
-	amount: numericString('Amount'),
-	subtotal: optionalNumeric('Subtotal'),
-	taxAmount: optionalNumeric('Tax'),
+	// amount: server [Range(0, 99999999)] — expenses can legitimately be $0
+	amount: nonNegativeNumeric('Amount'),
+	subtotal: optionalNonNegative('Subtotal'),
+	taxAmount: optionalNonNegative('Tax'),
 	incurredAt: required('Incurred date'),
 	dueDate: optionalText,
 	paidAt: optionalText,
@@ -107,10 +159,13 @@ export const expenseSchema = z.object({
 	receiptNumber: optionalText,
 	paymentMethod: optionalText,
 	cardLast4: optionalText,
-	taxRate: optionalNumeric('Tax rate'),
-	tip: optionalNumeric('Tip'),
-	discount: optionalNumeric('Discount'),
-	shipping: optionalNumeric('Shipping'),
+	taxRate: optionalNonNegative('Tax rate').refine(
+		(v) => v === null || v <= 100,
+		'Tax rate cannot exceed 100%'
+	),
+	tip: optionalNonNegative('Tip'),
+	discount: optionalNonNegative('Discount'),
+	shipping: optionalNonNegative('Shipping'),
 });
 
 export const workOrderSchema = z.object({
@@ -136,6 +191,7 @@ export const appointmentSchema = z.object({
 	propertyId: idString,
 	tenantId: idString,
 	prospectName: optionalText,
+	// prospectEmail: server [EmailAddress] optional
 	prospectEmail: optionalEmail,
 	assignedTo: optionalText,
 });
@@ -146,17 +202,48 @@ export const ownerSchema = z.object({
 	taxId: optionalText,
 	address: optionalText,
 	phone: optionalText,
+	// email: server [EmailAddress] optional
 	email: optionalEmail,
 });
 
 export const vendorSchema = z.object({
 	name: required('Name'),
 	serviceType: required('Service type'),
+	// email: server [EmailAddress] optional
 	email: optionalEmail,
 	phone: optionalText,
 	is1099Eligible: z.boolean(),
 	w9OnFile: z.boolean(),
 	preferred: z.boolean(),
+});
+
+/**
+ * New security deposit holding: lease is required; amount is optional (defaults
+ * to the lease's deposit amount server-side) but if provided must be > 0.
+ */
+export const newDepositHoldingSchema = z.object({
+	leaseId: numericString('Lease'),
+	// amount is optional — blank means "use the lease default"
+	amount: optionalNonNegative('Amount'),
+	notes: optionalText,
+});
+
+/** Deduction to add to an existing deposit holding. */
+export const depositDeductionSchema = z.object({
+	reason: required('Reason'),
+	// deduction amounts must be > 0
+	amount: positiveNumeric('Amount'),
+	notes: optionalText,
+});
+
+/** Portfolio settings update: only name is required on the server. */
+export const settingsSchema = z.object({
+	name: required('Portfolio name'),
+	description: optionalText,
+	managementCompanyName: optionalText,
+	timeZone: optionalText,
+	status: z.string(),
+	settings: optionalText,
 });
 
 /**

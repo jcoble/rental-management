@@ -45,9 +45,13 @@ public class InspectionResponse
 public class CreateInspectionRequest
 {
     [Required]
+    [Range(1, int.MaxValue)]
     public int PropertyId { get; set; }
 
+    [Range(1, int.MaxValue)]
     public int? UnitId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
 
     public InspectionType Type { get; set; } = InspectionType.Routine;
@@ -67,7 +71,10 @@ public class CreateInspectionRequest
 
 public class UpdateInspectionRequest
 {
+    [Range(1, int.MaxValue)]
     public int? UnitId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
 
     public InspectionType? Type { get; set; }

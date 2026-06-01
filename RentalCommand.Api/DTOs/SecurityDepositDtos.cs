@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using RentalCommand.Core.Entities;
 
@@ -58,10 +59,36 @@ public class SecurityDepositResponse
 }
 
 /// <summary>Create a new security deposit holding, optionally overriding the lease's deposit amount.</summary>
-public record CreateDepositRequest(int LeaseId, decimal? Amount, string? Notes);
+public class CreateDepositRequest
+{
+    [Required]
+    [Range(1, int.MaxValue)]
+    public int LeaseId { get; set; }
+
+    [Range(0, 99999999)]
+    public decimal? Amount { get; set; }
+
+    [MaxLength(2000)]
+    public string? Notes { get; set; }
+}
 
 /// <summary>Append an itemised deduction to an existing holding.</summary>
-public record AddDeductionRequest(string Reason, decimal Amount, string? Notes);
+public class AddDeductionRequest
+{
+    [Required]
+    [MaxLength(500)]
+    public string Reason { get; set; } = string.Empty;
+
+    [Range(0.01, 99999999)]
+    public decimal Amount { get; set; }
+
+    [MaxLength(2000)]
+    public string? Notes { get; set; }
+}
 
 /// <summary>Finalise the deposit return. Net refund is computed from Amount minus all deductions.</summary>
-public record ReturnDepositRequest(string? Notes);
+public class ReturnDepositRequest
+{
+    [MaxLength(2000)]
+    public string? Notes { get; set; }
+}

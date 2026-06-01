@@ -52,7 +52,10 @@ public class PropertyResponse
 
 public class CreatePropertyRequest
 {
+    [Range(1, int.MaxValue)]
     public int? OwnerId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? OwnerEntityId { get; set; }
 
     [Required]
@@ -63,25 +66,28 @@ public class CreatePropertyRequest
     public PropertyStatus Status { get; set; } = PropertyStatus.Active;
 
     [Required]
-    [MaxLength(300)]
+    [MaxLength(250)]
     public string AddressLine1 { get; set; } = string.Empty;
 
-    [MaxLength(300)]
+    [MaxLength(250)]
     public string? AddressLine2 { get; set; }
 
     [Required]
-    [MaxLength(120)]
+    [MaxLength(100)]
     public string City { get; set; } = string.Empty;
 
     [Required]
-    [MaxLength(60)]
+    [MaxLength(100)]
     public string State { get; set; } = string.Empty;
 
     [Required]
     [MaxLength(20)]
     public string PostalCode { get; set; } = string.Empty;
 
+    [Range(1800, 2200)]
     public int? YearBuilt { get; set; }
+
+    [Range(0, 100)]
     public decimal? ManagementFeePercent { get; set; }
 
     [MaxLength(2000)]
@@ -90,7 +96,10 @@ public class CreatePropertyRequest
 
 public class UpdatePropertyRequest
 {
+    [Range(1, int.MaxValue)]
     public int? OwnerId { get; set; }
+
+    [Range(1, int.MaxValue)]
     public int? OwnerEntityId { get; set; }
 
     [MaxLength(200)]
@@ -99,22 +108,25 @@ public class UpdatePropertyRequest
     public PropertyType? PropertyType { get; set; }
     public PropertyStatus? Status { get; set; }
 
-    [MaxLength(300)]
+    [MaxLength(250)]
     public string? AddressLine1 { get; set; }
 
-    [MaxLength(300)]
+    [MaxLength(250)]
     public string? AddressLine2 { get; set; }
 
-    [MaxLength(120)]
+    [MaxLength(100)]
     public string? City { get; set; }
 
-    [MaxLength(60)]
+    [MaxLength(100)]
     public string? State { get; set; }
 
     [MaxLength(20)]
     public string? PostalCode { get; set; }
 
+    [Range(1800, 2200)]
     public int? YearBuilt { get; set; }
+
+    [Range(0, 100)]
     public decimal? ManagementFeePercent { get; set; }
 
     [MaxLength(2000)]
