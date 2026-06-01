@@ -22,7 +22,76 @@
 
 <div class="h-full overflow-y-auto p-6">
 	{#if dashboardQuery.isLoading}
-		<div class="flex h-64 items-center justify-center text-muted-foreground">Loading dashboard...</div>
+		<!-- Skeleton loading state -->
+		<div class="mb-6">
+			<div class="h-7 w-48 animate-pulse rounded bg-muted"></div>
+			<div class="mt-2 h-4 w-64 animate-pulse rounded bg-muted"></div>
+		</div>
+		<div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+			{#each [0, 1, 2, 3] as _}
+				<Card.Root class="gap-0 py-0">
+					<Card.Content class="p-4">
+						<div class="h-4 w-24 animate-pulse rounded bg-muted"></div>
+						<div class="mt-2 h-8 w-32 animate-pulse rounded bg-muted"></div>
+						<div class="mt-1.5 h-3 w-20 animate-pulse rounded bg-muted"></div>
+					</Card.Content>
+				</Card.Root>
+			{/each}
+		</div>
+		<div class="grid gap-6 lg:grid-cols-3">
+			<div class="space-y-6 lg:col-span-2">
+				<Card.Root class="gap-0 py-0">
+					<Card.Header class="px-4 pt-4 pb-3">
+						<div class="h-5 w-48 animate-pulse rounded bg-muted"></div>
+					</Card.Header>
+					<Card.Content class="px-4 pb-4 pt-0">
+						<div class="space-y-2">
+							{#each [0, 1, 2] as _}
+								<div class="h-14 w-full animate-pulse rounded border border-border bg-muted"></div>
+							{/each}
+						</div>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root class="gap-0 py-0">
+					<Card.Header class="px-4 pt-4 pb-3">
+						<div class="h-5 w-32 animate-pulse rounded bg-muted"></div>
+					</Card.Header>
+					<Card.Content class="px-4 pb-4 pt-0">
+						<div class="space-y-2">
+							{#each [0, 1, 2, 3, 4] as _}
+								<div class="h-12 w-full animate-pulse rounded border border-border bg-muted"></div>
+							{/each}
+						</div>
+					</Card.Content>
+				</Card.Root>
+			</div>
+			<div class="space-y-6">
+				<Card.Root class="gap-0 py-0">
+					<Card.Header class="px-4 pt-4 pb-2">
+						<div class="h-5 w-40 animate-pulse rounded bg-muted"></div>
+					</Card.Header>
+					<Card.Content class="px-4 pb-4 pt-0">
+						<div class="space-y-2">
+							{#each [0, 1, 2] as _}
+								<div class="h-12 w-full animate-pulse rounded border border-border bg-muted"></div>
+							{/each}
+						</div>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root class="gap-0 py-0">
+					<Card.Header class="px-4 pt-4 pb-2">
+						<div class="h-5 w-32 animate-pulse rounded bg-muted"></div>
+					</Card.Header>
+					<Card.Content class="px-4 pb-4 pt-0">
+						<div class="space-y-2">
+							{#each [0, 1, 2] as _}
+								<div class="h-8 w-full animate-pulse rounded border border-border bg-muted"></div>
+							{/each}
+						</div>
+					</Card.Content>
+				</Card.Root>
+			</div>
+		</div>
 	{:else if dashboardQuery.isError}
 		<div class="flex h-64 items-center justify-center text-destructive">Failed to load dashboard.</div>
 	{:else if dashboardQuery.data}
@@ -36,28 +105,28 @@
 			<Card.Root class="gap-0 py-0">
 				<Card.Content class="p-4">
 					<div class="flex items-center gap-2 text-muted-foreground"><Building class="h-4 w-4" /> Occupancy</div>
-					<p class="mt-2 text-2xl font-bold">{data.occupancy.occupancyRate}%</p>
+					<p class="mt-2 font-mono tabular-nums text-2xl font-bold">{data.occupancy.occupancyRate}%</p>
 					<p class="text-xs text-muted-foreground">{data.occupancy.occupiedUnits}/{data.occupancy.totalUnits} occupied</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="gap-0 py-0">
 				<Card.Content class="p-4">
 					<div class="flex items-center gap-2 text-warning"><AlertTriangle class="h-4 w-4" /> Overdue</div>
-					<p class="mt-2 text-2xl font-bold">{money(data.accounting.overdueAmount)}</p>
+					<p class="mt-2 font-mono tabular-nums text-2xl font-bold">{money(data.accounting.overdueAmount)}</p>
 					<p class="text-xs text-muted-foreground">Receivables past due</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="gap-0 py-0">
 				<Card.Content class="p-4">
 					<div class="flex items-center gap-2 text-success"><Wallet class="h-4 w-4" /> Net This Month</div>
-					<p class="mt-2 text-2xl font-bold">{money(data.accounting.netThisMonth)}</p>
+					<p class="mt-2 font-mono tabular-nums text-2xl font-bold">{money(data.accounting.netThisMonth)}</p>
 					<p class="text-xs text-muted-foreground">Paid - expenses</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="gap-0 py-0">
 				<Card.Content class="p-4">
 					<div class="flex items-center gap-2 text-destructive"><Wrench class="h-4 w-4" /> Open Work Orders</div>
-					<p class="mt-2 text-2xl font-bold">{data.maintenance.openCount}</p>
+					<p class="mt-2 font-mono tabular-nums text-2xl font-bold">{data.maintenance.openCount}</p>
 					<p class="text-xs text-muted-foreground">{data.maintenance.emergencyCount} emergency</p>
 				</Card.Content>
 			</Card.Root>
@@ -81,7 +150,7 @@
 												<p class="text-sm font-medium">{lease.leaseNumber} · {lease.tenant}</p>
 												<p class="text-xs text-muted-foreground">{lease.property} · Unit {lease.unit}</p>
 											</div>
-											<p class="text-xs text-warning">Ends {new Date(lease.endDate).toLocaleDateString()}</p>
+											<p class="font-mono tabular-nums text-xs text-warning">Ends {new Date(lease.endDate).toLocaleDateString()}</p>
 										</div>
 									</div>
 								{/each}
@@ -99,7 +168,7 @@
 							{#each data.recentActivity.slice(0, 8) as activity}
 								<div class="rounded border border-border bg-background px-3 py-2 text-sm">
 									<p class="text-foreground">{activity.description || activity.action || activity.type}</p>
-									<p class="text-xs text-muted-foreground">{new Date(activity.createdAt).toLocaleString()}</p>
+									<p class="font-mono tabular-nums text-xs text-muted-foreground">{new Date(activity.createdAt).toLocaleString()}</p>
 								</div>
 							{/each}
 						</div>
@@ -120,7 +189,7 @@
 								{#each data.upcomingAppointments as appt}
 									<div class="rounded border border-border bg-background p-2 text-sm">
 										<p>{appt.title}</p>
-										<p class="text-xs text-muted-foreground">{new Date(appt.scheduledStart).toLocaleString()} · {appt.type}</p>
+										<p class="font-mono tabular-nums text-xs text-muted-foreground">{new Date(appt.scheduledStart).toLocaleString()} · {appt.type}</p>
 									</div>
 								{/each}
 							</div>

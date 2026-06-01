@@ -2,6 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -9,6 +10,8 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+
+	let saveSucceeded = $state(false);
 
 	const portfolioQuery = createQuery(() => ({
 		queryKey: ['portfolio', portfolioId],
@@ -49,7 +52,10 @@
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ['portfolio', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['portfolios'] });
+			showSuccess('Settings saved.');
+			saveSucceeded = true;
 		},
+		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 </script>
 
@@ -95,13 +101,21 @@
 						</Select.Content>
 					</Select.Root>
 				</div>
-				<div class="md:col-span-2">
-					<label for="settings-json" class="mb-1 block text-xs text-muted-foreground">Settings JSON</label>
-					<textarea id="settings-json" bind:value={form.settings} rows={8} class="w-full rounded border border-border bg-background px-3 py-2 text-sm font-mono"></textarea>
-				</div>
 			</div>
-			<div class="mt-4">
-				<Button onclick={() => updateMutation.mutate()} disabled={updateMutation.isPending}>Save Settings</Button>
+
+			<!-- Advanced JSON settings -->
+			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4">
+				<p class="text-sm font-semibold">Advanced settings</p>
+				<p class="mb-3 text-xs text-muted-foreground">Raw portfolio settings object. Changes here affect system-level defaults.</p>
+				<label for="settings-json" class="mb-1 block text-xs text-muted-foreground">Settings JSON</label>
+				<textarea id="settings-json" bind:value={form.settings} rows={8} class="w-full rounded border border-border bg-background px-3 py-2 text-sm font-mono"></textarea>
+			</div>
+
+			<div class="mt-4 flex items-center gap-3">
+				<Button onclick={() => { saveSucceeded = false; updateMutation.mutate(); }} disabled={updateMutation.isPending}>Save Settings</Button>
+				{#if saveSucceeded && !updateMutation.isPending}
+					<span class="text-xs text-green-600">Settings saved successfully.</span>
+				{/if}
 			</div>
 		</Card.Content>
 	</Card.Root>
