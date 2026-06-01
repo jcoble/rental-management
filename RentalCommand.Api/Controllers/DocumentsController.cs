@@ -55,15 +55,18 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     private readonly IDocumentService _documents;
     private readonly IFileStorage _storage;
     private readonly UploadSettings _uploadSettings;
+    private readonly ILogger<DocumentsController> _logger;
 
     public DocumentsController(
         IDocumentService documents,
         IFileStorage storage,
-        IOptions<UploadSettings> uploadSettings)
+        IOptions<UploadSettings> uploadSettings,
+        ILogger<DocumentsController> logger)
     {
         _documents = documents;
         _storage = storage;
         _uploadSettings = uploadSettings.Value;
+        _logger = logger;
     }
 
     // -------------------------------------------------------------------------
@@ -104,7 +107,8 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         }
         catch (Exception ex)
         {
-            return StatusCode(StatusCodes.Status500InternalServerError, new { error = "File storage failed.", detail = ex.Message });
+            _logger.LogError(ex, "Document storage upload failed for portfolio {PortfolioId}", portfolioId);
+            return StatusCode(StatusCodes.Status500InternalServerError, new { error = "File storage failed." });
         }
 
         // Persist the StoredFile row; clean up the blob on DB failure.

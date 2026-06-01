@@ -21,15 +21,21 @@ final _draftProvider =
 /// Holds the authed image bytes for the document preview.
 final _imageProvider =
     FutureProvider.autoDispose.family<Uint8List, int>((ref, id) async {
-  // Cache the fetched bytes for the session so scrolling the preview out of and
-  // back into view does not re-download the full image every time.
-  ref.keepAlive();
+  // Keep bytes alive while the screen is open so rebuilds (e.g. field edits)
+  // do not re-download the image. The link is released after a short delay
+  // once the provider is disposed (screen popped), avoiding unbounded growth.
+  final link = ref.keepAlive();
+  ref.onDispose(() {
+    Future<void>.delayed(const Duration(seconds: 10), link.close);
+  });
   return ref.read(scanRepositoryProvider).downloadFile(id);
 });
 
 /// Holds the leases list (only fetched for Payment drafts).
 final _leasesProvider =
     FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
+  // Keep alive so the 1.5 s poll-driven rebuilds don't trigger repeated fetches.
+  ref.keepAlive();
   return ref.read(scanRepositoryProvider).listLeases();
 });
 
@@ -331,6 +337,15 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   Widget build(BuildContext context) {
     final draftAsync = ref.watch(_draftProvider(widget.draftId));
 
+    // React to new draft data without scheduling a redundant setState each build.
+    // _onDraftLoaded's internal guards (_fieldsInitialized, _isPaidInitialized)
+    // ensure idempotent field init; polling start/stop is also safe to call again.
+    ref.listen<AsyncValue<ScanDraft>>(_draftProvider(widget.draftId), (_, next) {
+      next.whenData((draft) {
+        if (mounted) setState(() => _onDraftLoaded(draft));
+      });
+    });
+
     return draftAsync.when(
       loading: () => Scaffold(
         appBar: AppBar(title: Text('Review Scan #${widget.draftId}')),
@@ -346,11 +361,6 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         ),
       ),
       data: (draft) {
-        // Side-effect: initialize fields, start/stop polling.
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() => _onDraftLoaded(draft));
-        });
-
         return _ReviewBody(
           draft: draft,
           editedFields: _editedFields,

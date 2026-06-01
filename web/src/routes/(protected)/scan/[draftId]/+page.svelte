@@ -13,6 +13,7 @@
 	import * as Table from '$lib/components/ui/table';
 	import * as Select from '$lib/components/ui/select';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
 
 	// ScheduleECategory enum values (mirrors RentalCommand.Core.Enums.ScheduleECategory)
 	const SCHEDULE_E_CATEGORIES = [
@@ -236,14 +237,6 @@
 		return String(val);
 	}
 
-	const isImage = $derived(() => {
-		const url = data?.fileUrl ?? '';
-		// Heuristic: if the file URL is for an image content type
-		// We check the field list for a hint, otherwise rely on extension
-		// The API serves /api/v1/scans/{id}/file — we use an img tag and let it fail gracefully
-		return true; // default to image; <img> won't crash on PDFs
-	});
-
 	// Preview goes through a same-origin, cookie-authed SvelteKit route (the API's
 	// /file endpoint needs a JWT bearer an <img>/<iframe> can't send).
 	const fileUrl = $derived(data ? `/scan-file/${data.id}` : '');
@@ -308,9 +301,18 @@
 		return JSON.stringify(overrides);
 	}
 
+	// Reject dialog state
+	let showRejectDialog = $state(false);
+	let rejectReason = $state('');
+
 	function handleReject() {
-		const reason = window.prompt('Enter a reason for rejection (optional):') ?? '';
-		rejectMutation.mutate(reason);
+		rejectReason = '';
+		showRejectDialog = true;
+	}
+
+	function confirmReject() {
+		showRejectDialog = false;
+		rejectMutation.mutate(rejectReason);
 	}
 </script>
 
@@ -631,3 +633,29 @@
 		</div>
 	{/if}
 </div>
+
+<Dialog.Root
+	open={showRejectDialog}
+	onOpenChange={(v) => { if (!v) showRejectDialog = false; }}
+>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Reject scan</Dialog.Title>
+			<Dialog.Description>Optionally provide a reason. The scan will be marked as rejected.</Dialog.Description>
+		</Dialog.Header>
+		<div class="py-2">
+			<textarea
+				bind:value={rejectReason}
+				rows={3}
+				placeholder="Reason for rejection (optional)"
+				class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 placeholder:text-muted-foreground resize-none"
+			></textarea>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => { showRejectDialog = false; }}>Cancel</Button>
+			<Button variant="destructive" onclick={confirmReject} disabled={rejectMutation.isPending}>
+				{rejectMutation.isPending ? 'Rejecting…' : 'Reject'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
