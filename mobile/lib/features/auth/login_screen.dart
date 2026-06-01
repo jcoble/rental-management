@@ -200,8 +200,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           : const Text('Sign In'),
                     ),
 
-                    // Dev-only: fill demo credentials
-                    if (kDebugMode) ...[
+                    // Dev convenience: fill demo credentials. Shown in debug + profile
+                    // builds (!kReleaseMode); hidden in a real release build.
+                    if (!kReleaseMode) ...[
                       const SizedBox(height: 16),
                       OutlinedButton.icon(
                         onPressed: _fillDevLogin,
