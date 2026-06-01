@@ -51,10 +51,6 @@
 	let expenseSearch = $state('');
 	let expenseStatusFilter = $state('');
 	const debouncedExpenseSearch = debounced(() => expenseSearch, 300);
-	$effect(() => {
-		debouncedExpenseSearch.value;
-		expenseStatusFilter;
-	});
 
 	const paymentsQuery = createQuery(() => ({
 		queryKey: ['payments', portfolioId, debouncedPaymentSearch.value, paymentSkip],
