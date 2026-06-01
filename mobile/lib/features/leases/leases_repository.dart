@@ -138,11 +138,7 @@ class TenantLeasesNotifier extends Notifier<AsyncValue<List<Lease>>> {
   Future<void> load() async {
     state = const AsyncValue.loading();
     try {
-      final all = await _repo.listLeases();
-      // Filter client-side by tenantId (API supports tenantId param too,
-      // but client-side is consistent with the web pattern).
-      final filtered =
-          all.where((l) => l.tenantId == _tenantId).toList();
+      final filtered = await _repo.listLeases(tenantId: _tenantId);
       state = AsyncValue.data(filtered);
     } on ApiException catch (e) {
       state = AsyncValue.error(e, StackTrace.current);

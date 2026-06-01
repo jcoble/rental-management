@@ -23,9 +23,8 @@
 		unavailableIds = new Set([...unavailableIds].filter((id) => id !== payment.id));
 
 		try {
-			const result = await paymentsApi.createIntent(payment.id);
+			await paymentsApi.createIntent(payment.id);
 			// Stripe Elements is not wired yet — acknowledge the round-trip and stub.
-			console.log('[pay-now] intent created, transactionId:', result.transactionId);
 			showSuccess('Secure card payment is coming soon.');
 		} catch (err) {
 			if (err instanceof ApiError && err.status === 503) {

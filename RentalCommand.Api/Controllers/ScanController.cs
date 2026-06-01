@@ -46,6 +46,18 @@ public class ScanController : AuthenticatedPortfolioControllerBase
         [FromForm] string targetEntityType,
         CancellationToken ct)
     {
+        if (file is null || file.Length == 0)
+            return BadRequest(new { error = "A non-empty file is required." });
+
+        // When a targetEntityType is explicitly provided it must be a recognised value.
+        // Empty/null is allowed — the LLM worker will classify it during processing.
+        if (!string.IsNullOrEmpty(targetEntityType)
+            && !string.Equals(targetEntityType, "Expense", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(targetEntityType, "Payment", StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment (or omit to auto-classify)." });
+        }
+
         using var ms = new MemoryStream();
         await file.CopyToAsync(ms, ct);
         var bytes = ms.ToArray();
