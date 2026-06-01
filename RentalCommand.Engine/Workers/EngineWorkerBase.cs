@@ -123,17 +123,71 @@ public abstract class EngineWorkerBase : BackgroundService
                 }
             }
 
-            try
-            {
-                await Task.Delay(PollInterval, stoppingToken);
-            }
-            catch (OperationCanceledException)
+            // Wait for the next cycle, emitting idle keep-alive heartbeats so a long
+            // PollInterval (e.g. the hourly / 6-hourly financial workers) never looks like a
+            // hang to the watchdog. Liveness is decoupled from work cadence.
+            if (!await DelayWithHeartbeatAsync(stoppingToken))
             {
                 break;
             }
         }
 
         _logger.LogInformation("{WorkerName} stopped", WorkerName);
+    }
+
+    /// <summary>
+    /// Maximum gap between liveness heartbeats while a worker is idle between cycles. Kept well
+    /// under the watchdog's staleness thresholds so a worker with a long <see cref="PollInterval"/>
+    /// still reports "alive" regularly (only a genuine hang then goes stale).
+    /// </summary>
+    protected virtual TimeSpan HeartbeatInterval => TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// Sleeps for <see cref="PollInterval"/>, broken into <see cref="HeartbeatInterval"/> slices,
+    /// emitting an idle keep-alive heartbeat after each slice. Returns false if shutdown was
+    /// requested during the wait (so the caller breaks the loop).
+    /// </summary>
+    private async Task<bool> DelayWithHeartbeatAsync(CancellationToken stoppingToken)
+    {
+        var remaining = PollInterval;
+        while (remaining > TimeSpan.Zero)
+        {
+            if (stoppingToken.IsCancellationRequested)
+            {
+                return false;
+            }
+
+            var slice = remaining < HeartbeatInterval ? remaining : HeartbeatInterval;
+            try
+            {
+                await Task.Delay(slice, stoppingToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
+
+            remaining -= slice;
+            if (remaining <= TimeSpan.Zero)
+            {
+                break; // next loop iteration runs the cycle, which emits its own heartbeat
+            }
+
+            // Idle keep-alive heartbeat (no work this tick). Best-effort: a failed write must
+            // not break the wait loop.
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var reporter = scope.ServiceProvider.GetRequiredService<EngineStatusReporter>();
+                await reporter.ReportHeartbeatAsync(WorkerName, stoppingToken, processedDelta: 0);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "{WorkerName} failed to report idle heartbeat", WorkerName);
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
