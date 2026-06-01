@@ -122,7 +122,10 @@
 		}
 		if (format === 'date') {
 			const d = val instanceof Date ? val : new Date(String(val));
-			return isNaN(d.getTime()) ? String(val) : d.toLocaleDateString();
+			// Format in UTC so a UTC date string (e.g. "2026-05-31T00:00:00Z") renders as
+			// the intended calendar day for every viewer, instead of drifting a day back
+			// for those behind UTC.
+			return isNaN(d.getTime()) ? String(val) : d.toLocaleDateString(undefined, { timeZone: 'UTC' });
 		}
 		if (format === 'datetime') {
 			const d = val instanceof Date ? val : new Date(String(val));
