@@ -71,8 +71,34 @@ var host = builder.Build();
 var logger = host.Services.GetRequiredService<ILogger<Program>>();
 
 var lockConnString = new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false }.ToString();
-var lockConnection = new NpgsqlConnection(lockConnString);
-await lockConnection.OpenAsync();
+
+// Wait for the database to be reachable before acquiring the advisory lock / starting workers.
+// On a fresh/dropped database the Engine can boot before the API has created the schema (and in
+// production the DB may be briefly unavailable at startup), so retry instead of crashing.
+NpgsqlConnection? lockConnection = null;
+const int maxDbAttempts = 30;
+for (var attempt = 1; attempt <= maxDbAttempts; attempt++)
+{
+    try
+    {
+        lockConnection = new NpgsqlConnection(lockConnString);
+        await lockConnection.OpenAsync();
+        break;
+    }
+    catch (Exception ex) when (attempt < maxDbAttempts)
+    {
+        if (lockConnection is not null) { await lockConnection.DisposeAsync(); lockConnection = null; }
+        logger.LogWarning(
+            "Database not reachable yet (attempt {Attempt}/{Max}): {Message}. Retrying in 2s…",
+            attempt, maxDbAttempts, ex.Message);
+        await Task.Delay(TimeSpan.FromSeconds(2));
+    }
+}
+if (lockConnection is null)
+{
+    logger.LogError("Database never became reachable after {Max} attempts. Exiting.", maxDbAttempts);
+    return;
+}
 
 await using (var lockCmd = lockConnection.CreateCommand())
 {
