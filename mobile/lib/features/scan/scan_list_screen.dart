@@ -11,18 +11,69 @@ import 'scan_review_screen.dart';
 // Providers
 // ---------------------------------------------------------------------------
 
-/// Filter string: null = all, otherwise 'Pending' | 'Reviewing' | 'Confirmed' etc.
-class _ScanFilterNotifier extends Notifier<String?> {
+/// Which tab the user has selected. `null` = All.
+///
+/// Note this is the *UI* filter, which is not 1:1 with the server's `status`
+/// query. The "In progress" tab covers two server statuses (Pending and
+/// Processing), so it is filtered client-side rather than by a single server
+/// status — see [_serverStatusFor] / [_clientFilterFor].
+class _ScanFilterNotifier extends Notifier<_ScanFilter?> {
   @override
-  String? build() => null;
-  void setFilter(String? v) => state = v;
+  _ScanFilter? build() => null;
+  void setFilter(_ScanFilter? v) => state = v;
 }
 
 final _scanFilterProvider =
-    NotifierProvider<_ScanFilterNotifier, String?>(_ScanFilterNotifier.new);
+    NotifierProvider<_ScanFilterNotifier, _ScanFilter?>(_ScanFilterNotifier.new);
 
 // Re-export the public provider under a local alias for readability.
 final _scanListProvider = scanListFamilyProvider;
+
+/// UI filter tabs. Distinct from server status so "In progress" can span both
+/// Pending and Processing without dropping a draft mid-extraction.
+enum _ScanFilter { inProgress, reviewing, confirmed }
+
+/// The server-side `status` query for a given tab, or null to fetch everything
+/// and filter client-side. "In progress" fetches all and filters locally so a
+/// draft stays visible across the Pending → Processing transition.
+String? _serverStatusFor(_ScanFilter? filter) {
+  switch (filter) {
+    case _ScanFilter.reviewing:
+      return 'Reviewing';
+    case _ScanFilter.confirmed:
+      return 'Confirmed';
+    case _ScanFilter.inProgress:
+    case null:
+      return null;
+  }
+}
+
+/// Client-side predicate applied on top of whatever the server returned. Only
+/// the "In progress" tab needs one (Pending OR Processing); the rest already
+/// fetch exactly what they show.
+bool Function(ScanDraft)? _clientFilterFor(_ScanFilter? filter) {
+  switch (filter) {
+    case _ScanFilter.inProgress:
+      return (d) => d.isInFlight;
+    case _ScanFilter.reviewing:
+    case _ScanFilter.confirmed:
+    case null:
+      return null;
+  }
+}
+
+String _labelFor(_ScanFilter? filter) {
+  switch (filter) {
+    case _ScanFilter.inProgress:
+      return 'In progress';
+    case _ScanFilter.reviewing:
+      return 'Reviewing';
+    case _ScanFilter.confirmed:
+      return 'Confirmed';
+    case null:
+      return 'All';
+  }
+}
 
 // ---------------------------------------------------------------------------
 // ScanListScreen
@@ -32,7 +83,12 @@ final _scanListProvider = scanListFamilyProvider;
 class ScanListScreen extends ConsumerWidget {
   const ScanListScreen({super.key});
 
-  static const _filterTabs = ['All', 'Pending', 'Reviewing', 'Confirmed'];
+  static const _filterTabs = <_ScanFilter?>[
+    null, // All
+    _ScanFilter.inProgress,
+    _ScanFilter.reviewing,
+    _ScanFilter.confirmed,
+  ];
 
   Future<void> _startCapture(BuildContext context, WidgetRef ref) async {
     final draftId = await showScanCaptureSheet(context);
@@ -46,14 +102,15 @@ class ScanListScreen extends ConsumerWidget {
     );
 
     // Refresh list after returning from the review screen.
-    final status = ref.read(_scanFilterProvider);
+    final status = _serverStatusFor(ref.read(_scanFilterProvider));
     ref.invalidate(_scanListProvider(status));
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final activeFilter = ref.watch(_scanFilterProvider);
-    final status = activeFilter;
+    final status = _serverStatusFor(activeFilter);
+    final clientFilter = _clientFilterFor(activeFilter);
     final draftsAsync = ref.watch(_scanListProvider(status));
 
     return Scaffold(
@@ -75,13 +132,12 @@ class ScanListScreen extends ConsumerWidget {
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
-                children: _filterTabs.map((label) {
-                  final filterValue = label == 'All' ? null : label;
+                children: _filterTabs.map((filterValue) {
                   final selected = activeFilter == filterValue;
                   return Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: FilterChip(
-                      label: Text(label),
+                      label: Text(_labelFor(filterValue)),
                       selected: selected,
                       onSelected: (_) {
                         ref
@@ -104,7 +160,11 @@ class ScanListScreen extends ConsumerWidget {
                 message: e is ApiException ? e.message : e.toString(),
                 onRetry: () => ref.invalidate(_scanListProvider(status)),
               ),
-              data: (drafts) => drafts.isEmpty
+              data: (allDrafts) {
+                final drafts = clientFilter == null
+                    ? allDrafts
+                    : allDrafts.where(clientFilter).toList();
+                return drafts.isEmpty
                   ? _EmptyView(
                       onCapture: () => _startCapture(context, ref),
                     )
@@ -132,7 +192,8 @@ class ScanListScreen extends ConsumerWidget {
                           );
                         },
                       ),
-                    ),
+                    );
+              },
             ),
           ),
         ],
@@ -205,6 +266,8 @@ class _DraftTile extends StatelessWidget {
         return Colors.green;
       case 'Reviewing':
         return Colors.blue;
+      case 'Processing':
+        return Colors.indigo;
       case 'Failed':
       case 'Rejected':
         return cs.error;
@@ -220,6 +283,8 @@ class _DraftTile extends StatelessWidget {
         return Icons.check_circle_outline;
       case 'Reviewing':
         return Icons.rate_review_outlined;
+      case 'Processing':
+        return Icons.auto_awesome_outlined;
       case 'Failed':
       case 'Rejected':
         return Icons.cancel_outlined;
@@ -258,7 +323,9 @@ class _StatusChip extends StatelessWidget {
   (String, Color, Color) _style(String status, ColorScheme cs) {
     switch (status) {
       case 'Pending':
-        return ('Processing', Colors.amber.shade100, Colors.amber.shade900);
+        return ('Queued', Colors.amber.shade100, Colors.amber.shade900);
+      case 'Processing':
+        return ('Reading…', Colors.indigo.shade100, Colors.indigo.shade900);
       case 'Reviewing':
         return ('Review', Colors.blue.shade100, Colors.blue.shade900);
       case 'Confirmed':
