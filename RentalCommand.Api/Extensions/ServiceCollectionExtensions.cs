@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAccountingService, AccountingService>();
         services.AddScoped<IScheduleEService, ScheduleEService>();
         services.AddScoped<IOwnerStatementService, OwnerStatementService>();
+        services.AddScoped<IOwnerStatementEmailService, OwnerStatementEmailService>();
         services.AddScoped<ISecurityDepositService, SecurityDepositService>();
 
         // --- controllers-ops-misc sub-unit ---

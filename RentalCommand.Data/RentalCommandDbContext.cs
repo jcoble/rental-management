@@ -111,6 +111,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.TaxId).HasMaxLength(64);
             entity.Property(e => e.Address).HasMaxLength(500);
             entity.Property(e => e.Phone).HasMaxLength(50);
+            entity.Property(e => e.Email).HasMaxLength(200);
             entity.Property(e => e.OwnerEntityType).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasQueryFilter(e => e.DeletedAt == null);
