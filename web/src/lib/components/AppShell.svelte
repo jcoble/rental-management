@@ -103,6 +103,15 @@
 		return currentPath.startsWith(href);
 	}
 
+	// Title shown in the mobile top bar — the label of the deepest matching nav item
+	// so the user always knows which section they're in. Falls back to the brand.
+	let currentTitle = $derived.by(() => {
+		const match = navItems
+			.filter((item) => isActive(item.href))
+			.sort((a, b) => b.href.length - a.href.length)[0];
+		return match?.label ?? 'Rental Command';
+	});
+
 	function getInitials(name: string): string {
 		return name
 			.split(' ')
@@ -302,7 +311,7 @@
 						<Menu class="h-5 w-5" />
 					{/if}
 				</Button>
-				<span class="font-semibold text-foreground">Rental Command</span>
+				<span class="truncate font-semibold text-foreground" data-testid="mobile-page-title">{currentTitle}</span>
 			</header>
 		{/if}
 

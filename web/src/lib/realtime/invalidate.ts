@@ -31,15 +31,22 @@ const entityQueryKeys: Record<string, string[][]> = {
 	Unit: [['units'], ['units-for-lease'], ['properties'], ['dashboard']],
 	Tenant: [['tenants'], ['dashboard']],
 	Lease: [['leases'], ['units-for-lease'], ['dashboard']],
-	Payment: [['payments'], ['payment-summary'], ['dashboard']],
-	Expense: [['expenses'], ['expense-summary'], ['dashboard']],
+	// Payment/Expense both feed the accounting `/summary` rollup (collected /
+	// outstanding / overdue / total expenses), keyed `['accounting-summary', …]`
+	// on the accounting page. The earlier `payment-summary` / `expense-summary`
+	// keys matched no query, so the summary cards stayed stale on realtime events.
+	Payment: [['payments'], ['accounting-summary'], ['dashboard']],
+	Expense: [['expenses'], ['accounting-summary'], ['dashboard']],
 	WorkOrder: [['work-orders'], ['dashboard']],
 	Inspection: [['inspections'], ['dashboard']],
 	Appointment: [['appointments'], ['dashboard']],
 	Vendor: [['vendors']],
 	OwnerEntity: [['owners'], ['dashboard']],
 	Portfolio: [['portfolio'], ['portfolios'], ['dashboard']],
-	ScanDraft: [['scans'], ['scan']]
+	// A confirmed scan creates an Expense (the backend also broadcasts that
+	// `Expense` event), so refresh the expense list + accounting summary too —
+	// the just-confirmed expense and its effect on the cards show without a reload.
+	ScanDraft: [['scans'], ['scan'], ['expenses'], ['accounting-summary'], ['dashboard']]
 };
 
 /** Detail query-key prefix for an entity, used to drop a deleted entity's cache. */

@@ -53,7 +53,10 @@
 	const debouncedExpenseSearch = debounced(() => expenseSearch, 300);
 
 	const paymentsQuery = createQuery(() => ({
-		queryKey: ['payments', portfolioId, debouncedPaymentSearch.value, paymentSkip],
+		// Include the status filter in the key so each filter gets its own cache
+		// entry — otherwise switching filters shows the previous filter's results
+		// until a refetch lands.
+		queryKey: ['payments', portfolioId, debouncedPaymentSearch.value, paymentStatusFilter, paymentSkip],
 		queryFn: () => payments.list(portfolioId, { search: debouncedPaymentSearch.value, skip: paymentSkip, take: PAGE_SIZE }),
 	}));
 	const expensesQuery = createQuery(() => ({
@@ -268,7 +271,7 @@
 	}
 
 	function money(value: number) {
-		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
+		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value || 0);
 	}
 	const paymentsList = $derived(
 		(paymentsQuery.data ?? []).filter((p) => !paymentStatusFilter || p.status === paymentStatusFilter)
