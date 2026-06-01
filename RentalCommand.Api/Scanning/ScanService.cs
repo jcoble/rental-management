@@ -483,7 +483,9 @@ public sealed class ScanService : IScanService
             dto.Tip      = ParseDecimalField(root, "tip");
             dto.Discount = ParseDecimalField(root, "discount");
             dto.Shipping = ParseDecimalField(root, "shipping");
-            dto.Total    = ParseDecimalField(root, "total");
+            // Accept "amount" as an alias for "total" — single-amount documents (rent checks,
+            // simple receipts) naturally use "amount"; "total" wins when both are present.
+            dto.Total    = ParseDecimalField(root, "total") ?? ParseDecimalField(root, "amount");
 
             // ---- Payment ----
             dto.PaymentMethod = ReadFieldValue(root, "payment_method");
@@ -725,7 +727,7 @@ public sealed class ScanService : IScanService
             if (TryGetOverrideDecimal(root, out var tax, "tax"))
                 dto.Tax = tax;
 
-            if (TryGetOverrideDecimal(root, out var total, "total"))
+            if (TryGetOverrideDecimal(root, out var total, "total", "amount"))
                 dto.Total = total;
 
             if (TryGetOverrideString(root, out var paymentMethod, "paymentMethod", "payment_method"))
