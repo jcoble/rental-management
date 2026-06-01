@@ -27,6 +27,15 @@ public sealed class OutboxDispatchWorker : EngineWorkerBase
     /// <summary>Maximum number of messages drained per poll cycle.</summary>
     private const int BatchSize = 50;
 
+    /// <summary>
+    /// How many times to attempt the isolated SentAt commit after a successful external send
+    /// before giving up (and accepting that the message will be re-sent next cycle).
+    /// </summary>
+    private const int PersistRetryAttempts = 3;
+
+    /// <summary>Short delay between SentAt-commit retry attempts.</summary>
+    private static readonly TimeSpan PersistRetryDelay = TimeSpan.FromMilliseconds(200);
+
     protected override string WorkerName => "OutboxDispatchWorker";
     protected override TimeSpan PollInterval => TimeSpan.FromSeconds(10);
     protected override TimeSpan StepTimeout => TimeSpan.FromMinutes(2);
@@ -38,9 +47,12 @@ public sealed class OutboxDispatchWorker : EngineWorkerBase
 
     /// <summary>
     /// Exponential backoff: 30s * 2^retryCount, capped at 1 hour.
-    /// RetryCount here is the count BEFORE this attempt (i.e. the number of prior failures),
-    /// so the first retry (RetryCount=0 after first fail becomes RetryCount=1) backs off 30s,
-    /// second 60s, third 120s, fourth 240s, fifth 480s (capped to 3600s).
+    /// The backoff check (see <see cref="ExecuteCycleAsync"/>) passes the message's CURRENT
+    /// <see cref="OutboxMessage.RetryCount"/> — i.e. the count AFTER the failure was recorded
+    /// and incremented. So after the first failure RetryCount=1 and the wait before the next
+    /// attempt is Backoff(1)=60s; then RetryCount=2 → 120s, 3 → 240s, 4 → 480s, 5 → 960s
+    /// (all capped to 3600s). RetryCount=5 reaches <see cref="MaxRetryCount"/> and is no longer
+    /// retried, so the largest backoff actually used is Backoff(4)=480s.
     /// </summary>
     private static TimeSpan Backoff(int retryCount) =>
         TimeSpan.FromSeconds(Math.Min(3600, 30 * Math.Pow(2, retryCount)));
@@ -81,13 +93,33 @@ public sealed class OutboxDispatchWorker : EngineWorkerBase
 
             try
             {
+                // At-least-once semantics: we send the external message FIRST, then persist
+                // SentAt. We must NOT mark SentAt before the send — a pre-send crash would
+                // then silently drop the message. The cost of send-then-persist is a narrow
+                // duplicate-send window: if the process dies (or the DB write fails) AFTER a
+                // successful external send but BEFORE SentAt is committed, the message is
+                // re-sent next cycle. We minimise that window by committing SentAt in an
+                // isolated, retried SaveChanges immediately after the successful send.
                 await DispatchAsync(channel, message, cancellationToken);
                 message.SentAt = DateTime.UtcNow;
                 message.Error = null;
                 dispatched++;
 
-                // Persist per-message so a crash only risks this one send.
-                await db.SaveChangesAsync(CancellationToken.None);
+                // Persist SentAt per-message. Retry a transient DB hiccup a few times so a
+                // momentary blip doesn't cause an avoidable duplicate send on the next cycle.
+                // Use CancellationToken.None: the external send already happened, so we must
+                // try hard to record it even if the cycle is being cancelled.
+                if (!await PersistSentWithRetryAsync(db, logger, message))
+                {
+                    // The send succeeded but SentAt could not be committed after several
+                    // attempts. The message will be re-sent next cycle (duplicate SMS/email).
+                    // Log loudly at Error level so this rare duplicate is observable.
+                    logger.LogError(
+                        "OutboxMessage {MessageId} ({MessageType}) was sent successfully but SentAt " +
+                        "could NOT be persisted after {Attempts} attempts — it will be RE-SENT next " +
+                        "cycle (duplicate delivery). Manual reconciliation may be required.",
+                        message.Id, message.MessageType, PersistRetryAttempts);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -124,6 +156,42 @@ public sealed class OutboxDispatchWorker : EngineWorkerBase
         }
 
         return dispatched;
+    }
+
+    /// <summary>
+    /// Commits the in-memory SentAt change for a single just-sent message, retrying a
+    /// transient DB failure up to <see cref="PersistRetryAttempts"/> times with a short delay.
+    /// Returns <c>true</c> if SentAt was persisted, <c>false</c> if every attempt failed (in
+    /// which case the message will be re-sent next cycle — the at-least-once duplicate window).
+    /// Uses <see cref="CancellationToken.None"/> because the external send has already happened
+    /// and we must try hard to record it regardless of cycle cancellation.
+    /// </summary>
+    private static async Task<bool> PersistSentWithRetryAsync(
+        RentalCommandDbContext db, ILogger<OutboxDispatchWorker> logger, OutboxMessage message)
+    {
+        for (var attempt = 1; attempt <= PersistRetryAttempts; attempt++)
+        {
+            try
+            {
+                await db.SaveChangesAsync(CancellationToken.None);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "OutboxMessage {MessageId} ({MessageType}) was sent but persisting SentAt failed " +
+                    "(attempt {Attempt}/{MaxAttempts}).",
+                    message.Id, message.MessageType, attempt, PersistRetryAttempts);
+
+                if (attempt < PersistRetryAttempts)
+                {
+                    await Task.Delay(PersistRetryDelay, CancellationToken.None);
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

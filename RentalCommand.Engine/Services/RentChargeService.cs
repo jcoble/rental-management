@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RentalCommand.Core.Configuration;
@@ -15,21 +16,33 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public sealed class RentChargeService : IRentChargeService
 {
+    private const string DefaultTimeZoneId = "America/New_York";
+
     private readonly RentalCommandDbContext _db;
     private readonly IMessagePublisher _publisher;
     private readonly NotificationsConfig _cfg;
+    private readonly TimeZoneInfo _businessTimeZone;
     private readonly ILogger<RentChargeService> _logger;
 
     public RentChargeService(
         RentalCommandDbContext db,
         IMessagePublisher publisher,
         IOptions<NotificationsConfig> options,
+        IConfiguration configuration,
         ILogger<RentChargeService> logger)
     {
         _db = db;
         _publisher = publisher;
         _cfg = options.Value;
         _logger = logger;
+
+        // The landlord's business day rolls over in their LOCAL zone, not UTC. Near month-end an
+        // evening (ET) UtcNow is already the next day/month in UTC, which would charge rent for the
+        // wrong period — so derive the business "today"/period/due-day in this zone. DB writes stay UTC.
+        var tzId = configuration["App:TimeZone"];
+        if (string.IsNullOrWhiteSpace(tzId))
+            tzId = DefaultTimeZoneId;
+        _businessTimeZone = TimeZoneInfo.FindSystemTimeZoneById(tzId);
     }
 
     /// <inheritdoc/>
@@ -41,7 +54,9 @@ public sealed class RentChargeService : IRentChargeService
             return 0;
         }
 
-        var today = DateTime.UtcNow.Date;
+        // Business "today" in the landlord's local zone (drives period key + due-day math only).
+        // Every value WRITTEN to the DB below stays UTC (DateTime.UtcNow / Kind=Utc).
+        var today = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date;
         var periodKey = today.ToString("yyyy-MM");
 
         var leases = await _db.Leases
@@ -54,6 +69,10 @@ public sealed class RentChargeService : IRentChargeService
         foreach (var lease in leases)
         {
             ct.ThrowIfCancellationRequested();
+
+            // Don't create $0 scheduled rent (e.g. unset/peppercorn leases) — nothing to bill.
+            if (lease.MonthlyRent <= 0)
+                continue;
 
             // Clamp due-day to actual days in month (e.g. lease.RentDueDay = 31 in February → 28/29).
             // Use the 7-arg constructor to pin Kind=Utc; the 3-arg form produces Kind=Unspecified.
@@ -89,29 +108,18 @@ public sealed class RentChargeService : IRentChargeService
 
             _db.Payments.Add(payment);
 
+            // M15: the scheduled-payment row and its outbox notification must commit atomically —
+            // a crash between two separate saves could leave a payment without its tenant notice
+            // (or vice-versa). Wrap both saves in one EF transaction; the next cycle's idempotency
+            // check re-attempts both together if this rolls back.
+            await using var tx = await _db.Database.BeginTransactionAsync(ct);
             try
             {
                 await _db.SaveChangesAsync(ct);
-                created++;
-            }
-            catch (DbUpdateException ex)
-            {
-                // The partial unique index on (LeaseId, PaymentType, PeriodKey) is a safe backstop
-                // against a race between two worker instances. Treat as a no-op and move on.
-                _logger.LogDebug(
-                    ex,
-                    "Rent charge already exists for lease {LeaseId} period {PeriodKey} (DB unique violation — skipping)",
-                    lease.Id, periodKey);
 
-                // Detach the failed entity so the context remains usable for the next iteration.
-                _db.Entry(payment).State = EntityState.Detached;
-                continue;
-            }
-
-            // Optional tenant notification (email preferred; fall back to SMS).
-            if (_cfg.NotifyTenants && lease.Tenant is { } tenant)
-            {
-                try
+                // Optional tenant notification (email preferred; fall back to SMS). The outbox
+                // publisher shares this DbContext, so its insert enlists in the same transaction.
+                if (_cfg.NotifyTenants && lease.Tenant is { } tenant)
                 {
                     if (!string.IsNullOrWhiteSpace(tenant.Email))
                     {
@@ -139,14 +147,36 @@ public sealed class RentChargeService : IRentChargeService
                             ct);
                     }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(
-                        ex,
-                        "Failed to enqueue rent-due notice for tenant {TenantId} (lease {LeaseId})",
-                        tenant.Id, lease.Id);
-                    // Notification failure must not roll back the already-saved payment.
-                }
+
+                await tx.CommitAsync(ct);
+                created++;
+            }
+            catch (DbUpdateException ex)
+            {
+                // The partial unique index on (LeaseId, PaymentType, PeriodKey) is a safe backstop
+                // against a race between two worker instances. Treat as a no-op and move on.
+                await tx.RollbackAsync(ct);
+                _logger.LogDebug(
+                    ex,
+                    "Rent charge already exists for lease {LeaseId} period {PeriodKey} (DB unique violation — skipping)",
+                    lease.Id, periodKey);
+
+                // Detach the failed entity so the context remains usable for the next iteration.
+                _db.Entry(payment).State = EntityState.Detached;
+                continue;
+            }
+            catch (Exception ex)
+            {
+                // Any other failure (e.g. notification enqueue) rolls back the whole unit so we never
+                // persist a payment without its notice. The next cycle retries both atomically.
+                await tx.RollbackAsync(ct);
+                _logger.LogWarning(
+                    ex,
+                    "Failed to create rent charge + notice for lease {LeaseId} period {PeriodKey}; rolled back, will retry",
+                    lease.Id, periodKey);
+
+                _db.Entry(payment).State = EntityState.Detached;
+                continue;
             }
         }
 

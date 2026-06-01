@@ -105,8 +105,16 @@ public class PortalService : IPortalService
 
     public async Task<IReadOnlyList<PortalMessageResponse>> GetMessagesAsync(int portfolioId, int tenantId, CancellationToken ct = default)
     {
-        // PortalMessage has no TenantId column; scope a tenant's messages to the properties they hold a
-        // lease on within this portfolio (plus any portfolio-wide messages with no property attached).
+        // PortalMessage has no TenantId column. Scope a tenant's messages to:
+        //   (a) messages authored by this tenant's own portal UserAccount (covers general inquiries with
+        //       no property attached — these must NOT leak to every other tenant), and
+        //   (b) messages attached to a property this tenant holds a lease on within this portfolio.
+        var userAccountId = await _db.UserAccounts
+            .AsNoTracking()
+            .Where(ua => ua.PortfolioId == portfolioId && ua.TenantId == tenantId)
+            .Select(ua => (int?)ua.Id)
+            .FirstOrDefaultAsync(ct);
+
         var propertyIds = await _db.Leases
             .AsNoTracking()
             .Where(l => l.PortfolioId == portfolioId && l.TenantId == tenantId)
@@ -117,7 +125,8 @@ public class PortalService : IPortalService
         var messages = await _db.PortalMessages
             .AsNoTracking()
             .Where(m => m.PortfolioId == portfolioId &&
-                (m.PropertyId == null || propertyIds.Contains(m.PropertyId.Value)))
+                ((userAccountId != null && m.UserAccountId == userAccountId.Value) ||
+                 (m.PropertyId != null && propertyIds.Contains(m.PropertyId.Value))))
             .OrderByDescending(m => m.CreatedAt)
             .Select(m => new PortalMessageResponse
             {
@@ -185,7 +194,14 @@ public class PortalService : IPortalService
     public async Task<PortalMessageResponse?> UpdateMessageStatusAsync(
         int portfolioId, int tenantId, int id, string? status, CancellationToken ct = default)
     {
-        // Resolve the set of property ids the tenant holds a lease on (same scope logic as GetMessagesAsync).
+        // Resolve the tenant's own portal account and leased properties (same scope logic as GetMessagesAsync)
+        // so a tenant can only touch messages they authored or that belong to a property they lease.
+        var userAccountId = await _db.UserAccounts
+            .AsNoTracking()
+            .Where(ua => ua.PortfolioId == portfolioId && ua.TenantId == tenantId)
+            .Select(ua => (int?)ua.Id)
+            .FirstOrDefaultAsync(ct);
+
         var propertyIds = await _db.Leases
             .AsNoTracking()
             .Where(l => l.PortfolioId == portfolioId && l.TenantId == tenantId)
@@ -197,7 +213,8 @@ public class PortalService : IPortalService
             .FirstOrDefaultAsync(m =>
                 m.Id == id &&
                 m.PortfolioId == portfolioId &&
-                (m.PropertyId == null || propertyIds.Contains(m.PropertyId.Value)), ct);
+                ((userAccountId != null && m.UserAccountId == userAccountId.Value) ||
+                 (m.PropertyId != null && propertyIds.Contains(m.PropertyId.Value))), ct);
 
         if (entity == null)
         {

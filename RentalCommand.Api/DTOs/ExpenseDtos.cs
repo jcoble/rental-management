@@ -88,7 +88,7 @@ public class CreateExpenseRequest
 
     public ExpenseStatus Status { get; set; } = ExpenseStatus.Pending;
 
-    [Range(0, 99999999)]
+    [Range(0.01, 99999999)]
     public decimal Amount { get; set; }
 
     [Required]
@@ -131,7 +131,7 @@ public class UpdateExpenseRequest
 
     public ExpenseStatus? Status { get; set; }
 
-    [Range(0, 99999999)]
+    [Range(0.01, 99999999)]
     public decimal? Amount { get; set; }
 
     public DateTime? IncurredAt { get; set; }

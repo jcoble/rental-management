@@ -12,11 +12,37 @@ namespace RentalCommand.Api.Controllers;
 [Authorize]
 public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
 {
-    /// <summary>Portfolio id from the <c>portfolioId</c> claim, or 0 if unscoped.</summary>
+    /// <summary>
+    /// Portfolio id from the <c>portfolioId</c> claim. Throws when the claim is missing or
+    /// unparseable so a request with no portfolio scope can never run a tenant-scoped query with
+    /// <c>portfolioId == 0</c> (which would read across tenants). Use <see cref="TryGetPortfolioId"/>
+    /// for code paths that legitimately tolerate an unscoped caller.
+    /// </summary>
+    /// <exception cref="UnauthorizedAccessException">The <c>portfolioId</c> claim is absent or invalid.</exception>
     protected int GetPortfolioId()
     {
+        if (!TryGetPortfolioId(out var id))
+        {
+            throw new UnauthorizedAccessException("Missing portfolio context");
+        }
+
+        return id;
+    }
+
+    /// <summary>
+    /// Attempts to read the <c>portfolioId</c> claim without throwing. Returns <c>false</c> (and
+    /// <paramref name="portfolioId"/> = 0) when the caller has no portfolio scope.
+    /// </summary>
+    protected bool TryGetPortfolioId(out int portfolioId)
+    {
         var claim = User.FindFirst("portfolioId");
-        return claim != null && int.TryParse(claim.Value, out var id) ? id : 0;
+        if (claim != null && int.TryParse(claim.Value, out portfolioId))
+        {
+            return true;
+        }
+
+        portfolioId = 0;
+        return false;
     }
 
     /// <summary>Int user id parsed from the <c>sub</c>/NameIdentifier claim.</summary>
