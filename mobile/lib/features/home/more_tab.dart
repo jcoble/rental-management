@@ -5,6 +5,7 @@ import '../appointments/appointments_screen.dart';
 import '../deposits/deposits_screen.dart';
 import '../leases/leases_list_screen.dart';
 import '../maintenance/work_orders_screen.dart';
+import '../messages/messages_list_screen.dart';
 import '../owner_reports/owner_reports_screen.dart';
 import '../payments/payments_screen.dart';
 import '../team/team_screen.dart';
@@ -63,6 +64,21 @@ class _MoreMenu extends StatelessWidget {
               Navigator.of(context).push<void>(
                 MaterialPageRoute<void>(
                   builder: (_) => const WorkOrdersScreen(),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _MenuTile(
+            icon: Icons.inbox_outlined,
+            activeIcon: Icons.inbox,
+            label: 'Messages',
+            subtitle: 'Tenant messages and replies',
+            color: colorScheme.secondary,
+            onTap: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => const MessagesListScreen(),
                 ),
               );
             },

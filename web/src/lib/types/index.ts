@@ -14,6 +14,24 @@ export type InspectionType = 'MoveIn' | 'MoveOut' | 'Routine' | 'AnnualSafety';
 export type InspectionStatus = 'Scheduled' | 'Completed' | 'NeedsFollowUp' | 'Cancelled';
 export type UserRole = 'Admin' | 'Manager' | 'Agent' | 'Owner' | 'Tenant';
 export type PortalMessageStatus = 'Open' | 'InProgress' | 'Resolved' | 'Closed';
+export type MessageStatus = 'Open' | 'InProgress' | 'Resolved' | 'Closed';
+
+export interface Message {
+	id: number;
+	portfolioId: number;
+	propertyId?: number;
+	propertyName?: string;
+	unitId?: number;
+	unitLabel?: string;
+	userAccountId: number;
+	senderName?: string;
+	subject: string;
+	body: string;
+	status: MessageStatus;
+	reply?: string;
+	createdAt: string;
+	updatedAt: string;
+}
 
 export interface Portfolio {
 	id: number;
