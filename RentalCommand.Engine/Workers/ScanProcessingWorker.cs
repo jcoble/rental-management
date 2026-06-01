@@ -49,6 +49,16 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
             ct.ThrowIfCancellationRequested();
             try
             {
+                // Atomically claim this draft: flip Pending → Processing only if it is still
+                // Pending. If another Engine restart already picked it up (or another instance
+                // raced us), zero rows are updated and we skip to avoid double-processing the
+                // paid LLM call and double-incrementing TokensUsed/CostUsd.
+                var claimed = await db.ScanDrafts
+                    .Where(d => d.Id == draft.Id && d.Status == "Pending")
+                    .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, "Processing"), ct);
+                if (claimed == 0)
+                    continue;
+
                 // Read the stored bytes back from the blob store.
                 await using var stream = await storage.DownloadAsync(draft.FilePath, ct);
                 using var ms = new MemoryStream();
