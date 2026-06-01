@@ -5,6 +5,7 @@
 	import { toast } from 'svelte-sonner';
 	import { scan, type ScanFieldDto } from '$lib/api/scan';
 	import { leases } from '$lib/api/endpoints/leases';
+	import { properties } from '$lib/api/endpoints/properties';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
@@ -15,23 +16,34 @@
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 
-	// ScheduleECategory enum values (mirrors RentalCommand.Core.Enums.ScheduleECategory)
-	const SCHEDULE_E_CATEGORIES = [
-		'Advertising',
-		'AutoTravel',
-		'CleaningMaintenance',
-		'Commissions',
-		'Insurance',
-		'LegalProfessional',
-		'ManagementFees',
-		'MortgageInterest',
-		'Repairs',
-		'Supplies',
-		'Taxes',
-		'Utilities',
-		'Depreciation',
-		'Other'
-	] as const;
+	// ScheduleECategory enum values (mirrors RentalCommand.Core.Enums.ScheduleECategory).
+	// The submitted value stays the enum name; only the label shown to the landlord is friendly.
+	const SCHEDULE_E_CATEGORIES: { value: string; label: string }[] = [
+		{ value: 'Advertising', label: 'Advertising' },
+		{ value: 'AutoTravel', label: 'Auto & travel' },
+		{ value: 'CleaningMaintenance', label: 'Cleaning & maintenance' },
+		{ value: 'Commissions', label: 'Commissions' },
+		{ value: 'Insurance', label: 'Insurance' },
+		{ value: 'LegalProfessional', label: 'Legal & professional fees' },
+		{ value: 'ManagementFees', label: 'Management fees' },
+		{ value: 'MortgageInterest', label: 'Mortgage interest' },
+		{ value: 'Repairs', label: 'Repairs & maintenance' },
+		{ value: 'Supplies', label: 'Supplies' },
+		{ value: 'Taxes', label: 'Taxes' },
+		{ value: 'Utilities', label: 'Utilities' },
+		{ value: 'Depreciation', label: 'Depreciation' },
+		{ value: 'Other', label: 'Other' }
+	];
+
+	// Map enum name → friendly label (falls back to the raw value if unknown).
+	const CATEGORY_LABELS: Record<string, string> = Object.fromEntries(
+		SCHEDULE_E_CATEGORIES.map((c) => [c.value, c.label])
+	);
+
+	function categoryLabel(value: string | undefined | null): string {
+		if (!value) return 'Select category';
+		return CATEGORY_LABELS[value] ?? value;
+	}
 
 	// Grouped scalar field definitions (in display order within each group)
 	const FIELD_GROUPS: { label: string; fields: string[] }[] = [
@@ -68,8 +80,14 @@
 	const draftQuery = createQuery(() => ({
 		queryKey: ['scan', draftId],
 		queryFn: () => scan.get(draftId),
-		// Bounded poll: only while Pending (SignalR flips to Reviewing; poll is a fallback)
-		refetchInterval: (q) => (q.state.data?.status === 'Pending' ? 1500 : false)
+		// Bounded poll: keep polling while the worker is still reading the document.
+		// The worker flips the draft Pending → Processing → Reviewing, so we must
+		// poll through BOTH Pending and Processing to catch the final Reviewing
+		// state (SignalR also pushes the flip; the poll is a fallback).
+		refetchInterval: (q) => {
+			const s = q.state.data?.status;
+			return s === 'Pending' || s === 'Processing' ? 1500 : false;
+		}
 	}));
 
 	const data = $derived(draftQuery.data);
@@ -77,15 +95,36 @@
 	// Whether this draft targets a Payment (rent check) rather than an Expense
 	const isPayment = $derived(data?.targetEntityType === 'Payment');
 
+	// The worker is still reading the document while Pending or Processing.
+	const isProcessing = $derived(data?.status === 'Pending' || data?.status === 'Processing');
+
 	// Lease selector state (only used when isPayment).
 	// String-backed for the shadcn Select; converted to a number at confirm time.
 	let selectedLeaseId = $state<string>('');
+
+	// Optional property selector for Expense drafts. Sends `propertyId` override.
+	// 'none' is the sentinel for "no property" (empty string conflicts with the
+	// Select's "nothing selected" state in bits-ui).
+	const NO_PROPERTY = 'none';
+	let selectedPropertyId = $state<string>(NO_PROPERTY);
 
 	const leasesQuery = createQuery(() => ({
 		queryKey: ['leases', getCurrentPortfolioId()],
 		queryFn: () => leases.list(getCurrentPortfolioId()),
 		enabled: isPayment
 	}));
+
+	const propertiesQuery = createQuery(() => ({
+		queryKey: ['properties', getCurrentPortfolioId()],
+		queryFn: () => properties.list(getCurrentPortfolioId(), { take: 200 }),
+		enabled: !isPayment
+	}));
+
+	const selectedPropertyLabel = $derived.by(() => {
+		if (!selectedPropertyId || selectedPropertyId === NO_PROPERTY) return '— No property —';
+		const sel = propertiesQuery.data?.find((p) => String(p.id) === selectedPropertyId);
+		return sel ? sel.name : '— No property —';
+	});
 
 	function leaseLabel(lease: { leaseNumber: string; tenantName?: string | null; unitNumber?: string | null }): string {
 		return `#${lease.leaseNumber}${lease.tenantName ? ` — ${lease.tenantName}` : ''}${lease.unitNumber ? ` · Unit ${lease.unitNumber}` : ''}`;
@@ -99,6 +138,24 @@
 
 	// Editable field values (keyed by field name, scalars only)
 	let editedFields = $state<Record<string, string>>({});
+
+	// Parse a money-ish string ("$1,234.50") into a number, or null if unparseable.
+	function parseAmount(raw: string | undefined | null): number | null {
+		if (raw == null) return null;
+		const cleaned = String(raw).replace(/[^0-9.\-]/g, '');
+		if (cleaned === '' || cleaned === '-' || cleaned === '.') return null;
+		const n = Number(cleaned);
+		return Number.isFinite(n) ? n : null;
+	}
+
+	// The amount the server will use for the expense = edited total, falling back to subtotal.
+	// (Mirrors the server: Amount = total ?? subtotal.) Drives the $0 confirm guard.
+	const resolvedAmount = $derived.by(() =>
+		parseAmount(editedFields['total']) ?? parseAmount(editedFields['subtotal'])
+	);
+
+	// Block confirming an expense whose amount is blank/0/negative (server rejects amount <= 0).
+	const amountInvalid = $derived(!isPayment && (resolvedAmount == null || resolvedAmount <= 0));
 
 	// Paid / Unpaid toggle — true = already paid (receipt), false = unpaid bill
 	let isPaid = $state(true);
@@ -158,7 +215,8 @@
 	// User-facing status wording. "Reviewing" really means "waiting for you to review".
 	function statusLabel(s: string): string {
 		switch (s) {
-			case 'Pending': return 'Processing';
+			case 'Pending':
+			case 'Processing': return 'Processing';
 			case 'Reviewing': return 'Ready to review';
 			case 'Confirmed': return 'Confirmed';
 			case 'Failed': return 'Extraction failed';
@@ -170,6 +228,7 @@
 	function statusBadgeClass(status: string): string {
 		switch (status) {
 			case 'Pending':
+			case 'Processing':
 				return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-800';
 			case 'Reviewing':
 				return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200 dark:border-blue-800';
@@ -241,6 +300,15 @@
 	// /file endpoint needs a JWT bearer an <img>/<iframe> can't send).
 	const fileUrl = $derived(data ? `/scan-file/${data.id}` : '');
 
+	// Success state — what was just created, so the landlord keeps context
+	// instead of being dumped onto /accounting.
+	let confirmedRecord = $state<{ type: 'Expense' | 'Payment'; amount: number | null } | null>(null);
+
+	function formatUsd(val: number | null): string {
+		if (val == null) return '';
+		return val.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+	}
+
 	// Confirm mutation
 	const confirmMutation = createMutation(() => ({
 		mutationFn: () => {
@@ -250,12 +318,18 @@
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			queryClient.invalidateQueries({ queryKey: ['scan', draftId] });
+			// Capture the resolved amount before refetch can mutate editedFields.
+			confirmedRecord = {
+				type: isPayment ? 'Payment' : 'Expense',
+				amount: resolvedAmount
+			};
 			if (isPayment) {
 				toast.success('Payment recorded');
 			} else {
 				toast.success('Expense created');
 			}
-			goto('/accounting');
+			// Stay on the page and show a confirmation with a link to view it,
+			// rather than silently navigating to /accounting.
 		},
 		onError: (err) => {
 			toast.error(err instanceof Error ? err.message : 'Confirm failed');
@@ -291,12 +365,24 @@
 			if (name === LINE_ITEMS_FIELD) continue;
 			overrides[keyMap[name] ?? name] = value;
 		}
+
+		// Explicitly send the user-edited amount as a clean number under `total`
+		// (the server honors `total`/`amount`). Without this the edited value
+		// could be dropped or mis-parsed when typed with a currency symbol/commas.
+		if (resolvedAmount != null) {
+			overrides['total'] = resolvedAmount;
+		}
+
 		if (isPayment) {
 			// Payment drafts require leaseId; omit the paid/unpaid toggle (a received check is always paid)
 			overrides['leaseId'] = selectedLeaseId ? Number(selectedLeaseId) : null;
 		} else {
 			// Expense drafts: always include the paid/unpaid toggle decision
 			overrides['is_paid'] = isPaid;
+			// Optional property association (server honors `propertyId`).
+			if (selectedPropertyId && selectedPropertyId !== NO_PROPERTY) {
+				overrides['propertyId'] = Number(selectedPropertyId);
+			}
 		}
 		return JSON.stringify(overrides);
 	}
@@ -325,8 +411,26 @@
 		<div class="flex h-48 items-center justify-center">
 			<div class="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent"></div>
 		</div>
+	{:else if draftQuery.isError}
+		<!-- M5: clear error state with retry instead of a perpetual spinner -->
+		<div class="mx-auto max-w-md py-12 text-center" data-testid="scan-load-error">
+			<div class="mb-3 text-3xl">⚠️</div>
+			<h2 class="mb-1 text-lg font-semibold">Couldn't load this scan</h2>
+			<p class="mb-4 text-sm text-muted-foreground">
+				{draftQuery.error instanceof Error ? draftQuery.error.message : 'Something went wrong fetching the scan draft.'}
+			</p>
+			<div class="flex items-center justify-center gap-3">
+				<Button data-testid="scan-load-retry" onclick={() => draftQuery.refetch()} disabled={draftQuery.isFetching}>
+					{draftQuery.isFetching ? 'Retrying…' : 'Try again'}
+				</Button>
+				<Button variant="outline" href="/scan">Back to scans</Button>
+			</div>
+		</div>
 	{:else if !data}
-		<p class="text-sm text-muted-foreground">Scan draft not found.</p>
+		<div class="mx-auto max-w-md py-12 text-center">
+			<p class="mb-4 text-sm text-muted-foreground">Scan draft not found.</p>
+			<Button variant="outline" href="/scan">Back to scans</Button>
+		</div>
 	{:else}
 		<div class="mb-4">
 			<PageBreadcrumb
@@ -343,15 +447,55 @@
 			</Badge>
 		</div>
 
-		{#if data.status === 'Failed'}
-			<div class="mb-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-700 dark:bg-red-900/20 dark:text-red-300">
-				<strong>Extraction failed.</strong> You can still manually enter the field values below and confirm.
+		{#if confirmedRecord}
+			<!-- design#11: keep context after confirm instead of dumping to /accounting -->
+			<div
+				class="mb-4 flex flex-col gap-3 rounded-lg border border-green-300 bg-green-50 px-4 py-4 text-sm text-green-900 dark:border-green-700 dark:bg-green-900/20 dark:text-green-200 sm:flex-row sm:items-center sm:justify-between"
+				data-testid="scan-confirm-success"
+			>
+				<div class="flex items-center gap-3">
+					<span class="text-2xl leading-none">✓</span>
+					<div>
+						<p class="font-semibold">
+							{confirmedRecord.type === 'Payment' ? 'Payment recorded' : 'Expense created'}{confirmedRecord.amount != null ? ` — ${formatUsd(confirmedRecord.amount)}` : ''}
+						</p>
+						<p class="text-xs opacity-80">It's saved to your books. You can view it or scan another document.</p>
+					</div>
+				</div>
+				<div class="flex shrink-0 gap-2">
+					<Button size="sm" href="/accounting" data-testid="scan-view-record">View in Accounting</Button>
+					<Button size="sm" variant="outline" href="/scan">Scan another</Button>
+				</div>
 			</div>
 		{/if}
 
-		{#if data.status === 'Pending'}
-			<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
-				Processing document… fields will appear once extraction completes.
+		{#if data.status === 'Failed'}
+			<!-- L7: clear "couldn't read this" message; Confirm disabled, Reject available -->
+			<div class="mb-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-700 dark:bg-red-900/20 dark:text-red-300" data-testid="scan-failed-banner">
+				<strong>We couldn't read this document.</strong> The computer wasn't able to pull out the details automatically.
+				You can <strong>Reject</strong> it to clear it from your list, then try scanning a clearer photo or PDF.
+			</div>
+		{/if}
+
+		{#if isProcessing}
+			<!-- design#10: prominent, readable "reading your document" state with progress -->
+			<div
+				class="mb-4 flex items-center gap-4 rounded-lg border border-accent/40 bg-accent/5 px-5 py-5"
+				data-testid="scan-processing-banner"
+				role="status"
+				aria-live="polite"
+			>
+				<div class="h-9 w-9 shrink-0 animate-spin rounded-full border-[3px] border-accent border-t-transparent"></div>
+				<div class="min-w-0">
+					<p class="text-base font-semibold text-foreground">Reading your document…</p>
+					<p class="text-sm text-muted-foreground">
+						The computer is pulling out the vendor, amounts, and dates for you. This usually takes just a few seconds.
+					</p>
+					<!-- Indeterminate progress bar -->
+					<div class="mt-2 h-1.5 w-full max-w-sm overflow-hidden rounded-full bg-accent/20">
+						<div class="h-full w-1/3 animate-pulse rounded-full bg-accent"></div>
+					</div>
+				</div>
 			</div>
 		{/if}
 
@@ -442,10 +586,35 @@
 								<p class="mt-1 text-xs text-muted-foreground">Loading leases…</p>
 							{/if}
 						</div>
+					{:else}
+						<!-- Optional property selector for Expense drafts (sends propertyId override) -->
+						<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
+							<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-property-select">
+								Which property is this for? <span class="font-normal text-muted-foreground">(optional)</span>
+							</label>
+							<Select.Root type="single" bind:value={selectedPropertyId}>
+								<Select.Trigger id="scan-property-select" data-testid="scan-property-select" class="w-full">
+									{selectedPropertyLabel}
+								</Select.Trigger>
+								<Select.Content>
+									<Select.Item value={NO_PROPERTY} label="— No property —">— No property —</Select.Item>
+									{#if propertiesQuery.data}
+										{#each propertiesQuery.data as prop (prop.id)}
+											<Select.Item value={String(prop.id)} label={prop.name}>
+												{prop.name}
+											</Select.Item>
+										{/each}
+									{/if}
+								</Select.Content>
+							</Select.Root>
+							{#if propertiesQuery.isLoading}
+								<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
+							{/if}
+						</div>
 					{/if}
 					{#if data.fields.length === 0}
 						<p class="text-sm text-muted-foreground">
-							{#if data.status === 'Pending'}
+							{#if isProcessing}
 								Fields will appear once extraction completes.
 							{:else}
 								No fields extracted. Enter values manually below.
@@ -453,21 +622,21 @@
 						</p>
 						<!-- Manual entry fallback: provide common fields -->
 						<div class="mt-4 space-y-3">
-							<!-- Suppressed while Pending so fields don't appear then get replaced by the full extracted set -->
-							{#each (data.status === 'Pending' ? [] : ['vendor_name', 'total', 'subtotal', 'tax', 'transaction_date', 'category', 'payment_method', 'notes']) as fieldName}
+							<!-- Suppressed while processing so fields don't appear then get replaced by the full extracted set -->
+							{#each (isProcessing ? [] : ['vendor_name', 'total', 'subtotal', 'tax', 'transaction_date', 'category', 'payment_method', 'notes']) as fieldName}
 								<div>
 									<label class="mb-1 block text-xs font-medium text-muted-foreground capitalize" for="field-{fieldName}">
 										{fieldName.replace(/_/g, ' ')}
 									</label>
 									{#if fieldName === 'category'}
-										<!-- Category dropdown -->
+										<!-- Category dropdown — friendly labels, enum value submitted -->
 										<Select.Root type="single" bind:value={editedFields[fieldName]}>
 											<Select.Trigger id="field-{fieldName}" data-testid="scan-field-{fieldName}" class="w-full">
-												{editedFields[fieldName] || 'Select category'}
+												{categoryLabel(editedFields[fieldName])}
 											</Select.Trigger>
 											<Select.Content>
 												{#each SCHEDULE_E_CATEGORIES as cat}
-													<Select.Item value={cat} label={cat}>{cat}</Select.Item>
+													<Select.Item value={cat.value} label={cat.label}>{cat.label}</Select.Item>
 												{/each}
 											</Select.Content>
 										</Select.Root>
@@ -507,14 +676,14 @@
 													{/if}
 												</div>
 												{#if field.name === 'category'}
-													<!-- Category dropdown -->
+													<!-- Category dropdown — friendly labels, enum value submitted -->
 													<Select.Root type="single" bind:value={editedFields[field.name]}>
 														<Select.Trigger id="field-{field.name}" data-testid="scan-field-{field.name}" class="w-full">
-															{editedFields[field.name] || 'Select category'}
+															{categoryLabel(editedFields[field.name])}
 														</Select.Trigger>
 														<Select.Content>
 															{#each SCHEDULE_E_CATEGORIES as cat}
-																<Select.Item value={cat} label={cat}>{cat}</Select.Item>
+																<Select.Item value={cat.value} label={cat.label}>{cat.label}</Select.Item>
 															{/each}
 														</Select.Content>
 													</Select.Root>
@@ -572,38 +741,44 @@
 				<!-- Paid / Unpaid toggle — hidden for Payment drafts (received check is always paid) -->
 				{#if !isPayment}
 				<div class="border-t border-border px-4 py-3" data-testid="scan-paid-toggle">
-					<div class="flex items-center gap-3">
-						<span class="text-xs font-medium text-muted-foreground">Payment status:</span>
-						<Button
+					<span class="mb-1.5 block text-xs font-medium text-muted-foreground">Payment status</span>
+					<!-- Segmented control: a single bordered track with two equal segments -->
+					<div class="inline-flex w-full rounded-md border border-border bg-muted/40 p-0.5" role="group" aria-label="Payment status">
+						<button
 							type="button"
-							size="sm"
-							variant={isPaid ? 'default' : 'outline'}
+							data-testid="scan-paid-yes"
+							aria-pressed={isPaid}
 							onclick={() => { isPaid = true; }}
-							class="rounded-r-none"
+							class="flex-1 rounded-[5px] px-3 py-1.5 text-sm font-medium transition-colors {isPaid
+								? 'bg-background text-foreground shadow-sm'
+								: 'text-muted-foreground hover:text-foreground'}"
 						>
 							Already paid (receipt)
-						</Button>
-						<Button
+						</button>
+						<button
 							type="button"
-							size="sm"
-							variant={!isPaid ? 'default' : 'outline'}
+							data-testid="scan-paid-no"
+							aria-pressed={!isPaid}
 							onclick={() => { isPaid = false; }}
-							class="-ml-3 rounded-l-none border-l-0"
+							class="flex-1 rounded-[5px] px-3 py-1.5 text-sm font-medium transition-colors {!isPaid
+								? 'bg-background text-foreground shadow-sm'
+								: 'text-muted-foreground hover:text-foreground'}"
 						>
 							Unpaid bill{editedFields['due_date'] ? ` — due ${editedFields['due_date']}` : ''}
-						</Button>
+						</button>
 					</div>
 				</div>
 				{/if}
 
 				<!-- Action buttons -->
 				<Card.Footer class="border-t border-border px-4 py-3 [.border-t]:pt-3">
+					{@const isTerminal = data.status === 'Rejected' || data.status === 'Confirmed' || !!confirmedRecord}
 					<div class="flex w-full flex-col gap-2">
 						<div class="flex gap-3">
 							<Button
 								data-testid="scan-confirm"
 								onclick={() => confirmMutation.mutate()}
-								disabled={confirmMutation.isPending || data.status === 'Rejected' || data.status === 'Confirmed' || (isPayment && !selectedLeaseId)}
+								disabled={confirmMutation.isPending || isProcessing || isTerminal || (isPayment && !selectedLeaseId) || amountInvalid}
 								class="flex-1"
 							>
 								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : 'Confirm & Create Expense'}
@@ -612,16 +787,24 @@
 								data-testid="scan-reject"
 								variant="outline"
 								onclick={handleReject}
-								disabled={rejectMutation.isPending || data.status === 'Rejected' || data.status === 'Confirmed'}
+								disabled={rejectMutation.isPending || isProcessing || isTerminal}
 								class="hover:text-destructive"
 							>
 								{rejectMutation.isPending ? 'Rejecting…' : 'Reject'}
 							</Button>
 						</div>
-						{#if isPayment && !selectedLeaseId && data.status !== 'Confirmed' && data.status !== 'Rejected'}
+						{#if amountInvalid && !isTerminal && !isProcessing}
+							<p class="text-center text-xs text-red-500" data-testid="scan-amount-error">
+								Enter an amount greater than $0 (under "total") before confirming.
+							</p>
+						{/if}
+						{#if isPayment && !selectedLeaseId && !isTerminal && !isProcessing}
 							<p class="text-center text-xs text-amber-600 dark:text-amber-400">Select a lease above to enable payment creation.</p>
 						{/if}
-						{#if data.status === 'Confirmed'}
+						{#if data.status === 'Failed' && !isTerminal}
+							<p class="text-center text-xs text-muted-foreground">Couldn't read this document — enter the amount manually, or reject it.</p>
+						{/if}
+						{#if data.status === 'Confirmed' && !confirmedRecord}
 							<p class="text-center text-xs text-green-600 dark:text-green-400">This scan has already been confirmed.</p>
 						{/if}
 						{#if data.status === 'Rejected'}
