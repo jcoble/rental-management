@@ -42,7 +42,7 @@ public class StripePaymentService : IStripePaymentService
             return CreateIntentResult.NotFound();
         }
 
-        StripeConfiguration.ApiKey = _config.SecretKey;
+        var requestOptions = new RequestOptions { ApiKey = _config.SecretKey };
         var intentService = new PaymentIntentService();
         var intent = await intentService.CreateAsync(new PaymentIntentCreateOptions
         {
@@ -57,7 +57,7 @@ public class StripePaymentService : IStripePaymentService
             {
                 Enabled = true
             }
-        }, cancellationToken: ct);
+        }, requestOptions, ct);
 
         var now = DateTime.UtcNow;
         var transaction = new PaymentTransaction

@@ -39,7 +39,9 @@ public sealed class ScanFileService : IScanFileService
         CancellationToken ct = default)
     {
         // 1. Validate before touching storage.
-        var (isValid, error) = FileUploadValidator.ValidateScanUpload(fileName, contentType, bytes.Length, _settings);
+        // Pass the first 16 bytes for magic-byte content sniffing (defense-in-depth).
+        var header = bytes.Length > 0 ? bytes[..Math.Min(16, bytes.Length)] : null;
+        var (isValid, error) = FileUploadValidator.ValidateScanUpload(fileName, contentType, bytes.Length, _settings, header);
         if (!isValid)
             throw new ArgumentException(error ?? "Invalid upload.");
 

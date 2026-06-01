@@ -184,11 +184,18 @@ public sealed class ScanService : IScanService
         // Build ReceiptData JSON for the non-promoted details.
         var receiptDataJson = BuildReceiptDataJson(dto);
 
+        var expenseAmount = dto.Total ?? dto.Subtotal ?? 0m;
+        if (expenseAmount <= 0m)
+        {
+            await ReleaseClaim(portfolioId, draftId, ct);
+            return new ScanConfirmResult(false, null, "Confirmed amount must be greater than zero.");
+        }
+
         var request = new CreateExpenseRequest
         {
             Category    = dto.Category ?? ScheduleECategory.Other,
             Description = string.IsNullOrWhiteSpace(dto.VendorName) ? "Scanned receipt" : dto.VendorName!,
-            Amount      = dto.Total ?? dto.Subtotal ?? 0m,
+            Amount      = expenseAmount,
             Subtotal    = dto.Subtotal,
             TaxAmount   = dto.Tax,
             IncurredAt  = dto.TransactionDate ?? DateTime.UtcNow,
@@ -285,6 +292,13 @@ public sealed class ScanService : IScanService
             return new ScanConfirmResult(false, null, "Select a lease for this payment");
         }
 
+        var paymentAmount = dto.Total ?? dto.Subtotal ?? 0m;
+        if (paymentAmount <= 0m)
+        {
+            await ReleaseClaim(portfolioId, draftId, ct);
+            return new ScanConfirmResult(false, null, "Confirmed amount must be greater than zero.");
+        }
+
         // Build notes from payer name + any free-text notes on the document.
         var notes = string.Join(" — ",
             new[] { dto.PayerName, dto.Notes }
@@ -297,7 +311,7 @@ public sealed class ScanService : IScanService
             LeaseId           = leaseId,
             PaymentType       = PaymentType.Rent,
             Status            = PaymentStatus.Paid,
-            Amount            = dto.Total ?? dto.Subtotal ?? 0m,
+            Amount            = paymentAmount,
             DueDate           = paymentDate,
             PaidDate          = paymentDate,
             Method            = "Check",
@@ -402,8 +416,8 @@ public sealed class ScanService : IScanService
         if (draft is null)
             return false;
 
-        if (draft.Status is "Confirmed" or "Rejected")
-            return false; // already finalized — don't reject a confirmed (already-created) record
+        if (draft.Status is "Confirmed" or "Rejected" or "Confirming")
+            return false; // already finalized or mid-confirm — don't race with a concurrent confirm
 
         draft.Status = "Rejected";
         draft.ReviewedAt = DateTime.UtcNow;

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -16,6 +17,16 @@ using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Raise Kestrel's hard body-size limit (default 30 MB) so large scan uploads
+// (up to 50 MB per UploadSettings) are not silently rejected with 413 before
+// the controller runs. 64 MB gives headroom over the 50 MB app-level gate for
+// multipart framing overhead. The UploadSettings.MaxFileSizeBytes check in
+// FileUploadValidator remains the real policy gate.
+builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 64_000_000);
+
+// Raise the ASP.NET multipart body limit to match.
+builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = 64_000_000);
 
 // --- Configuration binding ---
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
