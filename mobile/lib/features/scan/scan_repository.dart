@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/models/lease.dart';
 import 'scan_models.dart';
 
 /// Repository for all scan-draft API calls.
@@ -148,11 +149,16 @@ class ScanRepository {
 
   /// Fetches the active leases list for the caller's portfolio.
   ///
-  /// Used by the review screen when [targetEntityType] == 'Payment'.
-  Future<List<Map<String, dynamic>>> listLeases() async {
+  /// Used by the review screen when [targetEntityType] == 'Payment'. Returns
+  /// typed [Lease]s so pickers can show tenant/unit/property names directly.
+  Future<List<Lease>> listLeases() async {
     try {
       final response = await _dio.get<List<dynamic>>('/leases');
-      return (response.data ?? []).cast<Map<String, dynamic>>();
+      final data = response.data ?? [];
+      return data
+          .whereType<Map<String, dynamic>>()
+          .map(Lease.fromJson)
+          .toList();
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

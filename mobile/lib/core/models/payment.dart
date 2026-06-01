@@ -38,7 +38,7 @@ class Payment {
       id: (json['id'] as num).toInt(),
       portfolioId: (json['portfolioId'] as num).toInt(),
       leaseId: (json['leaseId'] as num).toInt(),
-      type: json['type'] as String? ?? '',
+      type: json['paymentType'] as String? ?? json['type'] as String? ?? '',
       status: json['status'] as String? ?? '',
       amount: (json['amount'] as num?)?.toDouble() ?? 0,
       dueDate: DateTime.tryParse(json['dueDate'] as String? ?? '') ?? DateTime(0),

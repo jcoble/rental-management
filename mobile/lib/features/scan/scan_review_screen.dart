@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/models/models.dart';
 import 'scan_models.dart';
 import 'scan_repository.dart';
 
@@ -33,7 +34,7 @@ final _imageProvider =
 
 /// Holds the leases list (only fetched for Payment drafts).
 final _leasesProvider =
-    FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
+    FutureProvider.autoDispose<List<Lease>>((ref) async {
   // Keep alive so the 1.5 s poll-driven rebuilds don't trigger repeated fetches.
   ref.keepAlive();
   return ref.read(scanRepositoryProvider).listLeases();
@@ -58,6 +59,7 @@ const _fieldGroups = <({String label, List<String> fields})>[
   (
     label: 'Amounts',
     fields: [
+      'transaction_date',
       'subtotal',
       'tax',
       'tax_rate',
@@ -83,6 +85,7 @@ const _knownScalarFields = {
   'vendor_website',
   'vendor_tax_id',
   'receipt_number',
+  'transaction_date',
   'subtotal',
   'tax',
   'tax_rate',
@@ -97,6 +100,62 @@ const _knownScalarFields = {
   'category',
   'notes',
 };
+
+// Money fields use a decimal number keypad; date fields open a date picker so a
+// non-technical landlord never has to fight the on-screen keyboard.
+const _moneyFields = {
+  'amount',
+  'total',
+  'subtotal',
+  'tax',
+  'tip',
+  'discount',
+  'shipping',
+};
+
+const _dateFields = {
+  'transaction_date',
+  'due_date',
+};
+
+// Friendly label overrides for keys where plain Title Case reads awkwardly.
+const _labelOverrides = <String, String>{
+  'vendor_name': 'Vendor',
+  'vendor_tax_id': 'Vendor tax ID',
+  'transaction_date': 'Transaction date',
+  'due_date': 'Due date',
+  'receipt_number': 'Receipt number',
+  'card_last4': 'Card last 4',
+  'tax_rate': 'Tax rate',
+  'payment_method': 'Payment method',
+  'document_kind': 'Document type',
+  'total': 'Total',
+  'subtotal': 'Subtotal',
+  'tax': 'Tax',
+};
+
+/// Turns a raw snake_case field name into a human-readable label, e.g.
+/// `transaction_date` -> "Transaction date", `vendor_name` -> "Vendor".
+String _prettifyLabel(String name) {
+  final override = _labelOverrides[name];
+  if (override != null) return override;
+  final words = name.split('_').where((w) => w.isNotEmpty).toList();
+  if (words.isEmpty) return name;
+  return words
+      .asMap()
+      .entries
+      .map((e) {
+        final w = e.value;
+        final lower = w.toLowerCase();
+        // Only the first word is capitalised (sentence case) so labels read
+        // naturally; the rest stay lower-case unless they're a single letter.
+        if (e.key == 0) {
+          return lower[0].toUpperCase() + lower.substring(1);
+        }
+        return lower;
+      })
+      .join(' ');
+}
 
 // ScheduleECategory values (mirrors RentalCommand.Core.Enums.ScheduleECategory)
 const _scheduleECategories = [
@@ -418,18 +477,28 @@ class _ReviewBody extends ConsumerWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    final isProcessing =
-        draft.status == 'Pending' || draft.status == 'Processing';
-    final isTerminal =
-        draft.status == 'Confirmed' || draft.status == 'Rejected';
-    // Confirm/Reject are disabled while the document is still being processed.
-    final confirmEnabled = !isProcessing &&
-        !confirming &&
-        !rejecting &&
+    // Use the data-layer contract getters so the interim Processing/Confirming
+    // states the server reports are all handled here (L19).
+    //
+    // `extracting` drives the full-page "reading your document…" view: it's only
+    // true while the server is still pulling fields out of the scan.
+    // `actionsLocked` additionally covers the in-flight confirm state so Confirm
+    // and Reject can't be tapped while the server is mid-confirm.
+    final extracting = draft.isProcessing;
+    final actionsLocked = draft.isProcessing || draft.isInFlight;
+    final isTerminal = draft.isTerminal;
+    final isFailed = draft.status == 'Failed';
+    final busy = confirming || rejecting;
+
+    // Confirm is only possible once the draft is ready for review (or Failed, so
+    // manual values can still be entered) and nothing is in flight.
+    final confirmEnabled = !actionsLocked &&
+        !busy &&
         !isTerminal &&
         (!draft.isPayment || selectedLeaseId != null);
-    final rejectEnabled =
-        !isProcessing && !confirming && !rejecting && !isTerminal;
+    // Reject stays available on Failed so a bad scan can always be cleared, but
+    // never while processing, mid-action, or already terminal.
+    final rejectEnabled = (!actionsLocked || isFailed) && !busy && !isTerminal;
 
     return Scaffold(
       appBar: AppBar(
@@ -439,7 +508,7 @@ class _ReviewBody extends ConsumerWidget {
           const SizedBox(width: 12),
         ],
       ),
-      body: isProcessing
+      body: extracting
           ? _ProcessingView(draftId: draft.id)
           : ListView(
         padding: const EdgeInsets.only(bottom: 140),
@@ -550,12 +619,26 @@ class _ReviewBody extends ConsumerWidget {
                   textAlign: TextAlign.center,
                 ),
               ),
+            // Surface the interim "Confirming" state (L19): the server is mid-
+            // confirm even though this client didn't start it.
+            if (draft.isInFlight && !isFailed && !confirming)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Saving this record…',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
             Row(
               children: [
                 Expanded(
                   child: FilledButton(
                     onPressed: confirmEnabled ? onConfirm : null,
-                    child: confirming
+                    child: (confirming || (draft.isInFlight && !isFailed))
                         ? const SizedBox(
                             width: 18,
                             height: 18,
@@ -572,13 +655,26 @@ class _ReviewBody extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(width: 12),
+                // design#9: Reject is clearly destructive (error-coloured text +
+                // border) so it can't be mistaken for a secondary action.
                 OutlinedButton(
                   onPressed: rejectEnabled ? onReject : null,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: colorScheme.error,
+                    side: BorderSide(
+                      color: rejectEnabled
+                          ? colorScheme.error
+                          : colorScheme.outlineVariant,
+                    ),
+                  ),
                   child: rejecting
-                      ? const SizedBox(
+                      ? SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: colorScheme.error,
+                          ),
                         )
                       : const Text('Reject'),
                 ),
@@ -698,6 +794,25 @@ class _DocumentPreview extends ConsumerWidget {
 // _LeaseSelector
 // ---------------------------------------------------------------------------
 
+/// Builds a human-readable label for a lease dropdown entry (H3): tenant + unit
+/// instead of a bare lease number, e.g. "Unit 4B — Jane Smith". Falls back to
+/// whatever data is available, ending with the lease number when nothing else
+/// is populated.
+String _leaseLabel(Lease lease) {
+  final tenant = lease.tenantName?.trim();
+  final unit = lease.unitNumber?.trim();
+  final number = lease.leaseNumber.trim();
+
+  final hasUnit = unit != null && unit.isNotEmpty;
+  final hasTenant = tenant != null && tenant.isNotEmpty;
+
+  if (hasUnit && hasTenant) return 'Unit $unit — $tenant';
+  if (hasUnit) return 'Unit $unit';
+  if (hasTenant) return tenant;
+  if (number.isNotEmpty) return '#$number';
+  return 'Lease';
+}
+
 class _LeaseSelector extends ConsumerWidget {
   const _LeaseSelector({
     required this.selectedLeaseId,
@@ -748,14 +863,12 @@ class _LeaseSelector extends ConsumerWidget {
                     EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               ),
               items: leases.map((l) {
-                final id = (l['id'] as num).toInt();
-                final number = l['leaseNumber'] as String? ?? '';
-                final tenant = l['tenantName'] as String?;
-                final unit = l['unitNumber'] as String?;
-                final label = '#$number'
-                    '${tenant != null ? ' — $tenant' : ''}'
-                    '${unit != null ? ' · Unit $unit' : ''}';
-                return DropdownMenuItem(value: id, child: Text(label));
+                final id = l.id;
+                final label = _leaseLabel(l);
+                return DropdownMenuItem(
+                  value: id,
+                  child: Text(label, overflow: TextOverflow.ellipsis),
+                );
               }).toList(),
               onChanged: onLeaseSelected,
             ),
@@ -895,7 +1008,41 @@ class _FieldInputState extends State<_FieldInput> {
             ? Colors.amber.shade700
             : colorScheme.onSurface;
 
-    final fieldLabel = widget.field.name.replaceAll('_', ' ');
+    final fieldLabel = _prettifyLabel(widget.field.name);
+    final isDate = _dateFields.contains(widget.field.name);
+    final isMoney = _moneyFields.contains(widget.field.name);
+
+    // Date fields open a calendar picker so the landlord taps a date instead of
+    // typing one (design#5). Free-text editing is still allowed as a fallback.
+    if (isDate) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _FieldLabel(
+            label: fieldLabel,
+            level: level,
+            labelColor: labelColor,
+          ),
+          TextFormField(
+            controller: _controller,
+            onChanged: widget.onChanged,
+            keyboardType: TextInputType.datetime,
+            decoration: InputDecoration(
+              border: const OutlineInputBorder(),
+              hintText: 'YYYY-MM-DD',
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.calendar_today_outlined, size: 20),
+                tooltip: 'Pick a date',
+                onPressed: _pickDate,
+              ),
+              enabledBorder: _borderForLevel(level, colorScheme),
+            ),
+          ),
+        ],
+      );
+    }
 
     // Category field gets a dropdown
     if (widget.field.name == 'category') {
@@ -943,23 +1090,54 @@ class _FieldInputState extends State<_FieldInput> {
         TextFormField(
           controller: _controller,
           onChanged: widget.onChanged,
+          // Money fields get a decimal number pad so amounts are easy to enter
+          // on a phone (design#5).
+          keyboardType: isMoney
+              ? const TextInputType.numberWithOptions(decimal: true)
+              : null,
           decoration: InputDecoration(
             border: const OutlineInputBorder(),
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            enabledBorder: level == ConfidenceLevel.low
-                ? OutlineInputBorder(
-                    borderSide: BorderSide(color: colorScheme.error),
-                  )
-                : level == ConfidenceLevel.medium
-                    ? OutlineInputBorder(
-                        borderSide: BorderSide(color: Colors.amber.shade600),
-                      )
-                    : null,
+            enabledBorder: _borderForLevel(level, colorScheme),
           ),
         ),
       ],
     );
+  }
+
+  /// Confidence-tinted border for an input, or null for high confidence.
+  InputBorder? _borderForLevel(ConfidenceLevel level, ColorScheme colorScheme) {
+    if (level == ConfidenceLevel.low) {
+      return OutlineInputBorder(
+        borderSide: BorderSide(color: colorScheme.error),
+      );
+    }
+    if (level == ConfidenceLevel.medium) {
+      return OutlineInputBorder(
+        borderSide: BorderSide(color: Colors.amber.shade600),
+      );
+    }
+    return null;
+  }
+
+  /// Opens a calendar picker, seeding it from the current value when parseable,
+  /// and writes the chosen date back as an ISO `yyyy-MM-dd` string.
+  Future<void> _pickDate() async {
+    final current = DateTime.tryParse(_controller.text.trim());
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: current ?? now,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(now.year + 5),
+    );
+    if (picked == null) return;
+    final iso = '${picked.year.toString().padLeft(4, '0')}-'
+        '${picked.month.toString().padLeft(2, '0')}-'
+        '${picked.day.toString().padLeft(2, '0')}';
+    _controller.text = iso;
+    widget.onChanged(iso);
   }
 }
 
@@ -976,40 +1154,83 @@ class _FieldLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Plain-language explanation of what a confidence badge means, so a non-
+    // technical landlord knows to double-check it (design#14).
+    final hint = level == ConfidenceLevel.low
+        ? 'The computer is not sure about this — please double-check it.'
+        : 'The computer is fairly sure, but give this a quick look.';
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: labelColor,
-            ),
-          ),
-          if (level != ConfidenceLevel.high) ...[
-            const SizedBox(width: 6),
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-              decoration: BoxDecoration(
-                color: level == ConfidenceLevel.low
-                    ? Colors.red.shade100
-                    : Colors.amber.shade100,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                level == ConfidenceLevel.low ? 'Low confidence' : 'Medium confidence',
+          Row(
+            children: [
+              Text(
+                label,
                 style: TextStyle(
-                  fontSize: 10,
-                  color: level == ConfidenceLevel.low
-                      ? Colors.red.shade800
-                      : Colors.amber.shade800,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: labelColor,
+                ),
+              ),
+              if (level != ConfidenceLevel.high) ...[
+                const SizedBox(width: 6),
+                Tooltip(
+                  message: hint,
+                  triggerMode: TooltipTriggerMode.tap,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: level == ConfidenceLevel.low
+                          ? Colors.red.shade100
+                          : Colors.amber.shade100,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          level == ConfidenceLevel.low
+                              ? 'Low confidence'
+                              : 'Medium confidence',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: level == ConfidenceLevel.low
+                                ? Colors.red.shade800
+                                : Colors.amber.shade800,
+                          ),
+                        ),
+                        const SizedBox(width: 3),
+                        Icon(
+                          Icons.info_outline,
+                          size: 11,
+                          color: level == ConfidenceLevel.low
+                              ? Colors.red.shade800
+                              : Colors.amber.shade800,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          // For low confidence, also spell out the hint inline — tooltips are
+          // easy to miss on touch, and this is the field most likely wrong.
+          if (level == ConfidenceLevel.low)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                hint,
+                style: TextStyle(
+                  fontSize: 10.5,
+                  color: Colors.red.shade700,
                 ),
               ),
             ),
-          ],
         ],
       ),
     );

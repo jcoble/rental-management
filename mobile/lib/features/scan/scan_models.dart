@@ -92,7 +92,8 @@ class ScanDraft {
   /// 'Expense' or 'Payment'
   final String targetEntityType;
 
-  /// 'Pending' | 'Reviewing' | 'Confirmed' | 'Failed' | 'Rejected'
+  /// Lifecycle: 'Pending' -> 'Processing' -> 'Reviewing' -> 'Confirmed'
+  /// (or 'Failed' / 'Rejected').
   final String status;
 
   /// Relative path returned by the API, e.g. /api/v1/scans/{id}/file
@@ -106,8 +107,25 @@ class ScanDraft {
   final DateTime? reviewedAt;
   final DateTime? confirmedAt;
 
+  /// Target is a Payment draft (vs. an Expense draft).
   bool get isPayment => targetEntityType == 'Payment';
+
+  /// Queued for extraction; the Engine has not picked it up yet.
   bool get isPending => status == 'Pending';
+
+  /// The Engine is actively extracting fields from the document.
+  bool get isProcessing => status == 'Processing';
+
+  /// Still being worked (queued or processing) — not yet reviewable.
+  /// Use this for "show a spinner / keep polling" decisions.
+  bool get isInFlight => isPending || isProcessing;
+
+  /// Extraction finished; awaiting user review/confirmation.
+  bool get isReviewing => status == 'Reviewing';
+
+  /// Reached a final state — confirmed, rejected, or failed (no more work).
+  bool get isTerminal =>
+      status == 'Confirmed' || status == 'Rejected' || status == 'Failed';
 
   /// True when the server ran in no-op mode (no OpenAI key configured).
   bool get isNoOp => modelId == 'noop';

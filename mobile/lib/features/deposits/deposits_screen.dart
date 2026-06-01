@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/models/models.dart';
 import 'deposits_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -661,6 +662,20 @@ class _CreateDepositSheetState
     super.dispose();
   }
 
+  /// Human-readable label for a lease so the landlord can tell which lease is
+  /// which (e.g. "Unit 4B — Jane Smith"). Falls back to the lease number when
+  /// the unit/tenant fields aren't populated.
+  String _leaseLabel(Lease l) {
+    final unit = l.unitNumber;
+    final tenant = l.tenantName;
+    final parts = <String>[
+      if (unit != null && unit.isNotEmpty) 'Unit $unit',
+      if (tenant != null && tenant.isNotEmpty) tenant,
+    ];
+    if (parts.isEmpty) return l.leaseNumber;
+    return parts.join(' — ');
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() {
@@ -737,9 +752,7 @@ class _CreateDepositSheetState
                       .map((l) => DropdownMenuItem(
                             value: l.id,
                             child: Text(
-                              l.tenantName != null
-                                  ? '${l.tenantName} (${l.leaseNumber})'
-                                  : l.leaseNumber,
+                              _leaseLabel(l),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ))
