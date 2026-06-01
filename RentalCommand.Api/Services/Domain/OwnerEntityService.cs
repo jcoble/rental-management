@@ -71,6 +71,7 @@ public class OwnerEntityService : IOwnerEntityService
             TaxId = request.TaxId,
             Address = request.Address,
             Phone = request.Phone,
+            Email = request.Email,
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -97,6 +98,7 @@ public class OwnerEntityService : IOwnerEntityService
         if (request.TaxId != null) entity.TaxId = request.TaxId;
         if (request.Address != null) entity.Address = request.Address;
         if (request.Phone != null) entity.Phone = request.Phone;
+        if (request.Email != null) entity.Email = request.Email;
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);

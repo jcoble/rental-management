@@ -40,6 +40,8 @@ builder.Services.Configure<RentalCommand.Core.Configuration.GoogleAuthOptions>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.GoogleAuthOptions.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.StripeConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.StripeConfig.SectionName));
+builder.Services.Configure<RentalCommand.Core.Configuration.ReportsConfig>(
+    builder.Configuration.GetSection(RentalCommand.Core.Configuration.ReportsConfig.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
@@ -192,6 +194,12 @@ builder.Services.AddScoped<INotificationHubService, NotificationHubService>();
 
 // --- Domain feature services (per-entity scoped CRUD) ---
 builder.Services.AddDomainServices();
+
+// --- Outbox message publisher (API-side: enqueues rows; Engine dispatches them) ---
+builder.Services.AddScoped<IMessagePublisher, RentalCommand.Api.Services.OutboxMessagePublisher>();
+
+// --- Scheduled owner statement worker (default OFF; set Reports:EmailOwnerStatementsMonthly=true to enable) ---
+builder.Services.AddHostedService<RentalCommand.Api.Services.ScheduledOwnerStatementWorker>();
 
 // --- Stripe payment services (gated — no-ops when Stripe keys are absent) ---
 builder.Services.AddScoped<IStripePaymentService, StripePaymentService>();
