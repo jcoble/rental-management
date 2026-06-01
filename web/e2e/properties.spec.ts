@@ -6,6 +6,9 @@ test.describe('Properties', () => {
 		await login(page);
 		await page.goto('/properties');
 		await expect(page.getByTestId('properties-page')).toBeVisible();
+		// Svelte 5 attaches delegated click handlers after the initial TanStack data-load
+		// completes; wait for the network to settle so create-button clicks aren't dropped.
+		await page.waitForLoadState('networkidle');
 	});
 
 	test('shows the list view with a create affordance and search', async ({ page }) => {
@@ -32,8 +35,12 @@ test.describe('Properties', () => {
 		await page.getByTestId('property-zip-input').fill('78701');
 		await page.getByTestId('property-form-save').click();
 
-		// Dialog closes on success and the new row appears.
+		// Dialog closes on success. Search to surface the new row regardless of pagination,
+		// and scope to the desktop grid (the cell testid also renders in the hidden mobile card).
 		await expect(page.getByTestId('property-form')).toBeHidden();
-		await expect(page.getByTestId('property-name').filter({ hasText: name })).toBeVisible();
+		await page.getByTestId('property-search-input').fill(name);
+		await expect(
+			page.getByTestId('datagrid-desktop').getByTestId('property-name').filter({ hasText: name })
+		).toBeVisible();
 	});
 });
