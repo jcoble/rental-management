@@ -98,7 +98,9 @@ class AuthInterceptor extends Interceptor {
     try {
       final refreshToken = await tokenStore.getRefreshToken();
       if (refreshToken == null) {
-        _refreshCompleter!.complete(null);
+        final c = _refreshCompleter!;
+        _refreshCompleter = null;
+        c.complete(null);
         return null;
       }
 
@@ -116,7 +118,9 @@ class AuthInterceptor extends Interceptor {
 
       final data = response.data;
       if (data == null) {
-        _refreshCompleter!.complete(null);
+        final c = _refreshCompleter!;
+        _refreshCompleter = null;
+        c.complete(null);
         return null;
       }
 
@@ -124,7 +128,9 @@ class AuthInterceptor extends Interceptor {
       final newRefreshToken = _extractRefreshTokenFromCookies(response);
 
       if (newAccessToken == null) {
-        _refreshCompleter!.complete(null);
+        final c = _refreshCompleter!;
+        _refreshCompleter = null;
+        c.complete(null);
         return null;
       }
 
@@ -133,13 +139,15 @@ class AuthInterceptor extends Interceptor {
         refreshToken: newRefreshToken ?? refreshToken,
       );
 
-      _refreshCompleter!.complete(newAccessToken);
+      final c = _refreshCompleter!;
+      _refreshCompleter = null;
+      c.complete(newAccessToken);
       return newAccessToken;
     } catch (e) {
-      _refreshCompleter!.complete(null);
-      return null;
-    } finally {
+      final c = _refreshCompleter;
       _refreshCompleter = null;
+      c?.complete(null);
+      return null;
     }
   }
 
