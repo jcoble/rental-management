@@ -107,7 +107,10 @@ public class StripePaymentService : IStripePaymentService
         };
         _db.StripeWebhookEvents.Add(webhookEvent);
 
-        try
+        // Run the per-type handler FIRST. Only if it succeeds do we mark the event processed and
+        // commit. If the handler throws, the exception propagates (→ controller returns non-2xx) and
+        // nothing is saved, so Stripe retries and we never leave a phantom "processed" event behind
+        // with stale payment state.
         {
             switch (ev.Type)
             {
@@ -180,11 +183,10 @@ public class StripePaymentService : IStripePaymentService
                     break;
             }
         }
-        finally
-        {
-            // Always mark processed and save, even if the per-type handler encountered an error.
-            webhookEvent.ProcessedAt = now;
-            await _db.SaveChangesAsync(ct);
-        }
+
+        // Handler completed without throwing — record the event as processed and persist the
+        // payment/transaction mutations together in a single SaveChanges.
+        webhookEvent.ProcessedAt = now;
+        await _db.SaveChangesAsync(ct);
     }
 }

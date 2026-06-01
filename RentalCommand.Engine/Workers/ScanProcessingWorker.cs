@@ -47,6 +47,12 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
         foreach (var draft in pending)
         {
             ct.ThrowIfCancellationRequested();
+
+            // Tracks whether THIS draft is currently claimed in 'Processing'. If a
+            // cancellation (per-cycle StepTimeout or host shutdown) interrupts the LLM
+            // call below, the cancellation handler uses this to drive the claimed draft to
+            // a visible terminal 'Failed' state instead of leaving it stuck in 'Processing'.
+            var claimedThisDraft = false;
             try
             {
                 // Atomically claim this draft: flip Pending → Processing only if it is still
@@ -58,6 +64,7 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                     .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, "Processing"), ct);
                 if (claimed == 0)
                     continue;
+                claimedThisDraft = true;
 
                 // Read the stored bytes back from the blob store.
                 await using var stream = await storage.DownloadAsync(draft.FilePath, ct);
@@ -105,19 +112,67 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                     new { draft.Id, draft.Status, draft.TargetEntityType }, ct);
                 processed++;
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // The cycle was cancelled mid-flight — either the per-cycle StepTimeout fired
+                // (a slow/poison document) or the host is shutting down. Both cancel the same
+                // token, and either way a draft we already flipped to 'Processing' would be
+                // stranded there forever (the worker only ever polls 'Pending'). Drive it to a
+                // visible terminal 'Failed' state so the user can retry or reject. The write must
+                // NOT use the already-cancelled token, or the status update would never persist.
+                if (claimedThisDraft)
+                {
+                    logger.LogWarning(
+                        "Scan extraction interrupted (cancellation) for draft {DraftId}; marking Failed", draft.Id);
+                    await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id, logger);
+                }
+                break;
+            }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Scan extraction failed for draft {DraftId}", draft.Id);
-                draft.Status = "Failed";
-                draft.ReviewedAt = DateTime.UtcNow;
-                await db.SaveChangesAsync(ct);
-                await dataUpdate.BroadcastEntityUpdateAsync(
-                    draft.PortfolioId, "ScanDraft", draft.Id,
-                    new { draft.Id, draft.Status }, CancellationToken.None);
+                // Use a fresh, non-cancelled save: if the failure rode in on an already-cancelled
+                // token (e.g. a timeout surfaced as a DB/HTTP cancellation), reusing it here would
+                // throw again and leave the draft stuck in 'Processing'.
+                await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id, logger);
             }
         }
         return processed;
+    }
+
+    /// <summary>
+    /// Drives a claimed ('Processing') draft to the terminal 'Failed' state on a fresh DbContext
+    /// scope with a non-cancellable token, so the write persists even when the cycle's token is
+    /// already cancelled (StepTimeout / shutdown) or its DbContext is in a faulted state. Only
+    /// flips rows still in 'Processing' so it never clobbers a state the API or a later cycle set.
+    /// </summary>
+    private static async Task MarkFailedAsync(
+        IServiceProvider scoped,
+        IDataUpdateService dataUpdate,
+        int portfolioId,
+        int draftId,
+        ILogger logger)
+    {
+        try
+        {
+            using var failScope = scoped.GetRequiredService<IServiceScopeFactory>().CreateScope();
+            var failDb = failScope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            await failDb.ScanDrafts
+                .Where(d => d.Id == draftId && d.Status == "Processing")
+                .ExecuteUpdateAsync(s => s
+                    .SetProperty(d => d.Status, "Failed")
+                    .SetProperty(d => d.ReviewedAt, DateTime.UtcNow), CancellationToken.None);
+
+            await dataUpdate.BroadcastEntityUpdateAsync(
+                portfolioId, "ScanDraft", draftId,
+                new { Id = draftId, Status = "Failed" }, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // Last-resort: never let the failure-handling itself throw out of the cycle. The
+            // startup crash-recovery (Processing → Pending) is the backstop if this never lands.
+            logger.LogError(ex, "Failed to mark draft {DraftId} as Failed", draftId);
+        }
     }
 
     private static string GuessContentType(string path) =>
