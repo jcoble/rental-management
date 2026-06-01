@@ -13,8 +13,8 @@ import '../../core/models/models.dart';
 ///   POST   /properties                       — create property
 ///   PATCH  /properties/{id}                  — update property
 ///   DELETE /properties/{id}                  — delete property
-///   GET    /properties/{id}/units            — list units for a property
-///   POST   /properties/{id}/units            — add a unit
+///   GET    /units?propertyId={id}            — list units for a property
+///   POST   /units  (body includes propertyId) — add a unit
 ///   PATCH  /units/{id}                       — update a unit
 ///   GET    /leases?propertyId={id}           — leases filtered by property
 class PropertiesRepository {
@@ -83,8 +83,10 @@ class PropertiesRepository {
 
   Future<List<Unit>> listUnits(int propertyId) async {
     try {
-      final response =
-          await _dio.get<List<dynamic>>('/properties/$propertyId/units');
+      final response = await _dio.get<List<dynamic>>(
+        '/units',
+        queryParameters: {'propertyId': propertyId},
+      );
       final data = response.data ?? [];
       return data
           .whereType<Map<String, dynamic>>()
@@ -99,8 +101,8 @@ class PropertiesRepository {
   Future<Unit> createUnit(int propertyId, Map<String, dynamic> data) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
-        '/properties/$propertyId/units',
-        data: data,
+        '/units',
+        data: {...data, 'propertyId': propertyId},
       );
       return Unit.fromJson(response.data!);
     } on DioException catch (e) {
