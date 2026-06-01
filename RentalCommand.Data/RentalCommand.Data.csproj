@@ -17,6 +17,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- NU1903: System.Security.Cryptography.Xml is pulled ONLY as a design-time transitive of
+         Microsoft.EntityFrameworkCore.Design (PrivateAssets=all above → never shipped to the runtime,
+         so the deployed app is not exposed). No patched version exists yet — even the latest 10.0.1 is
+         still flagged. Suppress these specific advisories to keep the audit clean; a DIFFERENT future
+         advisory on this package would still surface. REMOVE once Microsoft ships a fixed version. -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-37gx-xxp4-5rgx" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-w3x6-4m5h-cxqf" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\RentalCommand.Core\RentalCommand.Core.csproj" />
   </ItemGroup>
 
