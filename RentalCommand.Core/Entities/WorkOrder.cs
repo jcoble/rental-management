@@ -23,6 +23,7 @@ public class WorkOrder
     public decimal? ActualCost { get; set; }
     public string? CreatedBy { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public DateTime? DeletedAt { get; set; }   // soft-delete (preserves maintenance history)
 
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
