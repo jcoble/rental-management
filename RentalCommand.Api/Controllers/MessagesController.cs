@@ -41,6 +41,25 @@ public class MessagesController : AuthenticatedPortfolioControllerBase
         return item == null ? NotFound(new { error = "Message not found" }) : Ok(item);
     }
 
+    /// <summary>
+    /// Landlord → tenant: send a new message over the chosen channels (Portal/Email/Sms).
+    /// Returns 201 with the created message, or 404 when the tenant is not in this portfolio.
+    /// </summary>
+    [HttpPost]
+    [ProducesResponseType(typeof(MessageResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<MessageResponse>> Create([FromBody] CreateMessageRequest request, CancellationToken ct)
+    {
+        var result = await _service.CreateToTenantAsync(GetPortfolioId(), GetUserId(), request, ct);
+        if (result == null)
+        {
+            return NotFound(new { error = "Tenant not found" });
+        }
+
+        return CreatedAtAction(nameof(Get), new { id = result.Id }, result);
+    }
+
     /// <summary>Post a landlord reply. Optionally override status (defaults to InProgress).</summary>
     [HttpPost("{id:int}/reply")]
     [ProducesResponseType(typeof(MessageResponse), StatusCodes.Status200OK)]
