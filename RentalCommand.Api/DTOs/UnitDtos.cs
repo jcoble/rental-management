@@ -43,19 +43,28 @@ public class UnitResponse
 public class CreateUnitRequest
 {
     [Required]
+    [Range(1, int.MaxValue)]
     public int PropertyId { get; set; }
 
     [Required]
     [MaxLength(50)]
     public string UnitNumber { get; set; } = string.Empty;
 
-    [MaxLength(120)]
+    [MaxLength(100)]
     public string? FloorPlan { get; set; }
 
+    [Range(0, 99)]
     public decimal Bedrooms { get; set; }
+
+    [Range(0, 99)]
     public decimal Bathrooms { get; set; }
+
+    [Range(0, 99999)]
     public int? SquareFeet { get; set; }
+
+    [Range(0, 99999999)]
     public decimal MarketRent { get; set; }
+
     public UnitStatus Status { get; set; } = UnitStatus.Vacant;
 
     [MaxLength(2000)]
@@ -67,13 +76,21 @@ public class UpdateUnitRequest
     [MaxLength(50)]
     public string? UnitNumber { get; set; }
 
-    [MaxLength(120)]
+    [MaxLength(100)]
     public string? FloorPlan { get; set; }
 
+    [Range(0, 99)]
     public decimal? Bedrooms { get; set; }
+
+    [Range(0, 99)]
     public decimal? Bathrooms { get; set; }
+
+    [Range(0, 99999)]
     public int? SquareFeet { get; set; }
+
+    [Range(0, 99999999)]
     public decimal? MarketRent { get; set; }
+
     public UnitStatus? Status { get; set; }
 
     [MaxLength(2000)]

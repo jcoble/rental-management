@@ -5,6 +5,7 @@
 	import { securityDeposits } from '$lib/api/endpoints/securityDeposits';
 	import type { SecurityDepositHolding } from '$lib/types';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { depositDeductionSchema, parseForm } from '$lib/schemas';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
@@ -34,15 +35,18 @@
 	let deductionReason = $state('');
 	let deductionAmount = $state('');
 	let deductionNotes = $state('');
+	let deductionErrors = $state<Record<string, string>>({});
 	let showDeductionForm = $state(false);
 
 	function openDeduction() {
 		deductionReason = '';
 		deductionAmount = '';
 		deductionNotes = '';
+		deductionErrors = {};
 		showDeductionForm = true;
 	}
 	function closeDeduction() {
+		deductionErrors = {};
 		showDeductionForm = false;
 	}
 
@@ -58,12 +62,19 @@
 	}));
 
 	function submitDeduction() {
-		const reason = deductionReason.trim();
-		const amount = parseFloat(deductionAmount);
-		if (!reason) { showError('Please enter a reason.'); return; }
-		if (isNaN(amount) || amount <= 0) { showError('Please enter a valid amount.'); return; }
+		const result = parseForm(depositDeductionSchema, {
+			reason: deductionReason,
+			amount: deductionAmount,
+			notes: deductionNotes,
+		});
+		if (result.errors) {
+			deductionErrors = result.errors;
+			return;
+		}
+		deductionErrors = {};
+		const { reason, amount, notes } = result.data;
 		const body: { reason: string; amount: number; notes?: string } = { reason, amount };
-		if (deductionNotes.trim()) body.notes = deductionNotes.trim();
+		if (notes) body.notes = notes;
 		deductionMut.mutate(body);
 	}
 
@@ -270,6 +281,7 @@
 					bind:value={deductionReason}
 					placeholder="e.g. Carpet cleaning, Broken window"
 				/>
+				{#if deductionErrors.reason}<p class="mt-1 text-xs text-destructive" data-testid="deduction-reason-error">{deductionErrors.reason}</p>{/if}
 			</div>
 			<div>
 				<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
@@ -281,6 +293,7 @@
 					step="0.01"
 					placeholder="0.00"
 				/>
+				{#if deductionErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="deduction-amount-error">{deductionErrors.amount}</p>{/if}
 			</div>
 			<div>
 				<span class="mb-1 block text-xs text-muted-foreground">Notes (optional)</span>
