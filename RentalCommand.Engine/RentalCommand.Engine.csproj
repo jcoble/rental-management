@@ -20,6 +20,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- NU1903 (design-time-only transitive of EF Core Design; not shipped) — see RentalCommand.Data.csproj.
+         No patched System.Security.Cryptography.Xml exists yet; remove these once one ships. -->
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-37gx-xxp4-5rgx" />
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-w3x6-4m5h-cxqf" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\RentalCommand.Api\RentalCommand.Api.csproj" />
     <ProjectReference Include="..\RentalCommand.Core\RentalCommand.Core.csproj" />
     <ProjectReference Include="..\RentalCommand.Data\RentalCommand.Data.csproj" />
