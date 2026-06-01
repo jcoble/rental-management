@@ -26,7 +26,16 @@ PG_DB="${PG_DB:-rentalcommand}"
 
 API_HTTPS_URL="${API_HTTPS_URL:-https://localhost:5666}"
 API_HTTP_URL="${API_HTTP_URL:-http://localhost:5665}"
+# The web's SERVER-SIDE (SSR + Vite proxy) target for the API. This is DECOUPLED
+# from API_HTTPS_URL on purpose: the API may bind to 0.0.0.0 (so the phone can
+# reach it over the LAN), but the mkcert TLS cert only covers localhost/127.0.0.1/::1.
+# Node enforces cert hostname verification, so the web must always reach the API at
+# a cert-valid host. Defaults to localhost; override only for a genuinely remote API.
+WEB_API_URL="${WEB_API_URL:-https://localhost:5666}"
 WEB_PORT="${WEB_PORT:-5667}"
+# Web dev-server bind host. Default localhost; set to 0.0.0.0 to serve the web UI
+# over the LAN (e.g. WEB_HOST=0.0.0.0 to open https://<lan-ip>:5667 from another device).
+WEB_HOST="${WEB_HOST:-localhost}"
 WEB_URL="${WEB_URL:-https://localhost:$WEB_PORT}"
 
 CONN_STR="Host=localhost;Port=$PG_PORT;Database=$PG_DB;Username=$PG_USER;Password=$PG_PASSWORD"
@@ -161,8 +170,8 @@ echo ""
 # config appends /api/v1; do NOT set VITE_API_URL (it would push the browser to
 # cross-origin calls and drop the /api/v1 prefix on the server side).
 cd web
-API_URL="${API_URL:-$API_HTTPS_URL}" \
-    pnpm dev --host localhost --port "$WEB_PORT" &
+API_URL="${API_URL:-$WEB_API_URL}" \
+    pnpm dev --host "$WEB_HOST" --port "$WEB_PORT" &
 WEB_PID=$!
 
 wait "$WEB_PID"
