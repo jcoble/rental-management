@@ -43,7 +43,7 @@ public class SecurityDepositResponse
             LeaseId = e.LeaseId,
             LeaseNumber = e.Lease?.LeaseNumber,
             Amount = e.Amount,
-            Status = e.Status,
+            Status = e.Status.ToString(),
             HeldAt = e.HeldAt,
             ReturnedAt = e.ReturnedAt,
             ReturnedAmount = e.ReturnedAmount,

@@ -522,7 +522,7 @@ public class DemoDataSeeder
             PortfolioId    = 1,
             LeaseId        = l.Id,
             Amount         = l.SecurityDeposit,
-            Status         = "Held",
+            Status         = SecurityDepositStatus.Held,
             HeldAt         = l.StartDate,
             DeductionsJson = "[]",
             CreatedAt      = l.StartDate,
