@@ -29,7 +29,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Inspection> Inspections => Set<Inspection>();
     public DbSet<ActivityLog> ActivityLogs => Set<ActivityLog>();
     public DbSet<UserAccount> UserAccounts => Set<UserAccount>();
-    public DbSet<AuthSession> AuthSessions => Set<AuthSession>();
     public DbSet<PortalMessage> PortalMessages => Set<PortalMessage>();
 
     // Auth + audit + infrastructure entities (Task 3)
@@ -76,7 +75,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.TokenHash).IsRequired().HasMaxLength(128);
             entity.Property(e => e.IpAddress).HasMaxLength(64);
             entity.Property(e => e.UserAgent).HasMaxLength(512);
-            entity.HasIndex(e => e.TokenHash);
+            entity.HasIndex(e => e.TokenHash).IsUnique();
             entity.HasIndex(e => e.UserId);
             entity.HasIndex(e => e.ExpiresAt);
             entity.HasOne(e => e.User)
@@ -559,18 +558,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(t => t.UserAccounts)
                 .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.SetNull);
-        });
-
-        modelBuilder.Entity<AuthSession>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.TokenHash).IsRequired().HasMaxLength(128);
-            entity.HasIndex(e => e.TokenHash).IsUnique();
-            entity.HasIndex(e => e.ExpiresAt);
-            entity.HasOne(e => e.UserAccount)
-                .WithMany(u => u.Sessions)
-                .HasForeignKey(e => e.UserAccountId)
-                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<PortalMessage>(entity =>
