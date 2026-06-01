@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
@@ -84,6 +85,7 @@ public class RentChargeServiceTests : IDisposable
             _ctx.Db,
             _publisher.Object,
             Options.Create(cfg),
+            new ConfigurationBuilder().Build(),
             NullLogger<RentChargeService>.Instance);
     }
 

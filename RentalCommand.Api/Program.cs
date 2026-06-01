@@ -226,6 +226,28 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.UseCors("WebApp");
+
+// Map auth-context failures to a clean 401 instead of a 500. GetPortfolioId()/GetUserId() throw
+// UnauthorizedAccessException when an authenticated request lacks the portfolioId/sub claim they
+// require (e.g. a token with no portfolio scope) — without this the throw would surface as a 500.
+// Registered high so it wraps controller execution.
+app.Use(async (context, next) =>
+{
+    try
+    {
+        await next();
+    }
+    catch (UnauthorizedAccessException)
+    {
+        if (!context.Response.HasStarted)
+        {
+            context.Response.StatusCode = 401;
+            context.Response.ContentType = "application/problem+json";
+            await context.Response.WriteAsync("{\"error\":\"Unauthorized\"}");
+        }
+    }
+});
+
 app.UseAuthentication();
 app.UseAuthorization();
 
