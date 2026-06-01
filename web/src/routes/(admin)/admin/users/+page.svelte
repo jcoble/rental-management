@@ -6,11 +6,11 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
-	import * as Card from '$lib/components/ui/card';
-	import * as Table from '$lib/components/ui/table';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Plus } from '@lucide/svelte';
+	import { DataGrid } from '$lib/components/data-grid';
+	import type { ColumnDef } from '$lib/components/data-grid/types';
 
 	const ROLES: UserRole[] = ['Admin', 'Manager', 'Agent', 'Owner', 'Tenant'];
 
@@ -100,16 +100,90 @@
 		return !!currentUser && currentUser.id === member.id;
 	}
 
-	function formatDate(iso: string) {
-		try {
-			return new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'short', day: 'numeric' }).format(
-				new Date(iso)
-			);
-		} catch {
-			return iso;
-		}
-	}
+	const columns: ColumnDef<TeamMember>[] = [
+		{
+			key: 'member',
+			title: 'Member',
+			mobileRole: 'title',
+			cell: memberCellSnippet,
+			accessor: (m) => m.displayName || m.email,
+		},
+		{
+			key: 'role',
+			title: 'Role',
+			mobileRole: 'badge',
+			cell: roleCellSnippet,
+			accessor: (m) => m.role,
+		},
+		{
+			key: 'status',
+			title: 'Status',
+			mobileRole: 'meta',
+			cell: statusCellSnippet,
+			accessor: (m) => (m.isActive ? 'Active' : 'Inactive'),
+		},
+		{
+			key: 'createdAt',
+			title: 'Joined',
+			format: 'date',
+			sortable: true,
+			mobileRole: 'meta',
+		},
+	];
 </script>
+
+{#snippet memberCellSnippet(member: TeamMember)}
+	<div>
+		<p class="font-medium" data-testid="member-name">
+			{member.displayName || '—'}
+			{#if isSelf(member)}
+				<span class="ml-1 text-xs text-muted-foreground">(you)</span>
+			{/if}
+		</p>
+		<p class="text-xs text-muted-foreground" data-testid="member-email">
+			{member.email}
+		</p>
+	</div>
+{/snippet}
+
+{#snippet roleCellSnippet(member: TeamMember)}
+	<Select.Root
+		type="single"
+		value={member.role}
+		disabled={isSelf(member) || setRoleMutation.isPending || setActiveMutation.isPending}
+		onValueChange={(role) => {
+			if (role && role !== member.role) {
+				setRoleMutation.mutate({ id: member.id, role: role as UserRole });
+			}
+		}}
+	>
+		<Select.Trigger
+			class="h-8 w-36 text-xs"
+			data-testid="member-role-select"
+			disabled={isSelf(member)}
+		>
+			<Select.Value />
+		</Select.Trigger>
+		<Select.Content>
+			{#each ROLES as r}
+				<Select.Item value={r} label={r}>{r}</Select.Item>
+			{/each}
+		</Select.Content>
+	</Select.Root>
+{/snippet}
+
+{#snippet statusCellSnippet(member: TeamMember)}
+	<Button
+		variant={member.isActive ? 'outline' : 'secondary'}
+		size="sm"
+		class="h-7 text-xs"
+		disabled={isSelf(member) || setActiveMutation.isPending || setRoleMutation.isPending}
+		data-testid="member-active-toggle"
+		onclick={() => setActiveMutation.mutate({ id: member.id, isActive: !member.isActive })}
+	>
+		{member.isActive ? 'Active' : 'Inactive'}
+	</Button>
+{/snippet}
 
 <svelte:head>
 	<title>Team - Rental Command</title>
@@ -126,96 +200,15 @@
 		</Button>
 	</div>
 
-	<Card.Root class="gap-0 py-0" data-testid="team-members-card">
-		<Card.Content class="p-0">
-			{#if membersQuery.isPending}
-				<p class="py-10 text-center text-sm text-muted-foreground" data-testid="team-loading">
-					Loading team…
-				</p>
-			{:else if membersQuery.isError}
-				<p class="py-10 text-center text-sm text-destructive" data-testid="team-error">
-					Failed to load team members.
-				</p>
-			{:else if members.length === 0}
-				<p class="py-10 text-center text-sm text-muted-foreground" data-testid="team-empty">
-					No team members yet.
-				</p>
-			{:else}
-				<Table.Root>
-					<Table.Header>
-						<Table.Row>
-							<Table.Head>Member</Table.Head>
-							<Table.Head>Role</Table.Head>
-							<Table.Head>Status</Table.Head>
-							<Table.Head>Joined</Table.Head>
-						</Table.Row>
-					</Table.Header>
-					<Table.Body data-testid="team-members-list">
-						{#each members as member (member.id)}
-							<Table.Row data-testid="team-member-row" data-member-id={member.id}>
-								<Table.Cell>
-									<div>
-										<p class="font-medium" data-testid="member-name">
-											{member.displayName || '—'}
-											{#if isSelf(member)}
-												<span class="ml-1 text-xs text-muted-foreground">(you)</span>
-											{/if}
-										</p>
-										<p class="text-xs text-muted-foreground" data-testid="member-email">
-											{member.email}
-										</p>
-									</div>
-								</Table.Cell>
-
-								<Table.Cell>
-									<Select.Root
-										type="single"
-										value={member.role}
-										disabled={isSelf(member) || setRoleMutation.isPending || setActiveMutation.isPending}
-										onValueChange={(role) => {
-											if (role && role !== member.role) {
-												setRoleMutation.mutate({ id: member.id, role: role as UserRole });
-											}
-										}}
-									>
-										<Select.Trigger
-											class="h-8 w-36 text-xs"
-											data-testid="member-role-select"
-											disabled={isSelf(member)}
-										>
-											<Select.Value />
-										</Select.Trigger>
-										<Select.Content>
-											{#each ROLES as r}
-												<Select.Item value={r} label={r}>{r}</Select.Item>
-											{/each}
-										</Select.Content>
-									</Select.Root>
-								</Table.Cell>
-
-								<Table.Cell>
-									<Button
-										variant={member.isActive ? 'outline' : 'secondary'}
-										size="sm"
-										class="h-7 text-xs"
-										disabled={isSelf(member) || setActiveMutation.isPending || setRoleMutation.isPending}
-										data-testid="member-active-toggle"
-										onclick={() => setActiveMutation.mutate({ id: member.id, isActive: !member.isActive })}
-									>
-										{member.isActive ? 'Active' : 'Inactive'}
-									</Button>
-								</Table.Cell>
-
-								<Table.Cell class="text-xs text-muted-foreground" data-testid="member-created-at">
-									{formatDate(member.createdAt)}
-								</Table.Cell>
-							</Table.Row>
-						{/each}
-					</Table.Body>
-				</Table.Root>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<DataGrid
+		data={members}
+		{columns}
+		loading={membersQuery.isPending}
+		emptyMessage="No team members yet."
+		getRowKey={(m) => m.id}
+		getRowTestId={() => 'team-member-row'}
+		data-testid="team-members-list"
+	/>
 </div>
 
 <!-- Invite member dialog -->

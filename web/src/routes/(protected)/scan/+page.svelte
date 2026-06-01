@@ -5,10 +5,11 @@
 	import { scan, type ScanDraftResponse } from '$lib/api/scan';
 	import FileDrop from '$lib/components/FileDrop.svelte';
 	import * as Card from '$lib/components/ui/card';
-	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import * as Table from '$lib/components/ui/table';
 	import * as Tabs from '$lib/components/ui/tabs';
+	import { DataGrid } from '$lib/components/data-grid';
+	import type { ColumnDef } from '$lib/components/data-grid/types';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 
 	const queryClient = useQueryClient();
 
@@ -37,39 +38,57 @@
 		uploadMutation.mutate(file);
 	}
 
-	function statusBadgeVariant(status: string): 'default' | 'secondary' | 'destructive' | 'outline' {
-		switch (status) {
-			case 'Confirmed':
-				return 'default';
-			case 'Reviewing':
-				return 'secondary';
-			case 'Failed':
-			case 'Rejected':
-				return 'destructive';
-			default:
-				return 'outline';
-		}
-	}
+	// Scan statuses not in StatusBadge default map — pass a custom map
+	const scanStatusMap: Record<string, { label?: string; class: string }> = {
+		Pending:   { class: 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800' },
+		Reviewing: { class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800' },
+		Confirmed: { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800' },
+		Failed:    { class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800' },
+		Rejected:  { class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800' },
+	};
 
-	// Keep custom colour classes for statuses that don't map to a variant cleanly
-	function statusBadgeClass(status: string): string {
-		switch (status) {
-			case 'Pending':
-				return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-800';
-			case 'Reviewing':
-				return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200 dark:border-blue-800';
-			case 'Confirmed':
-				return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 border-green-200 dark:border-green-800';
-			case 'Failed':
-			case 'Rejected':
-				return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300 border-red-200 dark:border-red-800';
-			default:
-				return '';
-		}
-	}
+	const columns: ColumnDef<ScanDraftResponse>[] = [
+		{
+			key: 'status',
+			title: 'Status',
+			mobileRole: 'badge',
+			cell: statusCellSnippet,
+		},
+		{
+			key: 'targetEntityType',
+			title: 'Type',
+			mobileRole: 'subtitle',
+			accessor: (d) => d.targetEntityType,
+		},
+		{
+			key: 'createdAt',
+			title: 'Created',
+			format: 'date',
+			sortable: true,
+			mobileRole: 'meta',
+		},
+		{
+			key: 'actions',
+			title: '',
+			mobileRole: 'hidden',
+			align: 'right',
+			width: '5rem',
+			cell: actionCellSnippet,
+		},
+	];
 
 	const draftsList = $derived((scansQuery.data ?? []) as ScanDraftResponse[]);
 </script>
+
+{#snippet statusCellSnippet(draft: ScanDraftResponse)}
+	<StatusBadge status={draft.status} map={scanStatusMap} />
+{/snippet}
+
+{#snippet actionCellSnippet(draft: ScanDraftResponse)}
+	<Button variant="link" href="/scan/{draft.id}" class="h-auto p-0">
+		Review
+	</Button>
+{/snippet}
 
 <svelte:head>
 	<title>Scan Receipts - Rental Command</title>
@@ -111,44 +130,16 @@
 
 		<!-- Drafts table — rendered once, inside a shared content area -->
 		<Tabs.Content value={activeFilter} class="mt-4">
-			{#if scansQuery.isLoading}
-				<p class="py-8 text-center text-sm text-muted-foreground">Loading…</p>
-			{:else if draftsList.length === 0}
-				<p class="py-8 text-center text-sm text-muted-foreground">No scan drafts found.</p>
-			{:else}
-				<Card.Root class="overflow-hidden py-0 gap-0">
-					<Table.Root>
-						<Table.Header>
-							<Table.Row>
-								<Table.Head class="px-4 py-3">Status</Table.Head>
-								<Table.Head class="px-4 py-3">Type</Table.Head>
-								<Table.Head class="px-4 py-3">Created</Table.Head>
-								<Table.Head class="px-4 py-3">Action</Table.Head>
-							</Table.Row>
-						</Table.Header>
-						<Table.Body>
-							{#each draftsList as draft (draft.id)}
-								<Table.Row data-testid="scan-row" data-draft-id={draft.id}>
-									<Table.Cell class="px-4 py-3">
-										<Badge variant="outline" class={statusBadgeClass(draft.status)}>
-											{draft.status}
-										</Badge>
-									</Table.Cell>
-									<Table.Cell class="px-4 py-3 text-muted-foreground">{draft.targetEntityType}</Table.Cell>
-									<Table.Cell class="px-4 py-3 text-muted-foreground">
-										{new Date(draft.createdAt).toLocaleDateString()}
-									</Table.Cell>
-									<Table.Cell class="px-4 py-3">
-										<Button variant="link" href="/scan/{draft.id}" class="h-auto p-0">
-											Review
-										</Button>
-									</Table.Cell>
-								</Table.Row>
-							{/each}
-						</Table.Body>
-					</Table.Root>
-				</Card.Root>
-			{/if}
+			<DataGrid
+				data={draftsList}
+				{columns}
+				loading={scansQuery.isLoading}
+				emptyMessage="No scan drafts found."
+				onRowClick={(draft) => goto(`/scan/${draft.id}`)}
+				getRowKey={(draft) => draft.id}
+				getRowTestId={() => 'scan-row'}
+				data-testid="scans-list"
+			/>
 		</Tabs.Content>
 	</Tabs.Root>
 </div>

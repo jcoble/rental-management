@@ -254,7 +254,7 @@
 											<p class="px-1 text-xs text-muted-foreground" data-testid="tools-used">
 												Looked at: {askMutation.data.toolsUsed.map(friendlyToolName).join(', ')}
 												{#if (askMutation.data.tokensUsed ?? 0) > 0}
-													· {askMutation.data.tokensUsed.toLocaleString()} tokens
+													· <span class="font-mono tabular-nums">{askMutation.data.tokensUsed.toLocaleString()} tokens</span>
 												{/if}
 											</p>
 										{/if}

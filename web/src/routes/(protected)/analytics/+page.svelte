@@ -133,9 +133,54 @@
 	</div>
 
 	{#if overviewQuery.isLoading}
-		<p class="py-16 text-center text-sm text-muted-foreground" data-testid="analytics-loading">
-			Loading…
-		</p>
+		<!-- Skeleton loading state -->
+		<div class="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4" data-testid="analytics-loading">
+			{#each [0, 1, 2, 3] as _}
+				<Card.Root class="gap-0 py-0">
+					<Card.Content class="p-4">
+						<div class="h-3 w-24 animate-pulse rounded bg-muted"></div>
+						<div class="mt-2 h-8 w-28 animate-pulse rounded bg-muted"></div>
+						<div class="mt-1.5 h-3 w-32 animate-pulse rounded bg-muted"></div>
+					</Card.Content>
+				</Card.Root>
+			{/each}
+		</div>
+		<div class="grid gap-4 lg:grid-cols-3">
+			<Card.Root class="gap-0 py-0 lg:col-span-2">
+				<Card.Header class="border-b border-border px-4 py-3">
+					<div class="h-5 w-36 animate-pulse rounded bg-muted"></div>
+				</Card.Header>
+				<Card.Content class="p-4">
+					<div class="h-44 w-full animate-pulse rounded bg-muted"></div>
+				</Card.Content>
+			</Card.Root>
+			<div class="flex flex-col gap-4">
+				<Card.Root class="gap-0 py-0">
+					<Card.Header class="border-b border-border px-4 py-3">
+						<div class="h-5 w-32 animate-pulse rounded bg-muted"></div>
+					</Card.Header>
+					<Card.Content class="p-4">
+						<div class="space-y-3">
+							{#each [0, 1, 2] as _}
+								<div class="h-5 w-full animate-pulse rounded bg-muted"></div>
+							{/each}
+						</div>
+					</Card.Content>
+				</Card.Root>
+				<Card.Root class="gap-0 py-0">
+					<Card.Header class="border-b border-border px-4 py-3">
+						<div class="h-5 w-36 animate-pulse rounded bg-muted"></div>
+					</Card.Header>
+					<Card.Content class="p-4">
+						<div class="space-y-3">
+							{#each [0, 1, 2] as _}
+								<div class="h-7 w-full animate-pulse rounded bg-muted"></div>
+							{/each}
+						</div>
+					</Card.Content>
+				</Card.Root>
+			</div>
+		</div>
 	{:else if overviewQuery.isError}
 		<p class="py-16 text-center text-sm text-destructive" data-testid="analytics-error">
 			Failed to load insights. Check your connection or try refreshing.
@@ -151,7 +196,7 @@
 			<Card.Root class="gap-0 py-0" data-testid="kpi-occupancy">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Occupancy</p>
-					<p class="text-2xl font-bold">{pct(overview.occupancyRate)}</p>
+					<p class="font-mono tabular-nums text-2xl font-bold">{pct(overview.occupancyRate)}</p>
 					<p class="mt-0.5 text-xs text-muted-foreground">
 						{overview.occupiedUnits} / {overview.totalUnits} units
 					</p>
@@ -162,7 +207,7 @@
 			<Card.Root class="gap-0 py-0" data-testid="kpi-collection">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Collection Rate</p>
-					<p class="text-2xl font-bold">{pct(overview.collectionRate)}</p>
+					<p class="font-mono tabular-nums text-2xl font-bold">{pct(overview.collectionRate)}</p>
 					<p class="mt-0.5 text-xs text-muted-foreground">
 						{money(overview.monthRentCollected)} of {money(overview.monthRentScheduled)}
 					</p>
@@ -173,7 +218,7 @@
 			<Card.Root class="gap-0 py-0" data-testid="kpi-overdue">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Overdue</p>
-					<p class="text-2xl font-bold text-destructive">{money(overview.overdue.amount)}</p>
+					<p class="font-mono tabular-nums text-2xl font-bold text-destructive">{money(overview.overdue.amount)}</p>
 					<p class="mt-0.5 text-xs text-muted-foreground">
 						{overview.overdue.count} payment{overview.overdue.count !== 1 ? 's' : ''}
 					</p>
@@ -184,7 +229,7 @@
 			<Card.Root class="gap-0 py-0" data-testid="kpi-mrr">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Monthly Recurring Rent</p>
-					<p class="text-2xl font-bold">{money(overview.monthlyRecurringRent)}</p>
+					<p class="font-mono tabular-nums text-2xl font-bold">{money(overview.monthlyRecurringRent)}</p>
 					<p class="mt-0.5 text-xs text-muted-foreground">Across active leases</p>
 				</Card.Content>
 			</Card.Root>
