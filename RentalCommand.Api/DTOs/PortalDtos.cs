@@ -46,7 +46,13 @@ public class PortalMessageResponse
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
-    public int UserAccountId { get; set; }
+
+    /// <summary>Portal author; null for landlord-initiated messages addressed to this tenant.</summary>
+    public int? UserAccountId { get; set; }
+
+    /// <summary>True when this message was sent by the landlord to the tenant (inbound to the tenant).</summary>
+    public bool FromLandlord { get; set; }
+
     public int? PropertyId { get; set; }
     public int? UnitId { get; set; }
     public string Subject { get; set; } = string.Empty;

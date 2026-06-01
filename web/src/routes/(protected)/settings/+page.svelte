@@ -6,6 +6,7 @@
 	import { settingsSchema, parseForm } from '$lib/schemas';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
 
@@ -28,6 +29,46 @@
 		status: 'Active',
 		settings: '{\n  "rentCollectionDay": 1\n}',
 	});
+
+	// Messaging defaults live under the "messaging" key inside the settings JSON string.
+	// Portal is always the base channel; only Email/SMS are configurable defaults here.
+	const messagingDefaults = $derived.by(() => {
+		try {
+			const parsed = JSON.parse(form.settings || '{}');
+			const m = parsed?.messaging ?? {};
+			return { email: m.email === true, sms: m.sms === true };
+		} catch {
+			// Invalid JSON in the raw field — fall back to off so the toggles still render.
+			return { email: false, sms: false };
+		}
+	});
+
+	// Returns true if the raw settings JSON is currently unparseable (toggles are disabled then).
+	const settingsJsonInvalid = $derived.by(() => {
+		try {
+			JSON.parse(form.settings || '{}');
+			return false;
+		} catch {
+			return true;
+		}
+	});
+
+	// Re-stringify the settings JSON with the given messaging default flipped, preserving
+	// every other key (e.g. rentCollectionDay) and the existing 2-space formatting.
+	function setMessagingDefault(key: 'email' | 'sms', value: boolean) {
+		let parsed: Record<string, unknown>;
+		try {
+			parsed = JSON.parse(form.settings || '{}');
+		} catch {
+			return; // Don't clobber raw JSON the user is mid-edit on.
+		}
+		const messaging = {
+			...(typeof parsed.messaging === 'object' && parsed.messaging !== null ? parsed.messaging : {}),
+			[key]: value,
+		};
+		parsed.messaging = messaging;
+		form.settings = JSON.stringify(parsed, null, 2);
+	}
 
 	$effect(() => {
 		if (portfolioQuery.data) {
@@ -103,6 +144,53 @@
 							<Select.Item value="Archived" label="Archived">Archived</Select.Item>
 						</Select.Content>
 					</Select.Root>
+				</div>
+			</div>
+
+			<!-- Messaging defaults -->
+			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" data-testid="settings-messaging">
+				<p class="text-sm font-semibold">Messaging</p>
+				<p class="mb-3 text-xs text-muted-foreground">
+					Choose which channels are pre-selected when you send a tenant a new message. The tenant
+					portal inbox is always included; these just set the defaults for email and text. You can
+					still turn any channel on or off for each individual message.
+				</p>
+
+				{#if settingsJsonInvalid}
+					<p class="text-xs text-destructive" data-testid="settings-messaging-json-warning">
+						Fix the Settings JSON below to change these toggles.
+					</p>
+				{/if}
+
+				<div class="space-y-3">
+					<label class="flex items-start gap-3" class:opacity-50={settingsJsonInvalid}>
+						<Checkbox
+							checked={messagingDefaults.email}
+							disabled={settingsJsonInvalid}
+							onCheckedChange={(v) => setMessagingDefault('email', v === true)}
+							data-testid="settings-messaging-email"
+						/>
+						<span class="text-sm leading-tight">
+							<span class="font-medium">Email tenants by default</span>
+							<span class="block text-xs text-muted-foreground">New messages are emailed to the tenant automatically.</span>
+						</span>
+					</label>
+
+					<label class="flex items-start gap-3" class:opacity-50={settingsJsonInvalid}>
+						<Checkbox
+							checked={messagingDefaults.sms}
+							disabled={settingsJsonInvalid}
+							onCheckedChange={(v) => setMessagingDefault('sms', v === true)}
+							data-testid="settings-messaging-sms"
+						/>
+						<span class="text-sm leading-tight">
+							<span class="font-medium">Text tenants by default (SMS)</span>
+							<span class="block text-xs text-muted-foreground">
+								New messages are texted to the tenant automatically.
+								Texting requires Twilio to be set up — until then, texts won't go out even if this is on.
+							</span>
+						</span>
+					</label>
 				</div>
 			</div>
 
