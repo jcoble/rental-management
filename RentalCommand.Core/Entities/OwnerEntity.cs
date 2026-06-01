@@ -16,6 +16,7 @@ public class OwnerEntity
     public string? TaxId { get; set; }
     public string? Address { get; set; }
     public string? Phone { get; set; }
+    public string? Email { get; set; }   // for emailed owner statements
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

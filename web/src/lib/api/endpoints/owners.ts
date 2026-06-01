@@ -9,4 +9,6 @@ export const owners = {
 	create: (data: Record<string, unknown>) => api.post<Owner>('/owner-entities', data),
 	update: (id: number, data: Record<string, unknown>) => api.patch<Owner>(`/owner-entities/${id}`, data),
 	delete: (id: number) => api.delete(`/owner-entities/${id}`),
+	emailStatement: (ownerId: number, year: number) =>
+		api.post<void>(`/accounting/owner-statements/${ownerId}/email?year=${year}`, {}),
 };

@@ -17,12 +17,18 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
     private readonly IAccountingService _service;
     private readonly IScheduleEService _scheduleE;
     private readonly IOwnerStatementService _ownerStatements;
+    private readonly IOwnerStatementEmailService _ownerStatementEmail;
 
-    public AccountingController(IAccountingService service, IScheduleEService scheduleE, IOwnerStatementService ownerStatements)
+    public AccountingController(
+        IAccountingService service,
+        IScheduleEService scheduleE,
+        IOwnerStatementService ownerStatements,
+        IOwnerStatementEmailService ownerStatementEmail)
     {
         _service = service;
         _scheduleE = scheduleE;
         _ownerStatements = ownerStatements;
+        _ownerStatementEmail = ownerStatementEmail;
     }
 
     /// <summary>Expense totals by Schedule E category plus collected/outstanding/overdue payment rollups.</summary>
@@ -119,6 +125,26 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
         var csv = BuildOwnerStatementCsv(report);
         var bytes = Encoding.UTF8.GetBytes(csv);
         return File(bytes, "text/csv", $"owner-statement-{ownerId}-{reportYear}.csv");
+    }
+
+    // ── Owner Statement email endpoint ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Enqueues an on-demand owner-statement email for <paramref name="ownerId"/>.
+    /// The owner must have an <c>Email</c> address set. Returns 400 with an error message when
+    /// the owner has no email or no statement data exists for the requested year.
+    /// Defaults to the current UTC year when <paramref name="year"/> is omitted.
+    /// </summary>
+    [HttpPost("owner-statements/{ownerId:int}/email")]
+    [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(object), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> EmailOwnerStatement(int ownerId, [FromQuery] int? year, CancellationToken ct)
+    {
+        var reportYear = year ?? DateTime.UtcNow.Year;
+        var result = await _ownerStatementEmail.SendOwnerStatementAsync(GetPortfolioId(), ownerId, reportYear, ct);
+        if (!result.Sent)
+            return BadRequest(new { error = result.Reason });
+        return Ok(new { queued = true });
     }
 
     // ── CSV helpers ─────────────────────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ public class OwnerEntityResponse
     public string? TaxId { get; set; }
     public string? Address { get; set; }
     public string? Phone { get; set; }
+    public string? Email { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -29,6 +30,7 @@ public class OwnerEntityResponse
         TaxId = e.TaxId,
         Address = e.Address,
         Phone = e.Phone,
+        Email = e.Email,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
     };
@@ -50,6 +52,10 @@ public class CreateOwnerEntityRequest
 
     [MaxLength(50)]
     public string? Phone { get; set; }
+
+    [MaxLength(254)]
+    [EmailAddress]
+    public string? Email { get; set; }
 }
 
 public class UpdateOwnerEntityRequest
@@ -67,4 +73,8 @@ public class UpdateOwnerEntityRequest
 
     [MaxLength(50)]
     public string? Phone { get; set; }
+
+    [MaxLength(254)]
+    [EmailAddress]
+    public string? Email { get; set; }
 }

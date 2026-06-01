@@ -38,7 +38,7 @@
 	}));
 
 	// --- Owner form/dialog ---
-	const emptyOwner = { name: '', ownerEntityType: 'Person' as OwnerEntityType, taxId: '', address: '', phone: '' };
+	const emptyOwner = { name: '', ownerEntityType: 'Person' as OwnerEntityType, taxId: '', address: '', phone: '', email: '' };
 	let showOwnerForm = $state(false);
 	let editingOwnerId = $state<number | null>(null);
 	let ownerForm = $state({ ...emptyOwner });
@@ -78,7 +78,7 @@
 	}
 	function openEditOwner(o: Owner) {
 		editingOwnerId = o.id;
-		ownerForm = { name: o.name, ownerEntityType: o.ownerEntityType, taxId: o.taxId ?? '', address: o.address ?? '', phone: o.phone ?? '' };
+		ownerForm = { name: o.name, ownerEntityType: o.ownerEntityType, taxId: o.taxId ?? '', address: o.address ?? '', phone: o.phone ?? '', email: o.email ?? '' };
 		ownerErrors = {};
 		showOwnerForm = true;
 	}
@@ -372,6 +372,10 @@
 			<Input data-testid="owner-taxid-input" bind:value={ownerForm.taxId} placeholder="Tax ID / EIN (optional)" />
 			<Input data-testid="owner-address-input" bind:value={ownerForm.address} placeholder="Address (optional)" />
 			<Input data-testid="owner-phone-input" bind:value={ownerForm.phone} placeholder="Phone (optional)" />
+			<div>
+				<Input data-testid="owner-email-input" bind:value={ownerForm.email} type="email" placeholder="Email (optional)" />
+				{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="owner-email-error">{ownerErrors.email}</p>{/if}
+			</div>
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button data-testid="owner-form-cancel" variant="outline" onclick={closeOwnerForm}>Cancel</Button>
