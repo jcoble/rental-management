@@ -78,11 +78,13 @@ class SignalrService {
     }
 
     final hubUrl = _resolveHubUrl();
+    debugPrint('[SignalR] connecting to $hubUrl');
     _hub = _buildConnection(hubUrl);
     try {
       await _hub!.start();
-    } catch (e) {
-      debugPrint('[SignalR] connect() failed: $e');
+      debugPrint('[SignalR] CONNECTED state=${_hub!.state}');
+    } catch (e, st) {
+      debugPrint('[SignalR] connect() failed: $e\n$st');
       // withAutomaticReconnect() will keep retrying after the initial failure
       // only if start() succeeds first.  Log and let the caller retry by
       // calling connect() again (the realtimeWatcher does this on re-auth).
@@ -176,21 +178,19 @@ class SignalrService {
 // Debug self-signed cert bypass
 // ---------------------------------------------------------------------------
 
-/// Installs a global [HttpOverrides] that accepts any certificate in debug
-/// builds when [kAllowSelfSignedCertInDebug] is true.
+/// Installs a global [HttpOverrides] that accepts the mkcert self-signed
+/// certificate used in local development, so the SignalR negotiate + WebSocket
+/// upgrade can connect to the dev API over the LAN.
 ///
-/// This must be called before [runApp] in [main] so that both the Dio HTTP
-/// client (REST calls) and the SignalR WebSocket upgrade accept the mkcert
-/// certificate used in local development.
-///
-/// The [assert] ensures this code is completely tree-shaken in release builds.
+/// Must be called before [runApp] in [main]. Gated on `!kReleaseMode` (NOT an
+/// `assert`): asserts are stripped in **profile** builds, which would leave
+/// HttpOverrides unset and SignalR unable to accept the dev cert — exactly how
+/// `DioClient` guards its own bypass. Disabled in release so production keeps
+/// full certificate validation.
 void installDebugCertBypass() {
-  assert(() {
-    if (kAllowSelfSignedCertInDebug) {
-      HttpOverrides.global = _SelfSignedCertHttpOverrides();
-    }
-    return true;
-  }());
+  if (!kReleaseMode && kAllowSelfSignedCertInDebug) {
+    HttpOverrides.global = _SelfSignedCertHttpOverrides();
+  }
 }
 
 class _SelfSignedCertHttpOverrides extends HttpOverrides {
