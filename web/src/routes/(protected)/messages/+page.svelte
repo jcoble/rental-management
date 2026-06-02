@@ -421,9 +421,9 @@
 			</div>
 			<div class="flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground {mine ? 'justify-end' : 'justify-start'}">
 				<span>{formatRelative(m.createdAt)}</span>
-				{#if mine && m.channels && m.channels.length > 0}
+				{#if mine && m.channels}
 					<span aria-hidden="true">·</span>
-					<span>{m.channels.map(channelLabel).join(', ')}</span>
+					<span>{m.channels.split(',').filter(Boolean).map(channelLabel).join(', ')}</span>
 				{/if}
 			</div>
 		</div>
