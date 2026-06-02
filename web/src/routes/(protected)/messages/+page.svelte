@@ -120,6 +120,7 @@
 			replyBody = '';
 			// Seed the detail cache with the server's fresh thread, then refresh the list.
 			queryClient.setQueryData(['conversation', updated.id], updated);
+			queryClient.invalidateQueries({ queryKey: ['conversation', updated.id] });
 			queryClient.invalidateQueries({ queryKey: ['conversations'] });
 		},
 		onError: (err) => showError(apiErrorMessage(err)),

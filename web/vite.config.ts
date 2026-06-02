@@ -26,6 +26,10 @@ export default defineConfig(({ mode }) => {
 					target: apiTarget,
 					changeOrigin: true,
 					secure: false,
+					// Proxy WebSocket upgrades too, so the SignalR hub at
+					// /api/v1/hubs/updates can establish its realtime connection
+					// through the dev server (without this, wss fails to connect).
+					ws: true,
 					// The SvelteKit route at src/routes/api/auth/refresh/+server.ts must handle
 					// POST /api/auth/refresh itself (it reads the httpOnly refresh-token cookie and
 					// forwards server-side to the API's /api/v1/auth/refresh). Without this bypass the
