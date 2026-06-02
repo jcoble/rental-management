@@ -5,6 +5,7 @@ import '../auth/token_store.dart';
 import '../../features/appointments/appointments_repository.dart';
 import '../../features/leases/leases_repository.dart';
 import '../../features/maintenance/work_orders_repository.dart';
+import '../../features/messages/messages_repository.dart';
 import '../../features/payments/payments_repository.dart';
 import '../../features/properties/properties_repository.dart';
 import '../../features/scan/scan_repository.dart';
@@ -100,6 +101,12 @@ void _invalidateForEntity(Ref ref, String entityType) {
       // autoDispose FutureProvider.family — invalidating re-fetches every
       // currently-mounted variant (e.g. ScanListScreen with filter = null).
       ref.invalidate(scanListFamilyProvider);
+
+    case 'Conversation':
+      // Refresh the thread list (unread counts + ordering) and invalidate the
+      // open-thread family so a message sent from web/portal appears live.
+      _refreshIfAlive(ref, conversationsProvider);
+      ref.invalidate(conversationProvider);
 
     default:
       // Unknown entity type — defensive no-op.
