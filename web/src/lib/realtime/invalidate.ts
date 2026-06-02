@@ -48,8 +48,15 @@ const entityQueryKeys: Record<string, string[][]> = {
 	// the just-confirmed expense and its effect on the cards show without a reload.
 	ScanDraft: [['scans'], ['scan'], ['expenses'], ['accounting-summary'], ['dashboard']],
 	// A conversation event (a new message from either side) refreshes the thread list and,
-	// via the ['conversation'] prefix, whichever thread is currently open.
-	Conversation: [['conversations'], ['conversation']]
+	// via the ['conversation'] prefix, whichever thread is currently open. The
+	// `portal-*` keys cover the tenant-side portal messenger so a landlord message
+	// lands live in the resident portal too.
+	Conversation: [
+		['conversations'],
+		['conversation'],
+		['portal-conversations'],
+		['portal-conversation']
+	]
 };
 
 /** Detail query-key prefix for an entity, used to drop a deleted entity's cache. */
