@@ -16,10 +16,12 @@ namespace RentalCommand.Api.Controllers;
 public class PortalController : AuthenticatedPortfolioControllerBase
 {
     private readonly IPortalService _service;
+    private readonly IConversationService _conversations;
 
-    public PortalController(IPortalService service)
+    public PortalController(IPortalService service, IConversationService conversations)
     {
         _service = service;
+        _conversations = conversations;
     }
 
     /// <summary>Tenant id from the <c>tenantId</c> JWT claim, or null when the caller is not a tenant.</summary>
@@ -89,10 +91,16 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         return Ok(items);
     }
 
-    [HttpGet("messages")]
-    [ProducesResponseType(typeof(IReadOnlyList<PortalMessageResponse>), StatusCodes.Status200OK)]
+    // -----------------------------------------------------------------------------------------------
+    // Threaded conversations (tenant side). A tenant has multiple topic threads; each is scoped to the
+    // signed-in tenant via the tenantId claim. Tenant messages are in-app only (no channel selection).
+    // -----------------------------------------------------------------------------------------------
+
+    /// <summary>List the signed-in tenant's conversations, most-recently-active first.</summary>
+    [HttpGet("conversations")]
+    [ProducesResponseType(typeof(IReadOnlyList<ConversationSummary>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
-    public async Task<ActionResult<IReadOnlyList<PortalMessageResponse>>> Messages(CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<ConversationSummary>>> Conversations(CancellationToken ct)
     {
         var tenantId = GetTenantId();
         if (tenantId == null)
@@ -100,17 +108,35 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             return Forbid();
         }
 
-        var items = await _service.GetMessagesAsync(GetPortfolioId(), tenantId.Value, ct);
+        var items = await _conversations.ListForTenantAsync(GetPortfolioId(), tenantId.Value, ct);
         return Ok(items);
     }
 
-    [HttpPost("messages")]
-    [ProducesResponseType(typeof(PortalMessageResponse), StatusCodes.Status201Created)]
+    /// <summary>Fetch one of the tenant's conversations with its full history; resets the tenant's unread count.</summary>
+    [HttpGet("conversations/{id:int}")]
+    [ProducesResponseType(typeof(ConversationDetail), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ConversationDetail>> Conversation(int id, CancellationToken ct)
+    {
+        var tenantId = GetTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        var item = await _conversations.GetForTenantAsync(GetPortfolioId(), tenantId.Value, id, ct);
+        return item == null ? NotFound(new { error = "Conversation not found" }) : Ok(item);
+    }
+
+    /// <summary>Tenant opens a new topic thread with the landlord.</summary>
+    [HttpPost("conversations")]
+    [ProducesResponseType(typeof(ConversationDetail), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<PortalMessageResponse>> CreateMessage(
-        [FromBody] CreatePortalMessageRequest request, CancellationToken ct)
+    public async Task<ActionResult<ConversationDetail>> StartConversation(
+        [FromBody] TenantStartConversationRequest request, CancellationToken ct)
     {
         var tenantId = GetTenantId();
         if (tenantId == null)
@@ -118,28 +144,22 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             return Forbid();
         }
 
-        if (string.IsNullOrWhiteSpace(request.Subject))
-        {
-            return BadRequest(new { error = "Subject cannot be empty" });
-        }
+        var created = await _conversations.TenantStartAsync(
+            GetPortfolioId(), tenantId.Value, request.Subject, request.Body, ct);
 
-        if (string.IsNullOrWhiteSpace(request.Body))
-        {
-            return BadRequest(new { error = "Body cannot be empty" });
-        }
-
-        var created = await _service.CreateMessageAsync(GetPortfolioId(), tenantId.Value, request, ct);
         return created == null
-            ? NotFound(new { error = "Referenced property not found in this portfolio, or tenant has no portal account" })
-            : CreatedAtAction(nameof(Messages), created);
+            ? NotFound(new { error = "Tenant not found" })
+            : CreatedAtAction(nameof(Conversation), new { id = created.Id }, created);
     }
 
-    [HttpPatch("messages/{id:int}")]
-    [ProducesResponseType(typeof(PortalMessageResponse), StatusCodes.Status200OK)]
+    /// <summary>Tenant appends a reply to one of their own conversations (in-app only).</summary>
+    [HttpPost("conversations/{id:int}/messages")]
+    [ProducesResponseType(typeof(ConversationDetail), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<PortalMessageResponse>> UpdateMessageStatus(
-        int id, [FromBody] UpdatePortalMessageStatusRequest request, CancellationToken ct)
+    public async Task<ActionResult<ConversationDetail>> PostConversationMessage(
+        int id, [FromBody] TenantPostMessageRequest request, CancellationToken ct)
     {
         var tenantId = GetTenantId();
         if (tenantId == null)
@@ -147,7 +167,7 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             return Forbid();
         }
 
-        var updated = await _service.UpdateMessageStatusAsync(GetPortfolioId(), tenantId.Value, id, request.Status, ct);
-        return updated == null ? NotFound(new { error = "Message not found" }) : Ok(updated);
+        var result = await _conversations.TenantPostAsync(GetPortfolioId(), tenantId.Value, id, request.Body, ct);
+        return result == null ? NotFound(new { error = "Conversation not found" }) : Ok(result);
     }
 }
