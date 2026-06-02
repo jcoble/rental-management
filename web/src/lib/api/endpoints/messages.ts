@@ -11,7 +11,8 @@ export interface ConversationMessage {
 	id: number;
 	senderRole: SenderRole;
 	body: string;
-	channels?: string[];
+	/** Comma-separated list of channels a landlord message was sent on (e.g. "Portal,Email"). */
+	channels?: string;
 	createdAt: string;
 }
 
