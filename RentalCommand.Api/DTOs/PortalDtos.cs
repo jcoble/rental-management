@@ -40,28 +40,3 @@ public class PortalPaymentResponse
     /// <summary>Stable selector for frontend tests, e.g. <c>portal-payment-1</c>.</summary>
     public string TestId => $"portal-payment-{Id}";
 }
-
-/// <summary>Tenant-facing projection of a portal message thread (created by the tenant, replied by staff).</summary>
-public class PortalMessageResponse
-{
-    public int Id { get; set; }
-    public int PortfolioId { get; set; }
-
-    /// <summary>Portal author; null for landlord-initiated messages addressed to this tenant.</summary>
-    public int? UserAccountId { get; set; }
-
-    /// <summary>True when this message was sent by the landlord to the tenant (inbound to the tenant).</summary>
-    public bool FromLandlord { get; set; }
-
-    public int? PropertyId { get; set; }
-    public int? UnitId { get; set; }
-    public string Subject { get; set; } = string.Empty;
-    public string Body { get; set; } = string.Empty;
-    public string Status { get; set; } = string.Empty;
-    public string? Reply { get; set; }
-    public DateTime CreatedAt { get; set; }
-    public DateTime UpdatedAt { get; set; }
-
-    /// <summary>Stable selector for frontend tests, e.g. <c>portal-message-1</c>.</summary>
-    public string TestId => $"portal-message-{Id}";
-}
