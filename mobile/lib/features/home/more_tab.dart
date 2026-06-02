@@ -70,10 +70,10 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.inbox_outlined,
-            activeIcon: Icons.inbox,
+            icon: Icons.forum_outlined,
+            activeIcon: Icons.forum,
             label: 'Messages',
-            subtitle: 'Tenant messages and replies',
+            subtitle: 'Chat with your tenants',
             color: colorScheme.secondary,
             onTap: () {
               Navigator.of(context).push<void>(
