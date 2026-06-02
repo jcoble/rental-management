@@ -10,6 +10,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
+	import { MessageSquare, ChevronRight } from '@lucide/svelte';
 	import type { Payment } from '$lib/types';
 
 	/** Payment IDs currently being submitted to create-intent. */
@@ -65,22 +66,19 @@
 		queryFn: () => portal.overview(),
 	}));
 
-	const messagesQuery = createQuery(() => ({
-		queryKey: ['portal-messages'],
+	// Conversation summaries power the Messages card's unread badge. Newest first;
+	// the tenant's JWT scopes this to their own threads.
+	const conversationsQuery = createQuery(() => ({
+		queryKey: ['portal-conversations'],
 		enabled: !!getCurrentUser(),
-		queryFn: () => portal.messages(),
+		queryFn: () => portal.conversations.list(),
 	}));
 
-	let messageForm = $state({ subject: '', body: '' });
+	const unreadMessages = $derived(
+		(conversationsQuery.data ?? []).reduce((sum, c) => sum + (c.unreadCount || 0), 0)
+	);
+
 	let workOrderForm = $state({ title: '', description: '', category: 'Resident Request', priority: 'Normal' });
-
-	const createMessageMutation = createMutation(() => ({
-		mutationFn: () => portal.createMessage(messageForm),
-		onSuccess: () => {
-			messageForm = { subject: '', body: '' };
-			queryClient.invalidateQueries({ queryKey: ['portal-messages'] });
-		},
-	}));
 
 	const createTenantWorkOrderMutation = createMutation(() => ({
 		mutationFn: () => portal.createTenantWorkOrder(workOrderForm),
@@ -89,17 +87,6 @@
 			queryClient.invalidateQueries({ queryKey: ['portal-overview'] });
 		},
 	}));
-
-	const updateMessageMutation = createMutation(() => ({
-		mutationFn: ({ id, status, reply }: { id: number; status?: string; reply?: string }) =>
-			portal.updateMessage(id, { status, reply }),
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: ['portal-messages'] }),
-	}));
-
-	function submitMessage() {
-		if (!messageForm.subject || !messageForm.body) return;
-		createMessageMutation.mutate();
-	}
 
 	function submitTenantWorkOrder() {
 		if (!workOrderForm.title || !workOrderForm.description) return;
@@ -238,42 +225,33 @@
 		{/if}
 	{/if}
 
-	<div class="grid gap-4 lg:grid-cols-2">
-		<Card.Root class="gap-0 py-0">
-			<Card.Content class="p-4">
-				<h2 class="mb-2 font-semibold">Send Message To Management</h2>
-				<div class="space-y-2">
-					<Input bind:value={messageForm.subject} placeholder="Subject" />
-					<textarea bind:value={messageForm.body} rows={4} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="Message"></textarea>
-					<Button onclick={submitMessage} disabled={createMessageMutation.isPending}>Send</Button>
+	<!-- Messages: links to the threaded messenger with your management team. -->
+	<a href="/portal/messages" class="block" data-testid="portal-messages-link">
+		<Card.Root class="gap-0 py-0 transition-colors hover:bg-muted/50">
+			<Card.Content class="flex items-center gap-4 p-4">
+				<div class="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+					<MessageSquare class="h-5 w-5" />
+					{#if unreadMessages > 0}
+						<span
+							class="absolute -right-1 -top-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground"
+							data-testid="portal-messages-unread-badge"
+						>
+							{unreadMessages}
+						</span>
+					{/if}
 				</div>
+				<div class="min-w-0 flex-1">
+					<h2 class="font-semibold">Messages</h2>
+					<p class="text-sm text-muted-foreground">
+						{#if unreadMessages > 0}
+							You have {unreadMessages} unread {unreadMessages === 1 ? 'message' : 'messages'} from your management team.
+						{:else}
+							Chat with your management team.
+						{/if}
+					</p>
+				</div>
+				<ChevronRight class="h-5 w-5 shrink-0 text-muted-foreground" />
 			</Card.Content>
 		</Card.Root>
-		<Card.Root class="gap-0 py-0">
-			<Card.Content class="p-4">
-				<h2 class="mb-2 font-semibold">Portal Messages</h2>
-				<div class="max-h-[45vh] overflow-y-auto space-y-2">
-					{#each messagesQuery.data || [] as message}
-						<div class="rounded border border-border bg-background p-3 text-sm">
-							<div class="flex items-center justify-between">
-								<p class="font-medium">{message.subject}</p>
-								<span>{message.status}</span>
-							</div>
-							<p class="text-xs text-muted-foreground">{message.author || 'Unknown'} · {new Date(message.createdAt).toLocaleString()}</p>
-							<p class="mt-1">{message.body}</p>
-							{#if message.reply}
-								<p class="mt-2 rounded border border-border px-2 py-1 text-xs text-muted-foreground">Reply: {message.reply}</p>
-							{/if}
-							{#if hasAnyRole('Admin', 'Manager', 'Agent') && message.status !== 'Resolved' && message.status !== 'Closed'}
-								<div class="mt-2 flex gap-2">
-									<Button variant="outline" size="sm" onclick={() => updateMessageMutation.mutate({ id: message.id, status: 'InProgress' })}>In Progress</Button>
-									<Button variant="outline" size="sm" onclick={() => updateMessageMutation.mutate({ id: message.id, status: 'Resolved' })}>Resolve</Button>
-								</div>
-							{/if}
-						</div>
-					{/each}
-				</div>
-			</Card.Content>
-		</Card.Root>
-	</div>
+	</a>
 </div>
