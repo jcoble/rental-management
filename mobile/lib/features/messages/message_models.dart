@@ -1,60 +1,106 @@
-/// Message model.
-///
-/// Matches the API contract:
-///   { id, portfolioId, propertyId?, propertyName?, unitId?, unitLabel?,
-///     userAccountId, senderName?, subject, body, status, reply?,
-///     createdAt (ISO), updatedAt (ISO) }
-///
-/// status ∈ Open | InProgress | Resolved | Closed
-class Message {
-  final int id;
-  final int portfolioId;
-  final int? propertyId;
-  final String? propertyName;
-  final int? unitId;
-  final String? unitLabel;
-  final int userAccountId;
-  final String? senderName;
-  final String subject;
-  final String body;
-  final String status;
-  final String? reply;
-  final DateTime createdAt;
-  final DateTime updatedAt;
+// Conversation (threaded messenger) models.
+//
+// Matches the API contract:
+//   GET  /conversations              -> Conversation[] (summary)
+//   GET  /conversations/{id}         -> Conversation (summary + messages[])
+//   POST /conversations              -> Conversation
+//   POST /conversations/{id}/messages -> Conversation
+//
+// A conversation is a thread between the landlord and a single tenant about a
+// subject. Each message has a senderRole of 'Landlord' or 'Tenant' and the
+// channels it was delivered on ('Portal' | 'Email' | 'Sms').
 
-  const Message({
+/// A single message (chat bubble) inside a conversation thread.
+class ConversationMessage {
+  final int id;
+
+  /// 'Landlord' | 'Tenant' — see [isFromLandlord].
+  final String senderRole;
+  final String body;
+
+  /// Delivery channels for this message, e.g. ['Portal', 'Email'].
+  /// Only meaningful for landlord-sent messages.
+  final List<String> channels;
+  final DateTime createdAt;
+
+  const ConversationMessage({
     required this.id,
-    required this.portfolioId,
-    this.propertyId,
-    this.propertyName,
-    this.unitId,
-    this.unitLabel,
-    required this.userAccountId,
-    this.senderName,
-    required this.subject,
+    required this.senderRole,
     required this.body,
-    required this.status,
-    this.reply,
+    this.channels = const [],
     required this.createdAt,
-    required this.updatedAt,
   });
 
-  factory Message.fromJson(Map<String, dynamic> json) {
-    return Message(
+  /// True when the landlord sent this message (right-aligned bubble).
+  bool get isFromLandlord => senderRole == 'Landlord';
+
+  factory ConversationMessage.fromJson(Map<String, dynamic> json) {
+    final rawChannels = json['channels'];
+    return ConversationMessage(
       id: (json['id'] as num).toInt(),
-      portfolioId: (json['portfolioId'] as num).toInt(),
-      propertyId: (json['propertyId'] as num?)?.toInt(),
-      propertyName: json['propertyName'] as String?,
-      unitId: (json['unitId'] as num?)?.toInt(),
-      unitLabel: json['unitLabel'] as String?,
-      userAccountId: (json['userAccountId'] as num).toInt(),
-      senderName: json['senderName'] as String?,
-      subject: json['subject'] as String? ?? '',
+      senderRole: json['senderRole'] as String? ?? 'Tenant',
       body: json['body'] as String? ?? '',
-      status: json['status'] as String? ?? 'Open',
-      reply: json['reply'] as String?,
+      channels: rawChannels is List
+          ? rawChannels.whereType<String>().toList(growable: false)
+          : const [],
       createdAt: DateTime.parse(json['createdAt'] as String),
-      updatedAt: DateTime.parse(json['updatedAt'] as String),
+    );
+  }
+}
+
+/// A conversation thread.
+///
+/// Always carries the summary fields used by the thread list. When loaded via
+/// `GET /conversations/{id}` (or returned from a start/send mutation) the
+/// [messages] list is populated with the full chronological history; the
+/// thread-list endpoint leaves it empty.
+class Conversation {
+  final int id;
+  final int tenantId;
+  final String tenantName;
+  final String subject;
+  final String? propertyName;
+  final String? lastMessagePreview;
+  final DateTime lastMessageAt;
+  final int unreadCount;
+  final int messageCount;
+
+  /// Chronological (ascending) message history. Empty for thread-list rows.
+  final List<ConversationMessage> messages;
+
+  const Conversation({
+    required this.id,
+    required this.tenantId,
+    required this.tenantName,
+    required this.subject,
+    this.propertyName,
+    this.lastMessagePreview,
+    required this.lastMessageAt,
+    required this.unreadCount,
+    required this.messageCount,
+    this.messages = const [],
+  });
+
+  bool get hasUnread => unreadCount > 0;
+
+  factory Conversation.fromJson(Map<String, dynamic> json) {
+    final rawMessages = json['messages'];
+    return Conversation(
+      id: (json['id'] as num).toInt(),
+      tenantId: (json['tenantId'] as num).toInt(),
+      tenantName: json['tenantName'] as String? ?? 'Tenant',
+      subject: json['subject'] as String? ?? '',
+      propertyName: json['propertyName'] as String?,
+      lastMessagePreview: json['lastMessagePreview'] as String?,
+      lastMessageAt: DateTime.parse(json['lastMessageAt'] as String),
+      unreadCount: (json['unreadCount'] as num?)?.toInt() ?? 0,
+      messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
+      messages: rawMessages is List
+          ? rawMessages
+              .whereType<Map<String, dynamic>>()
+              .map(ConversationMessage.fromJson)
+              .toList()
+          : const [],
     );
   }
 }

@@ -12,62 +12,49 @@ const _months = [
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ];
 
-String _fmtDateTime(DateTime d) {
-  final h = d.hour > 12 ? d.hour - 12 : (d.hour == 0 ? 12 : d.hour);
-  final min = d.minute.toString().padLeft(2, '0');
-  final ampm = d.hour >= 12 ? 'PM' : 'AM';
-  return '${_months[d.month]} ${d.day}, ${d.year}  $h:$min $ampm';
+/// Short timestamp under a bubble: "9:30 AM" or "Jun 1, 9:30 AM" if not today.
+String _fmtBubbleTime(DateTime d) {
+  final local = d.toLocal();
+  final now = DateTime.now();
+  final h = local.hour > 12 ? local.hour - 12 : (local.hour == 0 ? 12 : local.hour);
+  final min = local.minute.toString().padLeft(2, '0');
+  final ampm = local.hour >= 12 ? 'PM' : 'AM';
+  final time = '$h:$min $ampm';
+  final sameDay =
+      local.year == now.year && local.month == now.month && local.day == now.day;
+  if (sameDay) return time;
+  return '${_months[local.month]} ${local.day}, $time';
 }
 
-Color _statusColor(String status, ColorScheme cs) {
-  switch (status.toLowerCase()) {
-    case 'open':
-      return cs.secondaryContainer;
-    case 'inprogress':
-      return cs.tertiaryContainer;
-    case 'resolved':
-      return cs.primaryContainer;
-    case 'closed':
-      return cs.surfaceContainerHighest;
+/// Landlord-facing label for a channel string ('Sms' → 'Text').
+String _channelLabel(String channel) {
+  switch (channel) {
+    case 'Sms':
+      return 'Text';
     default:
-      return cs.surfaceContainerHighest;
-  }
-}
-
-Color _statusTextColor(String status, ColorScheme cs) {
-  switch (status.toLowerCase()) {
-    case 'open':
-      return cs.onSecondaryContainer;
-    case 'inprogress':
-      return cs.onTertiaryContainer;
-    case 'resolved':
-      return cs.onPrimaryContainer;
-    case 'closed':
-      return cs.onSurfaceVariant;
-    default:
-      return cs.onSurfaceVariant;
-  }
-}
-
-String _statusLabel(String s) {
-  switch (s) {
-    case 'InProgress':
-      return 'In Progress';
-    default:
-      return s;
+      return channel;
   }
 }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
-/// Detail screen for a single message.
-///
-/// Shows subject, body, sender/property, existing reply, a reply text field,
-/// and status action buttons (Mark Resolved / Reopen / Close).
+/// Conversation thread screen — chat bubbles plus a pinned compose bar.
 class MessageDetailScreen extends ConsumerStatefulWidget {
-  const MessageDetailScreen({super.key, required this.messageId});
+  const MessageDetailScreen({
+    super.key,
+    required this.conversationId,
+    this.title,
+    this.subtitle,
+  });
 
-  final int messageId;
+  final int conversationId;
+
+  /// Optional header text shown immediately (tenant name) while the thread
+  /// loads, so the app bar isn't blank.
+  final String? title;
+
+  /// Optional subtitle (the conversation subject).
+  final String? subtitle;
 
   @override
   ConsumerState<MessageDetailScreen> createState() =>
@@ -75,437 +62,511 @@ class MessageDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _MessageDetailScreenState extends ConsumerState<MessageDetailScreen> {
-  bool _statusUpdating = false;
+  final _scrollCtrl = ScrollController();
+  final _composeCtrl = TextEditingController();
 
-  Future<void> _setStatus(String status) async {
-    setState(() => _statusUpdating = true);
+  // Inline channel toggles for the NEXT send only. Portal on by default;
+  // Email/SMS off (portfolio messaging defaults aren't loaded on mobile yet).
+  bool _portal = true;
+  bool _email = false;
+  bool _sms = false;
+
+  bool _sending = false;
+
+  @override
+  void dispose() {
+    _scrollCtrl.dispose();
+    _composeCtrl.dispose();
+    super.dispose();
+  }
+
+  void _scrollToBottom({bool animated = false}) {
+    // Defer until after the frame so the list has laid out.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollCtrl.hasClients) return;
+      final target = _scrollCtrl.position.maxScrollExtent;
+      if (animated) {
+        _scrollCtrl.animateTo(
+          target,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      } else {
+        _scrollCtrl.jumpTo(target);
+      }
+    });
+  }
+
+  List<String> _selectedChannels() => [
+        if (_portal) 'Portal',
+        if (_email) 'Email',
+        if (_sms) 'Sms',
+      ];
+
+  Future<void> _send() async {
+    final text = _composeCtrl.text.trim();
+    if (text.isEmpty) return;
+    final channels = _selectedChannels();
+    if (channels.isEmpty) {
+      _showError('Choose at least one channel.');
+      return;
+    }
+
+    setState(() => _sending = true);
     try {
       await ref
-          .read(messageDetailProvider(widget.messageId).notifier)
-          .setStatus(status);
+          .read(conversationProvider(widget.conversationId).notifier)
+          .sendMessage(text, channels);
+      if (!mounted) return;
+      _composeCtrl.clear();
+      _scrollToBottom(animated: true);
+    } on ApiException catch (e) {
+      _showError(e.message);
     } finally {
-      if (mounted) setState(() => _statusUpdating = false);
+      if (mounted) setState(() => _sending = false);
     }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final msgAsync = ref.watch(messageDetailProvider(widget.messageId));
-    final colorScheme = Theme.of(context).colorScheme;
+    final convoAsync = ref.watch(conversationProvider(widget.conversationId));
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    // Auto-scroll to newest whenever the thread (re)loads with messages.
+    ref.listen<AsyncValue<Conversation>>(
+      conversationProvider(widget.conversationId),
+      (prev, next) {
+        next.whenData((convo) {
+          if (convo.messages.isNotEmpty) _scrollToBottom();
+        });
+      },
+    );
+
+    final headerTitle = convoAsync.maybeWhen(
+      data: (c) => c.tenantName,
+      orElse: () => widget.title ?? 'Conversation',
+    );
+    final headerSubtitle = convoAsync.maybeWhen(
+      data: (c) => c.subject,
+      orElse: () => widget.subtitle,
+    );
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Message'),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              headerTitle,
+              style: theme.textTheme.titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w600),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (headerSubtitle != null && headerSubtitle.isNotEmpty)
+              Text(
+                headerSubtitle,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onSurfaceVariant,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+          ],
+        ),
       ),
-      body: RefreshIndicator(
-        onRefresh: () => ref
-            .read(messageDetailProvider(widget.messageId).notifier)
-            .refresh(),
-        child: msgAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.error_outline,
-                      size: 40, color: colorScheme.error),
-                  const SizedBox(height: 12),
-                  Text(
-                    e is ApiException ? e.message : e.toString(),
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: colorScheme.error),
-                  ),
-                  const SizedBox(height: 16),
-                  FilledButton.tonal(
-                    onPressed: () => ref
-                        .read(messageDetailProvider(widget.messageId).notifier)
-                        .refresh(),
-                    child: const Text('Retry'),
-                  ),
-                ],
+      body: Column(
+        children: [
+          Expanded(
+            child: convoAsync.when(
+              loading: () =>
+                  const Center(child: CircularProgressIndicator()),
+              error: (e, _) => _ErrorBody(
+                message: e is ApiException ? e.message : e.toString(),
+                onRetry: () => ref
+                    .read(conversationProvider(widget.conversationId).notifier)
+                    .refresh(),
+              ),
+              data: (convo) => _MessageThread(
+                conversation: convo,
+                scrollController: _scrollCtrl,
+                theme: theme,
+                colorScheme: colorScheme,
               ),
             ),
           ),
-          data: (msg) => _DetailBody(
-            message: msg,
-            messageId: widget.messageId,
-            statusUpdating: _statusUpdating,
-            onSetStatus: _setStatus,
+          _ComposeBar(
+            controller: _composeCtrl,
+            sending: _sending,
+            portal: _portal,
+            email: _email,
+            sms: _sms,
+            onPortal: (v) => setState(() => _portal = v),
+            onEmail: (v) => setState(() => _email = v),
+            onSms: (v) => setState(() => _sms = v),
+            onSend: _send,
           ),
-        ),
+        ],
       ),
     );
   }
 }
 
-// ── Detail body ───────────────────────────────────────────────────────────────
+// ── Message thread (chat bubbles) ─────────────────────────────────────────────
 
-class _DetailBody extends ConsumerStatefulWidget {
-  const _DetailBody({
-    required this.message,
-    required this.messageId,
-    required this.statusUpdating,
-    required this.onSetStatus,
+class _MessageThread extends StatelessWidget {
+  const _MessageThread({
+    required this.conversation,
+    required this.scrollController,
+    required this.theme,
+    required this.colorScheme,
   });
 
-  final Message message;
-  final int messageId;
-  final bool statusUpdating;
-  final Future<void> Function(String) onSetStatus;
-
-  @override
-  ConsumerState<_DetailBody> createState() => _DetailBodyState();
-}
-
-class _DetailBodyState extends ConsumerState<_DetailBody> {
-  final _replyCtrl = TextEditingController();
-  bool _replySending = false;
-  String? _replyError;
-
-  @override
-  void dispose() {
-    _replyCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _sendReply() async {
-    final text = _replyCtrl.text.trim();
-    if (text.isEmpty) {
-      setState(() => _replyError = 'Reply cannot be empty.');
-      return;
-    }
-    setState(() {
-      _replySending = true;
-      _replyError = null;
-    });
-    try {
-      await ref
-          .read(messageDetailProvider(widget.messageId).notifier)
-          .reply(text);
-      if (mounted) _replyCtrl.clear();
-    } on ApiException catch (e) {
-      if (mounted) setState(() => _replyError = e.message);
-    } finally {
-      if (mounted) setState(() => _replySending = false);
-    }
-  }
+  final Conversation conversation;
+  final ScrollController scrollController;
+  final ThemeData theme;
+  final ColorScheme colorScheme;
 
   @override
   Widget build(BuildContext context) {
-    final msg = widget.message;
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-
-    final isResolved = msg.status == 'Resolved';
-    final isClosed = msg.status == 'Closed';
-    final isDone = isResolved || isClosed;
-
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-      children: [
-        // ── Subject + status chip ──────────────────────────────────────
-        Text(
-          msg.subject,
-          style: theme.textTheme.headlineSmall
-              ?.copyWith(fontWeight: FontWeight.w700),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            _StatusChip(status: msg.status, colorScheme: cs),
-          ],
-        ),
-
-        const SizedBox(height: 20),
-
-        // ── Meta grid ─────────────────────────────────────────────────
-        _SectionLabel(label: 'Details', theme: theme),
-        const SizedBox(height: 8),
-        _MetaGrid(message: msg, theme: theme, colorScheme: cs),
-
-        const SizedBox(height: 20),
-
-        // ── Message body ───────────────────────────────────────────────
-        _SectionLabel(label: 'Message', theme: theme),
-        const SizedBox(height: 8),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: cs.surfaceContainerLowest,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: cs.outlineVariant),
+    final messages = conversation.messages;
+    if (messages.isEmpty) {
+      return Center(
+        child: Text(
+          'No messages yet',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: colorScheme.onSurfaceVariant,
           ),
-          child: Text(msg.body, style: theme.textTheme.bodyMedium),
         ),
+      );
+    }
 
-        // ── Existing reply ─────────────────────────────────────────────
-        if (msg.reply != null && msg.reply!.isNotEmpty) ...[
-          const SizedBox(height: 20),
-          _SectionLabel(label: 'Your Reply', theme: theme),
-          const SizedBox(height: 8),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: cs.primaryContainer.withValues(alpha: 0.4),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: cs.primary.withValues(alpha: 0.3)),
+    return ListView.builder(
+      controller: scrollController,
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(12, 16, 12, 16),
+      itemCount: messages.length,
+      itemBuilder: (ctx, i) => _MessageBubble(
+        message: messages[i],
+        theme: theme,
+        colorScheme: colorScheme,
+      ),
+    );
+  }
+}
+
+class _MessageBubble extends StatelessWidget {
+  const _MessageBubble({
+    required this.message,
+    required this.theme,
+    required this.colorScheme,
+  });
+
+  final ConversationMessage message;
+  final ThemeData theme;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final mine = message.isFromLandlord;
+    final align = mine ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    final bubbleColor =
+        mine ? colorScheme.primary : colorScheme.surfaceContainerHighest;
+    final textColor =
+        mine ? colorScheme.onPrimary : colorScheme.onSurface;
+
+    final radius = BorderRadius.only(
+      topLeft: const Radius.circular(16),
+      topRight: const Radius.circular(16),
+      bottomLeft: Radius.circular(mine ? 16 : 4),
+      bottomRight: Radius.circular(mine ? 4 : 16),
+    );
+
+    // Landlord bubbles show which channels were used (rendering Sms → Text).
+    final channelText = mine && message.channels.isNotEmpty
+        ? message.channels.map(_channelLabel).join(' · ')
+        : null;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Column(
+        crossAxisAlignment: align,
+        children: [
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.sizeOf(context).width * 0.78,
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: bubbleColor,
+                borderRadius: radius,
+              ),
+              child: Text(
+                message.body,
+                style: theme.textTheme.bodyMedium?.copyWith(color: textColor),
+              ),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Row(
-                  children: [
-                    Icon(Icons.reply, size: 14, color: cs.primary),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Replied',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: cs.primary,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
+                Text(
+                  _fmtBubbleTime(message.createdAt),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
-                const SizedBox(height: 6),
-                Text(msg.reply!, style: theme.textTheme.bodyMedium),
+                if (channelText != null) ...[
+                  Text(
+                    '  ·  ',
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  Icon(
+                    Icons.check,
+                    size: 12,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 2),
+                  Text(
+                    channelText,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
         ],
-
-        const SizedBox(height: 24),
-
-        // ── Reply field ────────────────────────────────────────────────
-        _SectionLabel(label: 'Send a Reply', theme: theme),
-        const SizedBox(height: 8),
-        TextFormField(
-          controller: _replyCtrl,
-          maxLines: 4,
-          textInputAction: TextInputAction.newline,
-          decoration: const InputDecoration(
-            hintText: 'Type your reply…',
-            border: OutlineInputBorder(),
-          ),
-          enabled: !isDone && !_replySending,
-        ),
-        if (_replyError != null) ...[
-          const SizedBox(height: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: cs.errorContainer,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              _replyError!,
-              style:
-                  TextStyle(color: cs.onErrorContainer, fontSize: 13),
-            ),
-          ),
-        ],
-        const SizedBox(height: 10),
-        FilledButton.icon(
-          onPressed: (isDone || _replySending) ? null : _sendReply,
-          icon: _replySending
-              ? SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: cs.onPrimary,
-                  ),
-                )
-              : const Icon(Icons.send, size: 18),
-          label: const Text('Send Reply'),
-        ),
-
-        const SizedBox(height: 24),
-
-        // ── Status actions ─────────────────────────────────────────────
-        _SectionLabel(label: 'Status Actions', theme: theme),
-        const SizedBox(height: 8),
-        if (widget.statusUpdating)
-          const Center(child: CircularProgressIndicator())
-        else
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              if (!isDone)
-                OutlinedButton.icon(
-                  onPressed: () => widget.onSetStatus('Resolved'),
-                  icon: const Icon(Icons.check_circle_outline, size: 16),
-                  label: const Text('Mark Resolved'),
-                ),
-              if (isDone)
-                OutlinedButton.icon(
-                  onPressed: () => widget.onSetStatus('Open'),
-                  icon: const Icon(Icons.refresh, size: 16),
-                  label: const Text('Reopen'),
-                ),
-              if (!isClosed)
-                OutlinedButton.icon(
-                  onPressed: () => widget.onSetStatus('Closed'),
-                  icon: const Icon(Icons.archive_outlined, size: 16),
-                  label: const Text('Close'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: cs.onSurfaceVariant,
-                  ),
-                ),
-            ],
-          ),
-      ],
+      ),
     );
   }
 }
 
-// ── Meta grid ─────────────────────────────────────────────────────────────────
+// ── Compose bar (pinned bottom) ───────────────────────────────────────────────
 
-class _MetaGrid extends StatelessWidget {
-  const _MetaGrid({
-    required this.message,
-    required this.theme,
+class _ComposeBar extends StatelessWidget {
+  const _ComposeBar({
+    required this.controller,
+    required this.sending,
+    required this.portal,
+    required this.email,
+    required this.sms,
+    required this.onPortal,
+    required this.onEmail,
+    required this.onSms,
+    required this.onSend,
+  });
+
+  final TextEditingController controller;
+  final bool sending;
+  final bool portal;
+  final bool email;
+  final bool sms;
+  final ValueChanged<bool> onPortal;
+  final ValueChanged<bool> onEmail;
+  final ValueChanged<bool> onSms;
+  final VoidCallback onSend;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return SafeArea(
+      top: false,
+      child: Container(
+        decoration: BoxDecoration(
+          color: colorScheme.surface,
+          border: Border(
+            top: BorderSide(color: colorScheme.outlineVariant),
+          ),
+        ),
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Channel picker
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: 6,
+                children: [
+                  _MiniChannelChip(
+                    icon: Icons.forum_outlined,
+                    label: 'Portal',
+                    selected: portal,
+                    onChanged: onPortal,
+                  ),
+                  _MiniChannelChip(
+                    icon: Icons.email_outlined,
+                    label: 'Email',
+                    selected: email,
+                    onChanged: onEmail,
+                  ),
+                  _MiniChannelChip(
+                    icon: Icons.sms_outlined,
+                    label: 'Text',
+                    selected: sms,
+                    onChanged: onSms,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            // Text field + send
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    minLines: 1,
+                    maxLines: 5,
+                    textInputAction: TextInputAction.newline,
+                    keyboardType: TextInputType.multiline,
+                    decoration: InputDecoration(
+                      hintText: 'Message…',
+                      filled: true,
+                      fillColor: colorScheme.surfaceContainerHighest,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 10),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                _SendButton(
+                  sending: sending,
+                  onSend: onSend,
+                  colorScheme: colorScheme,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SendButton extends StatelessWidget {
+  const _SendButton({
+    required this.sending,
+    required this.onSend,
     required this.colorScheme,
   });
 
-  final Message message;
-  final ThemeData theme;
+  final bool sending;
+  final VoidCallback onSend;
   final ColorScheme colorScheme;
 
   @override
   Widget build(BuildContext context) {
-    final rows = <({String label, String value})>[];
-
-    if (message.senderName != null && message.senderName!.isNotEmpty) {
-      rows.add((label: 'From', value: message.senderName!));
-    }
-    if (message.propertyName != null && message.propertyName!.isNotEmpty) {
-      rows.add((label: 'Property', value: message.propertyName!));
-    }
-    if (message.unitLabel != null && message.unitLabel!.isNotEmpty) {
-      rows.add((label: 'Unit', value: message.unitLabel!));
-    }
-    rows.add((label: 'Received', value: _fmtDateTime(message.createdAt)));
-    rows.add((label: 'Updated', value: _fmtDateTime(message.updatedAt)));
-
-    return Container(
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerLowest,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: colorScheme.outlineVariant),
-      ),
-      child: Column(
-        children: [
-          for (var i = 0; i < rows.length; i++)
-            _DetailRow(
-              label: rows[i].label,
-              value: rows[i].value,
-              theme: theme,
-              colorScheme: colorScheme,
-              isLast: i == rows.length - 1,
-            ),
-        ],
+    return SizedBox(
+      width: 48,
+      height: 48,
+      child: Material(
+        color: colorScheme.primary,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: sending ? null : onSend,
+          child: Center(
+            child: sending
+                ? SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: colorScheme.onPrimary,
+                    ),
+                  )
+                : Icon(Icons.send, color: colorScheme.onPrimary, size: 20),
+          ),
+        ),
       ),
     );
   }
 }
 
-class _DetailRow extends StatelessWidget {
-  const _DetailRow({
+class _MiniChannelChip extends StatelessWidget {
+  const _MiniChannelChip({
+    required this.icon,
     required this.label,
-    required this.value,
-    required this.theme,
-    required this.colorScheme,
-    this.isLast = false,
+    required this.selected,
+    required this.onChanged,
   });
 
+  final IconData icon;
   final String label;
-  final String value;
-  final ThemeData theme;
-  final ColorScheme colorScheme;
-  final bool isLast;
+  final bool selected;
+  final ValueChanged<bool> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        border: isLast
-            ? null
-            : Border(
-                bottom: BorderSide(color: colorScheme.outlineVariant),
-              ),
-      ),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 80,
-            child: Text(
-              label,
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-          Expanded(
-            child: Text(
-              value,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(fontWeight: FontWeight.w500),
-            ),
-          ),
-        ],
-      ),
+    return FilterChip(
+      avatar: Icon(icon, size: 14),
+      label: Text(label),
+      selected: selected,
+      onSelected: onChanged,
+      showCheckmark: false,
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      labelStyle: const TextStyle(fontSize: 12),
     );
   }
 }
 
-// ── Shared small widgets ──────────────────────────────────────────────────────
+// ── Error ─────────────────────────────────────────────────────────────────────
 
-class _SectionLabel extends StatelessWidget {
-  const _SectionLabel({required this.label, required this.theme});
+class _ErrorBody extends StatelessWidget {
+  const _ErrorBody({required this.message, required this.onRetry});
 
-  final String label;
-  final ThemeData theme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      label,
-      style: theme.textTheme.labelLarge?.copyWith(
-        fontWeight: FontWeight.w700,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-        letterSpacing: 0.5,
-      ),
-    );
-  }
-}
-
-class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.status, required this.colorScheme});
-
-  final String status;
-  final ColorScheme colorScheme;
+  final String message;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: _statusColor(status, colorScheme),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        _statusLabel(status),
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          color: _statusTextColor(status, colorScheme),
+    final colorScheme = Theme.of(context).colorScheme;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, size: 40, color: colorScheme.error),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: colorScheme.error),
+            ),
+            const SizedBox(height: 16),
+            FilledButton.tonal(
+              onPressed: onRetry,
+              child: const Text('Retry'),
+            ),
+          ],
         ),
       ),
     );
