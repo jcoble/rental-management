@@ -1,42 +1,62 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { messages } from '$lib/api/endpoints/messages';
+	import { tick } from 'svelte';
+	import { messages, type ConversationSummary, type ConversationMessage } from '$lib/api/endpoints/messages';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import type { Message } from '$lib/types';
-	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatRelative } from '$lib/utils/date';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import { DataGrid } from '$lib/components/data-grid';
-	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { Plus } from '@lucide/svelte';
+	import { Plus, MessageSquare, ArrowLeft, Send, MailWarning } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 
-	const MSG_STATUSES = ['Open', 'InProgress', 'Resolved', 'Closed'];
+	// --- Selected thread --------------------------------------------------------
+	let selectedId = $state<number | null>(null);
 
-	let statusFilter = $state('');
-	let selectedMessage = $state<Message | null>(null);
-	let replyText = $state('');
-
-	const messagesQuery = createQuery(() => ({
-		queryKey: ['messages', statusFilter],
-		queryFn: () => messages.list(statusFilter || undefined),
+	// --- Conversation list (left pane) -----------------------------------------
+	const conversationsQuery = createQuery(() => ({
+		queryKey: ['conversations'],
+		queryFn: () => messages.list(),
 	}));
 
-	// --- Compose new message ---------------------------------------------------
-	let composeOpen = $state(false);
-	const composeEmpty = { tenantId: '', subject: '', body: '' };
-	let composeForm = $state({ ...composeEmpty });
-	// Portal is always the base channel; Email/SMS pre-fill from portfolio settings.
-	let channels = $state({ portal: true, email: false, sms: false });
+	const conversations = $derived(conversationsQuery.data ?? []);
 
+	// --- Selected conversation (right pane) ------------------------------------
+	const conversationQuery = createQuery(() => ({
+		queryKey: ['conversation', selectedId],
+		queryFn: () => messages.get(selectedId as number),
+		enabled: selectedId !== null,
+	}));
+
+	const conversation = $derived(conversationQuery.data ?? null);
+
+	// Opening a thread fetches it (server marks it read) → clear the unread badge
+	// in the list by invalidating once the detail load resolves.
+	let lastMarkedReadId = $state<number | null>(null);
+	$effect(() => {
+		const data = conversationQuery.data;
+		if (data && data.id !== lastMarkedReadId) {
+			lastMarkedReadId = data.id;
+			queryClient.invalidateQueries({ queryKey: ['conversations'] });
+		}
+	});
+
+	function openConversation(id: number) {
+		selectedId = id;
+	}
+
+	function backToList() {
+		selectedId = null;
+	}
+
+	// --- Portfolio + tenants (for compose) -------------------------------------
 	const tenantsQuery = createQuery(() => ({
 		queryKey: ['tenants', portfolioId],
 		queryFn: () => tenants.list(portfolioId, { take: 500 }),
@@ -48,6 +68,7 @@
 	}));
 
 	// Read Email/SMS defaults out of Portfolio.settings JSON ("messaging" key).
+	// Portal is always the base channel and stays on regardless.
 	const messagingDefaults = $derived.by(() => {
 		try {
 			const parsed = JSON.parse(portfolioQuery.data?.settings || '{}');
@@ -64,19 +85,82 @@
 			name: t.fullName ?? `${t.firstName} ${t.lastName}`,
 		}))
 	);
+
+	function channelsToList(c: { portal: boolean; email: boolean; sms: boolean }): string[] {
+		const selected: string[] = [];
+		if (c.portal) selected.push('Portal');
+		if (c.email) selected.push('Email');
+		if (c.sms) selected.push('Sms');
+		return selected;
+	}
+
+	// --- Reply compose (right pane, pinned bottom) -----------------------------
+	let replyBody = $state('');
+	let replyChannels = $state({ portal: true, email: false, sms: false });
+
+	// When the active thread changes, reset the reply box and pre-fill channels
+	// from the saved settings defaults (this choice applies to this send only).
+	$effect(() => {
+		// Touch selectedId so this reruns on thread switch.
+		void selectedId;
+		replyBody = '';
+		replyChannels = { portal: true, email: messagingDefaults.email, sms: messagingDefaults.sms };
+	});
+
+	const replyAnyChannel = $derived(replyChannels.portal || replyChannels.email || replyChannels.sms);
+	const canSendReply = $derived(!!replyBody.trim() && replyAnyChannel && selectedId !== null);
+
+	const replyMutation = createMutation(() => ({
+		mutationFn: () =>
+			messages.sendMessage(selectedId as number, {
+				body: replyBody.trim(),
+				channels: channelsToList(replyChannels),
+			}),
+		onSuccess: (updated) => {
+			replyBody = '';
+			// Seed the detail cache with the server's fresh thread, then refresh the list.
+			queryClient.setQueryData(['conversation', updated.id], updated);
+			queryClient.invalidateQueries({ queryKey: ['conversations'] });
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	function sendReply() {
+		if (!canSendReply || replyMutation.isPending) return;
+		replyMutation.mutate();
+	}
+
+	// Enter sends, Shift+Enter makes a newline.
+	function onReplyKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter' && !e.shiftKey) {
+			e.preventDefault();
+			sendReply();
+		}
+	}
+
+	// --- New conversation dialog -----------------------------------------------
+	let composeOpen = $state(false);
+	const composeEmpty = { tenantId: '', subject: '', body: '' };
+	let composeForm = $state({ ...composeEmpty });
+	let composeChannels = $state({ portal: true, email: false, sms: false });
+
 	const selectedTenantName = $derived(
 		tenantOptions.find((t) => String(t.id) === composeForm.tenantId)?.name ?? null
 	);
 
-	const anyChannel = $derived(channels.portal || channels.email || channels.sms);
-	const canSend = $derived(
-		!!composeForm.tenantId && !!composeForm.subject.trim() && !!composeForm.body.trim() && anyChannel
+	const composeAnyChannel = $derived(
+		composeChannels.portal || composeChannels.email || composeChannels.sms
+	);
+	const canStart = $derived(
+		!!composeForm.tenantId &&
+			!!composeForm.subject.trim() &&
+			!!composeForm.body.trim() &&
+			composeAnyChannel
 	);
 
 	function openCompose() {
 		composeForm = { ...composeEmpty };
-		// Portal always on; Email/SMS pre-filled from settings defaults (this message only).
-		channels = { portal: true, email: messagingDefaults.email, sms: messagingDefaults.sms };
+		composeChannels = { portal: true, email: messagingDefaults.email, sms: messagingDefaults.sms };
 		composeOpen = true;
 	}
 
@@ -85,287 +169,283 @@
 		composeForm = { ...composeEmpty };
 	}
 
-	const composeMutation = createMutation(() => ({
-		mutationFn: () => {
-			const selected: string[] = [];
-			if (channels.portal) selected.push('Portal');
-			if (channels.email) selected.push('Email');
-			if (channels.sms) selected.push('Sms');
-			return messages.create({
+	const startMutation = createMutation(() => ({
+		mutationFn: () =>
+			messages.start({
 				tenantId: Number(composeForm.tenantId),
 				subject: composeForm.subject.trim(),
 				body: composeForm.body.trim(),
-				channels: selected,
-			});
-		},
-		onSuccess: () => {
-			showSuccess('Message sent.');
+				channels: channelsToList(composeChannels),
+			}),
+		onSuccess: (created) => {
+			queryClient.setQueryData(['conversation', created.id], created);
+			queryClient.invalidateQueries({ queryKey: ['conversations'] });
 			closeCompose();
-			invalidate();
+			openConversation(created.id);
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	function sendCompose() {
-		if (!canSend) return;
-		composeMutation.mutate();
+	function startConversation() {
+		if (!canStart || startMutation.isPending) return;
+		startMutation.mutate();
 	}
 
-	function invalidate() {
-		queryClient.invalidateQueries({ queryKey: ['messages'] });
+	// --- Auto-scroll the thread to the newest message --------------------------
+	let scrollEl = $state<HTMLElement | null>(null);
+	$effect(() => {
+		// Rerun whenever the message list grows or the thread changes.
+		const count = conversation?.messages.length ?? 0;
+		void count;
+		void selectedId;
+		if (!scrollEl) return;
+		tick().then(() => {
+			if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight;
+		});
+	});
+
+	function channelLabel(ch: string): string {
+		if (ch === 'Sms') return 'Text';
+		return ch;
 	}
-
-	const replyMutation = createMutation(() => ({
-		mutationFn: ({ id, reply }: { id: number; reply: string }) =>
-			messages.reply(id, { reply, status: 'InProgress' }),
-		onSuccess: (updated) => {
-			showSuccess('Reply sent.');
-			selectedMessage = updated;
-			invalidate();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	const statusMutation = createMutation(() => ({
-		mutationFn: ({ id, status }: { id: number; status: string }) =>
-			messages.setStatus(id, status),
-		onSuccess: (updated) => {
-			showSuccess('Status updated.');
-			selectedMessage = updated;
-			invalidate();
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	function openMessage(msg: Message) {
-		selectedMessage = msg;
-		replyText = msg.reply ?? '';
-	}
-
-	function closeDialog() {
-		selectedMessage = null;
-		replyText = '';
-	}
-
-	function sendReply() {
-		if (!selectedMessage) return;
-		replyMutation.mutate({ id: selectedMessage.id, reply: replyText });
-	}
-
-	function markResolved() {
-		if (!selectedMessage) return;
-		statusMutation.mutate({ id: selectedMessage.id, status: 'Resolved' });
-	}
-
-	function reopen() {
-		if (!selectedMessage) return;
-		statusMutation.mutate({ id: selectedMessage.id, status: 'Open' });
-	}
-
-	// Status badge map extended for message statuses
-	const statusBadgeMap: Record<string, { label?: string; class: string }> = {
-		Open:       { class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
-		InProgress: { label: 'In Progress', class: 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-500 dark:border-yellow-800' },
-		Resolved:   { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		Closed:     { class: 'bg-muted text-muted-foreground border-border' },
-	};
-
-	// Column definitions
-	const columns: ColumnDef<Message>[] = [
-		{
-			key: 'senderName',
-			title: 'From',
-			sortable: true,
-			mobileRole: 'title',
-			accessor: (m) => m.senderName ?? m.propertyName ?? '—',
-			cell: fromCellSnippet,
-		},
-		{
-			key: 'subject',
-			title: 'Subject',
-			sortable: true,
-			mobileRole: 'subtitle',
-		},
-		{
-			key: 'status',
-			title: 'Status',
-			mobileRole: 'badge',
-			cell: statusCellSnippet,
-		},
-		{
-			key: 'createdAt',
-			title: 'Received',
-			format: 'date',
-			sortable: true,
-			mobileRole: 'meta',
-		},
-	];
 </script>
-
-{#snippet fromCellSnippet(msg: Message)}
-	<span data-testid="message-from">{msg.senderName ?? msg.propertyName ?? '—'}</span>
-{/snippet}
-
-{#snippet statusCellSnippet(msg: Message)}
-	<StatusBadge status={msg.status} map={statusBadgeMap} />
-{/snippet}
 
 <svelte:head>
 	<title>Messages - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="messages-page">
-	<div class="mb-6 flex items-center justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold">Message Center</h1>
-			<p class="text-sm text-muted-foreground">Tenant and owner messages — reply and track status.</p>
-		</div>
-	</div>
+<div class="flex h-full flex-col" data-testid="messages-page">
+	<!-- Two-pane shell: list on the left, thread on the right. On narrow screens
+	     only one pane shows at a time (list ↔ thread). -->
+	<div class="flex min-h-0 flex-1 overflow-hidden">
+		<!-- LEFT: thread list ------------------------------------------------ -->
+		<aside
+			class="flex w-full shrink-0 flex-col border-r border-border md:w-80 lg:w-96
+				{selectedId !== null ? 'hidden md:flex' : 'flex'}"
+			data-testid="conversation-list-pane"
+		>
+			<div class="flex items-center justify-between gap-2 border-b border-border p-4">
+				<div class="min-w-0">
+					<h1 class="text-lg font-bold leading-none">Messages</h1>
+					<p class="mt-1 text-xs text-muted-foreground">Chat with your tenants.</p>
+				</div>
+				<Button size="sm" class="shrink-0 gap-1.5" data-testid="conversation-new-button" onclick={openCompose}>
+					<Plus class="h-4 w-4" />
+					New
+				</Button>
+			</div>
 
-	<DataGrid
-		data={messagesQuery.data ?? []}
-		{columns}
-		loading={messagesQuery.isLoading}
-		emptyMessage="No messages found."
-		onRowClick={(msg) => openMessage(msg)}
-		getRowKey={(msg) => msg.id}
-		getRowTestId={() => 'message-row'}
-		data-testid="messages-list"
-	>
-		{#snippet toolbar()}
-			<div class="flex flex-1 items-center gap-2 min-w-0">
-				<Select.Root
-					type="single"
-					bind:value={statusFilter}
-				>
-					<Select.Trigger class="w-44 shrink-0" data-testid="message-status-filter">
-						{statusFilter ? statusFilter : 'All statuses'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="All statuses">All statuses</Select.Item>
-						{#each MSG_STATUSES as s}
-							<Select.Item value={s} label={s}>{s}</Select.Item>
+			<div class="min-h-0 flex-1 overflow-y-auto" data-testid="conversation-list">
+				{#if conversationsQuery.isLoading}
+					<div class="space-y-2 p-3">
+						{#each [0, 1, 2, 3, 4] as _}
+							<div class="h-16 animate-pulse rounded-lg bg-muted/60"></div>
 						{/each}
-					</Select.Content>
-				</Select.Root>
+					</div>
+				{:else if conversationsQuery.isError}
+					<div class="p-6 text-center text-sm text-destructive" data-testid="conversation-list-error">
+						<MailWarning class="mx-auto mb-2 h-6 w-6" />
+						Couldn't load your conversations.
+						<button class="mt-2 block w-full text-xs underline" onclick={() => conversationsQuery.refetch()}>
+							Try again
+						</button>
+					</div>
+				{:else if conversations.length === 0}
+					<div class="flex flex-col items-center justify-center px-6 py-16 text-center" data-testid="conversation-list-empty">
+						<MessageSquare class="mb-3 h-8 w-8 text-muted-foreground" />
+						<p class="text-sm font-medium">No conversations yet</p>
+						<p class="mt-1 text-xs text-muted-foreground">Start one to message a tenant.</p>
+						<Button size="sm" class="mt-4 gap-1.5" onclick={openCompose}>
+							<Plus class="h-4 w-4" />
+							New conversation
+						</Button>
+					</div>
+				{:else}
+					<ul>
+						{#each conversations as c (c.id)}
+							{@render conversationRow(c)}
+						{/each}
+					</ul>
+				{/if}
 			</div>
-			<Button data-testid="message-new-button" class="gap-2 shrink-0" onclick={openCompose}>
-				<Plus class="h-4 w-4" />
-				New message
-			</Button>
-		{/snippet}
-	</DataGrid>
-</div>
+		</aside>
 
-<!-- Message detail dialog -->
-<Dialog.Root
-	open={selectedMessage !== null}
-	onOpenChange={(v) => { if (!v) closeDialog(); }}
->
-	<Dialog.Content class="max-w-xl">
-		{#if selectedMessage}
-			<Dialog.Header>
-				<Dialog.Title class="pr-4">{selectedMessage.subject}</Dialog.Title>
-				<Dialog.Description class="flex items-center gap-2 flex-wrap">
-					<span class="text-xs text-muted-foreground">
-						From: <span class="font-medium text-foreground">{selectedMessage.senderName ?? '—'}</span>
-					</span>
-					{#if selectedMessage.propertyName}
-						<span class="text-xs text-muted-foreground">· {selectedMessage.propertyName}{selectedMessage.unitLabel ? ` · ${selectedMessage.unitLabel}` : ''}</span>
-					{/if}
-					<StatusBadge status={selectedMessage.status} map={statusBadgeMap} />
-				</Dialog.Description>
-			</Dialog.Header>
+		<!-- RIGHT: conversation view ----------------------------------------- -->
+		<section
+			class="min-w-0 flex-1 flex-col {selectedId !== null ? 'flex' : 'hidden md:flex'}"
+			data-testid="conversation-pane"
+		>
+			{#if selectedId === null}
+				<!-- Empty / no-selection placeholder (desktop only). -->
+				<div class="flex h-full flex-col items-center justify-center p-8 text-center text-muted-foreground">
+					<MessageSquare class="mb-3 h-10 w-10" />
+					<p class="text-sm font-medium">Select a conversation</p>
+					<p class="mt-1 text-xs">Pick a thread on the left, or start a new one.</p>
+				</div>
+			{:else if conversationQuery.isLoading}
+				<div class="flex-1 space-y-3 p-4">
+					{#each [0, 1, 2, 3] as _}
+						<div class="h-14 w-2/3 animate-pulse rounded-2xl bg-muted/60"></div>
+					{/each}
+				</div>
+			{:else if conversationQuery.isError}
+				<div class="flex h-full flex-col items-center justify-center p-8 text-center text-destructive" data-testid="conversation-error">
+					<MailWarning class="mb-2 h-8 w-8" />
+					<p class="text-sm">Couldn't load this conversation.</p>
+					<Button variant="outline" size="sm" class="mt-3" onclick={() => conversationQuery.refetch()}>Try again</Button>
+				</div>
+			{:else if conversation}
+				<!-- Thread header -->
+				<div class="flex items-center gap-2 border-b border-border p-4">
+					<Button
+						variant="ghost"
+						size="icon"
+						class="md:hidden"
+						data-testid="conversation-back"
+						onclick={backToList}
+						aria-label="Back to conversations"
+					>
+						<ArrowLeft class="h-5 w-5" />
+					</Button>
+					<div class="min-w-0">
+						<h2 class="truncate text-base font-semibold" data-testid="conversation-title">
+							{conversation.subject}
+						</h2>
+						<p class="truncate text-xs text-muted-foreground">
+							{conversation.tenantName}{conversation.propertyName ? ` · ${conversation.propertyName}` : ''}
+						</p>
+					</div>
+				</div>
 
-			<!-- Message body -->
-			<div class="rounded border border-border bg-muted/40 p-3 text-sm leading-relaxed" data-testid="message-body">
-				{selectedMessage.body}
-			</div>
+				<!-- Message history (chat bubbles) -->
+				<div bind:this={scrollEl} class="min-h-0 flex-1 space-y-3 overflow-y-auto p-4" data-testid="conversation-messages">
+					{#each conversation.messages as m (m.id)}
+						{@render bubble(m)}
+					{/each}
+				</div>
 
-			<!-- Existing reply -->
-			{#if selectedMessage.reply}
-				<div class="space-y-1">
-					<p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">Previous Reply</p>
-					<div class="rounded border border-border bg-background p-3 text-sm leading-relaxed" data-testid="message-existing-reply">
-						{selectedMessage.reply}
+				<!-- Compose box pinned at the bottom -->
+				<div class="border-t border-border p-3">
+					<div class="flex items-end gap-2">
+						<textarea
+							data-testid="reply-input"
+							bind:value={replyBody}
+							onkeydown={onReplyKeydown}
+							rows={2}
+							class="max-h-40 min-h-[2.5rem] flex-1 resize-y rounded-md border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+							placeholder="Type a message…  (Enter to send)"
+						></textarea>
+						<Button
+							size="icon"
+							class="h-10 w-10 shrink-0"
+							data-testid="reply-send"
+							onclick={sendReply}
+							disabled={!canSendReply || replyMutation.isPending}
+							aria-label="Send message"
+						>
+							<Send class="h-4 w-4" />
+						</Button>
+					</div>
+
+					<!-- Channel picker for this reply (pre-filled from settings; per-send only) -->
+					<div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+						<span class="text-muted-foreground">Send via:</span>
+						<label class="flex items-center gap-1.5">
+							<Checkbox bind:checked={replyChannels.portal} data-testid="reply-channel-portal" />
+							<span>Portal</span>
+						</label>
+						<label class="flex items-center gap-1.5">
+							<Checkbox bind:checked={replyChannels.email} data-testid="reply-channel-email" />
+							<span>Email</span>
+						</label>
+						<label class="flex items-center gap-1.5">
+							<Checkbox bind:checked={replyChannels.sms} data-testid="reply-channel-sms" />
+							<span>Text</span>
+						</label>
+						{#if !replyAnyChannel}
+							<span class="text-destructive" data-testid="reply-channel-error">Pick at least one.</span>
+						{/if}
 					</div>
 				</div>
 			{/if}
+		</section>
+	</div>
+</div>
 
-			<!-- Reply textarea -->
-			<div class="space-y-1">
-				<label for="message-reply-input" class="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-					{selectedMessage.reply ? 'Update Reply' : 'Write Reply'}
-				</label>
-				<textarea
-					id="message-reply-input"
-					data-testid="message-reply-input"
-					bind:value={replyText}
-					rows={4}
-					class="w-full rounded border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-					placeholder="Type your reply…"
-				></textarea>
+<!-- Thread-list row snippet -->
+{#snippet conversationRow(c: ConversationSummary)}
+	<li>
+		<button
+			type="button"
+			class="flex w-full items-start gap-3 border-b border-border/60 px-4 py-3 text-left transition-colors hover:bg-muted/50
+				{selectedId === c.id ? 'bg-muted' : ''}"
+			data-testid="conversation-row"
+			onclick={() => openConversation(c.id)}
+		>
+			<div class="min-w-0 flex-1">
+				<div class="flex items-baseline justify-between gap-2">
+					<span class="truncate text-sm font-semibold {c.unreadCount > 0 ? 'text-foreground' : ''}">
+						{c.tenantName}
+					</span>
+					<span class="shrink-0 text-[11px] text-muted-foreground">{formatRelative(c.lastMessageAt)}</span>
+				</div>
+				<p class="truncate text-xs font-medium text-foreground/80">{c.subject}</p>
+				{#if c.lastMessagePreview}
+					<p class="truncate text-xs text-muted-foreground">{c.lastMessagePreview}</p>
+				{/if}
 			</div>
+			{#if c.unreadCount > 0}
+				<span
+					class="mt-0.5 inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground"
+					data-testid="conversation-unread-badge"
+				>
+					{c.unreadCount}
+				</span>
+			{/if}
+		</button>
+	</li>
+{/snippet}
 
-			<Dialog.Footer class="flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-				<!-- Status actions (left side) -->
-				<div class="flex gap-2">
-					{#if selectedMessage.status !== 'Resolved' && selectedMessage.status !== 'Closed'}
-						<Button
-							variant="outline"
-							size="sm"
-							data-testid="message-mark-resolved"
-							onclick={markResolved}
-							disabled={statusMutation.isPending}
-						>
-							Mark Resolved
-						</Button>
-					{/if}
-					{#if selectedMessage.status === 'Resolved' || selectedMessage.status === 'Closed'}
-						<Button
-							variant="outline"
-							size="sm"
-							data-testid="message-reopen"
-							onclick={reopen}
-							disabled={statusMutation.isPending}
-						>
-							Reopen
-						</Button>
-					{/if}
-				</div>
+<!-- Chat bubble snippet -->
+{#snippet bubble(m: ConversationMessage)}
+	{@const mine = m.senderRole === 'Landlord'}
+	<div class="flex {mine ? 'justify-end' : 'justify-start'}" data-testid="message-bubble">
+		<div class="max-w-[78%] space-y-1">
+			<div
+				class="whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm leading-relaxed
+					{mine
+						? 'rounded-br-sm bg-primary text-primary-foreground'
+						: 'rounded-bl-sm bg-muted text-foreground'}"
+			>
+				{m.body}
+			</div>
+			<div class="flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground {mine ? 'justify-end' : 'justify-start'}">
+				<span>{formatRelative(m.createdAt)}</span>
+				{#if mine && m.channels && m.channels.length > 0}
+					<span aria-hidden="true">·</span>
+					<span>{m.channels.map(channelLabel).join(', ')}</span>
+				{/if}
+			</div>
+		</div>
+	</div>
+{/snippet}
 
-				<!-- Send reply (right side) -->
-				<div class="flex gap-2">
-					<Button variant="outline" onclick={closeDialog}>Cancel</Button>
-					<Button
-						data-testid="message-reply-send"
-						onclick={sendReply}
-						disabled={replyMutation.isPending || !replyText.trim()}
-					>
-						{replyMutation.isPending ? 'Sending…' : 'Send Reply'}
-					</Button>
-				</div>
-			</Dialog.Footer>
-		{/if}
-	</Dialog.Content>
-</Dialog.Root>
-
-<!-- Compose new message dialog -->
+<!-- New conversation dialog -->
 <Dialog.Root open={composeOpen} onOpenChange={(v) => { if (!v) closeCompose(); }}>
 	<Dialog.Content class="max-w-xl">
 		<Dialog.Header>
-			<Dialog.Title>New message</Dialog.Title>
+			<Dialog.Title>New conversation</Dialog.Title>
 			<Dialog.Description>
-				Send a message to a tenant. Choose how it reaches them below.
+				Start a thread with a tenant. Choose how the first message reaches them below.
 			</Dialog.Description>
 		</Dialog.Header>
 
-		<div class="space-y-4" data-testid="message-compose-form">
+		<div class="space-y-4" data-testid="conversation-compose-form">
 			<!-- Recipient -->
 			<div class="space-y-1">
-				<span class="text-xs font-medium text-muted-foreground uppercase tracking-wide">To</span>
+				<span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">To</span>
 				<Select.Root type="single" bind:value={composeForm.tenantId}>
-					<Select.Trigger class="w-full" data-testid="message-compose-tenant">
+					<Select.Trigger class="w-full" data-testid="conversation-compose-tenant">
 						{selectedTenantName ?? 'Choose a tenant…'}
 					</Select.Trigger>
 					<Select.Content>
@@ -380,25 +460,25 @@
 				</Select.Root>
 			</div>
 
-			<!-- Subject -->
+			<!-- Subject (topic) -->
 			<div class="space-y-1">
-				<label for="message-compose-subject" class="text-xs font-medium text-muted-foreground uppercase tracking-wide">Subject</label>
+				<label for="conversation-compose-subject" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Topic</label>
 				<Input
-					id="message-compose-subject"
-					data-testid="message-compose-subject"
+					id="conversation-compose-subject"
+					data-testid="conversation-compose-subject"
 					bind:value={composeForm.subject}
 					placeholder="What's this about?"
 				/>
 			</div>
 
-			<!-- Body -->
+			<!-- First message -->
 			<div class="space-y-1">
-				<label for="message-compose-body" class="text-xs font-medium text-muted-foreground uppercase tracking-wide">Message</label>
+				<label for="conversation-compose-body" class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Message</label>
 				<textarea
-					id="message-compose-body"
-					data-testid="message-compose-body"
+					id="conversation-compose-body"
+					data-testid="conversation-compose-body"
 					bind:value={composeForm.body}
-					rows={5}
+					rows={4}
 					class="w-full rounded border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
 					placeholder="Type your message…"
 				></textarea>
@@ -406,30 +486,30 @@
 
 			<!-- Channels -->
 			<div class="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
-				<p class="text-xs font-medium text-muted-foreground uppercase tracking-wide">Send via</p>
+				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Send via</p>
 				<label class="flex items-start gap-3">
-					<Checkbox bind:checked={channels.portal} data-testid="message-channel-portal" />
+					<Checkbox bind:checked={composeChannels.portal} data-testid="conversation-channel-portal" />
 					<span class="text-sm leading-tight">
 						<span class="font-medium">Portal inbox</span>
 						<span class="block text-xs text-muted-foreground">Shows up in the tenant's account.</span>
 					</span>
 				</label>
 				<label class="flex items-start gap-3">
-					<Checkbox bind:checked={channels.email} data-testid="message-channel-email" />
+					<Checkbox bind:checked={composeChannels.email} data-testid="conversation-channel-email" />
 					<span class="text-sm leading-tight">
 						<span class="font-medium">Email</span>
 						<span class="block text-xs text-muted-foreground">Emails the tenant a copy.</span>
 					</span>
 				</label>
 				<label class="flex items-start gap-3">
-					<Checkbox bind:checked={channels.sms} data-testid="message-channel-sms" />
+					<Checkbox bind:checked={composeChannels.sms} data-testid="conversation-channel-sms" />
 					<span class="text-sm leading-tight">
 						<span class="font-medium">Text (SMS)</span>
-						<span class="block text-xs text-muted-foreground">Texts the tenant. Requires Twilio setup.</span>
+						<span class="block text-xs text-muted-foreground">Texts the tenant. Requires SMS setup.</span>
 					</span>
 				</label>
-				{#if !anyChannel}
-					<p class="text-xs text-destructive" data-testid="message-channel-error">Pick at least one way to send.</p>
+				{#if !composeAnyChannel}
+					<p class="text-xs text-destructive" data-testid="conversation-channel-error">Pick at least one way to send.</p>
 				{/if}
 			</div>
 		</div>
@@ -437,11 +517,11 @@
 		<Dialog.Footer>
 			<Button variant="outline" onclick={closeCompose}>Cancel</Button>
 			<Button
-				data-testid="message-compose-send"
-				onclick={sendCompose}
-				disabled={!canSend || composeMutation.isPending}
+				data-testid="conversation-compose-send"
+				onclick={startConversation}
+				disabled={!canStart || startMutation.isPending}
 			>
-				{composeMutation.isPending ? 'Sending…' : 'Send message'}
+				{startMutation.isPending ? 'Starting…' : 'Start conversation'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
