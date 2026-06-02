@@ -6,9 +6,9 @@ import '../../core/auth/auth_models.dart';
 import '../../core/realtime/realtime_providers.dart';
 import '../ai/ai_models.dart';
 import '../ai/ai_repository.dart';
-import '../ai/ai_tab.dart';
 import '../leases/leases_list_screen.dart';
 import '../maintenance/work_order_detail_screen.dart';
+import '../messages/messages_list_screen.dart';
 import '../payments/payments_screen.dart';
 import '../properties/properties_tab.dart';
 import '../scan/scan_tab.dart';
@@ -29,7 +29,7 @@ final _briefingProvider = FutureProvider.autoDispose<BriefingResponse>((ref) {
 
 /// Bottom-navigation app shell.
 ///
-/// Tabs: Home · Scan · Properties · AI · More
+/// Tabs: Home · Scan · Properties · Messages · More
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
@@ -53,9 +53,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       activeIcon: Icons.apartment,
     ),
     _TabItem(
-      label: 'AI',
-      icon: Icons.auto_awesome_outlined,
-      activeIcon: Icons.auto_awesome,
+      label: 'Messages',
+      icon: Icons.forum_outlined,
+      activeIcon: Icons.forum,
     ),
     _TabItem(label: 'More', icon: Icons.more_horiz, activeIcon: Icons.menu),
   ];
@@ -87,7 +87,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           ),
           const ScanTab(),
           const PropertiesTab(),
-          const AiTab(),
+          const MessagesListScreen(),
           const MoreTab(),
         ],
       ),
