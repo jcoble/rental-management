@@ -315,9 +315,11 @@
 			</header>
 		{/if}
 
-		<!-- Page content -->
+		<!-- Page content. The inner wrapper carries a definite height (h-full) so
+		     full-height pages (e.g. the messages two-pane) can use h-full and scroll
+		     internally; normal pages still flow + overflow into <main>'s scroll. -->
 		<main class="flex-1 overflow-auto p-6">
-			<div class="pb-10">
+			<div class="h-full pb-10">
 				{@render children()}
 			</div>
 		</main>
