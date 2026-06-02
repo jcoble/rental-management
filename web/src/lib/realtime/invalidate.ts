@@ -46,7 +46,10 @@ const entityQueryKeys: Record<string, string[][]> = {
 	// A confirmed scan creates an Expense (the backend also broadcasts that
 	// `Expense` event), so refresh the expense list + accounting summary too —
 	// the just-confirmed expense and its effect on the cards show without a reload.
-	ScanDraft: [['scans'], ['scan'], ['expenses'], ['accounting-summary'], ['dashboard']]
+	ScanDraft: [['scans'], ['scan'], ['expenses'], ['accounting-summary'], ['dashboard']],
+	// A conversation event (a new message from either side) refreshes the thread list and,
+	// via the ['conversation'] prefix, whichever thread is currently open.
+	Conversation: [['conversations'], ['conversation']]
 };
 
 /** Detail query-key prefix for an entity, used to drop a deleted entity's cache. */
@@ -63,7 +66,8 @@ const entityDetailKey: Record<string, string> = {
 	Vendor: 'vendor',
 	OwnerEntity: 'owner',
 	Portfolio: 'portfolio',
-	ScanDraft: 'scan'
+	ScanDraft: 'scan',
+	Conversation: 'conversation'
 };
 
 function invalidateForEntity(queryClient: QueryClient, entityType: string): void {
