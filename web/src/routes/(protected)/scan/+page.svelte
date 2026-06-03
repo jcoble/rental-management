@@ -10,6 +10,7 @@
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import { Mic, Square } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 
@@ -26,6 +27,9 @@
 		{ value: 'Payment', label: 'Rent Check / Payment', hint: 'Becomes a payment record' }
 	] as const;
 	let docType = $state<string>('Expense');
+	let isRecording = $state(false);
+	let recorder: MediaRecorder | null = null;
+	let voiceChunks: Blob[] = [];
 
 	const scansQuery = createQuery(() => ({
 		queryKey: ['scans', activeFilter],
@@ -43,8 +47,52 @@
 		}
 	}));
 
+	const voiceMutation = createMutation(() => ({
+		mutationFn: (audio: Blob) => scan.createVoiceDraft(audio),
+		onSuccess: (draft) => {
+			queryClient.invalidateQueries({ queryKey: ['scans'] });
+			goto(`/scan/${draft.id}`);
+		},
+		onError: (err) => {
+			toast.error(err instanceof Error ? err.message : 'Voice capture failed');
+		}
+	}));
+
 	function handleFileSelected(file: File) {
 		uploadMutation.mutate(file);
+	}
+
+	async function startVoiceCapture() {
+		if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+			toast.error('Voice recording is not available in this browser.');
+			return;
+		}
+
+		try {
+			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			voiceChunks = [];
+			const nextRecorder = new MediaRecorder(stream);
+			nextRecorder.ondataavailable = (event) => {
+				if (event.data.size > 0) voiceChunks.push(event.data);
+			};
+			nextRecorder.onstop = () => {
+				stream.getTracks().forEach((track) => track.stop());
+				const audio = new Blob(voiceChunks, { type: nextRecorder.mimeType || 'audio/webm' });
+				voiceMutation.mutate(audio);
+				recorder = null;
+			};
+			recorder = nextRecorder;
+			nextRecorder.start();
+			isRecording = true;
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Could not start recording');
+		}
+	}
+
+	function stopVoiceCapture() {
+		if (!recorder || recorder.state === 'inactive') return;
+		isRecording = false;
+		recorder.stop();
 	}
 
 	// Scan statuses not in StatusBadge default map — pass a custom map
@@ -146,6 +194,30 @@
 			</Card.Root>
 		{:else}
 			<FileDrop onselected={handleFileSelected} />
+		{/if}
+	</div>
+
+	<div class="mb-6 flex flex-wrap items-center gap-3 border-b pb-6" data-testid="voice-capture">
+		<Button
+			type="button"
+			variant={isRecording ? 'destructive' : 'outline'}
+			class="gap-2"
+			disabled={voiceMutation.isPending}
+			onclick={isRecording ? stopVoiceCapture : startVoiceCapture}
+			data-testid="voice-record-button"
+		>
+			{#if isRecording}
+				<Square class="h-4 w-4" />
+				Stop recording
+			{:else}
+				<Mic class="h-4 w-4" />
+				Record voice note
+			{/if}
+		</Button>
+		{#if voiceMutation.isPending}
+			<span class="text-sm text-muted-foreground">Creating draft...</span>
+		{:else if isRecording}
+			<span class="text-sm text-muted-foreground">Recording...</span>
 		{/if}
 	</div>
 
