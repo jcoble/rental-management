@@ -28,6 +28,7 @@ public class ScanServiceTests : IDisposable
     private readonly Mock<IScanFileService> _filesMock;
     private readonly RecordingExpenseService _expenses;
     private readonly Mock<IPaymentService> _paymentsMock;
+    private readonly RecordingWorkOrderService _workOrders;
     private readonly RecordingAuditService _audit;
     private readonly ScanService _sut;
 
@@ -59,6 +60,7 @@ public class ScanServiceTests : IDisposable
         _filesMock    = new Mock<IScanFileService>(MockBehavior.Strict);
         _expenses     = new RecordingExpenseService();
         _paymentsMock = new Mock<IPaymentService>();
+        _workOrders   = new RecordingWorkOrderService();
         _audit        = new RecordingAuditService();
 
         _sut = new ScanService(
@@ -66,6 +68,7 @@ public class ScanServiceTests : IDisposable
             _filesMock.Object,
             _expenses,
             _paymentsMock.Object,
+            _workOrders,
             _audit,
             NullLogger<ScanService>.Instance);
     }
@@ -194,6 +197,40 @@ public class ScanServiceTests : IDisposable
         _expenses.LastRequest.Should().BeNull(); // expense service was never called
     }
 
+    [Fact]
+    public async Task ConfirmAndCreateAsync_ReviewingWorkOrderDraft_CreatesWorkOrder()
+    {
+        const string extractedJson =
+            """{"target_entity_type":{"value":"WorkOrder","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.7},"title":{"value":"Ceiling leak","confidence":0.9},"description":{"value":"Tenant says water is coming through the kitchen ceiling.","confidence":0.85},"category":{"value":"Plumbing","confidence":0.8},"priority":{"value":"Emergency","confidence":0.8},"estimated_cost":{"value":"250.00","confidence":0.4}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "WorkOrder");
+        SeedStoredFile(draft.FilePath);
+        _workOrders.SetupResponse(new WorkOrderResponse { Id = 123, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        result.EntityType.Should().Be("WorkOrder");
+        result.CreatedEntityId.Should().Be(123);
+        _workOrders.LastRequest.Should().NotBeNull();
+        _workOrders.LastRequest!.PropertyId.Should().Be(10);
+        _workOrders.LastRequest.UnitId.Should().Be(20);
+        _workOrders.LastRequest.Title.Should().Be("Ceiling leak");
+        _workOrders.LastRequest.Description.Should().Contain("kitchen ceiling");
+        _workOrders.LastRequest.Category.Should().Be("Plumbing");
+        _workOrders.LastRequest.Priority.Should().Be(WorkOrderPriority.Emergency);
+        _workOrders.LastRequest.EstimatedCost.Should().Be(250.00m);
+
+        string? draftStatus;
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = $"SELECT Status FROM ScanDrafts WHERE Id = {draft.Id}";
+            draftStatus = (string?)cmd.ExecuteScalar();
+        }
+        draftStatus.Should().Be("Confirmed");
+        _audit.Calls.Should().Contain(c => c.entityType == "WorkOrder" && c.entityId == 123);
+    }
+
     // -------------------------------------------------------------------------
     // Reject: happy path
     // -------------------------------------------------------------------------
@@ -219,13 +256,13 @@ public class ScanServiceTests : IDisposable
     // Seed helpers
     // -------------------------------------------------------------------------
 
-    private ScanDraft SeedDraft(string status, string? extractedFields)
+    private ScanDraft SeedDraft(string status, string? extractedFields, string targetEntityType = "Expense")
     {
         var draft = new ScanDraft
         {
             PortfolioId      = PortfolioId,
             FilePath         = $"uploads/test-{Guid.NewGuid():N}.jpg",
-            TargetEntityType = "Expense",
+            TargetEntityType = targetEntityType,
             Status           = status,
             ExtractedFields  = extractedFields,
             CreatedAt        = DateTime.UtcNow,
@@ -297,6 +334,33 @@ public class ScanServiceTests : IDisposable
             Calls.Add((portfolioId, entityType, entityId, operation));
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class RecordingWorkOrderService : IWorkOrderService
+    {
+        private WorkOrderResponse? _response;
+
+        public CreateWorkOrderRequest? LastRequest { get; private set; }
+
+        public void SetupResponse(WorkOrderResponse response) => _response = response;
+
+        public Task<WorkOrderResponse?> CreateAsync(int portfolioId, CreateWorkOrderRequest request, CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(_response);
+        }
+
+        public Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? vendorId, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<WorkOrderResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
     }
 }
 

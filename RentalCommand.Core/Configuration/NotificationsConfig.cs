@@ -12,6 +12,10 @@ public class NotificationsConfig
     // Whether to enqueue tenant-facing SMS/email notices from the automations (off until providers set).
     public bool NotifyTenants { get; set; } = false;
 
+    // Proactive owner-facing daily briefing delivery. Defaults off until recipients are configured.
+    public bool EnableDailyBriefingMessages { get; set; } = false;
+    public DailyBriefingOptions DailyBriefing { get; set; } = new();
+
     public int RentChargeLeadDays { get; set; } = 5;    // create the scheduled rent payment up to N days before due
     public int LateFeeGraceDays { get; set; } = 5;      // days past due before a late fee applies
     public int LeaseExpiryReminderDays { get; set; } = 60;
@@ -55,6 +59,14 @@ public class SendGridOptions
     public string? FromEmail { get; set; }
     public string? FromName { get; set; }
     public bool Enabled => !string.IsNullOrWhiteSpace(ApiKey) && !string.IsNullOrWhiteSpace(FromEmail);
+}
+
+public class DailyBriefingOptions
+{
+    public int SendHourLocal { get; set; } = 8;
+    public string[] SmsRecipients { get; set; } = [];
+    public string[] EmailRecipients { get; set; } = [];
+    public bool IncludeEmptyBriefing { get; set; } = false;
 }
 
 public class LateFeeCap

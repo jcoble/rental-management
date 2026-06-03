@@ -34,6 +34,7 @@ export interface ScanCreatedResponse {
 export interface ScanConfirmResponse {
 	expenseId?: number | null;
 	paymentId?: number | null;
+	workOrderId?: number | null;
 	entityType?: string | null;
 	entityId?: number | null;
 }
@@ -55,6 +56,12 @@ export const scan = {
 
 	confirm: (id: number, overridesJson: string): Promise<ScanConfirmResponse> =>
 		api.post<ScanConfirmResponse>(`/scans/${id}/confirm`, { overridesJson }),
+
+	createVoiceDraft: (audio: Blob): Promise<ScanDraftResponse> => {
+		const fd = new FormData();
+		fd.append('audio', audio, 'voice.webm');
+		return api.upload<ScanDraftResponse>('/voice/drafts', fd);
+	},
 
 	reject: (id: number, reason: string): Promise<unknown> =>
 		api.post(`/scans/${id}/reject`, { reason })

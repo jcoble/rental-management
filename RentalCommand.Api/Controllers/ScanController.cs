@@ -227,9 +227,12 @@ public class ScanController : AuthenticatedPortfolioControllerBase
         // navigate directly to the record. Both keys are included for backward compatibility
         // (older clients that always read expenseId still get a value; newer clients use
         // entityType + entityId for a generic approach).
-        return result.EntityType == "Payment"
-            ? Ok(new { paymentId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId })
-            : Ok(new { expenseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId });
+        return result.EntityType switch
+        {
+            "Payment" => Ok(new { paymentId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
+            "WorkOrder" => Ok(new { workOrderId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
+            _ => Ok(new { expenseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
+        };
     }
 
     // -------------------------------------------------------------------------

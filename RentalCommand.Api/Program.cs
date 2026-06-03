@@ -11,6 +11,7 @@ using RentalCommand.Api.Hubs;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Payments;
+using RentalCommand.Api.Services.Voice;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
@@ -60,6 +61,11 @@ else // default: openai
     });
 }
 builder.Services.AddScoped<RentalCommand.Core.Interfaces.IFileStorage, RentalCommand.Api.Scanning.DiskFileStorage>();
+builder.Services.AddHttpClient<IAudioTranscriptionService, OpenAiAudioTranscriptionService>(c =>
+{
+    c.BaseAddress = new Uri("https://api.openai.com/");
+    c.Timeout = TimeSpan.FromSeconds(90);
+});
 
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
 

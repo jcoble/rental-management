@@ -20,6 +20,7 @@ public sealed class ScanService : IScanService
     private readonly IScanFileService _files;
     private readonly IExpenseService _expenses;
     private readonly IPaymentService _payments;
+    private readonly IWorkOrderService _workOrders;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<ScanService> _logger;
 
@@ -28,6 +29,7 @@ public sealed class ScanService : IScanService
         IScanFileService files,
         IExpenseService expenses,
         IPaymentService payments,
+        IWorkOrderService workOrders,
         IAuditTrailService audit,
         ILogger<ScanService> logger)
     {
@@ -35,6 +37,7 @@ public sealed class ScanService : IScanService
         _files = files;
         _expenses = expenses;
         _payments = payments;
+        _workOrders = workOrders;
         _audit = audit;
         _logger = logger;
     }
@@ -119,7 +122,7 @@ public sealed class ScanService : IScanService
         if (draft.Status != "Reviewing")
             return new ScanConfirmResult(false, null, "Draft is not ready to confirm; it must be reviewed first.");
 
-        if (draft.TargetEntityType is not ("Expense" or "Payment"))
+        if (draft.TargetEntityType is not ("Expense" or "Payment" or "WorkOrder"))
             return new ScanConfirmResult(false, null, $"Unsupported target '{draft.TargetEntityType}'");
 
         // Start from the extracted fields, then apply the user's reviewed overrides (overrides win).
@@ -152,9 +155,12 @@ public sealed class ScanService : IScanService
         }
 
         // ---- ROUTER ----
-        var result = draft.TargetEntityType == "Payment"
-            ? await ConfirmAsPaymentAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct)
-            : await ConfirmAsExpenseAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct);
+        var result = draft.TargetEntityType switch
+        {
+            "Payment" => await ConfirmAsPaymentAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct),
+            "WorkOrder" => await ConfirmAsWorkOrderAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
+            _ => await ConfirmAsExpenseAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct),
+        };
 
         if (!result.Success)
         {
@@ -398,6 +404,89 @@ public sealed class ScanService : IScanService
             ct: ct);
 
         return new ScanConfirmResult(true, payment.Id, null, "Payment");
+    }
+
+    // -------------------------------------------------------------------------
+    // ConfirmAsWorkOrderAsync  (called by the router)
+    // -------------------------------------------------------------------------
+
+    private async Task<ScanConfirmResult> ConfirmAsWorkOrderAsync(
+        int portfolioId,
+        int draftId,
+        int userId,
+        ScanDraft draft,
+        string overridesJson,
+        CancellationToken ct)
+    {
+        var fields = BuildWorkOrderFields(draft.ExtractedFields);
+        ApplyWorkOrderOverrides(fields, overridesJson);
+
+        if (fields.PropertyId <= 0)
+            return new ScanConfirmResult(false, null, "Select a property for this work order");
+
+        if (string.IsNullOrWhiteSpace(fields.Title))
+            return new ScanConfirmResult(false, null, "Work order title is required");
+
+        if (string.IsNullOrWhiteSpace(fields.Description))
+            return new ScanConfirmResult(false, null, "Work order description is required");
+
+        var request = new CreateWorkOrderRequest
+        {
+            PropertyId = fields.PropertyId,
+            UnitId = fields.UnitId,
+            TenantId = fields.TenantId,
+            LeaseId = fields.LeaseId,
+            VendorId = fields.VendorId,
+            Title = fields.Title!,
+            Description = fields.Description!,
+            Category = string.IsNullOrWhiteSpace(fields.Category) ? "General" : fields.Category!,
+            Priority = fields.Priority,
+            Status = WorkOrderStatus.New,
+            RequestedAt = DateTime.UtcNow,
+            EstimatedCost = fields.EstimatedCost,
+            CreatedBy = userId.ToString(),
+        };
+
+        WorkOrderResponse? workOrder;
+        try
+        {
+            workOrder = await _workOrders.CreateAsync(portfolioId, request, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Work order creation threw while confirming scan draft {DraftId}", draftId);
+            workOrder = null;
+        }
+
+        if (workOrder is null)
+            return new ScanConfirmResult(false, null, "Work order creation failed");
+
+        await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "WorkOrder", workOrder.Id, ct);
+
+        var appliedJson = JsonSerializer.Serialize(new
+        {
+            request.PropertyId,
+            request.UnitId,
+            request.TenantId,
+            request.Title,
+            request.Description,
+            request.Category,
+            Priority = request.Priority.ToString(),
+            request.EstimatedCost,
+        });
+
+        await _audit.LogAsync(
+            portfolioId,
+            "WorkOrder",
+            workOrder.Id,
+            AuditLogOperation.Created,
+            userId: userId,
+            oldValues: draft.ExtractedFields,
+            newValues: appliedJson,
+            changeReason: "Created from scan draft #" + draftId,
+            ct: ct);
+
+        return new ScanConfirmResult(true, workOrder.Id, null, "WorkOrder");
     }
 
     // -------------------------------------------------------------------------
@@ -808,6 +897,88 @@ public sealed class ScanService : IScanService
         }
     }
 
+    private WorkOrderDraftFields BuildWorkOrderFields(string? extractedFieldsJson)
+    {
+        var fields = new WorkOrderDraftFields();
+        if (string.IsNullOrWhiteSpace(extractedFieldsJson))
+            return fields;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(extractedFieldsJson);
+            var root = doc.RootElement;
+
+            fields.PropertyId = ParseIntField(root, "property_id") ?? ParseIntField(root, "propertyId") ?? 0;
+            fields.UnitId = ParseIntField(root, "unit_id") ?? ParseIntField(root, "unitId");
+            fields.TenantId = ParseIntField(root, "tenant_id") ?? ParseIntField(root, "tenantId");
+            fields.LeaseId = ParseIntField(root, "lease_id") ?? ParseIntField(root, "leaseId");
+            fields.VendorId = ParseIntField(root, "vendor_id") ?? ParseIntField(root, "vendorId");
+            fields.Title = ReadFieldValue(root, "title");
+            fields.Description = ReadFieldValue(root, "description") ?? ReadFieldValue(root, "transcript");
+            fields.Category = ReadFieldValue(root, "category");
+            fields.EstimatedCost = ParseDecimalField(root, "estimated_cost") ?? ParseDecimalField(root, "estimatedCost");
+
+            var priority = ReadFieldValue(root, "priority");
+            if (!string.IsNullOrWhiteSpace(priority) &&
+                Enum.TryParse<WorkOrderPriority>(priority, ignoreCase: true, out var parsedPriority))
+            {
+                fields.Priority = parsedPriority;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse work-order extraction JSON.");
+        }
+
+        return fields;
+    }
+
+    private void ApplyWorkOrderOverrides(WorkOrderDraftFields fields, string overridesJson)
+    {
+        if (string.IsNullOrWhiteSpace(overridesJson))
+            return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(overridesJson);
+            var root = doc.RootElement;
+
+            if (TryGetOverrideInt(root, out var propertyId, "propertyId", "property_id"))
+                fields.PropertyId = propertyId;
+            if (TryGetOverrideInt(root, out var unitId, "unitId", "unit_id"))
+                fields.UnitId = unitId > 0 ? unitId : null;
+            if (TryGetOverrideInt(root, out var tenantId, "tenantId", "tenant_id"))
+                fields.TenantId = tenantId > 0 ? tenantId : null;
+            if (TryGetOverrideInt(root, out var leaseId, "leaseId", "lease_id"))
+                fields.LeaseId = leaseId > 0 ? leaseId : null;
+            if (TryGetOverrideInt(root, out var vendorId, "vendorId", "vendor_id"))
+                fields.VendorId = vendorId > 0 ? vendorId : null;
+            if (TryGetOverrideString(root, out var title, "title"))
+                fields.Title = title;
+            if (TryGetOverrideString(root, out var description, "description"))
+                fields.Description = description;
+            if (TryGetOverrideString(root, out var category, "category"))
+                fields.Category = category;
+            if (TryGetOverrideDecimal(root, out var estimatedCost, "estimatedCost", "estimated_cost"))
+                fields.EstimatedCost = estimatedCost;
+            if (TryGetOverrideString(root, out var priority, "priority") &&
+                Enum.TryParse<WorkOrderPriority>(priority, ignoreCase: true, out var parsedPriority))
+            {
+                fields.Priority = parsedPriority;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse work-order overridesJson; skipping overrides.");
+        }
+    }
+
+    private static int? ParseIntField(JsonElement root, string key)
+    {
+        var str = ReadFieldValue(root, key);
+        return int.TryParse(str, out var value) ? value : null;
+    }
+
     /// <summary>First present key wins. Accepts JSON string or number (number returned as text).</summary>
     private static bool TryGetOverrideString(JsonElement root, out string? value, params string[] keys)
     {
@@ -854,5 +1025,19 @@ public sealed class ScanService : IScanService
         }
         value = 0;
         return false;
+    }
+
+    private sealed class WorkOrderDraftFields
+    {
+        public int PropertyId { get; set; }
+        public int? UnitId { get; set; }
+        public int? TenantId { get; set; }
+        public int? LeaseId { get; set; }
+        public int? VendorId { get; set; }
+        public string? Title { get; set; }
+        public string? Description { get; set; }
+        public string? Category { get; set; }
+        public WorkOrderPriority Priority { get; set; } = WorkOrderPriority.Normal;
+        public decimal? EstimatedCost { get; set; }
     }
 }
