@@ -11,6 +11,7 @@ public class PropertyResponse
     public int PortfolioId { get; set; }
     public int? OwnerId { get; set; }
     public int? OwnerEntityId { get; set; }
+    public string? OwnerName { get; set; }
     public string Name { get; set; } = string.Empty;
     public PropertyType PropertyType { get; set; }
     public PropertyStatus Status { get; set; }
@@ -34,6 +35,7 @@ public class PropertyResponse
         PortfolioId = e.PortfolioId,
         OwnerId = e.OwnerId,
         OwnerEntityId = e.OwnerEntityId,
+        OwnerName = e.OwnerEntity?.Name ?? e.Owner?.Name,
         Name = e.Name,
         PropertyType = e.PropertyType,
         Status = e.Status,

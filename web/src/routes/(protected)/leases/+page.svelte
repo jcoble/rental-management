@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { leases } from '$lib/api/endpoints/leases';
 	import { properties } from '$lib/api/endpoints/properties';
@@ -51,8 +52,9 @@
 	}));
 
 	const empty = {
-		propertyId: '', unitId: '', tenantId: '', startDate: '', endDate: '',
-		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1', status: 'Draft',
+		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', startDate: '', endDate: '',
+		moveInDate: '', moveOutDate: '', monthlyRent: '', securityDeposit: '',
+		lateFeeAmount: '75', rentDueDay: '1', status: 'Draft', notes: '',
 	};
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
@@ -110,16 +112,20 @@
 	function openEdit(l: Lease) {
 		editingId = l.id;
 		form = {
+			leaseNumber: l.leaseNumber,
 			propertyId: String(l.propertyId),
 			unitId: String(l.unitId),
 			tenantId: String(l.tenantId),
 			startDate: l.startDate?.slice(0, 10) ?? '',
 			endDate: l.endDate?.slice(0, 10) ?? '',
+			moveInDate: l.moveInDate?.slice(0, 10) ?? '',
+			moveOutDate: l.moveOutDate?.slice(0, 10) ?? '',
 			monthlyRent: String(l.monthlyRent),
 			securityDeposit: String(l.securityDeposit),
 			lateFeeAmount: String(l.lateFeeAmount),
 			rentDueDay: String(l.rentDueDay),
 			status: l.status,
+			notes: l.notes ?? '',
 		};
 		formPropertyId = String(l.propertyId);
 		formErrors = {};
@@ -132,8 +138,7 @@
 	}
 
 	function submit() {
-		const { propertyId: _p, ...rest } = form;
-		const result = parseForm(leaseSchema, rest);
+		const result = parseForm(leaseSchema, form);
 		if (result.errors) {
 			formErrors = result.errors;
 			return;
@@ -143,7 +148,7 @@
 	}
 
 	const list = $derived((leasesQuery.data ?? []).filter((l) => !statusFilter || l.status === statusFilter));
-	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
+	const inputClass = 'h-10 rounded border border-border bg-background px-3 py-2 text-sm';
 </script>
 
 <svelte:head>
@@ -205,7 +210,8 @@
 										{:else}
 											<button data-testid="lease-give-notice" class="rounded border border-border px-2 py-1 text-xs" onclick={() => statusMutation.mutate({ id: lease.id, status: 'NoticeGiven' })}>Give Notice</button>
 										{/if}
-										<button data-testid="lease-edit" aria-label="Edit lease" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" onclick={() => openEdit(lease)}>
+										<a href={`/leases/${lease.id}`} data-testid="lease-details" class="rounded border border-border px-2 py-1 text-xs text-primary hover:bg-secondary">Details</a>
+										<button data-testid="lease-edit" aria-label="Edit lease" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" onclick={() => goto(`/leases/${lease.id}`)}>
 											<Pencil class="h-4 w-4" />
 										</button>
 										<button data-testid="lease-delete" aria-label="Delete lease" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive" onclick={() => (deleteTarget = lease)}>
@@ -234,46 +240,81 @@
 			<Dialog.Title>{editingId == null ? 'New Lease' : 'Edit Lease'}</Dialog.Title>
 		</Dialog.Header>
 		<div class="grid gap-3 md:grid-cols-3" data-testid="lease-form">
-			<select data-testid="lease-property-input" bind:value={form.propertyId} class={inputClass}>
-				<option value="">Select property</option>
-				{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}
-			</select>
 			<div>
-				<select data-testid="lease-unit-input" bind:value={form.unitId} class="{inputClass} w-full" disabled={!form.propertyId}>
+				<label for="lease-number-input" class="mb-1 block text-xs font-medium text-muted-foreground">Lease number</label>
+				<input id="lease-number-input" data-testid="lease-number-input" bind:value={form.leaseNumber} class="{inputClass} w-full" placeholder="Lease number" />
+				{#if formErrors.leaseNumber}<p class="mt-1 text-xs text-destructive" data-testid="lease-number-error">{formErrors.leaseNumber}</p>{/if}
+			</div>
+			<div>
+				<label for="lease-property-input" class="mb-1 block text-xs font-medium text-muted-foreground">Property</label>
+				<select id="lease-property-input" data-testid="lease-property-input" bind:value={form.propertyId} class="{inputClass} w-full">
+					<option value="">Select property</option>
+					{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}
+				</select>
+			</div>
+			<div>
+				<label for="lease-unit-input" class="mb-1 block text-xs font-medium text-muted-foreground">Unit</label>
+				<select id="lease-unit-input" data-testid="lease-unit-input" bind:value={form.unitId} class="{inputClass} w-full" disabled={!form.propertyId}>
 					<option value="">Select unit</option>
 					{#each unitsForPropertyQuery.data || [] as unit}<option value={unit.id}>Unit {unit.unitNumber} ({unit.status})</option>{/each}
 				</select>
 				{#if formErrors.unitId}<p class="mt-1 text-xs text-destructive" data-testid="lease-unit-error">{formErrors.unitId}</p>{/if}
 			</div>
 			<div>
-				<select data-testid="lease-tenant-input" bind:value={form.tenantId} class="{inputClass} w-full">
+				<label for="lease-tenant-input" class="mb-1 block text-xs font-medium text-muted-foreground">Tenant</label>
+				<select id="lease-tenant-input" data-testid="lease-tenant-input" bind:value={form.tenantId} class="{inputClass} w-full">
 					<option value="">Select tenant</option>
 					{#each tenantsQuery.data || [] as tenant}<option value={tenant.id}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</option>{/each}
 				</select>
 				{#if formErrors.tenantId}<p class="mt-1 text-xs text-destructive" data-testid="lease-tenant-error">{formErrors.tenantId}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="lease-start-input" type="date" bind:value={form.startDate} class="{inputClass} w-full" />
+				<label for="lease-start-input" class="mb-1 block text-xs font-medium text-muted-foreground">Lease start date</label>
+				<input id="lease-start-input" data-testid="lease-start-input" type="date" bind:value={form.startDate} class="{inputClass} w-full" />
 				{#if formErrors.startDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-start-error">{formErrors.startDate}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="lease-end-input" type="date" bind:value={form.endDate} class="{inputClass} w-full" />
+				<label for="lease-end-input" class="mb-1 block text-xs font-medium text-muted-foreground">Lease end date</label>
+				<input id="lease-end-input" data-testid="lease-end-input" type="date" bind:value={form.endDate} class="{inputClass} w-full" />
 				{#if formErrors.endDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-end-error">{formErrors.endDate}</p>{/if}
 			</div>
-			<select data-testid="lease-status-input" bind:value={form.status} class={inputClass}>
-				{#each LEASE_STATUSES as s}<option value={s}>{s}</option>{/each}
-			</select>
 			<div>
-				<input data-testid="lease-rent-input" bind:value={form.monthlyRent} class="{inputClass} w-full" placeholder="Monthly rent" />
+				<label for="lease-move-in-input" class="mb-1 block text-xs font-medium text-muted-foreground">Move-in date</label>
+				<input id="lease-move-in-input" data-testid="lease-move-in-input" type="date" bind:value={form.moveInDate} class="{inputClass} w-full" />
+			</div>
+			<div>
+				<label for="lease-move-out-input" class="mb-1 block text-xs font-medium text-muted-foreground">Move-out date</label>
+				<input id="lease-move-out-input" data-testid="lease-move-out-input" type="date" bind:value={form.moveOutDate} class="{inputClass} w-full" />
+			</div>
+			<div>
+				<label for="lease-status-input" class="mb-1 block text-xs font-medium text-muted-foreground">Status</label>
+				<select id="lease-status-input" data-testid="lease-status-input" bind:value={form.status} class="{inputClass} w-full">
+					{#each LEASE_STATUSES as s}<option value={s}>{s}</option>{/each}
+				</select>
+			</div>
+			<div>
+				<label for="lease-rent-input" class="mb-1 block text-xs font-medium text-muted-foreground">Monthly rent</label>
+				<input id="lease-rent-input" data-testid="lease-rent-input" bind:value={form.monthlyRent} class="{inputClass} w-full" placeholder="Monthly rent" />
 				{#if formErrors.monthlyRent}<p class="mt-1 text-xs text-destructive" data-testid="lease-rent-error">{formErrors.monthlyRent}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="lease-deposit-input" bind:value={form.securityDeposit} class="{inputClass} w-full" placeholder="Security deposit" />
+				<label for="lease-deposit-input" class="mb-1 block text-xs font-medium text-muted-foreground">Security deposit</label>
+				<input id="lease-deposit-input" data-testid="lease-deposit-input" bind:value={form.securityDeposit} class="{inputClass} w-full" placeholder="Security deposit" />
 				{#if formErrors.securityDeposit}<p class="mt-1 text-xs text-destructive" data-testid="lease-deposit-error">{formErrors.securityDeposit}</p>{/if}
 			</div>
 			<div class="grid grid-cols-2 gap-2">
-				<input data-testid="lease-late-fee-input" bind:value={form.lateFeeAmount} class={inputClass} placeholder="Late fee" />
-				<input data-testid="lease-due-day-input" bind:value={form.rentDueDay} class={inputClass} placeholder="Due day" />
+				<div>
+					<label for="lease-late-fee-input" class="mb-1 block text-xs font-medium text-muted-foreground">Late fee</label>
+					<input id="lease-late-fee-input" data-testid="lease-late-fee-input" bind:value={form.lateFeeAmount} class="{inputClass} w-full" placeholder="Late fee" />
+				</div>
+				<div>
+					<label for="lease-due-day-input" class="mb-1 block text-xs font-medium text-muted-foreground">Due day</label>
+					<input id="lease-due-day-input" data-testid="lease-due-day-input" bind:value={form.rentDueDay} class="{inputClass} w-full" placeholder="Due day" />
+				</div>
+			</div>
+			<div class="md:col-span-3">
+				<label for="lease-notes-input" class="mb-1 block text-xs font-medium text-muted-foreground">Notes</label>
+				<textarea id="lease-notes-input" data-testid="lease-notes-input" bind:value={form.notes} class="{inputClass} min-h-20 w-full" placeholder="Notes"></textarea>
 			</div>
 		</div>
 		<Dialog.Footer>

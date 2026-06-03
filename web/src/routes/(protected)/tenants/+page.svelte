@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import type { Tenant } from '$lib/types';
@@ -96,7 +97,7 @@
 	}
 
 	const list = $derived(tenantsQuery.data ?? []);
-	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
+	const inputClass = 'h-10 rounded border border-border bg-background px-3 py-2 text-sm';
 </script>
 
 <svelte:head>
@@ -147,7 +148,8 @@
 								<td class="px-3 py-2">{tenant.activeLeaseCount || 0}</td>
 								<td class="px-3 py-2">
 									<div class="flex justify-end gap-1">
-										<button data-testid="tenant-edit" aria-label="Edit tenant" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" onclick={() => openEdit(tenant)}>
+										<a href={`/tenants/${tenant.id}`} data-testid="tenant-details" class="rounded border border-border px-2 py-1 text-xs text-primary hover:bg-secondary">Details</a>
+										<button data-testid="tenant-edit" aria-label="Edit tenant" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground" onclick={() => goto(`/tenants/${tenant.id}`)}>
 											<Pencil class="h-4 w-4" />
 										</button>
 										<button data-testid="tenant-delete" aria-label="Delete tenant" class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-destructive" onclick={() => (deleteTarget = tenant)}>
@@ -174,19 +176,28 @@
 		</Dialog.Header>
 		<div class="grid gap-3 md:grid-cols-2" data-testid="tenant-form">
 			<div>
-				<input data-testid="tenant-first-name-input" bind:value={form.firstName} class="{inputClass} w-full" placeholder="First name" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="tenant-first-name-input">First name</label>
+				<input id="tenant-first-name-input" data-testid="tenant-first-name-input" bind:value={form.firstName} class="{inputClass} w-full" placeholder="First name" />
 				{#if formErrors.firstName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-first-name-error">{formErrors.firstName}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="tenant-last-name-input" bind:value={form.lastName} class="{inputClass} w-full" placeholder="Last name" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="tenant-last-name-input">Last name</label>
+				<input id="tenant-last-name-input" data-testid="tenant-last-name-input" bind:value={form.lastName} class="{inputClass} w-full" placeholder="Last name" />
 				{#if formErrors.lastName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-last-name-error">{formErrors.lastName}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="tenant-email-input" bind:value={form.email} class="{inputClass} w-full" placeholder="Email" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="tenant-email-input">Email</label>
+				<input id="tenant-email-input" data-testid="tenant-email-input" bind:value={form.email} class="{inputClass} w-full" placeholder="Email" />
 				{#if formErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="tenant-email-error">{formErrors.email}</p>{/if}
 			</div>
-			<input data-testid="tenant-phone-input" bind:value={form.phone} class={inputClass} placeholder="Phone" />
-			<input data-testid="tenant-emergency-input" bind:value={form.emergencyContact} class="{inputClass} md:col-span-2" placeholder="Emergency contact" />
+			<div>
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="tenant-phone-input">Phone</label>
+				<input id="tenant-phone-input" data-testid="tenant-phone-input" bind:value={form.phone} class="{inputClass} w-full" placeholder="Phone" />
+			</div>
+			<div class="md:col-span-2">
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="tenant-emergency-input">Emergency contact</label>
+				<input id="tenant-emergency-input" data-testid="tenant-emergency-input" bind:value={form.emergencyContact} class="{inputClass} w-full" placeholder="Emergency contact" />
+			</div>
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
 			<button data-testid="tenant-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeForm}>Cancel</button>

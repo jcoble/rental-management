@@ -27,7 +27,14 @@ PG_DB="${PG_DB:-rentalcommand}"
 API_HTTPS_URL="${API_HTTPS_URL:-https://localhost:5666}"
 API_HTTP_URL="${API_HTTP_URL:-http://localhost:5665}"
 WEB_PORT="${WEB_PORT:-5667}"
-WEB_URL="${WEB_URL:-https://localhost:$WEB_PORT}"
+LAN_DEV="${LAN_DEV:-0}"
+LAN_IP="${LAN_IP:-}"
+if [ "$LAN_DEV" = "1" ] && [ -z "$LAN_IP" ]; then
+    LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
+fi
+WEB_HOST="${WEB_HOST:-$([ "$LAN_DEV" = "1" ] && echo "0.0.0.0" || echo "localhost")}"
+WEB_PUBLIC_HOST="${WEB_PUBLIC_HOST:-$([ "$LAN_DEV" = "1" ] && echo "${LAN_IP:-localhost}" || echo "localhost")}"
+WEB_URL="${WEB_URL:-https://$WEB_PUBLIC_HOST:$WEB_PORT}"
 
 CONN_STR="Host=localhost;Port=$PG_PORT;Database=$PG_DB;Username=$PG_USER;Password=$PG_PASSWORD"
 
@@ -56,9 +63,15 @@ command -v mkcert >/dev/null 2>&1 || { echo "mkcert not found (brew install mkce
 # NODE_EXTRA_CA_CERTS — no TLS verification is ever disabled.
 CERT_DIR="$ROOT_DIR/web/.cert"
 mkdir -p "$CERT_DIR"
-[ -f "$CERT_DIR/cert.pem" ] && [ -f "$CERT_DIR/key.pem" ] || {
+WEB_CERT_HOSTS="localhost 127.0.0.1 ::1"
+if [ "$LAN_DEV" = "1" ] && [ -n "$LAN_IP" ]; then
+    WEB_CERT_HOSTS="$WEB_CERT_HOSTS $LAN_IP"
+fi
+WEB_CERT_STAMP="$CERT_DIR/web-cert-hosts.txt"
+[ -f "$CERT_DIR/cert.pem" ] && [ -f "$CERT_DIR/key.pem" ] && [ -f "$WEB_CERT_STAMP" ] && [ "$(cat "$WEB_CERT_STAMP")" = "$WEB_CERT_HOSTS" ] || {
     echo "Generating web mkcert cert..."
-    mkcert -cert-file "$CERT_DIR/cert.pem" -key-file "$CERT_DIR/key.pem" localhost 127.0.0.1 ::1 >/dev/null 2>&1
+    mkcert -cert-file "$CERT_DIR/cert.pem" -key-file "$CERT_DIR/key.pem" $WEB_CERT_HOSTS >/dev/null 2>&1
+    echo "$WEB_CERT_HOSTS" > "$WEB_CERT_STAMP"
 }
 [ -f "$CERT_DIR/api-cert.pem" ] && [ -f "$CERT_DIR/api-key.pem" ] || {
     echo "Generating API mkcert cert..."
@@ -151,6 +164,11 @@ echo "  Web UI : $WEB_URL"
 echo "  API    : $API_HTTPS_URL  (http: $API_HTTP_URL)"
 echo "  Engine : background worker (log: /tmp/rentalcommand-engine.log)"
 echo "  DB     : localhost:$PG_PORT/$PG_DB"
+if [ "$LAN_DEV" = "1" ]; then
+echo ""
+echo "  LAN mode is enabled. Open this on your phone: $WEB_URL"
+echo "  If the phone rejects HTTPS, install/trust the mkcert root CA from: $(mkcert -CAROOT)/rootCA.pem"
+fi
 echo ""
 echo "  Press Ctrl+C to stop API/Engine/Web."
 echo ""
@@ -162,7 +180,7 @@ echo ""
 # cross-origin calls and drop the /api/v1 prefix on the server side).
 cd web
 API_URL="${API_URL:-$API_HTTPS_URL}" \
-    pnpm dev --host localhost --port "$WEB_PORT" &
+    pnpm dev --host "$WEB_HOST" --port "$WEB_PORT" &
 WEB_PID=$!
 
 wait "$WEB_PID"

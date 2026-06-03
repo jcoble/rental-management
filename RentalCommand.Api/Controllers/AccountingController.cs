@@ -28,4 +28,13 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
         var summary = await _service.GetSummaryAsync(GetPortfolioId(), ct);
         return Ok(summary);
     }
+
+    /// <summary>Ledger, property P&amp;L, Schedule E, and vendor 1099 review reports.</summary>
+    [HttpGet("reports")]
+    [ProducesResponseType(typeof(AccountingReportsResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AccountingReportsResponse>> Reports(CancellationToken ct)
+    {
+        var reports = await _service.GetReportsAsync(GetPortfolioId(), ct);
+        return Ok(reports);
+    }
 }

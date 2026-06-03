@@ -151,7 +151,7 @@
 
 	const ownersList = $derived(ownersQuery.data ?? []);
 	const vendorsList = $derived(vendorsQuery.data ?? []);
-	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
+	const inputClass = 'h-10 rounded border border-border bg-background px-3 py-2 text-sm';
 </script>
 
 <svelte:head>
@@ -233,14 +233,19 @@
 		</Dialog.Header>
 		<div class="space-y-2" data-testid="owner-form">
 			<div>
-				<input data-testid="owner-name-input" bind:value={ownerForm.name} class="{inputClass} w-full" placeholder="Owner name" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="owner-name-input">Owner name</label>
+				<input id="owner-name-input" data-testid="owner-name-input" bind:value={ownerForm.name} class="{inputClass} w-full" placeholder="Owner name" />
 				{#if ownerErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="owner-name-error">{ownerErrors.name}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="owner-email-input" bind:value={ownerForm.email} class="{inputClass} w-full" placeholder="Owner email" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="owner-email-input">Owner email</label>
+				<input id="owner-email-input" data-testid="owner-email-input" bind:value={ownerForm.email} class="{inputClass} w-full" placeholder="Owner email" />
 				{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="owner-email-error">{ownerErrors.email}</p>{/if}
 			</div>
-			<input data-testid="owner-phone-input" bind:value={ownerForm.phone} class="{inputClass} w-full" placeholder="Owner phone" />
+			<div>
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="owner-phone-input">Owner phone</label>
+				<input id="owner-phone-input" data-testid="owner-phone-input" bind:value={ownerForm.phone} class="{inputClass} w-full" placeholder="Owner phone" />
+			</div>
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
 			<button data-testid="owner-form-cancel" class="rounded-md border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-secondary" onclick={closeOwnerForm}>Cancel</button>
@@ -256,18 +261,24 @@
 		</Dialog.Header>
 		<div class="space-y-2" data-testid="vendor-form">
 			<div>
-				<input data-testid="vendor-name-input" bind:value={vendorForm.name} class="{inputClass} w-full" placeholder="Vendor name" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="vendor-name-input">Vendor name</label>
+				<input id="vendor-name-input" data-testid="vendor-name-input" bind:value={vendorForm.name} class="{inputClass} w-full" placeholder="Vendor name" />
 				{#if vendorErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="vendor-name-error">{vendorErrors.name}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="vendor-service-input" bind:value={vendorForm.serviceType} class="{inputClass} w-full" placeholder="Service type" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="vendor-service-input">Service type</label>
+				<input id="vendor-service-input" data-testid="vendor-service-input" bind:value={vendorForm.serviceType} class="{inputClass} w-full" placeholder="Service type" />
 				{#if vendorErrors.serviceType}<p class="mt-1 text-xs text-destructive" data-testid="vendor-service-error">{vendorErrors.serviceType}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="vendor-email-input" bind:value={vendorForm.email} class="{inputClass} w-full" placeholder="Vendor email" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="vendor-email-input">Vendor email</label>
+				<input id="vendor-email-input" data-testid="vendor-email-input" bind:value={vendorForm.email} class="{inputClass} w-full" placeholder="Vendor email" />
 				{#if vendorErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="vendor-email-error">{vendorErrors.email}</p>{/if}
 			</div>
-			<input data-testid="vendor-phone-input" bind:value={vendorForm.phone} class="{inputClass} w-full" placeholder="Vendor phone" />
+			<div>
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="vendor-phone-input">Vendor phone</label>
+				<input id="vendor-phone-input" data-testid="vendor-phone-input" bind:value={vendorForm.phone} class="{inputClass} w-full" placeholder="Vendor phone" />
+			</div>
 			<div class="flex flex-wrap gap-4 text-sm">
 				<label class="flex items-center gap-1.5"><input data-testid="vendor-1099-input" type="checkbox" bind:checked={vendorForm.is1099Eligible} /> 1099 eligible</label>
 				<label class="flex items-center gap-1.5"><input data-testid="vendor-w9-input" type="checkbox" bind:checked={vendorForm.w9OnFile} /> W-9 on file</label>

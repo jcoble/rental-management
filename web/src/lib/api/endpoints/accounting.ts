@@ -1,4 +1,4 @@
-import type { AccountingSummary } from '$lib/types';
+import type { AccountingReports, AccountingSummary } from '$lib/types';
 import { api } from '../client';
 
 export const accounting = {
@@ -6,4 +6,5 @@ export const accounting = {
 	// Returns expense totals by Schedule E category + a payment collection rollup
 	// (collected / outstanding / overdue).
 	summary: () => api.get<AccountingSummary>('/accounting/summary'),
+	reports: () => api.get<AccountingReports>('/accounting/reports'),
 };

@@ -51,3 +51,57 @@ public class PaymentRollup
     /// <summary>Count of payments contributing to <see cref="Overdue"/>.</summary>
     public int OverdueCount { get; set; }
 }
+
+/// <summary>
+/// Broader accounting workspace data: ledger entries, property-level P&amp;L, Schedule E totals, and
+/// vendor 1099 review status.
+/// </summary>
+public class AccountingReportsResponse
+{
+    public int PortfolioId { get; set; }
+    public DateTime GeneratedAt { get; set; }
+    public decimal TotalIncome { get; set; }
+    public decimal TotalExpenses { get; set; }
+    public decimal NetCashFlow { get; set; }
+    public IReadOnlyList<LedgerTransactionResponse> Ledger { get; set; } = [];
+    public IReadOnlyList<PropertyFinancialSummaryResponse> Properties { get; set; } = [];
+    public IReadOnlyList<ScheduleECategoryTotal> ScheduleE { get; set; } = [];
+    public IReadOnlyList<Vendor1099SummaryResponse> Vendors1099 { get; set; } = [];
+}
+
+public class LedgerTransactionResponse
+{
+    public DateTime Date { get; set; }
+    public string Type { get; set; } = string.Empty;
+    public int Id { get; set; }
+    public string Description { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
+    public int? PropertyId { get; set; }
+    public string? PropertyName { get; set; }
+    public string? Counterparty { get; set; }
+    public string? Category { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public string SourceHref { get; set; } = string.Empty;
+}
+
+public class PropertyFinancialSummaryResponse
+{
+    public int PropertyId { get; set; }
+    public string PropertyName { get; set; } = string.Empty;
+    public decimal Income { get; set; }
+    public decimal Expenses { get; set; }
+    public decimal Net { get; set; }
+    public decimal Overdue { get; set; }
+    public int OverdueCount { get; set; }
+}
+
+public class Vendor1099SummaryResponse
+{
+    public int VendorId { get; set; }
+    public string VendorName { get; set; } = string.Empty;
+    public decimal TotalPaid { get; set; }
+    public bool Is1099Eligible { get; set; }
+    public bool W9OnFile { get; set; }
+    public bool NeedsW9 { get; set; }
+    public bool Needs1099Review { get; set; }
+}

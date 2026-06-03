@@ -46,6 +46,8 @@ public class PropertyService : IPropertyService
         };
 
         var items = await q
+            .Include(p => p.Owner)
+            .Include(p => p.OwnerEntity)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
@@ -57,6 +59,8 @@ public class PropertyService : IPropertyService
     {
         var entity = await _db.Properties
             .AsNoTracking()
+            .Include(p => p.Owner)
+            .Include(p => p.OwnerEntity)
             .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
 
         return entity == null ? null : PropertyResponse.FromEntity(entity);
@@ -109,6 +113,8 @@ public class PropertyService : IPropertyService
     public async Task<PropertyResponse?> UpdateAsync(int portfolioId, int id, UpdatePropertyRequest request, CancellationToken ct = default)
     {
         var entity = await _db.Properties
+            .Include(p => p.Owner)
+            .Include(p => p.OwnerEntity)
             .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
         if (entity == null)
         {

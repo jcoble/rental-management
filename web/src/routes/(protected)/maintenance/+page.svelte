@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import { inspections } from '$lib/api/endpoints/inspections';
@@ -126,7 +127,7 @@
 	}
 
 	const woList = $derived((workOrdersQuery.data ?? []).filter((w) => !woStatusFilter || w.status === woStatusFilter));
-	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
+	const inputClass = 'h-10 rounded border border-border bg-background px-3 py-2 text-sm';
 </script>
 
 <svelte:head>
@@ -172,7 +173,8 @@
 							<div class="mt-2 flex flex-wrap gap-2">
 								<button data-testid="work-order-set-progress" class="rounded border border-border px-2 py-1 text-xs" onclick={() => woStatusMutation.mutate({ id: wo.id, status: 'InProgress' })}>In Progress</button>
 								<button data-testid="work-order-set-complete" class="rounded border border-border px-2 py-1 text-xs" onclick={() => woStatusMutation.mutate({ id: wo.id, status: 'Completed' })}>Complete</button>
-								<button data-testid="work-order-edit" aria-label="Edit work order" class="rounded border border-border px-2 py-1 text-xs" onclick={() => openEditWo(wo)}><Pencil class="h-3.5 w-3.5" /></button>
+								<a href={`/maintenance/work-orders/${wo.id}`} data-testid="work-order-details" class="rounded border border-border px-2 py-1 text-xs text-primary hover:bg-secondary">Details</a>
+								<button data-testid="work-order-edit" aria-label="Edit work order" class="rounded border border-border px-2 py-1 text-xs" onclick={() => goto(`/maintenance/work-orders/${wo.id}`)}><Pencil class="h-3.5 w-3.5" /></button>
 								<button data-testid="work-order-delete" aria-label="Delete work order" class="rounded border border-border px-2 py-1 text-xs hover:text-destructive" onclick={() => (woDeleteTarget = wo)}><Trash2 class="h-3.5 w-3.5" /></button>
 							</div>
 						</div>
@@ -208,23 +210,32 @@
 		</Dialog.Header>
 		<div class="space-y-2" data-testid="work-order-form">
 			<div>
-				<select data-testid="work-order-property-input" bind:value={woForm.propertyId} class="{inputClass} w-full">
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="work-order-property-input">Property</label>
+				<select id="work-order-property-input" data-testid="work-order-property-input" bind:value={woForm.propertyId} class="{inputClass} w-full">
 					<option value="">Select property</option>
 					{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}
 				</select>
 				{#if woErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="work-order-property-error">{woErrors.propertyId}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="work-order-title-input" bind:value={woForm.title} class="{inputClass} w-full" placeholder="Issue title" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="work-order-title-input">Issue title</label>
+				<input id="work-order-title-input" data-testid="work-order-title-input" bind:value={woForm.title} class="{inputClass} w-full" placeholder="Issue title" />
 				{#if woErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="work-order-title-error">{woErrors.title}</p>{/if}
 			</div>
 			<div>
-				<textarea data-testid="work-order-description-input" bind:value={woForm.description} rows={3} class="{inputClass} w-full" placeholder="Description"></textarea>
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="work-order-description-input">Description</label>
+				<textarea id="work-order-description-input" data-testid="work-order-description-input" bind:value={woForm.description} rows={3} class="{inputClass} w-full" placeholder="Description"></textarea>
 				{#if woErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="work-order-description-error">{woErrors.description}</p>{/if}
 			</div>
 			<div class="grid grid-cols-2 gap-2">
-				<select data-testid="work-order-priority-input" bind:value={woForm.priority} class={inputClass}>{#each WO_PRIORITIES as p}<option value={p}>{p}</option>{/each}</select>
-				<input data-testid="work-order-category-input" bind:value={woForm.category} class={inputClass} placeholder="Category" />
+				<div>
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="work-order-priority-input">Priority</label>
+					<select id="work-order-priority-input" data-testid="work-order-priority-input" bind:value={woForm.priority} class="{inputClass} w-full">{#each WO_PRIORITIES as p}<option value={p}>{p}</option>{/each}</select>
+				</div>
+				<div>
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="work-order-category-input">Category</label>
+					<input id="work-order-category-input" data-testid="work-order-category-input" bind:value={woForm.category} class="{inputClass} w-full" placeholder="Category" />
+				</div>
 			</div>
 		</div>
 		<Dialog.Footer>
@@ -244,15 +255,20 @@
 		</Dialog.Header>
 		<div class="space-y-2" data-testid="inspection-form">
 			<div>
-				<select data-testid="inspection-property-input" bind:value={inspectionForm.propertyId} class="{inputClass} w-full">
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="inspection-property-input">Property</label>
+				<select id="inspection-property-input" data-testid="inspection-property-input" bind:value={inspectionForm.propertyId} class="{inputClass} w-full">
 					<option value="">Select property</option>
 					{#each propertiesQuery.data || [] as property}<option value={property.id}>{property.name}</option>{/each}
 				</select>
 				{#if inspectionErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="inspection-property-error">{inspectionErrors.propertyId}</p>{/if}
 			</div>
-			<select data-testid="inspection-type-input" bind:value={inspectionForm.type} class="{inputClass} w-full"><option>Routine</option><option>MoveIn</option><option>MoveOut</option><option>AnnualSafety</option></select>
 			<div>
-				<input data-testid="inspection-scheduled-input" type="datetime-local" bind:value={inspectionForm.scheduledFor} class="{inputClass} w-full" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="inspection-type-input">Inspection type</label>
+				<select id="inspection-type-input" data-testid="inspection-type-input" bind:value={inspectionForm.type} class="{inputClass} w-full"><option>Routine</option><option>MoveIn</option><option>MoveOut</option><option>AnnualSafety</option></select>
+			</div>
+			<div>
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="inspection-scheduled-input">Scheduled date and time</label>
+				<input id="inspection-scheduled-input" data-testid="inspection-scheduled-input" type="datetime-local" bind:value={inspectionForm.scheduledFor} class="{inputClass} w-full" />
 				{#if inspectionErrors.scheduledFor}<p class="mt-1 text-xs text-destructive" data-testid="inspection-scheduled-error">{inspectionErrors.scheduledFor}</p>{/if}
 			</div>
 		</div>

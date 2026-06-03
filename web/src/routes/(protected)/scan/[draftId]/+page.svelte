@@ -68,6 +68,7 @@
 	}));
 
 	const data = $derived(draftQuery.data);
+	const isScanLocked = $derived(data?.status === 'Confirmed' || data?.status === 'Rejected');
 
 	// Editable field values (keyed by field name, scalars only)
 	let editedFields = $state<Record<string, string>>({});
@@ -223,6 +224,8 @@
 	// Preview goes through a same-origin, cookie-authed SvelteKit route (the API's
 	// /file endpoint needs a JWT bearer an <img>/<iframe> can't send).
 	const fileUrl = $derived(data ? `/scan-file/${data.id}` : '');
+	const linkedExpenseId = $derived(data?.createdEntityType === 'Expense' ? data.createdEntityId : null);
+	const linkedExpenseHref = $derived(linkedExpenseId ? `/accounting/expenses/${linkedExpenseId}` : null);
 
 	// Confirm mutation
 	const confirmMutation = createMutation(() => ({
@@ -230,11 +233,12 @@
 			const overrides = buildOverridesJson();
 			return scan.confirm(draftId, overrides);
 		},
-		onSuccess: () => {
+		onSuccess: (result) => {
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			queryClient.invalidateQueries({ queryKey: ['scan', draftId] });
+			queryClient.invalidateQueries({ queryKey: ['expenses'] });
 			toast.success('Expense created');
-			goto('/accounting');
+			goto(result.expenseId ? `/accounting/expenses/${result.expenseId}` : '/accounting');
 		},
 		onError: (err) => {
 			toast.error(err instanceof Error ? err.message : 'Confirm failed');
@@ -314,6 +318,15 @@
 			</div>
 		{/if}
 
+		{#if data.status === 'Confirmed'}
+			<div class="mb-4 flex flex-col gap-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300 sm:flex-row sm:items-center sm:justify-between">
+				<p>This scan is confirmed and locked. Edit the created expense instead.</p>
+				{#if linkedExpenseHref}
+					<Button data-testid="scan-view-expense" href={linkedExpenseHref} size="sm">View/Edit Expense</Button>
+				{/if}
+			</div>
+		{/if}
+
 		<div class="grid gap-6 lg:grid-cols-2">
 			<!-- Left: document preview -->
 			<Card.Root class="flex flex-col gap-0 py-0">
@@ -390,6 +403,7 @@
 											id="field-{fieldName}"
 											data-testid="scan-field-{fieldName}"
 											bind:value={editedFields[fieldName]}
+											disabled={isScanLocked}
 											class="w-full rounded border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
 										>
 											<option value="">Select category</option>
@@ -403,6 +417,7 @@
 											data-testid="scan-field-{fieldName}"
 											type="text"
 											bind:value={editedFields[fieldName]}
+											disabled={isScanLocked}
 										/>
 									{/if}
 								</div>
@@ -438,6 +453,7 @@
 														id="field-{field.name}"
 														data-testid="scan-field-{field.name}"
 														bind:value={editedFields[field.name]}
+														disabled={isScanLocked}
 														class="w-full rounded border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-ring
 															{level === 'low' ? 'border-red-400 dark:border-red-500' : 'border-border'}
 															{level === 'medium' ? 'text-muted-foreground' : ''}"
@@ -454,6 +470,7 @@
 														data-testid="scan-field-{field.name}"
 														type="text"
 														bind:value={editedFields[field.name]}
+														disabled={isScanLocked}
 														class="border-input bg-background selection:bg-primary dark:bg-input/30 selection:text-primary-foreground ring-offset-background placeholder:text-muted-foreground flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] {fieldInputClass(field)}"
 														use:focusFirstLow={level === 'low' && isFirstLowField(data.fields, field)}
 													/>
@@ -507,6 +524,7 @@
 							size="sm"
 							variant={isPaid ? 'default' : 'outline'}
 							onclick={() => { isPaid = true; }}
+							disabled={isScanLocked}
 							class="rounded-r-none"
 						>
 							Already paid (receipt)
@@ -516,6 +534,7 @@
 							size="sm"
 							variant={!isPaid ? 'default' : 'outline'}
 							onclick={() => { isPaid = false; }}
+							disabled={isScanLocked}
 							class="-ml-3 rounded-l-none border-l-0"
 						>
 							Unpaid bill{editedFields['due_date'] ? ` — due ${editedFields['due_date']}` : ''}
@@ -546,7 +565,12 @@
 							</Button>
 						</div>
 						{#if data.status === 'Confirmed'}
-							<p class="text-center text-xs text-green-600 dark:text-green-400">This scan has already been confirmed.</p>
+							<div class="flex flex-col items-center gap-2 text-center text-xs text-green-600 dark:text-green-400">
+								<p>This scan has already been confirmed.</p>
+								{#if linkedExpenseHref}
+									<Button data-testid="scan-footer-view-expense" href={linkedExpenseHref} variant="link" class="h-auto p-0 text-xs">View/Edit created expense</Button>
+								{/if}
+							</div>
 						{/if}
 						{#if data.status === 'Rejected'}
 							<p class="text-center text-xs text-muted-foreground">This scan has been rejected.</p>
