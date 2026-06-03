@@ -6,6 +6,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using RentalCommand.Api.Scanning;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -57,6 +58,8 @@ builder.Services.AddSingleton<IDataUpdateService, EngineDataUpdateService>();
 builder.Services.AddScoped<IRentChargeService, RentChargeService>();
 builder.Services.AddScoped<ILateFeeService, LateFeeService>();
 builder.Services.AddScoped<ILeaseExpiryReminderService, LeaseExpiryReminderService>();
+builder.Services.AddScoped<IDailyBriefingService, DailyBriefingService>();
+builder.Services.AddScoped<IDailyBriefingDeliveryService, DailyBriefingDeliveryService>();
 
 // Engine resilience — persists worker heartbeats; consumed by the watchdog + health check.
 // Scoped (it opens its own scope per call to isolate DB access).
@@ -68,6 +71,7 @@ builder.Services.AddHostedService<ScanProcessingWorker>();
 builder.Services.AddHostedService<RentChargeWorker>();
 builder.Services.AddHostedService<LateFeeWorker>();
 builder.Services.AddHostedService<LeaseExpiryReminderWorker>();
+builder.Services.AddHostedService<DailyBriefingDeliveryWorker>();
 
 // Watcher: monitors the advisory lock connection; triggers graceful shutdown if a newer Engine takes over.
 builder.Services.AddHostedService<AdvisoryLockWatcherService>();

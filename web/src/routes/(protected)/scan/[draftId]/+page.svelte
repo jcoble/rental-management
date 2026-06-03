@@ -94,6 +94,7 @@
 
 	// Whether this draft targets a Payment (rent check) rather than an Expense
 	const isPayment = $derived(data?.targetEntityType === 'Payment');
+	const isWorkOrder = $derived(data?.targetEntityType === 'WorkOrder');
 
 	// The worker is still reading the document while Pending or Processing.
 	const isProcessing = $derived(data?.status === 'Pending' || data?.status === 'Processing');
@@ -155,7 +156,7 @@
 	);
 
 	// Block confirming an expense whose amount is blank/0/negative (server rejects amount <= 0).
-	const amountInvalid = $derived(!isPayment && (resolvedAmount == null || resolvedAmount <= 0));
+	const amountInvalid = $derived(!isPayment && !isWorkOrder && (resolvedAmount == null || resolvedAmount <= 0));
 
 	// Paid / Unpaid toggle — true = already paid (receipt), false = unpaid bill
 	let isPaid = $state(true);
@@ -184,6 +185,10 @@
 				const kindField = data.fields.find((f) => f.name === 'document_kind');
 				isPaid = defaultIsPaidFromKind(kindField?.value);
 				isPaidInitialized = true;
+			}
+			if ((data.targetEntityType === 'WorkOrder' || data.targetEntityType === 'Expense') && selectedPropertyId === NO_PROPERTY) {
+				const propertyField = data.fields.find((f) => f.name === 'property_id' || f.name === 'propertyId');
+				if (propertyField?.value) selectedPropertyId = propertyField.value;
 			}
 		}
 	});
@@ -296,18 +301,24 @@
 		return String(val);
 	}
 
+	function fieldValue(name: string): string {
+		return data?.fields.find((f) => f.name === name)?.value ?? '';
+	}
+
 	// Preview goes through a same-origin, cookie-authed SvelteKit route (the API's
 	// /file endpoint needs a JWT bearer an <img>/<iframe> can't send).
 	const fileUrl = $derived(data ? `/scan-file/${data.id}` : '');
 
 	// Success state — what was just created, so the landlord keeps context
 	// instead of being dumped onto /accounting.
-	let confirmedRecord = $state<{ type: 'Expense' | 'Payment'; id: number | null; amount: number | null } | null>(null);
+	let confirmedRecord = $state<{ type: 'Expense' | 'Payment' | 'WorkOrder'; id: number | null; amount: number | null } | null>(null);
 	const linkedRecordHref = $derived((() => {
 		const type = confirmedRecord?.type ?? data?.createdEntityType;
 		const id = confirmedRecord?.id ?? data?.createdEntityId;
 		if (!type || !id) return '/accounting';
-		return type === 'Payment' ? `/accounting/payments/${id}` : `/accounting/expenses/${id}`;
+		if (type === 'Payment') return `/accounting/payments/${id}`;
+		if (type === 'WorkOrder') return `/maintenance/${id}`;
+		return `/accounting/expenses/${id}`;
 	})());
 
 	function formatUsd(val: number | null): string {
@@ -325,16 +336,18 @@
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			queryClient.invalidateQueries({ queryKey: ['scan', draftId] });
 			// Capture the resolved amount before refetch can mutate editedFields.
-			const type = (result.entityType === 'Payment' || result.entityType === 'Expense')
+			const type = (result.entityType === 'Payment' || result.entityType === 'Expense' || result.entityType === 'WorkOrder')
 				? result.entityType
-				: isPayment ? 'Payment' : 'Expense';
+				: isPayment ? 'Payment' : isWorkOrder ? 'WorkOrder' : 'Expense';
 			confirmedRecord = {
 				type,
-				id: result.entityId ?? result.paymentId ?? result.expenseId ?? null,
+				id: result.entityId ?? result.paymentId ?? result.expenseId ?? result.workOrderId ?? null,
 				amount: resolvedAmount
 			};
 			if (isPayment) {
 				toast.success('Payment recorded');
+			} else if (isWorkOrder) {
+				toast.success('Work order created');
 			} else {
 				toast.success('Expense created');
 			}
@@ -386,6 +399,10 @@
 		if (isPayment) {
 			// Payment drafts require leaseId; omit the paid/unpaid toggle (a received check is always paid)
 			overrides['leaseId'] = selectedLeaseId ? Number(selectedLeaseId) : null;
+		} else if (isWorkOrder) {
+			if (selectedPropertyId && selectedPropertyId !== NO_PROPERTY) {
+				overrides['propertyId'] = Number(selectedPropertyId);
+			}
 		} else {
 			// Expense drafts: always include the paid/unpaid toggle decision
 			overrides['is_paid'] = isPaid;
@@ -467,9 +484,9 @@
 					<span class="text-2xl leading-none">✓</span>
 					<div>
 						<p class="font-semibold">
-							{confirmedRecord.type === 'Payment' ? 'Payment recorded' : 'Expense created'}{confirmedRecord.amount != null ? ` — ${formatUsd(confirmedRecord.amount)}` : ''}
+							{confirmedRecord.type === 'Payment' ? 'Payment recorded' : confirmedRecord.type === 'WorkOrder' ? 'Work order created' : 'Expense created'}{confirmedRecord.type !== 'WorkOrder' && confirmedRecord.amount != null ? ` — ${formatUsd(confirmedRecord.amount)}` : ''}
 						</p>
-						<p class="text-xs opacity-80">It's saved to your books. You can view it or scan another document.</p>
+						<p class="text-xs opacity-80">{confirmedRecord.type === 'WorkOrder' ? 'It is saved to maintenance.' : 'It is saved to your books.'} You can view it or scan another document.</p>
 					</div>
 				</div>
 				<div class="flex shrink-0 gap-2">
@@ -524,7 +541,12 @@
 					<Card.Title class="text-sm">Document Preview</Card.Title>
 				</Card.Header>
 				<Card.Content class="flex flex-1 items-center justify-center overflow-hidden p-4">
-					{#if fileUrl}
+					{#if isWorkOrder && fieldValue('transcript')}
+						<div class="w-full rounded-md border bg-muted/30 p-4">
+							<p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Transcript</p>
+							<p class="whitespace-pre-wrap text-sm leading-relaxed">{fieldValue('transcript')}</p>
+						</div>
+					{:else if fileUrl}
 						<!-- Try img first; for PDFs it won't render but we also show an iframe/link -->
 						<div class="w-full">
 							<img
@@ -597,10 +619,10 @@
 							{/if}
 						</div>
 					{:else}
-						<!-- Optional property selector for Expense drafts (sends propertyId override) -->
+						<!-- Property selector for Expense/WorkOrder drafts (sends propertyId override) -->
 						<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
 							<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-property-select">
-								Which property is this for? <span class="font-normal text-muted-foreground">(optional)</span>
+								Which property is this for? {#if isWorkOrder}<span class="text-red-500">*</span>{:else}<span class="font-normal text-muted-foreground">(optional)</span>{/if}
 							</label>
 							<Select.Root type="single" bind:value={selectedPropertyId}>
 								<Select.Trigger id="scan-property-select" data-testid="scan-property-select" class="w-full">
@@ -619,6 +641,9 @@
 							</Select.Root>
 							{#if propertiesQuery.isLoading}
 								<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
+							{/if}
+							{#if isWorkOrder && selectedPropertyId === NO_PROPERTY}
+								<p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Select a property to create this work order.</p>
 							{/if}
 						</div>
 					{/if}
@@ -748,8 +773,8 @@
 					{/if}
 				</Card.Content>
 
-				<!-- Paid / Unpaid toggle — hidden for Payment drafts (received check is always paid) -->
-				{#if !isPayment}
+				<!-- Paid / Unpaid toggle — hidden for Payment and WorkOrder drafts -->
+				{#if !isPayment && !isWorkOrder}
 				<div class="border-t border-border px-4 py-3" data-testid="scan-paid-toggle">
 					<span class="mb-1.5 block text-xs font-medium text-muted-foreground">Payment status</span>
 					<!-- Segmented control: a single bordered track with two equal segments -->
@@ -788,10 +813,10 @@
 							<Button
 								data-testid="scan-confirm"
 								onclick={() => confirmMutation.mutate()}
-								disabled={confirmMutation.isPending || isProcessing || isTerminal || (isPayment && !selectedLeaseId) || amountInvalid}
+								disabled={confirmMutation.isPending || isProcessing || isTerminal || (isPayment && !selectedLeaseId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || amountInvalid}
 								class="flex-1"
 							>
-								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : 'Confirm & Create Expense'}
+								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : 'Confirm & Create Expense'}
 							</Button>
 							<Button
 								data-testid="scan-reject"
@@ -810,6 +835,9 @@
 						{/if}
 						{#if isPayment && !selectedLeaseId && !isTerminal && !isProcessing}
 							<p class="text-center text-xs text-amber-600 dark:text-amber-400">Select a lease above to enable payment creation.</p>
+						{/if}
+						{#if isWorkOrder && selectedPropertyId === NO_PROPERTY && !isTerminal && !isProcessing}
+							<p class="text-center text-xs text-amber-600 dark:text-amber-400">Select a property above to enable work order creation.</p>
 						{/if}
 						{#if data.status === 'Failed' && !isTerminal}
 							<p class="text-center text-xs text-muted-foreground">Couldn't read this document — enter the amount manually, or reject it.</p>
