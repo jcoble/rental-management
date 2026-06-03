@@ -1,12 +1,13 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// AI-powered endpoints for the caller's portfolio. Scope comes from the JWT <c>portfolioId</c>
-/// claim. Phase 3: Daily Briefing + Portfolio Q&amp;A.
+/// claim. Includes daily briefing, portfolio Q&amp;A, and a direct chat endpoint.
 /// </summary>
 [ApiController]
 [Route("api/v1/ai")]
@@ -15,11 +16,13 @@ public class AiController : AuthenticatedPortfolioControllerBase
 {
     private readonly IDailyBriefingService _briefing;
     private readonly IPortfolioQaService _qa;
+    private readonly ILlmProvider _llm;
 
-    public AiController(IDailyBriefingService briefing, IPortfolioQaService qa)
+    public AiController(IDailyBriefingService briefing, IPortfolioQaService qa, ILlmProvider llm)
     {
         _briefing = briefing;
         _qa = qa;
+        _llm = llm;
     }
 
     /// <summary>Returns today's prioritized briefing for the portfolio.</summary>
@@ -40,5 +43,38 @@ public class AiController : AuthenticatedPortfolioControllerBase
         if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest("Question is required.");
         if (req.Question.Length > 4000) return BadRequest("Question is too long (max 4000 characters).");
         return Ok(await _qa.AskAsync(GetPortfolioId(), req.Question, req.History, ct));
+    }
+
+    /// <summary>Direct assistant chat for the in-app AI page.</summary>
+    [HttpPost("chat")]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(AiChatResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AiChatResponse>> Chat([FromBody] AiChatRequest request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.Message)) return BadRequest("Message is required.");
+        if (request.Message.Length > 8000) return BadRequest("Message is too long (max 8000 characters).");
+
+        var portfolioId = GetPortfolioId();
+        var prompt = $"""
+            You are Rental Command's assistant for a rental property management system.
+            Help the signed-in operator with practical property-management, leasing, maintenance,
+            accounting, scanning, and tenant-communication tasks.
+
+            Portfolio id: {portfolioId}
+
+            User request:
+            {request.Message}
+            """;
+
+        var reply = await _llm.ChatAsync(prompt, ct);
+        if (string.IsNullOrWhiteSpace(reply))
+        {
+            return Ok(new AiChatResponse
+            {
+                Reply = "The AI provider is not configured or returned an empty response. Check Assistant:ApiKey and Assistant:ModelId, then restart the API."
+            });
+        }
+
+        return Ok(new AiChatResponse { Reply = reply });
     }
 }

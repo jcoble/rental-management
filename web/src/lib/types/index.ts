@@ -4,8 +4,8 @@ export type PropertyStatus = 'Active' | 'UnderMaintenance' | 'Inactive';
 export type UnitStatus = 'Vacant' | 'Occupied' | 'Reserved' | 'Offline';
 export type LeaseStatus = 'Draft' | 'Active' | 'NoticeGiven' | 'Expired' | 'Terminated';
 export type PaymentType = 'Rent' | 'SecurityDeposit' | 'LateFee' | 'Utility' | 'Other';
-export type PaymentStatus = 'Scheduled' | 'Paid' | 'Partial' | 'Late' | 'Waived';
-export type ExpenseStatus = 'Pending' | 'Approved' | 'Paid';
+export type PaymentStatus = 'Scheduled' | 'Paid' | 'Partial' | 'Late' | 'Waived' | 'Failed' | 'Refunded';
+export type ExpenseStatus = 'Pending' | 'Approved' | 'Paid' | 'Rejected' | 'Draft';
 export type WorkOrderPriority = 'Low' | 'Normal' | 'High' | 'Emergency';
 export type WorkOrderStatus = 'New' | 'Scheduled' | 'InProgress' | 'WaitingParts' | 'Completed' | 'Cancelled';
 export type AppointmentType = 'Showing' | 'MoveIn' | 'MoveOut' | 'Inspection' | 'MaintenanceVisit' | 'OwnerMeeting';
@@ -67,8 +67,10 @@ export interface Property {
 	id: number;
 	portfolioId: number;
 	ownerId?: number;
+	ownerEntityId?: number;
 	name: string;
-	type: PropertyType;
+	propertyType: PropertyType;
+	type?: PropertyType;
 	status: PropertyStatus;
 	addressLine1: string;
 	addressLine2?: string;
@@ -144,7 +146,7 @@ export interface Payment {
 	id: number;
 	portfolioId: number;
 	leaseId: number;
-	type: PaymentType;
+	paymentType: PaymentType;
 	status: PaymentStatus;
 	amount: number;
 	dueDate: string;
@@ -259,6 +261,53 @@ export interface PaymentRollup {
 	outstanding: number;
 	overdue: number;
 	overdueCount: number;
+}
+
+/** Read-only report workspace from GET /api/v1/accounting/reports. */
+export interface AccountingReports {
+	portfolioId: number;
+	generatedAt: string;
+	totalIncome: number;
+	totalExpenses: number;
+	netCashFlow: number;
+	ledger: LedgerTransaction[];
+	properties: PropertyFinancialSummary[];
+	scheduleE: ScheduleECategoryTotal[];
+	vendors1099: Vendor1099Summary[];
+}
+
+export interface LedgerTransaction {
+	date: string;
+	type: 'Payment' | 'Expense' | string;
+	id: number;
+	description: string;
+	amount: number;
+	propertyId?: number;
+	propertyName?: string;
+	counterparty?: string;
+	category?: string;
+	status: string;
+	sourceHref: string;
+}
+
+export interface PropertyFinancialSummary {
+	propertyId: number;
+	propertyName: string;
+	income: number;
+	expenses: number;
+	net: number;
+	overdue: number;
+	overdueCount: number;
+}
+
+export interface Vendor1099Summary {
+	vendorId: number;
+	vendorName: string;
+	totalPaid: number;
+	is1099Eligible: boolean;
+	w9OnFile: boolean;
+	needsW9: boolean;
+	needs1099Review: boolean;
 }
 
 export interface Vendor {

@@ -21,12 +21,21 @@ export interface ScanDraftResponse {
 	createdAt: string;
 	reviewedAt: string | null;
 	confirmedAt: string | null;
+	createdEntityType: string | null;
+	createdEntityId: number | null;
 }
 
 export interface ScanCreatedResponse {
 	draftId: number;
 	status: string;
 	fileUrl: string;
+}
+
+export interface ScanConfirmResponse {
+	expenseId?: number | null;
+	paymentId?: number | null;
+	entityType?: string | null;
+	entityId?: number | null;
 }
 
 // ---- Typed API helpers ----
@@ -44,8 +53,8 @@ export const scan = {
 		return api.upload<ScanCreatedResponse>('/scans', fd);
 	},
 
-	confirm: (id: number, overridesJson: string): Promise<unknown> =>
-		api.post(`/scans/${id}/confirm`, { overridesJson }),
+	confirm: (id: number, overridesJson: string): Promise<ScanConfirmResponse> =>
+		api.post<ScanConfirmResponse>(`/scans/${id}/confirm`, { overridesJson }),
 
 	reject: (id: number, reason: string): Promise<unknown> =>
 		api.post(`/scans/${id}/reject`, { reason })

@@ -1,4 +1,4 @@
-import type { AccountingSummary, OwnerStatementReport, OwnerStatementSummary, ScheduleEReport } from '$lib/types';
+import type { AccountingReports, AccountingSummary, OwnerStatementReport, OwnerStatementSummary, ScheduleEReport } from '$lib/types';
 import { api, refreshToken } from '../client';
 import { CLIENT_API_BASE_URL } from '$lib/config';
 import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
@@ -9,6 +9,7 @@ export const accounting = {
 	// Returns expense totals by Schedule E category + a payment collection rollup
 	// (collected / outstanding / overdue).
 	summary: () => api.get<AccountingSummary>('/accounting/summary'),
+	reports: () => api.get<AccountingReports>('/accounting/reports'),
 
 	// GET /api/v1/accounting/schedule-e?year=YYYY
 	scheduleE: (year: number) => api.get<ScheduleEReport>(`/accounting/schedule-e?year=${year}`),
