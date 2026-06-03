@@ -2,25 +2,25 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { adminUsers } from '$lib/api/endpoints/adminUsers';
 	import type { TeamMember, UserRole, CreateTeamMemberResponse } from '$lib/types';
-	import { getCurrentUser } from '$lib/stores/auth.svelte';
+	import { getAuthState, getCurrentUser } from '$lib/stores/auth.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { Plus } from '@lucide/svelte';
-	import { DataGrid } from '$lib/components/data-grid';
-	import type { ColumnDef } from '$lib/components/data-grid/types';
+	import { Loader2, Plus } from '@lucide/svelte';
 
 	const ROLES: UserRole[] = ['Admin', 'Manager', 'Agent', 'Owner', 'Tenant'];
 
 	const queryClient = useQueryClient();
 	const currentUser = $derived(getCurrentUser());
+	const authState = getAuthState();
 
 	// ---- Query ----
 
 	const membersQuery = createQuery(() => ({
 		queryKey: ['admin-users'],
+		enabled: authState.isAuthenticated,
 		queryFn: () => adminUsers.list()
 	}));
 
@@ -97,42 +97,20 @@
 
 	/** True when a control on this row would self-lock: this is the current user's own row. */
 	function isSelf(member: TeamMember): boolean {
-		return !!currentUser && currentUser.id === member.id;
+		if (!currentUser) return false;
+		return (
+			currentUser.id === member.id ||
+			currentUser.email?.toLowerCase() === member.email.toLowerCase()
+		);
 	}
 
-	const columns: ColumnDef<TeamMember>[] = [
-		{
-			key: 'member',
-			title: 'Member',
-			mobileRole: 'title',
-			cell: memberCellSnippet,
-			accessor: (m) => m.displayName || m.email,
-		},
-		{
-			key: 'role',
-			title: 'Role',
-			mobileRole: 'badge',
-			cell: roleCellSnippet,
-			accessor: (m) => m.role,
-		},
-		{
-			key: 'status',
-			title: 'Status',
-			mobileRole: 'meta',
-			cell: statusCellSnippet,
-			accessor: (m) => (m.isActive ? 'Active' : 'Inactive'),
-		},
-		{
-			key: 'createdAt',
-			title: 'Joined',
-			format: 'date',
-			sortable: true,
-			mobileRole: 'meta',
-		},
-	];
+	function formatDate(date: string): string {
+		const parsed = new Date(date);
+		return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleDateString(undefined, { timeZone: 'UTC' });
+	}
 </script>
 
-{#snippet memberCellSnippet(member: TeamMember)}
+{#snippet memberName(member: TeamMember)}
 	<div>
 		<p class="font-medium" data-testid="member-name">
 			{member.displayName || '—'}
@@ -146,7 +124,7 @@
 	</div>
 {/snippet}
 
-{#snippet roleCellSnippet(member: TeamMember)}
+{#snippet roleSelect(member: TeamMember)}
 	<Select.Root
 		type="single"
 		value={member.role}
@@ -162,7 +140,7 @@
 			data-testid="member-role-select"
 			disabled={isSelf(member)}
 		>
-			<Select.Value />
+			{member.role}
 		</Select.Trigger>
 		<Select.Content>
 			{#each ROLES as r}
@@ -172,7 +150,7 @@
 	</Select.Root>
 {/snippet}
 
-{#snippet statusCellSnippet(member: TeamMember)}
+{#snippet statusButton(member: TeamMember)}
 	<Button
 		variant={member.isActive ? 'outline' : 'secondary'}
 		size="sm"
@@ -189,7 +167,7 @@
 	<title>Team - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="team-page">
+<div class="min-h-full pb-16" data-testid="team-page">
 	<div class="mb-5 flex items-start justify-between">
 		<div>
 			<h1 class="text-2xl font-bold">Team</h1>
@@ -200,15 +178,58 @@
 		</Button>
 	</div>
 
-	<DataGrid
-		data={members}
-		{columns}
-		loading={membersQuery.isPending}
-		emptyMessage="No team members yet."
-		getRowKey={(m) => m.id}
-		getRowTestId={() => 'team-member-row'}
-		data-testid="team-members-list"
-	/>
+	<div class="rounded-lg border border-border" data-testid="team-members-list">
+		{#if membersQuery.isPending}
+			<div class="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+				<Loader2 class="h-4 w-4 animate-spin" />
+				Loading team members…
+			</div>
+		{:else if members.length === 0}
+			<div class="py-12 text-center text-sm text-muted-foreground">No team members yet.</div>
+		{:else}
+			<div class="hidden overflow-x-auto sm:block">
+			<table class="w-full min-w-[760px] table-fixed text-sm">
+				<thead class="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
+					<tr>
+						<th class="w-[42%] px-4 py-3">Member</th>
+						<th class="w-[18%] px-4 py-3">Role</th>
+						<th class="w-[18%] px-4 py-3">Status</th>
+						<th class="w-[22%] px-4 py-3 text-right">Joined</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each members as member (member.id)}
+						<tr class="border-b border-border/60 last:border-0" data-testid="team-member-row">
+							<td class="px-4 py-3">{@render memberName(member)}</td>
+							<td class="px-4 py-3">{@render roleSelect(member)}</td>
+							<td class="px-4 py-3">{@render statusButton(member)}</td>
+							<td class="px-4 py-3 text-right text-muted-foreground">{formatDate(member.createdAt)}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+			</div>
+
+			<div class="divide-y divide-border sm:hidden">
+				{#each members as member (member.id)}
+					<div class="space-y-3 p-4" data-testid="team-member-row">
+						{@render memberName(member)}
+						<div class="grid grid-cols-2 gap-3">
+							<div>
+								<p class="mb-1 text-xs text-muted-foreground">Role</p>
+								{@render roleSelect(member)}
+							</div>
+							<div>
+								<p class="mb-1 text-xs text-muted-foreground">Status</p>
+								{@render statusButton(member)}
+							</div>
+						</div>
+						<p class="text-xs text-muted-foreground">Joined {formatDate(member.createdAt)}</p>
+					</div>
+				{/each}
+			</div>
+		{/if}
+	</div>
 </div>
 
 <!-- Invite member dialog -->

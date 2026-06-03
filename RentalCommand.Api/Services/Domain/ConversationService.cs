@@ -232,12 +232,15 @@ public class ConversationService : IConversationService
         });
 
         _db.Conversations.Add(conversation);
+        var notification = CreateTenantMessageNotification(portfolioId, conversation, tenant, now);
+        _db.Notifications.Add(notification);
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
 
         conversation.Tenant = tenant;
         var detail = ToDetail(conversation, conversation.TenantUnreadCount);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Notification", notification.Id, NotificationResponse.FromEntity(notification), ct);
         return detail;
     }
 
@@ -270,12 +273,15 @@ public class ConversationService : IConversationService
         conversation.LastMessageAt = now;
         conversation.LastMessagePreview = Preview(body);
         conversation.LandlordUnreadCount += 1;
+        var notification = CreateTenantMessageNotification(portfolioId, conversation, conversation.Tenant, now);
+        _db.Notifications.Add(notification);
 
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
 
         var detail = ToDetail(conversation, conversation.TenantUnreadCount);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Notification", notification.Id, NotificationResponse.FromEntity(notification), ct);
         return detail;
     }
 
@@ -341,6 +347,29 @@ public class ConversationService : IConversationService
         "sms" => "Sms",
         _ => null,
     };
+
+    private static Notification CreateTenantMessageNotification(
+        int portfolioId,
+        Conversation conversation,
+        Tenant? tenant,
+        DateTime now)
+    {
+        var tenantName = tenant != null ? $"{tenant.FirstName} {tenant.LastName}".Trim() : "Tenant";
+        if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "Tenant";
+
+        return new Notification
+        {
+            PortfolioId = portfolioId,
+            Type = "TenantMessage",
+            Title = $"New message from {tenantName}",
+            Message = conversation.LastMessagePreview ?? conversation.Subject,
+            Severity = "Info",
+            ActionUrl = $"/messages?conversationId={conversation.Id}",
+            RelatedEntityType = "Conversation",
+            RelatedEntityId = conversation.Id,
+            CreatedAt = now,
+        };
+    }
 
     private static string? Preview(string body)
     {

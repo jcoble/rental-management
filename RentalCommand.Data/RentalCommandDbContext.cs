@@ -32,6 +32,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<PortalMessage> PortalMessages => Set<PortalMessage>();
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<ConversationMessage> ConversationMessages => Set<ConversationMessage>();
+    public DbSet<Notification> Notifications => Set<Notification>();
 
     // Auth + audit + infrastructure entities (Task 3)
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
@@ -161,6 +162,25 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             // Each physical device token must be unique across all rows.
             entity.HasIndex(e => e.Token).IsUnique();
             entity.HasIndex(e => new { e.PortfolioId, e.UserId });
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Notification>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Type).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.Title).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Message).IsRequired().HasMaxLength(1000);
+            entity.Property(e => e.Severity).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.ActionUrl).HasMaxLength(500);
+            entity.Property(e => e.RelatedEntityType).HasMaxLength(120);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.IsRead);
+            entity.HasIndex(e => e.CreatedAt);
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)

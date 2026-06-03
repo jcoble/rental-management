@@ -27,7 +27,7 @@
 	<title>Create account - Rental Command</title>
 </svelte:head>
 
-<div class="flex h-full items-center justify-center bg-background p-6">
+<div class="auth-page-wrap">
 	<Card.Root class="w-full max-w-md shadow-xl">
 		<Card.Content class="p-6">
 			<div class="mb-5 flex items-center gap-2">

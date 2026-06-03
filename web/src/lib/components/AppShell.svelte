@@ -39,6 +39,7 @@
 		DropdownMenuTrigger
 	} from '$lib/components/ui/dropdown-menu';
 	import PortfolioSelector from '$lib/components/shared/PortfolioSelector.svelte';
+	import NotificationBell from '$lib/components/notifications/NotificationBell.svelte';
 	import { getCurrentUser, hasAnyRole, clearAuth } from '$lib/stores/auth.svelte';
 	import NavigationLoader from '$lib/components/NavigationLoader.svelte';
 
@@ -182,6 +183,20 @@
 			{/each}
 		</nav>
 
+		<!-- Notification Bell -->
+		<div class="border-t border-sidebar-border px-2 py-2" data-testid="sidebar-notifications">
+			{#if sidebarCollapsed && !isMobile}
+				<div class="flex justify-center" data-testid="sidebar-notifications-collapsed">
+					<NotificationBell data-testid="notification-bell-sidebar" />
+				</div>
+			{:else}
+				<div class="flex items-center gap-2 px-1" data-testid="sidebar-notifications-expanded">
+					<NotificationBell data-testid="notification-bell-sidebar" />
+					<span class="text-sm text-muted-foreground">Notifications</span>
+				</div>
+			{/if}
+		</div>
+
 		<!-- User section at bottom -->
 		<div class="border-t border-sidebar-border p-2">
 			{#if sidebarCollapsed && !isMobile}
@@ -312,6 +327,9 @@
 					{/if}
 				</Button>
 				<span class="truncate font-semibold text-foreground" data-testid="mobile-page-title">{currentTitle}</span>
+				<div class="ml-auto">
+					<NotificationBell data-testid="notification-bell-header" placement="down" />
+				</div>
 			</header>
 		{/if}
 

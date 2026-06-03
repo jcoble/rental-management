@@ -152,7 +152,7 @@
   }
 
   .auth-page-wrap {
-    @apply flex min-h-screen items-center justify-center bg-background p-4;
+    @apply flex min-h-dvh items-center justify-center bg-background p-6;
   }
 
   .auth-google-button {
