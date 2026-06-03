@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Popover, PopoverTrigger, PopoverContent } from '$lib/components/ui/popover';
-	import { HelpCircle } from '@lucide/svelte';
+	import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
+	import { HelpCircle } from "@lucide/svelte";
 
 	type Props = {
 		title: string;
@@ -8,7 +8,7 @@
 		detail?: string;
 		learnMoreUrl?: string;
 		learnMoreLabel?: string;
-		side?: 'top' | 'bottom' | 'left' | 'right';
+		side?: "top" | "bottom" | "left" | "right";
 		iconClass?: string;
 	};
 
@@ -16,10 +16,10 @@
 		title,
 		summary,
 		detail,
-		learnMoreUrl,
-		learnMoreLabel = 'Learn more',
-		side = 'bottom',
-		iconClass = 'h-3.5 w-3.5 text-muted-foreground'
+		learnMoreUrl = "/customer/help/glossary",
+		learnMoreLabel = "Learn more",
+		side = "bottom",
+		iconClass = "h-3.5 w-3.5 text-muted-foreground",
 	}: Props = $props();
 </script>
 
@@ -30,10 +30,7 @@
 	>
 		<HelpCircle class={iconClass} />
 	</PopoverTrigger>
-	<PopoverContent
-		{side}
-		class="w-72 p-3"
-	>
+	<PopoverContent {side} class="w-72 p-3">
 		<div class="space-y-1.5">
 			<p class="text-sm font-medium">{title}</p>
 			<p class="text-xs text-muted-foreground leading-relaxed">{summary}</p>
@@ -41,10 +38,7 @@
 				<p class="text-xs text-muted-foreground/80 leading-relaxed">{detail}</p>
 			{/if}
 			{#if learnMoreUrl}
-				<a
-					href={learnMoreUrl}
-					class="inline-block text-xs text-primary hover:underline mt-1"
-				>
+				<a href={learnMoreUrl} class="inline-block text-xs text-primary hover:underline mt-1">
 					{learnMoreLabel} →
 				</a>
 			{/if}
