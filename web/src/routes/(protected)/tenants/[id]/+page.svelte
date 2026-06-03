@@ -151,7 +151,7 @@
 	<title>{fullName ? `${fullName} - Tenant` : 'Tenant'} - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="tenant-detail-page">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="tenant-detail-page">
 	<!-- Breadcrumb -->
 	<div class="mb-4">
 		<PageBreadcrumb

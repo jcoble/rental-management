@@ -325,7 +325,7 @@
 	<title>{property?.name ?? 'Property'} - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="property-detail-page">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="property-detail-page">
 	<!-- Breadcrumb -->
 	<div class="mb-4">
 		<PageBreadcrumb

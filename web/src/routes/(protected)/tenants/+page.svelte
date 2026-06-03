@@ -183,7 +183,7 @@
 	<title>Tenants - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="tenants-page">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="tenants-page">
 	<div class="mb-4 flex items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold">Tenants</h1>

@@ -132,7 +132,7 @@
 	<title>{appt ? appt.title : 'Appointment'} - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="appointment-detail-page">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="appointment-detail-page">
 	<div class="mb-4">
 		<PageBreadcrumb
 			crumbs={[

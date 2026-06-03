@@ -114,7 +114,7 @@
 	<title>AI Assistant - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="ai-page">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="ai-page">
 	<div class="mb-4 flex items-center gap-2">
 		<div class="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-primary">
 			<Sparkles class="h-4 w-4" />

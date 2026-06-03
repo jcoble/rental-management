@@ -236,7 +236,7 @@
 	<title>{lease ? `Lease ${lease.leaseNumber}` : 'Lease'} - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="lease-detail-page">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="lease-detail-page">
 	{#if leaseQuery.isLoading}
 		<div class="flex h-48 items-center justify-center" data-testid="lease-detail-loading">
 			<div class="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent"></div>

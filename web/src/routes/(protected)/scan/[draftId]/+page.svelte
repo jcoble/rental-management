@@ -416,7 +416,7 @@
 	<title>Review Scan - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="scan-review">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="scan-review">
 	{#if draftQuery.isLoading}
 		<div class="flex h-48 items-center justify-center">
 			<div class="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent"></div>

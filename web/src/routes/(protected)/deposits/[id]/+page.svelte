@@ -129,7 +129,7 @@
 	<title>{deposit ? `Deposit – ${deposit.leaseNumber ?? `Lease #${deposit.leaseId}`}` : 'Security Deposit'} - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="deposit-detail-page">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="deposit-detail-page">
 	{#if depositQuery.isLoading}
 		<div class="flex h-48 items-center justify-center" data-testid="deposit-detail-loading">
 			<div class="h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent"></div>

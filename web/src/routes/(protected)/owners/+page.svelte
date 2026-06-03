@@ -297,7 +297,7 @@
 	<title>Owners & Vendors - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="owners-page">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="owners-page">
 	<div class="mb-4">
 		<h1 class="text-2xl font-bold">Owners & Vendors</h1>
 		<p class="text-sm text-muted-foreground">Manage ownership contacts and service provider compliance data.</p>

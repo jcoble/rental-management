@@ -114,7 +114,7 @@
 	<title>Insights - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="analytics-page">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="analytics-page">
 	<div class="mb-5 flex items-center justify-between">
 		<div>
 			<h1 class="text-2xl font-bold">Insights</h1>
