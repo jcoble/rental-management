@@ -33,6 +33,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Conversation> Conversations => Set<Conversation>();
     public DbSet<ConversationMessage> ConversationMessages => Set<ConversationMessage>();
     public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<NotificationSettings> NotificationSettings => Set<NotificationSettings>();
 
     // Auth + audit + infrastructure entities (Task 3)
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
@@ -185,6 +186,17 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<NotificationSettings>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.SignalWireProjectIdCipherText).HasMaxLength(4000);
+            entity.Property(e => e.SignalWireTokenCipherText).HasMaxLength(4000);
+            entity.Property(e => e.SignalWireSpaceUrlCipherText).HasMaxLength(4000);
+            entity.Property(e => e.SignalWireFromNumberCipherText).HasMaxLength(4000);
+            entity.Property(e => e.DailyBriefingSmsRecipientsCipherText).HasMaxLength(4000);
+            entity.Property(e => e.DailyBriefingEmailRecipientsCipherText).HasMaxLength(4000);
         });
 
         modelBuilder.Entity<OutboxMessage>(entity =>

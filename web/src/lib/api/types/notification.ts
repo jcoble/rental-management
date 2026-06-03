@@ -26,3 +26,28 @@ export interface UnreadCountResponse {
 export interface NotificationEmailResponse {
 	email: string | null;
 }
+
+export interface NotificationSettingsResponse {
+	enableDailyBriefingMessages: boolean;
+	dailyBriefingSendHourLocal: number;
+	dailyBriefingIncludeEmpty: boolean;
+	dailyBriefingSmsRecipients: string[];
+	dailyBriefingEmailRecipients: string[];
+	signalWireProjectId: string | null;
+	signalWireTokenSet: boolean;
+	signalWireToken: string | null;
+	signalWireSpaceUrl: string | null;
+	signalWireFromNumber: string | null;
+}
+
+export interface UpdateNotificationSettingsRequest {
+	enableDailyBriefingMessages: boolean;
+	dailyBriefingSendHourLocal: number;
+	dailyBriefingIncludeEmpty: boolean;
+	dailyBriefingSmsRecipients: string[];
+	dailyBriefingEmailRecipients: string[];
+	signalWireProjectId: string | null;
+	signalWireToken?: string | null;
+	signalWireSpaceUrl: string | null;
+	signalWireFromNumber: string | null;
+}

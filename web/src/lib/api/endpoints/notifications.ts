@@ -3,6 +3,8 @@ import type {
 	NotificationEmailResponse,
 	NotificationItem,
 	NotificationListParams,
+	NotificationSettingsResponse,
+	UpdateNotificationSettingsRequest,
 	UnreadCountResponse
 } from '$lib/api/types/notification';
 
@@ -21,5 +23,8 @@ export const notifications = {
 	markAllAsRead: () => api.post<void>('/notifications/read-all', {}),
 	getNotificationEmail: () => api.get<NotificationEmailResponse>('/notifications/email'),
 	setNotificationEmail: (email: string | null) =>
-		api.put<NotificationEmailResponse>('/notifications/email', { email })
+		api.put<NotificationEmailResponse>('/notifications/email', { email }),
+	getSettings: () => api.get<NotificationSettingsResponse>('/notifications/settings'),
+	setSettings: (settings: UpdateNotificationSettingsRequest) =>
+		api.put<NotificationSettingsResponse>('/notifications/settings', settings)
 };

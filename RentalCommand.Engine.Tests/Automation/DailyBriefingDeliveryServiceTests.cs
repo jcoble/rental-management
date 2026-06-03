@@ -1,7 +1,6 @@
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
@@ -32,7 +31,7 @@ public class DailyBriefingDeliveryServiceTests : IDisposable
             ],
         });
 
-        var options = Options.Create(new NotificationsConfig
+        var config = new NotificationsConfig
         {
             EnableDailyBriefingMessages = true,
             DailyBriefing = new DailyBriefingOptions
@@ -41,12 +40,12 @@ public class DailyBriefingDeliveryServiceTests : IDisposable
                 SmsRecipients = ["+15551234567"],
                 EmailRecipients = ["owner@example.com"],
             },
-        });
+        };
 
         var sut = new DailyBriefingDeliveryService(
             _ctx.Db,
             briefing,
-            options,
+            new StubNotificationSettingsService(config),
             NullLogger<DailyBriefingDeliveryService>.Instance);
 
         var first = await sut.EnqueueDueAsync(new DateTime(2026, 6, 3, 13, 0, 0, DateTimeKind.Utc));
@@ -64,6 +63,51 @@ public class DailyBriefingDeliveryServiceTests : IDisposable
         smsPayload.GetProperty("message").GetString().Should().Contain("urgent maintenance");
     }
 
+    [Fact]
+    public async Task EnqueueDueAsync_DoesNotQueueDuplicate_WhenExistingPayloadIsFormattedJson()
+    {
+        _ctx.Db.OutboxMessages.Add(new OutboxMessage
+        {
+            PortfolioId = 1,
+            MessageType = "sms",
+            Payload = JsonSerializer.Serialize(new
+            {
+                purpose = "daily-briefing",
+                date = "2026-06-03",
+                to = "+15551234567",
+                message = "Already queued",
+            }, new JsonSerializerOptions { WriteIndented = true }),
+            CreatedAt = new DateTime(2026, 6, 3, 12, 0, 0, DateTimeKind.Utc),
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        var config = new NotificationsConfig
+        {
+            EnableDailyBriefingMessages = true,
+            DailyBriefing = new DailyBriefingOptions
+            {
+                SendHourLocal = 8,
+                SmsRecipients = ["+15551234567"],
+            },
+        };
+
+        var sut = new DailyBriefingDeliveryService(
+            _ctx.Db,
+            new StubBriefingService(new BriefingResponse
+            {
+                Date = new DateTime(2026, 6, 3),
+                GeneratedAt = new DateTime(2026, 6, 3, 13, 0, 0, DateTimeKind.Utc),
+                Summary = "Should not enqueue.",
+            }),
+            new StubNotificationSettingsService(config),
+            NullLogger<DailyBriefingDeliveryService>.Instance);
+
+        var queued = await sut.EnqueueDueAsync(new DateTime(2026, 6, 3, 13, 0, 0, DateTimeKind.Utc));
+
+        queued.Should().Be(0);
+        _ctx.Db.OutboxMessages.Should().HaveCount(1);
+    }
+
     private sealed class StubBriefingService : IDailyBriefingService
     {
         private readonly BriefingResponse _response;
@@ -72,5 +116,21 @@ public class DailyBriefingDeliveryServiceTests : IDisposable
 
         public Task<BriefingResponse> ComposeAsync(int portfolioId, CancellationToken ct = default)
             => Task.FromResult(_response);
+    }
+
+    private sealed class StubNotificationSettingsService : INotificationSettingsService
+    {
+        private readonly NotificationsConfig _config;
+
+        public StubNotificationSettingsService(NotificationsConfig config) => _config = config;
+
+        public Task<NotificationSettingsResponse> GetAdminAsync(CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<NotificationSettingsResponse> UpdateAsync(UpdateNotificationSettingsRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<NotificationsConfig> GetRuntimeAsync(CancellationToken ct = default) =>
+            Task.FromResult(_config);
     }
 }
