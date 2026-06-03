@@ -83,6 +83,9 @@ services:
       - Assistant__Provider=${ASSISTANT_PROVIDER:-openai}
       - Assistant__ModelId=${ASSISTANT_MODEL_ID:-gpt-4o}
       - Assistant__ApiKey=${ASSISTANT_API_KEY:-}
+      - DataProtection__KeysPath=/var/lib/rentalcommand/dataprotection-keys
+    volumes:
+      - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
     depends_on:
       postgres:
         condition: service_healthy
@@ -124,20 +127,15 @@ services:
       - Assistant__Provider=${ASSISTANT_PROVIDER:-openai}
       - Assistant__ModelId=${ASSISTANT_MODEL_ID:-gpt-4o}
       - Assistant__ApiKey=${ASSISTANT_API_KEY:-}
-      - Notifications__EnableDailyBriefingMessages=${DAILY_BRIEFING_ENABLED:-false}
-      - Notifications__DailyBriefing__SendHourLocal=${DAILY_BRIEFING_HOUR:-8}
-      - Notifications__DailyBriefing__SmsRecipients__0=${DAILY_BRIEFING_SMS_TO:-}
-      - Notifications__DailyBriefing__EmailRecipients__0=${DAILY_BRIEFING_EMAIL_TO:-}
-      - Notifications__SignalWire__ProjectId=${SIGNALWIRE_PROJECT_ID:-}
-      - Notifications__SignalWire__Token=${SIGNALWIRE_TOKEN:-}
-      - Notifications__SignalWire__SpaceUrl=${SIGNALWIRE_SPACE_URL:-}
-      - Notifications__SignalWire__FromNumber=${SIGNALWIRE_FROM_NUMBER:-}
+      - DataProtection__KeysPath=/var/lib/rentalcommand/dataprotection-keys
       - Notifications__Twilio__AccountSid=${TWILIO_ACCOUNT_SID:-}
       - Notifications__Twilio__AuthToken=${TWILIO_AUTH_TOKEN:-}
       - Notifications__Twilio__FromNumber=${TWILIO_FROM_NUMBER:-}
       - Notifications__SendGrid__ApiKey=${SENDGRID_API_KEY:-}
       - Notifications__SendGrid__FromEmail=${SENDGRID_FROM_EMAIL:-}
       - Notifications__SendGrid__FromName=${SENDGRID_FROM_NAME:-Rental Command}
+    volumes:
+      - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
     depends_on:
       postgres:
         condition: service_healthy
@@ -192,3 +190,4 @@ networks:
 
 volumes:
   postgres_data:
+  dataprotection_keys:

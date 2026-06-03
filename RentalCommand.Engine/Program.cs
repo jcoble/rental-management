@@ -1,4 +1,5 @@
 using System.Data.Common;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,6 +20,14 @@ using RentalCommand.Engine.Workers;
 // explicitly constructed with DateTimeKind.Utc (see RentChargeService). This matches
 // the API project which also runs without the legacy switch.
 var builder = Host.CreateApplicationBuilder(args);
+
+var dataProtection = builder.Services.AddDataProtection().SetApplicationName("RentalCommand");
+var dataProtectionKeysPath = builder.Configuration["DataProtection:KeysPath"];
+if (!string.IsNullOrWhiteSpace(dataProtectionKeysPath))
+{
+    Directory.CreateDirectory(dataProtectionKeysPath);
+    dataProtection.PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath));
+}
 
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection")
     ?? throw new InvalidOperationException(
@@ -60,6 +69,7 @@ builder.Services.AddScoped<ILateFeeService, LateFeeService>();
 builder.Services.AddScoped<ILeaseExpiryReminderService, LeaseExpiryReminderService>();
 builder.Services.AddScoped<IDailyBriefingService, DailyBriefingService>();
 builder.Services.AddScoped<IDailyBriefingDeliveryService, DailyBriefingDeliveryService>();
+builder.Services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
 
 // Engine resilience — persists worker heartbeats; consumed by the watchdog + health check.
 // Scoped (it opens its own scope per call to isolate DB access).
