@@ -2,10 +2,8 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data;
 
@@ -16,28 +14,29 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
     private const string Purpose = "daily-briefing";
     private readonly RentalCommandDbContext _db;
     private readonly IDailyBriefingService _briefing;
-    private readonly NotificationsConfig _config;
+    private readonly INotificationSettingsService _settings;
     private readonly ILogger<DailyBriefingDeliveryService> _logger;
 
     public DailyBriefingDeliveryService(
         RentalCommandDbContext db,
         IDailyBriefingService briefing,
-        IOptions<NotificationsConfig> config,
+        INotificationSettingsService settings,
         ILogger<DailyBriefingDeliveryService> logger)
     {
         _db = db;
         _briefing = briefing;
-        _config = config.Value;
+        _settings = settings;
         _logger = logger;
     }
 
     public async Task<int> EnqueueDueAsync(DateTime? utcNow = null, CancellationToken ct = default)
     {
-        if (!_config.EnableDailyBriefingMessages)
+        var config = await _settings.GetRuntimeAsync(ct);
+        if (!config.EnableDailyBriefingMessages)
             return 0;
 
-        var smsRecipients = CleanRecipients(_config.DailyBriefing.SmsRecipients);
-        var emailRecipients = CleanRecipients(_config.DailyBriefing.EmailRecipients);
+        var smsRecipients = CleanRecipients(config.DailyBriefing.SmsRecipients);
+        var emailRecipients = CleanRecipients(config.DailyBriefing.EmailRecipients);
         if (smsRecipients.Count == 0 && emailRecipients.Count == 0)
             return 0;
 
@@ -51,7 +50,7 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
         foreach (var portfolio in portfolios)
         {
             var localNow = ToPortfolioLocalTime(now, portfolio.TimeZone);
-            if (localNow.Hour < _config.DailyBriefing.SendHourLocal)
+            if (localNow.Hour < config.DailyBriefing.SendHourLocal)
                 continue;
 
             var dateKey = localNow.Date.ToString("yyyy-MM-dd");
@@ -59,7 +58,7 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
                 continue;
 
             var briefing = await _briefing.ComposeAsync(portfolio.Id, ct);
-            if (!_config.DailyBriefing.IncludeEmptyBriefing &&
+            if (!config.DailyBriefing.IncludeEmptyBriefing &&
                 briefing.Bullets.Count == 0 &&
                 string.IsNullOrWhiteSpace(briefing.Summary))
             {
@@ -116,13 +115,35 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
 
     private async Task<bool> AlreadyQueuedAsync(int portfolioId, string dateKey, CancellationToken ct)
     {
-        var purposeNeedle = $"\"purpose\":\"{Purpose}\"";
-        var dateNeedle = $"\"date\":\"{dateKey}\"";
-        return await _db.OutboxMessages.AnyAsync(m =>
-            m.PortfolioId == portfolioId &&
-            (m.MessageType == "sms" || m.MessageType == "email") &&
-            m.Payload.Contains(purposeNeedle) &&
-            m.Payload.Contains(dateNeedle), ct);
+        var payloads = await _db.OutboxMessages
+            .Where(m => m.PortfolioId == portfolioId && (m.MessageType == "sms" || m.MessageType == "email"))
+            .Select(m => m.Payload)
+            .ToListAsync(ct);
+
+        return payloads.Any(payload => IsDailyBriefingPayloadForDate(payload, dateKey));
+    }
+
+    private static bool IsDailyBriefingPayloadForDate(string? payload, string dateKey)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+            return false;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            return root.ValueKind == JsonValueKind.Object
+                   && root.TryGetProperty("purpose", out var purpose)
+                   && purpose.ValueKind == JsonValueKind.String
+                   && string.Equals(purpose.GetString(), Purpose, StringComparison.Ordinal)
+                   && root.TryGetProperty("date", out var date)
+                   && date.ValueKind == JsonValueKind.String
+                   && string.Equals(date.GetString(), dateKey, StringComparison.Ordinal);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static DateTime ToPortfolioLocalTime(DateTime utcNow, string? timeZoneId)

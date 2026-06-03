@@ -10,10 +10,12 @@ namespace RentalCommand.Api.Controllers;
 public class NotificationsController : AuthenticatedPortfolioControllerBase
 {
     private readonly INotificationService _notifications;
+    private readonly INotificationSettingsService _settings;
 
-    public NotificationsController(INotificationService notifications)
+    public NotificationsController(INotificationService notifications, INotificationSettingsService settings)
     {
         _notifications = notifications;
+        _settings = settings;
     }
 
     [HttpGet]
@@ -69,5 +71,21 @@ public class NotificationsController : AuthenticatedPortfolioControllerBase
     {
         var response = await _notifications.SetNotificationEmailAsync(GetPortfolioId(), request.Email, ct);
         return response is null ? NotFound(new { error = "Portfolio not found" }) : Ok(response);
+    }
+
+    [HttpGet("settings")]
+    [ProducesResponseType(typeof(NotificationSettingsResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<NotificationSettingsResponse>> GetSettings(CancellationToken ct)
+    {
+        return Ok(await _settings.GetAdminAsync(ct));
+    }
+
+    [HttpPut("settings")]
+    [ProducesResponseType(typeof(NotificationSettingsResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<NotificationSettingsResponse>> SetSettings(
+        [FromBody] UpdateNotificationSettingsRequest request,
+        CancellationToken ct)
+    {
+        return Ok(await _settings.UpdateAsync(request, ct));
     }
 }

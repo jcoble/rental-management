@@ -42,6 +42,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPortalService, PortalService>();
         services.AddScoped<IConversationService, ConversationService>();
         services.AddScoped<INotificationService, NotificationService>();
+        services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
 
         // Aggregated read-only KPI rollup for the web dashboard.
         services.AddScoped<IDashboardService, DashboardService>();

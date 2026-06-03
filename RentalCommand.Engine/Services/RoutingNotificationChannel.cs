@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 
@@ -19,15 +20,18 @@ public sealed class RoutingNotificationChannel : INotificationChannel
 {
     private readonly HttpClient _http;
     private readonly NotificationsConfig _cfg;
+    private readonly INotificationSettingsService _settings;
     private readonly ILogger<RoutingNotificationChannel> _logger;
 
     public RoutingNotificationChannel(
         HttpClient http,
         IOptions<NotificationsConfig> options,
+        INotificationSettingsService settings,
         ILogger<RoutingNotificationChannel> logger)
     {
         _http = http;
         _cfg  = options.Value;
+        _settings = settings;
         _logger = logger;
     }
 
@@ -36,7 +40,8 @@ public sealed class RoutingNotificationChannel : INotificationChannel
     public async Task SendSmsAsync(string toPhoneNumber, string message, CancellationToken ct = default)
     {
         // SignalWire (Twilio-compatible, cheaper) takes precedence when configured; Twilio is the fallback.
-        var sw = _cfg.SignalWire;
+        var runtime = await _settings.GetRuntimeAsync(ct);
+        var sw = runtime.SignalWire;
         if (sw.Enabled)
         {
             var space = sw.SpaceUrl!.Trim().TrimEnd('/');
