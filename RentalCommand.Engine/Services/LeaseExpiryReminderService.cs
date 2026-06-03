@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -26,32 +26,33 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
 {
     private readonly RentalCommandDbContext _db;
     private readonly IMessagePublisher _publisher;
-    private readonly NotificationsConfig _cfg;
+    private readonly INotificationSettingsService _settings;
     private readonly ILogger<LeaseExpiryReminderService> _logger;
 
     public LeaseExpiryReminderService(
         RentalCommandDbContext db,
         IMessagePublisher publisher,
-        IOptions<NotificationsConfig> options,
+        INotificationSettingsService settings,
         ILogger<LeaseExpiryReminderService> logger)
     {
         _db = db;
         _publisher = publisher;
-        _cfg = options.Value;
+        _settings = settings;
         _logger = logger;
     }
 
     /// <inheritdoc/>
     public async Task<int> RemindAsync(CancellationToken ct = default)
     {
-        if (!_cfg.EnableLeaseExpiryReminders)
+        var cfg = await _settings.GetRuntimeAsync(ct);
+        if (!cfg.EnableLeaseExpiryReminders)
         {
             _logger.LogDebug("lease expiry reminders disabled");
             return 0;
         }
 
         var today = DateTime.UtcNow.Date;
-        var windowEnd = today.AddDays(_cfg.LeaseExpiryReminderDays);
+        var windowEnd = today.AddDays(cfg.LeaseExpiryReminderDays);
 
         var leases = await _db.Leases
             .Where(l => l.Status == LeaseStatus.Active

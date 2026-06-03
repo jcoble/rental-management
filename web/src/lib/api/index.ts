@@ -7,6 +7,8 @@ export { leases } from './endpoints/leases';
 export { payments } from './endpoints/payments';
 export { expenses } from './endpoints/expenses';
 export { accounting } from './endpoints/accounting';
+export { banking } from './endpoints/banking';
+export { notices } from './endpoints/notices';
 export { workOrders } from './endpoints/workOrders';
 export { appointments } from './endpoints/appointments';
 export { inspections } from './endpoints/inspections';

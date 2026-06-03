@@ -1,8 +1,11 @@
+import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:record/record.dart';
 
 import '../../core/api/api_exception.dart';
 import 'scan_repository.dart';
@@ -20,14 +23,25 @@ class ScanCaptureSheet extends ConsumerStatefulWidget {
 }
 
 class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
+  final AudioRecorder _recorder = AudioRecorder();
   bool _uploading = false;
   double _uploadProgress = 0;
   String? _error;
+  bool _recording = false;
+  bool _voiceUploading = false;
+  String? _recordingPath;
 
-  /// What kind of record this scan will become: 'Expense' (receipt/bill) or
-  /// 'Payment' (rent check). Drives the LLM extraction + confirm flow. Defaults
-  /// to 'Expense' since receipts/bills are the most common capture.
+  /// What kind of record this scan will become: 'Expense' (receipt/bill),
+  /// 'Payment' (rent check), or 'WorkOrder' (maintenance request). Drives the
+  /// extraction + confirm flow. Defaults to 'Expense' since receipts/bills are
+  /// the most common capture.
   String _targetEntityType = 'Expense';
+
+  @override
+  void dispose() {
+    _recorder.dispose();
+    super.dispose();
+  }
 
   Future<void> _pick(ImageSource source) async {
     final picker = ImagePicker();
@@ -51,7 +65,9 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
       final bytes = Uint8List.fromList(await picked.readAsBytes());
       final contentType = _mimeFromExtension(picked.name);
 
-      final created = await ref.read(scanRepositoryProvider).uploadImage(
+      final created = await ref
+          .read(scanRepositoryProvider)
+          .uploadImage(
             bytes,
             picked.name,
             contentType,
@@ -89,24 +105,131 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
     return 'image/jpeg'; // safe fallback for camera shots
   }
 
+  Future<void> _toggleVoice() async {
+    if (_recording) {
+      await _stopVoice();
+    } else {
+      await _startVoice();
+    }
+  }
+
+  Future<void> _startVoice() async {
+    setState(() => _error = null);
+
+    try {
+      final hasPermission = await _recorder.hasPermission();
+      if (!hasPermission) {
+        if (!mounted) return;
+        setState(() {
+          _error = 'Microphone permission is required to record a voice note.';
+        });
+        return;
+      }
+
+      final path =
+          '${Directory.systemTemp.path}/rental-command-voice-${DateTime.now().microsecondsSinceEpoch}.m4a';
+      await _recorder.start(
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          bitRate: 64000,
+          sampleRate: 44100,
+          numChannels: 1,
+          noiseSuppress: true,
+        ),
+        path: path,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _recording = true;
+        _recordingPath = path;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'Could not start recording. Please try again.';
+      });
+    }
+  }
+
+  Future<void> _stopVoice() async {
+    setState(() {
+      _voiceUploading = true;
+      _error = null;
+    });
+
+    try {
+      final path = await _recorder.stop() ?? _recordingPath;
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _recordingPath = null;
+      });
+
+      if (path == null || path.isEmpty) {
+        setState(() {
+          _voiceUploading = false;
+          _error = 'No voice note was recorded.';
+        });
+        return;
+      }
+
+      final file = File(path);
+      final bytes = Uint8List.fromList(await file.readAsBytes());
+      unawaited(file.delete().catchError((_) => file));
+
+      final draft = await ref
+          .read(scanRepositoryProvider)
+          .createVoiceDraft(bytes, 'voice.m4a', 'audio/mp4');
+
+      if (!mounted) return;
+      Navigator.of(context).pop(draft.id);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _voiceUploading = false;
+        _error = e.message;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _recording = false;
+        _voiceUploading = false;
+        _error = 'Voice capture failed. Please try again.';
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
-    if (_uploading) {
+    if (_uploading || _voiceUploading) {
       return Padding(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 8),
-            Text('Uploading…', style: theme.textTheme.titleMedium),
+            Text(
+              _voiceUploading ? 'Creating voice draft…' : 'Uploading…',
+              style: theme.textTheme.titleMedium,
+            ),
             const SizedBox(height: 20),
-            LinearProgressIndicator(value: _uploadProgress > 0 ? _uploadProgress : null),
+            LinearProgressIndicator(
+              value: _voiceUploading
+                  ? null
+                  : _uploadProgress > 0
+                  ? _uploadProgress
+                  : null,
+            ),
             const SizedBox(height: 8),
             Text(
-              _uploadProgress > 0
+              _voiceUploading
+                  ? 'Reading your note…'
+                  : _uploadProgress > 0
                   ? '${(_uploadProgress * 100).toStringAsFixed(0)}%'
                   : 'Preparing…',
               style: theme.textTheme.bodySmall?.copyWith(
@@ -135,7 +258,7 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Take a photo of a receipt, bill, or check.\nThe app will read the details for you.',
+              'Take a photo of a receipt, bill, check, or maintenance issue.\nThe app will read the details for you.',
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
@@ -179,6 +302,14 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
               label: const Text('Choose from gallery'),
               onPressed: () => _pick(ImageSource.gallery),
             ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              icon: Icon(
+                _recording ? Icons.stop_circle_outlined : Icons.mic_outlined,
+              ),
+              label: Text(_recording ? 'Stop voice note' : 'Record voice note'),
+              onPressed: _toggleVoice,
+            ),
             const SizedBox(height: 8),
           ],
         ),
@@ -187,9 +318,8 @@ class _ScanCaptureSheetState extends ConsumerState<ScanCaptureSheet> {
   }
 }
 
-/// Two large, thumb-friendly toggle buttons that pick what kind of record this
-/// scan should become: a Receipt/Bill ('Expense') or a Rent Check/Payment
-/// ('Payment'). The choice flows through to the upload's `targetEntityType`.
+/// Large, thumb-friendly toggle buttons that pick what kind of record this scan
+/// should become. The choice flows through to the upload's `targetEntityType`.
 class _DocTypeSelector extends StatelessWidget {
   const _DocTypeSelector({required this.selected, required this.onChanged});
 
@@ -198,24 +328,35 @@ class _DocTypeSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
       children: [
-        Expanded(
-          child: _DocTypeOption(
-            icon: Icons.receipt_long_outlined,
-            label: 'Receipt / Bill',
-            selected: selected == 'Expense',
-            onTap: () => onChanged('Expense'),
-          ),
+        Row(
+          children: [
+            Expanded(
+              child: _DocTypeOption(
+                icon: Icons.receipt_long_outlined,
+                label: 'Receipt / Bill',
+                selected: selected == 'Expense',
+                onTap: () => onChanged('Expense'),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _DocTypeOption(
+                icon: Icons.payments_outlined,
+                label: 'Rent Check / Payment',
+                selected: selected == 'Payment',
+                onTap: () => onChanged('Payment'),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _DocTypeOption(
-            icon: Icons.payments_outlined,
-            label: 'Rent Check / Payment',
-            selected: selected == 'Payment',
-            onTap: () => onChanged('Payment'),
-          ),
+        const SizedBox(height: 12),
+        _DocTypeOption(
+          icon: Icons.home_repair_service_outlined,
+          label: 'Maintenance Request',
+          selected: selected == 'WorkOrder',
+          onTap: () => onChanged('WorkOrder'),
         ),
       ],
     );
@@ -239,7 +380,9 @@ class _DocTypeOption extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final fg = selected ? colorScheme.onPrimaryContainer : colorScheme.onSurface;
+    final fg = selected
+        ? colorScheme.onPrimaryContainer
+        : colorScheme.onSurface;
 
     return Material(
       color: selected ? colorScheme.primaryContainer : colorScheme.surface,
@@ -254,7 +397,9 @@ class _DocTypeOption extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: selected ? colorScheme.primary : colorScheme.outlineVariant,
+              color: selected
+                  ? colorScheme.primary
+                  : colorScheme.outlineVariant,
               width: selected ? 2 : 1,
             ),
           ),

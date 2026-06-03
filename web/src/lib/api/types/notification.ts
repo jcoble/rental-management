@@ -28,6 +28,13 @@ export interface NotificationEmailResponse {
 }
 
 export interface NotificationSettingsResponse {
+	enableRentCharges: boolean;
+	enableLateFees: boolean;
+	enableLeaseExpiryReminders: boolean;
+	notifyTenants: boolean;
+	rentChargeLeadDays: number;
+	lateFeeGraceDays: number;
+	leaseExpiryReminderDays: number;
 	enableDailyBriefingMessages: boolean;
 	dailyBriefingSendHourLocal: number;
 	dailyBriefingIncludeEmpty: boolean;
@@ -41,6 +48,13 @@ export interface NotificationSettingsResponse {
 }
 
 export interface UpdateNotificationSettingsRequest {
+	enableRentCharges: boolean;
+	enableLateFees: boolean;
+	enableLeaseExpiryReminders: boolean;
+	notifyTenants: boolean;
+	rentChargeLeadDays: number;
+	lateFeeGraceDays: number;
+	leaseExpiryReminderDays: number;
 	enableDailyBriefingMessages: boolean;
 	dailyBriefingSendHourLocal: number;
 	dailyBriefingIncludeEmpty: boolean;

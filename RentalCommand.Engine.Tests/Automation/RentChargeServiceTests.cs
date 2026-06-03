@@ -84,7 +84,7 @@ public class RentChargeServiceTests : IDisposable
         return new RentChargeService(
             _ctx.Db,
             _publisher.Object,
-            Options.Create(cfg),
+            new FakeNotificationSettingsService(cfg),
             new ConfigurationBuilder().Build(),
             NullLogger<RentChargeService>.Instance);
     }

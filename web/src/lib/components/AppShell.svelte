@@ -26,7 +26,11 @@
 		FileBarChart,
 		History,
 		BarChart3,
-		MessageSquare
+		MessageSquare,
+		CreditCard,
+		ClipboardList,
+		Home,
+		BellRing
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -41,7 +45,9 @@
 	import PortfolioSelector from '$lib/components/shared/PortfolioSelector.svelte';
 	import NotificationBell from '$lib/components/notifications/NotificationBell.svelte';
 	import { getCurrentUser, hasAnyRole, clearAuth } from '$lib/stores/auth.svelte';
+	import { isPortalUser, isStaff } from '$lib/types/user';
 	import NavigationLoader from '$lib/components/NavigationLoader.svelte';
+	import AssistantBubble from '$lib/components/assistant/AssistantBubble.svelte';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 
@@ -68,16 +74,18 @@
 		roles?: string[];
 	};
 
-	const navItems: NavItem[] = [
+	const staffNavItems: NavItem[] = [
 		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
 		{ href: '/scan', label: 'Scan', icon: ScanLine, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/properties', label: 'Properties', icon: Building, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/tenants', label: 'Tenants', icon: Users, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/leases', label: 'Leases', icon: FileText, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/notices', label: 'Notices', icon: MessageSquare, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/maintenance', label: 'Maintenance', icon: Wrench, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/messages', label: 'Messages', icon: MessageSquare, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/analytics', label: 'Insights', icon: BarChart3, roles: ['Admin', 'Manager'] },
 		{ href: '/accounting', label: 'Accounting', icon: Calculator, roles: ['Admin', 'Manager'] },
+		{ href: '/banking', label: 'Banking', icon: Landmark, roles: ['Admin', 'Manager'] },
 		{ href: '/deposits', label: 'Deposits', icon: Landmark, roles: ['Admin', 'Manager'] },
 		{ href: '/tax', label: 'Tax', icon: Receipt, roles: ['Admin', 'Manager'] },
 		{ href: '/owners-report', label: 'Owner Reports', icon: FileBarChart, roles: ['Admin', 'Manager'] },
@@ -85,12 +93,23 @@
 		{ href: '/owners', label: 'Owners & Vendors', icon: BadgeDollarSign, roles: ['Admin', 'Manager'] },
 		{ href: '/ai', label: 'AI Assistant', icon: Sparkles, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/activity', label: 'Activity', icon: History, roles: ['Admin', 'Manager'] },
-		{ href: '/portal', label: 'Portal', icon: UserCircle2 },
 		{ href: '/admin/users', label: 'User Access', icon: Shield, roles: ['Admin'] },
 		{ href: '/settings', label: 'Settings', icon: Settings, roles: ['Admin', 'Manager'] }
 	];
 
 	let currentUser = $derived(getCurrentUser());
+	let portalUser = $derived(isPortalUser(currentUser) && !isStaff(currentUser));
+	const portalNavItems: NavItem[] = [
+		{ href: '/portal', label: 'Dashboard', icon: Home },
+		{ href: '/portal/messages', label: 'Messages', icon: MessageSquare },
+		{ href: '/portal/notifications', label: 'Notifications', icon: BellRing },
+		{ href: '/portal/maintenance', label: 'Maintenance', icon: Wrench },
+		{ href: '/portal/payments', label: 'Payments', icon: CreditCard },
+		{ href: '/portal/lease', label: 'Lease', icon: FileText },
+		{ href: '/portal/appointments', label: 'Appointments', icon: Calendar },
+		{ href: '/portal/requests', label: 'Requests', icon: ClipboardList }
+	];
+	let navItems = $derived(portalUser ? portalNavItems : staffNavItems);
 	let visibleNavItems = $derived.by(() =>
 		navItems.filter((item) => {
 			if (!item.roles || item.roles.length === 0) return true;
@@ -156,9 +175,11 @@
 		</div>
 
 		<!-- Portfolio Selector -->
-		<div class="border-b border-sidebar-border py-2">
-			<PortfolioSelector collapsed={sidebarCollapsed && !isMobile} />
-		</div>
+		{#if !portalUser}
+			<div class="border-b border-sidebar-border py-2">
+				<PortfolioSelector collapsed={sidebarCollapsed && !isMobile} />
+			</div>
+		{/if}
 
 		<!-- Navigation -->
 		<nav class="flex-1 overflow-y-auto px-2 py-3" data-testid="main-nav">
@@ -220,13 +241,15 @@
 							</div>
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
-						<DropdownMenuItem data-testid="user-menu-settings">
-							<a href="/settings" class="flex w-full items-center gap-2">
-								<Settings class="h-4 w-4" />
-								Settings
-							</a>
-						</DropdownMenuItem>
-						<DropdownMenuSeparator />
+						{#if !portalUser}
+							<DropdownMenuItem data-testid="user-menu-settings">
+								<a href="/settings" class="flex w-full items-center gap-2">
+									<Settings class="h-4 w-4" />
+									Settings
+								</a>
+							</DropdownMenuItem>
+							<DropdownMenuSeparator />
+						{/if}
 						<DropdownMenuItem
 							class="text-destructive focus:text-destructive"
 							data-testid="user-menu-sign-out-collapsed"
@@ -263,13 +286,15 @@
 							</div>
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
-						<DropdownMenuItem data-testid="user-menu-settings">
-							<a href="/settings" class="flex w-full items-center gap-2">
-								<Settings class="h-4 w-4" />
-								Settings
-							</a>
-						</DropdownMenuItem>
-						<DropdownMenuSeparator />
+						{#if !portalUser}
+							<DropdownMenuItem data-testid="user-menu-settings">
+								<a href="/settings" class="flex w-full items-center gap-2">
+									<Settings class="h-4 w-4" />
+									Settings
+								</a>
+							</DropdownMenuItem>
+							<DropdownMenuSeparator />
+						{/if}
 						<DropdownMenuItem
 							class="text-destructive focus:text-destructive"
 							data-testid="user-menu-sign-out"
@@ -339,6 +364,7 @@
 				{@render children()}
 			</div>
 		</main>
+		<AssistantBubble />
 	</div>
 </div>
 

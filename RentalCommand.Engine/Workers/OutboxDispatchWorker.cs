@@ -102,6 +102,7 @@ public sealed class OutboxDispatchWorker : EngineWorkerBase
                 // isolated, retried SaveChanges immediately after the successful send.
                 await DispatchAsync(channel, message, cancellationToken);
                 message.SentAt = DateTime.UtcNow;
+                message.FailedAt = null;
                 message.Error = null;
                 dispatched++;
 

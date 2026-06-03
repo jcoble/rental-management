@@ -7,19 +7,15 @@
 	// `Conversation` event to invalidate the `['portal-conversations']` /
 	// `['portal-conversation']` query keys (see $lib/realtime/invalidate.ts).
 	import { onDestroy } from 'svelte';
-	import { page } from '$app/stores';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { setOnAuthCleared } from '$lib/stores/auth.svelte';
 	import { signalRService } from '$lib/realtime/signalr';
 	import { useInvalidateOnSignalR } from '$lib/realtime/invalidate';
 	import { CLIENT_HUB_URL } from '$lib/config';
-	import { isStaff } from '$lib/types/user';
 	import AppShell from '$lib/components/AppShell.svelte';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
-	let staffUser = $derived(isStaff(data.user ?? null));
-	let isMessagesPage = $derived($page.url.pathname.startsWith('/portal/messages'));
 
 	// Bridge SignalR data-update events to TanStack Query invalidation (wired once).
 	const queryClient = useQueryClient();
@@ -45,10 +41,4 @@
 	});
 </script>
 
-{#if staffUser}
-	<AppShell>{@render children()}</AppShell>
-{:else}
-	<main class="h-dvh overflow-y-auto bg-background {isMessagesPage ? '' : 'p-6'}">
-		{@render children()}
-	</main>
-{/if}
+<AppShell>{@render children()}</AppShell>

@@ -89,7 +89,7 @@ class ScanDraft {
   final int id;
   final int portfolioId;
 
-  /// 'Expense' or 'Payment'
+  /// 'Expense', 'Payment', or 'WorkOrder'
   final String targetEntityType;
 
   /// Lifecycle: 'Pending' -> 'Processing' -> 'Reviewing' -> 'Confirmed'
@@ -109,6 +109,9 @@ class ScanDraft {
 
   /// Target is a Payment draft (vs. an Expense draft).
   bool get isPayment => targetEntityType == 'Payment';
+
+  /// Target is a maintenance work order draft.
+  bool get isWorkOrder => targetEntityType == 'WorkOrder';
 
   /// Queued for extraction; the Engine has not picked it up yet.
   bool get isPending => status == 'Pending';

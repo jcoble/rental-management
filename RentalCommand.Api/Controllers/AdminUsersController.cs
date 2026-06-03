@@ -90,6 +90,21 @@ public class AdminUsersController : AuthenticatedPortfolioControllerBase
             return BadRequest(new { error = "A user with that email address already exists." });
         }
 
+        if (request.Role == UserRole.Tenant && request.TenantId == null)
+        {
+            return BadRequest(new { error = "Tenant users must be linked to a tenant." });
+        }
+
+        if (request.TenantId.HasValue)
+        {
+            var tenantExists = await _db.Tenants
+                .AnyAsync(t => t.Id == request.TenantId.Value && t.PortfolioId == portfolioId, ct);
+            if (!tenantExists)
+            {
+                return BadRequest(new { error = "Tenant not found in this portfolio." });
+            }
+        }
+
         var now = DateTime.UtcNow;
         var passwordToUse = !string.IsNullOrWhiteSpace(request.TemporaryPassword)
             ? request.TemporaryPassword
@@ -105,6 +120,7 @@ public class AdminUsersController : AuthenticatedPortfolioControllerBase
             EmailConfirmed = true, // admin-created accounts skip the email-verify gate
             DisplayName = request.DisplayName ?? string.Empty,
             PortfolioId = portfolioId,
+            TenantId = request.TenantId,
             CreatedAt = now,
         };
 
@@ -140,6 +156,7 @@ public class AdminUsersController : AuthenticatedPortfolioControllerBase
             DisplayName = request.DisplayName ?? string.Empty,
             PasswordHash = string.Empty, // Identity owns the credential; this field is legacy
             Role = request.Role,
+            TenantId = request.TenantId,
             IsActive = true,
             CreatedAt = now,
             UpdatedAt = now,

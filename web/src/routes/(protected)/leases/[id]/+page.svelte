@@ -118,6 +118,25 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
+	let leaseQuestion = $state('');
+	let leaseAnswer = $state('');
+	let leaseAnswerSources = $state<string[]>([]);
+
+	const askLeaseMutation = createMutation(() => ({
+		mutationFn: (question: string) => leases.ask(leaseId, question),
+		onSuccess: (result) => {
+			leaseAnswer = result.answer;
+			leaseAnswerSources = result.sources;
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	function askLease() {
+		const question = leaseQuestion.trim();
+		if (!question) return;
+		askLeaseMutation.mutate(question);
+	}
+
 	function openEdit() {
 		if (!lease) return;
 		form = {
@@ -341,6 +360,41 @@
 						</div>
 					{/if}
 				</dl>
+			</Card.Content>
+		</Card.Root>
+
+		<Card.Root class="mb-6" data-testid="lease-qa-card">
+			<Card.Header>
+				<Card.Title class="text-base">Ask This Lease</Card.Title>
+				<Card.Description>Answers are grounded in stored lease dates, rent, fees, deposit, and notes.</Card.Description>
+			</Card.Header>
+			<Card.Content class="space-y-3">
+				<div class="flex flex-col gap-2 sm:flex-row">
+					<Input
+						data-testid="lease-question-input"
+						bind:value={leaseQuestion}
+						placeholder="Can I have a dog? When is rent due?"
+						onkeydown={(e) => { if (e.key === 'Enter') askLease(); }}
+					/>
+					<Button data-testid="lease-question-submit" onclick={askLease} disabled={askLeaseMutation.isPending || !leaseQuestion.trim()}>
+						{askLeaseMutation.isPending ? 'Answering...' : 'Ask'}
+					</Button>
+				</div>
+				{#if leaseAnswer}
+					<div class="rounded-md border border-border bg-muted/30 p-3" data-testid="lease-question-answer">
+						<p class="text-sm leading-6">{leaseAnswer}</p>
+						{#if leaseAnswerSources.length > 0}
+							<details class="mt-2 text-xs text-muted-foreground">
+								<summary>Lease facts used</summary>
+								<ul class="mt-2 list-disc space-y-1 pl-5">
+									{#each leaseAnswerSources as source}
+										<li>{source}</li>
+									{/each}
+								</ul>
+							</details>
+						{/if}
+					</div>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 

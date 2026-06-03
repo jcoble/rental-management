@@ -1,0 +1,136 @@
+class BankingSummary {
+  const BankingSummary({
+    required this.connectionCount,
+    required this.transactionCount,
+    required this.unmatchedCount,
+    required this.suggestedMatchCount,
+    this.lastSyncedAt,
+    this.connections = const [],
+    this.recentTransactions = const [],
+  });
+
+  final int connectionCount;
+  final int transactionCount;
+  final int unmatchedCount;
+  final int suggestedMatchCount;
+  final DateTime? lastSyncedAt;
+  final List<BankConnection> connections;
+  final List<BankTransaction> recentTransactions;
+
+  factory BankingSummary.fromJson(Map<String, dynamic> json) {
+    return BankingSummary(
+      connectionCount: (json['connectionCount'] as num?)?.toInt() ?? 0,
+      transactionCount: (json['transactionCount'] as num?)?.toInt() ?? 0,
+      unmatchedCount: (json['unmatchedCount'] as num?)?.toInt() ?? 0,
+      suggestedMatchCount: (json['suggestedMatchCount'] as num?)?.toInt() ?? 0,
+      lastSyncedAt: DateTime.tryParse(json['lastSyncedAt'] as String? ?? ''),
+      connections: (json['connections'] as List? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(BankConnection.fromJson)
+          .toList(),
+      recentTransactions: (json['recentTransactions'] as List? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(BankTransaction.fromJson)
+          .toList(),
+    );
+  }
+}
+
+class BankConnection {
+  const BankConnection({
+    required this.id,
+    required this.provider,
+    required this.institutionName,
+    required this.accountName,
+    this.accountMask,
+    required this.status,
+    this.lastSyncedAt,
+  });
+
+  final int id;
+  final String provider;
+  final String institutionName;
+  final String accountName;
+  final String? accountMask;
+  final String status;
+  final DateTime? lastSyncedAt;
+
+  factory BankConnection.fromJson(Map<String, dynamic> json) {
+    return BankConnection(
+      id: (json['id'] as num).toInt(),
+      provider: json['provider'] as String? ?? 'Plaid',
+      institutionName: json['institutionName'] as String? ?? '',
+      accountName: json['accountName'] as String? ?? '',
+      accountMask: json['accountMask'] as String?,
+      status: json['status'] as String? ?? 'Active',
+      lastSyncedAt: DateTime.tryParse(json['lastSyncedAt'] as String? ?? ''),
+    );
+  }
+}
+
+class BankTransaction {
+  const BankTransaction({
+    required this.id,
+    required this.postedAt,
+    required this.description,
+    this.merchantName,
+    required this.amount,
+    required this.matchStatus,
+    this.suggestedMatch,
+    required this.institutionName,
+    required this.accountName,
+  });
+
+  final int id;
+  final DateTime postedAt;
+  final String description;
+  final String? merchantName;
+  final double amount;
+  final String matchStatus;
+  final BankMatchSuggestion? suggestedMatch;
+  final String institutionName;
+  final String accountName;
+
+  factory BankTransaction.fromJson(Map<String, dynamic> json) {
+    final rawSuggestion = json['suggestedMatch'];
+    return BankTransaction(
+      id: (json['id'] as num).toInt(),
+      postedAt: DateTime.tryParse(json['postedAt'] as String? ?? '') ?? DateTime(0),
+      description: json['description'] as String? ?? '',
+      merchantName: json['merchantName'] as String?,
+      amount: (json['amount'] as num?)?.toDouble() ?? 0,
+      matchStatus: json['matchStatus'] as String? ?? 'Unmatched',
+      suggestedMatch: rawSuggestion is Map<String, dynamic>
+          ? BankMatchSuggestion.fromJson(rawSuggestion)
+          : null,
+      institutionName: json['institutionName'] as String? ?? '',
+      accountName: json['accountName'] as String? ?? '',
+    );
+  }
+}
+
+class BankMatchSuggestion {
+  const BankMatchSuggestion({
+    required this.entityType,
+    required this.entityId,
+    required this.confidence,
+    required this.label,
+    required this.reason,
+  });
+
+  final String entityType;
+  final int entityId;
+  final double confidence;
+  final String label;
+  final String reason;
+
+  factory BankMatchSuggestion.fromJson(Map<String, dynamic> json) {
+    return BankMatchSuggestion(
+      entityType: json['entityType'] as String? ?? '',
+      entityId: (json['entityId'] as num?)?.toInt() ?? 0,
+      confidence: (json['confidence'] as num?)?.toDouble() ?? 0,
+      label: json['label'] as String? ?? '',
+      reason: json['reason'] as String? ?? '',
+    );
+  }
+}

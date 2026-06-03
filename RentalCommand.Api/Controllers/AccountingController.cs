@@ -49,6 +49,17 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
         return Ok(reports);
     }
 
+    /// <summary>Unified, paginated payment and expense transactions for the accounting workspace.</summary>
+    [HttpGet("transactions")]
+    [ProducesResponseType(typeof(AccountingTransactionsResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AccountingTransactionsResponse>> Transactions(
+        [FromQuery] AccountingTransactionsQuery query,
+        CancellationToken ct)
+    {
+        var transactions = await _service.GetTransactionsAsync(GetPortfolioId(), query, ct);
+        return Ok(transactions);
+    }
+
     /// <summary>
     /// Year-end Schedule E report: per-property rental income and deductible expenses grouped by
     /// IRS Schedule E category. Defaults to the current UTC year when <paramref name="year"/> is omitted.

@@ -1,5 +1,8 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
@@ -78,13 +81,10 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(
-      () => ref.read(workOrdersProvider.notifier).load(),
-    );
+    Future.microtask(() => ref.read(workOrdersProvider.notifier).load());
   }
 
-  Future<void> _refresh() =>
-      ref.read(workOrdersProvider.notifier).refresh();
+  Future<void> _refresh() => ref.read(workOrdersProvider.notifier).refresh();
 
   void _openDetail(BuildContext context, WorkOrder wo) {
     Navigator.of(context).push<void>(
@@ -125,14 +125,8 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
             padding: const EdgeInsets.only(right: 8),
             child: SegmentedButton<WorkOrderFilter>(
               segments: const [
-                ButtonSegment(
-                  value: WorkOrderFilter.open,
-                  label: Text('Open'),
-                ),
-                ButtonSegment(
-                  value: WorkOrderFilter.all,
-                  label: Text('All'),
-                ),
+                ButtonSegment(value: WorkOrderFilter.open, label: Text('Open')),
+                ButtonSegment(value: WorkOrderFilter.all, label: Text('All')),
               ],
               selected: {currentFilter},
               onSelectionChanged: (s) {
@@ -154,17 +148,14 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
       body: RefreshIndicator(
         onRefresh: _refresh,
         child: workOrdersAsync.when(
-          loading: () =>
-              const Center(child: CircularProgressIndicator()),
+          loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => _ErrorBody(
             message: e is ApiException ? e.message : e.toString(),
             onRetry: _refresh,
           ),
           data: (list) {
             if (list.isEmpty) {
-              return _EmptyBody(
-                filter: currentFilter,
-              );
+              return _EmptyBody(filter: currentFilter);
             }
             return ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
@@ -217,8 +208,9 @@ class _WorkOrderCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       workOrder.title,
-                      style: theme.textTheme.titleSmall
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -269,8 +261,7 @@ class _WorkOrderCard extends StatelessWidget {
 }
 
 class _PriorityChip extends StatelessWidget {
-  const _PriorityChip(
-      {required this.priority, required this.colorScheme});
+  const _PriorityChip({required this.priority, required this.colorScheme});
 
   final String priority;
   final ColorScheme colorScheme;
@@ -296,8 +287,7 @@ class _PriorityChip extends StatelessWidget {
 }
 
 class _StatusChip extends StatelessWidget {
-  const _StatusChip(
-      {required this.status, required this.colorScheme});
+  const _StatusChip({required this.status, required this.colorScheme});
 
   final String status;
   final ColorScheme colorScheme;
@@ -323,8 +313,7 @@ class _StatusChip extends StatelessWidget {
 }
 
 class _CategoryChip extends StatelessWidget {
-  const _CategoryChip(
-      {required this.category, required this.colorScheme});
+  const _CategoryChip({required this.category, required this.colorScheme});
 
   final String category;
   final ColorScheme colorScheme;
@@ -339,10 +328,7 @@ class _CategoryChip extends StatelessWidget {
       ),
       child: Text(
         category,
-        style: TextStyle(
-          fontSize: 11,
-          color: colorScheme.onSurfaceVariant,
-        ),
+        style: TextStyle(fontSize: 11, color: colorScheme.onSurfaceVariant),
       ),
     );
   }
@@ -372,14 +358,17 @@ class _EmptyBody extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.build_outlined,
-                    size: 48, color: colorScheme.onSurfaceVariant),
+                Icon(
+                  Icons.build_outlined,
+                  size: 48,
+                  color: colorScheme.onSurfaceVariant,
+                ),
                 const SizedBox(height: 12),
                 Text(
                   msg,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -418,10 +407,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: colorScheme.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
@@ -441,8 +427,7 @@ class _CreateWorkOrderSheet extends ConsumerStatefulWidget {
       _CreateWorkOrderSheetState();
 }
 
-class _CreateWorkOrderSheetState
-    extends ConsumerState<_CreateWorkOrderSheet> {
+class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   final _formKey = GlobalKey<FormState>();
   final _titleCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
@@ -450,6 +435,9 @@ class _CreateWorkOrderSheetState
   int? _selectedPropertyId;
   String _priority = 'Normal';
   String _category = 'General';
+  Uint8List? _photoBytes;
+  String? _photoName;
+  String? _photoContentType;
 
   bool _saving = false;
   String? _error;
@@ -476,6 +464,31 @@ class _CreateWorkOrderSheetState
     super.dispose();
   }
 
+  Future<void> _pickPhoto(ImageSource source) async {
+    final picked = await ImagePicker().pickImage(
+      source: source,
+      imageQuality: 80,
+      maxWidth: 1600,
+      maxHeight: 1600,
+    );
+    if (picked == null) return;
+    final bytes = Uint8List.fromList(await picked.readAsBytes());
+    if (!mounted) return;
+    setState(() {
+      _photoBytes = bytes;
+      _photoName = picked.name;
+      _photoContentType = _mimeFromExtension(picked.name);
+    });
+  }
+
+  String _mimeFromExtension(String filename) {
+    final lower = filename.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.heic')) return 'image/heic';
+    return 'image/jpeg';
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
@@ -485,13 +498,25 @@ class _CreateWorkOrderSheetState
     });
 
     try {
-      await ref.read(workOrdersRepositoryProvider).createWorkOrder({
+      final repo = ref.read(workOrdersRepositoryProvider);
+      final created = await repo.createWorkOrder({
         'propertyId': _selectedPropertyId,
         'title': _titleCtrl.text.trim(),
         'description': _descCtrl.text.trim(),
         'priority': _priority,
         'category': _category,
       });
+      final photoBytes = _photoBytes;
+      final photoName = _photoName;
+      final photoContentType = _photoContentType;
+      if (photoBytes != null && photoName != null && photoContentType != null) {
+        await repo.uploadWorkOrderPhoto(
+          workOrderId: created.id,
+          bytes: photoBytes,
+          fileName: photoName,
+          contentType: photoContentType,
+        );
+      }
 
       widget.onSaved();
       if (mounted) Navigator.of(context).pop();
@@ -524,8 +549,9 @@ class _CreateWorkOrderSheetState
                   Expanded(
                     child: Text(
                       'New Work Order',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   IconButton(
@@ -555,15 +581,11 @@ class _CreateWorkOrderSheetState
                       .map(
                         (p) => DropdownMenuItem(
                           value: p.id,
-                          child: Text(
-                            p.name,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                          child: Text(p.name, overflow: TextOverflow.ellipsis),
                         ),
                       )
                       .toList(),
-                  onChanged: (v) =>
-                      setState(() => _selectedPropertyId = v),
+                  onChanged: (v) => setState(() => _selectedPropertyId = v),
                   validator: (v) =>
                       v == null ? 'Please select a property' : null,
                 ),
@@ -575,10 +597,9 @@ class _CreateWorkOrderSheetState
                 controller: _titleCtrl,
                 textInputAction: TextInputAction.next,
                 decoration: const InputDecoration(labelText: 'Title'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty)
-                        ? 'Title is required'
-                        : null,
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Title is required'
+                    : null,
               ),
               const SizedBox(height: 12),
 
@@ -587,12 +608,10 @@ class _CreateWorkOrderSheetState
                 controller: _descCtrl,
                 maxLines: 3,
                 textInputAction: TextInputAction.newline,
-                decoration:
-                    const InputDecoration(labelText: 'Description'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty)
-                        ? 'Description is required'
-                        : null,
+                decoration: const InputDecoration(labelText: 'Description'),
+                validator: (v) => (v == null || v.trim().isEmpty)
+                    ? 'Description is required'
+                    : null,
               ),
               const SizedBox(height: 12),
 
@@ -602,11 +621,11 @@ class _CreateWorkOrderSheetState
                   Expanded(
                     child: DropdownButtonFormField<String>(
                       initialValue: _priority,
-                      decoration:
-                          const InputDecoration(labelText: 'Priority'),
+                      decoration: const InputDecoration(labelText: 'Priority'),
                       items: _priorities
-                          .map((p) => DropdownMenuItem(
-                              value: p, child: Text(p)))
+                          .map(
+                            (p) => DropdownMenuItem(value: p, child: Text(p)),
+                          )
                           .toList(),
                       onChanged: (v) {
                         if (v != null) setState(() => _priority = v);
@@ -617,15 +636,54 @@ class _CreateWorkOrderSheetState
                   Expanded(
                     child: DropdownButtonFormField<String>(
                       initialValue: _category,
-                      decoration:
-                          const InputDecoration(labelText: 'Category'),
+                      decoration: const InputDecoration(labelText: 'Category'),
                       items: _categories
-                          .map((c) => DropdownMenuItem(
-                              value: c, child: Text(c)))
+                          .map(
+                            (c) => DropdownMenuItem(value: c, child: Text(c)),
+                          )
                           .toList(),
                       onChanged: (v) {
                         if (v != null) setState(() => _category = v);
                       },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              if (_photoBytes != null) ...[
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.memory(
+                    _photoBytes!,
+                    height: 140,
+                    fit: BoxFit.cover,
+                    width: double.infinity,
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _saving
+                          ? null
+                          : () => _pickPhoto(ImageSource.camera),
+                      icon: const Icon(Icons.camera_alt_outlined),
+                      label: Text(
+                        _photoBytes == null ? 'Take photo' : 'Retake',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _saving
+                          ? null
+                          : () => _pickPhoto(ImageSource.gallery),
+                      icon: const Icon(Icons.photo_library_outlined),
+                      label: const Text('Choose'),
                     ),
                   ),
                 ],
@@ -635,7 +693,9 @@ class _CreateWorkOrderSheetState
                 const SizedBox(height: 12),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 10),
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                   decoration: BoxDecoration(
                     color: colorScheme.errorContainer,
                     borderRadius: BorderRadius.circular(8),
@@ -643,7 +703,9 @@ class _CreateWorkOrderSheetState
                   child: Text(
                     _error!,
                     style: TextStyle(
-                        color: colorScheme.onErrorContainer, fontSize: 13),
+                      color: colorScheme.onErrorContainer,
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ],

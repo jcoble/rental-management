@@ -86,6 +86,38 @@ class LeasesRepository {
   Future<Lease> updateStatus(int id, String status) async {
     return updateLease(id, {'status': status});
   }
+
+  Future<LeaseQuestionResponse> ask(int id, String question) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/leases/$id/ask',
+        data: {'question': question},
+      );
+      return LeaseQuestionResponse.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+}
+
+class LeaseQuestionResponse {
+  const LeaseQuestionResponse({
+    required this.answer,
+    required this.llmEnhanced,
+    required this.sources,
+  });
+
+  final String answer;
+  final bool llmEnhanced;
+  final List<String> sources;
+
+  factory LeaseQuestionResponse.fromJson(Map<String, dynamic> json) {
+    return LeaseQuestionResponse(
+      answer: json['answer'] as String? ?? '',
+      llmEnhanced: json['llmEnhanced'] as bool? ?? false,
+      sources: (json['sources'] as List? ?? []).whereType<String>().toList(),
+    );
+  }
 }
 
 // ── Providers ─────────────────────────────────────────────────────────────────

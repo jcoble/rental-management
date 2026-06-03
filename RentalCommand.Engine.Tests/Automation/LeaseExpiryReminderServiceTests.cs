@@ -77,7 +77,7 @@ public class LeaseExpiryReminderServiceTests : IDisposable
         return new LeaseExpiryReminderService(
             _ctx.Db,
             _publisher.Object,
-            Options.Create(cfg),
+            new FakeNotificationSettingsService(cfg),
             NullLogger<LeaseExpiryReminderService>.Instance);
     }
 

@@ -53,9 +53,10 @@ public class ScanController : AuthenticatedPortfolioControllerBase
         // Empty/null is allowed — the LLM worker will classify it during processing.
         if (!string.IsNullOrEmpty(targetEntityType)
             && !string.Equals(targetEntityType, "Expense", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(targetEntityType, "Payment", StringComparison.OrdinalIgnoreCase))
+            && !string.Equals(targetEntityType, "Payment", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(targetEntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase))
         {
-            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment (or omit to auto-classify)." });
+            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment, WorkOrder (or omit to auto-classify)." });
         }
 
         using var ms = new MemoryStream();

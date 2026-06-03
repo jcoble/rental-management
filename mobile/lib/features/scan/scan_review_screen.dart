@@ -14,14 +14,18 @@ import 'scan_repository.dart';
 // ---------------------------------------------------------------------------
 
 /// Holds the draft being reviewed.
-final _draftProvider =
-    FutureProvider.autoDispose.family<ScanDraft, int>((ref, id) async {
+final _draftProvider = FutureProvider.autoDispose.family<ScanDraft, int>((
+  ref,
+  id,
+) async {
   return ref.read(scanRepositoryProvider).getDraft(id);
 });
 
 /// Holds the authed image bytes for the document preview.
-final _imageProvider =
-    FutureProvider.autoDispose.family<Uint8List, int>((ref, id) async {
+final _imageProvider = FutureProvider.autoDispose.family<Uint8List, int>((
+  ref,
+  id,
+) async {
   // Keep bytes alive while the screen is open so rebuilds (e.g. field edits)
   // do not re-download the image. The link is released after a short delay
   // once the provider is disposed (screen popped), avoiding unbounded growth.
@@ -33,8 +37,7 @@ final _imageProvider =
 });
 
 /// Holds the leases list (only fetched for Payment drafts).
-final _leasesProvider =
-    FutureProvider.autoDispose<List<Lease>>((ref) async {
+final _leasesProvider = FutureProvider.autoDispose<List<Lease>>((ref) async {
   // Keep alive so the 1.5 s poll-driven rebuilds don't trigger repeated fetches.
   ref.keepAlive();
   return ref.read(scanRepositoryProvider).listLeases();
@@ -54,7 +57,7 @@ const _fieldGroups = <({String label, List<String> fields})>[
       'vendor_website',
       'vendor_tax_id',
       'receipt_number',
-    ]
+    ],
   ),
   (
     label: 'Amounts',
@@ -70,12 +73,9 @@ const _fieldGroups = <({String label, List<String> fields})>[
       'payment_method',
       'card_last4',
       'due_date',
-    ]
+    ],
   ),
-  (
-    label: 'Details',
-    fields: ['document_kind', 'category', 'notes'],
-  ),
+  (label: 'Details', fields: ['document_kind', 'category', 'notes']),
 ];
 
 const _knownScalarFields = {
@@ -113,10 +113,7 @@ const _moneyFields = {
   'shipping',
 };
 
-const _dateFields = {
-  'transaction_date',
-  'due_date',
-};
+const _dateFields = {'transaction_date', 'due_date'};
 
 // Friendly label overrides for keys where plain Title Case reads awkwardly.
 const _labelOverrides = <String, String>{
@@ -192,6 +189,7 @@ const _keyMap = <String, String>{
 Map<String, dynamic> buildOverridesMap({
   required Map<String, String> editedFields,
   required bool isPayment,
+  required bool isWorkOrder,
   required bool isPaid,
   required int? selectedLeaseId,
 }) {
@@ -203,7 +201,7 @@ Map<String, dynamic> buildOverridesMap({
   }
   if (isPayment) {
     overrides['leaseId'] = selectedLeaseId;
-  } else {
+  } else if (!isWorkOrder) {
     overrides['is_paid'] = isPaid;
   }
   return overrides;
@@ -310,6 +308,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       final overrides = buildOverridesMap(
         editedFields: _editedFields,
         isPayment: draft.isPayment,
+        isWorkOrder: draft.isWorkOrder,
         isPaid: _isPaid,
         selectedLeaseId: _selectedLeaseId,
       );
@@ -318,7 +317,11 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            draft.isPayment ? 'Payment recorded!' : 'Expense created!',
+            draft.isPayment
+                ? 'Payment recorded!'
+                : draft.isWorkOrder
+                ? 'Work order created!'
+                : 'Expense created!',
           ),
           backgroundColor: Colors.green,
         ),
@@ -346,9 +349,9 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           .read(scanRepositoryProvider)
           .reject(draft.id, reason: reason.isEmpty ? null : reason);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Scan rejected.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Scan rejected.')));
       Navigator.of(context).pop();
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -375,9 +378,7 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         title: const Text('Reject scan'),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(
-            hintText: 'Reason (optional)',
-          ),
+          decoration: const InputDecoration(hintText: 'Reason (optional)'),
           autofocus: true,
         ),
         actions: [
@@ -401,7 +402,10 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
     // React to new draft data without scheduling a redundant setState each build.
     // _onDraftLoaded's internal guards (_fieldsInitialized, _isPaidInitialized)
     // ensure idempotent field init; polling start/stop is also safe to call again.
-    ref.listen<AsyncValue<ScanDraft>>(_draftProvider(widget.draftId), (_, next) {
+    ref.listen<AsyncValue<ScanDraft>>(_draftProvider(widget.draftId), (
+      _,
+      next,
+    ) {
       next.whenData((draft) {
         if (mounted) setState(() => _onDraftLoaded(draft));
       });
@@ -492,7 +496,8 @@ class _ReviewBody extends ConsumerWidget {
 
     // Confirm is only possible once the draft is ready for review (or Failed, so
     // manual values can still be entered) and nothing is in flight.
-    final confirmEnabled = !actionsLocked &&
+    final confirmEnabled =
+        !actionsLocked &&
         !busy &&
         !isTerminal &&
         (!draft.isPayment || selectedLeaseId != null);
@@ -511,84 +516,84 @@ class _ReviewBody extends ConsumerWidget {
       body: extracting
           ? _ProcessingView(draftId: draft.id)
           : ListView(
-        padding: const EdgeInsets.only(bottom: 140),
-        children: [
-          if (draft.status == 'Failed')
-            _Banner(
-              color: colorScheme.errorContainer,
-              borderColor: colorScheme.error.withValues(alpha: 0.4),
-              textColor: colorScheme.onErrorContainer,
-              child: const Text(
-                'Extraction failed. You can still enter the values below and confirm.',
-              ),
+              padding: const EdgeInsets.only(bottom: 140),
+              children: [
+                if (draft.status == 'Failed')
+                  _Banner(
+                    color: colorScheme.errorContainer,
+                    borderColor: colorScheme.error.withValues(alpha: 0.4),
+                    textColor: colorScheme.onErrorContainer,
+                    child: const Text(
+                      'Extraction failed. You can still enter the values below and confirm.',
+                    ),
+                  ),
+
+                if (draft.isNoOp)
+                  _Banner(
+                    color: Colors.amber.shade50,
+                    borderColor: Colors.amber.shade300,
+                    textColor: Colors.amber.shade900,
+                    child: const Text(
+                      'AI is off — no API key is configured. Enter the details below manually.',
+                    ),
+                  ),
+
+                if (draft.status == 'Confirmed')
+                  _Banner(
+                    color: Colors.green.shade50,
+                    borderColor: Colors.green.shade300,
+                    textColor: Colors.green.shade900,
+                    child: const Text('This scan has already been confirmed.'),
+                  ),
+
+                if (draft.status == 'Rejected')
+                  _Banner(
+                    color: colorScheme.surfaceContainerHighest,
+                    borderColor: colorScheme.outlineVariant,
+                    textColor: colorScheme.onSurfaceVariant,
+                    child: const Text('This scan has been rejected.'),
+                  ),
+
+                // ---- Document preview ----
+                _DocumentPreview(draftId: draft.id),
+
+                const Divider(height: 1),
+
+                // ---- Lease selector (Payment only) ----
+                if (draft.isPayment)
+                  _LeaseSelector(
+                    selectedLeaseId: selectedLeaseId,
+                    onLeaseSelected: onLeaseSelected,
+                  ),
+
+                // ---- Extracted field groups ----
+                if (draft.scalarFields.isNotEmpty)
+                  _FieldsSection(
+                    draft: draft,
+                    editedFields: editedFields,
+                    onFieldChanged: onFieldChanged,
+                  )
+                else if (draft.status != 'Pending')
+                  _ManualEntrySection(
+                    editedFields: editedFields,
+                    onFieldChanged: onFieldChanged,
+                  ),
+
+                // ---- Line items (read-only) ----
+                if (draft.lineItems.isNotEmpty)
+                  _LineItemsSection(items: draft.lineItems),
+
+                // ---- Paid/Unpaid toggle (Expense only) ----
+                if (!draft.isPayment && !draft.isWorkOrder)
+                  _PaidToggle(
+                    isPaid: isPaid,
+                    dueDate: editedFields['due_date'],
+                    onChanged: onIsPaidChanged,
+                  ),
+
+                const SizedBox(height: 8),
+              ],
             ),
-
-          if (draft.isNoOp)
-            _Banner(
-              color: Colors.amber.shade50,
-              borderColor: Colors.amber.shade300,
-              textColor: Colors.amber.shade900,
-              child: const Text(
-                'AI is off — no API key is configured. Enter the details below manually.',
-              ),
-            ),
-
-          if (draft.status == 'Confirmed')
-            _Banner(
-              color: Colors.green.shade50,
-              borderColor: Colors.green.shade300,
-              textColor: Colors.green.shade900,
-              child: const Text('This scan has already been confirmed.'),
-            ),
-
-          if (draft.status == 'Rejected')
-            _Banner(
-              color: colorScheme.surfaceContainerHighest,
-              borderColor: colorScheme.outlineVariant,
-              textColor: colorScheme.onSurfaceVariant,
-              child: const Text('This scan has been rejected.'),
-            ),
-
-          // ---- Document preview ----
-          _DocumentPreview(draftId: draft.id),
-
-          const Divider(height: 1),
-
-          // ---- Lease selector (Payment only) ----
-          if (draft.isPayment)
-            _LeaseSelector(
-              selectedLeaseId: selectedLeaseId,
-              onLeaseSelected: onLeaseSelected,
-            ),
-
-          // ---- Extracted field groups ----
-          if (draft.scalarFields.isNotEmpty)
-            _FieldsSection(
-              draft: draft,
-              editedFields: editedFields,
-              onFieldChanged: onFieldChanged,
-            )
-          else if (draft.status != 'Pending')
-            _ManualEntrySection(
-              editedFields: editedFields,
-              onFieldChanged: onFieldChanged,
-            ),
-
-          // ---- Line items (read-only) ----
-          if (draft.lineItems.isNotEmpty)
-            _LineItemsSection(items: draft.lineItems),
-
-          // ---- Paid/Unpaid toggle (Expense only) ----
-          if (!draft.isPayment)
-            _PaidToggle(
-              isPaid: isPaid,
-              dueDate: editedFields['due_date'],
-              onChanged: onIsPaidChanged,
-            ),
-
-          const SizedBox(height: 8),
-        ],
-      ),
       // ---- Bottom action bar ----
       bottomSheet: Container(
         padding: EdgeInsets.fromLTRB(
@@ -599,9 +604,7 @@ class _ReviewBody extends ConsumerWidget {
         ),
         decoration: BoxDecoration(
           color: colorScheme.surface,
-          border: Border(
-            top: BorderSide(color: colorScheme.outlineVariant),
-          ),
+          border: Border(top: BorderSide(color: colorScheme.outlineVariant)),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -612,10 +615,7 @@ class _ReviewBody extends ConsumerWidget {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
                   'Select a lease above to enable payment creation.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.amber.shade700,
-                  ),
+                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -650,6 +650,8 @@ class _ReviewBody extends ConsumerWidget {
                         : Text(
                             draft.isPayment
                                 ? 'Create Payment'
+                                : draft.isWorkOrder
+                                ? 'Create Work Order'
                                 : 'Confirm & Create Expense',
                           ),
                   ),
@@ -718,16 +720,18 @@ class _ProcessingView extends StatelessWidget {
                   const SizedBox(height: 28),
                   Text(
                     'Reading your document…',
-                    style: theme.textTheme.titleLarge
-                        ?.copyWith(fontWeight: FontWeight.w600),
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 10),
                   Text(
                     'The computer is pulling out the vendor, amounts, and dates '
                     'for you. This usually takes just a few seconds.',
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                 ],
@@ -762,8 +766,11 @@ class _DocumentPreview extends ConsumerWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.broken_image_outlined,
-                  color: Colors.grey.shade400, size: 48),
+              Icon(
+                Icons.broken_image_outlined,
+                color: Colors.grey.shade400,
+                size: 48,
+              ),
               const SizedBox(height: 8),
               Text(
                 'Preview unavailable',
@@ -780,8 +787,11 @@ class _DocumentPreview extends ConsumerWidget {
             // stored image doesn't pin the CPU on lower-end / throttled devices.
             cacheHeight: 1080,
             errorBuilder: (ctx, e, _) => Center(
-              child: Icon(Icons.picture_as_pdf_outlined,
-                  size: 64, color: Colors.grey.shade400),
+              child: Icon(
+                Icons.picture_as_pdf_outlined,
+                size: 64,
+                color: Colors.grey.shade400,
+              ),
             ),
           ),
         ),
@@ -859,8 +869,10 @@ class _LeaseSelector extends ConsumerWidget {
               isExpanded: true,
               decoration: const InputDecoration(
                 border: OutlineInputBorder(),
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                contentPadding: EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
               ),
               items: leases.map((l) {
                 final id = l.id;
@@ -903,15 +915,18 @@ class _FieldsSection extends StatelessWidget {
     // Build ordered groups
     final groups = <({String label, List<ScanField> fields})>[];
     for (final g in _fieldGroups) {
-      final present =
-          g.fields.map((n) => fieldMap[n]).whereType<ScanField>().toList();
+      final present = g.fields
+          .map((n) => fieldMap[n])
+          .whereType<ScanField>()
+          .toList();
       if (present.isNotEmpty) {
         groups.add((label: g.label, fields: present));
       }
     }
     // "Other" group
-    final otherFields =
-        draft.scalarFields.where((f) => !_knownScalarFields.contains(f.name)).toList();
+    final otherFields = draft.scalarFields
+        .where((f) => !_knownScalarFields.contains(f.name))
+        .toList();
     if (otherFields.isNotEmpty) {
       groups.add((label: 'Other', fields: otherFields));
     }
@@ -1005,8 +1020,8 @@ class _FieldInputState extends State<_FieldInput> {
     final labelColor = level == ConfidenceLevel.low
         ? colorScheme.error
         : level == ConfidenceLevel.medium
-            ? Colors.amber.shade700
-            : colorScheme.onSurface;
+        ? Colors.amber.shade700
+        : colorScheme.onSurface;
 
     final fieldLabel = _prettifyLabel(widget.field.name);
     final isDate = _dateFields.contains(widget.field.name);
@@ -1018,11 +1033,7 @@ class _FieldInputState extends State<_FieldInput> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _FieldLabel(
-            label: fieldLabel,
-            level: level,
-            labelColor: labelColor,
-          ),
+          _FieldLabel(label: fieldLabel, level: level, labelColor: labelColor),
           TextFormField(
             controller: _controller,
             onChanged: widget.onChanged,
@@ -1030,8 +1041,10 @@ class _FieldInputState extends State<_FieldInput> {
             decoration: InputDecoration(
               border: const OutlineInputBorder(),
               hintText: 'YYYY-MM-DD',
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
               suffixIcon: IconButton(
                 icon: const Icon(Icons.calendar_today_outlined, size: 20),
                 tooltip: 'Pick a date',
@@ -1049,11 +1062,7 @@ class _FieldInputState extends State<_FieldInput> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _FieldLabel(
-            label: fieldLabel,
-            level: level,
-            labelColor: labelColor,
-          ),
+          _FieldLabel(label: fieldLabel, level: level, labelColor: labelColor),
           DropdownButtonFormField<String>(
             initialValue: _scheduleECategories.contains(widget.value)
                 ? widget.value
@@ -1062,8 +1071,10 @@ class _FieldInputState extends State<_FieldInput> {
             isExpanded: true,
             decoration: const InputDecoration(
               border: OutlineInputBorder(),
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
             ),
             items: _scheduleECategories
                 .map((c) => DropdownMenuItem(value: c, child: Text(c)))
@@ -1082,11 +1093,7 @@ class _FieldInputState extends State<_FieldInput> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _FieldLabel(
-          label: fieldLabel,
-          level: level,
-          labelColor: labelColor,
-        ),
+        _FieldLabel(label: fieldLabel, level: level, labelColor: labelColor),
         TextFormField(
           controller: _controller,
           onChanged: widget.onChanged,
@@ -1097,8 +1104,10 @@ class _FieldInputState extends State<_FieldInput> {
               : null,
           decoration: InputDecoration(
             border: const OutlineInputBorder(),
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 10,
+            ),
             enabledBorder: _borderForLevel(level, colorScheme),
           ),
         ),
@@ -1133,7 +1142,8 @@ class _FieldInputState extends State<_FieldInput> {
       lastDate: DateTime(now.year + 5),
     );
     if (picked == null) return;
-    final iso = '${picked.year.toString().padLeft(4, '0')}-'
+    final iso =
+        '${picked.year.toString().padLeft(4, '0')}-'
         '${picked.month.toString().padLeft(2, '0')}-'
         '${picked.day.toString().padLeft(2, '0')}';
     _controller.text = iso;
@@ -1181,8 +1191,10 @@ class _FieldLabel extends StatelessWidget {
                   message: hint,
                   triggerMode: TooltipTriggerMode.tap,
                   child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 1,
+                    ),
                     decoration: BoxDecoration(
                       color: level == ConfidenceLevel.low
                           ? Colors.red.shade100
@@ -1225,10 +1237,7 @@ class _FieldLabel extends StatelessWidget {
               padding: const EdgeInsets.only(top: 2),
               child: Text(
                 hint,
-                style: TextStyle(
-                  fontSize: 10.5,
-                  color: Colors.red.shade700,
-                ),
+                style: TextStyle(fontSize: 10.5, color: Colors.red.shade700),
               ),
             ),
         ],
@@ -1271,10 +1280,10 @@ class _ManualEntrySection extends StatelessWidget {
           Text(
             'ENTER DETAILS',
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.8,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 8),
           ..._manualFields.map((name) {
@@ -1350,8 +1359,10 @@ class _LineItemsSection extends StatelessWidget {
                   children: [
                     Padding(
                       padding: const EdgeInsets.all(8),
-                      child:
-                          Text(item.description ?? '', style: theme.textTheme.bodySmall),
+                      child: Text(
+                        item.description ?? '',
+                        style: theme.textTheme.bodySmall,
+                      ),
                     ),
                     Padding(
                       padding: const EdgeInsets.all(8),
@@ -1388,15 +1399,11 @@ class _LineItemsSection extends StatelessWidget {
   }
 
   String _fmtNum(double? v) => v == null ? '' : v.toStringAsFixed(0);
-  String _fmtMoney(double? v) =>
-      v == null ? '' : v.toStringAsFixed(2);
+  String _fmtMoney(double? v) => v == null ? '' : v.toStringAsFixed(2);
 }
 
 class _TableHeaderCell extends StatelessWidget {
-  const _TableHeaderCell({
-    required this.text,
-    this.align = TextAlign.left,
-  });
+  const _TableHeaderCell({required this.text, this.align = TextAlign.left});
 
   final String text;
   final TextAlign align;
@@ -1408,10 +1415,7 @@ class _TableHeaderCell extends StatelessWidget {
       child: Text(
         text,
         textAlign: align,
-        style: const TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-        ),
+        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
       ),
     );
   }
@@ -1554,8 +1558,7 @@ class _StatusChip extends StatelessWidget {
       ),
       child: Text(
         _label(status),
-        style: TextStyle(
-            fontSize: 11, fontWeight: FontWeight.w600, color: fg),
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
       ),
     );
   }

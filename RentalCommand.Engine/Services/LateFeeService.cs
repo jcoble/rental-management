@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -25,20 +26,23 @@ public sealed class LateFeeService : ILateFeeService
 
     private readonly RentalCommandDbContext _db;
     private readonly IMessagePublisher _publisher;
-    private readonly NotificationsConfig _cfg;
+    private readonly INotificationSettingsService _settings;
+    private readonly NotificationsConfig _defaults;
     private readonly TimeZoneInfo _businessTimeZone;
     private readonly ILogger<LateFeeService> _logger;
 
     public LateFeeService(
         RentalCommandDbContext db,
         IMessagePublisher publisher,
+        INotificationSettingsService settings,
         IOptions<NotificationsConfig> options,
         IConfiguration configuration,
         ILogger<LateFeeService> logger)
     {
         _db = db;
         _publisher = publisher;
-        _cfg = options.Value;
+        _settings = settings;
+        _defaults = options.Value;
         _logger = logger;
 
         // Whether rent is "past due" — and by how many days — rolls over in the landlord's LOCAL
@@ -54,7 +58,10 @@ public sealed class LateFeeService : ILateFeeService
     /// <inheritdoc />
     public async Task<int> AssessAsync(CancellationToken ct = default)
     {
-        if (!_cfg.EnableLateFees)
+        var cfg = await _settings.GetRuntimeAsync(ct);
+        cfg.StateLateFeeCaps = _defaults.StateLateFeeCaps;
+
+        if (!cfg.EnableLateFees)
             return 0;
 
         // DA#4: derive the business "today" from the landlord's LOCAL zone so the grace cutoff and
@@ -63,7 +70,7 @@ public sealed class LateFeeService : ILateFeeService
         // and to keep the late-fee row's DueDate a UTC value.
         var localToday = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date;
         var today = new DateTime(localToday.Year, localToday.Month, localToday.Day, 0, 0, 0, DateTimeKind.Utc);
-        var cutoff = today.AddDays(-_cfg.LateFeeGraceDays);
+        var cutoff = today.AddDays(-cfg.LateFeeGraceDays);
 
         // Load all overdue rent payments that are still unpaid / partially paid / already late.
         var overdueRent = await _db.Payments
@@ -122,7 +129,7 @@ public sealed class LateFeeService : ILateFeeService
 
             // Apply state cap (flat and/or percent-of-rent) if configured.
             var state = rp.Lease.Property?.State ?? string.Empty;
-            if (_cfg.StateLateFeeCaps.TryGetValue(state, out var cap))
+            if (cfg.StateLateFeeCaps.TryGetValue(state, out var cap))
             {
                 // Flat-dollar cap: fee may not exceed MaxFlat.
                 if (cap.MaxFlat is decimal mf)
@@ -174,7 +181,7 @@ public sealed class LateFeeService : ILateFeeService
                 await _db.SaveChangesAsync(ct);
 
                 // ---- Optional tenant notification (enqueued inside the same transaction) ----
-                if (_cfg.NotifyTenants)
+            if (cfg.NotifyTenants)
                 {
                     // Fetch the tenant's contact details for this lease.
                     // FirstOrDefaultAsync respects the soft-delete global query filter;

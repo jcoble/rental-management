@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 
@@ -95,5 +96,48 @@ public class PortalService : IPortalService
             .ToListAsync(ct);
 
         return workOrders.Select(WorkOrderResponse.FromEntity).ToList();
+    }
+
+    public async Task<WorkOrderResponse?> CreateTenantWorkOrderAsync(
+        int portfolioId,
+        int tenantId,
+        CreateTenantWorkOrderRequest request,
+        CancellationToken ct = default)
+    {
+        var lease = await _db.Leases
+            .AsNoTracking()
+            .Where(l => l.PortfolioId == portfolioId && l.TenantId == tenantId)
+            .OrderByDescending(l => l.Status == LeaseStatus.Active)
+            .ThenByDescending(l => l.EndDate)
+            .Select(l => new { l.Id, l.PropertyId, l.UnitId })
+            .FirstOrDefaultAsync(ct);
+
+        if (lease is null)
+        {
+            return null;
+        }
+
+        var now = DateTime.UtcNow;
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = portfolioId,
+            PropertyId = lease.PropertyId,
+            UnitId = lease.UnitId,
+            TenantId = tenantId,
+            LeaseId = lease.Id,
+            Title = request.Title.Trim(),
+            Description = request.Description.Trim(),
+            Category = string.IsNullOrWhiteSpace(request.Category) ? "Resident Request" : request.Category.Trim(),
+            Priority = request.Priority,
+            Status = WorkOrderStatus.New,
+            RequestedAt = now,
+            CreatedBy = "Tenant",
+            UpdatedAt = now,
+        };
+
+        _db.WorkOrders.Add(workOrder);
+        await _db.SaveChangesAsync(ct);
+
+        return WorkOrderResponse.FromEntity(workOrder);
     }
 }

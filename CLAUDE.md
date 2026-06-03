@@ -79,6 +79,32 @@ Appointment, Inspection, Activity (`/activities`), Portal. Most inherit
 `AuthenticatedPortfolioControllerBase` and are **portfolio-scoped** — inbound FK references
 are validated to be in-portfolio (cross-tenant IDOR guard). SignalR hub: `/api/v1/hubs/updates`.
 
+## Worktrees
+
+Create git worktrees under a **single shared root**, one subfolder per repo, one worktree
+per task:
+
+```bash
+git worktree add ~/dev/work/worktrees/rental-management/<task-slug> -b <branch>
+```
+
+**Never** create worktrees inside the repo (`./worktrees/`, `.claude/`, `.claire/`) or under
+`~/.codex/worktrees/`. Scattered/in-repo worktrees get indexed by the IDE and Spotlight, bloat
+the checkout, and get lost track of.
+
+**Clean up the moment you're done.** As soon as a worktree's branch is merged (or the task is
+abandoned), remove it — do not leave clean/finished worktrees lying around:
+
+```bash
+git worktree remove ~/dev/work/worktrees/rental-management/<task-slug>
+git worktree prune
+```
+
+Stale worktrees pile up fast, waste disk, and load the machine (Spotlight/fseventsd churn).
+The default after finishing is **remove it now.** Only keep one if it has uncommitted or
+unmerged work that must survive — and if so, say so explicitly with its path, branch, and
+dirty status rather than leaving it silently.
+
 ## Conventions & known gotchas
 
 - **PostgreSQL only** (Npgsql). No SQLite, no SQL Server. There is one baseline migration;
