@@ -91,6 +91,26 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         return Ok(items);
     }
 
+    [HttpPost("tenant/work-orders")]
+    [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<WorkOrderResponse>> CreateTenantWorkOrder(
+        [FromBody] CreateTenantWorkOrderRequest request,
+        CancellationToken ct)
+    {
+        var tenantId = GetTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        var created = await _service.CreateTenantWorkOrderAsync(GetPortfolioId(), tenantId.Value, request, ct);
+        return created == null
+            ? BadRequest(new { error = "No lease was found for this tenant." })
+            : Created($"/api/v1/portal/work-orders/{created.Id}", created);
+    }
+
     // -----------------------------------------------------------------------------------------------
     // Threaded conversations (tenant side). A tenant has multiple topic threads; each is scoped to the
     // signed-in tenant via the tenantId claim. Tenant messages are in-app only (no channel selection).

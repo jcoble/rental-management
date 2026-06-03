@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -39,8 +41,7 @@ class WorkOrdersRepository {
 
   Future<WorkOrder> getWorkOrder(int id) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/work-orders/$id');
+      final response = await _dio.get<Map<String, dynamic>>('/work-orders/$id');
       return WorkOrder.fromJson(response.data!);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -50,17 +51,41 @@ class WorkOrdersRepository {
   /// Create body: { propertyId, title, description, priority, category }
   Future<WorkOrder> createWorkOrder(Map<String, dynamic> data) async {
     try {
-      final response =
-          await _dio.post<Map<String, dynamic>>('/work-orders', data: data);
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/work-orders',
+        data: data,
+      );
       return WorkOrder.fromJson(response.data!);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
   }
 
+  Future<void> uploadWorkOrderPhoto({
+    required int workOrderId,
+    required Uint8List bytes,
+    required String fileName,
+    required String contentType,
+  }) async {
+    try {
+      final formData = FormData.fromMap({
+        'file': MultipartFile.fromBytes(
+          bytes,
+          filename: fileName,
+          contentType: DioMediaType.parse(contentType),
+        ),
+        'entityType': 'WorkOrder',
+        'entityId': workOrderId,
+        'category': 'Maintenance photo',
+      });
+      await _dio.post<Map<String, dynamic>>('/documents', data: formData);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Update body: any subset of work order fields (partial PATCH).
-  Future<WorkOrder> updateWorkOrder(
-      int id, Map<String, dynamic> data) async {
+  Future<WorkOrder> updateWorkOrder(int id, Map<String, dynamic> data) async {
     try {
       final response = await _dio.patch<Map<String, dynamic>>(
         '/work-orders/$id',
@@ -128,9 +153,7 @@ class WorkOrdersNotifier extends Notifier<AsyncValue<List<WorkOrder>>> {
     try {
       final all = await _repo.listWorkOrders();
       final filtered = _filter == WorkOrderFilter.open
-          ? all
-              .where((w) => !_closedStatuses.contains(w.status))
-              .toList()
+          ? all.where((w) => !_closedStatuses.contains(w.status)).toList()
           : all;
       state = AsyncValue.data(filtered);
     } on ApiException catch (e) {
@@ -157,9 +180,7 @@ class WorkOrdersNotifier extends Notifier<AsyncValue<List<WorkOrder>>> {
         ];
         // Re-apply filter so closed items disappear from the open view.
         final filtered = _filter == WorkOrderFilter.open
-            ? newList
-                .where((w) => !_closedStatuses.contains(w.status))
-                .toList()
+            ? newList.where((w) => !_closedStatuses.contains(w.status)).toList()
             : newList;
         state = AsyncValue.data(filtered);
       });
@@ -171,8 +192,8 @@ class WorkOrdersNotifier extends Notifier<AsyncValue<List<WorkOrder>>> {
 
 final workOrdersProvider =
     NotifierProvider<WorkOrdersNotifier, AsyncValue<List<WorkOrder>>>(
-  WorkOrdersNotifier.new,
-);
+      WorkOrdersNotifier.new,
+    );
 
 // ── Single work order ─────────────────────────────────────────────────────────
 
@@ -223,10 +244,12 @@ class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrder>> {
   }
 }
 
-final workOrderDetailProvider = NotifierProvider.family<WorkOrderDetailNotifier,
-    AsyncValue<WorkOrder>, int>(
-  WorkOrderDetailNotifier.new,
-);
+final workOrderDetailProvider =
+    NotifierProvider.family<
+      WorkOrderDetailNotifier,
+      AsyncValue<WorkOrder>,
+      int
+    >(WorkOrderDetailNotifier.new);
 
 // ── Properties for dropdown ───────────────────────────────────────────────────
 
@@ -247,7 +270,7 @@ class PropertiesForWoNotifier extends Notifier<AsyncValue<List<Property>>> {
   }
 }
 
-final propertiesForWoProvider = NotifierProvider<PropertiesForWoNotifier,
-    AsyncValue<List<Property>>>(
-  PropertiesForWoNotifier.new,
-);
+final propertiesForWoProvider =
+    NotifierProvider<PropertiesForWoNotifier, AsyncValue<List<Property>>>(
+      PropertiesForWoNotifier.new,
+    );

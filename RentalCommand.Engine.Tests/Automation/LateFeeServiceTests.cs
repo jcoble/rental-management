@@ -90,6 +90,7 @@ public class LateFeeServiceTests : IDisposable
         return new LateFeeService(
             _ctx.Db,
             _publisher.Object,
+            new FakeNotificationSettingsService(cfg),
             Options.Create(cfg),
             new ConfigurationBuilder().Build(),
             NullLogger<LateFeeService>.Instance);

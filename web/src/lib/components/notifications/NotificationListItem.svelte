@@ -2,6 +2,9 @@
 	import { goto } from '$app/navigation';
 	import { Info, CheckCircle2, AlertTriangle, XCircle } from '@lucide/svelte';
 	import type { NotificationItem, NotificationSeverity } from '$lib/api/types/notification';
+	import { getCurrentUser } from '$lib/stores/auth.svelte';
+	import { isPortalUser, isStaff } from '$lib/types/user';
+	import { portalActionUrl } from '$lib/utils/portalLinks';
 
 	type Props = {
 		notification: NotificationItem;
@@ -10,6 +13,8 @@
 	};
 
 	let { notification, truncate = true, onRead }: Props = $props();
+	const currentUser = $derived(getCurrentUser());
+	const portalUser = $derived(isPortalUser(currentUser) && !isStaff(currentUser));
 
 	const severityConfig: Record<
 		NotificationSeverity,
@@ -38,7 +43,11 @@
 
 	async function handleClick() {
 		if (!notification.isRead) onRead?.(notification.id);
-		if (notification.actionUrl) await goto(notification.actionUrl, { invalidateAll: true });
+		if (notification.actionUrl) {
+			await goto(portalUser ? portalActionUrl(notification.actionUrl) : notification.actionUrl, {
+				invalidateAll: true
+			});
+		}
 	}
 </script>
 

@@ -18,6 +18,9 @@ public class SeedSettings
     /// <summary>Known dev password for the default Admin account. Meets the configured password policy.</summary>
     public string AdminPassword { get; set; } = "Admin123!";
 
+    /// <summary>Known dev password for demo tenant portal accounts. Meets the configured password policy.</summary>
+    public string TenantPassword { get; set; } = "Tenant123!";
+
     /// <summary>Display name of the default Admin account.</summary>
     public string AdminDisplayName { get; set; } = "Rental Command Admin";
 

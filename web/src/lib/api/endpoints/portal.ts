@@ -1,4 +1,5 @@
 import { api } from '../client';
+import type { Lease, Payment, WorkOrder } from '$lib/types';
 import type {
 	Conversation,
 	ConversationMessage,
@@ -22,7 +23,11 @@ export interface SendPortalMessageRequest {
 
 export const portal = {
 	overview: () => api.get('/portal/overview'),
-	createTenantWorkOrder: (data: Record<string, unknown>) => api.post('/portal/tenant/work-orders', data),
+	leases: () => api.get<Lease[]>('/portal/leases'),
+	balance: () => api.get('/portal/balance'),
+	payments: () => api.get<Payment[]>('/portal/payments'),
+	workOrders: () => api.get<WorkOrder[]>('/portal/work-orders'),
+	createTenantWorkOrder: (data: Record<string, unknown>) => api.post<WorkOrder>('/portal/tenant/work-orders', data),
 
 	/**
 	 * Tenant-scoped messaging. The tenant's JWT scopes every call to their own

@@ -247,6 +247,13 @@ export interface AccountingSummary {
 	expensesByCategory: ScheduleECategoryTotal[];
 	totalExpenses: number;
 	payments: PaymentRollup;
+	snapshot: MoneySnapshot;
+}
+
+export interface MoneySnapshot {
+	title: string;
+	summary: string;
+	bullets: string[];
 }
 
 export interface ScheduleECategoryTotal {
@@ -274,6 +281,29 @@ export interface AccountingReports {
 	properties: PropertyFinancialSummary[];
 	scheduleE: ScheduleECategoryTotal[];
 	vendors1099: Vendor1099Summary[];
+}
+
+export interface AccountingTransactionsResponse {
+	items: AccountingTransaction[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
+export interface AccountingTransaction {
+	kind: 'Payment' | 'Expense' | 'Bank';
+	id: number;
+	date: string;
+	description: string;
+	category: string;
+	status: string;
+	amount: number;
+	propertyId?: number;
+	propertyName?: string;
+	counterparty?: string;
+	detailHref?: string;
+	hasReceipt: boolean;
+	receiptIsImage: boolean;
 }
 
 export interface LedgerTransaction {
@@ -308,6 +338,163 @@ export interface Vendor1099Summary {
 	w9OnFile: boolean;
 	needsW9: boolean;
 	needs1099Review: boolean;
+}
+
+export interface BankingSummary {
+	connectionCount: number;
+	transactionCount: number;
+	unmatchedCount: number;
+	suggestedMatchCount: number;
+	lastSyncedAt?: string;
+	connections: BankConnection[];
+	recentTransactions: BankTransaction[];
+}
+
+export interface PlaidSettings {
+	plaidEnvironment: string;
+	configured: boolean;
+}
+
+export interface PlaidLinkTokenResponse {
+	linkToken: string;
+	expiration?: string;
+	requestId?: string;
+	configured: boolean;
+	message?: string;
+}
+
+export interface BankConnection {
+	id: number;
+	provider: string;
+	institutionName: string;
+	accountName: string;
+	accountMask?: string;
+	accountType?: string;
+	accountSubtype?: string;
+	status: string;
+	lastSyncedAt?: string;
+}
+
+export interface ExchangePlaidPublicTokenRequest {
+	publicToken: string;
+	institutionName: string;
+	accountId: string;
+	accountName: string;
+	accountMask?: string;
+	accountType?: string;
+	accountSubtype?: string;
+}
+
+export interface BankTransaction {
+	id: number;
+	bankConnectionId: number;
+	institutionName: string;
+	accountName: string;
+	providerTransactionId: string;
+	postedAt: string;
+	authorizedAt?: string;
+	description: string;
+	merchantName?: string;
+	amount: number;
+	isoCurrencyCode: string;
+	category?: string;
+	matchedPaymentId?: number;
+	matchedExpenseId?: number;
+	matchStatus: string;
+	matchConfidence?: number;
+	notes?: string;
+	suggestedMatch?: BankMatchSuggestion;
+}
+
+export interface BankMatchSuggestion {
+	entityType: 'Payment' | 'Expense' | string;
+	entityId: number;
+	confidence: number;
+	label: string;
+	reason: string;
+}
+
+export interface ImportBankTransactionsRequest {
+	provider: string;
+	institutionName: string;
+	accountName: string;
+	accountMask?: string;
+	accountType?: string;
+	accountSubtype?: string;
+	transactions: ImportBankTransactionItem[];
+}
+
+export interface ImportBankTransactionItem {
+	providerTransactionId: string;
+	postedAt: string;
+	authorizedAt?: string;
+	description: string;
+	merchantName?: string;
+	amount: number;
+	isoCurrencyCode: string;
+	category?: string;
+	rawData?: string;
+}
+
+export interface ImportBankTransactionsResponse {
+	connection: BankConnection;
+	importedCount: number;
+	skippedCount: number;
+	transactions: BankTransaction[];
+}
+
+export interface SyncBankConnectionResponse {
+	connection: BankConnection;
+	importedCount: number;
+	skippedCount: number;
+	transactions: BankTransaction[];
+}
+
+export interface MatchBankTransactionRequest {
+	entityType: string;
+	entityId: number;
+}
+
+export interface NoticeDraft {
+	id: number;
+	leaseId: number;
+	tenantId: number;
+	propertyId?: number;
+	tenantName: string;
+	propertyName?: string;
+	unitNumber?: string;
+	noticeType: string;
+	status: string;
+	subject: string;
+	body: string;
+	reason: string;
+	triggerDate: string;
+	conversationId?: number;
+	approvedChannels?: string;
+	createdAt: string;
+	updatedAt: string;
+	approvedAt?: string;
+	dismissedAt?: string;
+}
+
+export interface GenerateNoticeDraftsResponse {
+	createdCount: number;
+	drafts: NoticeDraft[];
+}
+
+export interface ApproveNoticeDraftRequest {
+	channels: string[];
+}
+
+export interface UpdateNoticeDraftRequest {
+	subject?: string;
+	body?: string;
+}
+
+export interface LeaseQuestionResponse {
+	answer: string;
+	llmEnhanced: boolean;
+	sources: string[];
 }
 
 export interface Vendor {

@@ -15,10 +15,12 @@ namespace RentalCommand.Api.Controllers;
 public class LeaseController : AuthenticatedPortfolioControllerBase
 {
     private readonly ILeaseService _service;
+    private readonly ILeaseQaService _qa;
 
-    public LeaseController(ILeaseService service)
+    public LeaseController(ILeaseService service, ILeaseQaService qa)
     {
         _service = service;
+        _qa = qa;
     }
 
     [HttpGet]
@@ -66,5 +68,14 @@ public class LeaseController : AuthenticatedPortfolioControllerBase
     {
         var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Lease not found" });
+    }
+
+    [HttpPost("{id:int}/ask")]
+    [ProducesResponseType(typeof(LeaseQuestionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseQuestionResponse>> Ask(int id, [FromBody] LeaseQuestionRequest request, CancellationToken ct)
+    {
+        var answer = await _qa.AskAsync(GetPortfolioId(), id, request.Question, ct);
+        return answer == null ? NotFound(new { error = "Lease not found or question is empty" }) : Ok(answer);
     }
 }

@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import '../ai/ai_tab.dart';
 import '../analytics/insights_screen.dart';
 import '../appointments/appointments_screen.dart';
+import '../banking/banking_screen.dart';
 import '../deposits/deposits_screen.dart';
 import '../leases/leases_list_screen.dart';
 import '../maintenance/work_orders_screen.dart';
+import '../notices/notices_screen.dart';
 import '../owner_reports/owner_reports_screen.dart';
 import '../payments/payments_screen.dart';
 import '../team/team_screen.dart';
@@ -111,6 +113,19 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
+            icon: Icons.mark_email_unread_outlined,
+            activeIcon: Icons.mark_email_unread,
+            label: 'Notices',
+            subtitle: 'Renewal, late rent and move-out drafts',
+            color: colorScheme.secondary,
+            onTap: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(builder: (_) => const NoticesScreen()),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _MenuTile(
             icon: Icons.event_outlined,
             activeIcon: Icons.event,
             label: 'Appointments',
@@ -145,6 +160,19 @@ class _MoreMenu extends StatelessWidget {
             onTap: () {
               Navigator.of(context).push<void>(
                 MaterialPageRoute<void>(builder: (_) => const DepositsScreen()),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _MenuTile(
+            icon: Icons.account_balance_outlined,
+            activeIcon: Icons.account_balance,
+            label: 'Banking',
+            subtitle: 'Read-only reconciliation',
+            color: colorScheme.primary,
+            onTap: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(builder: (_) => const BankingScreen()),
               );
             },
           ),

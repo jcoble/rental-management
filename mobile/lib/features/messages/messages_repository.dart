@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
+import '../../core/auth/auth_controller.dart';
 import 'message_models.dart';
 
 /// Repository for conversation threads (the threaded messenger).
@@ -17,14 +18,17 @@ import 'message_models.dart';
 ///
 /// Channel strings: 'Portal' | 'Email' | 'Sms'.
 class MessagesRepository {
-  MessagesRepository(this._dio);
+  MessagesRepository(this._dio, {required this.tenantMode});
 
   final Dio _dio;
+  final bool tenantMode;
 
   /// GET /conversations → ConversationSummary[] (messages list empty).
   Future<List<Conversation>> listConversations() async {
     try {
-      final response = await _dio.get<List<dynamic>>('/conversations');
+      final response = await _dio.get<List<dynamic>>(
+        tenantMode ? '/portal/conversations' : '/conversations',
+      );
       final data = response.data ?? [];
       return data
           .whereType<Map<String, dynamic>>()
@@ -38,8 +42,9 @@ class MessagesRepository {
   /// GET /conversations/{id} → full thread with messages (asc).
   Future<Conversation> getConversation(int id) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/conversations/$id');
+      final response = await _dio.get<Map<String, dynamic>>(
+        tenantMode ? '/portal/conversations/$id' : '/conversations/$id',
+      );
       return Conversation.fromJson(response.data!);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -55,13 +60,15 @@ class MessagesRepository {
   }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
-        '/conversations',
-        data: {
-          'tenantId': tenantId,
-          'subject': subject,
-          'body': body,
-          'channels': channels,
-        },
+        tenantMode ? '/portal/conversations' : '/conversations',
+        data: tenantMode
+            ? {'subject': subject, 'body': body}
+            : {
+                'tenantId': tenantId,
+                'subject': subject,
+                'body': body,
+                'channels': channels,
+              },
       );
       return Conversation.fromJson(response.data!);
     } on DioException catch (e) {
@@ -77,11 +84,12 @@ class MessagesRepository {
   }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
-        '/conversations/$id/messages',
-        data: {
-          'body': body,
-          'channels': channels,
-        },
+        tenantMode
+            ? '/portal/conversations/$id/messages'
+            : '/conversations/$id/messages',
+        data: tenantMode
+            ? {'body': body}
+            : {'body': body, 'channels': channels},
       );
       return Conversation.fromJson(response.data!);
     } on DioException catch (e) {
@@ -93,7 +101,9 @@ class MessagesRepository {
 // ── Providers ─────────────────────────────────────────────────────────────────
 
 final messagesRepositoryProvider = Provider<MessagesRepository>((ref) {
-  return MessagesRepository(ref.watch(dioProvider));
+  final auth = ref.watch(authControllerProvider);
+  final tenantMode = auth is AuthStateAuthenticated && auth.user.isTenant;
+  return MessagesRepository(ref.watch(dioProvider), tenantMode: tenantMode);
 });
 
 // ── Conversation list ─────────────────────────────────────────────────────────
@@ -119,8 +129,8 @@ class ConversationsNotifier extends Notifier<AsyncValue<List<Conversation>>> {
 
 final conversationsProvider =
     NotifierProvider<ConversationsNotifier, AsyncValue<List<Conversation>>>(
-  ConversationsNotifier.new,
-);
+      ConversationsNotifier.new,
+    );
 
 // ── Single conversation (thread) ──────────────────────────────────────────────
 
@@ -159,13 +169,19 @@ class ConversationNotifier extends Notifier<AsyncValue<Conversation>> {
   /// Rethrows [ApiException] so the compose bar can surface the error without
   /// dropping the thread out of its loaded state.
   Future<void> sendMessage(String body, List<String> channels) async {
-    final updated = await _repo.sendMessage(_id, body: body, channels: channels);
+    final updated = await _repo.sendMessage(
+      _id,
+      body: body,
+      channels: channels,
+    );
     state = AsyncValue.data(updated);
     ref.read(conversationsProvider.notifier).refresh();
   }
 }
 
-final conversationProvider = NotifierProvider.family<ConversationNotifier,
-    AsyncValue<Conversation>, int>(
-  ConversationNotifier.new,
-);
+final conversationProvider =
+    NotifierProvider.family<
+      ConversationNotifier,
+      AsyncValue<Conversation>,
+      int
+    >(ConversationNotifier.new);

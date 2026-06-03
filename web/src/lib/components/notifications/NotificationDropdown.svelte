@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { notificationStore } from '$lib/stores/notifications.svelte';
+	import { getCurrentUser } from '$lib/stores/auth.svelte';
+	import { isPortalUser, isStaff } from '$lib/types/user';
 	import NotificationListItem from './NotificationListItem.svelte';
 
 	type Props = {
@@ -11,6 +13,8 @@
 
 	let { id = 'notification-dropdown', labelledBy, placement = 'up' }: Props = $props();
 	let dropdownEl: HTMLDivElement | undefined = $state();
+	const currentUser = $derived(getCurrentUser());
+	const portalUser = $derived(isPortalUser(currentUser) && !isStaff(currentUser));
 
 	function handleClickOutside(event: MouseEvent) {
 		if (dropdownEl && !dropdownEl.closest('.notification-bell-root')?.contains(event.target as Node)) {
@@ -69,12 +73,12 @@
 
 	<div class="border-t border-border px-4 py-2.5">
 		<a
-			href="/settings"
+			href={portalUser ? '/portal/notifications' : '/settings'}
 			class="block text-center text-xs text-primary transition-colors hover:text-primary/80"
 			onclick={() => notificationStore.closeDropdown()}
 			data-testid="notification-view-settings"
 		>
-			Notification settings
+			{portalUser ? 'View notifications' : 'Notification settings'}
 		</a>
 	</div>
 </div>

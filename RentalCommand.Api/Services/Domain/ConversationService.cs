@@ -105,11 +105,24 @@ public class ConversationService : IConversationService
 
         _db.Conversations.Add(conversation);
         await _db.SaveChangesAsync(ct);
+
+        var tenantNotification = await CreateLandlordMessageNotificationAsync(
+            portfolioId, tenant.Id, conversation, subject, body, actualChannels, now, ct);
+        if (tenantNotification is not null)
+        {
+            _db.Notifications.Add(tenantNotification);
+            await _db.SaveChangesAsync(ct);
+        }
         await tx.CommitAsync(ct);
 
         conversation.Tenant = tenant;
         var detail = ToDetail(conversation, conversation.LandlordUnreadCount);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
+        if (tenantNotification is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                portfolioId, "Notification", tenantNotification.Id, NotificationResponse.FromEntity(tenantNotification), ct);
+        }
         return detail;
     }
 
@@ -146,12 +159,25 @@ public class ConversationService : IConversationService
         conversation.LastMessageAt = now;
         conversation.LastMessagePreview = Preview(body);
         conversation.TenantUnreadCount += 1;
+        var tenantNotification = conversation.Tenant is not null
+            ? await CreateLandlordMessageNotificationAsync(
+                portfolioId, conversation.Tenant.Id, conversation, conversation.Subject, body, actualChannels, now, ct)
+            : null;
+        if (tenantNotification is not null)
+        {
+            _db.Notifications.Add(tenantNotification);
+        }
 
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
 
         var detail = ToDetail(conversation, conversation.LandlordUnreadCount);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
+        if (tenantNotification is not null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                portfolioId, "Notification", tenantNotification.Id, NotificationResponse.FromEntity(tenantNotification), ct);
+        }
         return detail;
     }
 
@@ -232,15 +258,20 @@ public class ConversationService : IConversationService
         });
 
         _db.Conversations.Add(conversation);
-        var notification = CreateTenantMessageNotification(portfolioId, conversation, tenant, now);
-        _db.Notifications.Add(notification);
+        await _db.SaveChangesAsync(ct);
+
+        var notifications = await CreateTenantMessageNotificationsAsync(portfolioId, conversation, tenant, now, ct);
+        _db.Notifications.AddRange(notifications);
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
 
         conversation.Tenant = tenant;
         var detail = ToDetail(conversation, conversation.TenantUnreadCount);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Notification", notification.Id, NotificationResponse.FromEntity(notification), ct);
+        foreach (var notification in notifications)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Notification", notification.Id, NotificationResponse.FromEntity(notification), ct);
+        }
         return detail;
     }
 
@@ -273,15 +304,18 @@ public class ConversationService : IConversationService
         conversation.LastMessageAt = now;
         conversation.LastMessagePreview = Preview(body);
         conversation.LandlordUnreadCount += 1;
-        var notification = CreateTenantMessageNotification(portfolioId, conversation, conversation.Tenant, now);
-        _db.Notifications.Add(notification);
+        var notifications = await CreateTenantMessageNotificationsAsync(portfolioId, conversation, conversation.Tenant, now, ct);
+        _db.Notifications.AddRange(notifications);
 
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
 
         var detail = ToDetail(conversation, conversation.TenantUnreadCount);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
-        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Notification", notification.Id, NotificationResponse.FromEntity(notification), ct);
+        foreach (var notification in notifications)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, "Notification", notification.Id, NotificationResponse.FromEntity(notification), ct);
+        }
         return detail;
     }
 
@@ -348,23 +382,85 @@ public class ConversationService : IConversationService
         _ => null,
     };
 
-    private static Notification CreateTenantMessageNotification(
+    private async Task<IReadOnlyList<Notification>> CreateTenantMessageNotificationsAsync(
         int portfolioId,
         Conversation conversation,
         Tenant? tenant,
-        DateTime now)
+        DateTime now,
+        CancellationToken ct)
     {
         var tenantName = tenant != null ? $"{tenant.FirstName} {tenant.LastName}".Trim() : "Tenant";
         if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "Tenant";
 
+        var staffUserIds = await StaffUserIdsAsync(portfolioId, ct);
+
+        return staffUserIds.Select(userId => new Notification
+            {
+                PortfolioId = portfolioId,
+                UserId = userId,
+                Type = "TenantMessage",
+                Title = $"New message from {tenantName}",
+                Message = conversation.LastMessagePreview ?? conversation.Subject,
+                Severity = "Info",
+                ActionUrl = $"/messages?conversationId={conversation.Id}",
+                RelatedEntityType = "Conversation",
+                RelatedEntityId = conversation.Id,
+                CreatedAt = now,
+            })
+            .ToList();
+    }
+
+    private async Task<IReadOnlyList<int>> StaffUserIdsAsync(int portfolioId, CancellationToken ct)
+    {
+        var staffRoles = new[] { nameof(UserRole.Admin), nameof(UserRole.Manager), nameof(UserRole.Agent) };
+
+        return await (
+                from user in _db.Users.AsNoTracking()
+                join userRole in _db.UserRoles.AsNoTracking() on user.Id equals userRole.UserId
+                join role in _db.Roles.AsNoTracking() on userRole.RoleId equals role.Id
+                where user.PortfolioId == portfolioId && role.Name != null && staffRoles.Contains(role.Name)
+                select user.Id)
+            .Distinct()
+            .ToListAsync(ct);
+    }
+
+    private async Task<Notification?> CreateLandlordMessageNotificationAsync(
+        int portfolioId,
+        int tenantId,
+        Conversation conversation,
+        string subject,
+        string body,
+        string actualChannels,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (!actualChannels.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Contains("Portal", StringComparer.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var tenantUserId = await _db.Users
+            .AsNoTracking()
+            .Where(u => u.PortfolioId == portfolioId && u.TenantId == tenantId)
+            .OrderBy(u => u.Id)
+            .Select(u => (int?)u.Id)
+            .FirstOrDefaultAsync(ct);
+
+        if (tenantUserId is null)
+        {
+            return null;
+        }
+
         return new Notification
         {
             PortfolioId = portfolioId,
-            Type = "TenantMessage",
-            Title = $"New message from {tenantName}",
-            Message = conversation.LastMessagePreview ?? conversation.Subject,
+            UserId = tenantUserId,
+            Type = "TenantNotice",
+            Title = subject,
+            Message = Preview(body) ?? subject,
             Severity = "Info",
-            ActionUrl = $"/messages?conversationId={conversation.Id}",
+            ActionUrl = $"/portal/messages?conversation={conversation.Id}",
             RelatedEntityType = "Conversation",
             RelatedEntityId = conversation.Id,
             CreatedAt = now,

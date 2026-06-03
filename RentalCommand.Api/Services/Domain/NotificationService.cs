@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Entities;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -28,6 +29,10 @@ public class NotificationService : INotificationService
         var query = _db.Notifications
             .AsNoTracking()
             .Where(n => n.PortfolioId == portfolioId && (n.UserId == null || n.UserId == userId));
+        if (!await IsStaffUserAsync(portfolioId, userId, ct))
+        {
+            query = query.Where(n => n.Type != "TenantMessage");
+        }
 
         if (unreadOnly)
         {
@@ -43,22 +48,32 @@ public class NotificationService : INotificationService
         return items.Select(NotificationResponse.FromEntity).ToList();
     }
 
-    public Task<int> GetUnreadCountAsync(int portfolioId, int userId, CancellationToken ct = default)
+    public async Task<int> GetUnreadCountAsync(int portfolioId, int userId, CancellationToken ct = default)
     {
-        return _db.Notifications
+        var query = _db.Notifications
             .AsNoTracking()
-            .Where(n => n.PortfolioId == portfolioId && (n.UserId == null || n.UserId == userId) && !n.IsRead)
-            .CountAsync(ct);
+            .Where(n => n.PortfolioId == portfolioId && (n.UserId == null || n.UserId == userId) && !n.IsRead);
+        if (!await IsStaffUserAsync(portfolioId, userId, ct))
+        {
+            query = query.Where(n => n.Type != "TenantMessage");
+        }
+
+        return await query.CountAsync(ct);
     }
 
     public async Task<bool> MarkAsReadAsync(int portfolioId, int userId, int notificationId, CancellationToken ct = default)
     {
-        var notification = await _db.Notifications
-            .FirstOrDefaultAsync(n =>
+        var query = _db.Notifications
+            .Where(n =>
                 n.Id == notificationId &&
                 n.PortfolioId == portfolioId &&
-                (n.UserId == null || n.UserId == userId),
-                ct);
+                (n.UserId == null || n.UserId == userId));
+        if (!await IsStaffUserAsync(portfolioId, userId, ct))
+        {
+            query = query.Where(n => n.Type != "TenantMessage");
+        }
+
+        var notification = await query.FirstOrDefaultAsync(ct);
 
         if (notification is null)
         {
@@ -78,12 +93,41 @@ public class NotificationService : INotificationService
     public async Task MarkAllAsReadAsync(int portfolioId, int userId, CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
-        await _db.Notifications
-            .Where(n => n.PortfolioId == portfolioId && (n.UserId == null || n.UserId == userId) && !n.IsRead)
+        var query = _db.Notifications
+            .Where(n => n.PortfolioId == portfolioId && (n.UserId == null || n.UserId == userId) && !n.IsRead);
+        if (!await IsStaffUserAsync(portfolioId, userId, ct))
+        {
+            query = query.Where(n => n.Type != "TenantMessage");
+        }
+
+        await query
             .ExecuteUpdateAsync(s => s
                 .SetProperty(n => n.IsRead, true)
                 .SetProperty(n => n.ReadAt, now),
                 ct);
+    }
+
+    public async Task<NotificationResponse> CreateBroadcastAsync(
+        int portfolioId,
+        CreateBroadcastNotificationRequest request,
+        CancellationToken ct = default)
+    {
+        var notification = new Notification
+        {
+            PortfolioId = portfolioId,
+            UserId = null,
+            Type = "System",
+            Title = request.Title.Trim(),
+            Message = request.Message.Trim(),
+            Severity = string.IsNullOrWhiteSpace(request.Severity) ? "Info" : request.Severity.Trim(),
+            ActionUrl = string.IsNullOrWhiteSpace(request.ActionUrl) ? null : request.ActionUrl.Trim(),
+            CreatedAt = DateTime.UtcNow,
+        };
+
+        _db.Notifications.Add(notification);
+        await _db.SaveChangesAsync(ct);
+
+        return NotificationResponse.FromEntity(notification);
     }
 
     public async Task<NotificationEmailResponse> GetNotificationEmailAsync(int portfolioId, CancellationToken ct = default)
@@ -172,5 +216,21 @@ public class NotificationService : INotificationService
         notifications["email"] = email;
         root["notifications"] = notifications;
         return JsonSerializer.Serialize(root, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private async Task<bool> IsStaffUserAsync(int portfolioId, int userId, CancellationToken ct)
+    {
+        var staffRoles = new[] { "Admin", "Manager", "Agent" };
+
+        return await (
+                from user in _db.Users.AsNoTracking()
+                join userRole in _db.UserRoles.AsNoTracking() on user.Id equals userRole.UserId
+                join role in _db.Roles.AsNoTracking() on userRole.RoleId equals role.Id
+                where user.Id == userId &&
+                      user.PortfolioId == portfolioId &&
+                      role.Name != null &&
+                      staffRoles.Contains(role.Name)
+                select user.Id)
+            .AnyAsync(ct);
     }
 }

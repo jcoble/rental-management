@@ -1,0 +1,670 @@
+using System.Security.Cryptography;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Data;
+
+namespace RentalCommand.Api.Services.Domain;
+
+public class BankingService : IBankingService
+{
+    private readonly RentalCommandDbContext _db;
+    private readonly IDataProtector _protector;
+    private readonly IPlaidBankingProvider _plaid;
+    private readonly PlaidOptions _plaidOptions;
+
+    public BankingService(
+        RentalCommandDbContext db,
+        IDataProtectionProvider dataProtection,
+        IPlaidBankingProvider plaid,
+        IOptions<PlaidOptions> plaidOptions)
+    {
+        _db = db;
+        _protector = dataProtection.CreateProtector("RentalCommand.Banking.v1");
+        _plaid = plaid;
+        _plaidOptions = plaidOptions.Value;
+    }
+
+    public async Task<BankingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default)
+    {
+        var connections = await _db.BankConnections
+            .Where(c => c.PortfolioId == portfolioId)
+            .OrderBy(c => c.InstitutionName)
+            .ThenBy(c => c.AccountName)
+            .ToListAsync(ct);
+
+        var transactions = await BaseTransactions(portfolioId)
+            .OrderByDescending(t => t.PostedAt)
+            .ThenByDescending(t => t.Id)
+            .Take(10)
+            .ToListAsync(ct);
+
+        var unmatchedCount = await _db.BankTransactions
+            .CountAsync(t => t.PortfolioId == portfolioId && t.MatchStatus == "Unmatched", ct);
+
+        var mappedTransactions = await MapTransactionsWithSuggestionsAsync(portfolioId, transactions, ct);
+
+        return new BankingSummaryResponse
+        {
+            ConnectionCount = connections.Count,
+            TransactionCount = await _db.BankTransactions.CountAsync(t => t.PortfolioId == portfolioId, ct),
+            UnmatchedCount = unmatchedCount,
+            SuggestedMatchCount = mappedTransactions.Count(t => t.SuggestedMatch != null && t.MatchStatus == "Unmatched"),
+            LastSyncedAt = connections.Select(c => c.LastSyncedAt).Where(d => d.HasValue).Max(),
+            Connections = connections.Select(MapConnection).ToList(),
+            RecentTransactions = mappedTransactions
+        };
+    }
+
+    public async Task<IReadOnlyList<BankConnectionResponse>> ListConnectionsAsync(int portfolioId, CancellationToken ct = default)
+    {
+        return await _db.BankConnections
+            .Where(c => c.PortfolioId == portfolioId)
+            .OrderBy(c => c.InstitutionName)
+            .ThenBy(c => c.AccountName)
+            .Select(c => MapConnection(c))
+            .ToListAsync(ct);
+    }
+
+    public Task<PlaidSettingsResponse> GetPlaidSettingsAsync(int portfolioId, CancellationToken ct = default)
+    {
+        return Task.FromResult(ToPlaidSettingsResponse());
+    }
+
+    public async Task<PlaidLinkTokenResponse> CreatePlaidLinkTokenAsync(
+        int portfolioId,
+        int userId,
+        string? platform,
+        CancellationToken ct = default)
+    {
+        var settings = ApplyLinkPlatform(await GetRuntimeSettingsAsync(portfolioId, ct), platform);
+        if (!settings.Configured)
+        {
+            return new PlaidLinkTokenResponse
+            {
+                Configured = false,
+                Message = "Plaid client id and secret must be configured in server secrets before creating a Link token."
+            };
+        }
+
+        var result = await _plaid.CreateLinkTokenAsync(settings, portfolioId, userId, ct);
+        return new PlaidLinkTokenResponse
+        {
+            LinkToken = result.LinkToken,
+            Expiration = result.Expiration,
+            RequestId = result.RequestId,
+            Configured = true
+        };
+    }
+
+    public async Task<BankConnectionResponse> ExchangePlaidPublicTokenAsync(
+        int portfolioId,
+        ExchangePlaidPublicTokenRequest request,
+        CancellationToken ct = default)
+    {
+        var publicToken = Normalize(request.PublicToken)
+            ?? throw new InvalidOperationException("A Plaid public token is required.");
+        var accountId = Normalize(request.AccountId)
+            ?? throw new InvalidOperationException("A Plaid account id is required.");
+
+        var settings = await GetRuntimeSettingsAsync(portfolioId, ct);
+        if (!settings.Configured)
+        {
+            throw new InvalidOperationException("Plaid settings are not configured.");
+        }
+
+        var exchange = await _plaid.ExchangePublicTokenAsync(settings, publicToken, ct);
+        var now = DateTime.UtcNow;
+        var existingConnections = await _db.BankConnections
+            .Where(c => c.PortfolioId == portfolioId && c.Provider == "Plaid")
+            .ToListAsync(ct);
+        var connection = existingConnections.FirstOrDefault(c =>
+            UnprotectNullable(c.ExternalItemIdCipherText) == exchange.ItemId &&
+            UnprotectNullable(c.ExternalAccountIdCipherText) == accountId);
+
+        if (connection == null)
+        {
+            connection = new BankConnection
+            {
+                PortfolioId = portfolioId,
+                Provider = "Plaid",
+                CreatedAt = now,
+            };
+            _db.BankConnections.Add(connection);
+        }
+
+        connection.InstitutionName = Normalize(request.InstitutionName) ?? "Plaid bank";
+        connection.AccountName = Normalize(request.AccountName) ?? "Linked account";
+        connection.AccountMask = Normalize(request.AccountMask);
+        connection.AccountType = Normalize(request.AccountType);
+        connection.AccountSubtype = Normalize(request.AccountSubtype);
+        connection.ExternalItemIdCipherText = ProtectNullable(exchange.ItemId);
+        connection.ExternalAccountIdCipherText = ProtectNullable(accountId);
+        connection.ExternalAccessTokenCipherText = ProtectNullable(exchange.AccessToken);
+        connection.Status = "Active";
+        connection.UpdatedAt = now;
+
+        await _db.SaveChangesAsync(ct);
+        await SyncPlaidConnectionAsync(portfolioId, connection.Id, ct);
+        return MapConnection(connection);
+    }
+
+    public async Task<SyncBankConnectionResponse?> SyncPlaidConnectionAsync(
+        int portfolioId,
+        int connectionId,
+        CancellationToken ct = default)
+    {
+        var connection = await _db.BankConnections
+            .FirstOrDefaultAsync(c => c.PortfolioId == portfolioId && c.Id == connectionId && c.Provider == "Plaid", ct);
+        if (connection == null) return null;
+
+        var accessToken = UnprotectNullable(connection.ExternalAccessTokenCipherText);
+        if (string.IsNullOrWhiteSpace(accessToken))
+        {
+            throw new InvalidOperationException("This bank connection does not have a Plaid access token.");
+        }
+
+        var settings = await GetRuntimeSettingsAsync(portfolioId, ct);
+        if (!settings.Configured)
+        {
+            throw new InvalidOperationException("Plaid settings are not configured.");
+        }
+
+        var cursor = UnprotectNullable(connection.SyncCursorCipherText);
+        var synced = await _plaid.SyncTransactionsAsync(settings, accessToken, cursor, ct);
+        var now = DateTime.UtcNow;
+        var linkedAccountId = UnprotectNullable(connection.ExternalAccountIdCipherText);
+        var imported = new List<BankTransaction>();
+        var modified = new List<BankTransaction>();
+        var skipped = 0;
+        var incomingIds = synced.Added
+            .Concat(synced.Modified)
+            .Where(t => linkedAccountId == null || t.AccountId == linkedAccountId)
+            .Select(t => t.TransactionId.Trim())
+            .Where(id => id.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var existingTransactions = await _db.BankTransactions
+            .Where(t => t.BankConnectionId == connection.Id && incomingIds.Contains(t.ProviderTransactionId))
+            .ToListAsync(ct);
+        var existing = existingTransactions
+            .ToDictionary(t => t.ProviderTransactionId, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in synced.Added.Where(t => linkedAccountId == null || t.AccountId == linkedAccountId))
+        {
+            var providerTransactionId = item.TransactionId.Trim();
+            if (providerTransactionId.Length == 0 || existing.ContainsKey(providerTransactionId))
+            {
+                skipped++;
+                continue;
+            }
+
+            var transaction = new BankTransaction
+            {
+                PortfolioId = portfolioId,
+                BankConnectionId = connection.Id,
+                ProviderTransactionId = providerTransactionId,
+                PostedAt = item.PostedAt.ToUtc(),
+                AuthorizedAt = item.AuthorizedAt.ToUtc(),
+                Description = item.Description.Trim(),
+                MerchantName = Normalize(item.MerchantName),
+                Amount = -item.Amount,
+                IsoCurrencyCode = string.IsNullOrWhiteSpace(item.IsoCurrencyCode) ? "USD" : item.IsoCurrencyCode.Trim(),
+                Category = Normalize(item.Category),
+                RawData = item.RawData,
+                MatchStatus = "Unmatched",
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _db.BankTransactions.Add(transaction);
+            existing[providerTransactionId] = transaction;
+            imported.Add(transaction);
+        }
+
+        foreach (var item in synced.Modified.Where(t => linkedAccountId == null || t.AccountId == linkedAccountId))
+        {
+            var providerTransactionId = item.TransactionId.Trim();
+            if (providerTransactionId.Length == 0 || !existing.TryGetValue(providerTransactionId, out var transaction))
+            {
+                skipped++;
+                continue;
+            }
+
+            ApplyPlaidTransaction(transaction, item, now);
+            modified.Add(transaction);
+        }
+
+        var removedIds = synced.RemovedTransactionIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (removedIds.Count > 0)
+        {
+            var removedTransactions = await _db.BankTransactions
+                .Where(t => t.BankConnectionId == connection.Id && removedIds.Contains(t.ProviderTransactionId))
+                .ToListAsync(ct);
+            foreach (var transaction in removedTransactions)
+            {
+                transaction.MatchedPaymentId = null;
+                transaction.MatchedExpenseId = null;
+                transaction.MatchStatus = "Removed";
+                transaction.MatchConfidence = null;
+                transaction.Notes = "Removed by Plaid sync.";
+                transaction.UpdatedAt = now;
+            }
+        }
+
+        connection.SyncCursorCipherText = ProtectNullable(synced.NextCursor);
+        connection.LastSyncedAt = now;
+        connection.UpdatedAt = now;
+        await _db.SaveChangesAsync(ct);
+
+        var mapped = await MapTransactionsWithSuggestionsAsync(portfolioId, imported.Concat(modified).ToList(), ct);
+        return new SyncBankConnectionResponse
+        {
+            Connection = MapConnection(connection),
+            ImportedCount = imported.Count,
+            SkippedCount = skipped,
+            Transactions = mapped
+        };
+    }
+
+    public async Task<IReadOnlyList<BankTransactionResponse>> ListTransactionsAsync(
+        int portfolioId,
+        string? status,
+        CancellationToken ct = default)
+    {
+        var query = BaseTransactions(portfolioId);
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            query = query.Where(t => t.MatchStatus == status);
+        }
+
+        var transactions = await query
+            .OrderByDescending(t => t.PostedAt)
+            .ThenByDescending(t => t.Id)
+            .Take(100)
+            .ToListAsync(ct);
+
+        return await MapTransactionsWithSuggestionsAsync(portfolioId, transactions, ct);
+    }
+
+    public async Task<ImportBankTransactionsResponse> ImportAsync(
+        int portfolioId,
+        ImportBankTransactionsRequest request,
+        CancellationToken ct = default)
+    {
+        if (request.Transactions.Count == 0)
+        {
+            throw new InvalidOperationException("At least one bank transaction is required.");
+        }
+
+        var now = DateTime.UtcNow;
+        var provider = string.IsNullOrWhiteSpace(request.Provider) ? "Manual" : request.Provider.Trim();
+        var institution = string.IsNullOrWhiteSpace(request.InstitutionName) ? "Imported bank" : request.InstitutionName.Trim();
+        var account = string.IsNullOrWhiteSpace(request.AccountName) ? "Imported account" : request.AccountName.Trim();
+
+        var connection = await _db.BankConnections
+            .FirstOrDefaultAsync(c =>
+                c.PortfolioId == portfolioId &&
+                c.Provider == provider &&
+                c.InstitutionName == institution &&
+                c.AccountName == account &&
+                c.AccountMask == request.AccountMask, ct);
+
+        if (connection == null)
+        {
+            connection = new BankConnection
+            {
+                PortfolioId = portfolioId,
+                Provider = provider,
+                InstitutionName = institution,
+                AccountName = account,
+                AccountMask = request.AccountMask,
+                AccountType = request.AccountType,
+                AccountSubtype = request.AccountSubtype,
+                Status = "Active",
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _db.BankConnections.Add(connection);
+            await _db.SaveChangesAsync(ct);
+        }
+
+        var imported = new List<BankTransaction>();
+        var skipped = 0;
+        var incomingIds = request.Transactions
+            .Select(t => t.ProviderTransactionId.Trim())
+            .Where(id => id.Length > 0)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var existingIds = await _db.BankTransactions
+            .Where(t => t.BankConnectionId == connection.Id && incomingIds.Contains(t.ProviderTransactionId))
+            .Select(t => t.ProviderTransactionId)
+            .ToListAsync(ct);
+        var existing = existingIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in request.Transactions)
+        {
+            var providerTransactionId = item.ProviderTransactionId.Trim();
+            if (providerTransactionId.Length == 0 || existing.Contains(providerTransactionId))
+            {
+                skipped++;
+                continue;
+            }
+
+            var transaction = new BankTransaction
+            {
+                PortfolioId = portfolioId,
+                BankConnectionId = connection.Id,
+                ProviderTransactionId = providerTransactionId,
+                PostedAt = item.PostedAt.ToUtc(),
+                AuthorizedAt = item.AuthorizedAt.ToUtc(),
+                Description = item.Description.Trim(),
+                MerchantName = item.MerchantName,
+                Amount = item.Amount,
+                IsoCurrencyCode = string.IsNullOrWhiteSpace(item.IsoCurrencyCode) ? "USD" : item.IsoCurrencyCode.Trim(),
+                Category = item.Category,
+                RawData = item.RawData,
+                MatchStatus = "Unmatched",
+                CreatedAt = now,
+                UpdatedAt = now
+            };
+            _db.BankTransactions.Add(transaction);
+            imported.Add(transaction);
+        }
+
+        connection.LastSyncedAt = now;
+        connection.UpdatedAt = now;
+        await _db.SaveChangesAsync(ct);
+
+        var mapped = await MapTransactionsWithSuggestionsAsync(portfolioId, imported, ct);
+
+        return new ImportBankTransactionsResponse
+        {
+            Connection = MapConnection(connection),
+            ImportedCount = imported.Count,
+            SkippedCount = skipped,
+            Transactions = mapped
+        };
+    }
+
+    public async Task<BankTransactionResponse?> MatchAsync(
+        int portfolioId,
+        int transactionId,
+        MatchBankTransactionRequest request,
+        CancellationToken ct = default)
+    {
+        var transaction = await BaseTransactions(portfolioId)
+            .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
+        if (transaction == null) return null;
+
+        var entityType = request.EntityType.Trim();
+        if (entityType.Equals("Payment", StringComparison.OrdinalIgnoreCase))
+        {
+            var exists = await _db.Payments.AnyAsync(p => p.PortfolioId == portfolioId && p.Id == request.EntityId, ct);
+            if (!exists) return null;
+            transaction.MatchedPaymentId = request.EntityId;
+            transaction.MatchedExpenseId = null;
+        }
+        else if (entityType.Equals("Expense", StringComparison.OrdinalIgnoreCase))
+        {
+            var exists = await _db.Expenses.AnyAsync(e => e.PortfolioId == portfolioId && e.Id == request.EntityId, ct);
+            if (!exists) return null;
+            transaction.MatchedExpenseId = request.EntityId;
+            transaction.MatchedPaymentId = null;
+        }
+        else
+        {
+            throw new InvalidOperationException("EntityType must be Payment or Expense.");
+        }
+
+        transaction.MatchStatus = "Matched";
+        transaction.MatchConfidence = 1m;
+        transaction.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
+    }
+
+    public async Task<BankTransactionResponse?> ClearMatchAsync(int portfolioId, int transactionId, CancellationToken ct = default)
+    {
+        var transaction = await BaseTransactions(portfolioId)
+            .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
+        if (transaction == null) return null;
+
+        transaction.MatchedPaymentId = null;
+        transaction.MatchedExpenseId = null;
+        transaction.MatchStatus = "Unmatched";
+        transaction.MatchConfidence = null;
+        transaction.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
+    }
+
+    private IQueryable<BankTransaction> BaseTransactions(int portfolioId)
+    {
+        return _db.BankTransactions
+            .Include(t => t.BankConnection)
+            .Where(t => t.PortfolioId == portfolioId);
+    }
+
+    private Task<PlaidRuntimeSettings> GetRuntimeSettingsAsync(int portfolioId, CancellationToken ct)
+    {
+        return Task.FromResult(new PlaidRuntimeSettings(
+            NormalizeEnvironment(_plaidOptions.Environment),
+            _plaidOptions.ClientId,
+            _plaidOptions.Secret,
+            Normalize(_plaidOptions.RedirectUri),
+            Normalize(_plaidOptions.AndroidPackageName)));
+    }
+
+    private static PlaidRuntimeSettings ApplyLinkPlatform(PlaidRuntimeSettings settings, string? platform)
+    {
+        var normalized = Normalize(platform)?.ToLowerInvariant();
+        return normalized is "android" or "mobile-android"
+            ? settings with { RedirectUri = null }
+            : settings with { AndroidPackageName = null };
+    }
+
+    private PlaidSettingsResponse ToPlaidSettingsResponse()
+    {
+        return new PlaidSettingsResponse
+        {
+            PlaidEnvironment = NormalizeEnvironment(_plaidOptions.Environment),
+            Configured = _plaidOptions.Configured,
+        };
+    }
+
+    private string? ProtectNullable(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : _protector.Protect(value);
+
+    private string? UnprotectNullable(string? cipherText)
+    {
+        if (string.IsNullOrWhiteSpace(cipherText))
+            return null;
+
+        try
+        {
+            return _protector.Unprotect(cipherText);
+        }
+        catch (CryptographicException)
+        {
+            return null;
+        }
+    }
+
+    private static string NormalizeEnvironment(string? value)
+    {
+        var normalized = Normalize(value)?.ToLowerInvariant();
+        return normalized is "development" or "production" ? normalized : "sandbox";
+    }
+
+    private static string? Normalize(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static void ApplyPlaidTransaction(BankTransaction transaction, PlaidSyncedTransaction item, DateTime now)
+    {
+        transaction.PostedAt = item.PostedAt.ToUtc();
+        transaction.AuthorizedAt = item.AuthorizedAt.ToUtc();
+        transaction.Description = item.Description.Trim();
+        transaction.MerchantName = Normalize(item.MerchantName);
+        transaction.Amount = -item.Amount;
+        transaction.IsoCurrencyCode = string.IsNullOrWhiteSpace(item.IsoCurrencyCode) ? "USD" : item.IsoCurrencyCode.Trim();
+        transaction.Category = Normalize(item.Category);
+        transaction.RawData = item.RawData;
+        if (transaction.MatchStatus == "Matched")
+        {
+            transaction.MatchStatus = "Unmatched";
+            transaction.MatchConfidence = null;
+            transaction.MatchedPaymentId = null;
+            transaction.MatchedExpenseId = null;
+            transaction.Notes = "Plaid modified this transaction after it was matched; review the match again.";
+        }
+        transaction.UpdatedAt = now;
+    }
+
+    private async Task<IReadOnlyList<BankTransactionResponse>> MapTransactionsWithSuggestionsAsync(
+        int portfolioId,
+        IReadOnlyList<BankTransaction> transactions,
+        CancellationToken ct)
+    {
+        if (transactions.Count == 0) return [];
+
+        var paymentCandidates = await _db.Payments
+            .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
+            .Where(p => p.PortfolioId == portfolioId && p.Status != PaymentStatus.Failed && p.Status != PaymentStatus.Refunded)
+            .ToListAsync(ct);
+
+        var expenseCandidates = await _db.Expenses
+            .Include(e => e.Vendor)
+            .Where(e => e.PortfolioId == portfolioId)
+            .ToListAsync(ct);
+
+        return transactions
+            .Select(t => MapTransaction(t, SuggestMatch(t, paymentCandidates, expenseCandidates)))
+            .ToList();
+    }
+
+    private static BankMatchSuggestionResponse? SuggestMatch(
+        BankTransaction transaction,
+        IReadOnlyList<Payment> payments,
+        IReadOnlyList<Expense> expenses)
+    {
+        if (transaction.MatchStatus == "Matched") return null;
+
+        if (transaction.Amount > 0)
+        {
+            var payment = payments
+                .Select(p => new { Payment = p, Score = ScorePayment(transaction, p) })
+                .Where(x => x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .FirstOrDefault();
+
+            if (payment != null)
+            {
+                var tenant = payment.Payment.Lease?.Tenant;
+                var tenantName = tenant == null ? "payment" : $"{tenant.FirstName} {tenant.LastName}".Trim();
+                return new BankMatchSuggestionResponse
+                {
+                    EntityType = "Payment",
+                    EntityId = payment.Payment.Id,
+                    Confidence = payment.Score,
+                    Label = $"{tenantName} rent payment",
+                    Reason = "Deposit amount and date line up with an expected or recorded payment."
+                };
+            }
+        }
+
+        if (transaction.Amount < 0)
+        {
+            var expense = expenses
+                .Select(e => new { Expense = e, Score = ScoreExpense(transaction, e) })
+                .Where(x => x.Score > 0)
+                .OrderByDescending(x => x.Score)
+                .FirstOrDefault();
+
+            if (expense != null)
+            {
+                return new BankMatchSuggestionResponse
+                {
+                    EntityType = "Expense",
+                    EntityId = expense.Expense.Id,
+                    Confidence = expense.Score,
+                    Label = expense.Expense.Vendor?.Name ?? expense.Expense.Description,
+                    Reason = "Withdrawal amount and date line up with an expense."
+                };
+            }
+        }
+
+        return null;
+    }
+
+    private static decimal ScorePayment(BankTransaction transaction, Payment payment)
+    {
+        if (Math.Abs(transaction.Amount - payment.Amount) > 0.01m) return 0m;
+        var anchor = payment.PaidDate ?? payment.DueDate;
+        var days = Math.Abs((transaction.PostedAt.Date - anchor.Date).Days);
+        if (days > 7) return 0m;
+        return days switch
+        {
+            0 => 0.98m,
+            <= 2 => 0.90m,
+            <= 4 => 0.78m,
+            _ => 0.65m
+        };
+    }
+
+    private static decimal ScoreExpense(BankTransaction transaction, Expense expense)
+    {
+        if (Math.Abs(Math.Abs(transaction.Amount) - expense.Amount) > 0.01m) return 0m;
+        var anchor = expense.PaidAt ?? expense.IncurredAt;
+        var days = Math.Abs((transaction.PostedAt.Date - anchor.Date).Days);
+        if (days > 7) return 0m;
+        return days switch
+        {
+            0 => 0.98m,
+            <= 2 => 0.90m,
+            <= 4 => 0.78m,
+            _ => 0.65m
+        };
+    }
+
+    private static BankConnectionResponse MapConnection(BankConnection c) => new()
+    {
+        Id = c.Id,
+        Provider = c.Provider,
+        InstitutionName = c.InstitutionName,
+        AccountName = c.AccountName,
+        AccountMask = c.AccountMask,
+        AccountType = c.AccountType,
+        AccountSubtype = c.AccountSubtype,
+        Status = c.Status,
+        LastSyncedAt = c.LastSyncedAt
+    };
+
+    private static BankTransactionResponse MapTransaction(
+        BankTransaction t,
+        BankMatchSuggestionResponse? suggestion) => new()
+    {
+        Id = t.Id,
+        BankConnectionId = t.BankConnectionId,
+        InstitutionName = t.BankConnection?.InstitutionName ?? "",
+        AccountName = t.BankConnection?.AccountName ?? "",
+        ProviderTransactionId = t.ProviderTransactionId,
+        PostedAt = t.PostedAt,
+        AuthorizedAt = t.AuthorizedAt,
+        Description = t.Description,
+        MerchantName = t.MerchantName,
+        Amount = t.Amount,
+        IsoCurrencyCode = t.IsoCurrencyCode,
+        Category = t.Category,
+        MatchedPaymentId = t.MatchedPaymentId,
+        MatchedExpenseId = t.MatchedExpenseId,
+        MatchStatus = t.MatchStatus,
+        MatchConfidence = t.MatchConfidence,
+        Notes = t.Notes,
+        SuggestedMatch = suggestion
+    };
+}

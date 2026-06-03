@@ -1,15 +1,26 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
+import '../../core/models/models.dart';
 import '../../core/realtime/realtime_providers.dart';
 import '../ai/ai_models.dart';
 import '../ai/ai_repository.dart';
+import '../ai/ai_tab.dart';
 import '../leases/leases_list_screen.dart';
 import '../maintenance/work_order_detail_screen.dart';
+import '../maintenance/work_orders_repository.dart';
+import '../maintenance/work_orders_screen.dart';
+import '../messages/message_detail_screen.dart';
+import '../messages/message_models.dart';
 import '../messages/messages_list_screen.dart';
+import '../messages/messages_repository.dart';
 import '../payments/payments_screen.dart';
+import '../portal/tenant_portal_repository.dart';
 import '../properties/properties_tab.dart';
 import '../scan/scan_tab.dart';
 import '../tenants/tenants_list_screen.dart';
@@ -21,6 +32,45 @@ import 'more_tab.dart';
 
 final _briefingProvider = FutureProvider.autoDispose<BriefingResponse>((ref) {
   return ref.watch(aiRepositoryProvider).briefing();
+});
+
+final _latestMessagesProvider = FutureProvider.autoDispose<List<Conversation>>((
+  ref,
+) async {
+  final conversations = await ref
+      .watch(messagesRepositoryProvider)
+      .listConversations();
+  return conversations.take(5).toList();
+});
+
+final _fieldQueueProvider = FutureProvider.autoDispose<List<WorkOrder>>((
+  ref,
+) async {
+  final orders = await ref.watch(workOrdersRepositoryProvider).listWorkOrders();
+  final open = orders
+      .where((w) => !{'Completed', 'Cancelled'}.contains(w.status))
+      .toList();
+
+  int priorityRank(WorkOrder w) {
+    switch (w.priority.toLowerCase()) {
+      case 'emergency':
+        return 0;
+      case 'high':
+        return 1;
+      case 'normal':
+        return 2;
+      default:
+        return 3;
+    }
+  }
+
+  open.sort((a, b) {
+    final priority = priorityRank(a).compareTo(priorityRank(b));
+    if (priority != 0) return priority;
+    return a.requestedAt.compareTo(b.requestedAt);
+  });
+
+  return open.take(5).toList();
 });
 
 // ---------------------------------------------------------------------------
@@ -60,6 +110,21 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     _TabItem(label: 'More', icon: Icons.more_horiz, activeIcon: Icons.menu),
   ];
 
+  static const _tenantTabs = [
+    _TabItem(label: 'Home', icon: Icons.home_outlined, activeIcon: Icons.home),
+    _TabItem(
+      label: 'Messages',
+      icon: Icons.forum_outlined,
+      activeIcon: Icons.forum,
+    ),
+    _TabItem(
+      label: 'Maintenance',
+      icon: Icons.build_outlined,
+      activeIcon: Icons.build,
+    ),
+    _TabItem(label: 'More', icon: Icons.more_horiz, activeIcon: Icons.menu),
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -76,26 +141,44 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
     final authState = ref.watch(authControllerProvider);
     final user = authState is AuthStateAuthenticated ? authState.user : null;
+    final tenantMode = user?.isTenant ?? false;
+    final tabs = tenantMode ? _tenantTabs : _tabs;
+    final selectedIndex = _selectedIndex >= tabs.length
+        ? tabs.length - 1
+        : _selectedIndex;
 
     return Scaffold(
       body: IndexedStack(
-        index: _selectedIndex,
-        children: [
-          _HomeTab(
-            user: user,
-            onSwitchToTab: (index) => setState(() => _selectedIndex = index),
-          ),
-          const ScanTab(),
-          const PropertiesTab(),
-          const MessagesListScreen(),
-          const MoreTab(),
-        ],
+        index: selectedIndex,
+        children: tenantMode
+            ? [
+                _TenantHomeTab(user: user),
+                const MessagesListScreen(),
+                const _TenantMaintenanceTab(),
+                const _TenantMoreTab(),
+              ]
+            : [
+                _HomeTab(
+                  user: user,
+                  onSwitchToTab: (index) =>
+                      setState(() => _selectedIndex = index),
+                  onOpenAssistant: () {
+                    Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(builder: (_) => const AiTab()),
+                    );
+                  },
+                ),
+                const ScanTab(),
+                const PropertiesTab(),
+                const MessagesListScreen(),
+                const MoreTab(),
+              ],
       ),
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
+        selectedIndex: selectedIndex,
         onDestinationSelected: (index) =>
             setState(() => _selectedIndex = index),
-        destinations: _tabs
+        destinations: tabs
             .map(
               (tab) => NavigationDestination(
                 icon: Icon(tab.icon),
@@ -113,20 +196,404 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 // _HomeTab — the actual dashboard
 // ---------------------------------------------------------------------------
 
+class _TenantHomeTab extends ConsumerWidget {
+  const _TenantHomeTab({required this.user});
+
+  final AuthUser? user;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final snapshot = ref.watch(tenantPortalSnapshotProvider);
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Tenant Dashboard'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.logout_outlined),
+            tooltip: 'Sign out',
+            onPressed: () async {
+              await ref.read(authControllerProvider.notifier).logout();
+            },
+          ),
+        ],
+      ),
+      body: RefreshIndicator(
+        onRefresh: () async => ref.invalidate(tenantPortalSnapshotProvider),
+        child: snapshot.when(
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (err, _) => ListView(
+            padding: const EdgeInsets.all(20),
+            children: [
+              Text(
+                'Could not load your dashboard.',
+                style: theme.textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              Text('$err'),
+            ],
+          ),
+          data: (data) {
+            final openOrders = data.workOrders
+                .where(
+                  (w) => !{
+                    'Completed',
+                    'Cancelled',
+                    'Archived',
+                  }.contains(w.status),
+                )
+                .toList();
+            final unpaid =
+                data.payments
+                    .where(
+                      (p) => !{'Paid', 'Waived', 'Refunded'}.contains(p.status),
+                    )
+                    .toList()
+                  ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
+            final nextPayment = unpaid.isEmpty ? null : unpaid.first;
+            final unreadNotifications = data.notifications
+                .where((n) => !n.isRead)
+                .length;
+
+            return ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                Text(
+                  user?.displayName ?? 'My home',
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (data.notifications.isNotEmpty)
+                  _TenantCard(
+                    icon: Icons.notifications_outlined,
+                    title: 'Notifications',
+                    value: '$unreadNotifications unread',
+                    subtitle: data.notifications.first.title,
+                  ),
+                _TenantCard(
+                  icon: Icons.warning_amber_outlined,
+                  title: 'Overdue',
+                  value: _money(data.balance.overdue),
+                  subtitle: '${data.balance.overdueCount} overdue item(s)',
+                ),
+                _TenantCard(
+                  icon: Icons.payments_outlined,
+                  title: 'Next rent due',
+                  value: nextPayment == null
+                      ? 'None'
+                      : '${nextPayment.dueDate.difference(DateTime.now()).inDays} days',
+                  subtitle: nextPayment == null
+                      ? 'No unpaid rent scheduled'
+                      : '${_money(nextPayment.amount)} due',
+                ),
+                _TenantCard(
+                  icon: Icons.build_outlined,
+                  title: 'Open maintenance',
+                  value: '${openOrders.length}',
+                  subtitle: openOrders.isEmpty
+                      ? 'No open requests'
+                      : openOrders.first.title,
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _TenantMaintenanceTab extends ConsumerStatefulWidget {
+  const _TenantMaintenanceTab();
+
+  @override
+  ConsumerState<_TenantMaintenanceTab> createState() =>
+      _TenantMaintenanceTabState();
+}
+
+class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
+  final _title = TextEditingController();
+  final _description = TextEditingController();
+  String _priority = 'Normal';
+  Uint8List? _photoBytes;
+  String? _photoName;
+  String? _photoContentType;
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _description.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickPhoto(ImageSource source) async {
+    final picked = await ImagePicker().pickImage(
+      source: source,
+      imageQuality: 80,
+      maxWidth: 1600,
+      maxHeight: 1600,
+    );
+    if (picked == null) return;
+    final bytes = Uint8List.fromList(await picked.readAsBytes());
+    if (!mounted) return;
+    setState(() {
+      _photoBytes = bytes;
+      _photoName = picked.name;
+      _photoContentType = _mimeFromExtension(picked.name);
+    });
+  }
+
+  String _mimeFromExtension(String filename) {
+    final lower = filename.toLowerCase();
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.heic')) return 'image/heic';
+    return 'image/jpeg';
+  }
+
+  Future<void> _submit() async {
+    if (_title.text.trim().isEmpty || _description.text.trim().isEmpty) return;
+    setState(() => _saving = true);
+    try {
+      final repo = ref.read(tenantPortalRepositoryProvider);
+      final created = await repo.createWorkOrder(
+        title: _title.text.trim(),
+        description: _description.text.trim(),
+        priority: _priority,
+      );
+      final photoBytes = _photoBytes;
+      final photoName = _photoName;
+      final photoContentType = _photoContentType;
+      if (photoBytes != null && photoName != null && photoContentType != null) {
+        await repo.uploadWorkOrderPhoto(
+          workOrderId: created.id,
+          bytes: photoBytes,
+          fileName: photoName,
+          contentType: photoContentType,
+        );
+      }
+      ref.invalidate(tenantPortalSnapshotProvider);
+      _title.clear();
+      _description.clear();
+      _photoBytes = null;
+      _photoName = null;
+      _photoContentType = null;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Maintenance request submitted.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final snapshot = ref.watch(tenantPortalSnapshotProvider);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Maintenance')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          snapshot.maybeWhen(
+            data: (data) {
+              final open = data.workOrders
+                  .where(
+                    (w) => !{
+                      'Completed',
+                      'Cancelled',
+                      'Archived',
+                    }.contains(w.status),
+                  )
+                  .toList();
+              if (open.isEmpty) {
+                return const Text('No open maintenance requests.');
+              }
+              return Column(
+                children: open
+                    .map(
+                      (w) => Card(
+                        child: ListTile(
+                          title: Text(w.title),
+                          subtitle: Text('${w.status} · ${w.priority}'),
+                        ),
+                      ),
+                    )
+                    .toList(),
+              );
+            },
+            orElse: () => const SizedBox.shrink(),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _title,
+            decoration: const InputDecoration(labelText: 'Issue title'),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _description,
+            minLines: 3,
+            maxLines: 5,
+            decoration: const InputDecoration(labelText: 'Description'),
+          ),
+          const SizedBox(height: 12),
+          DropdownButtonFormField<String>(
+            initialValue: _priority,
+            decoration: const InputDecoration(labelText: 'Priority'),
+            items: const [
+              'Low',
+              'Normal',
+              'High',
+              'Emergency',
+            ].map((p) => DropdownMenuItem(value: p, child: Text(p))).toList(),
+            onChanged: (value) => setState(() => _priority = value ?? 'Normal'),
+          ),
+          const SizedBox(height: 12),
+          if (_photoBytes != null) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.memory(
+                _photoBytes!,
+                height: 140,
+                width: double.infinity,
+                fit: BoxFit.cover,
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _saving
+                      ? null
+                      : () => _pickPhoto(ImageSource.camera),
+                  icon: const Icon(Icons.camera_alt_outlined),
+                  label: Text(_photoBytes == null ? 'Take photo' : 'Retake'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _saving
+                      ? null
+                      : () => _pickPhoto(ImageSource.gallery),
+                  icon: const Icon(Icons.photo_library_outlined),
+                  label: const Text('Choose'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            onPressed: _saving ? null : _submit,
+            child: Text(_saving ? 'Submitting...' : 'Submit Request'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TenantMoreTab extends ConsumerWidget {
+  const _TenantMoreTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('More')),
+      body: ListView(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.description_outlined),
+            title: const Text('Lease'),
+            subtitle: const Text('Lease details appear on the dashboard.'),
+            onTap: () {},
+          ),
+          ListTile(
+            leading: const Icon(Icons.event_outlined),
+            title: const Text('Appointments'),
+            subtitle: const Text('Upcoming appointments will appear here.'),
+            onTap: () {},
+          ),
+          ListTile(
+            leading: const Icon(Icons.logout_outlined),
+            title: const Text('Sign out'),
+            onTap: () async {
+              await ref.read(authControllerProvider.notifier).logout();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TenantCard extends StatelessWidget {
+  const _TenantCard({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String value;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Icon(icon),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: theme.textTheme.labelLarge),
+                  const SizedBox(height: 4),
+                  Text(value, style: theme.textTheme.headlineSmall),
+                  Text(subtitle, style: theme.textTheme.bodySmall),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _money(num value) =>
+    '\$${value.toStringAsFixed(2).replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => ',')}';
+
 class _HomeTab extends ConsumerWidget {
   const _HomeTab({
     required this.user,
     required this.onSwitchToTab,
+    required this.onOpenAssistant,
   });
 
   final AuthUser? user;
 
   /// Callback to switch the shell's active tab (0-based index).
   final void Function(int index) onSwitchToTab;
+  final VoidCallback onOpenAssistant;
 
   // Tab indices
   static const _scanTabIndex = 1;
-  static const _aiTabIndex = 3;
 
   String get _greeting {
     final hour = DateTime.now().hour;
@@ -148,11 +615,18 @@ class _HomeTab extends ConsumerWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final briefingAsync = ref.watch(_briefingProvider);
+    final messagesAsync = ref.watch(_latestMessagesProvider);
+    final fieldQueueAsync = ref.watch(_fieldQueueProvider);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Rental Command'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.auto_awesome_outlined),
+            tooltip: 'AI Assistant',
+            onPressed: onOpenAssistant,
+          ),
           IconButton(
             icon: const Icon(Icons.logout_outlined),
             tooltip: 'Sign out',
@@ -193,7 +667,7 @@ class _HomeTab extends ConsumerWidget {
                     // ── Quick actions ─────────────────────────────────────
                     _QuickActions(
                       onScan: () => onSwitchToTab(_scanTabIndex),
-                      onAskAi: () => onSwitchToTab(_aiTabIndex),
+                      onAskAi: onOpenAssistant,
                       onAddExpense: () => onSwitchToTab(_scanTabIndex),
                     ),
                     const SizedBox(height: 32),
@@ -232,6 +706,33 @@ class _HomeTab extends ConsumerWidget {
                 data: (briefing) => _BriefingContent(briefing: briefing),
               ),
             ),
+
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
+              sliver: SliverList(
+                delegate: SliverChildListDelegate([
+                  _HomeSectionHeader(
+                    title: 'Latest messages',
+                    actionLabel: 'Open inbox',
+                    onAction: () => onSwitchToTab(3),
+                  ),
+                  const SizedBox(height: 8),
+                  _LatestMessagesSection(messagesAsync: messagesAsync),
+                  const SizedBox(height: 24),
+                  _HomeSectionHeader(
+                    title: 'Field queue',
+                    actionLabel: 'Open maintenance',
+                    onAction: () => Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const WorkOrdersScreen(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _FieldQueueSection(queueAsync: fieldQueueAsync),
+                ]),
+              ),
+            ),
           ],
         ),
       ),
@@ -241,16 +742,308 @@ class _HomeTab extends ConsumerWidget {
   String _formattedDate() {
     final now = DateTime.now();
     const months = [
-      'January', 'February', 'March', 'April', 'May', 'June',
-      'July', 'August', 'September', 'October', 'November', 'December',
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December',
     ];
     const weekdays = [
-      'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday',
-      'Saturday', 'Sunday',
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
     ];
     final weekday = weekdays[now.weekday - 1];
     final month = months[now.month - 1];
     return '$weekday, $month ${now.day}';
+  }
+}
+
+class _HomeSectionHeader extends StatelessWidget {
+  const _HomeSectionHeader({
+    required this.title,
+    required this.actionLabel,
+    required this.onAction,
+  });
+
+  final String title;
+  final String actionLabel;
+  final VoidCallback onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        TextButton(onPressed: onAction, child: Text(actionLabel)),
+      ],
+    );
+  }
+}
+
+class _LatestMessagesSection extends StatelessWidget {
+  const _LatestMessagesSection({required this.messagesAsync});
+
+  final AsyncValue<List<Conversation>> messagesAsync;
+
+  @override
+  Widget build(BuildContext context) {
+    return messagesAsync.when(
+      loading: () => const _LoadingCard(label: 'Loading messages...'),
+      error: (_, _) => const _EmptyInlineCard(
+        icon: Icons.forum_outlined,
+        text: "Couldn't load messages.",
+      ),
+      data: (messages) {
+        if (messages.isEmpty) {
+          return const _EmptyInlineCard(
+            icon: Icons.forum_outlined,
+            text: 'No recent messages.',
+          );
+        }
+
+        return Column(
+          children: [
+            for (final message in messages) ...[
+              _MessageCard(conversation: message),
+              const SizedBox(height: 8),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _FieldQueueSection extends StatelessWidget {
+  const _FieldQueueSection({required this.queueAsync});
+
+  final AsyncValue<List<WorkOrder>> queueAsync;
+
+  @override
+  Widget build(BuildContext context) {
+    return queueAsync.when(
+      loading: () => const _LoadingCard(label: 'Loading field queue...'),
+      error: (_, _) => const _EmptyInlineCard(
+        icon: Icons.build_outlined,
+        text: "Couldn't load work orders.",
+      ),
+      data: (queue) {
+        if (queue.isEmpty) {
+          return const _EmptyInlineCard(
+            icon: Icons.check_circle_outline,
+            text: 'No open field work.',
+          );
+        }
+
+        return Column(
+          children: [
+            for (final order in queue) ...[
+              _FieldQueueCard(workOrder: order),
+              const SizedBox(height: 8),
+            ],
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _MessageCard extends StatelessWidget {
+  const _MessageCard({required this.conversation});
+
+  final Conversation conversation;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final preview = conversation.lastMessagePreview ?? '';
+
+    return Card(
+      child: ListTile(
+        onTap: () => Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => MessageDetailScreen(
+              conversationId: conversation.id,
+              title: conversation.tenantName,
+              subtitle: conversation.subject,
+            ),
+          ),
+        ),
+        leading: CircleAvatar(
+          backgroundColor: conversation.hasUnread
+              ? cs.primaryContainer
+              : cs.surfaceContainerHighest,
+          child: Icon(
+            conversation.hasUnread ? Icons.mark_chat_unread : Icons.forum,
+            color: conversation.hasUnread
+                ? cs.onPrimaryContainer
+                : cs.onSurfaceVariant,
+            size: 18,
+          ),
+        ),
+        title: Text(
+          conversation.tenantName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: conversation.hasUnread
+                ? FontWeight.w700
+                : FontWeight.w600,
+          ),
+        ),
+        subtitle: Text(
+          preview.isEmpty ? conversation.subject : preview,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: conversation.hasUnread
+            ? Badge(label: Text('${conversation.unreadCount}'))
+            : const Icon(Icons.chevron_right),
+      ),
+    );
+  }
+}
+
+class _FieldQueueCard extends StatelessWidget {
+  const _FieldQueueCard({required this.workOrder});
+
+  final WorkOrder workOrder;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Card(
+      child: ListTile(
+        onTap: () => Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => WorkOrderDetailScreen(workOrderId: workOrder.id),
+          ),
+        ),
+        leading: CircleAvatar(
+          backgroundColor: _priorityBg(workOrder.priority, cs),
+          child: Icon(
+            Icons.build_outlined,
+            color: _priorityFg(workOrder.priority, cs),
+            size: 18,
+          ),
+        ),
+        title: Text(
+          workOrder.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        subtitle: Text(
+          [
+            if (workOrder.propertyName != null) workOrder.propertyName!,
+            workOrder.status,
+            workOrder.priority,
+          ].join(' / '),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        trailing: const Icon(Icons.chevron_right),
+      ),
+    );
+  }
+
+  Color _priorityBg(String priority, ColorScheme cs) {
+    switch (priority.toLowerCase()) {
+      case 'emergency':
+      case 'high':
+        return cs.errorContainer;
+      case 'normal':
+        return cs.secondaryContainer;
+      default:
+        return cs.surfaceContainerHighest;
+    }
+  }
+
+  Color _priorityFg(String priority, ColorScheme cs) {
+    switch (priority.toLowerCase()) {
+      case 'emergency':
+      case 'high':
+        return cs.onErrorContainer;
+      case 'normal':
+        return cs.onSecondaryContainer;
+      default:
+        return cs.onSurfaceVariant;
+    }
+  }
+}
+
+class _LoadingCard extends StatelessWidget {
+  const _LoadingCard({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 12),
+            Text(label),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyInlineCard extends StatelessWidget {
+  const _EmptyInlineCard({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Icon(icon, color: cs.onSurfaceVariant, size: 20),
+            const SizedBox(width: 12),
+            Expanded(child: Text(text)),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -375,11 +1168,7 @@ class _BriefingContent extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    Icons.auto_awesome,
-                    color: cs.primary,
-                    size: 18,
-                  ),
+                  Icon(Icons.auto_awesome, color: cs.primary, size: 18),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
@@ -418,14 +1207,18 @@ class _AllClearCard extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         child: Row(
           children: [
-            Icon(Icons.check_circle_outline, color: Colors.green.shade600, size: 22),
+            Icon(
+              Icons.check_circle_outline,
+              color: Colors.green.shade600,
+              size: 22,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
                 'All clear — nothing urgent today.',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: cs.onSurface,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.copyWith(color: cs.onSurface),
               ),
             ),
           ],
@@ -500,9 +1293,9 @@ class _BulletRow extends StatelessWidget {
 
     return Card(
       child: InkWell(
-        onTap: () => Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(builder: destination),
-        ),
+        onTap: () => Navigator.of(
+          context,
+        ).push<void>(MaterialPageRoute<void>(builder: destination)),
         borderRadius: BorderRadius.circular(12),
         child: content,
       ),
@@ -537,14 +1330,12 @@ class _BulletRow extends StatelessWidget {
   }
 
   (IconData, Color, Color) _severityStyle(
-      BulletSeverity severity, ColorScheme cs) {
+    BulletSeverity severity,
+    ColorScheme cs,
+  ) {
     switch (severity) {
       case BulletSeverity.critical:
-        return (
-          Icons.warning_rounded,
-          cs.error,
-          cs.errorContainer,
-        );
+        return (Icons.warning_rounded, cs.error, cs.errorContainer);
       case BulletSeverity.warning:
         return (
           Icons.info_outline,
@@ -552,11 +1343,7 @@ class _BulletRow extends StatelessWidget {
           Colors.amber.shade100,
         );
       case BulletSeverity.info:
-        return (
-          Icons.info_outline,
-          cs.primary,
-          cs.primaryContainer,
-        );
+        return (Icons.info_outline, cs.primary, cs.primaryContainer);
     }
   }
 }
@@ -599,11 +1386,7 @@ class _BriefingError extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _TabItem {
-  const _TabItem({
-    required this.label,
-    required this.icon,
-    this.activeIcon,
-  });
+  const _TabItem({required this.label, required this.icon, this.activeIcon});
 
   final String label;
   final IconData icon;

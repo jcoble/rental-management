@@ -1,7 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -20,20 +20,20 @@ public sealed class RentChargeService : IRentChargeService
 
     private readonly RentalCommandDbContext _db;
     private readonly IMessagePublisher _publisher;
-    private readonly NotificationsConfig _cfg;
+    private readonly INotificationSettingsService _settings;
     private readonly TimeZoneInfo _businessTimeZone;
     private readonly ILogger<RentChargeService> _logger;
 
     public RentChargeService(
         RentalCommandDbContext db,
         IMessagePublisher publisher,
-        IOptions<NotificationsConfig> options,
+        INotificationSettingsService settings,
         IConfiguration configuration,
         ILogger<RentChargeService> logger)
     {
         _db = db;
         _publisher = publisher;
-        _cfg = options.Value;
+        _settings = settings;
         _logger = logger;
 
         // The landlord's business day rolls over in their LOCAL zone, not UTC. Near month-end an
@@ -48,7 +48,8 @@ public sealed class RentChargeService : IRentChargeService
     /// <inheritdoc/>
     public async Task<int> GenerateAsync(CancellationToken ct = default)
     {
-        if (!_cfg.EnableRentCharges)
+        var cfg = await _settings.GetRuntimeAsync(ct);
+        if (!cfg.EnableRentCharges)
         {
             _logger.LogDebug("rent charges disabled");
             return 0;
@@ -80,7 +81,7 @@ public sealed class RentChargeService : IRentChargeService
             var dueDate = new DateTime(today.Year, today.Month, dueDay, 0, 0, 0, DateTimeKind.Utc);
 
             // Only act within the lead window: [dueDate - leadDays … dueDate].
-            if (today < dueDate.AddDays(-_cfg.RentChargeLeadDays) || today > dueDate)
+            if (today < dueDate.AddDays(-cfg.RentChargeLeadDays) || today > dueDate)
                 continue;
 
             // Idempotency: skip if a rent payment for this period already exists for this lease.
@@ -119,7 +120,7 @@ public sealed class RentChargeService : IRentChargeService
 
                 // Optional tenant notification (email preferred; fall back to SMS). The outbox
                 // publisher shares this DbContext, so its insert enlists in the same transaction.
-                if (_cfg.NotifyTenants && lease.Tenant is { } tenant)
+                if (cfg.NotifyTenants && lease.Tenant is { } tenant)
                 {
                     if (!string.IsNullOrWhiteSpace(tenant.Email))
                     {
