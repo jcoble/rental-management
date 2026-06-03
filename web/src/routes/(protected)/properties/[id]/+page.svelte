@@ -67,7 +67,7 @@
 		if (!property) return;
 		propertyForm = {
 			name: property.name,
-			type: property.type,
+			type: property.type ?? 'MultiFamily',
 			addressLine1: property.addressLine1,
 			city: property.city,
 			state: property.state,

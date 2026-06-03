@@ -87,12 +87,18 @@ public class ScanController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<ScanDraftResponse>> Get(int id, CancellationToken ct)
     {
+        var portfolioId = GetPortfolioId();
         var draft = await _db.ScanDrafts
-            .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == GetPortfolioId(), ct);
+            .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
 
-        return draft is null
-            ? NotFound(new { error = "Scan draft not found" })
-            : Ok(ScanDraftResponse.FromEntity(draft));
+        if (draft is null)
+            return NotFound(new { error = "Scan draft not found" });
+
+        var linkedFile = await _db.StoredFiles
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f => f.PortfolioId == portfolioId && f.FilePath == draft.FilePath, ct);
+
+        return Ok(ScanDraftResponse.FromEntity(draft, linkedFile?.EntityType, linkedFile?.EntityId));
     }
 
     // -------------------------------------------------------------------------
@@ -121,7 +127,17 @@ public class ScanController : AuthenticatedPortfolioControllerBase
             .Take(take)
             .ToListAsync(ct);
 
-        return Ok(drafts.Select(ScanDraftResponse.FromEntity).ToList());
+        var filePaths = drafts.Select(d => d.FilePath).ToHashSet(StringComparer.Ordinal);
+        var linkedFiles = await _db.StoredFiles
+            .AsNoTracking()
+            .Where(f => f.PortfolioId == portfolioId && filePaths.Contains(f.FilePath))
+            .ToDictionaryAsync(f => f.FilePath, ct);
+
+        return Ok(drafts.Select(d =>
+        {
+            linkedFiles.TryGetValue(d.FilePath, out var linkedFile);
+            return ScanDraftResponse.FromEntity(d, linkedFile?.EntityType, linkedFile?.EntityId);
+        }).ToList());
     }
 
     // -------------------------------------------------------------------------

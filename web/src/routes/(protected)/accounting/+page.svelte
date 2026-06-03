@@ -7,7 +7,7 @@
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
-	import type { Payment, Expense, AccountingSummary } from '$lib/types';
+	import type { Payment, Expense, AccountingReports, AccountingSummary } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -65,13 +65,14 @@
 	}));
 	// Single accounting rollup: payment collection (collected/outstanding/overdue) + expense totals.
 	const accountingSummaryQuery = createQuery(() => ({ queryKey: ['accounting-summary', portfolioId], queryFn: () => accounting.summary() }));
+	const accountingReportsQuery = createQuery(() => ({ queryKey: ['accounting-reports', portfolioId], queryFn: () => accounting.reports() }));
 	const leasesQuery = createQuery(() => ({ queryKey: ['leases', portfolioId], queryFn: () => leases.list(portfolioId, { take: 200 }) }));
 	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }) }));
 	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
 	const workOrdersQuery = createQuery(() => ({ queryKey: ['work-orders', portfolioId], queryFn: () => workOrders.list(portfolioId, { take: 200 }) }));
 
 	// --- Payment form/dialog ---
-	const emptyPayment = { leaseId: '', amount: '', dueDate: '', type: 'Rent', status: 'Scheduled' };
+	const emptyPayment = { leaseId: '', amount: '', dueDate: '', paymentType: 'Rent', status: 'Scheduled' };
 	let showPaymentForm = $state(false);
 	let editingPaymentId = $state<number | null>(null);
 	let paymentForm = $state({ ...emptyPayment });
@@ -81,6 +82,7 @@
 	function invalidatePayments() {
 		queryClient.invalidateQueries({ queryKey: ['payments', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['accounting-reports', portfolioId] });
 	}
 
 	const savePaymentMutation = createMutation(() => ({
@@ -121,7 +123,7 @@
 	}
 	function openEditPayment(p: Payment) {
 		editingPaymentId = p.id;
-		paymentForm = { leaseId: String(p.leaseId), amount: String(p.amount), dueDate: p.dueDate?.slice(0, 10) ?? '', type: p.type, status: p.status };
+		paymentForm = { leaseId: String(p.leaseId), amount: String(p.amount), dueDate: p.dueDate?.slice(0, 10) ?? '', paymentType: p.paymentType, status: p.status };
 		paymentErrors = {};
 		showPaymentForm = true;
 	}
@@ -159,6 +161,7 @@
 	function invalidateExpenses() {
 		queryClient.invalidateQueries({ queryKey: ['expenses', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['accounting-reports', portfolioId] });
 	}
 
 	const saveExpenseMutation = createMutation(() => ({
@@ -292,6 +295,9 @@
 		})
 	);
 	const summary = $derived(accountingSummaryQuery.data as AccountingSummary | undefined);
+	const reports = $derived(accountingReportsQuery.data as AccountingReports | undefined);
+	const recentLedger = $derived((reports?.ledger ?? []).slice(0, 8));
+	const vendorReviewCount = $derived((reports?.vendors1099 ?? []).filter((v) => v.needsW9 || v.needs1099Review).length);
 
 	// Derived labels for Select triggers
 	const selectedLeaseLabel = $derived(
@@ -333,7 +339,7 @@
 			accessor: (p) => p.leaseNumber ?? '—',
 		},
 		{
-			key: 'type',
+			key: 'paymentType',
 			title: 'Type',
 			mobileRole: 'meta',
 		},
@@ -553,6 +559,97 @@
 		</Card.Root>
 	</div>
 
+	<div class="mb-6" data-testid="accounting-reports">
+		<div class="mb-3 flex items-center justify-between">
+			<div>
+				<h2 class="text-lg font-semibold">Reports</h2>
+				<p class="text-sm text-muted-foreground">Ledger, property profit and loss, Schedule E totals, and 1099 review.</p>
+			</div>
+			{#if reports?.generatedAt}
+				<p class="text-xs text-muted-foreground">Updated {new Date(reports.generatedAt).toLocaleString()}</p>
+			{/if}
+		</div>
+
+		<div class="grid gap-4 lg:grid-cols-4">
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<p class="text-xs text-muted-foreground">Net cash flow</p>
+					<p class="text-2xl font-bold font-mono tabular-nums">{money(reports?.netCashFlow || 0)}</p>
+					<p class="mt-1 text-xs text-muted-foreground">Income {money(reports?.totalIncome || 0)} / expenses {money(reports?.totalExpenses || 0)}</p>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<p class="text-xs text-muted-foreground">Ledger rows</p>
+					<p class="text-2xl font-bold font-mono tabular-nums">{reports?.ledger.length ?? 0}</p>
+					<p class="mt-1 text-xs text-muted-foreground">Recent payments and expenses</p>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<p class="text-xs text-muted-foreground">Properties</p>
+					<p class="text-2xl font-bold font-mono tabular-nums">{reports?.properties.length ?? 0}</p>
+					<p class="mt-1 text-xs text-muted-foreground">Property-level P&amp;L</p>
+				</Card.Content>
+			</Card.Root>
+			<Card.Root class="gap-0 py-0">
+				<Card.Content class="p-4">
+					<p class="text-xs text-muted-foreground">1099 review</p>
+					<p class="text-2xl font-bold font-mono tabular-nums">{vendorReviewCount}</p>
+					<p class="mt-1 text-xs text-muted-foreground">Vendors needing W-9 or review</p>
+				</Card.Content>
+			</Card.Root>
+		</div>
+
+		<div class="mt-4 grid gap-4 xl:grid-cols-3">
+			<div class="rounded-lg border bg-card p-4">
+				<h3 class="mb-3 text-sm font-semibold">Recent Ledger</h3>
+				<div class="space-y-2">
+					{#each recentLedger as row}
+						<a href={row.sourceHref} class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-muted/60">
+							<span class="min-w-0">
+								<span class="block truncate text-sm">{row.description}</span>
+								<span class="block text-xs text-muted-foreground">{row.type} · {row.counterparty ?? row.propertyName ?? 'General'}</span>
+							</span>
+							<span class="shrink-0 font-mono text-sm tabular-nums">{money(row.amount)}</span>
+						</a>
+					{:else}
+						<p class="text-sm text-muted-foreground">No ledger activity yet.</p>
+					{/each}
+				</div>
+			</div>
+			<div class="rounded-lg border bg-card p-4">
+				<h3 class="mb-3 text-sm font-semibold">Property P&amp;L</h3>
+				<div class="space-y-2">
+					{#each (reports?.properties ?? []).slice(0, 6) as property}
+						<a href="/properties/{property.propertyId}" class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-muted/60">
+							<span class="min-w-0">
+								<span class="block truncate text-sm">{property.propertyName}</span>
+								<span class="block text-xs text-muted-foreground">{money(property.income)} income / {money(property.expenses)} expenses</span>
+							</span>
+							<span class="shrink-0 font-mono text-sm tabular-nums">{money(property.net)}</span>
+						</a>
+					{:else}
+						<p class="text-sm text-muted-foreground">No property report data yet.</p>
+					{/each}
+				</div>
+			</div>
+			<div class="rounded-lg border bg-card p-4">
+				<h3 class="mb-3 text-sm font-semibold">Schedule E</h3>
+				<div class="space-y-2">
+					{#each (reports?.scheduleE ?? []).slice(0, 8) as line}
+						<div class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5">
+							<span class="truncate text-sm">{line.categoryName}</span>
+							<span class="shrink-0 font-mono text-sm tabular-nums">{money(line.total)}</span>
+						</div>
+					{:else}
+						<p class="text-sm text-muted-foreground">No Schedule E totals yet.</p>
+					{/each}
+				</div>
+			</div>
+		</div>
+	</div>
+
 	<div class="space-y-6">
 		<!-- Payments DataGrid -->
 		<div>
@@ -670,9 +767,9 @@
 				</div>
 			</div>
 			<div class="grid grid-cols-2 gap-2">
-				<Select.Root type="single" bind:value={paymentForm.type}>
+				<Select.Root type="single" bind:value={paymentForm.paymentType}>
 					<Select.Trigger class="w-full" data-testid="payment-type-input">
-						{paymentForm.type || 'Select type'}
+						{paymentForm.paymentType || 'Select type'}
 					</Select.Trigger>
 					<Select.Content>
 						{#each PAYMENT_TYPES as t}
@@ -892,7 +989,7 @@
 <ConfirmDialog
 	open={paymentDeleteTarget !== null}
 	title="Delete payment"
-	message={paymentDeleteTarget ? `Delete this ${money(paymentDeleteTarget.amount)} ${paymentDeleteTarget.type} charge?` : ''}
+	message={paymentDeleteTarget ? `Delete this ${money(paymentDeleteTarget.amount)} ${paymentDeleteTarget.paymentType} charge?` : ''}
 	busy={deletePaymentMutation.isPending}
 	testid="payment-delete"
 	onconfirm={() => paymentDeleteTarget && deletePaymentMutation.mutate(paymentDeleteTarget.id)}

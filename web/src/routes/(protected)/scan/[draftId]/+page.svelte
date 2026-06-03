@@ -302,7 +302,13 @@
 
 	// Success state — what was just created, so the landlord keeps context
 	// instead of being dumped onto /accounting.
-	let confirmedRecord = $state<{ type: 'Expense' | 'Payment'; amount: number | null } | null>(null);
+	let confirmedRecord = $state<{ type: 'Expense' | 'Payment'; id: number | null; amount: number | null } | null>(null);
+	const linkedRecordHref = $derived((() => {
+		const type = confirmedRecord?.type ?? data?.createdEntityType;
+		const id = confirmedRecord?.id ?? data?.createdEntityId;
+		if (!type || !id) return '/accounting';
+		return type === 'Payment' ? `/accounting/payments/${id}` : `/accounting/expenses/${id}`;
+	})());
 
 	function formatUsd(val: number | null): string {
 		if (val == null) return '';
@@ -315,12 +321,16 @@
 			const overrides = buildOverridesJson();
 			return scan.confirm(draftId, overrides);
 		},
-		onSuccess: () => {
+		onSuccess: (result) => {
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			queryClient.invalidateQueries({ queryKey: ['scan', draftId] });
 			// Capture the resolved amount before refetch can mutate editedFields.
+			const type = (result.entityType === 'Payment' || result.entityType === 'Expense')
+				? result.entityType
+				: isPayment ? 'Payment' : 'Expense';
 			confirmedRecord = {
-				type: isPayment ? 'Payment' : 'Expense',
+				type,
+				id: result.entityId ?? result.paymentId ?? result.expenseId ?? null,
 				amount: resolvedAmount
 			};
 			if (isPayment) {
@@ -463,7 +473,7 @@
 					</div>
 				</div>
 				<div class="flex shrink-0 gap-2">
-					<Button size="sm" href="/accounting" data-testid="scan-view-record">View in Accounting</Button>
+					<Button size="sm" href={linkedRecordHref} data-testid="scan-view-record">View/Edit Record</Button>
 					<Button size="sm" variant="outline" href="/scan">Scan another</Button>
 				</div>
 			</div>
@@ -805,7 +815,10 @@
 							<p class="text-center text-xs text-muted-foreground">Couldn't read this document — enter the amount manually, or reject it.</p>
 						{/if}
 						{#if data.status === 'Confirmed' && !confirmedRecord}
-							<p class="text-center text-xs text-green-600 dark:text-green-400">This scan has already been confirmed.</p>
+							<p class="text-center text-xs text-green-600 dark:text-green-400">
+								This scan has already been confirmed.
+								<a href={linkedRecordHref} class="underline underline-offset-2">View/edit the created record.</a>
+							</p>
 						{/if}
 						{#if data.status === 'Rejected'}
 							<p class="text-center text-xs text-muted-foreground">This scan has been rejected.</p>

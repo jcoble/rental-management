@@ -40,6 +40,15 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
         return Ok(summary);
     }
 
+    /// <summary>Ledger, property P&amp;L, Schedule E, and vendor 1099 review reports.</summary>
+    [HttpGet("reports")]
+    [ProducesResponseType(typeof(AccountingReportsResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AccountingReportsResponse>> Reports(CancellationToken ct)
+    {
+        var reports = await _service.GetReportsAsync(GetPortfolioId(), ct);
+        return Ok(reports);
+    }
+
     /// <summary>
     /// Year-end Schedule E report: per-property rental income and deductible expenses grouped by
     /// IRS Schedule E category. Defaults to the current UTC year when <paramref name="year"/> is omitted.

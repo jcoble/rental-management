@@ -12,7 +12,8 @@ public sealed record ScanDraftResponse(
     int Id, int PortfolioId, string TargetEntityType, string Status,
     string FileUrl, IReadOnlyList<ScanFieldDto> Fields,
     string? ModelId, int? TokensUsed, decimal? CostUsd,
-    DateTime CreatedAt, DateTime? ReviewedAt, DateTime? ConfirmedAt)
+    DateTime CreatedAt, DateTime? ReviewedAt, DateTime? ConfirmedAt,
+    string? CreatedEntityType = null, int? CreatedEntityId = null)
 {
     /// <summary>
     /// Builds a <see cref="ScanDraftResponse"/> from a <see cref="ScanDraft"/> entity,
@@ -20,7 +21,10 @@ public sealed record ScanDraftResponse(
     /// <c>{name:{value,confidence}}</c> into the <see cref="Fields"/> list.
     /// Returns an empty list when <paramref name="d"/>.ExtractedFields is null or Status is Pending.
     /// </summary>
-    public static ScanDraftResponse FromEntity(ScanDraft d)
+    public static ScanDraftResponse FromEntity(
+        ScanDraft d,
+        string? createdEntityType = null,
+        int? createdEntityId = null)
     {
         var fields = ParseFields(d.ExtractedFields);
         var fileUrl = $"/api/v1/scans/{d.Id}/file";
@@ -29,7 +33,8 @@ public sealed record ScanDraftResponse(
             d.Id, d.PortfolioId, d.TargetEntityType, d.Status,
             fileUrl, fields,
             d.ModelId, d.TokensUsed, d.CostUsd,
-            d.CreatedAt, d.ReviewedAt, d.ConfirmedAt);
+            d.CreatedAt, d.ReviewedAt, d.ConfirmedAt,
+            createdEntityType, createdEntityId);
     }
 
     private static IReadOnlyList<ScanFieldDto> ParseFields(string? json)

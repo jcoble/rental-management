@@ -94,7 +94,7 @@
 		editingId = p.id;
 		form = {
 			name: p.name,
-			type: p.type,
+			type: p.type ?? 'MultiFamily',
 			addressLine1: p.addressLine1,
 			city: p.city,
 			state: p.state,
