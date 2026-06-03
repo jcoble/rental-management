@@ -44,3 +44,20 @@ public class SetNotificationEmailRequest
     [MaxLength(200)]
     public string? Email { get; set; }
 }
+
+public class CreateBroadcastNotificationRequest
+{
+    [Required]
+    [MaxLength(160)]
+    public string Title { get; set; } = string.Empty;
+
+    [Required]
+    [MaxLength(2000)]
+    public string Message { get; set; } = string.Empty;
+
+    [MaxLength(40)]
+    public string Severity { get; set; } = "Info";
+
+    [MaxLength(500)]
+    public string? ActionUrl { get; set; }
+}

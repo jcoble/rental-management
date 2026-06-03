@@ -20,6 +20,9 @@ public class AccountingSummaryResponse
     /// <summary>Rent-collection rollup across the portfolio's payments.</summary>
     public PaymentRollup Payments { get; set; } = new();
 
+    /// <summary>Plain-English money snapshot suitable for dashboard/accounting cards.</summary>
+    public MoneySnapshotResponse Snapshot { get; set; } = new();
+
     /// <summary>Stable selector for frontend tests.</summary>
     public string TestId => $"accounting-summary-{PortfolioId}";
 }
@@ -52,6 +55,13 @@ public class PaymentRollup
     public int OverdueCount { get; set; }
 }
 
+public class MoneySnapshotResponse
+{
+    public string Title { get; set; } = string.Empty;
+    public string Summary { get; set; } = string.Empty;
+    public IReadOnlyList<string> Bullets { get; set; } = [];
+}
+
 /// <summary>
 /// Broader accounting workspace data: ledger entries, property-level P&amp;L, Schedule E totals, and
 /// vendor 1099 review status.
@@ -67,6 +77,52 @@ public class AccountingReportsResponse
     public IReadOnlyList<PropertyFinancialSummaryResponse> Properties { get; set; } = [];
     public IReadOnlyList<ScheduleECategoryTotal> ScheduleE { get; set; } = [];
     public IReadOnlyList<Vendor1099SummaryResponse> Vendors1099 { get; set; } = [];
+}
+
+public class AccountingTransactionsQuery : ListQuery
+{
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "kind")]
+    public string? Kind { get; set; }
+
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "status")]
+    public string? Status { get; set; }
+
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "category")]
+    public string? Category { get; set; }
+
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "propertyId")]
+    public int? PropertyId { get; set; }
+
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "from")]
+    public DateTime? From { get; set; }
+
+    [Microsoft.AspNetCore.Mvc.FromQuery(Name = "to")]
+    public DateTime? To { get; set; }
+}
+
+public class AccountingTransactionsResponse
+{
+    public IReadOnlyList<AccountingTransactionResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
+public class AccountingTransactionResponse
+{
+    public string Kind { get; set; } = string.Empty;
+    public int Id { get; set; }
+    public DateTime Date { get; set; }
+    public string Description { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    public string Status { get; set; } = string.Empty;
+    public decimal Amount { get; set; }
+    public int? PropertyId { get; set; }
+    public string? PropertyName { get; set; }
+    public string? Counterparty { get; set; }
+    public string? DetailHref { get; set; }
+    public bool HasReceipt { get; set; }
+    public bool ReceiptIsImage { get; set; }
 }
 
 public class LedgerTransactionResponse

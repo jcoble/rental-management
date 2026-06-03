@@ -1,8 +1,25 @@
-import type { AccountingReports, AccountingSummary, OwnerStatementReport, OwnerStatementSummary, ScheduleEReport } from '$lib/types';
+import type {
+	AccountingReports,
+	AccountingSummary,
+	AccountingTransactionsResponse,
+	OwnerStatementReport,
+	OwnerStatementSummary,
+	ScheduleEReport
+} from '$lib/types';
 import { api, refreshToken } from '../client';
 import { CLIENT_API_BASE_URL } from '$lib/config';
 import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
 import { browser } from '$app/environment';
+import { buildListQuery, type ListParams } from '../list-params';
+
+export type AccountingTransactionParams = ListParams & {
+	kind?: string;
+	status?: string;
+	category?: string;
+	propertyId?: number;
+	from?: string;
+	to?: string;
+};
 
 export const accounting = {
 	// GET /api/v1/accounting/summary — portfolio scope comes from the JWT claim.
@@ -10,6 +27,12 @@ export const accounting = {
 	// (collected / outstanding / overdue).
 	summary: () => api.get<AccountingSummary>('/accounting/summary'),
 	reports: () => api.get<AccountingReports>('/accounting/reports'),
+	transactions: (params?: AccountingTransactionParams) => {
+		const { kind, status, category, propertyId, from, to, ...list } = params ?? {};
+		return api.get<AccountingTransactionsResponse>(
+			`/accounting/transactions${buildListQuery(list, { kind, status, category, propertyId, from, to })}`
+		);
+	},
 
 	// GET /api/v1/accounting/schedule-e?year=YYYY
 	scheduleE: (year: number) => api.get<ScheduleEReport>(`/accounting/schedule-e?year=${year}`),

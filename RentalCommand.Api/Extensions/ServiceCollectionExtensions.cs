@@ -2,6 +2,7 @@ using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Voice;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Api.Extensions;
@@ -16,6 +17,9 @@ public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddDomainServices(this IServiceCollection services)
     {
+        services.AddOptions<PlaidOptions>()
+            .BindConfiguration(PlaidOptions.SectionName);
+
         // --- controllers-inventory sub-unit ---
         services.AddScoped<IPortfolioService, PortfolioService>();
         services.AddScoped<IPropertyService, PropertyService>();
@@ -26,6 +30,7 @@ public static class ServiceCollectionExtensions
         // --- controllers-leasing-money sub-unit ---
         services.AddScoped<ITenantService, TenantService>();
         services.AddScoped<ILeaseService, LeaseService>();
+        services.AddScoped<ILeaseQaService, LeaseQaService>();
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IExpenseService, ExpenseService>();
         services.AddScoped<IAccountingService, AccountingService>();
@@ -33,6 +38,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOwnerStatementService, OwnerStatementService>();
         services.AddScoped<IOwnerStatementEmailService, OwnerStatementEmailService>();
         services.AddScoped<ISecurityDepositService, SecurityDepositService>();
+        services.AddScoped<IBankingService, BankingService>();
+        services.AddHttpClient<IPlaidBankingProvider, PlaidBankingProvider>();
 
         // --- controllers-ops-misc sub-unit ---
         services.AddScoped<IWorkOrderService, WorkOrderService>();
@@ -43,6 +50,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IConversationService, ConversationService>();
         services.AddScoped<INotificationService, NotificationService>();
         services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
+        services.AddScoped<INoticeDraftService, NoticeDraftService>();
+        services.AddScoped<ISmsInboundRentConfirmationService, SmsInboundRentConfirmationService>();
 
         // Aggregated read-only KPI rollup for the web dashboard.
         services.AddScoped<IDashboardService, DashboardService>();

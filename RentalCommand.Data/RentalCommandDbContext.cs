@@ -34,6 +34,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<ConversationMessage> ConversationMessages => Set<ConversationMessage>();
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<NotificationSettings> NotificationSettings => Set<NotificationSettings>();
+    public DbSet<BankConnection> BankConnections => Set<BankConnection>();
+    public DbSet<BankTransaction> BankTransactions => Set<BankTransaction>();
+    public DbSet<NoticeDraft> NoticeDrafts => Set<NoticeDraft>();
 
     // Auth + audit + infrastructure entities (Task 3)
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
@@ -197,6 +200,104 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.SignalWireFromNumberCipherText).HasMaxLength(4000);
             entity.Property(e => e.DailyBriefingSmsRecipientsCipherText).HasMaxLength(4000);
             entity.Property(e => e.DailyBriefingEmailRecipientsCipherText).HasMaxLength(4000);
+            entity.Property(e => e.EnableLeaseExpiryReminders).HasDefaultValue(true);
+            entity.Property(e => e.RentChargeLeadDays).HasDefaultValue(5);
+            entity.Property(e => e.LateFeeGraceDays).HasDefaultValue(5);
+            entity.Property(e => e.LeaseExpiryReminderDays).HasDefaultValue(60);
+        });
+
+        modelBuilder.Entity<BankConnection>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Provider).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.InstitutionName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.AccountName).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.AccountMask).HasMaxLength(20);
+            entity.Property(e => e.AccountType).HasMaxLength(80);
+            entity.Property(e => e.AccountSubtype).HasMaxLength(80);
+            entity.Property(e => e.ExternalItemIdCipherText).HasMaxLength(4000);
+            entity.Property(e => e.ExternalAccountIdCipherText).HasMaxLength(4000);
+            entity.Property(e => e.ExternalAccessTokenCipherText).HasMaxLength(4000);
+            entity.Property(e => e.SyncCursorCipherText).HasMaxLength(4000);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(40);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.Status);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<BankTransaction>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ProviderTransactionId).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Description).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.MerchantName).HasMaxLength(200);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.IsoCurrencyCode).IsRequired().HasMaxLength(8);
+            entity.Property(e => e.Category).HasMaxLength(200);
+            entity.Property(e => e.MatchStatus).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.MatchConfidence).HasPrecision(5, 2);
+            entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.RawData).HasColumnType("jsonb");
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.BankConnectionId);
+            entity.HasIndex(e => e.PostedAt);
+            entity.HasIndex(e => e.MatchStatus);
+            entity.HasIndex(e => new { e.BankConnectionId, e.ProviderTransactionId }).IsUnique();
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.BankConnection)
+                .WithMany(c => c.Transactions)
+                .HasForeignKey(e => e.BankConnectionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.MatchedPayment)
+                .WithMany()
+                .HasForeignKey(e => e.MatchedPaymentId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.MatchedExpense)
+                .WithMany()
+                .HasForeignKey(e => e.MatchedExpenseId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<NoticeDraft>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.NoticeType).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Body).IsRequired().HasMaxLength(4000);
+            entity.Property(e => e.Reason).IsRequired().HasMaxLength(1000);
+            entity.Property(e => e.ApprovedChannels).HasMaxLength(100);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.LeaseId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => new { e.PortfolioId, e.LeaseId, e.NoticeType, e.Status });
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Lease)
+                .WithMany()
+                .HasForeignKey(e => e.LeaseId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Conversation)
+                .WithMany()
+                .HasForeignKey(e => e.ConversationId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<OutboxMessage>(entity =>

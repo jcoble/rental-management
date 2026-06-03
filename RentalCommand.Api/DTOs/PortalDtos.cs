@@ -1,5 +1,8 @@
 namespace RentalCommand.Api.DTOs;
 
+using System.ComponentModel.DataAnnotations;
+using RentalCommand.Core.Enums;
+
 /// <summary>
 /// Tenant-facing balance summary derived from the signed-in tenant's payment records. Outstanding is
 /// everything still owed (scheduled/partial/late, not yet paid or waived); overdue is the subset whose
@@ -39,4 +42,20 @@ public class PortalPaymentResponse
 
     /// <summary>Stable selector for frontend tests, e.g. <c>portal-payment-1</c>.</summary>
     public string TestId => $"portal-payment-{Id}";
+}
+
+public class CreateTenantWorkOrderRequest
+{
+    [Required]
+    [MaxLength(200)]
+    public string Title { get; set; } = string.Empty;
+
+    [Required]
+    [MaxLength(4000)]
+    public string Description { get; set; } = string.Empty;
+
+    [MaxLength(120)]
+    public string Category { get; set; } = "Resident Request";
+
+    public WorkOrderPriority Priority { get; set; } = WorkOrderPriority.Normal;
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/auth/auth_controller.dart';
 import '../../core/models/models.dart';
 import '../tenants/tenants_repository.dart';
 import 'message_models.dart';
@@ -11,8 +12,19 @@ import 'messages_repository.dart';
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _months = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  '',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 /// Relative-ish timestamp for the thread list: "9:30 AM" today, "Mon" this
@@ -25,7 +37,9 @@ String _fmtRelative(DateTime d) {
   final diffDays = today.difference(that).inDays;
 
   if (diffDays == 0) {
-    final h = local.hour > 12 ? local.hour - 12 : (local.hour == 0 ? 12 : local.hour);
+    final h = local.hour > 12
+        ? local.hour - 12
+        : (local.hour == 0 ? 12 : local.hour);
     final min = local.minute.toString().padLeft(2, '0');
     final ampm = local.hour >= 12 ? 'PM' : 'AM';
     return '$h:$min $ampm';
@@ -60,9 +74,7 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(
-      () => ref.read(conversationsProvider.notifier).load(),
-    );
+    Future.microtask(() => ref.read(conversationsProvider.notifier).load());
   }
 
   Future<void> _refresh() => ref.read(conversationsProvider.notifier).refresh();
@@ -106,18 +118,20 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
   @override
   Widget build(BuildContext context) {
     final convosAsync = ref.watch(conversationsProvider);
+    final auth = ref.watch(authControllerProvider);
+    final tenantMode = auth is AuthStateAuthenticated && auth.user.isTenant;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Messages'),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _startNewConversation(context),
-        tooltip: 'New conversation',
-        child: const Icon(Icons.edit_outlined),
-      ),
+      appBar: AppBar(title: const Text('Messages')),
+      floatingActionButton: tenantMode
+          ? null
+          : FloatingActionButton(
+              onPressed: () => _startNewConversation(context),
+              tooltip: 'New conversation',
+              child: const Icon(Icons.edit_outlined),
+            ),
       body: RefreshIndicator(
         onRefresh: _refresh,
         child: convosAsync.when(
@@ -212,8 +226,9 @@ class _ConversationTile extends StatelessWidget {
                           child: Text(
                             conversation.tenantName,
                             style: theme.textTheme.titleSmall?.copyWith(
-                              fontWeight:
-                                  unread ? FontWeight.w700 : FontWeight.w600,
+                              fontWeight: unread
+                                  ? FontWeight.w700
+                                  : FontWeight.w600,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -226,8 +241,9 @@ class _ConversationTile extends StatelessWidget {
                             color: unread
                                 ? colorScheme.primary
                                 : colorScheme.onSurfaceVariant,
-                            fontWeight:
-                                unread ? FontWeight.w700 : FontWeight.w400,
+                            fontWeight: unread
+                                ? FontWeight.w700
+                                : FontWeight.w400,
                           ),
                         ),
                       ],
@@ -237,8 +253,7 @@ class _ConversationTile extends StatelessWidget {
                       conversation.subject,
                       style: theme.textTheme.bodyMedium?.copyWith(
                         color: colorScheme.onSurface,
-                        fontWeight:
-                            unread ? FontWeight.w600 : FontWeight.w500,
+                        fontWeight: unread ? FontWeight.w600 : FontWeight.w500,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -254,8 +269,9 @@ class _ConversationTile extends StatelessWidget {
                               color: unread
                                   ? colorScheme.onSurface
                                   : colorScheme.onSurfaceVariant,
-                              fontWeight:
-                                  unread ? FontWeight.w600 : FontWeight.w400,
+                              fontWeight: unread
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -337,8 +353,8 @@ class _EmptyBody extends StatelessWidget {
                 Text(
                   'No conversations yet',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
-                      ),
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -377,10 +393,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: colorScheme.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
@@ -432,11 +445,7 @@ class _ComposeConversationSheetState
   }
 
   List<String> _selectedChannels() {
-    return [
-      if (_portal) 'Portal',
-      if (_email) 'Email',
-      if (_sms) 'Sms',
-    ];
+    return [if (_portal) 'Portal', if (_email) 'Email', if (_sms) 'Sms'];
   }
 
   Future<void> _submit() async {
@@ -457,7 +466,9 @@ class _ComposeConversationSheetState
     });
 
     try {
-      final convo = await ref.read(messagesRepositoryProvider).startConversation(
+      final convo = await ref
+          .read(messagesRepositoryProvider)
+          .startConversation(
             tenantId: _selectedTenantId!,
             subject: _subjectCtrl.text.trim(),
             body: _bodyCtrl.text.trim(),
@@ -493,8 +504,9 @@ class _ComposeConversationSheetState
                   Expanded(
                     child: Text(
                       'New Conversation',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   IconButton(
@@ -533,8 +545,7 @@ class _ComposeConversationSheetState
                       )
                       .toList(),
                   onChanged: (v) => setState(() => _selectedTenantId = v),
-                  validator: (v) =>
-                      v == null ? 'Please choose a tenant' : null,
+                  validator: (v) => v == null ? 'Please choose a tenant' : null,
                 ),
               ),
               const SizedBox(height: 12),
@@ -588,7 +599,9 @@ class _ComposeConversationSheetState
                 const SizedBox(height: 12),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 10),
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                   decoration: BoxDecoration(
                     color: colorScheme.errorContainer,
                     borderRadius: BorderRadius.circular(8),
@@ -596,7 +609,9 @@ class _ComposeConversationSheetState
                   child: Text(
                     _error!,
                     style: TextStyle(
-                        color: colorScheme.onErrorContainer, fontSize: 13),
+                      color: colorScheme.onErrorContainer,
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ],

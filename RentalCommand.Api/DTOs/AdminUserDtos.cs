@@ -41,6 +41,9 @@ public class CreateTeamMemberRequest
     [Required]
     public UserRole Role { get; set; } = UserRole.Manager;
 
+    /// <summary>Required when creating a tenant portal user; becomes the JWT tenantId claim.</summary>
+    public int? TenantId { get; set; }
+
     /// <summary>
     /// Optional. If omitted, a strong temporary password is generated and returned once in the response.
     /// </summary>

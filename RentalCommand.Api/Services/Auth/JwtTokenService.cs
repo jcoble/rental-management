@@ -1,4 +1,5 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Collections.Concurrent;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -43,6 +44,10 @@ public interface IJwtTokenService
 /// </summary>
 public class JwtTokenService : IJwtTokenService
 {
+    private const int RefreshReplayCacheSeconds = 10;
+    private static readonly ConcurrentDictionary<string, Lazy<Task<TokenResult?>>> InFlightRefreshes = new();
+    private static readonly ConcurrentDictionary<string, CachedRefreshResult> RecentRefreshes = new();
+
     private readonly JwtSettings _settings;
     private readonly RentalCommandDbContext _dbContext;
     private readonly UserManager<ApplicationUser> _userManager;
@@ -169,6 +174,40 @@ public class JwtTokenService : IJwtTokenService
     {
         var tokenHash = HashToken(refreshToken);
 
+        if (RecentRefreshes.TryGetValue(tokenHash, out var cached))
+        {
+            if (cached.ExpiresAtUtc > DateTime.UtcNow)
+            {
+                return cached.Result;
+            }
+            RecentRefreshes.TryRemove(tokenHash, out _);
+        }
+
+        var refreshWork = InFlightRefreshes.GetOrAdd(
+            tokenHash,
+            _ => new Lazy<Task<TokenResult?>>(
+                () => RefreshTokenCoreAsync(tokenHash, ipAddress, userAgent),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+
+        try
+        {
+            var result = await refreshWork.Value;
+            if (result != null)
+            {
+                RecentRefreshes[tokenHash] = new CachedRefreshResult(
+                    result,
+                    DateTime.UtcNow.AddSeconds(RefreshReplayCacheSeconds));
+            }
+            return result;
+        }
+        finally
+        {
+            InFlightRefreshes.TryRemove(tokenHash, out _);
+        }
+    }
+
+    private async Task<TokenResult?> RefreshTokenCoreAsync(string tokenHash, string? ipAddress, string? userAgent)
+    {
         var storedToken = await _dbContext.RefreshTokens
             .FirstOrDefaultAsync(rt => rt.TokenHash == tokenHash);
 
@@ -178,28 +217,14 @@ public class JwtTokenService : IJwtTokenService
             return null;
         }
 
-        // Single-use + revocation: a reused or revoked token signals a possible token theft/replay.
-        // Invalidate the entire token family (all active refresh tokens for the user) and force re-auth.
+        // Single-use rotation: a reused or revoked token is rejected. A very recent concurrent
+        // replay is served from RecentRefreshes before this point, which avoids benign browser
+        // refresh races from invalidating the newly issued token pair.
         if (storedToken.IsUsed || storedToken.IsRevoked)
         {
             _logger.LogWarning(
-                "Refresh token reuse/revoked detected for user {UserId}; revoking all active refresh tokens for the user (token-family invalidation).",
+                "Refresh token reuse/revoked detected for user {UserId}; rejecting presented refresh token.",
                 storedToken.UserId);
-
-            var activeTokens = await _dbContext.RefreshTokens
-                .Where(rt => rt.UserId == storedToken.UserId && !rt.IsRevoked)
-                .ToListAsync();
-
-            foreach (var activeToken in activeTokens)
-            {
-                activeToken.IsRevoked = true;
-            }
-
-            if (activeTokens.Count > 0)
-            {
-                await _dbContext.SaveChangesAsync();
-            }
-
             return null;
         }
 
@@ -227,6 +252,8 @@ public class JwtTokenService : IJwtTokenService
 
         return await GenerateTokensAsync(user, roles, ipAddress, userAgent);
     }
+
+    private sealed record CachedRefreshResult(TokenResult Result, DateTime ExpiresAtUtc);
 
     public async Task<bool> RevokeRefreshTokenAsync(string refreshToken)
     {

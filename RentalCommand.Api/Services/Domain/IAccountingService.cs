@@ -11,4 +11,8 @@ public interface IAccountingService
 {
     Task<AccountingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default);
     Task<AccountingReportsResponse> GetReportsAsync(int portfolioId, CancellationToken ct = default);
+    Task<AccountingTransactionsResponse> GetTransactionsAsync(
+        int portfolioId,
+        AccountingTransactionsQuery query,
+        CancellationToken ct = default);
 }

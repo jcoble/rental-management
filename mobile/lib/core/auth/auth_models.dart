@@ -34,15 +34,20 @@ class AuthUser {
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'email': email,
-        'displayName': displayName,
-        'portfolioId': portfolioId,
-        'ownerEntityId': ownerEntityId,
-        'tenantId': tenantId,
-        'roles': roles,
-        'emailVerified': emailVerified,
-      };
+    'id': id,
+    'email': email,
+    'displayName': displayName,
+    'portfolioId': portfolioId,
+    'ownerEntityId': ownerEntityId,
+    'tenantId': tenantId,
+    'roles': roles,
+    'emailVerified': emailVerified,
+  };
+
+  bool get isStaff =>
+      roles.any((r) => r == 'Admin' || r == 'Manager' || r == 'Agent');
+
+  bool get isTenant => roles.contains('Tenant') && !isStaff;
 }
 
 /// Mirrors `LoginResponse` from `RentalCommand.Api/DTOs/AuthDTOs.cs`.
@@ -67,8 +72,9 @@ class LoginResponse {
   factory LoginResponse.fromJson(Map<String, dynamic> json) {
     return LoginResponse(
       accessToken: json['accessToken'] as String,
-      accessTokenExpiration:
-          DateTime.parse(json['accessTokenExpiration'] as String),
+      accessTokenExpiration: DateTime.parse(
+        json['accessTokenExpiration'] as String,
+      ),
       user: AuthUser.fromJson(json['user'] as Map<String, dynamic>),
     );
   }

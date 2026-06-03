@@ -16,6 +16,7 @@ class AccountingSummary {
     required this.overdueCount,
     required this.totalExpenses,
     required this.expensesByCategory,
+    required this.snapshot,
   });
 
   final int portfolioId;
@@ -25,6 +26,7 @@ class AccountingSummary {
   final int overdueCount;
   final double totalExpenses;
   final List<ExpenseCategoryTotal> expensesByCategory;
+  final MoneySnapshot snapshot;
 
   factory AccountingSummary.fromJson(Map<String, dynamic> json) {
     final payments = json['payments'] as Map<String, dynamic>? ?? {};
@@ -40,6 +42,31 @@ class AccountingSummary {
       overdueCount: (payments['overdueCount'] as num?)?.toInt() ?? 0,
       totalExpenses: (json['totalExpenses'] as num?)?.toDouble() ?? 0,
       expensesByCategory: cats,
+      snapshot: MoneySnapshot.fromJson(
+        json['snapshot'] as Map<String, dynamic>? ?? const {},
+      ),
+    );
+  }
+}
+
+class MoneySnapshot {
+  const MoneySnapshot({
+    required this.title,
+    required this.summary,
+    required this.bullets,
+  });
+
+  final String title;
+  final String summary;
+  final List<String> bullets;
+
+  factory MoneySnapshot.fromJson(Map<String, dynamic> json) {
+    return MoneySnapshot(
+      title: json['title'] as String? ?? '',
+      summary: json['summary'] as String? ?? '',
+      bullets: (json['bullets'] as List<dynamic>? ?? [])
+          .whereType<String>()
+          .toList(),
     );
   }
 }

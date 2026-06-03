@@ -1,244 +1,316 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { portal } from '$lib/api/endpoints/portal';
-	import { payments as paymentsApi } from '$lib/api/endpoints/payments';
-	import { ApiError } from '$lib/api/client';
-	import { getCurrentUser, hasAnyRole } from '$lib/stores/auth.svelte';
-	import { isStaff } from '$lib/types/user';
-	import { showSuccess, showError, showWarning } from '$lib/utils/toast';
+	import { notifications } from '$lib/api/endpoints/notifications';
+	import { getCurrentUser } from '$lib/stores/auth.svelte';
+	import { portalActionUrl } from '$lib/utils/portalLinks';
+	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import * as Card from '$lib/components/ui/card';
-	import { MessageSquare, ChevronRight } from '@lucide/svelte';
-	import type { Payment } from '$lib/types';
-
-	/** Payment IDs currently being submitted to create-intent. */
-	let payingIds = $state<Set<number>>(new Set());
-
-	/** Per-payment inline notice shown when Stripe is not configured (503). */
-	let unavailableIds = $state<Set<number>>(new Set());
-
-	async function payNow(payment: Payment) {
-		payingIds = new Set([...payingIds, payment.id]);
-		unavailableIds = new Set([...unavailableIds].filter((id) => id !== payment.id));
-
-		try {
-			await paymentsApi.createIntent(payment.id);
-			// Stripe Elements is not wired yet — acknowledge the round-trip and stub.
-			showSuccess('Secure card payment is coming soon.');
-		} catch (err) {
-			if (err instanceof ApiError && err.status === 503) {
-				unavailableIds = new Set([...unavailableIds, payment.id]);
-				showWarning("Online payments aren't available yet — please pay by your usual method.");
-			} else {
-				showError(
-					err instanceof ApiError && err.message
-						? err.message
-						: 'Something went wrong. Please try again.'
-				);
-			}
-		} finally {
-			payingIds = new Set([...payingIds].filter((id) => id !== payment.id));
-		}
-	}
+	import {
+		BellRing,
+		CalendarClock,
+		CreditCard,
+		FileText,
+		MessageSquare,
+		Wrench,
+		AlertTriangle,
+		ClipboardList
+	} from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const currentUser = $derived(getCurrentUser());
-	const isStaffUser = $derived(isStaff(currentUser));
 
-	const overviewQuery = createQuery(() => ({
-		queryKey: ['portal-overview'],
-		enabled: !!currentUser && !isStaffUser,
-		queryFn: () => portal.overview(),
+	const leasesQuery = createQuery(() => ({
+		queryKey: ['portal-leases'],
+		enabled: !!currentUser,
+		queryFn: () => portal.leases()
 	}));
 
-	// Conversation summaries power the Messages card's unread badge. Newest first;
-	// the tenant's JWT scopes this to their own threads.
+	const balanceQuery = createQuery(() => ({
+		queryKey: ['portal-balance'],
+		enabled: !!currentUser,
+		queryFn: () => portal.balance()
+	}));
+
+	const paymentsQuery = createQuery(() => ({
+		queryKey: ['portal-payments'],
+		enabled: !!currentUser,
+		queryFn: () => portal.payments()
+	}));
+
+	const workOrdersQuery = createQuery(() => ({
+		queryKey: ['portal-work-orders'],
+		enabled: !!currentUser,
+		queryFn: () => portal.workOrders()
+	}));
+
 	const conversationsQuery = createQuery(() => ({
 		queryKey: ['portal-conversations'],
-		enabled: !!currentUser && !isStaffUser,
-		queryFn: () => portal.conversations.list(),
+		enabled: !!currentUser,
+		queryFn: () => portal.conversations.list()
 	}));
 
-	const unreadMessages = $derived(
-		(conversationsQuery.data ?? []).reduce((sum, c) => sum + (c.unreadCount || 0), 0)
+	const notificationsQuery = createQuery(() => ({
+		queryKey: ['notifications', 'tenant-dashboard'],
+		enabled: !!currentUser,
+		queryFn: () => notifications.list({ take: 10 })
+	}));
+
+	const unreadNotificationsQuery = createQuery(() => ({
+		queryKey: ['notifications-unread-count'],
+		enabled: !!currentUser,
+		queryFn: () => notifications.unreadCount()
+	}));
+
+	const leases = $derived((leasesQuery.data ?? []) as any[]);
+	const payments = $derived((paymentsQuery.data ?? []) as any[]);
+	const workOrders = $derived((workOrdersQuery.data ?? []) as any[]);
+	const conversations = $derived(conversationsQuery.data ?? []);
+	const notificationItems = $derived(notificationsQuery.data ?? []);
+	const balance = $derived((balanceQuery.data ?? {}) as any);
+
+	const unreadMessages = $derived(conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0));
+	const unreadNotifications = $derived(unreadNotificationsQuery.data?.count ?? 0);
+	const openWorkOrders = $derived(
+		workOrders.filter((w) => !['Completed', 'Cancelled', 'Archived'].includes(String(w.status)))
 	);
+	const overduePayments = $derived(
+		payments.filter((p) => {
+			const due = new Date(p.dueDate);
+			return !['Paid', 'Waived', 'Refunded'].includes(String(p.status)) && due < new Date();
+		})
+	);
+	const upcomingPayments = $derived(
+		payments
+			.filter((p) => !['Paid', 'Waived', 'Refunded'].includes(String(p.status)))
+			.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+	);
+	const nextPayment = $derived(upcomingPayments.find((p) => new Date(p.dueDate) >= new Date()) ?? null);
+	const nextRentDays = $derived(nextPayment ? daysUntil(nextPayment.dueDate) : null);
+	const activeLease = $derived(leases.find((l) => l.status === 'Active') ?? leases[0] ?? null);
 
-	let workOrderForm = $state({ title: '', description: '', category: 'Resident Request', priority: 'Normal' });
+	let workOrderForm = $state({
+		title: '',
+		description: '',
+		category: 'Resident Request',
+		priority: 'Normal'
+	});
 
-	const createTenantWorkOrderMutation = createMutation(() => ({
+	const createWorkOrderMutation = createMutation(() => ({
 		mutationFn: () => portal.createTenantWorkOrder(workOrderForm),
 		onSuccess: () => {
-			workOrderForm = { title: '', description: '', category: 'Resident Request', priority: 'Normal' };
-			queryClient.invalidateQueries({ queryKey: ['portal-overview'] });
+			workOrderForm = {
+				title: '',
+				description: '',
+				category: 'Resident Request',
+				priority: 'Normal'
+			};
+			queryClient.invalidateQueries({ queryKey: ['portal-work-orders'] });
+			showSuccess('Maintenance request submitted.');
 		},
+		onError: (err) => showError(apiErrorMessage(err))
 	}));
 
-	function submitTenantWorkOrder() {
-		if (!workOrderForm.title || !workOrderForm.description) return;
-		createTenantWorkOrderMutation.mutate();
+	function submitWorkOrder() {
+		if (!workOrderForm.title.trim() || !workOrderForm.description.trim()) return;
+		createWorkOrderMutation.mutate();
+	}
+
+	function money(value: number | string | null | undefined) {
+		const amount = Number(value ?? 0);
+		return amount.toLocaleString(undefined, { style: 'currency', currency: 'USD' });
+	}
+
+	function date(value: string | null | undefined) {
+		if (!value) return '-';
+		return new Date(value).toLocaleDateString();
+	}
+
+	function daysUntil(value: string) {
+		const start = new Date();
+		const end = new Date(value);
+		start.setHours(0, 0, 0, 0);
+		end.setHours(0, 0, 0, 0);
+		return Math.ceil((end.getTime() - start.getTime()) / 86_400_000);
 	}
 </script>
 
 <svelte:head>
-	<title>Portal - Rental Command</title>
+	<title>Tenant Dashboard - Rental Command</title>
 </svelte:head>
 
-<div class="min-h-full pb-16">
-	<h1 class="mb-1 text-2xl font-bold">Role Portal</h1>
-	<p class="mb-5 text-sm text-muted-foreground">Role-aware view for admin, manager, agent, owner, and tenant accounts.</p>
+<div class="h-full overflow-y-auto bg-background" data-testid="tenant-dashboard">
+	<div class="mx-auto max-w-6xl px-5 py-6 md:px-8">
+		<header class="mb-6">
+			<p class="text-sm text-muted-foreground">Tenant dashboard</p>
+			<h1 class="text-2xl font-semibold tracking-normal text-foreground">
+				{currentUser?.displayName || 'My home'}
+			</h1>
+		</header>
 
-	{#if overviewQuery.data}
-		{@const data = overviewQuery.data as any}
-		<Card.Root class="mb-5 gap-0 py-0">
-			<Card.Content class="p-4">
-				<p class="text-sm text-muted-foreground">Signed in as</p>
-				<p class="text-lg font-semibold">{data.user.displayName} <span class="text-sm font-normal text-muted-foreground">({data.role})</span></p>
-			</Card.Content>
-		</Card.Root>
-
-		{#if data.role === 'Tenant'}
-			<div class="mb-5 grid gap-4 lg:grid-cols-2">
-				<Card.Root class="gap-0 py-0">
-					<Card.Content class="p-4">
-						<h2 class="mb-2 font-semibold">My Lease & Balance</h2>
-						<p class="text-sm">Outstanding: ${data.ledger?.outstanding || 0}</p>
-						<div class="mt-2 space-y-2 text-sm">
-							{#each data.leases || [] as lease}
-								<div class="rounded border border-border bg-background px-3 py-2">{lease.leaseNumber} · {lease.property} Unit {lease.unit} · {lease.status}</div>
-							{/each}
-						</div>
-					</Card.Content>
-				</Card.Root>
-				<Card.Root class="gap-0 py-0">
-					<Card.Content class="p-4">
-						<h2 class="mb-2 font-semibold">Submit Maintenance Request</h2>
-						<div class="space-y-2">
-							<Input bind:value={workOrderForm.title} placeholder="Issue title" />
-							<textarea bind:value={workOrderForm.description} rows={3} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="Describe the issue"></textarea>
-							<div class="grid grid-cols-2 gap-2">
-								<Input bind:value={workOrderForm.category} />
-								<Select.Root type="single" bind:value={workOrderForm.priority}>
-									<Select.Trigger class="w-full">
-										{workOrderForm.priority || 'Select priority'}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="Low" label="Low">Low</Select.Item>
-										<Select.Item value="Normal" label="Normal">Normal</Select.Item>
-										<Select.Item value="High" label="High">High</Select.Item>
-										<Select.Item value="Emergency" label="Emergency">Emergency</Select.Item>
-									</Select.Content>
-								</Select.Root>
-							</div>
-							<Button onclick={submitTenantWorkOrder} disabled={createTenantWorkOrderMutation.isPending}>Submit Request</Button>
-						</div>
-					</Card.Content>
-				</Card.Root>
+		<section id="notifications" class="mb-5 rounded-lg border border-border bg-card p-4">
+			<div class="mb-3 flex items-center justify-between gap-3">
+				<div class="flex items-center gap-2">
+					<BellRing class="h-5 w-5 text-primary" />
+					<h2 class="font-semibold">Notifications</h2>
+				</div>
+				<span class="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+					{unreadNotifications} unread
+				</span>
 			</div>
-
-			<!-- Payments: show owed/scheduled rent with online Pay now buttons. -->
-			{#if (data.ledger?.upcomingPayments || []).length > 0}
-				<Card.Root class="mb-5 gap-0 py-0">
-					<Card.Content class="p-4">
-						<h2 class="mb-3 font-semibold">Upcoming & Owed Payments</h2>
-						<div class="space-y-3">
-							{#each data.ledger.upcomingPayments as payment (payment.id)}
-								<div class="flex items-center justify-between rounded border border-border bg-background px-3 py-2 text-sm">
-									<div>
-										<p class="font-medium">{payment.type} — ${payment.amount}</p>
-										<p class="text-xs text-muted-foreground">
-											Due {new Date(payment.dueDate).toLocaleDateString()} · {payment.status}
-											{#if payment.leaseNumber}· {payment.leaseNumber}{/if}
-										</p>
-										{#if unavailableIds.has(payment.id)}
-											<p class="mt-1 text-xs text-amber-600">
-												Online payments aren't available yet — please pay by your usual method.
-											</p>
-										{/if}
-									</div>
-									<Button
-										size="sm"
-										variant={unavailableIds.has(payment.id) ? 'outline' : 'default'}
-										disabled={payingIds.has(payment.id)}
-										onclick={() => payNow(payment)}
-									>
-										{payingIds.has(payment.id) ? 'Processing…' : 'Pay now'}
-									</Button>
-								</div>
-							{/each}
-						</div>
-					</Card.Content>
-				</Card.Root>
+			{#if notificationItems.length === 0}
+				<p class="text-sm text-muted-foreground">No notifications yet.</p>
+			{:else}
+				<div class="divide-y divide-border">
+					{#each notificationItems.slice(0, 3) as item}
+						<a href={portalActionUrl(item.actionUrl)} class="block py-3 first:pt-0 last:pb-0">
+							<p class="text-sm font-medium text-foreground">{item.title}</p>
+							<p class="mt-1 line-clamp-2 text-sm text-muted-foreground">{item.message}</p>
+						</a>
+					{/each}
+				</div>
 			{/if}
-		{/if}
+		</section>
 
-		{#if data.role === 'Owner'}
-			<div class="mb-5 grid gap-4 md:grid-cols-3">
-				<Card.Root class="gap-0 py-0"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Properties</p><p class="text-2xl font-bold">{data.portfolioSummary?.propertyCount || 0}</p></Card.Content></Card.Root>
-				<Card.Root class="gap-0 py-0"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Collected</p><p class="text-2xl font-bold">${data.portfolioSummary?.collected || 0}</p></Card.Content></Card.Root>
-				<Card.Root class="gap-0 py-0"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Net</p><p class="text-2xl font-bold">${data.portfolioSummary?.net || 0}</p></Card.Content></Card.Root>
+		<section class="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+			<a href="/portal/messages" class="rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/40">
+				<div class="mb-3 flex items-center gap-2 text-primary"><MessageSquare class="h-4 w-4" /><span class="text-sm font-medium">Messages</span></div>
+				<p class="text-3xl font-semibold">{unreadMessages}</p>
+				<p class="mt-1 text-sm text-muted-foreground">Unread from management</p>
+			</a>
+			<div class="rounded-lg border border-border bg-card p-4">
+				<div class="mb-3 flex items-center gap-2 text-amber-500"><AlertTriangle class="h-4 w-4" /><span class="text-sm font-medium">Overdue</span></div>
+				<p class="text-3xl font-semibold">{money(balance.overdue ?? 0)}</p>
+				<p class="mt-1 text-sm text-muted-foreground">{overduePayments.length} overdue item{overduePayments.length === 1 ? '' : 's'}</p>
 			</div>
-		{/if}
+			<div class="rounded-lg border border-border bg-card p-4">
+				<div class="mb-3 flex items-center gap-2 text-emerald-500"><CreditCard class="h-4 w-4" /><span class="text-sm font-medium">Next Rent</span></div>
+				<p class="text-3xl font-semibold">{nextRentDays === null ? '-' : nextRentDays}</p>
+				<p class="mt-1 text-sm text-muted-foreground">
+					{#if nextPayment}
+						day{nextRentDays === 1 ? '' : 's'} until {money(nextPayment.amount)} is due
+					{:else}
+						No future rent scheduled
+					{/if}
+				</p>
+			</div>
+			<a href="/portal/maintenance" class="rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/40">
+				<div class="mb-3 flex items-center gap-2 text-red-500"><Wrench class="h-4 w-4" /><span class="text-sm font-medium">Maintenance</span></div>
+				<p class="text-3xl font-semibold">{openWorkOrders.length}</p>
+				<p class="mt-1 text-sm text-muted-foreground">Open requests</p>
+			</a>
+		</section>
 
-		{#if data.role === 'Agent'}
-			<Card.Root class="mb-5 gap-0 py-0">
-				<Card.Content class="p-4">
-					<h2 class="mb-2 font-semibold">Agent Queue</h2>
-					<div class="grid gap-3 lg:grid-cols-2">
-						<div>
-							<p class="mb-2 text-sm font-medium">Appointments</p>
-							{#each data.assignments?.appointments || [] as appointment}
-								<div class="mb-2 rounded border border-border bg-background px-3 py-2 text-sm">{appointment.title} · {appointment.status}</div>
-							{/each}
-						</div>
-						<div>
-							<p class="mb-2 text-sm font-medium">Open Work Orders</p>
-							{#each data.assignments?.workOrders || [] as wo}
-								<div class="mb-2 rounded border border-border bg-background px-3 py-2 text-sm">{wo.title} · {wo.priority}</div>
-							{/each}
+		<div class="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+			<section id="payments" class="rounded-lg border border-border bg-card p-4">
+				<div class="mb-4 flex items-center gap-2">
+					<CreditCard class="h-5 w-5 text-primary" />
+					<h2 class="font-semibold">Payments</h2>
+				</div>
+				{#if upcomingPayments.length === 0}
+					<p class="text-sm text-muted-foreground">No outstanding payments.</p>
+				{:else}
+					<div class="space-y-2">
+						{#each upcomingPayments.slice(0, 5) as payment}
+							<div class="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+								<div>
+									<p class="text-sm font-medium">{payment.paymentType ?? payment.type} · {money(payment.amount)}</p>
+									<p class="text-xs text-muted-foreground">Due {date(payment.dueDate)} · {payment.status}</p>
+								</div>
+								<span class="text-xs text-muted-foreground">
+									{daysUntil(payment.dueDate) < 0 ? `${Math.abs(daysUntil(payment.dueDate))} days late` : `${daysUntil(payment.dueDate)} days`}
+								</span>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</section>
+
+			<section id="lease" class="rounded-lg border border-border bg-card p-4">
+				<div class="mb-4 flex items-center gap-2">
+					<FileText class="h-5 w-5 text-primary" />
+					<h2 class="font-semibold">Lease</h2>
+				</div>
+				{#if activeLease}
+					<div class="space-y-3 text-sm">
+						<p class="font-medium">{activeLease.leaseNumber}</p>
+						<p class="text-muted-foreground">{activeLease.propertyName ?? activeLease.property} {activeLease.unitNumber ? `Unit ${activeLease.unitNumber}` : ''}</p>
+						<div class="grid grid-cols-2 gap-3">
+							<div><p class="text-xs text-muted-foreground">Rent</p><p>{money(activeLease.monthlyRent)}</p></div>
+							<div><p class="text-xs text-muted-foreground">Ends</p><p>{date(activeLease.endDate)}</p></div>
 						</div>
 					</div>
-				</Card.Content>
-			</Card.Root>
-		{/if}
+				{:else}
+					<p class="text-sm text-muted-foreground">No lease is linked to this account.</p>
+				{/if}
+			</section>
 
-		{#if hasAnyRole('Admin', 'Manager')}
-			<div class="mb-5 grid gap-4 md:grid-cols-3">
-				<Card.Root class="gap-0 py-0"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Open Work Orders</p><p class="text-2xl font-bold">{data.operations?.openWorkOrders || 0}</p></Card.Content></Card.Root>
-				<Card.Root class="gap-0 py-0"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Overdue Balance</p><p class="text-2xl font-bold">${data.operations?.overdueBalance || 0}</p></Card.Content></Card.Root>
-				<Card.Root class="gap-0 py-0"><Card.Content class="p-4"><p class="text-xs text-muted-foreground">Portal Messages</p><p class="text-2xl font-bold">{data.operations?.pendingPortalMessages || 0}</p></Card.Content></Card.Root>
-			</div>
-		{/if}
-	{/if}
-
-	<!-- Messages: links to the threaded messenger with your management team. -->
-	<a href={isStaffUser ? '/messages' : '/portal/messages'} class="block" data-testid="portal-messages-link">
-		<Card.Root class="gap-0 py-0 transition-colors hover:bg-muted/50">
-			<Card.Content class="flex items-center gap-4 p-4">
-				<div class="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-					<MessageSquare class="h-5 w-5" />
-					{#if unreadMessages > 0}
-						<span
-							class="absolute -right-1 -top-1 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground"
-							data-testid="portal-messages-unread-badge"
-						>
-							{unreadMessages}
-						</span>
+			<section id="maintenance" class="rounded-lg border border-border bg-card p-4">
+				<div class="mb-4 flex items-center gap-2">
+					<Wrench class="h-5 w-5 text-primary" />
+					<h2 class="font-semibold">Maintenance Requests</h2>
+				</div>
+				<div class="mb-5 space-y-2">
+					{#if openWorkOrders.length === 0}
+						<p class="text-sm text-muted-foreground">No open requests.</p>
+					{:else}
+						{#each openWorkOrders.slice(0, 5) as order}
+							<div class="rounded-md border border-border px-3 py-2">
+								<p class="text-sm font-medium">{order.title}</p>
+								<p class="text-xs text-muted-foreground">{order.status} · {order.priority}</p>
+							</div>
+						{/each}
 					{/if}
 				</div>
-				<div class="min-w-0 flex-1">
-					<h2 class="font-semibold">Messages</h2>
-					<p class="text-sm text-muted-foreground">
-						{#if unreadMessages > 0}
-							You have {unreadMessages} unread {unreadMessages === 1 ? 'message' : 'messages'} from your management team.
-						{:else}
-							Chat with your management team.
-						{/if}
-					</p>
+				<form class="space-y-3" onsubmit={(e) => { e.preventDefault(); submitWorkOrder(); }}>
+					<Input bind:value={workOrderForm.title} placeholder="Issue title" />
+					<textarea bind:value={workOrderForm.description} rows={4} class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" placeholder="Describe the issue"></textarea>
+					<div class="grid gap-3 sm:grid-cols-2">
+						<Input bind:value={workOrderForm.category} placeholder="Category" />
+						<Select.Root type="single" bind:value={workOrderForm.priority}>
+							<Select.Trigger class="w-full">{workOrderForm.priority}</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="Low" label="Low">Low</Select.Item>
+								<Select.Item value="Normal" label="Normal">Normal</Select.Item>
+								<Select.Item value="High" label="High">High</Select.Item>
+								<Select.Item value="Emergency" label="Emergency">Emergency</Select.Item>
+							</Select.Content>
+						</Select.Root>
+					</div>
+					<Button type="submit" disabled={createWorkOrderMutation.isPending}>
+						{createWorkOrderMutation.isPending ? 'Submitting...' : 'Submit Request'}
+					</Button>
+				</form>
+			</section>
+
+			<section id="appointments" class="rounded-lg border border-border bg-card p-4">
+				<div class="mb-4 flex items-center gap-2">
+					<CalendarClock class="h-5 w-5 text-primary" />
+					<h2 class="font-semibold">Appointments</h2>
 				</div>
-				<ChevronRight class="h-5 w-5 shrink-0 text-muted-foreground" />
-			</Card.Content>
-		</Card.Root>
-	</a>
+				<p class="text-sm text-muted-foreground">Upcoming visits, inspections, and maintenance appointments will appear here.</p>
+			</section>
+
+			<section id="requests" class="rounded-lg border border-border bg-card p-4 xl:col-span-2">
+				<div class="mb-4 flex items-center gap-2">
+					<ClipboardList class="h-5 w-5 text-primary" />
+					<h2 class="font-semibold">Latest Messages</h2>
+				</div>
+				{#if conversations.length === 0}
+					<p class="text-sm text-muted-foreground">No conversations yet.</p>
+				{:else}
+					<div class="grid gap-2 md:grid-cols-2">
+						{#each conversations.slice(0, 4) as conversation}
+							<a href={`/portal/messages?conversation=${conversation.id}`} class="rounded-md border border-border px-3 py-2 hover:bg-muted/40">
+								<p class="text-sm font-medium">{conversation.subject}</p>
+								<p class="mt-1 line-clamp-2 text-xs text-muted-foreground">{conversation.lastMessagePreview}</p>
+							</a>
+						{/each}
+					</div>
+				{/if}
+			</section>
+		</div>
+	</div>
 </div>

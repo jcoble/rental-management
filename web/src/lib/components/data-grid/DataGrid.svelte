@@ -63,6 +63,10 @@
 		 */
 		serverSide?: boolean;
 		onPageChange?: (page: number) => void;
+		/** Sort field, using the API convention of a leading '-' for descending. */
+		sort?: string;
+		/** Called when a sortable header changes in server-side mode. */
+		onSortChange?: (sort?: string) => void;
 		// ── Slots ─────────────────────────────────────────────────────────────────
 		toolbar?: Snippet;
 		class?: string;
@@ -84,6 +88,8 @@
 		totalCount,
 		serverSide = false,
 		onPageChange,
+		sort,
+		onSortChange,
 		toolbar,
 		class: className,
 		'data-testid': dataTestId
@@ -92,6 +98,17 @@
 	// ── Sort state ────────────────────────────────────────────────────────────────
 	let sortKey = $state<string | null>(null);
 	let sortDir = $state<SortDirection>('none');
+
+	$effect(() => {
+		if (!serverSide) return;
+		if (!sort) {
+			sortKey = null;
+			sortDir = 'none';
+			return;
+		}
+		sortKey = sort.startsWith('-') ? sort.slice(1) : sort;
+		sortDir = sort.startsWith('-') ? 'desc' : 'asc';
+	});
 
 	function toggleSort(col: ColumnDef<T>) {
 		if (!col.sortable) return;
@@ -102,8 +119,13 @@
 			sortKey = col.key;
 			sortDir = 'asc';
 		}
-		// Reset to page 1 when sort changes in client-side mode
-		if (!serverSide) clientPage = 1;
+		if (serverSide) {
+			page = 1;
+			onPageChange?.(1);
+			onSortChange?.(sortDir === 'none' || sortKey == null ? undefined : `${sortDir === 'desc' ? '-' : ''}${sortKey}`);
+		} else {
+			clientPage = 1;
+		}
 	}
 
 	// ── Value extraction ──────────────────────────────────────────────────────────

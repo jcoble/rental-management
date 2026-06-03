@@ -1,13 +1,14 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { payments } from '$lib/api/endpoints/payments';
 	import { expenses } from '$lib/api/endpoints/expenses';
-	import { accounting } from '$lib/api/endpoints/accounting';
+	import { accounting, downloadScheduleECsv } from '$lib/api/endpoints/accounting';
 	import { leases } from '$lib/api/endpoints/leases';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
-	import type { Payment, Expense, AccountingReports, AccountingSummary } from '$lib/types';
+	import type { Payment, Expense, AccountingReports, AccountingSummary, AccountingTransaction } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -18,7 +19,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import { Pencil, Trash2, Plus } from '@lucide/svelte';
+	import { Pencil, Trash2, Plus, Download, FileBarChart, Landmark } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -27,7 +28,7 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
-	const PAGE_SIZE = 200; // fetch a full window; DataGrid paginates client-side
+	const PAGE_SIZE = 20;
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
 	// Schedule E categories (mirrors RentalCommand.Core.Enums.ScheduleECategory — the values the API accepts).
@@ -38,30 +39,56 @@
 	];
 	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
 
-	let paymentSearch = $state('');
-	let paymentStatusFilter = $state('');
-	let paymentSkip = $state(0);
-	const debouncedPaymentSearch = debounced(() => paymentSearch, 300);
+	let transactionSearch = $state('');
+	let transactionKindFilter = $state('');
+	let transactionStatusFilter = $state('');
+	let transactionCategoryFilter = $state('');
+	let transactionPropertyFilter = $state('');
+	let transactionFromFilter = $state('');
+	let transactionToFilter = $state('');
+	let transactionPage = $state(1);
+	let transactionSort = $state('-date');
+	let transactionDeleteTarget = $state<AccountingTransaction | null>(null);
+	const debouncedTransactionSearch = debounced(() => transactionSearch, 300);
+	const selectedPropertyFilter = $derived(transactionPropertyFilter ? Number(transactionPropertyFilter) : undefined);
+
 	$effect(() => {
-		debouncedPaymentSearch.value;
-		paymentStatusFilter;
-		paymentSkip = 0;
+		debouncedTransactionSearch.value;
+		transactionKindFilter;
+		transactionStatusFilter;
+		transactionCategoryFilter;
+		transactionPropertyFilter;
+		transactionFromFilter;
+		transactionToFilter;
+		transactionPage = 1;
 	});
 
-	let expenseSearch = $state('');
-	let expenseStatusFilter = $state('');
-	const debouncedExpenseSearch = debounced(() => expenseSearch, 300);
-
-	const paymentsQuery = createQuery(() => ({
-		// Include the status filter in the key so each filter gets its own cache
-		// entry — otherwise switching filters shows the previous filter's results
-		// until a refetch lands.
-		queryKey: ['payments', portfolioId, debouncedPaymentSearch.value, paymentStatusFilter, paymentSkip],
-		queryFn: () => payments.list(portfolioId, { search: debouncedPaymentSearch.value, skip: paymentSkip, take: PAGE_SIZE }),
-	}));
-	const expensesQuery = createQuery(() => ({
-		queryKey: ['expenses', portfolioId],
-		queryFn: () => expenses.list(portfolioId, { take: 100 }),
+	const transactionsQuery = createQuery(() => ({
+		queryKey: [
+			'accounting-transactions',
+			portfolioId,
+			debouncedTransactionSearch.value,
+			transactionKindFilter,
+			transactionStatusFilter,
+			transactionCategoryFilter,
+			transactionPropertyFilter,
+			transactionFromFilter,
+			transactionToFilter,
+			transactionPage,
+			transactionSort,
+		],
+		queryFn: () => accounting.transactions({
+			search: debouncedTransactionSearch.value,
+			kind: transactionKindFilter || undefined,
+			status: transactionStatusFilter || undefined,
+			category: transactionCategoryFilter || undefined,
+			propertyId: selectedPropertyFilter,
+			from: transactionFromFilter || undefined,
+			to: transactionToFilter || undefined,
+			skip: (transactionPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+			sort: transactionSort,
+		}),
 	}));
 	// Single accounting rollup: payment collection (collected/outstanding/overdue) + expense totals.
 	const accountingSummaryQuery = createQuery(() => ({ queryKey: ['accounting-summary', portfolioId], queryFn: () => accounting.summary() }));
@@ -81,6 +108,7 @@
 
 	function invalidatePayments() {
 		queryClient.invalidateQueries({ queryKey: ['payments', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['accounting-transactions', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['accounting-reports', portfolioId] });
 	}
@@ -160,6 +188,7 @@
 
 	function invalidateExpenses() {
 		queryClient.invalidateQueries({ queryKey: ['expenses', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['accounting-transactions', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['accounting-reports', portfolioId] });
 	}
@@ -180,6 +209,18 @@
 		onSuccess: () => {
 			showSuccess('Expense deleted.');
 			expenseDeleteTarget = null;
+			invalidateExpenses();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	const deleteTransactionMutation = createMutation(() => ({
+		mutationFn: (t: AccountingTransaction) =>
+			t.kind === 'Payment' ? payments.delete(t.id) : expenses.delete(t.id),
+		onSuccess: () => {
+			showSuccess('Transaction deleted.');
+			transactionDeleteTarget = null;
+			invalidatePayments();
 			invalidateExpenses();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -276,23 +317,17 @@
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value || 0);
 	}
-	const paymentsList = $derived(
-		(paymentsQuery.data ?? []).filter((p) => !paymentStatusFilter || p.status === paymentStatusFilter)
-	);
-	const expensesList = $derived(
-		(expensesQuery.data ?? []).filter((e) => {
-			if (expenseStatusFilter && e.status !== expenseStatusFilter) return false;
-			if (debouncedExpenseSearch.value) {
-				const q = debouncedExpenseSearch.value.toLowerCase();
-				return (
-					e.description.toLowerCase().includes(q) ||
-					(e.propertyName ?? '').toLowerCase().includes(q) ||
-					(e.vendorName ?? '').toLowerCase().includes(q) ||
-					e.category.toLowerCase().includes(q)
-				);
-			}
-			return true;
-		})
+	const reportYear = $derived(new Date().getFullYear());
+	const transactionRows = $derived(transactionsQuery.data?.items ?? []);
+	const transactionTotalCount = $derived(transactionsQuery.data?.totalCount ?? 0);
+	const transactionStatusOptions = $derived.by(() =>
+		transactionKindFilter === 'Payment'
+			? PAYMENT_STATUSES
+			: transactionKindFilter === 'Expense'
+				? EXPENSE_STATUSES
+				: transactionKindFilter === 'Bank'
+					? ['Unmatched', 'Suggested', 'Matched']
+					: [...PAYMENT_STATUSES, ...EXPENSE_STATUSES.filter((status) => !PAYMENT_STATUSES.includes(status)), 'Unmatched', 'Suggested', 'Matched']
 	);
 	const summary = $derived(accountingSummaryQuery.data as AccountingSummary | undefined);
 	const reports = $derived(accountingReportsQuery.data as AccountingReports | undefined);
@@ -317,61 +352,20 @@
 
 	// ── DataGrid column definitions ───────────────────────────────────────────────
 
-	const paymentColumns: ColumnDef<Payment>[] = [
+	const transactionColumns: ColumnDef<AccountingTransaction>[] = [
 		{
-			key: 'dueDate',
-			title: 'Due Date',
+			key: 'date',
+			title: 'Date',
 			format: 'date',
 			sortable: true,
 			mobileRole: 'meta',
 		},
 		{
-			key: 'tenantName',
-			title: 'Tenant / Lease',
-			sortable: true,
-			mobileRole: 'title',
-			accessor: (p) => p.tenantName || p.leaseNumber || '—',
-		},
-		{
-			key: 'leaseNumber',
-			title: 'Lease #',
-			mobileRole: 'subtitle',
-			accessor: (p) => p.leaseNumber ?? '—',
-		},
-		{
-			key: 'paymentType',
+			key: 'kind',
 			title: 'Type',
-			mobileRole: 'meta',
-		},
-		{
-			key: 'amount',
-			title: 'Amount',
-			format: 'currency',
 			sortable: true,
-			mobileRole: 'metric',
-		},
-		{
-			key: 'status',
-			title: 'Status',
 			mobileRole: 'badge',
-			cell: paymentStatusCell,
-		},
-		{
-			key: 'actions',
-			title: '',
-			mobileRole: 'hidden',
-			width: '8rem',
-			cell: paymentActionsCell,
-		},
-	];
-
-	const expenseColumns: ColumnDef<Expense>[] = [
-		{
-			key: 'incurredAt',
-			title: 'Incurred',
-			format: 'date',
-			sortable: true,
-			mobileRole: 'meta',
+			cell: transactionKindCell,
 		},
 		{
 			key: 'description',
@@ -380,9 +374,10 @@
 			mobileRole: 'title',
 		},
 		{
-			key: 'category',
-			title: 'Category',
-			mobileRole: 'meta',
+			key: 'counterparty',
+			title: 'Counterparty',
+			mobileRole: 'subtitle',
+			accessor: (t) => t.counterparty ?? '—',
 		},
 		{
 			key: 'amount',
@@ -392,83 +387,63 @@
 			mobileRole: 'metric',
 		},
 		{
+			key: 'category',
+			title: 'Category',
+			mobileRole: 'meta',
+		},
+		{
 			key: 'propertyName',
 			title: 'Property',
 			mobileRole: 'meta',
-			accessor: (e) => e.propertyName ?? 'General',
+			accessor: (t) => t.propertyName ?? 'General',
 		},
 		{
 			key: 'status',
 			title: 'Status',
 			mobileRole: 'badge',
-			cell: expenseStatusCell,
+			cell: transactionStatusCell,
 		},
 		{
-			key: 'receipt',
+			key: 'hasReceipt',
 			title: 'Receipt',
 			mobileRole: 'hidden',
 			width: '5rem',
 			align: 'center',
-			cell: expenseReceiptCell,
+			cell: transactionReceiptCell,
 		},
 		{
 			key: 'actions',
 			title: '',
 			mobileRole: 'hidden',
-			width: '6rem',
-			cell: expenseActionsCell,
+			width: '8rem',
+			cell: transactionActionsCell,
 		},
 	];
 </script>
 
-{#snippet paymentStatusCell(p: Payment)}
-	<StatusBadge status={p.status} />
+{#snippet transactionKindCell(t: AccountingTransaction)}
+	<span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {t.kind === 'Payment' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500' : t.kind === 'Bank' ? 'border-sky-500/40 bg-sky-500/10 text-sky-500' : 'border-amber-500/40 bg-amber-500/10 text-amber-500'}">
+		{t.kind}
+	</span>
 {/snippet}
 
-{#snippet paymentActionsCell(p: Payment)}
-	<div class="flex items-center gap-1">
-		{#if p.status !== 'Paid'}
-			<Button
-				data-testid="payment-mark-paid"
-				variant="outline"
-				size="sm"
-				onclick={(e) => { e.stopPropagation(); markPaidMutation.mutate(p.id); }}
-			>Mark Paid</Button>
-		{/if}
-		<Button
-			data-testid="payment-edit"
-			aria-label="Edit payment"
-			variant="outline"
-			size="icon"
-			onclick={(e) => { e.stopPropagation(); openEditPayment(p); }}
-		><Pencil class="h-3.5 w-3.5" /></Button>
-		<Button
-			data-testid="payment-delete"
-			aria-label="Delete payment"
-			variant="outline"
-			size="icon"
-			onclick={(e) => { e.stopPropagation(); paymentDeleteTarget = p; }}
-		><Trash2 class="h-3.5 w-3.5" /></Button>
-	</div>
+{#snippet transactionStatusCell(t: AccountingTransaction)}
+	<StatusBadge status={t.status} />
 {/snippet}
 
-{#snippet expenseStatusCell(e: Expense)}
-	<StatusBadge status={e.status} />
-{/snippet}
-
-{#snippet expenseReceiptCell(e: Expense)}
-	{#if e.hasReceipt}
-		{#if e.receiptIsImage}
+{#snippet transactionReceiptCell(t: AccountingTransaction)}
+	{#if t.kind === 'Expense' && t.hasReceipt}
+		{#if t.receiptIsImage}
 			<a
-				href="/expense-file/{e.id}"
+				href="/expense-file/{t.id}"
 				target="_blank"
 				rel="noopener noreferrer"
-				data-testid="expense-receipt-{e.id}"
+				data-testid="expense-receipt-{t.id}"
 				aria-label="View receipt"
 				onclick={(ev) => ev.stopPropagation()}
 			>
 				<img
-					src="/expense-file/{e.id}?thumb=true"
+					src="/expense-file/{t.id}?thumb=true"
 					alt="Receipt thumbnail"
 					class="h-10 w-10 rounded object-cover ring-1 ring-border"
 					loading="lazy"
@@ -476,10 +451,10 @@
 			</a>
 		{:else}
 			<a
-				href="/expense-file/{e.id}"
+				href="/expense-file/{t.id}"
 				target="_blank"
 				rel="noopener noreferrer"
-				data-testid="expense-receipt-{e.id}"
+				data-testid="expense-receipt-{t.id}"
 				class="text-xs text-primary underline underline-offset-2 hover:text-primary/80"
 				onclick={(ev) => ev.stopPropagation()}
 			>PDF</a>
@@ -487,22 +462,39 @@
 	{/if}
 {/snippet}
 
-{#snippet expenseActionsCell(e: Expense)}
+{#snippet transactionActionsCell(t: AccountingTransaction)}
 	<div class="flex items-center gap-1">
-		<Button
-			data-testid="expense-edit"
-			aria-label="Edit expense"
-			variant="outline"
-			size="icon"
-			onclick={(ev) => { ev.stopPropagation(); openEditExpense(e); }}
-		><Pencil class="h-3.5 w-3.5" /></Button>
-		<Button
-			data-testid="expense-delete"
-			aria-label="Delete expense"
-			variant="outline"
-			size="icon"
-			onclick={(ev) => { ev.stopPropagation(); expenseDeleteTarget = e; }}
-		><Trash2 class="h-3.5 w-3.5" /></Button>
+		{#if t.kind === 'Bank'}
+			<Button
+				data-testid="bank-transaction-open"
+				variant="outline"
+				size="sm"
+				onclick={(ev) => { ev.stopPropagation(); goto('/banking'); }}
+			>Reconcile</Button>
+		{:else if t.kind === 'Payment' && t.status !== 'Paid'}
+			<Button
+				data-testid="payment-mark-paid"
+				variant="outline"
+				size="sm"
+				onclick={(ev) => { ev.stopPropagation(); markPaidMutation.mutate(t.id); }}
+			>Mark Paid</Button>
+		{/if}
+		{#if t.kind !== 'Bank'}
+			<Button
+				data-testid="transaction-edit"
+				aria-label="Open transaction"
+				variant="outline"
+				size="icon"
+				onclick={(ev) => { ev.stopPropagation(); goto(t.detailHref ?? `/accounting/${t.kind.toLowerCase()}s/${t.id}`); }}
+			><Pencil class="h-3.5 w-3.5" /></Button>
+			<Button
+				data-testid="transaction-delete"
+				aria-label="Delete transaction"
+				variant="outline"
+				size="icon"
+				onclick={(ev) => { ev.stopPropagation(); transactionDeleteTarget = t; }}
+			><Trash2 class="h-3.5 w-3.5" /></Button>
+		{/if}
 	</div>
 {/snippet}
 
@@ -559,15 +551,60 @@
 		</Card.Root>
 	</div>
 
+	<Card.Root class="mb-6 gap-0 py-0" data-testid="accounting-money-snapshot">
+		<Card.Header class="px-4 pt-4 pb-2">
+			<Card.Title class="text-base">Money Snapshot</Card.Title>
+			<Card.Description>Plain-English accounting summary for this portfolio.</Card.Description>
+		</Card.Header>
+		<Card.Content class="px-4 pb-4 pt-0">
+			{#if accountingSummaryQuery.isLoading}
+				<div class="space-y-2">
+					<div class="h-5 w-64 animate-pulse rounded bg-muted"></div>
+					<div class="h-4 w-full max-w-2xl animate-pulse rounded bg-muted"></div>
+				</div>
+			{:else if summary?.snapshot}
+				<p class="font-medium">{summary.snapshot.title}</p>
+				<p class="mt-1 text-sm text-muted-foreground">{summary.snapshot.summary}</p>
+				<div class="mt-3 grid gap-2 md:grid-cols-2">
+					{#each summary.snapshot.bullets as bullet}
+						<div class="rounded-md border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
+							{bullet}
+						</div>
+					{/each}
+				</div>
+			{:else}
+				<p class="text-sm text-muted-foreground">No money snapshot is available yet.</p>
+			{/if}
+		</Card.Content>
+	</Card.Root>
+
 	<div class="mb-6" data-testid="accounting-reports">
 		<div class="mb-3 flex items-center justify-between">
 			<div>
 				<h2 class="text-lg font-semibold">Reports</h2>
 				<p class="text-sm text-muted-foreground">Ledger, property profit and loss, Schedule E totals, and 1099 review.</p>
 			</div>
-			{#if reports?.generatedAt}
-				<p class="text-xs text-muted-foreground">Updated {new Date(reports.generatedAt).toLocaleString()}</p>
-			{/if}
+			<div class="flex flex-wrap items-center justify-end gap-2">
+				<Button variant="outline" size="sm" onclick={() => downloadScheduleECsv(reportYear)} data-testid="accounting-report-schedule-e-export">
+					<Download class="h-4 w-4" />
+					Schedule E CSV
+				</Button>
+				<Button variant="outline" size="sm" href="/tax" data-testid="accounting-report-tax-link">
+					<FileBarChart class="h-4 w-4" />
+					Tax Reports
+				</Button>
+				<Button variant="outline" size="sm" href="/owners-report" data-testid="accounting-report-owner-link">
+					<Landmark class="h-4 w-4" />
+					Owner Reports
+				</Button>
+				<Button variant="outline" size="sm" href="/banking" data-testid="accounting-banking-link">
+					<Landmark class="h-4 w-4" />
+					Banking
+				</Button>
+				{#if reports?.generatedAt}
+					<p class="w-full text-right text-xs text-muted-foreground">Updated {new Date(reports.generatedAt).toLocaleString()}</p>
+				{/if}
+			</div>
 		</div>
 
 		<div class="grid gap-4 lg:grid-cols-4">
@@ -601,10 +638,15 @@
 			</Card.Root>
 		</div>
 
-		<div class="mt-4 grid gap-4 xl:grid-cols-3">
-			<div class="rounded-lg border bg-card p-4">
-				<h3 class="mb-3 text-sm font-semibold">Recent Ledger</h3>
-				<div class="space-y-2">
+		<div class="mt-4 space-y-2">
+			<details class="group rounded-lg border bg-card" open>
+				<summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold">
+					<span>Recent Ledger</span>
+					<span class="text-xs text-muted-foreground group-open:hidden">Show</span>
+					<span class="hidden text-xs text-muted-foreground group-open:inline">Hide</span>
+				</summary>
+				<div class="border-t px-4 py-3">
+					<div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
 					{#each recentLedger as row}
 						<a href={row.sourceHref} class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-muted/60">
 							<span class="min-w-0">
@@ -616,11 +658,17 @@
 					{:else}
 						<p class="text-sm text-muted-foreground">No ledger activity yet.</p>
 					{/each}
+					</div>
 				</div>
-			</div>
-			<div class="rounded-lg border bg-card p-4">
-				<h3 class="mb-3 text-sm font-semibold">Property P&amp;L</h3>
-				<div class="space-y-2">
+			</details>
+			<details class="group rounded-lg border bg-card">
+				<summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold">
+					<span>Property P&amp;L</span>
+					<span class="text-xs text-muted-foreground group-open:hidden">Show</span>
+					<span class="hidden text-xs text-muted-foreground group-open:inline">Hide</span>
+				</summary>
+				<div class="border-t px-4 py-3">
+					<div class="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
 					{#each (reports?.properties ?? []).slice(0, 6) as property}
 						<a href="/properties/{property.propertyId}" class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-muted/60">
 							<span class="min-w-0">
@@ -632,11 +680,17 @@
 					{:else}
 						<p class="text-sm text-muted-foreground">No property report data yet.</p>
 					{/each}
+					</div>
 				</div>
-			</div>
-			<div class="rounded-lg border bg-card p-4">
-				<h3 class="mb-3 text-sm font-semibold">Schedule E</h3>
-				<div class="space-y-2">
+			</details>
+			<details class="group rounded-lg border bg-card">
+				<summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold">
+					<span>Schedule E</span>
+					<span class="text-xs text-muted-foreground group-open:hidden">Show</span>
+					<span class="hidden text-xs text-muted-foreground group-open:inline">Hide</span>
+				</summary>
+				<div class="border-t px-4 py-3">
+					<div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
 					{#each (reports?.scheduleE ?? []).slice(0, 8) as line}
 						<div class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5">
 							<span class="truncate text-sm">{line.categoryName}</span>
@@ -645,91 +699,122 @@
 					{:else}
 						<p class="text-sm text-muted-foreground">No Schedule E totals yet.</p>
 					{/each}
+					</div>
 				</div>
-			</div>
+			</details>
+			<details class="group rounded-lg border bg-card">
+				<summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold">
+					<span>1099 Review</span>
+					<span class="text-xs text-muted-foreground group-open:hidden">Show</span>
+					<span class="hidden text-xs text-muted-foreground group-open:inline">Hide</span>
+				</summary>
+				<div class="border-t px-4 py-3">
+					<div class="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+						{#each (reports?.vendors1099 ?? []).slice(0, 9) as vendor}
+							<a href="/owners" class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-muted/60">
+								<span class="min-w-0">
+									<span class="block truncate text-sm">{vendor.vendorName}</span>
+									<span class="block text-xs text-muted-foreground">
+										{vendor.needsW9 ? 'Needs W-9' : vendor.needs1099Review ? 'Needs 1099 review' : 'Tracked vendor'}
+									</span>
+								</span>
+								<span class="shrink-0 font-mono text-sm tabular-nums">{money(vendor.totalPaid)}</span>
+							</a>
+						{:else}
+							<p class="text-sm text-muted-foreground">No vendors need 1099 review.</p>
+						{/each}
+					</div>
+				</div>
+			</details>
 		</div>
 	</div>
 
-	<div class="space-y-6">
-		<!-- Payments DataGrid -->
-		<div>
-			<div class="mb-3 flex items-center justify-between">
-				<h2 class="text-lg font-semibold">Payments</h2>
-				<Button data-testid="payment-create-button" class="shrink-0 gap-2" onclick={openCreatePayment}>
+	<div>
+		<div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+			<div>
+				<h2 class="text-lg font-semibold">Transactions</h2>
+				<p class="text-sm text-muted-foreground">Payments, expenses, deposits, and withdrawals in one paged ledger.</p>
+			</div>
+			<div class="flex flex-wrap gap-2">
+				<Button data-testid="payment-create-button" variant="outline" class="shrink-0 gap-2" onclick={openCreatePayment}>
 					<Plus class="h-4 w-4" />
 					New Payment
 				</Button>
-			</div>
-			<DataGrid
-				data={paymentsList}
-				columns={paymentColumns}
-				loading={paymentsQuery.isLoading}
-				emptyMessage="No payments found."
-				getRowKey={(p) => p.id}
-				getRowTestId={(p) => `payment-row`}
-				data-testid="payments-list"
-				pageSize={PAGE_SIZE}
-			>
-				{#snippet toolbar()}
-					<div class="flex flex-1 flex-wrap items-center gap-2">
-						<div class="max-w-sm flex-1">
-							<SearchInput bind:value={paymentSearch} placeholder="Search payments…" testid="payment-search" />
-						</div>
-						<Select.Root type="single" bind:value={paymentStatusFilter}>
-							<Select.Trigger class="w-[160px]" data-testid="payment-status-filter">
-								{paymentStatusFilter || 'All statuses'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="All statuses">All statuses</Select.Item>
-								{#each PAYMENT_STATUSES as s}
-									<Select.Item value={s} label={s}>{s}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-				{/snippet}
-			</DataGrid>
-		</div>
-
-		<!-- Expenses DataGrid -->
-		<div>
-			<div class="mb-3 flex items-center justify-between">
-				<h2 class="text-lg font-semibold">Expenses</h2>
 				<Button data-testid="expense-create-button" class="shrink-0 gap-2" onclick={openCreateExpense}>
 					<Plus class="h-4 w-4" />
 					New Expense
 				</Button>
 			</div>
-			<DataGrid
-				data={expensesList}
-				columns={expenseColumns}
-				loading={expensesQuery.isLoading}
-				emptyMessage="No expenses found."
-				getRowKey={(e) => e.id}
-				getRowTestId={(e) => `expense-row`}
-				data-testid="expenses-list"
-				pageSize={PAGE_SIZE}
-			>
-				{#snippet toolbar()}
-					<div class="flex flex-1 flex-wrap items-center gap-2">
-						<div class="max-w-sm flex-1">
-							<SearchInput bind:value={expenseSearch} placeholder="Search expenses…" testid="expense-search" />
-						</div>
-						<Select.Root type="single" bind:value={expenseStatusFilter}>
-							<Select.Trigger class="w-[160px]" data-testid="expense-status-filter">
-								{expenseStatusFilter || 'All statuses'}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="All statuses">All statuses</Select.Item>
-								{#each EXPENSE_STATUSES as s}
-									<Select.Item value={s} label={s}>{s}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
-				{/snippet}
-			</DataGrid>
 		</div>
+		<DataGrid
+			data={transactionRows}
+			columns={transactionColumns}
+			loading={transactionsQuery.isLoading || transactionsQuery.isFetching}
+			emptyMessage="No transactions found."
+			getRowKey={(t) => `${t.kind}-${t.id}`}
+			getRowTestId={(t) => `transaction-row-${t.kind.toLowerCase()}-${t.id}`}
+			onRowClick={(t) => goto(t.detailHref ?? `/accounting/${t.kind.toLowerCase()}s/${t.id}`)}
+			data-testid="transactions-list"
+			pageSize={PAGE_SIZE}
+			page={transactionPage}
+			totalCount={transactionTotalCount}
+			serverSide
+			onPageChange={(page) => (transactionPage = page)}
+			sort={transactionSort}
+			onSortChange={(sort) => { transactionSort = sort ?? '-date'; transactionPage = 1; }}
+		>
+			{#snippet toolbar()}
+				<div class="grid w-full gap-2 lg:grid-cols-[minmax(14rem,1fr)_9rem_10rem_11rem_12rem_9rem_9rem]">
+					<SearchInput bind:value={transactionSearch} placeholder="Search descriptions, property, tenant, vendor…" testid="transaction-search" />
+					<Select.Root type="single" bind:value={transactionKindFilter}>
+						<Select.Trigger data-testid="transaction-kind-filter">
+							{transactionKindFilter || 'All types'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="All types">All types</Select.Item>
+							<Select.Item value="Payment" label="Payments">Payments</Select.Item>
+							<Select.Item value="Expense" label="Expenses">Expenses</Select.Item>
+							<Select.Item value="Bank" label="Bank activity">Bank activity</Select.Item>
+						</Select.Content>
+					</Select.Root>
+					<Select.Root type="single" bind:value={transactionStatusFilter}>
+						<Select.Trigger data-testid="transaction-status-filter">
+							{transactionStatusFilter || 'All statuses'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="All statuses">All statuses</Select.Item>
+							{#each transactionStatusOptions as s}
+								<Select.Item value={s} label={s}>{s}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					<Select.Root type="single" bind:value={transactionCategoryFilter}>
+						<Select.Trigger data-testid="transaction-category-filter">
+							{transactionCategoryFilter || 'All categories'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="All categories">All categories</Select.Item>
+							{#each (transactionKindFilter === 'Payment' ? PAYMENT_TYPES : transactionKindFilter === 'Expense' ? EXPENSE_CATEGORIES : transactionKindFilter === 'Bank' ? ['Deposit', 'Withdrawal'] : [...PAYMENT_TYPES, ...EXPENSE_CATEGORIES, 'Deposit', 'Withdrawal']) as c}
+								<Select.Item value={c} label={c}>{c}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					<Select.Root type="single" bind:value={transactionPropertyFilter}>
+						<Select.Trigger data-testid="transaction-property-filter">
+							{propertiesQuery.data?.find((p) => String(p.id) === transactionPropertyFilter)?.name ?? 'All properties'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="All properties">All properties</Select.Item>
+							{#each propertiesQuery.data || [] as property}
+								<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					<Input data-testid="transaction-from-filter" type="date" bind:value={transactionFromFilter} aria-label="From date" />
+					<Input data-testid="transaction-to-filter" type="date" bind:value={transactionToFilter} aria-label="To date" />
+				</div>
+			{/snippet}
+		</DataGrid>
 	</div>
 </div>
 
@@ -986,6 +1071,15 @@
 	</Dialog.Content>
 </Dialog.Root>
 
+<ConfirmDialog
+	open={transactionDeleteTarget !== null}
+	title="Delete transaction"
+	message={transactionDeleteTarget ? `Delete this ${transactionDeleteTarget.kind.toLowerCase()} for ${money(transactionDeleteTarget.amount)}?` : ''}
+	busy={deleteTransactionMutation.isPending}
+	testid="transaction-delete"
+	onconfirm={() => transactionDeleteTarget && deleteTransactionMutation.mutate(transactionDeleteTarget)}
+	oncancel={() => (transactionDeleteTarget = null)}
+/>
 <ConfirmDialog
 	open={paymentDeleteTarget !== null}
 	title="Delete payment"
