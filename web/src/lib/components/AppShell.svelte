@@ -133,10 +133,10 @@
 
 <NavigationLoader />
 
-<div class="flex h-screen bg-background">
+<div class="flex h-full w-full overflow-hidden bg-background">
 	<!-- Sidebar -->
 	<aside
-		class="fixed left-0 top-0 z-40 flex h-screen flex-col border-r border-sidebar-border bg-sidebar transition-all duration-200
+		class="fixed left-0 top-0 z-40 flex h-full flex-col border-r border-sidebar-border bg-sidebar transition-all duration-200
 			{isMobile
 			? (isSidebarOpen ? 'translate-x-0 w-56' : '-translate-x-full w-56')
 			: (sidebarCollapsed ? 'w-14' : 'w-56')}"
@@ -302,7 +302,7 @@
 
 	<!-- Main content -->
 	<div
-		class="flex-1 min-w-0 flex flex-col transition-all duration-200 {isMobile
+		class="flex h-full min-w-0 flex-1 flex-col transition-all duration-200 {isMobile
 			? 'ml-0'
 			: sidebarCollapsed
 				? 'ml-14'
@@ -333,11 +333,9 @@
 			</header>
 		{/if}
 
-		<!-- Page content. The inner wrapper carries a definite height (h-full) so
-		     full-height pages (e.g. the messages two-pane) can use h-full and scroll
-		     internally; normal pages still flow + overflow into <main>'s scroll. -->
-		<main class="flex-1 overflow-auto p-6">
-			<div class="h-full pb-10">
+		<!-- Page content frame. Routes own their internal 100% scroll area. -->
+		<main class="flex min-h-0 flex-1 justify-center overflow-hidden">
+			<div class="h-full w-full max-w-[1600px]">
 				{@render children()}
 			</div>
 		</main>

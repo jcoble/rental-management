@@ -167,7 +167,7 @@
 	<title>Team - Rental Command</title>
 </svelte:head>
 
-<div class="min-h-full pb-16" data-testid="team-page">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="team-page">
 	<div class="mb-5 flex items-start justify-between">
 		<div>
 			<h1 class="text-2xl font-bold">Team</h1>

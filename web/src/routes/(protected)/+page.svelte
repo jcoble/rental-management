@@ -20,7 +20,7 @@
 	<title>Dashboard - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6">
+<div class="box-border h-full overflow-y-auto p-6 pb-20">
 	{#if dashboardQuery.isLoading}
 		<!-- Skeleton loading state -->
 		<div class="mb-6">

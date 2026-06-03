@@ -95,7 +95,7 @@
 	<title>{workOrder?.title ?? 'Work Order'} - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6" data-testid="work-order-detail-page">
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="work-order-detail-page">
 	<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
 		<div class="min-w-0">
 			<Button variant="ghost" href="/maintenance" class="mb-2 -ml-3"><ArrowLeft class="h-4 w-4" />Maintenance</Button>

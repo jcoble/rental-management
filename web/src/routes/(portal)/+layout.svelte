@@ -48,7 +48,7 @@
 {#if staffUser}
 	<AppShell>{@render children()}</AppShell>
 {:else}
-	<main class="min-h-screen overflow-y-auto bg-background {isMessagesPage ? '' : 'p-6'}">
+	<main class="h-dvh overflow-y-auto bg-background {isMessagesPage ? '' : 'p-6'}">
 		{@render children()}
 	</main>
 {/if}

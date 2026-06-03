@@ -134,7 +134,7 @@
 	<title>Settings - Rental Command</title>
 </svelte:head>
 
-<div class="min-h-full pb-16">
+<div class="box-border h-full overflow-y-auto p-6 pb-20">
 	<div class="mb-4">
 		<h1 class="text-2xl font-bold">Portfolio Settings</h1>
 		<p class="text-sm text-muted-foreground">Configure timezone, status, and operational defaults.</p>
