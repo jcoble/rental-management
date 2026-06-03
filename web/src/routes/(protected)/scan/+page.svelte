@@ -24,7 +24,8 @@
 	// Defaults to 'Expense' since receipts/bills are the most common capture.
 	const DOC_TYPES = [
 		{ value: 'Expense', label: 'Receipt / Bill', hint: 'Becomes an expense record' },
-		{ value: 'Payment', label: 'Rent Check / Payment', hint: 'Becomes a payment record' }
+		{ value: 'Payment', label: 'Rent Check / Payment', hint: 'Becomes a payment record' },
+		{ value: 'WorkOrder', label: 'Maintenance Request', hint: 'Becomes a work order' }
 	] as const;
 	let docType = $state<string>('Expense');
 	let isRecording = $state(false);
@@ -162,7 +163,7 @@
 	{#if !uploadMutation.isPending}
 		<div class="mb-4" data-testid="scan-doc-type">
 			<span class="mb-1.5 block text-sm font-medium">What are you scanning?</span>
-			<div class="grid max-w-xl grid-cols-2 gap-3">
+			<div class="grid max-w-3xl gap-3 sm:grid-cols-3">
 				{#each DOC_TYPES as opt}
 					<button
 						type="button"

@@ -58,7 +58,7 @@ class ScanRepository {
   /// [bytes]            — raw file bytes
   /// [filename]         — e.g. 'receipt.jpg'
   /// [contentType]      — MIME type, e.g. 'image/jpeg'
-  /// [targetEntityType] — 'Expense' (default) or 'Payment'
+  /// [targetEntityType] — 'Expense' (default), 'Payment', or 'WorkOrder'
   /// [onSendProgress]   — optional progress callback (0.0–1.0)
   Future<ScanCreatedResponse> uploadImage(
     Uint8List bytes,
@@ -93,6 +93,32 @@ class ScanRepository {
     }
   }
 
+  /// Uploads a recorded voice note and creates a reviewable AI draft.
+  Future<ScanDraft> createVoiceDraft(
+    Uint8List bytes,
+    String filename,
+    String contentType,
+  ) async {
+    try {
+      final formData = FormData.fromMap({
+        'audio': MultipartFile.fromBytes(
+          bytes,
+          filename: filename,
+          contentType: DioMediaType.parse(contentType),
+        ),
+      });
+
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/voice/drafts',
+        data: formData,
+      );
+
+      return ScanDraft.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Downloads the stored scan file as bytes.
   ///
   /// The Dio auth interceptor attaches the Bearer token automatically, which is
@@ -117,7 +143,7 @@ class ScanRepository {
     }
   }
 
-  /// Confirms a draft, creating the target entity (Expense or Payment).
+  /// Confirms a draft, creating the target entity (Expense, Payment, or WorkOrder).
   ///
   /// [overrides] keys match what the API's [ConfirmScanRequest] expects:
   ///   — scalar fields: snake_case names as-is (vendor_name, total, etc.)
@@ -178,7 +204,8 @@ final scanRepositoryProvider = Provider<ScanRepository>((ref) {
 /// Exposed at the repository level so the realtime watcher can invalidate all
 /// active variants (e.g. [ScanListScreen] mounted with filter = null) without
 /// importing the screen file.
-final scanListFamilyProvider =
-    FutureProvider.autoDispose.family<List<ScanDraft>, String?>(
-  (ref, status) => ref.read(scanRepositoryProvider).listDrafts(status: status),
-);
+final scanListFamilyProvider = FutureProvider.autoDispose
+    .family<List<ScanDraft>, String?>(
+      (ref, status) =>
+          ref.read(scanRepositoryProvider).listDrafts(status: status),
+    );

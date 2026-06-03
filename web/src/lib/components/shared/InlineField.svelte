@@ -15,6 +15,7 @@
 		error = '',
 		testid,
 		class: className = '',
+		onedit,
 	}: {
 		label: string;
 		value?: string;
@@ -26,6 +27,7 @@
 		error?: string;
 		testid: string;
 		class?: string;
+		onedit?: () => void;
 	} = $props();
 
 	const fieldId = $derived(`${testid}-input`);
@@ -58,8 +60,19 @@
 			<p class="mt-1 text-xs text-destructive" data-testid={`${testid}-error`}>{error}</p>
 		{/if}
 	{:else}
-		<p class="min-h-10 rounded-md border border-transparent py-2 text-sm font-medium text-foreground" data-testid={`${testid}-value`}>
-			{displayText}
-		</p>
+		{#if onedit}
+			<button
+				type="button"
+				class="min-h-10 w-full rounded-md border border-transparent py-2 text-left text-sm font-medium text-foreground transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+				data-testid={`${testid}-value`}
+				onclick={onedit}
+			>
+				{displayText}
+			</button>
+		{:else}
+			<p class="min-h-10 rounded-md border border-transparent py-2 text-sm font-medium text-foreground" data-testid={`${testid}-value`}>
+				{displayText}
+			</p>
+		{/if}
 	{/if}
 </div>

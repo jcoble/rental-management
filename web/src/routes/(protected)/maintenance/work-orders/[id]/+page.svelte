@@ -127,12 +127,12 @@
 			</Card.Header>
 			<Card.Content>
 				<div class="grid gap-4 md:grid-cols-3">
-					<InlineField label="Issue title" bind:value={form.title} display={workOrder.title} {editing} error={formErrors.title} testid="work-order-detail-title" class="md:col-span-2" />
-					<InlineField label="Status" bind:value={form.status} display={workOrder.status} {editing} type="select" options={statusOptions} testid="work-order-detail-status" />
-					<InlineField label="Property" bind:value={form.propertyId} display={workOrder.propertyName} {editing} type="select" options={propertyOptions} error={formErrors.propertyId} testid="work-order-detail-property" />
-					<InlineField label="Priority" bind:value={form.priority} display={workOrder.priority} {editing} type="select" options={priorityOptions} testid="work-order-detail-priority" />
-					<InlineField label="Category" bind:value={form.category} display={workOrder.category} {editing} error={formErrors.category} testid="work-order-detail-category" />
-					<InlineField label="Description" bind:value={form.description} display={workOrder.description} {editing} type="textarea" error={formErrors.description} testid="work-order-detail-description" class="md:col-span-3" />
+					<InlineField label="Issue title" bind:value={form.title} display={workOrder.title} {editing} onedit={startEditing} error={formErrors.title} testid="work-order-detail-title" class="md:col-span-2" />
+					<InlineField label="Status" bind:value={form.status} display={workOrder.status} {editing} onedit={startEditing} type="select" options={statusOptions} testid="work-order-detail-status" />
+					<InlineField label="Property" bind:value={form.propertyId} display={workOrder.propertyName} {editing} onedit={startEditing} type="select" options={propertyOptions} error={formErrors.propertyId} testid="work-order-detail-property" />
+					<InlineField label="Priority" bind:value={form.priority} display={workOrder.priority} {editing} onedit={startEditing} type="select" options={priorityOptions} testid="work-order-detail-priority" />
+					<InlineField label="Category" bind:value={form.category} display={workOrder.category} {editing} onedit={startEditing} error={formErrors.category} testid="work-order-detail-category" />
+					<InlineField label="Description" bind:value={form.description} display={workOrder.description} {editing} onedit={startEditing} type="textarea" error={formErrors.description} testid="work-order-detail-description" class="md:col-span-3" />
 				</div>
 			</Card.Content>
 		</Card.Root>

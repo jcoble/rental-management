@@ -1,14 +1,29 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
+	import { ai } from '$lib/api/endpoints/ai';
+	import { messages } from '$lib/api/endpoints/messages';
+	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Dashboard } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building } from '@lucide/svelte';
+	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, Sparkles, MessageSquare } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
 
 	const dashboardQuery = createQuery(() => ({
 		queryKey: ['dashboard', getCurrentPortfolioId()],
 		queryFn: () => portfolios.dashboard(getCurrentPortfolioId()),
+	}));
+	const briefingQuery = createQuery(() => ({
+		queryKey: ['ai-briefing', getCurrentPortfolioId()],
+		queryFn: () => ai.briefing(),
+	}));
+	const messagesQuery = createQuery(() => ({
+		queryKey: ['dashboard-messages', getCurrentPortfolioId()],
+		queryFn: () => messages.list(),
+	}));
+	const workOrdersQuery = createQuery(() => ({
+		queryKey: ['dashboard-work-orders', getCurrentPortfolioId()],
+		queryFn: () => workOrders.list(getCurrentPortfolioId(), { take: 10, sort: '-requestedAt' }),
 	}));
 
 	function money(value: number) {
@@ -128,6 +143,116 @@
 					<div class="flex items-center gap-2 text-destructive"><Wrench class="h-4 w-4" /> Open Work Orders</div>
 					<p class="mt-2 font-mono tabular-nums text-2xl font-bold">{data.maintenance.openCount}</p>
 					<p class="text-xs text-muted-foreground">{data.maintenance.emergencyCount} emergency</p>
+				</Card.Content>
+			</Card.Root>
+		</div>
+
+		<div class="mb-6 grid gap-4 lg:grid-cols-2">
+			<Card.Root class="gap-0 py-0" data-testid="dashboard-todays-briefing">
+				<Card.Header class="px-4 pt-4 pb-3">
+					<Card.Title class="flex items-center gap-2 text-base font-semibold">
+						<Sparkles class="h-4 w-4 text-primary" />
+						Today's Briefing
+					</Card.Title>
+				</Card.Header>
+				<Card.Content class="px-4 pb-4 pt-0">
+					{#if briefingQuery.isLoading}
+						<div class="space-y-2">
+							<div class="h-4 w-3/4 animate-pulse rounded bg-muted"></div>
+							<div class="h-14 w-full animate-pulse rounded bg-muted"></div>
+						</div>
+					{:else if briefingQuery.isError}
+						<p class="text-sm text-muted-foreground">Briefing is unavailable.</p>
+					{:else}
+						{@const briefing = briefingQuery.data}
+						{#if briefing?.summary}
+							<p class="mb-3 text-sm text-muted-foreground">{briefing.summary}</p>
+						{/if}
+						<div class="space-y-2">
+							{#each (briefing?.bullets ?? []).slice(0, 5) as bullet}
+								<div class="rounded border border-border bg-background px-3 py-2">
+									<div class="flex items-center justify-between gap-3">
+										<p class="text-sm font-medium">{bullet.title}</p>
+										<span class="rounded-full border px-2 py-0.5 text-[11px] capitalize text-muted-foreground">{bullet.severity}</span>
+									</div>
+									<p class="mt-1 text-xs text-muted-foreground">{bullet.detail}</p>
+								</div>
+							{:else}
+								<p class="text-sm text-muted-foreground">No priority items for today.</p>
+							{/each}
+						</div>
+					{/if}
+				</Card.Content>
+			</Card.Root>
+
+			<Card.Root class="gap-0 py-0" data-testid="dashboard-latest-messages">
+				<Card.Header class="px-4 pt-4 pb-3">
+					<Card.Title class="flex items-center gap-2 text-base font-semibold">
+						<MessageSquare class="h-4 w-4 text-primary" />
+						Latest Messages
+					</Card.Title>
+				</Card.Header>
+				<Card.Content class="px-4 pb-4 pt-0">
+					{#if messagesQuery.isLoading}
+						<div class="space-y-2">
+							{#each [0, 1, 2] as _}
+								<div class="h-14 w-full animate-pulse rounded bg-muted"></div>
+							{/each}
+						</div>
+					{:else if messagesQuery.isError}
+						<p class="text-sm text-muted-foreground">Messages are unavailable.</p>
+					{:else}
+						<div class="space-y-2">
+							{#each (messagesQuery.data ?? []).slice(0, 5) as thread}
+								<a href="/messages?conversation={thread.id}" class="block rounded border border-border bg-background px-3 py-2 transition-colors hover:bg-muted/40">
+									<div class="flex items-center justify-between gap-3">
+										<p class="truncate text-sm font-medium">{thread.subject}</p>
+										<span class="shrink-0 font-mono text-[11px] text-muted-foreground">{new Date(thread.lastMessageAt).toLocaleDateString()}</span>
+									</div>
+									<p class="mt-0.5 truncate text-xs text-muted-foreground">{thread.tenantName}{thread.propertyName ? ` · ${thread.propertyName}` : ''}</p>
+									{#if thread.lastMessagePreview}
+										<p class="mt-1 truncate text-xs text-muted-foreground">{thread.lastMessagePreview}</p>
+									{/if}
+								</a>
+							{:else}
+								<p class="text-sm text-muted-foreground">No recent messages.</p>
+							{/each}
+						</div>
+					{/if}
+				</Card.Content>
+			</Card.Root>
+
+			<Card.Root class="gap-0 py-0" data-testid="dashboard-latest-maintenance">
+				<Card.Header class="px-4 pt-4 pb-3">
+					<Card.Title class="flex items-center gap-2 text-base font-semibold">
+						<Wrench class="h-4 w-4 text-primary" />
+						Latest Maintenance
+					</Card.Title>
+				</Card.Header>
+				<Card.Content class="px-4 pb-4 pt-0">
+					{#if workOrdersQuery.isLoading}
+						<div class="space-y-2">
+							{#each [0, 1, 2] as _}
+								<div class="h-14 w-full animate-pulse rounded bg-muted"></div>
+							{/each}
+						</div>
+					{:else if workOrdersQuery.isError}
+						<p class="text-sm text-muted-foreground">Maintenance is unavailable.</p>
+					{:else}
+						<div class="space-y-2">
+							{#each (workOrdersQuery.data ?? []).filter((w) => !['Completed', 'Cancelled', 'Archived'].includes(String(w.status))).slice(0, 3) as order}
+								<a href="/maintenance/work-orders/{order.id}" class="block rounded border border-border bg-background px-3 py-2 transition-colors hover:bg-muted/40">
+									<div class="flex items-center justify-between gap-3">
+										<p class="truncate text-sm font-medium">{order.title}</p>
+										<span class="shrink-0 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">{order.priority}</span>
+									</div>
+									<p class="mt-1 truncate text-xs text-muted-foreground">{order.status} · {new Date(order.requestedAt).toLocaleDateString()}</p>
+								</a>
+							{:else}
+								<p class="text-sm text-muted-foreground">No open maintenance requests.</p>
+							{/each}
+						</div>
+					{/if}
 				</Card.Content>
 			</Card.Root>
 		</div>

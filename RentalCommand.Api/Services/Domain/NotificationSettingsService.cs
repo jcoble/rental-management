@@ -32,6 +32,13 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         var row = await GetOrCreateAsync(ct);
         var now = DateTime.UtcNow;
 
+        row.EnableRentCharges = request.EnableRentCharges;
+        row.EnableLateFees = request.EnableLateFees;
+        row.EnableLeaseExpiryReminders = request.EnableLeaseExpiryReminders;
+        row.NotifyTenants = request.NotifyTenants;
+        row.RentChargeLeadDays = Math.Clamp(request.RentChargeLeadDays, 0, 31);
+        row.LateFeeGraceDays = Math.Clamp(request.LateFeeGraceDays, 0, 60);
+        row.LeaseExpiryReminderDays = Math.Clamp(request.LeaseExpiryReminderDays, 1, 365);
         row.EnableDailyBriefingMessages = request.EnableDailyBriefingMessages;
         row.DailyBriefingSendHourLocal = Math.Clamp(request.DailyBriefingSendHourLocal, 0, 23);
         row.DailyBriefingIncludeEmpty = request.DailyBriefingIncludeEmpty;
@@ -55,6 +62,13 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         var row = await GetOrCreateAsync(ct);
         return new NotificationsConfig
         {
+            EnableRentCharges = row.EnableRentCharges,
+            EnableLateFees = row.EnableLateFees,
+            EnableLeaseExpiryReminders = row.EnableLeaseExpiryReminders,
+            NotifyTenants = row.NotifyTenants,
+            RentChargeLeadDays = row.RentChargeLeadDays,
+            LateFeeGraceDays = row.LateFeeGraceDays,
+            LeaseExpiryReminderDays = row.LeaseExpiryReminderDays,
             EnableDailyBriefingMessages = row.EnableDailyBriefingMessages,
             DailyBriefing = new DailyBriefingOptions
             {
@@ -82,6 +96,10 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         row = new NotificationSettings
         {
             Id = SingletonId,
+            EnableLeaseExpiryReminders = true,
+            RentChargeLeadDays = 5,
+            LateFeeGraceDays = 5,
+            LeaseExpiryReminderDays = 60,
             DailyBriefingSendHourLocal = 8,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
@@ -93,6 +111,13 @@ public sealed class NotificationSettingsService : INotificationSettingsService
 
     private NotificationSettingsResponse ToAdminResponse(NotificationSettings row) => new()
     {
+        EnableRentCharges = row.EnableRentCharges,
+        EnableLateFees = row.EnableLateFees,
+        EnableLeaseExpiryReminders = row.EnableLeaseExpiryReminders,
+        NotifyTenants = row.NotifyTenants,
+        RentChargeLeadDays = row.RentChargeLeadDays,
+        LateFeeGraceDays = row.LateFeeGraceDays,
+        LeaseExpiryReminderDays = row.LeaseExpiryReminderDays,
         EnableDailyBriefingMessages = row.EnableDailyBriefingMessages,
         DailyBriefingSendHourLocal = row.DailyBriefingSendHourLocal,
         DailyBriefingIncludeEmpty = row.DailyBriefingIncludeEmpty,

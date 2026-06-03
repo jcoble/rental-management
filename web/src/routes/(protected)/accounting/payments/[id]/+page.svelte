@@ -130,15 +130,15 @@
 			</Card.Header>
 			<Card.Content>
 				<div class="grid gap-4 md:grid-cols-3">
-					<InlineField label="Lease" bind:value={form.leaseId} display={payment.leaseNumber} {editing} type="select" options={leaseOptions} error={formErrors.leaseId} testid="payment-detail-lease" />
-					<InlineField label="Amount" bind:value={form.amount} display={`$${payment.amount}`} {editing} error={formErrors.amount} testid="payment-detail-amount" />
-					<InlineField label="Due date" bind:value={form.dueDate} display={new Date(payment.dueDate).toLocaleDateString()} {editing} type="date" error={formErrors.dueDate} testid="payment-detail-due-date" />
-					<InlineField label="Payment type" bind:value={form.paymentType} display={payment.paymentType} {editing} type="select" options={typeOptions} testid="payment-detail-type" />
-					<InlineField label="Status" bind:value={form.status} display={payment.status} {editing} type="select" options={statusOptions} testid="payment-detail-status" />
-					<InlineField label="Paid date" bind:value={form.paidDate} display={payment.paidDate ? new Date(payment.paidDate).toLocaleDateString() : ''} {editing} type="date" testid="payment-detail-paid-date" />
-					<InlineField label="Method" bind:value={form.method} display={payment.method} {editing} testid="payment-detail-method" />
-					<InlineField label="Reference" bind:value={form.externalReference} display={payment.externalReference} {editing} testid="payment-detail-reference" />
-					<InlineField label="Notes" bind:value={form.notes} display={payment.notes} {editing} type="textarea" testid="payment-detail-notes" class="md:col-span-3" />
+					<InlineField label="Lease" bind:value={form.leaseId} display={payment.leaseNumber} {editing} onedit={startEditing} type="select" options={leaseOptions} error={formErrors.leaseId} testid="payment-detail-lease" />
+					<InlineField label="Amount" bind:value={form.amount} display={`$${payment.amount}`} {editing} onedit={startEditing} error={formErrors.amount} testid="payment-detail-amount" />
+					<InlineField label="Due date" bind:value={form.dueDate} display={new Date(payment.dueDate).toLocaleDateString()} {editing} onedit={startEditing} type="date" error={formErrors.dueDate} testid="payment-detail-due-date" />
+					<InlineField label="Payment type" bind:value={form.paymentType} display={payment.paymentType} {editing} onedit={startEditing} type="select" options={typeOptions} testid="payment-detail-type" />
+					<InlineField label="Status" bind:value={form.status} display={payment.status} {editing} onedit={startEditing} type="select" options={statusOptions} testid="payment-detail-status" />
+					<InlineField label="Paid date" bind:value={form.paidDate} display={payment.paidDate ? new Date(payment.paidDate).toLocaleDateString() : ''} {editing} onedit={startEditing} type="date" testid="payment-detail-paid-date" />
+					<InlineField label="Method" bind:value={form.method} display={payment.method} {editing} onedit={startEditing} testid="payment-detail-method" />
+					<InlineField label="Reference" bind:value={form.externalReference} display={payment.externalReference} {editing} onedit={startEditing} testid="payment-detail-reference" />
+					<InlineField label="Notes" bind:value={form.notes} display={payment.notes} {editing} onedit={startEditing} type="textarea" testid="payment-detail-notes" class="md:col-span-3" />
 				</div>
 			</Card.Content>
 		</Card.Root>

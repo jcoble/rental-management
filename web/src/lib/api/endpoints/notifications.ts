@@ -21,6 +21,8 @@ export const notifications = {
 	unreadCount: () => api.get<UnreadCountResponse>('/notifications/unread-count'),
 	markAsRead: (id: number) => api.post<void>(`/notifications/${id}/read`, {}),
 	markAllAsRead: () => api.post<void>('/notifications/read-all', {}),
+	broadcast: (data: { title: string; message: string; severity?: string; actionUrl?: string | null }) =>
+		api.post<NotificationItem>('/notifications/broadcast', data),
 	getNotificationEmail: () => api.get<NotificationEmailResponse>('/notifications/email'),
 	setNotificationEmail: (email: string | null) =>
 		api.put<NotificationEmailResponse>('/notifications/email', { email }),

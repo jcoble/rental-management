@@ -20,7 +20,19 @@
 	let formErrors = $state<Record<string, string>>({});
 	let notificationEmail = $state('');
 	let signalWireTokenInput = $state('');
+	let broadcastForm = $state({
+		title: '',
+		message: '',
+		severity: 'Info'
+	});
 	let notificationSettingsForm = $state({
+		enableRentCharges: false,
+		enableLateFees: false,
+		enableLeaseExpiryReminders: true,
+		notifyTenants: false,
+		rentChargeLeadDays: 5,
+		lateFeeGraceDays: 5,
+		leaseExpiryReminderDays: 60,
 		enableDailyBriefingMessages: false,
 		dailyBriefingSendHourLocal: 8,
 		dailyBriefingIncludeEmpty: false,
@@ -140,6 +152,13 @@
 		if (notificationSettingsQuery.data) {
 			const data = notificationSettingsQuery.data;
 			notificationSettingsForm = {
+				enableRentCharges: data.enableRentCharges,
+				enableLateFees: data.enableLateFees,
+				enableLeaseExpiryReminders: data.enableLeaseExpiryReminders,
+				notifyTenants: data.notifyTenants,
+				rentChargeLeadDays: data.rentChargeLeadDays,
+				lateFeeGraceDays: data.lateFeeGraceDays,
+				leaseExpiryReminderDays: data.leaseExpiryReminderDays,
 				enableDailyBriefingMessages: data.enableDailyBriefingMessages,
 				dailyBriefingSendHourLocal: data.dailyBriefingSendHourLocal,
 				dailyBriefingIncludeEmpty: data.dailyBriefingIncludeEmpty,
@@ -175,6 +194,13 @@
 	const saveNotificationSettingsMutation = createMutation(() => ({
 		mutationFn: () =>
 			notifications.setSettings({
+				enableRentCharges: notificationSettingsForm.enableRentCharges,
+				enableLateFees: notificationSettingsForm.enableLateFees,
+				enableLeaseExpiryReminders: notificationSettingsForm.enableLeaseExpiryReminders,
+				notifyTenants: notificationSettingsForm.notifyTenants,
+				rentChargeLeadDays: Number(notificationSettingsForm.rentChargeLeadDays) || 5,
+				lateFeeGraceDays: Number(notificationSettingsForm.lateFeeGraceDays) || 5,
+				leaseExpiryReminderDays: Number(notificationSettingsForm.leaseExpiryReminderDays) || 60,
 				enableDailyBriefingMessages: notificationSettingsForm.enableDailyBriefingMessages,
 				dailyBriefingSendHourLocal: Number(notificationSettingsForm.dailyBriefingSendHourLocal) || 8,
 				dailyBriefingIncludeEmpty: notificationSettingsForm.dailyBriefingIncludeEmpty,
@@ -187,6 +213,13 @@
 			}),
 		onSuccess: (result) => {
 			notificationSettingsForm = {
+				enableRentCharges: result.enableRentCharges,
+				enableLateFees: result.enableLateFees,
+				enableLeaseExpiryReminders: result.enableLeaseExpiryReminders,
+				notifyTenants: result.notifyTenants,
+				rentChargeLeadDays: result.rentChargeLeadDays,
+				lateFeeGraceDays: result.lateFeeGraceDays,
+				leaseExpiryReminderDays: result.leaseExpiryReminderDays,
 				enableDailyBriefingMessages: result.enableDailyBriefingMessages,
 				dailyBriefingSendHourLocal: result.dailyBriefingSendHourLocal,
 				dailyBriefingIncludeEmpty: result.dailyBriefingIncludeEmpty,
@@ -200,6 +233,21 @@
 			signalWireTokenInput = '';
 			queryClient.invalidateQueries({ queryKey: ['notification-settings'] });
 			showSuccess('Notification delivery settings saved.');
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	const broadcastMutation = createMutation(() => ({
+		mutationFn: () =>
+			notifications.broadcast({
+				title: broadcastForm.title.trim(),
+				message: broadcastForm.message.trim(),
+				severity: broadcastForm.severity
+			}),
+		onSuccess: () => {
+			broadcastForm = { title: '', message: '', severity: 'Info' };
+			queryClient.invalidateQueries({ queryKey: ['notifications'] });
+			showSuccess('Broadcast notification sent.');
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
@@ -277,11 +325,91 @@
 			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" data-testid="settings-notification-delivery">
 				<div class="grid gap-4 md:grid-cols-2">
 					<div class="md:col-span-2">
-						<p class="text-sm font-semibold">SMS and Daily Briefing Delivery</p>
+						<p class="text-sm font-semibold">Automation and Delivery</p>
 						<p class="text-xs text-muted-foreground">
-							SignalWire credentials and briefing recipients are encrypted at rest in the database.
+							Automation flags, SignalWire credentials, and briefing recipients are stored in admin settings. Provider secrets are encrypted at rest.
 						</p>
 					</div>
+
+					<label class="flex items-start gap-3 rounded border border-border bg-background p-3">
+						<Checkbox
+							checked={notificationSettingsForm.enableRentCharges}
+							onCheckedChange={(v) => (notificationSettingsForm.enableRentCharges = v === true)}
+							data-testid="settings-enable-rent-charges"
+						/>
+						<span class="text-sm leading-tight">
+							<span class="font-medium">Auto-post rent charges</span>
+							<span class="block text-xs text-muted-foreground">Create scheduled rent rows before each due date.</span>
+						</span>
+					</label>
+					<label class="flex items-start gap-3 rounded border border-border bg-background p-3">
+						<Checkbox
+							checked={notificationSettingsForm.enableLateFees}
+							onCheckedChange={(v) => (notificationSettingsForm.enableLateFees = v === true)}
+							data-testid="settings-enable-late-fees"
+						/>
+						<span class="text-sm leading-tight">
+							<span class="font-medium">Auto-assess late fees</span>
+							<span class="block text-xs text-muted-foreground">Add lease late fees after the grace period.</span>
+						</span>
+					</label>
+					<label class="flex items-start gap-3 rounded border border-border bg-background p-3">
+						<Checkbox
+							checked={notificationSettingsForm.enableLeaseExpiryReminders}
+							onCheckedChange={(v) => (notificationSettingsForm.enableLeaseExpiryReminders = v === true)}
+							data-testid="settings-enable-lease-reminders"
+						/>
+						<span class="text-sm leading-tight">
+							<span class="font-medium">Lease expiry reminders</span>
+							<span class="block text-xs text-muted-foreground">Queue renewal and move-out reminders before lease end.</span>
+						</span>
+					</label>
+					<label class="flex items-start gap-3 rounded border border-border bg-background p-3">
+						<Checkbox
+							checked={notificationSettingsForm.notifyTenants}
+							onCheckedChange={(v) => (notificationSettingsForm.notifyTenants = v === true)}
+							data-testid="settings-notify-tenants"
+						/>
+						<span class="text-sm leading-tight">
+							<span class="font-medium">Send tenant notices</span>
+							<span class="block text-xs text-muted-foreground">Let automations enqueue tenant SMS/email when configured.</span>
+						</span>
+					</label>
+
+					<div>
+						<label for="settings-rent-lead-days" class="mb-1 block text-xs text-muted-foreground">Rent Lead Days</label>
+						<Input
+							id="settings-rent-lead-days"
+							type="number"
+							min="0"
+							max="31"
+							bind:value={notificationSettingsForm.rentChargeLeadDays}
+							data-testid="settings-rent-lead-days"
+						/>
+					</div>
+					<div>
+						<label for="settings-late-grace-days" class="mb-1 block text-xs text-muted-foreground">Late Fee Grace Days</label>
+						<Input
+							id="settings-late-grace-days"
+							type="number"
+							min="0"
+							max="60"
+							bind:value={notificationSettingsForm.lateFeeGraceDays}
+							data-testid="settings-late-grace-days"
+						/>
+					</div>
+					<div>
+						<label for="settings-lease-reminder-days" class="mb-1 block text-xs text-muted-foreground">Lease Reminder Days</label>
+						<Input
+							id="settings-lease-reminder-days"
+							type="number"
+							min="1"
+							max="365"
+							bind:value={notificationSettingsForm.leaseExpiryReminderDays}
+							data-testid="settings-lease-reminder-days"
+						/>
+					</div>
+					<div class="hidden md:block"></div>
 
 					<div>
 						<label for="settings-signalwire-project" class="mb-1 block text-xs text-muted-foreground">SignalWire Project ID</label>
@@ -391,6 +519,50 @@
 							data-testid="settings-notification-delivery-save"
 						>
 							{saveNotificationSettingsMutation.isPending ? 'Saving…' : 'Save Delivery Settings'}
+						</Button>
+					</div>
+				</div>
+			</div>
+
+			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" data-testid="settings-broadcast-notification">
+				<p class="text-sm font-semibold">Broadcast Notification</p>
+				<p class="mb-3 text-xs text-muted-foreground">
+					Send an in-app announcement to every user in this portfolio. It appears in their notification bell and tenant dashboard.
+				</p>
+				<div class="grid gap-3 md:grid-cols-[1fr_160px]">
+					<div>
+						<label for="broadcast-title" class="mb-1 block text-xs text-muted-foreground">Title</label>
+						<Input id="broadcast-title" bind:value={broadcastForm.title} placeholder="Swimming pool closed today" data-testid="broadcast-title" />
+					</div>
+					<div>
+						<label for="broadcast-severity" class="mb-1 block text-xs text-muted-foreground">Severity</label>
+						<Select.Root type="single" bind:value={broadcastForm.severity}>
+							<Select.Trigger id="broadcast-severity" class="w-full">{broadcastForm.severity}</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="Info" label="Info">Info</Select.Item>
+								<Select.Item value="Warning" label="Warning">Warning</Select.Item>
+								<Select.Item value="Critical" label="Critical">Critical</Select.Item>
+							</Select.Content>
+						</Select.Root>
+					</div>
+					<div class="md:col-span-2">
+						<label for="broadcast-message" class="mb-1 block text-xs text-muted-foreground">Message</label>
+						<textarea
+							id="broadcast-message"
+							bind:value={broadcastForm.message}
+							rows={3}
+							class="w-full rounded border border-border bg-background px-3 py-2 text-sm"
+							placeholder="The swimming pool is closed for maintenance and will reopen tomorrow morning."
+							data-testid="broadcast-message"
+						></textarea>
+					</div>
+					<div class="md:col-span-2">
+						<Button
+							onclick={() => broadcastMutation.mutate()}
+							disabled={!broadcastForm.title.trim() || !broadcastForm.message.trim() || broadcastMutation.isPending}
+							data-testid="broadcast-send"
+						>
+							{broadcastMutation.isPending ? 'Sending...' : 'Send Broadcast'}
 						</Button>
 					</div>
 				</div>

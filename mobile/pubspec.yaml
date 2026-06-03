@@ -18,6 +18,7 @@ dependencies:
   flutter_secure_storage: ^10.3.1
   image_picker: ^1.1.2
   signalr_netcore: ^1.4.4
+  record: ^7.0.0
 
 dev_dependencies:
   flutter_test:

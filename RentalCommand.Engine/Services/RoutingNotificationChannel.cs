@@ -39,6 +39,8 @@ public sealed class RoutingNotificationChannel : INotificationChannel
 
     public async Task SendSmsAsync(string toPhoneNumber, string message, CancellationToken ct = default)
     {
+        var normalizedTo = NormalizeSmsNumber(toPhoneNumber);
+
         // SignalWire (Twilio-compatible, cheaper) takes precedence when configured; Twilio is the fallback.
         var runtime = await _settings.GetRuntimeAsync(ct);
         var sw = runtime.SignalWire;
@@ -50,7 +52,7 @@ public sealed class RoutingNotificationChannel : INotificationChannel
                 space = "https://" + space;
             }
             var swUrl = $"{space}/api/laml/2010-04-01/Accounts/{sw.ProjectId}/Messages.json";
-            await PostCompatMessageAsync(swUrl, sw.ProjectId!, sw.Token!, sw.FromNumber!, toPhoneNumber, message, "SignalWire", ct);
+            await PostCompatMessageAsync(swUrl, sw.ProjectId!, sw.Token!, sw.FromNumber!, normalizedTo, message, "SignalWire", ct);
             return;
         }
 
@@ -58,13 +60,36 @@ public sealed class RoutingNotificationChannel : INotificationChannel
         if (twilio.Enabled)
         {
             var url = $"https://api.twilio.com/2010-04-01/Accounts/{twilio.AccountSid}/Messages.json";
-            await PostCompatMessageAsync(url, twilio.AccountSid!, twilio.AuthToken!, twilio.FromNumber!, toPhoneNumber, message, "Twilio", ct);
+            await PostCompatMessageAsync(url, twilio.AccountSid!, twilio.AuthToken!, twilio.FromNumber!, normalizedTo, message, "Twilio", ct);
             return;
         }
 
         _logger.LogInformation(
             "[SMS suppressed — no SMS provider configured] to {To}: {Message}",
-            toPhoneNumber, message);
+            normalizedTo, message);
+    }
+
+    private static string NormalizeSmsNumber(string input)
+    {
+        var trimmed = input.Trim();
+        var digits = new string(trimmed.Where(char.IsDigit).ToArray());
+
+        if (digits.Length == 10)
+        {
+            return "+1" + digits;
+        }
+
+        if (digits.Length == 11 && digits.StartsWith("1", StringComparison.Ordinal))
+        {
+            return "+" + digits;
+        }
+
+        if (trimmed.StartsWith("+", StringComparison.Ordinal) && digits.Length > 0)
+        {
+            return "+" + digits;
+        }
+
+        return trimmed;
     }
 
     // Twilio and SignalWire share the same Compatibility (LaML) API shape: HTTP Basic auth plus a

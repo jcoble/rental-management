@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 
@@ -53,6 +54,17 @@ public class NotificationsController : AuthenticatedPortfolioControllerBase
     {
         await _notifications.MarkAllAsReadAsync(GetPortfolioId(), GetUserId(), ct);
         return NoContent();
+    }
+
+    [HttpPost("broadcast")]
+    [Authorize(Roles = "Admin,Manager,Owner")]
+    [ProducesResponseType(typeof(NotificationResponse), StatusCodes.Status201Created)]
+    public async Task<ActionResult<NotificationResponse>> Broadcast(
+        [FromBody] CreateBroadcastNotificationRequest request,
+        CancellationToken ct)
+    {
+        var created = await _notifications.CreateBroadcastAsync(GetPortfolioId(), request, ct);
+        return Created($"/api/v1/notifications/{created.Id}", created);
     }
 
     [HttpGet("email")]

@@ -184,37 +184,76 @@ class _SummaryCards extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Row(
+      child: Column(
         children: [
-          Expanded(
-            child: _SummaryCard(
-              label: 'Collected',
-              amount: summary.collected,
-              color: colorScheme.primaryContainer,
-              textColor: colorScheme.onPrimaryContainer,
-              theme: theme,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: _SummaryCard(
+                  label: 'Collected',
+                  amount: summary.collected,
+                  color: colorScheme.primaryContainer,
+                  textColor: colorScheme.onPrimaryContainer,
+                  theme: theme,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _SummaryCard(
+                  label: 'Outstanding',
+                  amount: summary.outstanding,
+                  color: colorScheme.secondaryContainer,
+                  textColor: colorScheme.onSecondaryContainer,
+                  theme: theme,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _SummaryCard(
+                  label: 'Overdue',
+                  amount: summary.overdue,
+                  color: colorScheme.errorContainer,
+                  textColor: colorScheme.onErrorContainer,
+                  theme: theme,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _SummaryCard(
-              label: 'Outstanding',
-              amount: summary.outstanding,
-              color: colorScheme.secondaryContainer,
-              textColor: colorScheme.onSecondaryContainer,
-              theme: theme,
+          if (summary.snapshot.title.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      summary.snapshot.title,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (summary.snapshot.summary.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        summary.snapshot.summary,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                    for (final bullet in summary.snapshot.bullets.take(3)) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        '- $bullet',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _SummaryCard(
-              label: 'Overdue',
-              amount: summary.overdue,
-              color: colorScheme.errorContainer,
-              textColor: colorScheme.onErrorContainer,
-              theme: theme,
-            ),
-          ),
+          ],
         ],
       ),
     );

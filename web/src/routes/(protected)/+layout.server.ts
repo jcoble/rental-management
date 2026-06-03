@@ -13,6 +13,10 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		throw redirect(303, `/login?redirectTo=${encodeURIComponent(redirectTo)}`);
 	}
 
+	if (locals.user.roles?.includes('Tenant') && !locals.user.roles.some((r) => ['Admin', 'Manager', 'Agent'].includes(r))) {
+		throw redirect(303, '/portal');
+	}
+
 	return {
 		user: locals.user,
 		accessToken: locals.accessToken,

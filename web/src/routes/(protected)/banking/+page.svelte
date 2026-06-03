@@ -1,0 +1,463 @@
+<script lang="ts">
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { banking } from '$lib/api/endpoints/banking';
+	import type {
+		BankTransaction,
+		BankingSummary,
+		ExchangePlaidPublicTokenRequest,
+		ImportBankTransactionsRequest,
+		PlaidSettings
+	} from '$lib/types';
+	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
+	import * as Card from '$lib/components/ui/card';
+	import { Button } from '$lib/components/ui/button';
+	import { Landmark, Link2, RefreshCw, Upload } from '@lucide/svelte';
+
+	type PlaidWindow = Window &
+		typeof globalThis & {
+			Plaid?: {
+				create: (config: Record<string, unknown>) => { open: () => void; destroy?: () => void };
+			};
+		};
+
+	const queryClient = useQueryClient();
+	const portfolioId = $derived(getCurrentPortfolioId());
+
+	let statusFilter = $state('');
+	let exchangePublicToken = $state('');
+	let exchangeInstitutionName = $state('Plaid Sandbox Bank');
+	let exchangeAccountId = $state('');
+	let exchangeAccountName = $state('Operating checking');
+	let exchangeAccountMask = $state('');
+	let importJson = $state(`{
+  "provider": "Manual",
+  "institutionName": "Sample Bank",
+  "accountName": "Operating checking",
+  "accountMask": "1234",
+  "transactions": [
+    {
+      "providerTransactionId": "sample-deposit-001",
+      "postedAt": "2026-06-03T00:00:00Z",
+      "description": "Rent deposit",
+      "amount": 1200,
+      "isoCurrencyCode": "USD",
+      "category": "Rent"
+    }
+  ]
+}`);
+	const isDev = import.meta.env.DEV;
+
+	const summaryQuery = createQuery(() => ({
+		queryKey: ['banking-summary', portfolioId],
+		queryFn: () => banking.summary(),
+		enabled: !!portfolioId
+	}));
+
+	const transactionsQuery = createQuery(() => ({
+		queryKey: ['banking-transactions', portfolioId, statusFilter],
+		queryFn: () => banking.transactions(statusFilter || undefined),
+		enabled: !!portfolioId
+	}));
+
+	const plaidSettingsQuery = createQuery(() => ({
+		queryKey: ['banking-plaid-settings', portfolioId],
+		queryFn: () => banking.plaidSettings(),
+		enabled: !!portfolioId
+	}));
+
+	const summary = $derived(summaryQuery.data as BankingSummary | undefined);
+	const transactions = $derived((transactionsQuery.data as BankTransaction[] | undefined) ?? []);
+	const plaidSettings = $derived(plaidSettingsQuery.data as PlaidSettings | undefined);
+
+	function money(value: number) {
+		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
+	}
+
+	function date(value: string) {
+		return new Date(value).toLocaleDateString();
+	}
+
+	function refreshBanking() {
+		queryClient.invalidateQueries({ queryKey: ['banking-summary', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['banking-transactions', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['banking-plaid-settings', portfolioId] });
+	}
+
+	const linkTokenMutation = createMutation(() => ({
+		mutationFn: () => banking.createPlaidLinkToken(),
+		onSuccess: (result) => {
+			if (!result.configured) {
+				showError(result.message ?? 'Plaid settings are not configured.');
+			}
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	const exchangeMutation = createMutation(() => ({
+		mutationFn: (request: ExchangePlaidPublicTokenRequest) => banking.exchangePlaidPublicToken(request),
+		onSuccess: (connection) => {
+			showSuccess(`Connected ${connection.institutionName} ${connection.accountName}.`);
+			exchangePublicToken = '';
+			refreshBanking();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	const syncMutation = createMutation(() => ({
+		mutationFn: (id: number) => banking.syncConnection(id),
+		onSuccess: (result) => {
+			showSuccess(`Synced ${result.importedCount} new transaction${result.importedCount === 1 ? '' : 's'}.`);
+			refreshBanking();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	const importMutation = createMutation(() => ({
+		mutationFn: (request: ImportBankTransactionsRequest) => banking.importTransactions(request),
+		onSuccess: (result) => {
+			showSuccess(`Imported ${result.importedCount} bank transaction${result.importedCount === 1 ? '' : 's'}.`);
+			refreshBanking();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	const matchMutation = createMutation(() => ({
+		mutationFn: ({ id, entityType, entityId }: { id: number; entityType: string; entityId: number }) =>
+			banking.match(id, { entityType, entityId }),
+		onSuccess: () => {
+			showSuccess('Bank transaction matched.');
+			refreshBanking();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	const clearMutation = createMutation(() => ({
+		mutationFn: (id: number) => banking.clearMatch(id),
+		onSuccess: () => {
+			showSuccess('Match cleared.');
+			refreshBanking();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	function importTransactions() {
+		try {
+			const parsed = JSON.parse(importJson) as ImportBankTransactionsRequest;
+			if (!Array.isArray(parsed.transactions) || parsed.transactions.length === 0) {
+				showError('Import JSON needs a transactions array.');
+				return;
+			}
+			importMutation.mutate(parsed);
+		} catch {
+			showError('Import JSON is not valid.');
+		}
+	}
+
+	async function loadPlaidScript() {
+		const plaidWindow = window as PlaidWindow;
+		if (plaidWindow.Plaid) return;
+		await new Promise<void>((resolve, reject) => {
+			const existing = document.querySelector<HTMLScriptElement>('script[src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"]');
+			if (existing) {
+				existing.addEventListener('load', () => resolve(), { once: true });
+				existing.addEventListener('error', () => reject(new Error('Plaid Link script failed to load.')), { once: true });
+				return;
+			}
+			const script = document.createElement('script');
+			script.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js';
+			script.async = true;
+			script.onload = () => resolve();
+			script.onerror = () => reject(new Error('Plaid Link script failed to load.'));
+			document.head.appendChild(script);
+		});
+	}
+
+	async function connectPlaid() {
+		try {
+			const result = await linkTokenMutation.mutateAsync();
+			if (!result.configured || !result.linkToken) return;
+			sessionStorage.setItem('plaid:linkToken', result.linkToken);
+			await loadPlaidScript();
+			const handler = (window as PlaidWindow).Plaid?.create({
+				token: result.linkToken,
+				onSuccess: async (public_token: string, metadata: Record<string, unknown>) => {
+					const accounts = (metadata.accounts as Array<Record<string, string | undefined>> | undefined) ?? [];
+					const account = accounts[0] ?? {};
+					const institution = metadata.institution as Record<string, string | undefined> | undefined;
+					await exchangeMutation.mutateAsync({
+						publicToken: public_token,
+						institutionName: institution?.name ?? 'Plaid bank',
+						accountId: account.id ?? '',
+						accountName: account.name ?? account.subtype ?? 'Linked account',
+						accountMask: account.mask,
+						accountType: account.type,
+						accountSubtype: account.subtype
+					});
+					sessionStorage.removeItem('plaid:linkToken');
+				},
+				onExit: () => {
+					sessionStorage.removeItem('plaid:linkToken');
+				}
+			});
+			handler?.open();
+		} catch (err) {
+			showError(apiErrorMessage(err));
+		}
+	}
+
+	function exchangeManualPublicToken() {
+		if (!exchangePublicToken.trim() || !exchangeAccountId.trim()) {
+			showError('Public token and account id are required.');
+			return;
+		}
+		exchangeMutation.mutate({
+			publicToken: exchangePublicToken,
+			institutionName: exchangeInstitutionName,
+			accountId: exchangeAccountId,
+			accountName: exchangeAccountName || 'Linked account',
+			accountMask: exchangeAccountMask || undefined,
+			accountType: 'depository',
+			accountSubtype: 'checking'
+		});
+	}
+</script>
+
+<svelte:head>
+	<title>Banking - Rental Command</title>
+</svelte:head>
+
+<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="banking-page">
+	<div class="mb-5 flex flex-wrap items-start justify-between gap-4">
+		<div>
+			<h1 class="flex items-center gap-2 text-2xl font-bold">
+				<Landmark class="h-6 w-6 text-primary" />
+				Banking
+			</h1>
+			<p class="mt-1 text-sm text-muted-foreground">
+				Read-only bank reconciliation. Import or sync deposits and withdrawals, then match them to rent payments and expenses.
+			</p>
+		</div>
+		<Button variant="outline" onclick={connectPlaid} disabled={linkTokenMutation.isPending || exchangeMutation.isPending || !plaidSettings?.configured}>
+			<Link2 class="mr-1.5 h-4 w-4" />
+			{linkTokenMutation.isPending || exchangeMutation.isPending ? 'Connecting...' : 'Connect Plaid'}
+		</Button>
+	</div>
+
+	<div class="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+		<Card.Root class="gap-0 py-0">
+			<Card.Content class="p-4">
+				<p class="text-xs text-muted-foreground">Bank connections</p>
+				<p class="font-mono text-2xl font-bold">{summary?.connectionCount ?? 0}</p>
+			</Card.Content>
+		</Card.Root>
+		<Card.Root class="gap-0 py-0">
+			<Card.Content class="p-4">
+				<p class="text-xs text-muted-foreground">Transactions</p>
+				<p class="font-mono text-2xl font-bold">{summary?.transactionCount ?? 0}</p>
+			</Card.Content>
+		</Card.Root>
+		<Card.Root class="gap-0 py-0">
+			<Card.Content class="p-4">
+				<p class="text-xs text-muted-foreground">Unmatched</p>
+				<p class="font-mono text-2xl font-bold text-amber-600">{summary?.unmatchedCount ?? 0}</p>
+			</Card.Content>
+		</Card.Root>
+		<Card.Root class="gap-0 py-0">
+			<Card.Content class="p-4">
+				<p class="text-xs text-muted-foreground">Suggestions</p>
+				<p class="font-mono text-2xl font-bold text-primary">{summary?.suggestedMatchCount ?? 0}</p>
+			</Card.Content>
+		</Card.Root>
+	</div>
+
+	<div class="grid gap-6 xl:grid-cols-[1fr_420px]">
+		<Card.Root class="gap-0 py-0">
+			<Card.Header class="border-b border-border px-4 py-3">
+				<div class="flex flex-wrap items-center justify-between gap-3">
+					<div>
+						<Card.Title class="text-base">Bank transactions</Card.Title>
+						<Card.Description>Deposits are positive. Withdrawals are negative.</Card.Description>
+					</div>
+					<select
+						class="h-9 rounded-md border border-input bg-background px-3 text-sm"
+						bind:value={statusFilter}
+						data-testid="banking-status-filter"
+					>
+						<option value="">All</option>
+						<option value="Unmatched">Unmatched</option>
+						<option value="Matched">Matched</option>
+					</select>
+				</div>
+			</Card.Header>
+			<Card.Content class="p-0">
+				{#if transactionsQuery.isLoading}
+					<p class="py-12 text-center text-sm text-muted-foreground">Loading bank transactions...</p>
+				{:else if transactionsQuery.isError}
+					<p class="py-12 text-center text-sm text-destructive">Could not load bank transactions.</p>
+				{:else if transactions.length === 0}
+					<p class="py-12 text-center text-sm text-muted-foreground">No bank transactions yet.</p>
+				{:else}
+					<div class="overflow-x-auto">
+						<table class="w-full text-sm">
+							<thead>
+								<tr class="border-b border-border bg-muted/50">
+									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Date</th>
+									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Description</th>
+									<th class="px-4 py-3 text-right font-medium text-muted-foreground">Amount</th>
+									<th class="px-4 py-3 text-left font-medium text-muted-foreground">Match</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each transactions as transaction (transaction.id)}
+									<tr class="border-b border-border last:border-0" data-testid="bank-transaction-{transaction.id}">
+										<td class="whitespace-nowrap px-4 py-3">{date(transaction.postedAt)}</td>
+										<td class="px-4 py-3">
+											<p class="font-medium">{transaction.merchantName || transaction.description}</p>
+											<p class="text-xs text-muted-foreground">{transaction.institutionName} / {transaction.accountName}</p>
+										</td>
+										<td class="whitespace-nowrap px-4 py-3 text-right font-mono {transaction.amount >= 0 ? 'text-green-600' : 'text-destructive'}">
+											{money(transaction.amount)}
+										</td>
+										<td class="min-w-64 px-4 py-3">
+											{#if transaction.matchStatus === 'Matched'}
+												<div class="flex flex-wrap items-center gap-2">
+													<span class="rounded-full bg-green-500/10 px-2 py-1 text-xs font-medium text-green-600">Matched</span>
+													<Button
+														size="sm"
+														variant="outline"
+														onclick={() => clearMutation.mutate(transaction.id)}
+														disabled={clearMutation.isPending}
+													>
+														Clear
+													</Button>
+												</div>
+											{:else if transaction.suggestedMatch}
+												<div class="space-y-2">
+													<p class="text-xs text-muted-foreground">{transaction.suggestedMatch.reason}</p>
+													<Button
+														size="sm"
+														onclick={() => matchMutation.mutate({
+															id: transaction.id,
+															entityType: transaction.suggestedMatch!.entityType,
+															entityId: transaction.suggestedMatch!.entityId
+														})}
+														disabled={matchMutation.isPending}
+													>
+														Match {transaction.suggestedMatch.label}
+													</Button>
+												</div>
+											{:else}
+												<span class="text-xs text-muted-foreground">No suggestion yet</span>
+											{/if}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+			</Card.Content>
+		</Card.Root>
+
+		<div class="space-y-4">
+			<Card.Root class="gap-0 py-0">
+					<Card.Header class="border-b border-border px-4 py-3">
+						<Card.Title class="flex items-center gap-2 text-base">
+							<Link2 class="h-4 w-4" />
+							Plaid
+						</Card.Title>
+						<Card.Description>Read-only bank connection through Plaid Link.</Card.Description>
+					</Card.Header>
+					<Card.Content class="space-y-3 p-4">
+						<div class="rounded-md border border-border p-3">
+							<p class="text-sm font-medium">
+								{plaidSettings?.configured ? 'Plaid is configured' : 'Plaid is not configured'}
+							</p>
+							<p class="mt-1 text-xs text-muted-foreground">
+								Environment: {plaidSettings?.plaidEnvironment ?? 'sandbox'}
+							</p>
+							{#if !plaidSettings?.configured}
+								<p class="mt-2 text-xs text-muted-foreground">
+									Set <code>Plaid:ClientId</code> and <code>Plaid:Secret</code> in server secrets to enable bank connections.
+								</p>
+							{/if}
+						</div>
+						<div class="flex flex-wrap gap-2">
+							<Button variant="outline" onclick={connectPlaid} disabled={!plaidSettings?.configured || linkTokenMutation.isPending || exchangeMutation.isPending}>
+								<Link2 class="mr-1.5 h-4 w-4" />
+							Connect account
+						</Button>
+					</div>
+				</Card.Content>
+			</Card.Root>
+
+			<Card.Root class="gap-0 py-0">
+				<Card.Header class="border-b border-border px-4 py-3">
+					<Card.Title class="text-base">Connections</Card.Title>
+					<Card.Description>Sync pulls new bank lines from Plaid and keeps existing matches.</Card.Description>
+				</Card.Header>
+				<Card.Content class="space-y-3 p-4">
+					{#if (summary?.connections.length ?? 0) === 0}
+						<p class="text-sm text-muted-foreground">No bank connections yet.</p>
+					{:else}
+						{#each summary?.connections ?? [] as connection (connection.id)}
+							<div class="rounded-md border border-border p-3">
+								<div class="flex items-start justify-between gap-3">
+									<div>
+										<p class="font-medium">{connection.institutionName}</p>
+										<p class="text-xs text-muted-foreground">{connection.accountName}{connection.accountMask ? ` • ${connection.accountMask}` : ''}</p>
+										<p class="mt-1 text-xs text-muted-foreground">Last synced {connection.lastSyncedAt ? date(connection.lastSyncedAt) : 'never'}</p>
+									</div>
+									<Button size="sm" variant="outline" onclick={() => syncMutation.mutate(connection.id)} disabled={syncMutation.isPending || connection.provider !== 'Plaid'}>
+										<RefreshCw class="mr-1.5 h-4 w-4" />
+										Sync
+									</Button>
+								</div>
+							</div>
+						{/each}
+					{/if}
+				</Card.Content>
+			</Card.Root>
+
+			{#if isDev}
+				<Card.Root class="gap-0 py-0">
+					<Card.Header class="border-b border-border px-4 py-3">
+						<Card.Title class="text-base">Sandbox token exchange</Card.Title>
+						<Card.Description>Development-only Plaid sandbox/debug path when Link is not available.</Card.Description>
+					</Card.Header>
+					<Card.Content class="space-y-3 p-4">
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="public-sandbox-token" bind:value={exchangePublicToken} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Plaid account id" bind:value={exchangeAccountId} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Institution name" bind:value={exchangeInstitutionName} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Account name" bind:value={exchangeAccountName} />
+						<input class="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" placeholder="Mask" bind:value={exchangeAccountMask} />
+						<Button class="w-full" variant="outline" onclick={exchangeManualPublicToken} disabled={exchangeMutation.isPending}>
+							Exchange public token
+						</Button>
+					</Card.Content>
+				</Card.Root>
+			{/if}
+
+			<Card.Root class="gap-0 py-0">
+				<Card.Header class="border-b border-border px-4 py-3">
+					<Card.Title class="flex items-center gap-2 text-base">
+						<Upload class="h-4 w-4" />
+						Import bank lines
+					</Card.Title>
+					<Card.Description>Manual import stays available for CSV/JSON exports and scanner cleanup.</Card.Description>
+				</Card.Header>
+				<Card.Content class="space-y-3 p-4">
+					<textarea
+						class="min-h-80 w-full rounded-md border border-input bg-background p-3 font-mono text-xs"
+						bind:value={importJson}
+						data-testid="banking-import-json"
+					></textarea>
+					<Button class="w-full" onclick={importTransactions} disabled={importMutation.isPending}>
+						{importMutation.isPending ? 'Importing...' : 'Import transactions'}
+					</Button>
+				</Card.Content>
+			</Card.Root>
+		</div>
+	</div>
+</div>

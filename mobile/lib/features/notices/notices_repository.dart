@@ -1,0 +1,62 @@
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/api/api_exception.dart';
+import '../../core/api/dio_client.dart';
+import 'notices_models.dart';
+
+class NoticesRepository {
+  NoticesRepository(this._dio);
+
+  final Dio _dio;
+
+  Future<List<NoticeDraft>> list({String status = 'Draft'}) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/notices',
+        queryParameters: status.isEmpty ? null : {'status': status},
+      );
+      return (response.data ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(NoticeDraft.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> generate() async {
+    try {
+      await _dio.post<Map<String, dynamic>>('/notices/generate', data: {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> approve(int id, List<String> channels) async {
+    try {
+      await _dio.post<Map<String, dynamic>>(
+        '/notices/$id/approve',
+        data: {'channels': channels},
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> dismiss(int id) async {
+    try {
+      await _dio.post<Map<String, dynamic>>('/notices/$id/dismiss', data: {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+}
+
+final noticesRepositoryProvider = Provider<NoticesRepository>((ref) {
+  return NoticesRepository(ref.watch(dioProvider));
+});
+
+final noticeDraftsProvider = FutureProvider.autoDispose<List<NoticeDraft>>((ref) {
+  return ref.watch(noticesRepositoryProvider).list();
+});

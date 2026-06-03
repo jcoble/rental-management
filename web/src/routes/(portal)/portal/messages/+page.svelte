@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { page } from '$app/stores';
 	import { tick } from 'svelte';
 	import {
 		portal,
@@ -17,6 +18,13 @@
 
 	// --- Selected thread --------------------------------------------------------
 	let selectedId = $state<number | null>(null);
+
+	$effect(() => {
+		const fromUrl = $page.url.searchParams.get('conversation');
+		if (fromUrl && Number.isFinite(Number(fromUrl))) {
+			selectedId = Number(fromUrl);
+		}
+	});
 
 	// --- Conversation list (left pane) -----------------------------------------
 	const conversationsQuery = createQuery(() => ({
@@ -149,7 +157,7 @@
 	<title>Messages - Rental Command</title>
 </svelte:head>
 
-<div class="flex h-screen flex-col" data-testid="portal-messages-page">
+<div class="flex h-full min-h-[720px] flex-col" data-testid="portal-messages-page">
 	<!-- Two-pane shell: thread list on the left, conversation on the right. On
 	     narrow screens only one pane shows at a time (list ↔ thread). -->
 	<div class="flex min-h-0 flex-1 overflow-hidden">

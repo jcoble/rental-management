@@ -1,0 +1,314 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/api/api_exception.dart';
+import 'banking_models.dart';
+import 'banking_repository.dart';
+
+class BankingScreen extends ConsumerWidget {
+  const BankingScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final summaryAsync = ref.watch(bankingSummaryProvider);
+    final transactionsAsync = ref.watch(bankingTransactionsProvider);
+
+    Future<void> refresh() async {
+      ref.invalidate(bankingSummaryProvider);
+      ref.invalidate(bankingTransactionsProvider);
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Banking')),
+      body: RefreshIndicator(
+        onRefresh: refresh,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          children: [
+            summaryAsync.when(
+              loading: () => const _LoadingCard(label: 'Loading banking summary...'),
+              error: (e, _) => _ErrorCard(message: _message(e)),
+              data: (summary) => _SummaryGrid(summary: summary),
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'Recent bank lines',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            transactionsAsync.when(
+              loading: () => const _LoadingCard(label: 'Loading transactions...'),
+              error: (e, _) => _ErrorCard(message: _message(e)),
+              data: (transactions) {
+                if (transactions.isEmpty) {
+                  return const _EmptyCard();
+                }
+                return Column(
+                  children: [
+                    for (final transaction in transactions) ...[
+                      _TransactionCard(transaction: transaction),
+                      const SizedBox(height: 8),
+                    ],
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _message(Object e) => e is ApiException ? e.message : e.toString();
+}
+
+class _SummaryGrid extends StatelessWidget {
+  const _SummaryGrid({required this.summary});
+
+  final BankingSummary summary;
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.count(
+      crossAxisCount: 2,
+      crossAxisSpacing: 10,
+      mainAxisSpacing: 10,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      childAspectRatio: 1.65,
+      children: [
+        _MetricCard(label: 'Connections', value: '${summary.connectionCount}'),
+        _MetricCard(label: 'Transactions', value: '${summary.transactionCount}'),
+        _MetricCard(label: 'Unmatched', value: '${summary.unmatchedCount}'),
+        _MetricCard(label: 'Suggestions', value: '${summary.suggestedMatchCount}'),
+      ],
+    );
+  }
+}
+
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(label, style: theme.textTheme.bodySmall),
+            const SizedBox(height: 4),
+            Text(
+              value,
+              style: theme.textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TransactionCard extends ConsumerWidget {
+  const _TransactionCard({required this.transaction});
+
+  final BankTransaction transaction;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final suggestion = transaction.suggestedMatch;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    transaction.merchantName ?? transaction.description,
+                    style: theme.textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Text(
+                  _money(transaction.amount),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: transaction.amount >= 0 ? Colors.green.shade700 : cs.error,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${transaction.institutionName} / ${transaction.accountName} / ${_date(transaction.postedAt)}',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 10),
+            if (transaction.matchStatus == 'Matched')
+              Row(
+                children: [
+                  const _StatusPill(label: 'Matched'),
+                  const SizedBox(width: 8),
+                  TextButton(
+                    onPressed: () async {
+                      try {
+                        await ref
+                            .read(bankingRepositoryProvider)
+                            .clearMatch(transaction);
+                        ref.invalidate(bankingSummaryProvider);
+                        ref.invalidate(bankingTransactionsProvider);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Match cleared.')),
+                          );
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(BankingScreen._message(e))),
+                          );
+                        }
+                      }
+                    },
+                    child: const Text('Clear'),
+                  ),
+                ],
+              )
+            else if (suggestion != null) ...[
+              Text(
+                suggestion.reason,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 8),
+              FilledButton.tonal(
+                onPressed: () async {
+                  await ref.read(bankingRepositoryProvider).match(transaction);
+                  ref.invalidate(bankingSummaryProvider);
+                  ref.invalidate(bankingTransactionsProvider);
+                },
+                child: Text('Match ${suggestion.label}'),
+              ),
+            ] else
+              Text(
+                'No match suggestion yet',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _money(double value) {
+    final sign = value < 0 ? '-' : '';
+    return '$sign\$${value.abs().toStringAsFixed(2)}';
+  }
+
+  static String _date(DateTime value) => '${value.month}/${value.day}/${value.year}';
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.green.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: Colors.green.shade700,
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _LoadingCard extends StatelessWidget {
+  const _LoadingCard({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 12),
+            Text(label),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorCard extends StatelessWidget {
+  const _ErrorCard({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Text(message, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+      ),
+    );
+  }
+}
+
+class _EmptyCard extends StatelessWidget {
+  const _EmptyCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Card(
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Text('No bank transactions yet. Import or connect a read-only account on web.'),
+      ),
+    );
+  }
+}

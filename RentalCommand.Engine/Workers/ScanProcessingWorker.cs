@@ -8,6 +8,10 @@ using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Workers;
 
+public sealed record ExtractionSchema(
+    string Instructions,
+    IReadOnlyList<ExtractionFieldSpec> Fields);
+
 /// <summary>
 /// Polls Pending <see cref="Core.Entities.ScanDraft"/> rows, runs LLM extraction off the request
 /// path, writes the per-field {value,confidence} JSON + provenance back to the draft, flips Status
@@ -27,6 +31,11 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
 
     public ScanProcessingWorker(IServiceProvider serviceProvider, ILogger<ScanProcessingWorker> logger)
         : base(serviceProvider, logger) { }
+
+    public static ExtractionSchema ChooseExtractionSchema(string? targetEntityType)
+        => string.Equals(targetEntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase)
+            ? new ExtractionSchema(WorkOrderExtractionSchema.Instructions, WorkOrderExtractionSchema.Fields)
+            : new ExtractionSchema(ReceiptExtractionSchema.Instructions, ReceiptExtractionSchema.Fields);
 
     protected override async Task<int> ExecuteCycleAsync(IServiceProvider scoped, CancellationToken ct)
     {
@@ -87,11 +96,12 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                 // prompt small/cheap on large portfolios.
                 var groundingContext = await BuildGroundingContextAsync(db, draft.PortfolioId, ct);
 
-                // Receipt→Expense only this phase.
+                var schema = ChooseExtractionSchema(draft.TargetEntityType);
+
                 var extracted = await llm.ExtractAsync(
                     bytes, contentType,
-                    ReceiptExtractionSchema.Instructions,
-                    ReceiptExtractionSchema.Fields,
+                    schema.Instructions,
+                    schema.Fields,
                     groundingContext, ct);
 
                 // Persist {name:{value,confidence}} JSON + provenance.
@@ -103,11 +113,18 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                 draft.TokensUsed = extracted.TokensUsed;
                 draft.CostUsd = EstimateCost(extracted.ModelId, extracted.InputTokens, extracted.OutputTokens);
 
-                // Route by classified document kind: rent checks become Payments, everything else Expenses.
-                var classifiedKind = extracted.Fields.TryGetValue("document_kind", out var kindField)
-                    ? kindField.Value ?? string.Empty
-                    : string.Empty;
-                draft.TargetEntityType = classifiedKind == "RentCheck" ? "Payment" : "Expense";
+                if (!string.Equals(draft.TargetEntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Route by classified document kind: rent checks become Payments, everything else Expenses.
+                    var classifiedKind = extracted.Fields.TryGetValue("document_kind", out var kindField)
+                        ? kindField.Value ?? string.Empty
+                        : string.Empty;
+                    draft.TargetEntityType = classifiedKind == "RentCheck" ? "Payment" : "Expense";
+                }
+                else
+                {
+                    draft.TargetEntityType = "WorkOrder";
+                }
 
                 draft.Status = "Reviewing";
                 draft.ReviewedAt = DateTime.UtcNow;
