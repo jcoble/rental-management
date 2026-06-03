@@ -19,6 +19,18 @@
 	let saveSucceeded = $state(false);
 	let formErrors = $state<Record<string, string>>({});
 	let notificationEmail = $state('');
+	let signalWireTokenInput = $state('');
+	let notificationSettingsForm = $state({
+		enableDailyBriefingMessages: false,
+		dailyBriefingSendHourLocal: 8,
+		dailyBriefingIncludeEmpty: false,
+		dailyBriefingSmsRecipientsText: '',
+		dailyBriefingEmailRecipientsText: '',
+		signalWireProjectId: '',
+		signalWireSpaceUrl: '',
+		signalWireFromNumber: '',
+		signalWireTokenSet: false,
+	});
 
 	const portfolioQuery = createQuery(() => ({
 		queryKey: ['portfolio', portfolioId],
@@ -30,6 +42,12 @@
 		queryKey: ['notification-email', portfolioId],
 		enabled: authState.isAuthenticated && portfolioId > 0,
 		queryFn: () => notifications.getNotificationEmail(),
+	}));
+
+	const notificationSettingsQuery = createQuery(() => ({
+		queryKey: ['notification-settings'],
+		enabled: authState.isAuthenticated && portfolioId > 0,
+		queryFn: () => notifications.getSettings(),
 	}));
 
 	let form = $state({
@@ -118,6 +136,24 @@
 		}
 	});
 
+	$effect(() => {
+		if (notificationSettingsQuery.data) {
+			const data = notificationSettingsQuery.data;
+			notificationSettingsForm = {
+				enableDailyBriefingMessages: data.enableDailyBriefingMessages,
+				dailyBriefingSendHourLocal: data.dailyBriefingSendHourLocal,
+				dailyBriefingIncludeEmpty: data.dailyBriefingIncludeEmpty,
+				dailyBriefingSmsRecipientsText: data.dailyBriefingSmsRecipients.join('\n'),
+				dailyBriefingEmailRecipientsText: data.dailyBriefingEmailRecipients.join('\n'),
+				signalWireProjectId: data.signalWireProjectId ?? '',
+				signalWireSpaceUrl: data.signalWireSpaceUrl ?? '',
+				signalWireFromNumber: data.signalWireFromNumber ?? '',
+				signalWireTokenSet: data.signalWireTokenSet,
+			};
+			signalWireTokenInput = '';
+		}
+	});
+
 	const saveNotificationEmailMutation = createMutation(() => ({
 		mutationFn: () => notifications.setNotificationEmail(notificationEmail.trim() || null),
 		onSuccess: (result) => {
@@ -125,6 +161,45 @@
 			queryClient.invalidateQueries({ queryKey: ['notification-email', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['portfolio', portfolioId] });
 			showSuccess('Notification email saved.');
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	function parseRecipients(text: string) {
+		return text
+			.split(/[\n,]+/)
+			.map((value) => value.trim())
+			.filter(Boolean);
+	}
+
+	const saveNotificationSettingsMutation = createMutation(() => ({
+		mutationFn: () =>
+			notifications.setSettings({
+				enableDailyBriefingMessages: notificationSettingsForm.enableDailyBriefingMessages,
+				dailyBriefingSendHourLocal: Number(notificationSettingsForm.dailyBriefingSendHourLocal) || 8,
+				dailyBriefingIncludeEmpty: notificationSettingsForm.dailyBriefingIncludeEmpty,
+				dailyBriefingSmsRecipients: parseRecipients(notificationSettingsForm.dailyBriefingSmsRecipientsText),
+				dailyBriefingEmailRecipients: parseRecipients(notificationSettingsForm.dailyBriefingEmailRecipientsText),
+				signalWireProjectId: notificationSettingsForm.signalWireProjectId.trim() || null,
+				signalWireToken: signalWireTokenInput.length > 0 ? signalWireTokenInput : undefined,
+				signalWireSpaceUrl: notificationSettingsForm.signalWireSpaceUrl.trim() || null,
+				signalWireFromNumber: notificationSettingsForm.signalWireFromNumber.trim() || null,
+			}),
+		onSuccess: (result) => {
+			notificationSettingsForm = {
+				enableDailyBriefingMessages: result.enableDailyBriefingMessages,
+				dailyBriefingSendHourLocal: result.dailyBriefingSendHourLocal,
+				dailyBriefingIncludeEmpty: result.dailyBriefingIncludeEmpty,
+				dailyBriefingSmsRecipientsText: result.dailyBriefingSmsRecipients.join('\n'),
+				dailyBriefingEmailRecipientsText: result.dailyBriefingEmailRecipients.join('\n'),
+				signalWireProjectId: result.signalWireProjectId ?? '',
+				signalWireSpaceUrl: result.signalWireSpaceUrl ?? '',
+				signalWireFromNumber: result.signalWireFromNumber ?? '',
+				signalWireTokenSet: result.signalWireTokenSet,
+			};
+			signalWireTokenInput = '';
+			queryClient.invalidateQueries({ queryKey: ['notification-settings'] });
+			showSuccess('Notification delivery settings saved.');
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
@@ -196,6 +271,128 @@
 					>
 						{saveNotificationEmailMutation.isPending ? 'Saving…' : 'Save'}
 					</Button>
+				</div>
+			</div>
+
+			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" data-testid="settings-notification-delivery">
+				<div class="grid gap-4 md:grid-cols-2">
+					<div class="md:col-span-2">
+						<p class="text-sm font-semibold">SMS and Daily Briefing Delivery</p>
+						<p class="text-xs text-muted-foreground">
+							SignalWire credentials and briefing recipients are encrypted at rest in the database.
+						</p>
+					</div>
+
+					<div>
+						<label for="settings-signalwire-project" class="mb-1 block text-xs text-muted-foreground">SignalWire Project ID</label>
+						<Input
+							id="settings-signalwire-project"
+							bind:value={notificationSettingsForm.signalWireProjectId}
+							autocomplete="off"
+							data-testid="settings-signalwire-project"
+						/>
+					</div>
+					<div>
+						<label for="settings-signalwire-space" class="mb-1 block text-xs text-muted-foreground">SignalWire Space URL</label>
+						<Input
+							id="settings-signalwire-space"
+							bind:value={notificationSettingsForm.signalWireSpaceUrl}
+							placeholder="your-space.signalwire.com"
+							autocomplete="off"
+							data-testid="settings-signalwire-space"
+						/>
+					</div>
+					<div>
+						<label for="settings-signalwire-from" class="mb-1 block text-xs text-muted-foreground">SignalWire From Number</label>
+						<Input
+							id="settings-signalwire-from"
+							bind:value={notificationSettingsForm.signalWireFromNumber}
+							placeholder="+13302933081"
+							autocomplete="off"
+							data-testid="settings-signalwire-from"
+						/>
+					</div>
+					<div>
+						<label for="settings-signalwire-token" class="mb-1 block text-xs text-muted-foreground">
+							SignalWire API Token {notificationSettingsForm.signalWireTokenSet ? '(saved)' : ''}
+						</label>
+						<Input
+							id="settings-signalwire-token"
+							type="password"
+							bind:value={signalWireTokenInput}
+							placeholder={notificationSettingsForm.signalWireTokenSet ? 'Leave blank to keep saved token' : 'Paste API token'}
+							autocomplete="new-password"
+							data-testid="settings-signalwire-token"
+						/>
+					</div>
+
+					<label class="flex items-start gap-3 md:col-span-2">
+						<Checkbox
+							checked={notificationSettingsForm.enableDailyBriefingMessages}
+							onCheckedChange={(v) => (notificationSettingsForm.enableDailyBriefingMessages = v === true)}
+							data-testid="settings-daily-briefing-enabled"
+						/>
+						<span class="text-sm leading-tight">
+							<span class="font-medium">Send daily briefing messages</span>
+							<span class="block text-xs text-muted-foreground">The Engine sends one briefing per portfolio per day after the local send hour.</span>
+						</span>
+					</label>
+
+					<div>
+						<label for="settings-briefing-hour" class="mb-1 block text-xs text-muted-foreground">Send Hour Local</label>
+						<Input
+							id="settings-briefing-hour"
+							type="number"
+							min="0"
+							max="23"
+							bind:value={notificationSettingsForm.dailyBriefingSendHourLocal}
+							data-testid="settings-briefing-hour"
+						/>
+					</div>
+					<label class="flex items-start gap-3 self-end pb-2">
+						<Checkbox
+							checked={notificationSettingsForm.dailyBriefingIncludeEmpty}
+							onCheckedChange={(v) => (notificationSettingsForm.dailyBriefingIncludeEmpty = v === true)}
+							data-testid="settings-briefing-include-empty"
+						/>
+						<span class="text-sm leading-tight">
+							<span class="font-medium">Send even when empty</span>
+							<span class="block text-xs text-muted-foreground">Useful for testing; usually leave this off.</span>
+						</span>
+					</label>
+
+					<div>
+						<label for="settings-briefing-sms" class="mb-1 block text-xs text-muted-foreground">Daily Briefing SMS Recipients</label>
+						<textarea
+							id="settings-briefing-sms"
+							bind:value={notificationSettingsForm.dailyBriefingSmsRecipientsText}
+							rows={3}
+							class="w-full rounded border border-border bg-background px-3 py-2 text-sm"
+							placeholder="+13303966191"
+							data-testid="settings-briefing-sms"
+						></textarea>
+					</div>
+					<div>
+						<label for="settings-briefing-email" class="mb-1 block text-xs text-muted-foreground">Daily Briefing Email Recipients</label>
+						<textarea
+							id="settings-briefing-email"
+							bind:value={notificationSettingsForm.dailyBriefingEmailRecipientsText}
+							rows={3}
+							class="w-full rounded border border-border bg-background px-3 py-2 text-sm"
+							placeholder="owner@example.com"
+							data-testid="settings-briefing-email"
+						></textarea>
+					</div>
+
+					<div class="md:col-span-2">
+						<Button
+							onclick={() => saveNotificationSettingsMutation.mutate()}
+							disabled={notificationSettingsQuery.isLoading || saveNotificationSettingsMutation.isPending}
+							data-testid="settings-notification-delivery-save"
+						>
+							{saveNotificationSettingsMutation.isPending ? 'Saving…' : 'Save Delivery Settings'}
+						</Button>
+					</div>
 				</div>
 			</div>
 
