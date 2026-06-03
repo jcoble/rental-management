@@ -149,7 +149,10 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         var body = new
         {
             model = _config.ModelId,
-            max_completion_tokens = 1500,
+            // The receipt schema asks for ~20 fields, a confidence per field, AND a line-items
+            // array — at 1500 the tool-call JSON gets truncated (the model hits the cap before
+            // finishing the function call), yielding an empty extraction. 4096 gives ample room.
+            max_completion_tokens = 4096,
             messages = new object[]
             {
                 new { role = "system", content = systemPrompt.ToString() },
