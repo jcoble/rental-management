@@ -26,6 +26,14 @@ const numericString = (label: string) =>
 		.min(1, `${label} is required`)
 		.refine((v) => !Number.isNaN(Number(v)), `${label} must be a number`)
 		.transform((v) => Number(v));
+const optionalNumericString = (label: string) =>
+	z
+		.string()
+		.trim()
+		.transform((v) => (v.length ? v : null))
+		.nullable()
+		.refine((v) => v === null || !Number.isNaN(Number(v)), `${label} must be a number`)
+		.transform((v) => (v === null ? null : Number(v)));
 const idString = z
 	.string()
 	.trim()
@@ -58,23 +66,32 @@ export const tenantSchema = z.object({
 });
 
 export const leaseSchema = z.object({
+	leaseNumber: required('Lease number'),
+	propertyId: numericString('Property'),
 	unitId: numericString('Unit'),
 	tenantId: numericString('Tenant'),
 	startDate: required('Start date'),
 	endDate: required('End date'),
+	moveInDate: optionalText,
+	moveOutDate: optionalText,
 	monthlyRent: numericString('Monthly rent'),
 	securityDeposit: numericString('Security deposit'),
 	lateFeeAmount: numericString('Late fee'),
 	rentDueDay: numericString('Due day'),
 	status: z.string(),
+	notes: optionalText,
 });
 
 export const paymentSchema = z.object({
 	leaseId: numericString('Lease'),
 	amount: numericString('Amount'),
 	dueDate: required('Due date'),
-	type: z.string(),
+	paymentType: z.string(),
 	status: z.string(),
+	paidDate: optionalText,
+	method: optionalText,
+	externalReference: optionalText,
+	notes: optionalText,
 });
 
 export const expenseSchema = z.object({
@@ -85,6 +102,13 @@ export const expenseSchema = z.object({
 	status: z.string(),
 	propertyId: idString,
 	vendorId: idString,
+	dueDate: optionalText,
+	paidAt: optionalText,
+	billableToOwner: z.boolean(),
+	notes: optionalText,
+	subtotal: optionalNumericString('Subtotal'),
+	taxAmount: optionalNumericString('Tax amount'),
+	receiptData: optionalText,
 });
 
 export const workOrderSchema = z.object({

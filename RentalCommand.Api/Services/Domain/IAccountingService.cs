@@ -10,4 +10,5 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IAccountingService
 {
     Task<AccountingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default);
+    Task<AccountingReportsResponse> GetReportsAsync(int portfolioId, CancellationToken ct = default);
 }

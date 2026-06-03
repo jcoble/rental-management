@@ -9,8 +9,8 @@ export const properties = {
 	create: (data: Record<string, unknown>) => api.post<Property>('/properties', data),
 	update: (id: number, data: Record<string, unknown>) => api.patch<Property>(`/properties/${id}`, data),
 	delete: (id: number) => api.delete(`/properties/${id}`),
-	listUnits: (propertyId: number) => api.get<Unit[]>(`/properties/${propertyId}/units`),
-	createUnit: (propertyId: number, data: Record<string, unknown>) => api.post<Unit>(`/properties/${propertyId}/units`, data),
+	listUnits: (propertyId: number) => api.get<Unit[]>(`/units${buildListQuery(undefined, { propertyId })}`),
+	createUnit: (propertyId: number, data: Record<string, unknown>) => api.post<Unit>('/units', { propertyId, ...data }),
 	updateUnit: (id: number, data: Record<string, unknown>) => api.patch<Unit>(`/units/${id}`, data),
 	deleteUnit: (id: number) => api.delete(`/units/${id}`),
 };

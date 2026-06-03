@@ -125,4 +125,13 @@ public class UpdateExpenseRequest
 
     [MaxLength(2000)]
     public string? Notes { get; set; }
+
+    /// <summary>Subtotal before tax/tip; editable after scan confirmation.</summary>
+    public decimal? Subtotal { get; set; }
+
+    /// <summary>Tax amount; editable after scan confirmation.</summary>
+    public decimal? TaxAmount { get; set; }
+
+    /// <summary>Full receipt details JSON (jsonb); editable after scan confirmation.</summary>
+    public string? ReceiptData { get; set; }
 }

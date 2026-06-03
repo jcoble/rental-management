@@ -139,9 +139,21 @@
 										{new Date(draft.createdAt).toLocaleDateString()}
 									</Table.Cell>
 									<Table.Cell class="px-4 py-3">
-										<Button variant="link" href="/scan/{draft.id}" class="h-auto p-0">
-											Review
-										</Button>
+										<div class="flex items-center gap-3">
+											<Button variant="link" href="/scan/{draft.id}" class="h-auto p-0">
+												Review
+											</Button>
+											{#if draft.createdEntityType === 'Expense' && draft.createdEntityId}
+												<Button
+													data-testid="scan-expense-link"
+													variant="link"
+													href="/accounting/expenses/{draft.createdEntityId}"
+													class="h-auto p-0"
+												>
+													View Expense
+												</Button>
+											{/if}
+										</div>
 									</Table.Cell>
 								</Table.Row>
 							{/each}

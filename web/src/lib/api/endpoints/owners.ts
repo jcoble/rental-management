@@ -4,9 +4,10 @@ import { buildListQuery, type ListParams } from '../list-params';
 
 export const owners = {
 	list: (portfolioId: number, params?: ListParams) =>
-		api.get<Owner[]>(`/owners${buildListQuery(params, { portfolioId })}`),
-	get: (id: number) => api.get<Owner>(`/owners/${id}`),
-	create: (data: Record<string, unknown>) => api.post<Owner>('/owners', data),
-	update: (id: number, data: Record<string, unknown>) => api.patch<Owner>(`/owners/${id}`, data),
-	delete: (id: number) => api.delete(`/owners/${id}`),
+		api.get<Owner[]>(`/owner-entities${buildListQuery(params, { portfolioId })}`),
+	get: (id: number) => api.get<Owner>(`/owner-entities/${id}`),
+	create: (data: Record<string, unknown>) => api.post<Owner>('/owner-entities', data),
+	update: (id: number, data: Record<string, unknown>) =>
+		api.patch<Owner>(`/owner-entities/${id}`, data),
+	delete: (id: number) => api.delete(`/owner-entities/${id}`),
 };

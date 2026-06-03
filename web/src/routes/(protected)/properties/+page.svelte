@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { owners } from '$lib/api/endpoints/owners';
@@ -89,12 +90,12 @@
 		editingId = p.id;
 		form = {
 			name: p.name,
-			type: p.type,
+			type: p.propertyType ?? p.type ?? 'MultiFamily',
 			addressLine1: p.addressLine1,
 			city: p.city,
 			state: p.state,
 			postalCode: p.postalCode,
-			ownerId: p.ownerId != null ? String(p.ownerId) : '',
+			ownerId: p.ownerEntityId != null ? String(p.ownerEntityId) : '',
 		};
 		formErrors = {};
 		showForm = true;
@@ -115,7 +116,16 @@
 		formErrors = {};
 		savePropertyMutation.mutate({
 			id: editingId,
-			data: { portfolioId, ...result.data },
+			data: {
+				portfolioId,
+				name: result.data.name,
+				propertyType: result.data.type,
+				ownerEntityId: result.data.ownerId,
+				addressLine1: result.data.addressLine1,
+				city: result.data.city,
+				state: result.data.state,
+				postalCode: result.data.postalCode
+			},
 		});
 	}
 
@@ -158,7 +168,7 @@
 	}
 
 	const list = $derived(propertiesQuery.data ?? []);
-	const inputClass = 'rounded border border-border bg-background px-3 py-2 text-sm';
+	const inputClass = 'h-10 rounded border border-border bg-background px-3 py-2 text-sm';
 </script>
 
 <svelte:head>
@@ -208,16 +218,23 @@
 									<div class="mt-2 flex gap-4 text-xs text-muted-foreground">
 										<span>{property.unitCount || 0} units</span>
 										<span>{property.occupiedUnits || 0} occupied</span>
-										<span>{property.type}</span>
+										<span>{property.propertyType ?? property.type}</span>
 									</div>
 								</button>
 								<div class="flex shrink-0 items-center gap-1">
 									<span class="rounded border border-border bg-background px-2 py-0.5 text-xs">{property.status}</span>
+									<a
+										href={`/properties/${property.id}`}
+										data-testid="property-details"
+										class="rounded border border-border px-2 py-1 text-xs text-primary hover:bg-secondary"
+									>
+										Details
+									</a>
 									<button
 										data-testid="property-edit"
 										aria-label="Edit property"
 										class="rounded p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
-										onclick={() => openEdit(property)}
+										onclick={() => goto(`/properties/${property.id}`)}
 									>
 										<Pencil class="h-4 w-4" />
 									</button>
@@ -247,12 +264,24 @@
 				<p class="text-sm text-muted-foreground">Select a property to manage units.</p>
 			{:else}
 				<div class="mb-3 grid gap-2" data-testid="unit-form">
-					<input data-testid="unit-number-input" bind:value={unitForm.unitNumber} class={inputClass} placeholder="Unit number" />
+					<div>
+						<label class="mb-1 block text-xs font-medium text-muted-foreground" for="unit-number-input">Unit number</label>
+						<input id="unit-number-input" data-testid="unit-number-input" bind:value={unitForm.unitNumber} class="{inputClass} w-full" placeholder="Unit number" />
+					</div>
 					{#if unitErrors.unitNumber}<p class="text-xs text-destructive" data-testid="unit-number-error">{unitErrors.unitNumber}</p>{/if}
 					<div class="grid grid-cols-3 gap-2">
-						<input data-testid="unit-bedrooms-input" bind:value={unitForm.bedrooms} class={inputClass} placeholder="Beds" />
-						<input data-testid="unit-bathrooms-input" bind:value={unitForm.bathrooms} class={inputClass} placeholder="Baths" />
-						<input data-testid="unit-rent-input" bind:value={unitForm.marketRent} class={inputClass} placeholder="Rent" />
+						<div>
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="unit-bedrooms-input">Beds</label>
+							<input id="unit-bedrooms-input" data-testid="unit-bedrooms-input" bind:value={unitForm.bedrooms} class="{inputClass} w-full" placeholder="Beds" />
+						</div>
+						<div>
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="unit-bathrooms-input">Baths</label>
+							<input id="unit-bathrooms-input" data-testid="unit-bathrooms-input" bind:value={unitForm.bathrooms} class="{inputClass} w-full" placeholder="Baths" />
+						</div>
+						<div>
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="unit-rent-input">Market rent</label>
+							<input id="unit-rent-input" data-testid="unit-rent-input" bind:value={unitForm.marketRent} class="{inputClass} w-full" placeholder="Rent" />
+						</div>
 					</div>
 					<button data-testid="unit-save-button" onclick={submitUnit} class="rounded bg-primary px-3 py-2 text-sm text-white" disabled={createUnitMutation.isPending}>Add Unit</button>
 				</div>
@@ -284,33 +313,44 @@
 		</Dialog.Header>
 		<div class="grid gap-3 md:grid-cols-2" data-testid="property-form">
 			<div class="md:col-span-2">
-				<input data-testid="property-name-input" bind:value={form.name} class="{inputClass} w-full" placeholder="Property name" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="property-name-input">Property name</label>
+				<input id="property-name-input" data-testid="property-name-input" bind:value={form.name} class="{inputClass} w-full" placeholder="Property name" />
 				{#if formErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="property-name-error">{formErrors.name}</p>{/if}
 			</div>
-			<select data-testid="property-type-input" bind:value={form.type} class={inputClass}>
-				<option>SingleFamily</option><option>MultiFamily</option><option>Condo</option><option>Townhome</option><option>Commercial</option><option>MixedUse</option>
-			</select>
-			<select data-testid="property-owner-input" bind:value={form.ownerId} class={inputClass}>
-				<option value="">No owner assigned</option>
-				{#each ownersQuery.data || [] as owner}
-					<option value={owner.id}>{owner.name}</option>
-				{/each}
-			</select>
+			<div>
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="property-type-input">Property type</label>
+				<select id="property-type-input" data-testid="property-type-input" bind:value={form.type} class="{inputClass} w-full">
+					<option>SingleFamily</option><option>MultiFamily</option><option>Condo</option><option>Townhome</option><option>Commercial</option><option>MixedUse</option>
+				</select>
+			</div>
+			<div>
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="property-owner-input">Owner</label>
+				<select id="property-owner-input" data-testid="property-owner-input" bind:value={form.ownerId} class="{inputClass} w-full">
+					<option value="">No owner assigned</option>
+					{#each ownersQuery.data || [] as owner}
+						<option value={owner.id}>{owner.name}</option>
+					{/each}
+				</select>
+			</div>
 			<div class="md:col-span-2">
-				<input data-testid="property-address-input" bind:value={form.addressLine1} class="{inputClass} w-full" placeholder="Address" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="property-address-input">Address</label>
+				<input id="property-address-input" data-testid="property-address-input" bind:value={form.addressLine1} class="{inputClass} w-full" placeholder="Address" />
 				{#if formErrors.addressLine1}<p class="mt-1 text-xs text-destructive" data-testid="property-address-error">{formErrors.addressLine1}</p>{/if}
 			</div>
 			<div>
-				<input data-testid="property-city-input" bind:value={form.city} class="{inputClass} w-full" placeholder="City" />
+				<label class="mb-1 block text-xs font-medium text-muted-foreground" for="property-city-input">City</label>
+				<input id="property-city-input" data-testid="property-city-input" bind:value={form.city} class="{inputClass} w-full" placeholder="City" />
 				{#if formErrors.city}<p class="mt-1 text-xs text-destructive" data-testid="property-city-error">{formErrors.city}</p>{/if}
 			</div>
 			<div class="grid grid-cols-2 gap-2">
 				<div>
-					<input data-testid="property-state-input" bind:value={form.state} class="{inputClass} w-full" placeholder="State" />
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="property-state-input">State</label>
+					<input id="property-state-input" data-testid="property-state-input" bind:value={form.state} class="{inputClass} w-full" placeholder="State" />
 					{#if formErrors.state}<p class="mt-1 text-xs text-destructive" data-testid="property-state-error">{formErrors.state}</p>{/if}
 				</div>
 				<div>
-					<input data-testid="property-zip-input" bind:value={form.postalCode} class="{inputClass} w-full" placeholder="ZIP" />
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="property-zip-input">ZIP</label>
+					<input id="property-zip-input" data-testid="property-zip-input" bind:value={form.postalCode} class="{inputClass} w-full" placeholder="ZIP" />
 					{#if formErrors.postalCode}<p class="mt-1 text-xs text-destructive" data-testid="property-zip-error">{formErrors.postalCode}</p>{/if}
 				</div>
 			</div>
