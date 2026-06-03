@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
+	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId, setCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import type { Portfolio } from '$lib/types';
 	import { ChevronDown, Plus, Building2 } from '@lucide/svelte';
@@ -9,9 +10,11 @@
 	let { collapsed = false }: { collapsed?: boolean } = $props();
 
 	const queryClient = useQueryClient();
+	const authState = getAuthState();
 
 	const portfoliosQuery = createQuery(() => ({
 		queryKey: ['portfolios'],
+		enabled: authState.isAuthenticated,
 		queryFn: () => portfolios.list(),
 	}));
 

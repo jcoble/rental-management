@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { auth } from '$lib/api/endpoints/auth';
 	import { portal } from '$lib/api/endpoints/portal';
 	import { payments as paymentsApi } from '$lib/api/endpoints/payments';
 	import { ApiError } from '$lib/api/client';
-	import { clearAuth, getCurrentUser, hasAnyRole, setCurrentUser } from '$lib/stores/auth.svelte';
+	import { getCurrentUser, hasAnyRole } from '$lib/stores/auth.svelte';
+	import { isStaff } from '$lib/types/user';
 	import { showSuccess, showError, showWarning } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -44,25 +44,12 @@
 	}
 
 	const queryClient = useQueryClient();
-
-	const meQuery = createQuery(() => ({
-		queryKey: ['auth-me'],
-		queryFn: () => auth.me(),
-		retry: false,
-	}));
-
-	$effect(() => {
-		if (meQuery.data) setCurrentUser(meQuery.data);
-		if (meQuery.isError) {
-			// clearAuth() handles navigation (to /logout, which clears cookies
-			// then redirects to /login) — no extra goto needed.
-			clearAuth();
-		}
-	});
+	const currentUser = $derived(getCurrentUser());
+	const isStaffUser = $derived(isStaff(currentUser));
 
 	const overviewQuery = createQuery(() => ({
 		queryKey: ['portal-overview'],
-		enabled: !!getCurrentUser(),
+		enabled: !!currentUser && !isStaffUser,
 		queryFn: () => portal.overview(),
 	}));
 
@@ -70,7 +57,7 @@
 	// the tenant's JWT scopes this to their own threads.
 	const conversationsQuery = createQuery(() => ({
 		queryKey: ['portal-conversations'],
-		enabled: !!getCurrentUser(),
+		enabled: !!currentUser && !isStaffUser,
 		queryFn: () => portal.conversations.list(),
 	}));
 
@@ -98,7 +85,7 @@
 	<title>Portal - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6">
+<div class="min-h-full pb-16">
 	<h1 class="mb-1 text-2xl font-bold">Role Portal</h1>
 	<p class="mb-5 text-sm text-muted-foreground">Role-aware view for admin, manager, agent, owner, and tenant accounts.</p>
 
@@ -226,7 +213,7 @@
 	{/if}
 
 	<!-- Messages: links to the threaded messenger with your management team. -->
-	<a href="/portal/messages" class="block" data-testid="portal-messages-link">
+	<a href={isStaffUser ? '/messages' : '/portal/messages'} class="block" data-testid="portal-messages-link">
 		<Card.Root class="gap-0 py-0 transition-colors hover:bg-muted/50">
 			<Card.Content class="flex items-center gap-4 p-4">
 				<div class="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">

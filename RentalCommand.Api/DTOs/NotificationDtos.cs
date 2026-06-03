@@ -1,0 +1,46 @@
+using System.ComponentModel.DataAnnotations;
+using RentalCommand.Core.Entities;
+
+namespace RentalCommand.Api.DTOs;
+
+public class NotificationResponse
+{
+    public int Id { get; set; }
+    public string Type { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+    public string Severity { get; set; } = string.Empty;
+    public string? ActionUrl { get; set; }
+    public string? RelatedEntityType { get; set; }
+    public int? RelatedEntityId { get; set; }
+    public bool IsRead { get; set; }
+    public DateTime CreatedAt { get; set; }
+
+    public static NotificationResponse FromEntity(Notification notification) => new()
+    {
+        Id = notification.Id,
+        Type = notification.Type,
+        Title = notification.Title,
+        Message = notification.Message,
+        Severity = notification.Severity,
+        ActionUrl = notification.ActionUrl,
+        RelatedEntityType = notification.RelatedEntityType,
+        RelatedEntityId = notification.RelatedEntityId,
+        IsRead = notification.IsRead,
+        CreatedAt = notification.CreatedAt,
+    };
+}
+
+public sealed record UnreadCountResponse(int Count);
+
+public class NotificationEmailResponse
+{
+    public string? Email { get; set; }
+}
+
+public class SetNotificationEmailRequest
+{
+    [EmailAddress]
+    [MaxLength(200)]
+    public string? Email { get; set; }
+}

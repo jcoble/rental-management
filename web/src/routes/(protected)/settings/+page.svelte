@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
+	import { notifications } from '$lib/api/endpoints/notifications';
+	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { settingsSchema, parseForm } from '$lib/schemas';
@@ -11,14 +13,23 @@
 	import * as Card from '$lib/components/ui/card';
 
 	const queryClient = useQueryClient();
+	const authState = getAuthState();
 	const portfolioId = $derived(getCurrentPortfolioId());
 
 	let saveSucceeded = $state(false);
 	let formErrors = $state<Record<string, string>>({});
+	let notificationEmail = $state('');
 
 	const portfolioQuery = createQuery(() => ({
 		queryKey: ['portfolio', portfolioId],
+		enabled: authState.isAuthenticated && portfolioId > 0,
 		queryFn: () => portfolios.get(portfolioId),
+	}));
+
+	const notificationEmailQuery = createQuery(() => ({
+		queryKey: ['notification-email', portfolioId],
+		enabled: authState.isAuthenticated && portfolioId > 0,
+		queryFn: () => notifications.getNotificationEmail(),
 	}));
 
 	let form = $state({
@@ -100,13 +111,30 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	$effect(() => {
+		if (notificationEmailQuery.data) {
+			notificationEmail = notificationEmailQuery.data.email ?? '';
+		}
+	});
+
+	const saveNotificationEmailMutation = createMutation(() => ({
+		mutationFn: () => notifications.setNotificationEmail(notificationEmail.trim() || null),
+		onSuccess: (result) => {
+			notificationEmail = result.email ?? '';
+			queryClient.invalidateQueries({ queryKey: ['notification-email', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['portfolio', portfolioId] });
+			showSuccess('Notification email saved.');
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
 </script>
 
 <svelte:head>
 	<title>Settings - Rental Command</title>
 </svelte:head>
 
-<div class="h-full overflow-y-auto p-6">
+<div class="min-h-full pb-16">
 	<div class="mb-4">
 		<h1 class="text-2xl font-bold">Portfolio Settings</h1>
 		<p class="text-sm text-muted-foreground">Configure timezone, status, and operational defaults.</p>
@@ -144,6 +172,30 @@
 							<Select.Item value="Archived" label="Archived">Archived</Select.Item>
 						</Select.Content>
 					</Select.Root>
+				</div>
+			</div>
+
+			<!-- Messaging defaults -->
+			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" data-testid="settings-notification-email">
+				<p class="text-sm font-semibold">Notification Email</p>
+				<p class="mb-3 text-xs text-muted-foreground">
+					Notification emails will be sent to this address. Leave blank to use your login email.
+				</p>
+				<div class="flex flex-col gap-2 sm:flex-row">
+					<Input
+						type="email"
+						bind:value={notificationEmail}
+						placeholder="your-email@example.com"
+						data-testid="settings-notification-email-input"
+						disabled={notificationEmailQuery.isLoading || saveNotificationEmailMutation.isPending}
+					/>
+					<Button
+						onclick={() => saveNotificationEmailMutation.mutate()}
+						disabled={notificationEmailQuery.isLoading || saveNotificationEmailMutation.isPending}
+						data-testid="settings-notification-email-save"
+					>
+						{saveNotificationEmailMutation.isPending ? 'Saving…' : 'Save'}
+					</Button>
 				</div>
 			</div>
 
