@@ -485,15 +485,44 @@ public class StripePaymentService : IStripePaymentService
             leaseId, tenantId, portfolioId, session.Id);
     }
 
-    /// <summary>Resolves the success URL: explicit request value, else config default, else a built-in.</summary>
+    /// <summary>
+    /// Resolves the success URL: an explicit request value is honored ONLY when it passes the
+    /// return-URL allowlist (so a client can't turn Checkout into an open redirect to a phishing
+    /// site); otherwise the trusted configured value, else a built-in.
+    /// </summary>
     private string ResolveSuccessUrl(string? requested) =>
-        !string.IsNullOrWhiteSpace(requested) ? requested!
+        IsAllowedReturnUrl(requested) ? requested!
         : !string.IsNullOrWhiteSpace(_config.CheckoutSuccessUrl) ? _config.CheckoutSuccessUrl!
         : DefaultSuccessUrl;
 
-    /// <summary>Resolves the cancel URL: explicit request value, else config default, else a built-in.</summary>
+    /// <summary>Resolves the cancel URL with the same allowlist guard as the success URL.</summary>
     private string ResolveCancelUrl(string? requested) =>
-        !string.IsNullOrWhiteSpace(requested) ? requested!
+        IsAllowedReturnUrl(requested) ? requested!
         : !string.IsNullOrWhiteSpace(_config.CheckoutCancelUrl) ? _config.CheckoutCancelUrl!
         : DefaultCancelUrl;
+
+    /// <summary>
+    /// A client-supplied return URL is trusted only if it is an absolute URL whose host is
+    /// explicitly allowed: either it appears in <see cref="StripeConfig.AllowedReturnHosts"/>
+    /// (https only), or it is a loopback host (localhost/127.0.0.1/::1) for local development.
+    /// Anything else (other hosts, non-http schemes, relative/garbage) is rejected so we fall back
+    /// to the server-configured URL — closing the open-redirect vector.
+    /// </summary>
+    private bool IsAllowedReturnUrl(string? requested)
+    {
+        if (string.IsNullOrWhiteSpace(requested) ||
+            !Uri.TryCreate(requested, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (uri.IsLoopback &&
+            (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+        {
+            return true; // local dev (localhost / 127.0.0.1 / ::1)
+        }
+
+        return uri.Scheme == Uri.UriSchemeHttps
+            && _config.AllowedReturnHosts.Contains(uri.Host, StringComparer.OrdinalIgnoreCase);
+    }
 }
