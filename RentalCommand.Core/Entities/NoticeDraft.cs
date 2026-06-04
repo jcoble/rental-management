@@ -12,6 +12,14 @@ public class NoticeDraft
     public string Subject { get; set; } = string.Empty;
     public string Body { get; set; } = string.Empty;
     public string Reason { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Provenance: the exact LLM prompt used to draft this notice's copy, or <c>null</c> when the
+    /// deterministic template fallback produced it (no LLM key / LLM returned nothing usable). Kept
+    /// for audit so a landlord/owner can see how an AI-written notice was generated.
+    /// </summary>
+    public string? GenerationPrompt { get; set; }
+
     public DateTime TriggerDate { get; set; }
     public int? ConversationId { get; set; }
     public string? ApprovedChannels { get; set; }

@@ -9,6 +9,11 @@ public class NotificationsConfig
     public bool EnableLateFees { get; set; } = false;
     public bool EnableLeaseExpiryReminders { get; set; } = true;
 
+    // Lease Lifecycle Autopilot: proactively DRAFT renewal offers, escalating late-rent notices, and
+    // move-out reminders for one-tap approval. Defaults ON because drafts are never auto-sent — the
+    // landlord still approves each one (and picks channels) before anything leaves the building.
+    public bool EnableNoticeAutopilot { get; set; } = true;
+
     // Whether to enqueue tenant-facing SMS/email notices from the automations (off until providers set).
     public bool NotifyTenants { get; set; } = false;
 

@@ -77,6 +77,12 @@ but the landlord cannot use the complete workflow in a logical place.
 | DO- Bulk lease PDF scan              | Missing | Single-document scanning exists; no bulk lease migration workflow. |
 | DO- Opening balances/history scoping | Missing | No migration scoping workflow.                                     |
 
+## Cross-cutting — Web UX
+
+| Feature | Status | Notes |
+| ------- | ------ | ----- |
+| DO- Inline-edit on detail pages (replace modal "Edit" dialogs) | Partial | Every grid-backed entity has a detail page, and it is supposed to turn the record into an **in-place edit form** right on the detail page (tap Edit → fields become inputs → Save/Cancel in the header), using the shared `web/src/lib/components/shared/InlineField.svelte` component. **DONE (true inline edit):** `accounting/expenses/[id]`, `accounting/payments/[id]`, `maintenance/work-orders/[id]`. **TODO (still open a separate modal "Edit" dialog instead of editing inline):** `tenants/[id]`, `leases/[id]`, `properties/[id]`, `appointments/[id]`, `deposits/[id]`, and `maintenance/[id]` (inspection detail). Convert each to the `InlineField` pattern: an `editing` state, Edit/Save/Cancel header buttons, the existing `<entity>.update(id, data)` TanStack mutation, per-field validation + `data-testid`s. Remove the now-redundant edit dialog. |
+
 ## Next Completion Lanes
 
 1. **Mobile field operations:** add voice maintenance intake, field queue actions, before/after photos, and clearer tenant/owner status stream.

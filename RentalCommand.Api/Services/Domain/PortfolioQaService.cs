@@ -14,6 +14,7 @@ public class PortfolioQaService : IPortfolioQaService
     private readonly RentalCommandDbContext _db;
     private readonly ILlmProvider _llm;
     private readonly IAccountingService _accounting;
+    private readonly IMessagePublisher _publisher;
     private readonly ILogger<PortfolioQaService> _logger;
 
     // Compact JSON serializer — no indentation to minimise tokens.
@@ -120,11 +121,13 @@ public class PortfolioQaService : IPortfolioQaService
         RentalCommandDbContext db,
         ILlmProvider llm,
         IAccountingService accounting,
+        IMessagePublisher publisher,
         ILogger<PortfolioQaService> logger)
     {
         _db = db;
         _llm = llm;
         _accounting = accounting;
+        _publisher = publisher;
         _logger = logger;
     }
 
@@ -136,6 +139,7 @@ public class PortfolioQaService : IPortfolioQaService
         int portfolioId,
         string question,
         IReadOnlyList<QaTurn>? history,
+        QaDeliveryOptions? delivery = null,
         CancellationToken ct = default)
     {
         var today = DateTime.UtcNow.Date;
@@ -231,12 +235,14 @@ public class PortfolioQaService : IPortfolioQaService
 
             // Final answer path.
             var answer = result.Text ?? "(The assistant returned no text.)";
+            var delivered = await DeliverAsync(portfolioId, question, answer, delivery, ct);
             return new AskResponse(
                 Answer: answer,
                 ToolsUsed: toolsUsed.Distinct().ToList(),
                 LlmAvailable: true,
                 TokensUsed: totalTokens,
-                ModelId: modelId);
+                ModelId: modelId,
+                DeliveredChannels: delivered);
         }
 
         // Exceeded max iterations — return whatever text we have.
@@ -245,13 +251,94 @@ public class PortfolioQaService : IPortfolioQaService
             ?.Content
             ?? "The assistant did not produce a final answer within the allowed number of steps.";
 
+        var incompleteAnswer = lastText + " (Note: response may be incomplete.)";
+        var deliveredIncomplete = await DeliverAsync(portfolioId, question, incompleteAnswer, delivery, ct);
         return new AskResponse(
-            Answer: lastText + " (Note: response may be incomplete.)",
+            Answer: incompleteAnswer,
             ToolsUsed: toolsUsed.Distinct().ToList(),
             LlmAvailable: true,
             TokensUsed: totalTokens,
-            ModelId: modelId);
+            ModelId: modelId,
+            DeliveredChannels: deliveredIncomplete);
     }
+
+    // ---------------------------------------------------------------------------
+    // Delivery (optional "text me / email me this answer")
+    // ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// Enqueues email/SMS outbox rows carrying the answer when delivery is requested. Mirrors the
+    /// existing outbox payload shapes exactly: email = { to, subject, body }, sms = { to, message }.
+    /// Missing recipients are skipped (never throws); a missing phone falls back to the first active
+    /// owner-entity phone in the portfolio. Returns the channels actually queued.
+    /// </summary>
+    private async Task<List<string>?> DeliverAsync(
+        int portfolioId,
+        string question,
+        string answer,
+        QaDeliveryOptions? delivery,
+        CancellationToken ct)
+    {
+        if (delivery is not { AnyRequested: true })
+            return null;
+
+        var delivered = new List<string>();
+        var subject = "Your Rental Command answer";
+        var body = $"You asked:\n{question}\n\nAnswer:\n{answer}";
+
+        try
+        {
+            if (delivery.ViaEmail)
+            {
+                var to = string.IsNullOrWhiteSpace(delivery.ToEmail) ? null : delivery.ToEmail!.Trim();
+                if (to is not null)
+                {
+                    await _publisher.PublishAsync(portfolioId, "email", new { to, subject, body }, ct);
+                    delivered.Add("Email");
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "Q&A email delivery requested for portfolio {PortfolioId} but no recipient was available; skipped.",
+                        portfolioId);
+                }
+            }
+
+            if (delivery.ViaSms)
+            {
+                var to = string.IsNullOrWhiteSpace(delivery.ToPhone)
+                    ? await ResolveDefaultOwnerPhoneAsync(portfolioId, ct)
+                    : delivery.ToPhone!.Trim();
+                if (!string.IsNullOrWhiteSpace(to))
+                {
+                    await _publisher.PublishAsync(portfolioId, "sms", new { to, message = body }, ct);
+                    delivered.Add("Sms");
+                }
+                else
+                {
+                    _logger.LogInformation(
+                        "Q&A SMS delivery requested for portfolio {PortfolioId} but no phone was available; skipped.",
+                        portfolioId);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            // Delivery is best-effort — never fail the answer because a channel could not be queued.
+            _logger.LogError(ex, "Q&A answer delivery failed for portfolio {PortfolioId}", portfolioId);
+        }
+
+        return delivered.Count == 0 ? null : delivered;
+    }
+
+    /// <summary>First active (non-deleted) owner-entity phone for the portfolio, if any.</summary>
+    private async Task<string?> ResolveDefaultOwnerPhoneAsync(int portfolioId, CancellationToken ct)
+        => await _db.OwnerEntities
+            .AsNoTracking()
+            .Where(o => o.PortfolioId == portfolioId && o.DeletedAt == null && o.Phone != null && o.Phone != "")
+            .OrderBy(o => o.Id)
+            .Select(o => o.Phone)
+            .FirstOrDefaultAsync(ct);
 
     // ---------------------------------------------------------------------------
     // Tool dispatcher

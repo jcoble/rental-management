@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -42,7 +43,34 @@ public class AiController : AuthenticatedPortfolioControllerBase
     {
         if (string.IsNullOrWhiteSpace(req.Question)) return BadRequest("Question is required.");
         if (req.Question.Length > 4000) return BadRequest("Question is too long (max 4000 characters).");
-        return Ok(await _qa.AskAsync(GetPortfolioId(), req.Question, req.History, ct));
+
+        var delivery = BuildDelivery(req);
+        return Ok(await _qa.AskAsync(GetPortfolioId(), req.Question, req.History, delivery, ct));
+    }
+
+    /// <summary>
+    /// Maps the request's delivery flags to resolved <see cref="QaDeliveryOptions"/>, filling in
+    /// the signed-in user's email as the default email recipient when none is supplied.
+    /// </summary>
+    private QaDeliveryOptions BuildDelivery(AskRequest req)
+    {
+        if (!req.DeliverViaEmail && !req.DeliverViaSms)
+            return QaDeliveryOptions.None;
+
+        var toEmail = !string.IsNullOrWhiteSpace(req.DeliverToEmail)
+            ? req.DeliverToEmail!.Trim()
+            : GetUserEmail();
+
+        var toPhone = string.IsNullOrWhiteSpace(req.DeliverToPhone) ? null : req.DeliverToPhone!.Trim();
+
+        return new QaDeliveryOptions(req.DeliverViaEmail, req.DeliverViaSms, toEmail, toPhone);
+    }
+
+    /// <summary>The signed-in user's email from claims (mapped or raw), or null when absent.</summary>
+    private string? GetUserEmail()
+    {
+        var email = User.FindFirstValue(ClaimTypes.Email) ?? User.FindFirstValue("email");
+        return string.IsNullOrWhiteSpace(email) ? null : email;
     }
 
     /// <summary>Direct assistant chat for the in-app AI page.</summary>

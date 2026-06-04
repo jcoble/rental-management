@@ -205,6 +205,33 @@ public class ScanServiceTests : IDisposable
 
         var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "WorkOrder");
         SeedStoredFile(draft.FilePath);
+        // The extracted property_id/unit_id are now re-validated against real in-portfolio rows
+        // (a hallucinated/cross-portfolio id is dropped to manual selection), so the grounded ids
+        // the draft carries must correspond to actual rows in this portfolio.
+        _db.Properties.Add(new Property
+        {
+            Id = 10,
+            PortfolioId = PortfolioId,
+            Name = "Maple Court",
+            AddressLine1 = "10 Maple Ct",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 20,
+            PropertyId = 10,
+            UnitNumber = "1",
+            Bedrooms = 2,
+            Bathrooms = 1,
+            MarketRent = 1200m,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
         _workOrders.SetupResponse(new WorkOrderResponse { Id = 123, PortfolioId = PortfolioId });
 
         var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");

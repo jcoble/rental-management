@@ -27,10 +27,13 @@ class AiRepository {
   }
 
   /// Sends [question] with optional [history] and returns the assistant answer.
+  ///
+  /// Pass [delivery] to also have the server text/email the answer to the landlord.
   Future<AskResponse> ask(
     String question,
-    List<QaTurn> history,
-  ) async {
+    List<QaTurn> history, {
+    AskDelivery? delivery,
+  }) async {
     try {
       final response = await _dio.post<Map<String, dynamic>>(
         '/ai/ask',
@@ -38,6 +41,7 @@ class AiRepository {
           'question': question,
           if (history.isNotEmpty)
             'history': history.map((t) => t.toJson()).toList(),
+          if (delivery != null) ...delivery.toJson(),
         },
       );
       return AskResponse.fromJson(response.data!);

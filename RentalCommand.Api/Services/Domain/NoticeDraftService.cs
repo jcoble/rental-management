@@ -1,20 +1,36 @@
+using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
 public class NoticeDraftService : INoticeDraftService
 {
+    // Renewal terms: propose a modest escalation on the current rent for the new term.
+    private const decimal RenewalEscalationPercent = 3.0m;
+    private const int RenewalTermMonths = 12;
+
     private readonly RentalCommandDbContext _db;
     private readonly IConversationService _conversations;
+    private readonly ILlmProvider _llm;
+    private readonly ILogger<NoticeDraftService> _logger;
 
-    public NoticeDraftService(RentalCommandDbContext db, IConversationService conversations)
+    public NoticeDraftService(
+        RentalCommandDbContext db,
+        IConversationService conversations,
+        ILlmProvider llm,
+        ILogger<NoticeDraftService> logger)
     {
         _db = db;
         _conversations = conversations;
+        _llm = llm;
+        _logger = logger;
     }
 
     public async Task<IReadOnlyList<NoticeDraftResponse>> ListAsync(
@@ -55,14 +71,16 @@ public class NoticeDraftService : INoticeDraftService
             if (lease.Tenant == null) continue;
 
             var daysToEnd = (lease.EndDate.Date - today).Days;
-            if (daysToEnd >= 0 && daysToEnd <= 75)
+            if (daysToEnd >= 0 && daysToEnd <= 75
+                && !await DraftExistsAsync(portfolioId, lease.Id, "RenewalOffer", created, ct))
             {
-                await AddIfMissingAsync(created, BuildRenewalDraft(portfolioId, lease, daysToEnd, now), ct);
+                created.Add(await BuildRenewalDraftAsync(portfolioId, lease, daysToEnd, now, ct));
             }
 
-            if (daysToEnd >= 0 && daysToEnd <= 30)
+            if (daysToEnd >= 0 && daysToEnd <= 30
+                && !await DraftExistsAsync(portfolioId, lease.Id, "MoveOutReminder", created, ct))
             {
-                await AddIfMissingAsync(created, BuildMoveOutDraft(portfolioId, lease, daysToEnd, now), ct);
+                created.Add(await BuildMoveOutDraftAsync(portfolioId, lease, daysToEnd, now, ct));
             }
         }
 
@@ -80,7 +98,10 @@ public class NoticeDraftService : INoticeDraftService
         {
             if (payment.Lease?.Tenant == null) continue;
             var daysLate = (today - payment.DueDate.Date).Days;
-            await AddIfMissingAsync(created, BuildLateDraft(portfolioId, payment, daysLate, now), ct);
+            if (!await DraftExistsAsync(portfolioId, payment.LeaseId, "LateRentNotice", created, ct))
+            {
+                created.Add(await BuildLateDraftAsync(portfolioId, payment, daysLate, now, ct));
+            }
         }
 
         if (created.Count > 0)
@@ -162,81 +183,216 @@ public class NoticeDraftService : INoticeDraftService
             .Include(d => d.Lease).ThenInclude(l => l!.Unit)
             .Where(d => d.PortfolioId == portfolioId);
 
-    private async Task AddIfMissingAsync(List<NoticeDraft> created, NoticeDraft draft, CancellationToken ct)
+    /// <summary>
+    /// True if an open (Draft-status) notice of this type already exists for the lease — either
+    /// persisted or already queued this batch. Checked BEFORE composing copy so we never spend an
+    /// LLM call (or create a duplicate) for a notice the landlord already has waiting.
+    /// </summary>
+    private async Task<bool> DraftExistsAsync(
+        int portfolioId, int leaseId, string noticeType, List<NoticeDraft> created, CancellationToken ct)
     {
-        var existsInDb = await _db.NoticeDrafts.AnyAsync(d =>
-            d.PortfolioId == draft.PortfolioId &&
-            d.LeaseId == draft.LeaseId &&
-            d.NoticeType == draft.NoticeType &&
-            d.Status == "Draft", ct);
-        var existsInBatch = created.Any(d =>
-            d.PortfolioId == draft.PortfolioId &&
-            d.LeaseId == draft.LeaseId &&
-            d.NoticeType == draft.NoticeType &&
-            d.Status == "Draft");
-
-        if (!existsInDb && !existsInBatch)
+        if (created.Any(d =>
+                d.PortfolioId == portfolioId &&
+                d.LeaseId == leaseId &&
+                d.NoticeType == noticeType &&
+                d.Status == "Draft"))
         {
-            created.Add(draft);
+            return true;
         }
+
+        return await _db.NoticeDrafts.AnyAsync(d =>
+            d.PortfolioId == portfolioId &&
+            d.LeaseId == leaseId &&
+            d.NoticeType == noticeType &&
+            d.Status == "Draft", ct);
     }
 
-    private static NoticeDraft BuildRenewalDraft(int portfolioId, Lease lease, int daysToEnd, DateTime now)
+    // ===========================================================================================
+    // Proactive copy generation. Each builder computes the grounded facts, asks the LLM to write a
+    // warm, professional subject + body from ONLY those facts, and falls back to a deterministic
+    // template when the LLM is a no-op (no API key) or returns nothing usable. The exact prompt is
+    // stored on the draft for audit/provenance.
+    // ===========================================================================================
+
+    private async Task<NoticeDraft> BuildRenewalDraftAsync(
+        int portfolioId, Lease lease, int daysToEnd, DateTime now, CancellationToken ct)
     {
         var tenant = lease.Tenant!;
         var propertyName = lease.Property?.Name ?? "your home";
-        var unit = string.IsNullOrWhiteSpace(lease.Unit?.UnitNumber) ? "" : $" Unit {lease.Unit.UnitNumber}";
+        var unit = UnitSuffix(lease.Unit?.UnitNumber);
         var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
 
-        return new NoticeDraft
-        {
-            PortfolioId = portfolioId,
-            LeaseId = lease.Id,
-            TenantId = lease.TenantId,
-            PropertyId = lease.PropertyId,
-            NoticeType = "RenewalOffer",
-            Subject = $"Lease renewal for {propertyName}{unit}",
-            Body = $"Hi {tenantName}, your current lease for {propertyName}{unit} ends on {lease.EndDate:MMMM d, yyyy}. "
-                 + $"We would like to offer a renewal at {lease.MonthlyRent:C0} per month. "
-                 + "Please reply here if you would like to renew or if you have questions.",
-            Reason = $"Lease ends in {daysToEnd} days.",
-            TriggerDate = lease.EndDate.Date,
-            CreatedAt = now,
-            UpdatedAt = now
-        };
+        // Renewal terms: escalate the current rent and extend the term by a year.
+        var proposedRent = Math.Round(lease.MonthlyRent * (1 + RenewalEscalationPercent / 100m), 0, MidpointRounding.AwayFromZero);
+        var newEndDate = lease.EndDate.Date.AddMonths(RenewalTermMonths);
+
+        var facts =
+            $"- Tenant: {tenantName}\n" +
+            $"- Property/unit: {propertyName}{unit}\n" +
+            $"- Current lease ends: {lease.EndDate:MMMM d, yyyy} ({daysToEnd} days away)\n" +
+            $"- Current rent: {lease.MonthlyRent:C0}/month\n" +
+            $"- Proposed new rent: {proposedRent:C0}/month (a {RenewalEscalationPercent:0.#}% increase)\n" +
+            $"- Proposed new term: {RenewalTermMonths} months, new end date {newEndDate:MMMM d, yyyy}\n" +
+            "- Ask the tenant to reply to accept, decline, or ask questions.";
+
+        var deterministicSubject = $"Lease renewal for {propertyName}{unit}";
+        var deterministicBody =
+            $"Hi {tenantName}, your current lease for {propertyName}{unit} ends on {lease.EndDate:MMMM d, yyyy}. "
+            + $"We would like to offer a {RenewalTermMonths}-month renewal at {proposedRent:C0} per month "
+            + $"(currently {lease.MonthlyRent:C0}), running through {newEndDate:MMMM d, yyyy}. "
+            + "Please reply here to accept, decline, or ask any questions.";
+
+        var draft = await ComposeAsync(
+            portfolioId, lease, "RenewalOffer",
+            intent: "a friendly lease-renewal offer",
+            facts: facts,
+            deterministicSubject: deterministicSubject,
+            deterministicBody: deterministicBody,
+            reason: $"Lease ends in {daysToEnd} days. Proposed {proposedRent:C0}/mo ({RenewalEscalationPercent:0.#}% increase) through {newEndDate:MMM d, yyyy}.",
+            triggerDate: lease.EndDate.Date,
+            now: now,
+            ct: ct);
+
+        return draft;
     }
 
-    private static NoticeDraft BuildMoveOutDraft(int portfolioId, Lease lease, int daysToEnd, DateTime now)
+    private async Task<NoticeDraft> BuildMoveOutDraftAsync(
+        int portfolioId, Lease lease, int daysToEnd, DateTime now, CancellationToken ct)
     {
         var tenant = lease.Tenant!;
         var propertyName = lease.Property?.Name ?? "your home";
-        var unit = string.IsNullOrWhiteSpace(lease.Unit?.UnitNumber) ? "" : $" Unit {lease.Unit.UnitNumber}";
+        var unit = UnitSuffix(lease.Unit?.UnitNumber);
         var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
 
-        return new NoticeDraft
-        {
-            PortfolioId = portfolioId,
-            LeaseId = lease.Id,
-            TenantId = lease.TenantId,
-            PropertyId = lease.PropertyId,
-            NoticeType = "MoveOutReminder",
-            Subject = $"Move-out reminder for {propertyName}{unit}",
-            Body = $"Hi {tenantName}, this is a reminder that your lease for {propertyName}{unit} ends on {lease.EndDate:MMMM d, yyyy}. "
-                 + "Please reply to coordinate keys, inspection timing, and forwarding-address details.",
-            Reason = $"Lease ends in {daysToEnd} days.",
-            TriggerDate = lease.EndDate.Date,
-            CreatedAt = now,
-            UpdatedAt = now
-        };
+        var facts =
+            $"- Tenant: {tenantName}\n" +
+            $"- Property/unit: {propertyName}{unit}\n" +
+            $"- Lease ends: {lease.EndDate:MMMM d, yyyy} ({daysToEnd} days away)\n" +
+            "- Coordinate: key return, the move-out inspection time, and a forwarding address for the deposit.\n" +
+            "- Ask the tenant to reply to set up those details.";
+
+        var deterministicSubject = $"Move-out reminder for {propertyName}{unit}";
+        var deterministicBody =
+            $"Hi {tenantName}, this is a reminder that your lease for {propertyName}{unit} ends on {lease.EndDate:MMMM d, yyyy}. "
+            + "Please reply to coordinate keys, inspection timing, and forwarding-address details so we can return your deposit promptly.";
+
+        return await ComposeAsync(
+            portfolioId, lease, "MoveOutReminder",
+            intent: "a courteous move-out coordination reminder",
+            facts: facts,
+            deterministicSubject: deterministicSubject,
+            deterministicBody: deterministicBody,
+            reason: $"Lease ends in {daysToEnd} days.",
+            triggerDate: lease.EndDate.Date,
+            now: now,
+            ct: ct);
     }
 
-    private static NoticeDraft BuildLateDraft(int portfolioId, Payment payment, int daysLate, DateTime now)
+    private async Task<NoticeDraft> BuildLateDraftAsync(
+        int portfolioId, Payment payment, int daysLate, DateTime now, CancellationToken ct)
     {
         var lease = payment.Lease!;
         var tenant = lease.Tenant!;
         var propertyName = lease.Property?.Name ?? "your home";
-        var unit = string.IsNullOrWhiteSpace(lease.Unit?.UnitNumber) ? "" : $" Unit {lease.Unit.UnitNumber}";
+        var unit = UnitSuffix(lease.Unit?.UnitNumber);
         var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
+
+        // Escalation: tone hardens the longer rent stays unpaid.
+        var (level, levelLabel, tone) = LateEscalationLevel(daysLate);
+
+        var facts =
+            $"- Tenant: {tenantName}\n" +
+            $"- Property/unit: {propertyName}{unit}\n" +
+            $"- Amount due: {payment.Amount:C0}\n" +
+            $"- Was due: {payment.DueDate:MMMM d, yyyy} ({daysLate} days ago)\n" +
+            $"- This is the {levelLabel} reminder. {tone}\n" +
+            "- Ask the tenant to reply with payment status or to arrange a plan.";
+
+        var deterministicSubject = level switch
+        {
+            1 => $"Friendly reminder: rent past due for {propertyName}{unit}",
+            2 => $"Second notice: rent {daysLate} days past due for {propertyName}{unit}",
+            _ => $"Final notice: overdue rent for {propertyName}{unit}"
+        };
+        var deterministicBody = level switch
+        {
+            1 => $"Hi {tenantName}, our records show {payment.Amount:C0} due on {payment.DueDate:MMMM d, yyyy} "
+                 + $"for {propertyName}{unit} is now {daysLate} days past due. If you've already paid, thank you — "
+                 + "please disregard. Otherwise, please reply with your payment status or any questions.",
+            2 => $"Hi {tenantName}, this is a second reminder that {payment.Amount:C0} due on {payment.DueDate:MMMM d, yyyy} "
+                 + $"for {propertyName}{unit} remains unpaid ({daysLate} days past due). Please bring the balance current "
+                 + "or reply so we can arrange a payment plan.",
+            _ => $"Hi {tenantName}, this is a final notice that {payment.Amount:C0} due on {payment.DueDate:MMMM d, yyyy} "
+                 + $"for {propertyName}{unit} remains unpaid and is now {daysLate} days past due. Please pay in full "
+                 + "immediately or contact us today to avoid further action under your lease."
+        };
+
+        return await ComposeAsync(
+            portfolioId, lease, "LateRentNotice",
+            intent: $"a {levelLabel} past-due rent reminder ({tone})",
+            facts: facts,
+            deterministicSubject: deterministicSubject,
+            deterministicBody: deterministicBody,
+            reason: $"Payment is {daysLate} days past due ({levelLabel} notice).",
+            triggerDate: payment.DueDate.Date,
+            now: now,
+            ct: ct);
+    }
+
+    /// <summary>
+    /// Late-rent escalation ladder driven by days past due. Returns (level 1/2/3, human label, tone hint).
+    /// </summary>
+    private static (int Level, string Label, string Tone) LateEscalationLevel(int daysLate) => daysLate switch
+    {
+        <= 7 => (1, "first", "Keep it warm and assume good faith — they may have simply forgotten."),
+        <= 20 => (2, "second", "Be firm but polite; the balance still needs to be brought current."),
+        _ => (3, "final", "Be serious and direct: this is the last reminder before lease remedies, while staying professional.")
+    };
+
+    private static string UnitSuffix(string? unitNumber) =>
+        string.IsNullOrWhiteSpace(unitNumber) ? "" : $" Unit {unitNumber}";
+
+    /// <summary>
+    /// Builds the LLM prompt from grounded facts, asks for a subject+body JSON, and falls back to the
+    /// deterministic template whenever the LLM is a no-op (empty/blank) or unparseable. The prompt is
+    /// always stored on the draft; when the fallback is used, <see cref="NoticeDraft.GenerationPrompt"/>
+    /// is left null to mark the copy as template-generated.
+    /// </summary>
+    private async Task<NoticeDraft> ComposeAsync(
+        int portfolioId,
+        Lease lease,
+        string noticeType,
+        string intent,
+        string facts,
+        string deterministicSubject,
+        string deterministicBody,
+        string reason,
+        DateTime triggerDate,
+        DateTime now,
+        CancellationToken ct)
+    {
+        var prompt = BuildPrompt(intent, facts);
+
+        var subject = deterministicSubject;
+        var body = deterministicBody;
+        string? usedPrompt = null;
+
+        try
+        {
+            var raw = await _llm.ChatAsync(prompt, ct);
+            if (TryParseCopy(raw, out var llmSubject, out var llmBody))
+            {
+                subject = Truncate(llmSubject, 200);
+                body = Truncate(llmBody, 4000);
+                usedPrompt = Truncate(prompt, 8000);
+            }
+            // else: empty (no-op / no key) or malformed → keep deterministic template.
+        }
+        catch (Exception ex)
+        {
+            // Never let a copy-generation failure block the proactive draft — fall back to the template.
+            _logger.LogWarning(ex, "LLM copy generation failed for {NoticeType} (lease {LeaseId}); using template.", noticeType, lease.Id);
+        }
 
         return new NoticeDraft
         {
@@ -244,16 +400,80 @@ public class NoticeDraftService : INoticeDraftService
             LeaseId = lease.Id,
             TenantId = lease.TenantId,
             PropertyId = lease.PropertyId,
-            NoticeType = "LateRentNotice",
-            Subject = $"Past-due rent for {propertyName}{unit}",
-            Body = $"Hi {tenantName}, our records show {payment.Amount:C0} due on {payment.DueDate:MMMM d, yyyy} "
-                 + $"for {propertyName}{unit}. Please reply with payment status or questions.",
-            Reason = $"Payment is {daysLate} days past due.",
-            TriggerDate = payment.DueDate.Date,
+            NoticeType = noticeType,
+            Subject = subject,
+            Body = body,
+            Reason = reason,
+            GenerationPrompt = usedPrompt,
+            TriggerDate = triggerDate,
             CreatedAt = now,
             UpdatedAt = now
         };
     }
+
+    private static string BuildPrompt(string intent, string facts)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("You are a property manager writing a short message to a tenant on behalf of the landlord.");
+        sb.AppendLine($"Write {intent}.");
+        sb.AppendLine();
+        sb.AppendLine("Use ONLY these facts — do not invent names, amounts, dates, fees, or legal threats:");
+        sb.AppendLine(facts);
+        sb.AppendLine();
+        sb.AppendLine("Requirements:");
+        sb.AppendLine("- Warm, clear, professional. Plain language a non-lawyer tenant understands.");
+        sb.AppendLine("- 2–4 short sentences in the body. No placeholders like [Name]; use the real tenant name.");
+        sb.AppendLine("- Do not include a signature, contact block, or subject-line label inside the body.");
+        sb.AppendLine("- Respond with ONLY a JSON object: {\"subject\": \"...\", \"body\": \"...\"}. No markdown, no extra text.");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Parses the model's <c>{"subject","body"}</c> JSON (tolerating ```json fences). Returns false on
+    /// empty/blank input (the no-op fallback) or when either field is missing/blank.
+    /// </summary>
+    private static bool TryParseCopy(string? raw, out string subject, out string body)
+    {
+        subject = "";
+        body = "";
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+
+        var text = raw.Trim();
+        // Strip a ```json … ``` fence if the model added one.
+        if (text.StartsWith("```"))
+        {
+            var firstNewline = text.IndexOf('\n');
+            if (firstNewline >= 0) text = text[(firstNewline + 1)..];
+            if (text.EndsWith("```")) text = text[..^3];
+            text = text.Trim();
+        }
+
+        // Be lenient: pull out the first {...} block if there's surrounding prose.
+        var start = text.IndexOf('{');
+        var end = text.LastIndexOf('}');
+        if (start < 0 || end <= start) return false;
+        text = text[start..(end + 1)];
+
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return false;
+            if (root.TryGetProperty("subject", out var s) && s.ValueKind == JsonValueKind.String)
+                subject = s.GetString()?.Trim() ?? "";
+            if (root.TryGetProperty("body", out var b) && b.ValueKind == JsonValueKind.String)
+                body = b.GetString()?.Trim() ?? "";
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        return subject.Length > 0 && body.Length > 0;
+    }
+
+    private static string Truncate(string value, int max) =>
+        value.Length <= max ? value : value[..max];
 
     private static List<string> NormalizeChannels(List<string>? channels) =>
         (channels ?? [])

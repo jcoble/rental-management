@@ -137,7 +137,10 @@ public sealed class AnthropicLlmProvider : ILlmProvider
         var body = new
         {
             model = _config.ModelId,
-            max_tokens = 1500,
+            // The receipt schema asks for ~24 fields, a confidence per field, AND a line-items
+            // array — at 1500 the tool_use JSON gets truncated (the model hits the cap before
+            // finishing the tool call), yielding an empty extraction. 4096 gives ample room.
+            max_tokens = 4096,
             system = systemPrompt.ToString(),
             tools = new[] { BuildTool(fields) },
             tool_choice = new { type = "tool", name = ToolName },

@@ -104,6 +104,32 @@ class BriefingResponse {
       };
 }
 
+/// Optional "text me / email me this answer" delivery options for `POST /api/v1/ai/ask`.
+class AskDelivery {
+  const AskDelivery({
+    this.viaEmail = false,
+    this.viaSms = false,
+    this.toEmail,
+    this.toPhone,
+  });
+
+  final bool viaEmail;
+  final bool viaSms;
+
+  /// Override email recipient; defaults to the signed-in user's email server-side.
+  final String? toEmail;
+
+  /// Override phone recipient; defaults to a configured owner phone server-side.
+  final String? toPhone;
+
+  Map<String, dynamic> toJson() => {
+        if (viaEmail) 'deliverViaEmail': true,
+        if (viaSms) 'deliverViaSms': true,
+        if (toEmail != null) 'deliverToEmail': toEmail,
+        if (toPhone != null) 'deliverToPhone': toPhone,
+      };
+}
+
 /// Response from `POST /api/v1/ai/ask`.
 class AskResponse {
   const AskResponse({
@@ -112,6 +138,7 @@ class AskResponse {
     required this.llmAvailable,
     required this.tokensUsed,
     required this.modelId,
+    this.deliveredChannels = const [],
   });
 
   final String answer;
@@ -120,10 +147,17 @@ class AskResponse {
   final int tokensUsed;
   final String modelId;
 
+  /// Channels the answer was queued for delivery on (e.g. `Email`, `Sms`).
+  final List<String> deliveredChannels;
+
   factory AskResponse.fromJson(Map<String, dynamic> json) {
     final rawTools = json['toolsUsed'];
     final tools = rawTools is List
         ? rawTools.whereType<String>().toList()
+        : <String>[];
+    final rawDelivered = json['deliveredChannels'];
+    final delivered = rawDelivered is List
+        ? rawDelivered.whereType<String>().toList()
         : <String>[];
 
     return AskResponse(
@@ -132,6 +166,7 @@ class AskResponse {
       llmAvailable: json['llmAvailable'] as bool? ?? true,
       tokensUsed: (json['tokensUsed'] as num?)?.toInt() ?? 0,
       modelId: json['modelId'] as String? ?? '',
+      deliveredChannels: delivered,
     );
   }
 
@@ -141,6 +176,7 @@ class AskResponse {
         'llmAvailable': llmAvailable,
         'tokensUsed': tokensUsed,
         'modelId': modelId,
+        'deliveredChannels': deliveredChannels,
       };
 }
 

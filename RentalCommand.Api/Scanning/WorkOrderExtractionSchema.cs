@@ -9,7 +9,9 @@ public static class WorkOrderExtractionSchema
     public const string Instructions =
         "You are extracting a maintenance work order from a photo or note for a US residential-rental property manager. " +
         "Identify the likely property, unit, tenant, category, urgency, and a concise title/description. " +
-        "Use property_id, unit_id, tenant_id, and vendor_id only when the grounding context strongly matches; otherwise leave them empty for human review. " +
+        "The grounding context lists this portfolio's known vendors, properties, units, and tenants, each with its exact numeric id. " +
+        "For property_id, unit_id, tenant_id, and vendor_id, return the matching id COPIED VERBATIM from that grounding list, and only when it strongly matches; otherwise leave the id empty for human review. " +
+        "Never return an id that is not present in the grounding list, and never guess or fabricate an id. " +
         "Priority must be Low, Normal, High, or Emergency. Use Emergency for active flooding, fire, electrical hazard, no heat in winter, lockout, or safety risk. " +
         "Use High for urgent habitability problems or worsening leaks. Use Normal for routine repairs and Low for cosmetic or preventive items. " +
         "Never invent ids, costs, or facts not visible in the document/photo or grounding context.";
@@ -20,15 +22,15 @@ public static class WorkOrderExtractionSchema
             "Always set to WorkOrder for this schema.",
             EnumValues: new[] { "WorkOrder" }),
         new ExtractionFieldSpec("property_id", "integer",
-            "Matched property id from grounding context, only when strongly matched."),
+            "Exact id of the matching property, copied from the grounding list's properties[].id, only when strongly matched. Empty otherwise."),
         new ExtractionFieldSpec("unit_id", "integer",
-            "Matched unit id from grounding context, only when strongly matched."),
+            "Exact id of the matching unit, copied from the grounding list's units[].id, only when strongly matched. Empty otherwise."),
         new ExtractionFieldSpec("tenant_id", "integer",
-            "Matched tenant id from grounding context, only when strongly matched."),
+            "Exact id of the matching tenant, copied from the grounding list's tenants[].id, only when strongly matched. Empty otherwise."),
         new ExtractionFieldSpec("lease_id", "integer",
-            "Matched lease id from grounding context, only when strongly matched."),
+            "Leave empty; leases are not provided in the grounding list."),
         new ExtractionFieldSpec("vendor_id", "integer",
-            "Suggested vendor id from grounding context, only when strongly matched."),
+            "Exact id of the suggested vendor, copied from the grounding list's vendors[].id, only when strongly matched. Empty otherwise."),
         new ExtractionFieldSpec("title", "string",
             "Short maintenance title, e.g. 'Kitchen ceiling leak'.", Required: true),
         new ExtractionFieldSpec("description", "string",
