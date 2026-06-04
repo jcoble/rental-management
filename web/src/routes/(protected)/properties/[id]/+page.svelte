@@ -14,12 +14,12 @@
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { AlertCircle, Building2, Pencil, Plus, Trash2 } from '@lucide/svelte';
+	import { AlertCircle, Building2, Pencil, Plus, Save, Trash2, X } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -54,16 +54,21 @@
 	const unitsList = $derived(unitsQuery.data ?? []);
 	const leasesList = $derived(leasesQuery.data ?? []);
 
-	// ── Edit property dialog ──────────────────────────────────────────────────
+	// ── Inline property edit ──────────────────────────────────────────────────
 	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', city: '', state: '', postalCode: '', ownerId: '' };
-	let showPropertyForm = $state(false);
+	let editingProperty = $state(false);
 	let propertyForm = $state({ ...emptyProperty });
 	let propertyFormErrors = $state<Record<string, string>>({});
 	let showDeletePropertyConfirm = $state(false);
 
 	const propertyTypes = ['SingleFamily', 'MultiFamily', 'Condo', 'Townhome', 'Commercial', 'MixedUse'];
+	const propertyTypeOptions = $derived(propertyTypes.map((value) => ({ value, label: value })));
+	const ownerOptions = $derived([
+		{ value: '', label: 'No owner assigned' },
+		...(ownersQuery.data ?? []).map((o) => ({ value: String(o.id), label: o.name })),
+	]);
 
-	function openEditProperty() {
+	function startEditingProperty() {
 		if (!property) return;
 		propertyForm = {
 			name: property.name,
@@ -75,11 +80,11 @@
 			ownerId: property.ownerId != null ? String(property.ownerId) : '',
 		};
 		propertyFormErrors = {};
-		showPropertyForm = true;
+		editingProperty = true;
 	}
 
-	function closePropertyForm() {
-		showPropertyForm = false;
+	function cancelEditingProperty() {
+		editingProperty = false;
 		propertyFormErrors = {};
 	}
 
@@ -98,7 +103,8 @@
 			properties.update(pid, data),
 		onSuccess: () => {
 			showSuccess('Property updated.');
-			closePropertyForm();
+			editingProperty = false;
+			propertyFormErrors = {};
 			queryClient.invalidateQueries({ queryKey: ['property', id] });
 			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
 		},
@@ -375,19 +381,30 @@
 				</div>
 			</div>
 			<div class="flex items-center gap-2">
-				<Button variant="outline" class="gap-2" onclick={openEditProperty} data-testid="property-detail-edit">
-					<Pencil class="h-4 w-4" />
-					Edit
-				</Button>
-				<Button
-					variant="destructive"
-					class="gap-2"
-					onclick={() => (showDeletePropertyConfirm = true)}
-					data-testid="property-detail-delete"
-				>
-					<Trash2 class="h-4 w-4" />
-					Delete
-				</Button>
+				{#if editingProperty}
+					<Button variant="outline" class="gap-2" onclick={cancelEditingProperty} disabled={savePropertyMutation.isPending} data-testid="property-detail-cancel">
+						<X class="h-4 w-4" />
+						Cancel
+					</Button>
+					<Button class="gap-2" onclick={submitProperty} disabled={savePropertyMutation.isPending} data-testid="property-detail-save">
+						<Save class="h-4 w-4" />
+						{savePropertyMutation.isPending ? 'Saving…' : 'Save'}
+					</Button>
+				{:else}
+					<Button variant="outline" class="gap-2" onclick={startEditingProperty} data-testid="property-detail-edit">
+						<Pencil class="h-4 w-4" />
+						Edit
+					</Button>
+					<Button
+						variant="destructive"
+						class="gap-2"
+						onclick={() => (showDeletePropertyConfirm = true)}
+						data-testid="property-detail-delete"
+					>
+						<Trash2 class="h-4 w-4" />
+						Delete
+					</Button>
+				{/if}
 			</div>
 		</div>
 
@@ -397,37 +414,24 @@
 				<Card.Title>Property Details</Card.Title>
 			</Card.Header>
 			<Card.Content>
-				<dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Type</dt>
-						<dd class="mt-1 text-sm text-foreground">{property.type}</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Address</dt>
-						<dd class="mt-1 text-sm text-foreground">
-							{property.addressLine1}{property.addressLine2 ? `, ${property.addressLine2}` : ''}
-						</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">City / State / ZIP</dt>
-						<dd class="mt-1 text-sm text-foreground">{property.city}, {property.state} {property.postalCode}</dd>
-					</div>
-					{#if property.yearBuilt}
+				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+					<InlineField label="Name" bind:value={propertyForm.name} display={property.name} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.name} testid="property-detail-name-field" />
+					<InlineField label="Type" bind:value={propertyForm.type} display={property.type} editing={editingProperty} onedit={startEditingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" />
+					<InlineField label="Owner" bind:value={propertyForm.ownerId} display={property.ownerName ?? 'No owner assigned'} editing={editingProperty} onedit={startEditingProperty} type="select" options={ownerOptions} testid="property-detail-owner" />
+					<InlineField label="Address" bind:value={propertyForm.addressLine1} display={`${property.addressLine1}${property.addressLine2 ? `, ${property.addressLine2}` : ''}`} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.addressLine1} testid="property-detail-address" />
+					<InlineField label="City" bind:value={propertyForm.city} display={property.city} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.city} testid="property-detail-city" />
+					<InlineField label="State" bind:value={propertyForm.state} display={property.state} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.state} testid="property-detail-state" />
+					<InlineField label="ZIP" bind:value={propertyForm.postalCode} display={property.postalCode} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.postalCode} testid="property-detail-zip" />
+					{#if !editingProperty && property.yearBuilt}
 						<div>
 							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Year Built</dt>
 							<dd class="mt-1 text-sm text-foreground">{property.yearBuilt}</dd>
 						</div>
 					{/if}
-					{#if property.managementFeePercent != null}
+					{#if !editingProperty && property.managementFeePercent != null}
 						<div>
 							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Management Fee</dt>
 							<dd class="mt-1 text-sm text-foreground">{property.managementFeePercent}%</dd>
-						</div>
-					{/if}
-					{#if property.ownerName}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Owner</dt>
-							<dd class="mt-1 text-sm text-foreground">{property.ownerName}</dd>
 						</div>
 					{/if}
 					<div>
@@ -436,13 +440,13 @@
 							{property.unitCount ?? 0} total · {property.occupiedUnits ?? 0} occupied
 						</dd>
 					</div>
-					{#if property.notes}
+					{#if !editingProperty && property.notes}
 						<div class="sm:col-span-2 lg:col-span-3">
 							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notes</dt>
 							<dd class="mt-1 text-sm text-foreground">{property.notes}</dd>
 						</div>
 					{/if}
-				</dl>
+				</div>
 			</Card.Content>
 		</Card.Root>
 
@@ -484,66 +488,6 @@
 		</div>
 	{/if}
 </div>
-
-<!-- Edit Property dialog -->
-<Dialog.Root open={showPropertyForm} onOpenChange={(v) => { if (!v) closePropertyForm(); }}>
-	<Dialog.Content class="max-w-2xl">
-		<Dialog.Header>
-			<Dialog.Title>Edit Property</Dialog.Title>
-		</Dialog.Header>
-		<div class="grid gap-3 md:grid-cols-2" data-testid="property-form">
-			<div class="md:col-span-2">
-				<Input data-testid="property-name-input" bind:value={propertyForm.name} placeholder="Property name" />
-				{#if propertyFormErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="property-name-error">{propertyFormErrors.name}</p>{/if}
-			</div>
-			<Select.Root type="single" bind:value={propertyForm.type}>
-				<Select.Trigger class="w-full" data-testid="property-type-input">
-					{propertyForm.type ? propertyForm.type : 'Select type'}
-				</Select.Trigger>
-				<Select.Content>
-					{#each propertyTypes as pt}
-						<Select.Item value={pt} label={pt}>{pt}</Select.Item>
-					{/each}
-				</Select.Content>
-			</Select.Root>
-			<Select.Root type="single" bind:value={propertyForm.ownerId}>
-				<Select.Trigger class="w-full" data-testid="property-owner-input">
-					{propertyForm.ownerId ? ((ownersQuery.data || []).find(o => String(o.id) === propertyForm.ownerId)?.name ?? 'No owner assigned') : 'No owner assigned'}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>
-					{#each ownersQuery.data || [] as owner}
-						<Select.Item value={String(owner.id)} label={owner.name}>{owner.name}</Select.Item>
-					{/each}
-				</Select.Content>
-			</Select.Root>
-			<div class="md:col-span-2">
-				<Input data-testid="property-address-input" bind:value={propertyForm.addressLine1} placeholder="Address" />
-				{#if propertyFormErrors.addressLine1}<p class="mt-1 text-xs text-destructive" data-testid="property-address-error">{propertyFormErrors.addressLine1}</p>{/if}
-			</div>
-			<div>
-				<Input data-testid="property-city-input" bind:value={propertyForm.city} placeholder="City" />
-				{#if propertyFormErrors.city}<p class="mt-1 text-xs text-destructive" data-testid="property-city-error">{propertyFormErrors.city}</p>{/if}
-			</div>
-			<div class="grid grid-cols-2 gap-2">
-				<div>
-					<Input data-testid="property-state-input" bind:value={propertyForm.state} placeholder="State" />
-					{#if propertyFormErrors.state}<p class="mt-1 text-xs text-destructive" data-testid="property-state-error">{propertyFormErrors.state}</p>{/if}
-				</div>
-				<div>
-					<Input data-testid="property-zip-input" bind:value={propertyForm.postalCode} placeholder="ZIP" />
-					{#if propertyFormErrors.postalCode}<p class="mt-1 text-xs text-destructive" data-testid="property-zip-error">{propertyFormErrors.postalCode}</p>{/if}
-				</div>
-			</div>
-		</div>
-		<div class="mt-4 flex justify-end gap-2">
-			<Button data-testid="property-form-cancel" variant="outline" onclick={closePropertyForm}>Cancel</Button>
-			<Button data-testid="property-form-save" onclick={submitProperty} disabled={savePropertyMutation.isPending}>
-				{savePropertyMutation.isPending ? 'Saving…' : 'Save Property'}
-			</Button>
-		</div>
-	</Dialog.Content>
-</Dialog.Root>
 
 <!-- Unit add/edit dialog -->
 <Dialog.Root open={showUnitForm} onOpenChange={(v) => { if (!v) closeUnitForm(); }}>
