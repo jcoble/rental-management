@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { Building } from '@lucide/svelte';
+	import { Building, Loader2, MailCheck, CheckCircle2 } from '@lucide/svelte';
 	import type { ActionData, PageData } from './$types';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import * as Card from '$lib/components/ui/card';
+	import AuthBrandPanel from '$lib/components/auth/AuthBrandPanel.svelte';
 
-	let { data, form }: { data: PageData; form: ActionData } = $props();
+	let { form }: { data: PageData; form: ActionData } = $props();
 
 	let submitting = $state(false);
 	let displayName = $state('');
@@ -21,37 +21,64 @@
 			if (form.email) email = form.email ?? '';
 		}
 	});
+
+	// Lightweight live validation hints (don't block the submit button — the
+	// server is the source of truth — but give friendly inline feedback).
+	const passwordTooShort = $derived(password.length > 0 && password.length < 8);
+	const passwordsMismatch = $derived(confirmPassword.length > 0 && confirmPassword !== password);
 </script>
 
 <svelte:head>
 	<title>Create account - Rental Command</title>
 </svelte:head>
 
-<div class="auth-page-wrap">
-	<Card.Root class="w-full max-w-md shadow-xl">
-		<Card.Content class="p-6">
-			<div class="mb-5 flex items-center gap-2">
-				<Building class="h-6 w-6 text-primary" />
-				<h1 class="text-xl font-bold text-foreground">Rental Command</h1>
+<div class="grid h-dvh w-full grid-cols-1 overflow-y-auto bg-background lg:grid-cols-2">
+	<AuthBrandPanel tagline="Get your whole portfolio set up in minutes." />
+
+	<div class="flex items-center justify-center p-6 sm:p-10">
+		<div class="w-full max-w-sm">
+			<!-- Compact brand for narrow screens -->
+			<div class="mb-8 flex items-center gap-2 lg:hidden">
+				<span
+					class="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
+				>
+					<Building class="h-5 w-5" />
+				</span>
+				<span class="text-lg font-semibold tracking-tight text-foreground">Rental Command</span>
 			</div>
 
 			{#if form && 'registered' in form && form.registered}
 				<!-- Success: email sent -->
-				<div class="space-y-4" data-testid="register-success">
-					<p class="text-sm font-medium text-foreground">Check your email</p>
-					<p class="text-sm text-muted-foreground">
-						We sent a verification link to <span class="font-medium text-foreground">{form.email}</span>.
-						Click the link in that email to activate your account.
-					</p>
+				<div class="space-y-5" data-testid="register-success">
+					<div
+						class="flex h-12 w-12 items-center justify-center rounded-full bg-green-500/10 text-green-500 ring-1 ring-inset ring-green-500/20"
+					>
+						<MailCheck class="h-6 w-6" />
+					</div>
+					<div class="space-y-1.5">
+						<h1 class="text-2xl font-semibold tracking-tight text-foreground">Check your email</h1>
+						<p class="text-sm text-muted-foreground">
+							We sent a verification link to
+							<span class="font-medium text-foreground">{form.email}</span>. Click it to activate your
+							account.
+						</p>
+						<p class="text-sm text-muted-foreground">
+							Don't see it? Check your <span class="font-medium text-foreground">spam folder</span> — it
+							can take a minute to arrive.
+						</p>
+					</div>
 					<a
 						href="/login"
-						class="inline-block text-sm text-primary underline-offset-4 hover:underline"
+						class="inline-block text-sm font-medium text-primary underline-offset-4 hover:underline"
 					>
 						Back to sign in
 					</a>
 				</div>
 			{:else}
-				<p class="mb-4 text-sm text-muted-foreground">Create your account.</p>
+				<div class="mb-6">
+					<h1 class="text-2xl font-semibold tracking-tight text-foreground">Create your account</h1>
+					<p class="mt-1 text-sm text-muted-foreground">Start managing your rentals in minutes.</p>
+				</div>
 
 				<form
 					method="POST"
@@ -63,10 +90,10 @@
 							submitting = false;
 						};
 					}}
-					class="space-y-3"
+					class="space-y-4"
 				>
 					<div>
-						<label for="register-displayname" class="mb-1 block text-xs text-muted-foreground">
+						<label for="register-displayname" class="mb-1.5 block text-sm font-medium text-foreground">
 							Display name
 						</label>
 						<Input
@@ -78,11 +105,12 @@
 							bind:value={displayName}
 							required
 							placeholder="Jane Smith"
+							class="h-11"
 						/>
 					</div>
 
 					<div>
-						<label for="register-email" class="mb-1 block text-xs text-muted-foreground">
+						<label for="register-email" class="mb-1.5 block text-sm font-medium text-foreground">
 							Email
 						</label>
 						<Input
@@ -94,12 +122,14 @@
 							bind:value={email}
 							required
 							placeholder="you@example.com"
+							class="h-11"
 						/>
 					</div>
 
 					<div>
-						<label for="register-password" class="mb-1 block text-xs text-muted-foreground">
-							Password <span class="text-muted-foreground/60">(min. 8 characters)</span>
+						<label for="register-password" class="mb-1.5 block text-sm font-medium text-foreground">
+							Password
+							<span class="font-normal text-muted-foreground">(min. 8 characters)</span>
 						</label>
 						<Input
 							id="register-password"
@@ -110,36 +140,52 @@
 							bind:value={password}
 							required
 							placeholder="••••••••"
+							class="h-11"
+							aria-invalid={passwordTooShort}
 						/>
+						{#if passwordTooShort}
+							<p class="mt-1 text-xs text-amber-500">Use at least 8 characters.</p>
+						{/if}
 					</div>
 
 					<div>
-						<label for="register-confirm-password" class="mb-1 block text-xs text-muted-foreground">
+						<label
+							for="register-confirm-password"
+							class="mb-1.5 block text-sm font-medium text-foreground"
+						>
 							Confirm password
 						</label>
-						<Input
-							id="register-confirm-password"
-							name="confirmPassword"
-							type="password"
-							data-testid="register-confirm-password-input"
-							autocomplete="new-password"
-							bind:value={confirmPassword}
-							required
-							placeholder="••••••••"
-						/>
+						<div class="relative">
+							<Input
+								id="register-confirm-password"
+								name="confirmPassword"
+								type="password"
+								data-testid="register-confirm-password-input"
+								autocomplete="new-password"
+								bind:value={confirmPassword}
+								required
+								placeholder="••••••••"
+								class="h-11 pr-9"
+								aria-invalid={passwordsMismatch}
+							/>
+							{#if confirmPassword.length > 0 && !passwordsMismatch}
+								<CheckCircle2
+									class="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-green-500"
+									aria-hidden="true"
+								/>
+							{/if}
+						</div>
+						{#if passwordsMismatch}
+							<p class="mt-1 text-xs text-destructive">Passwords don't match.</p>
+						{/if}
 					</div>
 
-					<Button
-						type="submit"
-						data-testid="register-submit"
-						disabled={submitting}
-						class="w-full"
-					>
-						{submitting ? 'Creating account…' : 'Create account'}
-					</Button>
-
 					{#if form && 'error' in form && form.error}
-						<div role="alert" data-testid="register-error" class="space-y-1">
+						<div
+							role="alert"
+							data-testid="register-error"
+							class="space-y-1 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2"
+						>
 							<p class="text-sm text-destructive">{form.error}</p>
 							{#if form.details}
 								<p class="text-xs text-muted-foreground">{form.details}</p>
@@ -147,12 +193,26 @@
 						</div>
 					{/if}
 
-					<p class="text-center text-xs text-muted-foreground">
+					<Button
+						type="submit"
+						data-testid="register-submit"
+						disabled={submitting}
+						class="h-11 w-full"
+					>
+						{#if submitting}
+							<Loader2 class="h-4 w-4 animate-spin" />
+							Creating account…
+						{:else}
+							Create account
+						{/if}
+					</Button>
+
+					<p class="text-center text-sm text-muted-foreground">
 						Already have an account?
-						<a href="/login" class="text-primary underline-offset-4 hover:underline">Sign in</a>
+						<a href="/login" class="font-medium text-primary underline-offset-4 hover:underline">Sign in</a>
 					</p>
 				</form>
 			{/if}
-		</Card.Content>
-	</Card.Root>
+		</div>
+	</div>
 </div>

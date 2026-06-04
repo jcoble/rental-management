@@ -12,6 +12,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
+	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Check, Landmark, Link2, RefreshCw, Upload, X } from '@lucide/svelte';
@@ -26,7 +27,19 @@
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 
-	let statusFilter = $state('');
+	// shadcn Select binds a string; bits-ui treats '' as "no selection", so 'all' stands in for the
+	// "no filter" choice and `statusFilter` maps it back to '' for the query.
+	const ALL_STATUS = 'all';
+	let statusValue = $state(ALL_STATUS);
+	const statusFilter = $derived(statusValue === ALL_STATUS ? '' : statusValue);
+	const STATUS_FILTER_OPTIONS = [
+		{ value: ALL_STATUS, label: 'All' },
+		{ value: 'Unmatched', label: 'Unmatched' },
+		{ value: 'Matched', label: 'Matched' }
+	];
+	const statusFilterLabel = $derived(
+		STATUS_FILTER_OPTIONS.find((o) => o.value === statusValue)?.label ?? 'All'
+	);
 	let exchangePublicToken = $state('');
 	let exchangeInstitutionName = $state('Plaid Sandbox Bank');
 	let exchangeAccountId = $state('');
@@ -415,15 +428,16 @@
 						<Card.Title class="text-base">Bank transactions</Card.Title>
 						<Card.Description>Deposits are positive. Withdrawals are negative.</Card.Description>
 					</div>
-					<select
-						class="h-9 rounded-md border border-input bg-background px-3 text-sm"
-						bind:value={statusFilter}
-						data-testid="banking-status-filter"
-					>
-						<option value="">All</option>
-						<option value="Unmatched">Unmatched</option>
-						<option value="Matched">Matched</option>
-					</select>
+					<Select.Root type="single" bind:value={statusValue}>
+						<Select.Trigger class="h-9 w-36" data-testid="banking-status-filter">
+							{statusFilterLabel}
+						</Select.Trigger>
+						<Select.Content>
+							{#each STATUS_FILTER_OPTIONS as opt (opt.value)}
+								<Select.Item value={opt.value} label={opt.label}>{opt.label}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
 				</div>
 			</Card.Header>
 			<Card.Content class="p-0">

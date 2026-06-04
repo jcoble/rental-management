@@ -10,6 +10,7 @@
 		icon: IconComponent,
 		actionLabel,
 		onaction,
+		tone = 'muted',
 		class: className
 	}: {
 		title: string;
@@ -20,10 +21,21 @@
 		actionLabel?: string;
 		/** Callback for the action button. */
 		onaction?: () => void;
+		/** Tints the icon medallion by meaning. Defaults to neutral. */
+		tone?: 'muted' | 'primary' | 'success' | 'warning' | 'destructive';
 		class?: string;
 	} = $props();
 
 	const Icon = $derived(IconComponent ?? InboxIcon);
+
+	const TONE_MAP: Record<string, string> = {
+		muted: 'bg-muted text-muted-foreground',
+		primary: 'bg-primary/10 text-primary',
+		success: 'bg-green-500/10 text-green-500',
+		warning: 'bg-amber-500/10 text-amber-500',
+		destructive: 'bg-destructive/10 text-destructive'
+	};
+	const medallionClass = $derived(TONE_MAP[tone] ?? TONE_MAP.muted);
 </script>
 
 <div
@@ -33,8 +45,14 @@
 	)}
 	data-testid="empty-state"
 >
-	<div class="flex h-12 w-12 items-center justify-center rounded-full bg-muted" aria-hidden="true">
-		<Icon class="h-6 w-6 text-muted-foreground" />
+	<div
+		class={cn(
+			'flex h-12 w-12 items-center justify-center rounded-full ring-1 ring-inset ring-border/60',
+			medallionClass
+		)}
+		aria-hidden="true"
+	>
+		<Icon class="h-6 w-6" />
 	</div>
 	<div class="space-y-1">
 		<p class="text-sm font-medium text-foreground" data-testid="empty-state-title">{title}</p>

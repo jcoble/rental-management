@@ -7,6 +7,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -48,7 +49,7 @@ public class WorkOrderStatusTimelineTests : IDisposable
         _db.SaveChanges();
 
         _service = new WorkOrderService(_db, new NoopDataUpdateService());
-        _portal = new PortalService(_db);
+        _portal = new PortalService(_db, new NoopLeaseQaService());
     }
 
     public void Dispose()

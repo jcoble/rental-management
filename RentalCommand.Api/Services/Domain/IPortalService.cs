@@ -24,6 +24,14 @@ public interface IPortalService
     Task<WorkOrderResponse?> CreateTenantWorkOrderAsync(int portfolioId, int tenantId, CreateTenantWorkOrderRequest request, CancellationToken ct = default);
 
     /// <summary>
+    /// Answers a tenant's question grounded in their OWN lease. The lease must belong to this tenant
+    /// (when <paramref name="leaseId"/> is null, the tenant's most relevant lease is used); a lease id
+    /// that isn't the tenant's yields null (→ 404) so a tenant can never query another tenant's lease.
+    /// Returns null when the tenant has no lease or the question is empty. IDOR-critical.
+    /// </summary>
+    Task<LeaseQuestionResponse?> AskLeaseAsync(int portfolioId, int tenantId, int? leaseId, string question, CancellationToken ct = default);
+
+    /// <summary>
     /// The tenant's autopay enrollment for one of their leases. When <paramref name="leaseId"/> is
     /// null, resolves the tenant's most relevant (active-preferred) lease. Returns a status with
     /// Active=false when there is no enrollment. Ownership-checked: a lease not belonging to this
