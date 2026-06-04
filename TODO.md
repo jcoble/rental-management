@@ -651,6 +651,11 @@ Plan:
   Certificate of Completion + SHA-256; completion flips the lease to Active. Api 241/241.
   (Standalone module #26 still deferred.)
 
+### Wave 8 — Polish batch merged in PR #90 (main `e9b3a0e`)
+- **#22** Inline feature explainers (HelpPopover) across Scan/Notices/Accounting/AI/Lease.
+- **#27** SMTP/Zoho email transport (config-selectable; set Transport=Smtp + smtp.zoho.com creds to fix
+  DMARC delivery). Engine tests 33/33.
+
 ### ✅ ALL FIVE DECISION-SPEC FEATURES SHIPPED (PRs #85–#89)
 Reports Hub (#17) · Bank reconciliation (#4/#5) · Docs+KB (#13/#14) · Sandbox (#11) · Native e-sign (#23).
 
