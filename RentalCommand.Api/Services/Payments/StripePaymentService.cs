@@ -5,6 +5,7 @@ using Stripe.Checkout;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Payments;
@@ -25,15 +26,18 @@ public class StripePaymentService : IStripePaymentService
 
     private readonly RentalCommandDbContext _db;
     private readonly StripeConfig _config;
+    private readonly ISandboxGuard _sandbox;
     private readonly ILogger<StripePaymentService> _logger;
 
     public StripePaymentService(
         RentalCommandDbContext db,
         IOptions<StripeConfig> config,
+        ISandboxGuard sandbox,
         ILogger<StripePaymentService> logger)
     {
         _db = db;
         _config = config.Value;
+        _sandbox = sandbox;
         _logger = logger;
     }
 
@@ -43,6 +47,13 @@ public class StripePaymentService : IStripePaymentService
         if (!_config.Enabled)
         {
             _logger.LogDebug("Stripe is not configured — create-intent is a no-op");
+            return CreateIntentResult.NotEnabled();
+        }
+
+        // HARD sandbox guard: never move real money for a demo account.
+        if (await _sandbox.IsSandboxAsync(portfolioId, ct))
+        {
+            _logger.LogInformation("[suppressed — sandbox] create-intent for portfolio {PortfolioId} — Stripe not called.", portfolioId);
             return CreateIntentResult.NotEnabled();
         }
 
@@ -102,6 +113,13 @@ public class StripePaymentService : IStripePaymentService
         if (!_config.Enabled)
         {
             _logger.LogDebug("Stripe is not configured — payment checkout is a no-op");
+            return CheckoutResult.NotEnabled();
+        }
+
+        // HARD sandbox guard: never create a real Checkout session for a demo account.
+        if (await _sandbox.IsSandboxAsync(portfolioId, ct))
+        {
+            _logger.LogInformation("[suppressed — sandbox] payment checkout for portfolio {PortfolioId} — Stripe not called.", portfolioId);
             return CheckoutResult.NotEnabled();
         }
 
@@ -188,6 +206,13 @@ public class StripePaymentService : IStripePaymentService
         if (!_config.Enabled)
         {
             _logger.LogDebug("Stripe is not configured — autopay setup is a no-op");
+            return CheckoutResult.NotEnabled();
+        }
+
+        // HARD sandbox guard: never enroll a real payment method for a demo account.
+        if (await _sandbox.IsSandboxAsync(portfolioId, ct))
+        {
+            _logger.LogInformation("[suppressed — sandbox] autopay setup for portfolio {PortfolioId} — Stripe not called.", portfolioId);
             return CheckoutResult.NotEnabled();
         }
 

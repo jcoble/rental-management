@@ -15,6 +15,7 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
+	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
 
 	const queryClient = useQueryClient();
 	const authState = getAuthState();
@@ -313,6 +314,11 @@
 	<div class="mb-4">
 		<h1 class="text-2xl font-bold">Portfolio Settings</h1>
 		<p class="text-sm text-muted-foreground">Configure timezone, status, and operational defaults.</p>
+	</div>
+
+	<!-- Account mode: Sandbox vs Live + the one-way Go Live flow. -->
+	<div class="mb-4 max-w-3xl" data-testid="settings-sandbox-section">
+		<SandboxBanner variant="card" />
 	</div>
 
 	<Card.Root class="max-w-3xl gap-0 py-0">

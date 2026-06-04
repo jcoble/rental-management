@@ -62,6 +62,7 @@
 	import { appointments as appointmentsApi } from '$lib/api/endpoints/appointments';
 	import NavigationLoader from '$lib/components/NavigationLoader.svelte';
 	import AssistantBubble from '$lib/components/assistant/AssistantBubble.svelte';
+	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 
@@ -568,6 +569,11 @@
 				? 'ml-14'
 				: 'ml-60'}"
 	>
+		<!-- Sandbox mode banner: slim, top of the shell, above the header. Hidden when Live. -->
+		{#if !portalUser}
+			<SandboxBanner variant="banner" />
+		{/if}
+
 		<!-- App header bar: quick actions + live badges (TODO #2). Always visible. -->
 		<header
 			class="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border bg-background/95 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/60 sm:px-4"

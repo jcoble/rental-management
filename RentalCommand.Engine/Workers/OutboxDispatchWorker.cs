@@ -61,6 +61,7 @@ public sealed class OutboxDispatchWorker : EngineWorkerBase
     {
         var db = scopedProvider.GetRequiredService<RentalCommandDbContext>();
         var channel = scopedProvider.GetRequiredService<INotificationChannel>();
+        var sandboxGuard = scopedProvider.GetRequiredService<ISandboxGuard>();
         var logger = scopedProvider.GetRequiredService<ILogger<OutboxDispatchWorker>>();
 
         // Load all candidates (unsent, within retry budget) — oldest-first.
@@ -88,6 +89,21 @@ public sealed class OutboxDispatchWorker : EngineWorkerBase
             if (message.FailedAt is not null &&
                 message.FailedAt.Value + Backoff(message.RetryCount) > now)
             {
+                continue;
+            }
+
+            // HARD sandbox guard: a message scoped to a Sandbox portfolio must NEVER reach a real
+            // tenant/vendor. Suppress the send and mark the row handled (SentAt set) so it is not
+            // retried forever. This is the single choke point for all outbound SMS/email.
+            if (await sandboxGuard.IsSandboxAsync(message.PortfolioId, cancellationToken))
+            {
+                logger.LogInformation(
+                    "[suppressed — sandbox] OutboxMessage {MessageId} ({MessageType}) for sandbox portfolio {PortfolioId} — not sent.",
+                    message.Id, message.MessageType, message.PortfolioId);
+                message.SentAt = DateTime.UtcNow;
+                message.FailedAt = null;
+                message.Error = null;
+                await db.SaveChangesAsync(CancellationToken.None);
                 continue;
             }
 
