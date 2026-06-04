@@ -272,7 +272,8 @@ var app = builder.Build();
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-    await db.Database.MigrateAsync();
+    // Advisory-locked so the API and Engine (both self-migrate on startup) don't race on a fresh batch.
+    await DatabaseMigrator.MigrateWithLockAsync(db);
 
     var seeder = scope.ServiceProvider.GetRequiredService<IdentitySeeder>();
     await seeder.SeedAsync();

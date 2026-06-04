@@ -114,9 +114,10 @@ var host = builder.Build();
 
 // --- Self-migrate ---
 // The Engine applies EF Core migrations itself so it no longer depends on the API having
-// created the schema. MigrateAsync() is idempotent, so it's safe for both API and Engine
-// to migrate. Done BEFORE acquiring the advisory lock so the schema (incl. the heartbeat
-// table the watcher/watchdog read) exists before any worker starts.
+// created the schema. Both the API and Engine self-migrate on startup, so the migration runs
+// under a shared PostgreSQL advisory lock (DatabaseMigrator) — concurrent MigrateAsync calls
+// would otherwise race on a fresh batch and crash one process. Done BEFORE acquiring the worker
+// advisory lock so the schema (incl. the heartbeat table the watchdog reads) exists first.
 {
     var migrateLogger = host.Services.GetRequiredService<ILogger<Program>>();
     const int maxMigrateAttempts = 30;
@@ -126,7 +127,8 @@ var host = builder.Build();
         {
             using var scope = host.Services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
-            await db.Database.MigrateAsync();
+            // Advisory-locked so the Engine and API don't apply a fresh migration batch concurrently.
+            await DatabaseMigrator.MigrateWithLockAsync(db);
             migrateLogger.LogInformation("Engine applied database migrations (or none pending).");
             break;
         }
