@@ -197,6 +197,23 @@ export const inspectionSchema = z.object({
 	scheduledFor: required('Scheduled date'),
 });
 
+/**
+ * Recurring maintenance task ("HVAC filter every 90 days"). Property + title +
+ * next-due date are required; unit/vendor are optional ids that blank → null.
+ */
+export const recurringMaintenanceSchema = z.object({
+	propertyId: numericString('Property'),
+	title: required('Title'),
+	description: optionalText,
+	category: optionalText,
+	unitId: idString,
+	vendorId: idString,
+	recurrenceInterval: z.string(),
+	nextDueDate: required('Next due date'),
+	priority: z.string(),
+	isActive: z.boolean(),
+});
+
 export const appointmentSchema = z.object({
 	title: required('Title'),
 	type: z.string(),
