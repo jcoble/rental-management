@@ -98,3 +98,60 @@ class WorkOrder {
     };
   }
 }
+
+/// One entry in a work order's live status timeline (oldest → newest).
+///
+/// Wire shape (camelCase, enums as strings):
+///   { id, fromStatus, toStatus, note, changedByLabel, createdAtUtc }
+/// [fromStatus] is null for the initial create event.
+class WorkOrderStatusEvent {
+  final int id;
+  final String? fromStatus;
+  final String toStatus;
+  final String? note;
+  final String? changedByLabel;
+  final DateTime createdAtUtc;
+
+  const WorkOrderStatusEvent({
+    required this.id,
+    this.fromStatus,
+    required this.toStatus,
+    this.note,
+    this.changedByLabel,
+    required this.createdAtUtc,
+  });
+
+  factory WorkOrderStatusEvent.fromJson(Map<String, dynamic> json) {
+    return WorkOrderStatusEvent(
+      id: (json['id'] as num).toInt(),
+      fromStatus: json['fromStatus'] as String?,
+      toStatus: json['toStatus'] as String? ?? '',
+      note: json['note'] as String?,
+      changedByLabel: json['changedByLabel'] as String?,
+      createdAtUtc:
+          DateTime.tryParse(json['createdAtUtc'] as String? ?? '')?.toLocal() ??
+          DateTime(0),
+    );
+  }
+}
+
+/// A work order plus its status [timeline], returned by the single-work-order
+/// GET (`/work-orders/{id}` and `/portal/work-orders/{id}`). The list endpoints
+/// stay lightweight and omit the timeline.
+class WorkOrderDetail {
+  final WorkOrder workOrder;
+  final List<WorkOrderStatusEvent> timeline;
+
+  const WorkOrderDetail({required this.workOrder, required this.timeline});
+
+  factory WorkOrderDetail.fromJson(Map<String, dynamic> json) {
+    final events = (json['timeline'] as List<dynamic>?) ?? const [];
+    return WorkOrderDetail(
+      workOrder: WorkOrder.fromJson(json),
+      timeline: events
+          .whereType<Map<String, dynamic>>()
+          .map(WorkOrderStatusEvent.fromJson)
+          .toList(),
+    );
+  }
+}

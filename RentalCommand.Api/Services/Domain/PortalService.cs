@@ -98,6 +98,30 @@ public class PortalService : IPortalService
         return workOrders.Select(WorkOrderResponse.FromEntity).ToList();
     }
 
+    public async Task<WorkOrderDetailResponse?> GetWorkOrderDetailAsync(
+        int portfolioId, int tenantId, int workOrderId, CancellationToken ct = default)
+    {
+        // Ownership is part of the lookup: a work order on another tenant's lease/unit simply isn't
+        // found, so we never leak its existence or its timeline. Mirrors the lease-ledger restriction.
+        var workOrder = await _db.WorkOrders
+            .AsNoTracking()
+            .FirstOrDefaultAsync(
+                w => w.Id == workOrderId && w.PortfolioId == portfolioId && w.TenantId == tenantId, ct);
+        if (workOrder is null)
+        {
+            return null;
+        }
+
+        var events = await _db.WorkOrderStatusEvents
+            .AsNoTracking()
+            .Where(e => e.WorkOrderId == workOrderId && e.PortfolioId == portfolioId)
+            .OrderBy(e => e.CreatedAtUtc)
+            .ThenBy(e => e.Id)
+            .ToListAsync(ct);
+
+        return WorkOrderDetailResponse.FromEntity(workOrder, events);
+    }
+
     public async Task<WorkOrderResponse?> CreateTenantWorkOrderAsync(
         int portfolioId,
         int tenantId,
@@ -134,6 +158,19 @@ public class PortalService : IPortalService
             CreatedBy = "Tenant",
             UpdatedAt = now,
         };
+
+        // Seed the timeline with the initial null → New event so the tenant's own request shows a
+        // status stream from the moment they submit it.
+        workOrder.StatusEvents.Add(new WorkOrderStatusEvent
+        {
+            PortfolioId = portfolioId,
+            FromStatus = null,
+            ToStatus = workOrder.Status,
+            Note = null,
+            ChangedByUserId = null,
+            ChangedByLabel = "Tenant",
+            CreatedAtUtc = now,
+        });
 
         _db.WorkOrders.Add(workOrder);
         await _db.SaveChangesAsync(ct);

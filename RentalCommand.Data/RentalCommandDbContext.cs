@@ -25,6 +25,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Expense> Expenses => Set<Expense>();
     public DbSet<Vendor> Vendors => Set<Vendor>();
     public DbSet<WorkOrder> WorkOrders => Set<WorkOrder>();
+    public DbSet<WorkOrderStatusEvent> WorkOrderStatusEvents => Set<WorkOrderStatusEvent>();
     public DbSet<Appointment> Appointments => Set<Appointment>();
     public DbSet<Inspection> Inspections => Set<Inspection>();
     public DbSet<ActivityLog> ActivityLogs => Set<ActivityLog>();
@@ -652,6 +653,21 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(v => v.WorkOrders)
                 .HasForeignKey(e => e.VendorId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<WorkOrderStatusEvent>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.FromStatus).HasConversion<int>();
+            entity.Property(e => e.ToStatus).HasConversion<int>();
+            entity.Property(e => e.Note).HasMaxLength(2000);
+            entity.Property(e => e.ChangedByLabel).HasMaxLength(120);
+            entity.HasIndex(e => e.WorkOrderId);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasOne(e => e.WorkOrder)
+                .WithMany(w => w.StatusEvents)
+                .HasForeignKey(e => e.WorkOrderId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Appointment>(entity =>

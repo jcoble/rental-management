@@ -408,7 +408,7 @@ public class ScanServiceTests : IDisposable
 
         public void SetupResponse(WorkOrderResponse response) => _response = response;
 
-        public Task<WorkOrderResponse?> CreateAsync(int portfolioId, CreateWorkOrderRequest request, CancellationToken ct = default)
+        public Task<WorkOrderResponse?> CreateAsync(int portfolioId, CreateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default)
         {
             LastRequest = request;
             return Task.FromResult(_response);
@@ -417,10 +417,10 @@ public class ScanServiceTests : IDisposable
         public Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? vendorId, ListQuery query, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
-        public Task<WorkOrderResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+        public Task<WorkOrderDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
-        public Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, CancellationToken ct = default)
+        public Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)

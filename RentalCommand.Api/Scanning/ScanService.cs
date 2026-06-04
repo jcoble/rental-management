@@ -458,7 +458,7 @@ public sealed class ScanService : IScanService
         WorkOrderResponse? workOrder;
         try
         {
-            workOrder = await _workOrders.CreateAsync(portfolioId, request, ct);
+            workOrder = await _workOrders.CreateAsync(portfolioId, request, userId, "Staff", ct);
         }
         catch (Exception ex)
         {

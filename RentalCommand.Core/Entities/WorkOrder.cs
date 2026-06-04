@@ -32,4 +32,7 @@ public class WorkOrder
     public Lease? Lease { get; set; }
     public Vendor? Vendor { get; set; }
     public List<Expense> Expenses { get; set; } = [];
+
+    /// <summary>Append-only status timeline (Received → Assigned → In Progress → Done), oldest first.</summary>
+    public List<WorkOrderStatusEvent> StatusEvents { get; set; } = [];
 }
