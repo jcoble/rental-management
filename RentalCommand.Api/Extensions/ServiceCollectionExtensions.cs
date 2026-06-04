@@ -26,6 +26,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IUnitService, UnitService>();
         services.AddScoped<IOwnerEntityService, OwnerEntityService>();
         services.AddScoped<IVendorService, VendorService>();
+        services.AddScoped<IVendorDispatchService, VendorDispatchService>();
 
         // --- controllers-leasing-money sub-unit ---
         services.AddScoped<ITenantService, TenantService>();
@@ -52,6 +53,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
         services.AddScoped<INoticeDraftService, NoticeDraftService>();
         services.AddScoped<ISmsInboundRentConfirmationService, SmsInboundRentConfirmationService>();
+        services.AddScoped<ISmsInboundVendorDoneService, SmsInboundVendorDoneService>();
+        services.AddScoped<ISmsInboundRouter, SmsInboundRouter>();
         services.AddScoped<IApplicationService, ApplicationService>();
         services.AddScoped<RentalCommand.Api.Services.Security.ISmsWebhookSignatureValidator,
             RentalCommand.Api.Services.Security.SmsWebhookSignatureValidator>();
