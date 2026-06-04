@@ -13,6 +13,16 @@ public class Vendor
     public bool W9OnFile { get; set; }
     public bool Preferred { get; set; }
     public string? Notes { get; set; }
+
+    /// <summary>Cached average of all <see cref="VendorRating.Stars"/> (1–5); null until first rated.</summary>
+    public decimal? AverageRating { get; set; }
+
+    /// <summary>Cached number of ratings that make up <see cref="AverageRating"/>.</summary>
+    public int RatingCount { get; set; }
+
+    /// <summary>Cached count of work orders this vendor has completed (incl. via DONE replies).</summary>
+    public int JobsCompleted { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -22,4 +32,6 @@ public class Vendor
     public Portfolio? Portfolio { get; set; }
     public List<WorkOrder> WorkOrders { get; set; } = [];
     public List<Expense> Expenses { get; set; } = [];
+    public List<VendorDispatch> Dispatches { get; set; } = [];
+    public List<VendorRating> Ratings { get; set; } = [];
 }

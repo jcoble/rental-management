@@ -1,4 +1,4 @@
-import type { WorkOrder, WorkOrderDetail } from '$lib/types';
+import type { VendorDispatch, WorkOrder, WorkOrderDetail } from '$lib/types';
 import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
 
@@ -15,5 +15,9 @@ export const workOrders = {
 	// An optional statusNote (≤2000 chars) is recorded on the timeline when the status changes.
 	updateStatus: (id: number, status: string, statusNote?: string) =>
 		api.patch<WorkOrderDetail>(`/work-orders/${id}`, statusNote ? { status, statusNote } : { status }),
+	// Assign + text a vendor the job. The vendor replies DONE to auto-close it.
+	// Throws ApiError (400) when the chosen vendor has no phone number on file.
+	dispatch: (id: number, data: { vendorId: number; note?: string }) =>
+		api.post<VendorDispatch>(`/work-orders/${id}/dispatch`, data),
 	delete: (id: number) => api.delete(`/work-orders/${id}`),
 };

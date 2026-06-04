@@ -16,10 +16,12 @@ namespace RentalCommand.Api.Controllers;
 public class WorkOrderController : AuthenticatedPortfolioControllerBase
 {
     private readonly IWorkOrderService _service;
+    private readonly IVendorDispatchService _dispatch;
 
-    public WorkOrderController(IWorkOrderService service)
+    public WorkOrderController(IWorkOrderService service, IVendorDispatchService dispatch)
     {
         _service = service;
+        _dispatch = dispatch;
     }
 
     [HttpGet]
@@ -67,5 +69,25 @@ public class WorkOrderController : AuthenticatedPortfolioControllerBase
     {
         var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Work order not found" });
+    }
+
+    /// <summary>
+    /// Assign the work order to a vendor and text them the job ("reply DONE when finished"). Creates an
+    /// open dispatch and enqueues the SMS. 404 when the work order or vendor is out of scope; 400 when
+    /// the vendor has no phone number on file.
+    /// </summary>
+    [HttpPost("{id:int}/dispatch")]
+    [ProducesResponseType(typeof(VendorDispatchResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<VendorDispatchResponse>> Dispatch(int id, [FromBody] DispatchWorkOrderRequest request, CancellationToken ct)
+    {
+        var result = await _dispatch.DispatchAsync(GetPortfolioId(), id, request, GetUserId(), ct);
+        return result.Outcome switch
+        {
+            DispatchOutcome.Dispatched => CreatedAtAction(nameof(Get), new { id }, result.Dispatch),
+            DispatchOutcome.VendorHasNoPhone => BadRequest(new { error = "Vendor has no phone number on file; add one before dispatching." }),
+            _ => NotFound(new { error = "Work order or vendor not found in this portfolio" }),
+        };
     }
 }

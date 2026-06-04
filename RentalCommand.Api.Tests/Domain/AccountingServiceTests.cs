@@ -502,5 +502,6 @@ internal sealed class AccountingServiceTestDbContext : RentalCommandDbContext
         modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
         modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
         modelBuilder.Entity<Lease>().ToTable("Leases");
+        modelBuilder.Entity<VendorRating>().ToTable("VendorRatings");
     }
 }

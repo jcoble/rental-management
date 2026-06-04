@@ -17,6 +17,16 @@ public class VendorResponse
     public bool W9OnFile { get; set; }
     public bool Preferred { get; set; }
     public string? Notes { get; set; }
+
+    /// <summary>Cached average star rating (1–5); null until the vendor has been rated.</summary>
+    public decimal? AverageRating { get; set; }
+
+    /// <summary>Number of ratings behind <see cref="AverageRating"/>.</summary>
+    public int RatingCount { get; set; }
+
+    /// <summary>Count of work orders this vendor has completed.</summary>
+    public int JobsCompleted { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -36,9 +46,63 @@ public class VendorResponse
         W9OnFile = e.W9OnFile,
         Preferred = e.Preferred,
         Notes = e.Notes,
+        AverageRating = e.AverageRating,
+        RatingCount = e.RatingCount,
+        JobsCompleted = e.JobsCompleted,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
     };
+}
+
+/// <summary>Body for <c>POST /api/v1/vendors/{id}/ratings</c>: a 1–5 star rating of a vendor.</summary>
+public class CreateVendorRatingRequest
+{
+    [Range(1, 5)]
+    public int Stars { get; set; }
+
+    [MaxLength(2000)]
+    public string? Comment { get; set; }
+
+    /// <summary>Optional work order the rating followed; validated to be in the caller's portfolio.</summary>
+    [Range(1, int.MaxValue)]
+    public int? WorkOrderId { get; set; }
+}
+
+/// <summary>Wire shape returned for a recorded <see cref="VendorRating"/>.</summary>
+public class VendorRatingResponse
+{
+    public int Id { get; set; }
+    public int VendorId { get; set; }
+    public int? WorkOrderId { get; set; }
+    public int Stars { get; set; }
+    public string? Comment { get; set; }
+    public DateTime CreatedAtUtc { get; set; }
+
+    public static VendorRatingResponse FromEntity(VendorRating e) => new()
+    {
+        Id = e.Id,
+        VendorId = e.VendorId,
+        WorkOrderId = e.WorkOrderId,
+        Stars = e.Stars,
+        Comment = e.Comment,
+        CreatedAtUtc = e.CreatedAtUtc,
+    };
+}
+
+/// <summary>Vendor performance scorecard for <c>GET /api/v1/vendors/{id}/scorecard</c>.</summary>
+public class VendorScorecardResponse
+{
+    public int VendorId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public decimal? AverageRating { get; set; }
+    public int RatingCount { get; set; }
+    public int JobsCompleted { get; set; }
+
+    /// <summary>
+    /// Average hours from when a job was texted to the vendor to their DONE reply, across all
+    /// completed dispatches. Null when the vendor has no completed dispatch yet.
+    /// </summary>
+    public decimal? AvgResponseHours { get; set; }
 }
 
 public class CreateVendorRequest
