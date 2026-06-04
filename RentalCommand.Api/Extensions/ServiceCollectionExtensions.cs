@@ -112,6 +112,12 @@ public static class ServiceCollectionExtensions
         // --- mobile push registration ---
         services.AddScoped<IDeviceService, DeviceService>();
 
+        // --- sandbox mode (graduate-once → wipe demo) ---
+        // Guard short-circuits real outbound (Stripe/e-sign here; SMS/email in the Engine outbox worker)
+        // while a portfolio is in Sandbox. SandboxService owns the one-way go-live wipe.
+        services.AddScoped<RentalCommand.Core.Interfaces.ISandboxGuard, RentalCommand.Data.SandboxGuard>();
+        services.AddScoped<ISandboxService, SandboxService>();
+
         return services;
     }
 }

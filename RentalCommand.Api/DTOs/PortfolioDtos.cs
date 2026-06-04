@@ -15,6 +15,10 @@ public class PortfolioResponse
     public PortfolioStatus Status { get; set; }
     public string Currency { get; set; } = "USD";
     public string? Settings { get; set; }
+
+    /// <summary>Account-wide sandbox/live state. True = seeded demo sandbox (real outbound suppressed).</summary>
+    public bool IsSandbox { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -31,9 +35,25 @@ public class PortfolioResponse
         Status = e.Status,
         Currency = e.Currency,
         Settings = e.Settings,
+        IsSandbox = e.IsSandbox,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
     };
+}
+
+/// <summary>
+/// Current Sandbox/Live state of the account (portfolio). The web app uses <see cref="IsSandbox"/> to
+/// render the persistent "Sandbox" banner and to offer the one-way "Go Live" action.
+/// </summary>
+public class SandboxStateResponse
+{
+    public int PortfolioId { get; set; }
+
+    /// <summary>True while the account is a seeded demo sandbox (all real outbound is suppressed).</summary>
+    public bool IsSandbox { get; set; }
+
+    /// <summary>When the sandbox demo data was seeded; null once graduated to Live.</summary>
+    public DateTime? SandboxSeededAtUtc { get; set; }
 }
 
 public class CreatePortfolioRequest

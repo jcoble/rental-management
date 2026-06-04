@@ -1,0 +1,330 @@
+using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.TestCommon;
+
+namespace RentalCommand.Api.Tests.Domain;
+
+/// <summary>
+/// Go-live (graduate-once → wipe demo) coverage for <see cref="SandboxService"/>: a sandbox portfolio's
+/// data is wiped and the flag flipped to Live; the operation is idempotent; and it only ever affects the
+/// caller's own portfolio (IDOR-safe) — a second, sandboxed portfolio is left fully intact.
+/// </summary>
+public class SandboxServiceTests : IDisposable
+{
+    private readonly SqliteTestContext _ctx = new();
+
+    public void Dispose() => _ctx.Dispose();
+
+    private SandboxService BuildService() => new(_ctx.Db, NullLogger<SandboxService>.Instance);
+
+    // -----------------------------------------------------------------------
+    // State read
+
+    [Fact]
+    public async Task GetState_ReturnsSandboxFlagAndSeededAt()
+    {
+        var seededAt = DateTime.UtcNow.AddMinutes(-5);
+        MarkSandbox(portfolioId: 1, seededAt);
+
+        var state = await BuildService().GetStateAsync(1, CancellationToken.None);
+
+        state.Should().NotBeNull();
+        state!.PortfolioId.Should().Be(1);
+        state.IsSandbox.Should().BeTrue();
+        state.SandboxSeededAtUtc.Should().BeCloseTo(seededAt, TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public async Task GetState_ForMissingPortfolio_ReturnsNull()
+    {
+        var state = await BuildService().GetStateAsync(999, CancellationToken.None);
+        state.Should().BeNull();
+    }
+
+    // -----------------------------------------------------------------------
+    // Go-live: wipe + flip
+
+    [Fact]
+    public async Task GoLive_WipesDomainData_AndFlipsToLive()
+    {
+        MarkSandbox(portfolioId: 1, DateTime.UtcNow);
+        SeedRichGraph(portfolioId: 1);
+
+        // Sanity: data is present before go-live.
+        (await _ctx.Db.Properties.CountAsync()).Should().BeGreaterThan(0);
+        (await _ctx.Db.Payments.CountAsync()).Should().BeGreaterThan(0);
+        (await _ctx.Db.PaymentTransactions.CountAsync()).Should().BeGreaterThan(0);
+        (await _ctx.Db.Conversations.CountAsync()).Should().BeGreaterThan(0);
+
+        var state = await BuildService().GoLiveAsync(1, CancellationToken.None);
+
+        state.Should().NotBeNull();
+        state!.IsSandbox.Should().BeFalse();
+        state.SandboxSeededAtUtc.Should().BeNull();
+
+        // The flag flipped...
+        var portfolio = await _ctx.Db.Portfolios.SingleAsync(p => p.Id == 1);
+        portfolio.IsSandbox.Should().BeFalse();
+        portfolio.SandboxSeededAtUtc.Should().BeNull();
+
+        // ...and every portfolio-scoped row was wiped (the Portfolio row itself survives).
+        (await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.Units.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.Leases.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.Payments.CountAsync()).Should().Be(0);
+        (await _ctx.Db.PaymentTransactions.CountAsync()).Should().Be(0);
+        (await _ctx.Db.Expenses.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.Tenants.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.Vendors.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.WorkOrders.IgnoreQueryFilters().CountAsync()).Should().Be(0);
+        (await _ctx.Db.Conversations.CountAsync()).Should().Be(0);
+        (await _ctx.Db.ConversationMessages.CountAsync()).Should().Be(0);
+        (await _ctx.Db.SecurityDepositHoldings.CountAsync()).Should().Be(0);
+        (await _ctx.Db.Portfolios.CountAsync()).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GoLive_IsIdempotent_OnAlreadyLivePortfolio()
+    {
+        // Portfolio 1 starts Live (default). Seed a couple of rows that must NOT be touched.
+        SeedRichGraph(portfolioId: 1);
+        var propsBefore = await _ctx.Db.Properties.CountAsync();
+
+        var state = await BuildService().GoLiveAsync(1, CancellationToken.None);
+
+        state.Should().NotBeNull();
+        state!.IsSandbox.Should().BeFalse();
+        // No-op on an already-live account: data is left intact (we did not wipe a real portfolio).
+        (await _ctx.Db.Properties.CountAsync()).Should().Be(propsBefore);
+    }
+
+    [Fact]
+    public async Task GoLive_ForMissingPortfolio_ReturnsNull()
+    {
+        var state = await BuildService().GoLiveAsync(999, CancellationToken.None);
+        state.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GoLive_OnlyAffectsCallersOwnPortfolio()
+    {
+        // Two sandbox portfolios, each with its own data.
+        MarkSandbox(portfolioId: 1, DateTime.UtcNow);
+        SeedRichGraph(portfolioId: 1);
+
+        _ctx.Db.Portfolios.Add(new Portfolio
+        {
+            Id = 2,
+            Name = "Other",
+            ManagementCompanyName = "Other Co",
+            TimeZone = "UTC",
+            IsSandbox = true,
+            SandboxSeededAtUtc = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _ctx.Db.SaveChanges();
+        SeedRichGraph(portfolioId: 2);
+
+        var p2PropsBefore = await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 2);
+        p2PropsBefore.Should().BeGreaterThan(0);
+
+        // Graduate ONLY portfolio 1.
+        await BuildService().GoLiveAsync(1, CancellationToken.None);
+
+        // Portfolio 1 wiped + Live.
+        (await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 1)).Should().Be(0);
+        (await _ctx.Db.Portfolios.SingleAsync(p => p.Id == 1)).IsSandbox.Should().BeFalse();
+
+        // Portfolio 2 entirely untouched — still sandbox, still has all its data.
+        var p2 = await _ctx.Db.Portfolios.SingleAsync(p => p.Id == 2);
+        p2.IsSandbox.Should().BeTrue();
+        (await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 2)).Should().Be(p2PropsBefore);
+        (await _ctx.Db.Payments.CountAsync(p => p.PortfolioId == 2)).Should().BeGreaterThan(0);
+        (await _ctx.Db.Conversations.CountAsync(c => c.PortfolioId == 2)).Should().BeGreaterThan(0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+
+    private void MarkSandbox(int portfolioId, DateTime seededAt)
+    {
+        var p = _ctx.Db.Portfolios.Single(x => x.Id == portfolioId);
+        p.IsSandbox = true;
+        p.SandboxSeededAtUtc = seededAt;
+        _ctx.Db.SaveChanges();
+    }
+
+    /// <summary>
+    /// Seeds a small but FK-rich graph for a portfolio so the wipe ordering is exercised across the
+    /// tricky constraints: PaymentTransaction→Payment (RESTRICT), Conversation→Tenant (RESTRICT),
+    /// Unit (no PortfolioId), ConversationMessage (no PortfolioId), and the work-order/expense chain.
+    /// </summary>
+    private void SeedRichGraph(int portfolioId)
+    {
+        var now = DateTime.UtcNow;
+
+        // Ensure the portfolio exists (portfolio 1 is pre-seeded; others are added by the caller).
+        var property = new Property
+        {
+            PortfolioId = portfolioId,
+            Name = $"P{portfolioId}",
+            AddressLine1 = "1 St",
+            City = "Town",
+            State = "ST",
+            PostalCode = "00000",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Properties.Add(property);
+
+        var unit = new Unit { Property = property, UnitNumber = $"U{portfolioId}", CreatedAt = now, UpdatedAt = now };
+        _ctx.Db.Units.Add(unit);
+
+        var tenant = new Tenant
+        {
+            PortfolioId = portfolioId,
+            FirstName = "T",
+            LastName = portfolioId.ToString(),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Tenants.Add(tenant);
+
+        var vendor = new Vendor
+        {
+            PortfolioId = portfolioId,
+            Name = "V",
+            ServiceType = "Plumbing",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Vendors.Add(vendor);
+        _ctx.Db.SaveChanges();
+
+        var lease = new Lease
+        {
+            PortfolioId = portfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = $"L-{portfolioId}",
+            Status = LeaseStatus.Active,
+            StartDate = now.AddMonths(-6),
+            EndDate = now.AddMonths(6),
+            MonthlyRent = 1000m,
+            SecurityDeposit = 1000m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Leases.Add(lease);
+        _ctx.Db.SaveChanges();
+
+        var payment = new Payment
+        {
+            PortfolioId = portfolioId,
+            LeaseId = lease.Id,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1000m,
+            DueDate = now.Date,
+            PaidDate = now.Date,
+            PeriodKey = now.ToString("yyyy-MM"),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Payments.Add(payment);
+        _ctx.Db.SaveChanges();
+
+        // PaymentTransaction RESTRICTs Payment — must be deleted before the payment in the wipe.
+        _ctx.Db.PaymentTransactions.Add(new PaymentTransaction
+        {
+            PortfolioId = portfolioId,
+            PaymentId = payment.Id,
+            Amount = 1000m,
+            Currency = "usd",
+            Provider = "stripe",
+            ProviderPaymentIntentId = $"pi_{portfolioId}",
+            Status = PaymentTransactionStatus.Succeeded,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        _ctx.Db.SecurityDepositHoldings.Add(new SecurityDepositHolding
+        {
+            PortfolioId = portfolioId,
+            LeaseId = lease.Id,
+            Amount = 1000m,
+            Status = SecurityDepositStatus.Held,
+            HeldAt = now,
+            DeductionsJson = "[]",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = portfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            VendorId = vendor.Id,
+            Title = "Fix",
+            Description = "desc",
+            Priority = WorkOrderPriority.Normal,
+            Status = WorkOrderStatus.New,
+            RequestedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.WorkOrders.Add(workOrder);
+        _ctx.Db.SaveChanges();
+
+        _ctx.Db.Expenses.Add(new Expense
+        {
+            PortfolioId = portfolioId,
+            PropertyId = property.Id,
+            VendorId = vendor.Id,
+            WorkOrderId = workOrder.Id,
+            Category = ScheduleECategory.Repairs,
+            Description = "Repair",
+            Amount = 100m,
+            Status = ExpenseStatus.Paid,
+            IncurredAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        _ctx.Db.WorkOrderStatusEvents.Add(new WorkOrderStatusEvent
+        {
+            PortfolioId = portfolioId,
+            WorkOrderId = workOrder.Id,
+            FromStatus = WorkOrderStatus.New,
+            ToStatus = WorkOrderStatus.InProgress,
+            CreatedAtUtc = now,
+        });
+
+        // Conversation RESTRICTs Tenant; its messages have no PortfolioId (join-deleted).
+        var conversation = new Conversation
+        {
+            PortfolioId = portfolioId,
+            TenantId = tenant.Id,
+            Subject = "Rent",
+            CreatedAt = now,
+            LastMessageAt = now,
+        };
+        _ctx.Db.Conversations.Add(conversation);
+        _ctx.Db.SaveChanges();
+
+        _ctx.Db.ConversationMessages.Add(new ConversationMessage
+        {
+            ConversationId = conversation.Id,
+            SenderRole = ConversationSenderRole.Tenant,
+            Body = "Hi",
+            CreatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
+    }
+}

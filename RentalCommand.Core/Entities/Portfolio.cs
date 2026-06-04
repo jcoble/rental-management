@@ -20,6 +20,17 @@ public class Portfolio
     /// </summary>
     public string? PublicApplicationToken { get; set; }
 
+    /// <summary>
+    /// Account-wide demo/live state. New signups start in Sandbox (<c>true</c>) seeded with demo data
+    /// to explore; "Go Live" is a ONE-WAY graduation that wipes the demo data and flips this to <c>false</c>.
+    /// While true, all real outbound (email/SMS/Stripe/e-sign) is HARD-suppressed so demo play never
+    /// contacts real people or moves real money. Existing/seeded portfolios default to <c>false</c> (live).
+    /// </summary>
+    public bool IsSandbox { get; set; }
+
+    /// <summary>UTC instant the sandbox demo data was seeded for this portfolio; null once graduated (Live).</summary>
+    public DateTime? SandboxSeededAtUtc { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
