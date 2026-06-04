@@ -31,7 +31,10 @@ test.describe('Properties', () => {
 		await page.getByTestId('property-name-input').fill(name);
 		await page.getByTestId('property-address-input').fill('123 Test Street');
 		await page.getByTestId('property-city-input').fill('Austin');
+		// State is now a searchable StateSelect combobox: open, filter, pick the option.
+		await page.getByTestId('property-state-input').click();
 		await page.getByTestId('property-state-input').fill('TX');
+		await page.getByRole('option', { name: 'Texas' }).click();
 		await page.getByTestId('property-zip-input').fill('78701');
 		await page.getByTestId('property-form-save').click();
 
