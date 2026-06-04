@@ -31,6 +31,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<RecurringMaintenanceTask> RecurringMaintenanceTasks => Set<RecurringMaintenanceTask>();
     public DbSet<Appointment> Appointments => Set<Appointment>();
     public DbSet<Inspection> Inspections => Set<Inspection>();
+    public DbSet<InspectionItem> InspectionItems => Set<InspectionItem>();
+    public DbSet<InspectionTemplate> InspectionTemplates => Set<InspectionTemplate>();
+    public DbSet<InspectionTemplateItem> InspectionTemplateItems => Set<InspectionTemplateItem>();
     public DbSet<ActivityLog> ActivityLogs => Set<ActivityLog>();
     public DbSet<UserAccount> UserAccounts => Set<UserAccount>();
     public DbSet<PortalMessage> PortalMessages => Set<PortalMessage>();
@@ -798,6 +801,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Outcome).HasMaxLength(500);
             entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.Inspector).HasMaxLength(200);
             entity.Property(e => e.Type).HasConversion<int>();
             entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
@@ -822,6 +826,57 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(l => l.Inspections)
                 .HasForeignKey(e => e.LeaseId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<InspectionItem>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Area).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.Label).IsRequired().HasMaxLength(300);
+            entity.Property(e => e.Note).HasMaxLength(2000);
+            // Stored as the string enum name to match the app-wide string-enum convention.
+            entity.Property(e => e.Result).HasConversion<string>().HasMaxLength(40);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.InspectionId);
+            entity.HasOne(e => e.Inspection)
+                .WithMany(i => i.Items)
+                .HasForeignKey(e => e.InspectionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // Photo + spawned work order are optional links; never cascade from those rows back here.
+            entity.HasOne(e => e.PhotoStoredFile)
+                .WithMany()
+                .HasForeignKey(e => e.PhotoStoredFileId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.SpawnedWorkOrder)
+                .WithMany()
+                .HasForeignKey(e => e.SpawnedWorkOrderId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<InspectionTemplate>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.InspectionType).HasConversion<int>();
+            entity.HasIndex(e => e.PortfolioId);
+            // PortfolioId is optional: built-in templates (if ever seeded) carry null.
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .IsRequired(false)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<InspectionTemplateItem>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Area).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.Label).IsRequired().HasMaxLength(300);
+            entity.HasIndex(e => e.TemplateId);
+            entity.HasOne(e => e.Template)
+                .WithMany(t => t.Items)
+                .HasForeignKey(e => e.TemplateId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ActivityLog>(entity =>

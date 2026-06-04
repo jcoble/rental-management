@@ -195,6 +195,9 @@ export const inspectionSchema = z.object({
 	propertyId: numericString('Property'),
 	type: z.string(),
 	scheduledFor: required('Scheduled date'),
+	// Optional smart-checklist template. Built-in templates have negative ids — kept as-is.
+	templateId: idString,
+	inspector: optionalText,
 });
 
 /**
