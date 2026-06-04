@@ -541,4 +541,22 @@ treatment (ties to #7 site makeover, EdiPlatform auth pages are the reference):
 - Consistent with the landing page (#15) vibe. Keep the DEV "Fill dev login"
   button in dev builds.
 
+### 30. 🔴 AUTH BUG (HIGH): bounced after ~15 min, refresh intermittently fails
+User report: logs in with correct creds, then gets bounced out after the access
+token expires (~15 min); the silent refresh "just doesn't work lots of the time."
+Intermittent → smells like refresh-token ROTATION + REUSE-DETECTION revoking the
+whole family on a race (two concurrent refreshes → 2nd looks like reuse → family
+revoked → logout). Architecture (per CLAUDE.md): same-origin proxy
+`POST /api/auth/refresh`, single-flight + brief cache in
+`web/src/lib/server/token-refresh.ts`, `hooks.server.ts` validates rc_access_token
+via GET /auth/me (refresh on 401), client `lib/api/client.ts` refresh-and-retry on
+401, server rotates single-use refresh tokens, reuse revokes family.
+Hypotheses (ROOT CAUSE FIRST): SSR + client refresh racing on same cookie;
+single-flight not deduping across SSR+client; rotated token not persisted back to
+cookie atomically (next refresh uses stale token); cookie exp vs JWT exp mismatch.
+FIX must make a normal session refresh reliably and NEVER self-trigger family
+revocation. Owned by the dedicated auth agent.
+
+## Done
+
 _(moved here as completed)_
