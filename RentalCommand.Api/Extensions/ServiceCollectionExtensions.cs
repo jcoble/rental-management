@@ -90,6 +90,10 @@ public static class ServiceCollectionExtensions
         // --- document hub ---
         services.AddScoped<IDocumentService, DocumentService>();
 
+        // --- CSV / bulk import (migration on-ramp) ---
+        services.AddScoped<RentalCommand.Api.Services.Import.ICsvImportService,
+            RentalCommand.Api.Services.Import.CsvImportService>();
+
         // --- mobile push registration ---
         services.AddScoped<IDeviceService, DeviceService>();
 

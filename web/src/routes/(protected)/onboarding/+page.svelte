@@ -37,6 +37,7 @@
 		Trash2,
 		PartyPopper,
 		Sparkles,
+		FileSpreadsheet,
 	} from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -503,6 +504,26 @@
 					A few quick steps to go from empty to up-and-running. The computer does the typing — you
 					just confirm.
 				</p>
+			</div>
+
+			<!-- Bulk import shortcut -->
+			<div
+				class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2.5"
+				data-testid="onboarding-spreadsheet-import"
+			>
+				<span class="text-sm text-foreground">
+					Already have your tenants, properties, or units in a spreadsheet?
+				</span>
+				<Button
+					variant="outline"
+					size="sm"
+					class="gap-1.5"
+					href="/import"
+					data-testid="onboarding-import-spreadsheet"
+				>
+					<FileSpreadsheet class="h-4 w-4" />
+					Import from a spreadsheet
+				</Button>
 			</div>
 
 			<!-- Step indicator -->
