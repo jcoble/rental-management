@@ -1,0 +1,84 @@
+<!--
+  StateSelect — searchable US-state picker (drop-in for a text/select state field).
+
+  Built on the shared Combobox (50+ items, so type-to-search matters). Binds the
+  2-letter USPS code (uppercase, e.g. "CA"); empty string means "no state".
+
+  Props:
+    value       string  (bindable)  2-letter state code, or "" for empty. bind:value supported.
+    onchange?   (code: string) => void   fired when the selection changes (gets the code, or "" if cleared).
+    placeholder string  trigger/placeholder text. Default "Select state".
+    disabled?   boolean
+    includeTerritories? boolean  also list US territories (PR/GU/...). Default false.
+    testid?     string  applied as data-testid on the input/trigger for E2E.
+    id?         string  id for the input (label `for=` association).
+
+  Value format: the bound value is always the 2-letter code. A drop-in replacement
+  for `<input>`/`<select>` state fields — callers keep storing the same code string.
+-->
+<script lang="ts">
+	import * as Combobox from '$lib/components/ui/combobox';
+	import { US_STATES, US_TERRITORIES, type UsState } from '$lib/data/us-states';
+
+	let {
+		value = $bindable(''),
+		onchange,
+		placeholder = 'Select state',
+		disabled = false,
+		includeTerritories = false,
+		testid,
+		id
+	}: {
+		value?: string;
+		onchange?: (code: string) => void;
+		placeholder?: string;
+		disabled?: boolean;
+		includeTerritories?: boolean;
+		testid?: string;
+		id?: string;
+	} = $props();
+
+	// Source list -> Combobox `items` shape ({ value, label }). Codes are uppercase.
+	// Label includes the full name AND the code so searching either "Cal" or "CA"
+	// finds California. The wrapper shows this label in the input when closed.
+	const states = $derived<readonly UsState[]>(
+		includeTerritories ? [...US_STATES, ...US_TERRITORIES] : US_STATES
+	);
+	const items = $derived(states.map((s) => ({ value: s.code, label: `${s.name} (${s.code})` })));
+
+	// `inputValue` is the live text in the search box. The Combobox wrapper resets
+	// it to the selected item's label when closed and clears it on open; while the
+	// user types we read it here to filter the list ourselves.
+	let inputValue = $state('');
+
+	const filtered = $derived(
+		inputValue.trim() === ''
+			? items
+			: items.filter((i) => i.label.toLowerCase().includes(inputValue.trim().toLowerCase()))
+	);
+
+	function handleValueChange(next: string | undefined) {
+		const code = (next ?? '').toUpperCase();
+		value = code;
+		onchange?.(code);
+	}
+</script>
+
+<Combobox.Root
+	type="single"
+	{items}
+	bind:value
+	onValueChange={handleValueChange}
+	bind:inputValue
+	{disabled}
+>
+	<Combobox.Input {placeholder} {id} data-testid={testid} aria-label={placeholder} />
+	<Combobox.Content>
+		{#each filtered as item (item.value)}
+			<Combobox.Item value={item.value} label={item.label} />
+		{/each}
+		{#if filtered.length === 0}
+			<Combobox.Empty>No state found.</Combobox.Empty>
+		{/if}
+	</Combobox.Content>
+</Combobox.Root>
