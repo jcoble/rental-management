@@ -419,6 +419,14 @@ public sealed class ScanService : IScanService
         CancellationToken ct)
     {
         var fields = BuildWorkOrderFields(draft.ExtractedFields);
+
+        // The id fields above came straight from the LLM. Before we trust them for auto-fill, drop any
+        // that aren't actually in THIS portfolio: a hallucinated or foreign id must never pre-select
+        // another portfolio's row (IDOR), and a bogus id would otherwise make WorkOrderService.CreateAsync
+        // reject the whole confirm. Foreign/unknown ids fall back to 0/null so the landlord picks manually.
+        await ValidateWorkOrderIdsInPortfolioAsync(portfolioId, fields, ct);
+
+        // Trusted user selections from the review UI win and are re-validated in-portfolio by CreateAsync.
         ApplyWorkOrderOverrides(fields, overridesJson);
 
         if (fields.PropertyId <= 0)
@@ -931,6 +939,50 @@ public sealed class ScanService : IScanService
         }
 
         return fields;
+    }
+
+    /// <summary>
+    /// Verifies each LLM-suggested id (property/unit/tenant/lease/vendor) actually belongs to this
+    /// portfolio and clears any that don't. The model is told to copy ids from the grounded list, but
+    /// it can still hallucinate or echo a foreign id, so we re-check against the live in-portfolio rows
+    /// here (the grounding set is itself a portfolio-scoped query, so the DB is the authoritative check).
+    /// Unit must additionally belong to the matched property. This keeps auto-fill IDOR-safe and stops a
+    /// single bad id from failing the whole confirm — bad ids fall back to 0/null for manual selection.
+    /// </summary>
+    private async Task ValidateWorkOrderIdsInPortfolioAsync(
+        int portfolioId, WorkOrderDraftFields fields, CancellationToken ct)
+    {
+        if (fields.PropertyId > 0 &&
+            !await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId, ct))
+        {
+            // Property is the anchor: if it's not ours, the dependent unit can't be trusted either.
+            fields.PropertyId = 0;
+        }
+
+        if (fields.UnitId is > 0 &&
+            !await _db.EnsureUnitInPortfolioAsync(
+                portfolioId, fields.UnitId.Value, fields.PropertyId > 0 ? fields.PropertyId : null, ct))
+        {
+            fields.UnitId = null;
+        }
+
+        if (fields.TenantId is > 0 &&
+            !await _db.EnsureTenantInPortfolioAsync(portfolioId, fields.TenantId.Value, ct))
+        {
+            fields.TenantId = null;
+        }
+
+        if (fields.LeaseId is > 0 &&
+            !await _db.EnsureLeaseInPortfolioAsync(portfolioId, fields.LeaseId.Value, ct))
+        {
+            fields.LeaseId = null;
+        }
+
+        if (fields.VendorId is > 0 &&
+            !await _db.EnsureVendorInPortfolioAsync(portfolioId, fields.VendorId.Value, ct))
+        {
+            fields.VendorId = null;
+        }
     }
 
     private void ApplyWorkOrderOverrides(WorkOrderDraftFields fields, string overridesJson)

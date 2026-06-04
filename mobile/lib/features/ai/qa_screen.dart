@@ -13,6 +13,9 @@ class _QaState {
     this.pending = false,
     this.llmUnavailable = false,
     this.lastResponse,
+    this.lastQuestion,
+    this.deliveringChannel,
+    this.deliveryNote,
     this.error,
   });
 
@@ -20,6 +23,16 @@ class _QaState {
   final bool pending;
   final bool llmUnavailable;
   final AskResponse? lastResponse;
+
+  /// The question that produced [lastResponse], so it can be re-delivered.
+  final String? lastQuestion;
+
+  /// Channel currently being delivered (`'email'` | `'sms'`), or null when idle.
+  final String? deliveringChannel;
+
+  /// Short status note shown under the latest answer after a delivery attempt.
+  final String? deliveryNote;
+
   final String? error;
 
   _QaState copyWith({
@@ -27,15 +40,24 @@ class _QaState {
     bool? pending,
     bool? llmUnavailable,
     AskResponse? lastResponse,
+    String? lastQuestion,
+    String? deliveringChannel,
+    String? deliveryNote,
     String? error,
     bool clearError = false,
     bool clearLastResponse = false,
+    bool clearDeliveringChannel = false,
+    bool clearDeliveryNote = false,
   }) {
     return _QaState(
       history: history ?? this.history,
       pending: pending ?? this.pending,
       llmUnavailable: llmUnavailable ?? this.llmUnavailable,
       lastResponse: clearLastResponse ? null : (lastResponse ?? this.lastResponse),
+      lastQuestion: clearLastResponse ? null : (lastQuestion ?? this.lastQuestion),
+      deliveringChannel:
+          clearDeliveringChannel ? null : (deliveringChannel ?? this.deliveringChannel),
+      deliveryNote: clearDeliveryNote ? null : (deliveryNote ?? this.deliveryNote),
       error: clearError ? null : (error ?? this.error),
     );
   }
@@ -55,6 +77,7 @@ class _QaNotifier extends Notifier<_QaState> {
       history: [...state.history, userTurn],
       pending: true,
       clearError: true,
+      clearDeliveryNote: true,
     );
 
     try {
@@ -67,6 +90,7 @@ class _QaNotifier extends Notifier<_QaState> {
         history: [...state.history, assistantTurn],
         pending: false,
         lastResponse: response,
+        lastQuestion: question.trim(),
         llmUnavailable: !response.llmAvailable,
       );
     } on ApiException catch (e) {
@@ -85,6 +109,49 @@ class _QaNotifier extends Notifier<_QaState> {
         pending: false,
         error: e.toString(),
         clearLastResponse: true,
+      );
+    }
+  }
+
+  /// Re-runs the last question with delivery turned on so the landlord gets the
+  /// answer as a text or email. [channel] is `'email'` or `'sms'`.
+  Future<void> deliver(String channel) async {
+    final question = state.lastQuestion;
+    if (question == null || state.pending || state.deliveringChannel != null) {
+      return;
+    }
+
+    // History excludes the final assistant turn (the answer being delivered).
+    final historyForRequest = state.history.length >= 2
+        ? state.history.sublist(0, state.history.length - 2)
+        : <QaTurn>[];
+
+    final delivery = channel == 'email'
+        ? const AskDelivery(viaEmail: true)
+        : const AskDelivery(viaSms: true);
+
+    state = state.copyWith(deliveringChannel: channel, clearDeliveryNote: true);
+
+    try {
+      final response = await ref
+          .read(aiRepositoryProvider)
+          .ask(question, historyForRequest, delivery: delivery);
+
+      final ok = channel == 'email'
+          ? response.deliveredChannels.contains('Email')
+          : response.deliveredChannels.contains('Sms');
+      final note = ok
+          ? (channel == 'email' ? 'Emailed to you.' : 'Texted to you.')
+          : (channel == 'email'
+              ? "Couldn't email — no address on file."
+              : "Couldn't text — no phone on file.");
+      state = state.copyWith(deliveryNote: note, clearDeliveringChannel: true);
+    } on ApiException catch (e) {
+      state = state.copyWith(deliveryNote: e.message, clearDeliveringChannel: true);
+    } catch (e) {
+      state = state.copyWith(
+        deliveryNote: 'Delivery failed.',
+        clearDeliveringChannel: true,
       );
     }
   }
@@ -204,6 +271,11 @@ class _QaScreenState extends ConsumerState<QaScreen> {
                   history: qa.history,
                   pending: qa.pending,
                   lastResponse: qa.lastResponse,
+                  canDeliver: qa.lastQuestion != null && !qa.pending,
+                  deliveringChannel: qa.deliveringChannel,
+                  deliveryNote: qa.deliveryNote,
+                  onDeliver: (channel) =>
+                      ref.read(_qaProvider.notifier).deliver(channel),
                   scrollController: _scrollController,
                   onPromptTap: _usePrompt,
                 ),
@@ -328,6 +400,10 @@ class _ChatList extends StatelessWidget {
     required this.history,
     required this.pending,
     required this.lastResponse,
+    required this.canDeliver,
+    required this.deliveringChannel,
+    required this.deliveryNote,
+    required this.onDeliver,
     required this.scrollController,
     required this.onPromptTap,
   });
@@ -335,6 +411,10 @@ class _ChatList extends StatelessWidget {
   final List<QaTurn> history;
   final bool pending;
   final AskResponse? lastResponse;
+  final bool canDeliver;
+  final String? deliveringChannel;
+  final String? deliveryNote;
+  final ValueChanged<String> onDeliver;
   final ScrollController scrollController;
   final ValueChanged<String> onPromptTap;
 
@@ -360,6 +440,10 @@ class _ChatList extends StatelessWidget {
           turn: turn,
           isLastAssistant: isLastAssistant,
           lastResponse: isLastAssistant ? lastResponse : null,
+          canDeliver: isLastAssistant && canDeliver,
+          deliveringChannel: isLastAssistant ? deliveringChannel : null,
+          deliveryNote: isLastAssistant ? deliveryNote : null,
+          onDeliver: onDeliver,
         );
       },
     );
@@ -373,11 +457,19 @@ class _TurnBubble extends StatelessWidget {
     required this.turn,
     required this.isLastAssistant,
     this.lastResponse,
+    this.canDeliver = false,
+    this.deliveringChannel,
+    this.deliveryNote,
+    this.onDeliver,
   });
 
   final QaTurn turn;
   final bool isLastAssistant;
   final AskResponse? lastResponse;
+  final bool canDeliver;
+  final String? deliveringChannel;
+  final String? deliveryNote;
+  final ValueChanged<String>? onDeliver;
 
   @override
   Widget build(BuildContext context) {
@@ -386,6 +478,10 @@ class _TurnBubble extends StatelessWidget {
         : _AssistantBubble(
             content: turn.content,
             lastResponse: isLastAssistant ? lastResponse : null,
+            canDeliver: canDeliver,
+            deliveringChannel: deliveringChannel,
+            deliveryNote: deliveryNote,
+            onDeliver: onDeliver,
           );
   }
 }
@@ -434,10 +530,21 @@ class _UserBubble extends StatelessWidget {
 }
 
 class _AssistantBubble extends StatelessWidget {
-  const _AssistantBubble({required this.content, this.lastResponse});
+  const _AssistantBubble({
+    required this.content,
+    this.lastResponse,
+    this.canDeliver = false,
+    this.deliveringChannel,
+    this.deliveryNote,
+    this.onDeliver,
+  });
 
   final String content;
   final AskResponse? lastResponse;
+  final bool canDeliver;
+  final String? deliveringChannel;
+  final String? deliveryNote;
+  final ValueChanged<String>? onDeliver;
 
   @override
   Widget build(BuildContext context) {
@@ -482,10 +589,93 @@ class _AssistantBubble extends StatelessWidget {
                   const SizedBox(height: 4),
                   _ToolsUsedLine(response: resp),
                 ],
+                if (canDeliver && onDeliver != null) ...[
+                  const SizedBox(height: 4),
+                  _DeliverActions(
+                    deliveringChannel: deliveringChannel,
+                    onDeliver: onDeliver!,
+                  ),
+                ],
+                if (deliveryNote != null) ...[
+                  const SizedBox(height: 2),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: Text(
+                      deliveryNote!,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.8),
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// Small "Text me this" / "Email me this" action row under the latest answer.
+class _DeliverActions extends StatelessWidget {
+  const _DeliverActions({
+    required this.deliveringChannel,
+    required this.onDeliver,
+  });
+
+  final String? deliveringChannel;
+  final ValueChanged<String> onDeliver;
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = deliveringChannel != null;
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: Wrap(
+        spacing: 4,
+        children: [
+          _DeliverButton(
+            icon: Icons.sms_outlined,
+            label: deliveringChannel == 'sms' ? 'Texting…' : 'Text me this',
+            onPressed: busy ? null : () => onDeliver('sms'),
+          ),
+          _DeliverButton(
+            icon: Icons.mail_outline_rounded,
+            label: deliveringChannel == 'email' ? 'Emailing…' : 'Email me this',
+            onPressed: busy ? null : () => onDeliver('email'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeliverButton extends StatelessWidget {
+  const _DeliverButton({
+    required this.icon,
+    required this.label,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return TextButton.icon(
+      onPressed: onPressed,
+      icon: Icon(icon, size: 16),
+      label: Text(label),
+      style: TextButton.styleFrom(
+        foregroundColor: theme.colorScheme.onSurfaceVariant,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        minimumSize: Size.zero,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        textStyle: theme.textTheme.labelMedium,
       ),
     );
   }

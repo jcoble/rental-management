@@ -272,6 +272,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
             entity.Property(e => e.Body).IsRequired().HasMaxLength(4000);
             entity.Property(e => e.Reason).IsRequired().HasMaxLength(1000);
+            entity.Property(e => e.GenerationPrompt).HasMaxLength(8000);
             entity.Property(e => e.ApprovedChannels).HasMaxLength(100);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.LeaseId);

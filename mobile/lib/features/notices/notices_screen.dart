@@ -49,15 +49,35 @@ class NoticesScreen extends ConsumerWidget {
   }
 }
 
-class _NoticeCard extends ConsumerWidget {
+class _NoticeCard extends ConsumerStatefulWidget {
   const _NoticeCard({required this.draft});
 
   final NoticeDraft draft;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_NoticeCard> createState() => _NoticeCardState();
+}
+
+class _NoticeCardState extends ConsumerState<_NoticeCard> {
+  // Per-channel approve selection, mirroring the web notices page (all three on by default).
+  bool _portal = true;
+  bool _email = true;
+  bool _sms = true;
+  bool _busy = false;
+
+  NoticeDraft get draft => widget.draft;
+
+  List<String> get _selectedChannels => [
+        if (_portal) 'Portal',
+        if (_email) 'Email',
+        if (_sms) 'Sms',
+      ];
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final channels = _selectedChannels;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -92,15 +112,39 @@ class _NoticeCard extends ConsumerWidget {
               draft.body,
               style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant, height: 1.4),
             ),
+            if (draft.status == 'Draft') ...[
+              const SizedBox(height: 10),
+              Text(
+                'Send via',
+                style: theme.textTheme.labelSmall?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              Wrap(
+                spacing: 4,
+                children: [
+                  FilterChip(
+                    label: const Text('Portal'),
+                    selected: _portal,
+                    onSelected: _busy ? null : (v) => setState(() => _portal = v),
+                  ),
+                  FilterChip(
+                    label: const Text('Email'),
+                    selected: _email,
+                    onSelected: _busy ? null : (v) => setState(() => _email = v),
+                  ),
+                  FilterChip(
+                    label: const Text('SMS'),
+                    selected: _sms,
+                    onSelected: _busy ? null : (v) => setState(() => _sms = v),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
                   child: FilledButton.tonalIcon(
-                    onPressed: () async {
-                      await ref.read(noticesRepositoryProvider).approve(draft.id, ['Portal', 'Email', 'Sms']);
-                      ref.invalidate(noticeDraftsProvider);
-                    },
+                    onPressed: (_busy || channels.isEmpty) ? null : _approve,
                     icon: const Icon(Icons.send_outlined),
                     label: const Text('Approve'),
                   ),
@@ -108,10 +152,7 @@ class _NoticeCard extends ConsumerWidget {
                 const SizedBox(width: 8),
                 IconButton.outlined(
                   tooltip: 'Dismiss',
-                  onPressed: () async {
-                    await ref.read(noticesRepositoryProvider).dismiss(draft.id);
-                    ref.invalidate(noticeDraftsProvider);
-                  },
+                  onPressed: _busy ? null : _dismiss,
                   icon: const Icon(Icons.close),
                 ),
               ],
@@ -120,6 +161,28 @@ class _NoticeCard extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _approve() async {
+    final channels = _selectedChannels;
+    if (channels.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      await ref.read(noticesRepositoryProvider).approve(draft.id, channels);
+      ref.invalidate(noticeDraftsProvider);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _dismiss() async {
+    setState(() => _busy = true);
+    try {
+      await ref.read(noticesRepositoryProvider).dismiss(draft.id);
+      ref.invalidate(noticeDraftsProvider);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   String _label(String type) {
