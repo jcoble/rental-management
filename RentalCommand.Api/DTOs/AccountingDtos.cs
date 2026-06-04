@@ -184,6 +184,48 @@ public class AccountingTransactionResponse
     public string? DetailHref { get; set; }
     public bool HasReceipt { get; set; }
     public bool ReceiptIsImage { get; set; }
+
+    /// <summary>
+    /// True when a bank transaction has been confirmed (Matched) against this Payment/Expense row,
+    /// i.e. it has "cleared" the bank. Always false for the bank rows themselves. Powers the inline
+    /// "✓ Cleared" badge on the accounting ledger.
+    /// </summary>
+    public bool Reconciled { get; set; }
+
+    /// <summary>Bank/institution name of the matched bank line, when <see cref="Reconciled"/> is true.</summary>
+    public string? ClearedBankName { get; set; }
+
+    /// <summary>Posted date of the matched bank line, when <see cref="Reconciled"/> is true.</summary>
+    public DateTime? ClearedAt { get; set; }
+
+    /// <summary>
+    /// A high-confidence, still-unmatched bank line the user could one-tap confirm against this
+    /// Payment/Expense row. Populated only when the row is NOT already <see cref="Reconciled"/> and a
+    /// suggestion exists; null otherwise. Powers the "Match?" chip. Confirming is never automatic.
+    /// </summary>
+    public SuggestedBankMatchResponse? SuggestedBankMatch { get; set; }
+}
+
+/// <summary>
+/// A suggested (unconfirmed) bank line for a Payment/Expense row on the accounting ledger. The user
+/// confirms it with one tap; nothing is auto-matched.
+/// </summary>
+public class SuggestedBankMatchResponse
+{
+    /// <summary>Id of the suggested <see cref="RentalCommand.Core.Entities.BankTransaction"/>.</summary>
+    public int BankTransactionId { get; set; }
+
+    /// <summary>Best display name for the suggested bank line (merchant, else institution).</summary>
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>Signed amount of the suggested bank line (deposits positive, withdrawals negative).</summary>
+    public decimal Amount { get; set; }
+
+    /// <summary>Posted date of the suggested bank line.</summary>
+    public DateTime Date { get; set; }
+
+    /// <summary>Match confidence in (0,1] from the banking match engine.</summary>
+    public decimal Confidence { get; set; }
 }
 
 public class LedgerTransactionResponse

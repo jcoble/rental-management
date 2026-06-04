@@ -380,6 +380,8 @@ public class AccountingService : IAccountingService
             .Select(g => new { EntityId = g.Key, ContentType = g.OrderByDescending(f => f.UploadedAt).First().ContentType })
             .ToDictionaryAsync(x => x.EntityId, x => x.ContentType, ct);
 
+        var reconciliation = await BuildReconciliationAsync(portfolioId, pageRows, ct);
+
         return new AccountingTransactionsResponse
         {
             Items = pageRows.Select(r =>
@@ -405,12 +407,255 @@ public class AccountingService : IAccountingService
                     item.ReceiptIsImage = contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
                 }
 
+                if ((r.Kind == KindPayment || r.Kind == KindExpense) &&
+                    reconciliation.TryGetValue((r.Kind, r.Id), out var recon))
+                {
+                    item.Reconciled = recon.Reconciled;
+                    item.ClearedBankName = recon.ClearedBankName;
+                    item.ClearedAt = recon.ClearedAt;
+                    item.SuggestedBankMatch = recon.Suggested;
+                }
+
                 return item;
             }).ToList(),
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
         };
+    }
+
+    /// <summary>
+    /// For the Payment/Expense rows on the current page, look up their bank-reconciliation state in a
+    /// single pair of queries (no N+1): a CONFIRMED match (a Matched bank line linked to the row) wins
+    /// and yields "✓ Cleared · {bank} · {date}"; otherwise a high-confidence still-unmatched bank line
+    /// is surfaced as a one-tap "Match?" suggestion. Nothing is auto-matched here.
+    /// </summary>
+    private async Task<Dictionary<(string Kind, int Id), ReconciliationState>> BuildReconciliationAsync(
+        int portfolioId,
+        IReadOnlyList<AccountingTransactionRow> pageRows,
+        CancellationToken ct)
+    {
+        var result = new Dictionary<(string, int), ReconciliationState>();
+
+        var paymentRows = pageRows.Where(r => r.Kind == KindPayment).ToList();
+        var expenseRows = pageRows.Where(r => r.Kind == KindExpense).ToList();
+        if (paymentRows.Count == 0 && expenseRows.Count == 0) return result;
+
+        var paymentIds = paymentRows.Select(r => r.Id).ToHashSet();
+        var expenseIds = expenseRows.Select(r => r.Id).ToHashSet();
+
+        // 1) Confirmed (Matched) bank lines that link to a row on this page → "cleared".
+        var cleared = await _db.BankTransactions
+            .AsNoTracking()
+            .Where(t =>
+                t.PortfolioId == portfolioId &&
+                t.MatchStatus == "Matched" &&
+                ((t.MatchedPaymentId != null && paymentIds.Contains(t.MatchedPaymentId.Value)) ||
+                 (t.MatchedExpenseId != null && expenseIds.Contains(t.MatchedExpenseId.Value))))
+            .Select(t => new
+            {
+                t.MatchedPaymentId,
+                t.MatchedExpenseId,
+                t.PostedAt,
+                InstitutionName = t.BankConnection!.InstitutionName,
+            })
+            .ToListAsync(ct);
+
+        foreach (var c in cleared)
+        {
+            if (c.MatchedPaymentId is int pid && paymentIds.Contains(pid))
+            {
+                result[(KindPayment, pid)] = new ReconciliationState
+                {
+                    Reconciled = true,
+                    ClearedBankName = c.InstitutionName,
+                    ClearedAt = c.PostedAt,
+                };
+            }
+            else if (c.MatchedExpenseId is int eid && expenseIds.Contains(eid))
+            {
+                result[(KindExpense, eid)] = new ReconciliationState
+                {
+                    Reconciled = true,
+                    ClearedBankName = c.InstitutionName,
+                    ClearedAt = c.PostedAt,
+                };
+            }
+        }
+
+        // 2) For rows not already cleared, suggest a still-unmatched bank line. Pull the portfolio's
+        // open (Unmatched, unlinked) bank lines once and pair them in-memory by amount (hard gate) +
+        // date proximity, with a merchant/counterparty name signal — same shape as the banking engine.
+        var unmatched = await _db.BankTransactions
+            .AsNoTracking()
+            .Where(t =>
+                t.PortfolioId == portfolioId &&
+                t.MatchStatus == "Unmatched" &&
+                t.MatchedPaymentId == null &&
+                t.MatchedExpenseId == null)
+            .Select(t => new BankSuggestionCandidate
+            {
+                Id = t.Id,
+                PostedAt = t.PostedAt,
+                Amount = t.Amount,
+                MerchantName = t.MerchantName,
+                Description = t.Description,
+                InstitutionName = t.BankConnection!.InstitutionName,
+            })
+            .ToListAsync(ct);
+
+        if (unmatched.Count == 0) return result;
+
+        var deposits = unmatched.Where(c => c.Amount > 0).ToList();   // suggest against payments (income)
+        var withdrawals = unmatched.Where(c => c.Amount < 0).ToList(); // suggest against expenses
+
+        foreach (var p in paymentRows)
+        {
+            if (result.ContainsKey((KindPayment, p.Id))) continue; // already cleared
+            var suggestion = BestBankSuggestion(deposits, p.Amount, p.Date, p.Counterparty);
+            if (suggestion != null)
+                result[(KindPayment, p.Id)] = new ReconciliationState { Suggested = suggestion };
+        }
+
+        foreach (var e in expenseRows)
+        {
+            if (result.ContainsKey((KindExpense, e.Id))) continue;
+            // Expense amounts are stored positive; the bank withdrawal is negative.
+            var suggestion = BestBankSuggestion(withdrawals, -e.Amount, e.Date, e.Counterparty);
+            if (suggestion != null)
+                result[(KindExpense, e.Id)] = new ReconciliationState { Suggested = suggestion };
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Pick the best open bank line for a Payment/Expense row: amount must match within a cent (hard
+    /// gate); date proximity sets the base score and a counterparty-name signal raises it. Returns the
+    /// top candidate above a confidence floor, or null. Mirrors the banking match engine so the inline
+    /// "Match?" chip agrees with the banking review queue.
+    /// </summary>
+    private static SuggestedBankMatchResponse? BestBankSuggestion(
+        IReadOnlyList<BankSuggestionCandidate> candidates,
+        decimal targetSignedAmount,
+        DateTime anchor,
+        string? counterparty)
+    {
+        SuggestedBankMatchResponse? best = null;
+        decimal bestScore = 0m;
+
+        foreach (var c in candidates)
+        {
+            if (Math.Abs(c.Amount - targetSignedAmount) > 0.01m) continue;
+
+            var nameMatch = NameMatchStrength(c.MerchantName, c.Description, counterparty);
+            var days = Math.Abs((c.PostedAt.Date - anchor.Date).Days);
+            var maxDays = nameMatch >= 0.6m ? 14 : 7;
+            if (days > maxDays) continue;
+
+            var dateScore = days switch
+            {
+                0 => 0.80m,
+                <= 2 => 0.72m,
+                <= 4 => 0.62m,
+                <= 7 => 0.52m,
+                _ => 0.42m,
+            };
+            var score = Math.Min(dateScore + nameMatch * 0.20m, 0.99m);
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = new SuggestedBankMatchResponse
+                {
+                    BankTransactionId = c.Id,
+                    Name = string.IsNullOrWhiteSpace(c.MerchantName) ? c.InstitutionName : c.MerchantName!,
+                    Amount = c.Amount,
+                    Date = c.PostedAt,
+                    Confidence = score,
+                };
+            }
+        }
+
+        return best;
+    }
+
+    // ── Name-aware matching helpers (kept in lockstep with BankingService's match engine) ──────────
+    private static decimal NameMatchStrength(string? bankMerchant, string? bankDescription, params string?[] candidateNames)
+    {
+        var bankText = NormalizeName($"{bankMerchant} {bankDescription}");
+        if (bankText.Length == 0) return 0m;
+
+        var bankTokens = SignificantTokens(bankText);
+        if (bankTokens.Count == 0) return 0m;
+
+        var best = 0m;
+        foreach (var candidate in candidateNames)
+        {
+            var normalized = NormalizeName(candidate);
+            if (normalized.Length == 0) continue;
+
+            if (bankText.Contains(normalized, StringComparison.Ordinal) ||
+                normalized.Contains(bankText, StringComparison.Ordinal))
+            {
+                return 1m;
+            }
+
+            var candidateTokens = SignificantTokens(normalized);
+            if (candidateTokens.Count == 0) continue;
+
+            var shared = candidateTokens.Count(t => bankTokens.Contains(t));
+            if (shared == 0) continue;
+
+            var fraction = (decimal)shared / candidateTokens.Count;
+            if (fraction > best) best = fraction;
+        }
+
+        return best;
+    }
+
+    private static string NormalizeName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+
+        var sb = new System.Text.StringBuilder(value.Length);
+        foreach (var ch in value.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch)) sb.Append(ch);
+            else if (char.IsWhiteSpace(ch)) sb.Append(' ');
+        }
+
+        return string.Join(' ', sb.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private static readonly HashSet<string> NameStopWords = new(StringComparer.Ordinal)
+    {
+        "ach", "the", "and", "llc", "inc", "co", "payment", "pmt", "deposit", "debit", "credit",
+        "transfer", "xfer", "online", "pos", "purchase", "rent", "from", "for", "ref", "id",
+    };
+
+    private static HashSet<string> SignificantTokens(string normalized) =>
+        normalized
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(t => t.Length >= 2 && !NameStopWords.Contains(t))
+            .ToHashSet(StringComparer.Ordinal);
+
+    private sealed class ReconciliationState
+    {
+        public bool Reconciled { get; set; }
+        public string? ClearedBankName { get; set; }
+        public DateTime? ClearedAt { get; set; }
+        public SuggestedBankMatchResponse? Suggested { get; set; }
+    }
+
+    private sealed class BankSuggestionCandidate
+    {
+        public int Id { get; set; }
+        public DateTime PostedAt { get; set; }
+        public decimal Amount { get; set; }
+        public string? MerchantName { get; set; }
+        public string Description { get; set; } = string.Empty;
+        public string InstitutionName { get; set; } = string.Empty;
     }
 
     public async Task<AccountingReportsResponse> GetReportsAsync(int portfolioId, CancellationToken ct = default)
