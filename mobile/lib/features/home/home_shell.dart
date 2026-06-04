@@ -8,6 +8,8 @@ import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/models/models.dart';
 import '../../core/realtime/realtime_providers.dart';
+import '../accounting/accounting_models.dart';
+import '../accounting/accounting_repository.dart';
 import '../ai/ai_models.dart';
 import '../ai/ai_repository.dart';
 import '../ai/ai_tab.dart';
@@ -20,6 +22,7 @@ import '../messages/message_models.dart';
 import '../messages/messages_list_screen.dart';
 import '../messages/messages_repository.dart';
 import '../payments/payments_screen.dart';
+import '../portal/tenant_account_history_screen.dart';
 import '../portal/tenant_portal_repository.dart';
 import '../properties/properties_tab.dart';
 import '../scan/scan_tab.dart';
@@ -279,6 +282,18 @@ class _TenantHomeTab extends ConsumerWidget {
                   value: _money(data.balance.overdue),
                   subtitle: '${data.balance.overdueCount} overdue item(s)',
                 ),
+                if (data.leases.isNotEmpty)
+                  _TenantCard(
+                    icon: Icons.receipt_long_outlined,
+                    title: 'Account history',
+                    value: 'View',
+                    subtitle: 'Every charge and payment, explained',
+                    onTap: () => Navigator.of(context).push<void>(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const TenantAccountHistoryScreen(),
+                      ),
+                    ),
+                  ),
                 _TenantCard(
                   icon: Icons.payments_outlined,
                   title: 'Next rent due',
@@ -511,6 +526,17 @@ class _TenantMoreTab extends ConsumerWidget {
       body: ListView(
         children: [
           ListTile(
+            leading: const Icon(Icons.receipt_long_outlined),
+            title: const Text('Account history'),
+            subtitle: const Text('Every charge and payment, explained.'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => const TenantAccountHistoryScreen(),
+              ),
+            ),
+          ),
+          ListTile(
             leading: const Icon(Icons.description_outlined),
             title: const Text('Lease'),
             subtitle: const Text('Lease details appear on the dashboard.'),
@@ -541,36 +567,53 @@ class _TenantCard extends StatelessWidget {
     required this.title,
     required this.value,
     required this.subtitle,
+    this.onTap,
   });
 
   final IconData icon;
   final String title;
   final String value;
   final String subtitle;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          children: [
-            Icon(icon),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: theme.textTheme.labelLarge),
-                  const SizedBox(height: 4),
-                  Text(value, style: theme.textTheme.headlineSmall),
-                  Text(subtitle, style: theme.textTheme.bodySmall),
-                ],
-              ),
+    final content = Padding(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          Icon(icon),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: theme.textTheme.labelLarge),
+                const SizedBox(height: 4),
+                Text(value, style: theme.textTheme.headlineSmall),
+                Text(subtitle, style: theme.textTheme.bodySmall),
+              ],
             ),
-          ],
-        ),
+          ),
+          if (onTap != null)
+            Icon(
+              Icons.chevron_right,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+        ],
+      ),
+    );
+
+    if (onTap == null) {
+      return Card(child: content);
+    }
+
+    return Card(
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: content,
       ),
     );
   }
@@ -617,6 +660,7 @@ class _HomeTab extends ConsumerWidget {
     final briefingAsync = ref.watch(_briefingProvider);
     final messagesAsync = ref.watch(_latestMessagesProvider);
     final fieldQueueAsync = ref.watch(_fieldQueueProvider);
+    final moneyAsync = ref.watch(moneySnapshotProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -637,7 +681,10 @@ class _HomeTab extends ConsumerWidget {
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: () async => ref.invalidate(_briefingProvider),
+        onRefresh: () async {
+          ref.invalidate(_briefingProvider);
+          ref.invalidate(moneySnapshotProvider);
+        },
         child: CustomScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
@@ -704,6 +751,17 @@ class _HomeTab extends ConsumerWidget {
                   ),
                 ),
                 data: (briefing) => _BriefingContent(briefing: briefing),
+              ),
+            ),
+
+            // ── Money snapshot ────────────────────────────────────────────
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
+              sliver: SliverToBoxAdapter(
+                child: _MoneySnapshotSection(
+                  snapshotAsync: moneyAsync,
+                  onRetry: () => ref.invalidate(moneySnapshotProvider),
+                ),
               ),
             ),
 
@@ -1135,6 +1193,255 @@ class _QuickActionButton extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Money snapshot — plain-English "money in / out / kept" + who's behind
+// ---------------------------------------------------------------------------
+
+class _MoneySnapshotSection extends StatelessWidget {
+  const _MoneySnapshotSection({
+    required this.snapshotAsync,
+    required this.onRetry,
+  });
+
+  final AsyncValue<MoneySnapshot> snapshotAsync;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return snapshotAsync.when(
+      loading: () => const _LoadingCard(label: 'Loading your money...'),
+      error: (_, _) => Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Icon(Icons.wifi_off_outlined, color: cs.error, size: 22),
+              const SizedBox(width: 12),
+              const Expanded(child: Text("Couldn't load your money.")),
+              TextButton(onPressed: onRetry, child: const Text('Retry')),
+            ],
+          ),
+        ),
+      ),
+      data: (snapshot) {
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.savings_outlined, color: cs.primary, size: 20),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Your money',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (snapshot.periodLabel.isNotEmpty)
+                      Text(
+                        snapshot.periodLabel,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: cs.onSurfaceVariant,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                _MoneyRow(
+                  icon: Icons.south_west,
+                  iconColor: Colors.green.shade700,
+                  label: 'Collected',
+                  amount: snapshot.collected,
+                  explanation: snapshot.explanations.collected,
+                ),
+                const SizedBox(height: 14),
+                _MoneyRow(
+                  icon: Icons.north_east,
+                  iconColor: cs.error,
+                  label: 'Spent',
+                  amount: snapshot.spent,
+                  explanation: snapshot.explanations.spent,
+                ),
+                const SizedBox(height: 14),
+                _MoneyRow(
+                  icon: Icons.account_balance_wallet_outlined,
+                  iconColor: cs.primary,
+                  label: 'Kept',
+                  amount: snapshot.net,
+                  explanation: snapshot.explanations.net,
+                  emphasize: true,
+                ),
+                if (snapshot.pastDueCount > 0 ||
+                    snapshot.pastDueAmount > 0) ...[
+                  const SizedBox(height: 14),
+                  const Divider(height: 1),
+                  const SizedBox(height: 14),
+                  _PastDueRow(
+                    count: snapshot.pastDueCount,
+                    amount: snapshot.pastDueAmount,
+                    explanation: snapshot.explanations.pastDue,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MoneyRow extends StatelessWidget {
+  const _MoneyRow({
+    required this.icon,
+    required this.iconColor,
+    required this.label,
+    required this.amount,
+    required this.explanation,
+    this.emphasize = false,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final String label;
+  final double amount;
+  final String explanation;
+  final bool emphasize;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Icon(icon, size: 18, color: iconColor),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: cs.onSurface,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    _money(amount),
+                    style:
+                        (emphasize
+                                ? theme.textTheme.headlineSmall
+                                : theme.textTheme.titleLarge)
+                            ?.copyWith(
+                              fontWeight: FontWeight.w700,
+                              fontFeatures: const [
+                                FontFeature.tabularFigures(),
+                              ],
+                              color: emphasize ? cs.primary : cs.onSurface,
+                            ),
+                  ),
+                ],
+              ),
+              if (explanation.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  explanation,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: cs.onSurfaceVariant,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PastDueRow extends StatelessWidget {
+  const _PastDueRow({
+    required this.count,
+    required this.amount,
+    required this.explanation,
+  });
+
+  final int count;
+  final double amount;
+  final String explanation;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final tenantWord = count == 1 ? 'tenant' : 'tenants';
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: cs.errorContainer,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            Icons.warning_amber_rounded,
+            size: 16,
+            color: cs.onErrorContainer,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '$count $tenantWord behind, owing ${_money(amount)}',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                  color: cs.onSurface,
+                ),
+              ),
+              if (explanation.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  explanation,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: cs.onSurfaceVariant,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

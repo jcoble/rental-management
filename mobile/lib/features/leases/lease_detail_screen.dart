@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import 'lease_ledger_view.dart';
 import 'leases_list_screen.dart';
 import 'leases_repository.dart';
 
@@ -176,6 +177,27 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
                   value: 'Day ${_lease.rentDueDay}',
                 ),
               ],
+            ),
+            const SizedBox(height: 12),
+
+            // ── Account history (transparent ledger) ───────────────────────
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.receipt_long_outlined),
+                title: const Text('Account history'),
+                subtitle: const Text('Every charge and payment, explained'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) => Scaffold(
+                      appBar: AppBar(
+                        title: Text('Lease #${_lease.leaseNumber} history'),
+                      ),
+                      body: LeaseLedgerView(leaseId: _lease.id),
+                    ),
+                  ),
+                ),
+              ),
             ),
             const SizedBox(height: 12),
 

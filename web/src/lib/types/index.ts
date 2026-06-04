@@ -308,7 +308,7 @@ export interface AccountingTransaction {
 
 export interface LedgerTransaction {
 	date: string;
-	type: 'Payment' | 'Expense' | string;
+	type: 'Payment' | 'Expense' | 'Charge' | 'Bank' | string;
 	id: number;
 	description: string;
 	amount: number;
@@ -318,6 +318,46 @@ export interface LedgerTransaction {
 	category?: string;
 	status: string;
 	sourceHref: string;
+	/** Plain-English "why this is here", derived deterministically (no LLM). */
+	explanation: string;
+}
+
+/** Tenant-facing ledger from GET /api/v1/leases/{id}/ledger (LeaseLedgerResponse). */
+export interface LeaseLedger {
+	leaseId: number;
+	leaseNumber: string;
+	tenantName?: string;
+	propertyName?: string;
+	totalCharged: number;
+	totalPaid: number;
+	/** Outstanding balance (charges minus payments). Negative = credit/overpayment. */
+	balance: number;
+	entries: LedgerTransaction[];
+	testId: string;
+}
+
+/** Plain-English money snapshot from GET /api/v1/accounting/snapshot (MoneySnapshotResponse). */
+export interface MoneySnapshotResponse {
+	portfolioId: number;
+	periodLabel: string;
+	periodStart: string;
+	periodEnd: string;
+	collected: number;
+	spent: number;
+	net: number;
+	pastDueAmount: number;
+	pastDueCount: number;
+	collectedLast30Days: number;
+	spentLast30Days: number;
+	netLast30Days: number;
+	explanations: MoneySnapshotExplanations;
+}
+
+export interface MoneySnapshotExplanations {
+	collected: string;
+	spent: string;
+	net: string;
+	pastDue: string;
 }
 
 export interface PropertyFinancialSummary {

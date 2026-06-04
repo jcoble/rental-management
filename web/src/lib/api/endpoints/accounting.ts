@@ -2,6 +2,7 @@ import type {
 	AccountingReports,
 	AccountingSummary,
 	AccountingTransactionsResponse,
+	MoneySnapshotResponse,
 	OwnerStatementReport,
 	OwnerStatementSummary,
 	ScheduleEReport
@@ -26,6 +27,9 @@ export const accounting = {
 	// Returns expense totals by Schedule E category + a payment collection rollup
 	// (collected / outstanding / overdue).
 	summary: () => api.get<AccountingSummary>('/accounting/summary'),
+	// GET /api/v1/accounting/snapshot — plain-English money snapshot (collected / spent /
+	// kept) with ready-to-show explanation sentences for the non-technical landlord.
+	snapshot: () => api.get<MoneySnapshotResponse>('/accounting/snapshot'),
 	reports: () => api.get<AccountingReports>('/accounting/reports'),
 	transactions: (params?: AccountingTransactionParams) => {
 		const { kind, status, category, propertyId, from, to, ...list } = params ?? {};

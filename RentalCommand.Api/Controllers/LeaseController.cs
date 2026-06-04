@@ -41,6 +41,22 @@ public class LeaseController : AuthenticatedPortfolioControllerBase
         return item == null ? NotFound(new { error = "Lease not found" }) : Ok(item);
     }
 
+    /// <summary>
+    /// Tenant-facing ledger for a lease: every charge and payment, newest first, each with a
+    /// plain-English explanation of what it is, plus a running balance. Kills "what is this charge?"
+    /// disputes. Returns 404 when the lease is not in the caller's portfolio. When the caller is a
+    /// tenant, they may only read their OWN lease's ledger (any other lease 404s) — this management
+    /// endpoint is otherwise reachable by any authenticated portfolio user.
+    /// </summary>
+    [HttpGet("{id:int}/ledger")]
+    [ProducesResponseType(typeof(LeaseLedgerResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseLedgerResponse>> Ledger(int id, CancellationToken ct)
+    {
+        var ledger = await _service.GetLedgerAsync(GetPortfolioId(), id, GetTenantIdOrNull(), ct);
+        return ledger == null ? NotFound(new { error = "Lease not found" }) : Ok(ledger);
+    }
+
     [HttpPost]
     [ProducesResponseType(typeof(LeaseResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
