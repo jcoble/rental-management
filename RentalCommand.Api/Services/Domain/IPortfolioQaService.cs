@@ -9,9 +9,14 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface IPortfolioQaService
 {
+    /// <param name="delivery">
+    /// Optional email/SMS delivery of the answer. When omitted, the answer is only returned in the
+    /// response. Recipient defaults are resolved by the caller (e.g. the signed-in user's email).
+    /// </param>
     Task<AskResponse> AskAsync(
         int portfolioId,
         string question,
         IReadOnlyList<QaTurn>? history,
+        QaDeliveryOptions? delivery = null,
         CancellationToken ct = default);
 }

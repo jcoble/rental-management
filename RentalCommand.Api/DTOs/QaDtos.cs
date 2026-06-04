@@ -17,6 +17,41 @@ public class AskRequest
 
     /// <summary>Prior turns in the conversation, oldest first (optional).</summary>
     public List<QaTurn>? History { get; set; }
+
+    /// <summary>When true, also email the answer to the landlord after responding.</summary>
+    public bool DeliverViaEmail { get; set; }
+
+    /// <summary>When true, also text (SMS) the answer to the landlord after responding.</summary>
+    public bool DeliverViaSms { get; set; }
+
+    /// <summary>Optional email recipient override; defaults to the signed-in user's email.</summary>
+    [MaxLength(256)]
+    public string? DeliverToEmail { get; set; }
+
+    /// <summary>Optional phone recipient override; defaults to a configured owner phone.</summary>
+    [MaxLength(32)]
+    public string? DeliverToPhone { get; set; }
+}
+
+/// <summary>
+/// Resolved delivery options handed to the Q&amp;A service. The controller fills in sensible
+/// default recipients (e.g. the signed-in user's email) before the service enqueues outbox rows.
+/// </summary>
+/// <param name="ViaEmail">Email the answer when true.</param>
+/// <param name="ViaSms">Text the answer when true.</param>
+/// <param name="ToEmail">Email recipient (override or the user's email); null when unknown.</param>
+/// <param name="ToPhone">Phone recipient (override); null when unknown.</param>
+public record QaDeliveryOptions(
+    bool ViaEmail,
+    bool ViaSms,
+    string? ToEmail,
+    string? ToPhone)
+{
+    /// <summary>No delivery requested.</summary>
+    public static readonly QaDeliveryOptions None = new(false, false, null, null);
+
+    /// <summary>True when at least one channel is requested.</summary>
+    public bool AnyRequested => ViaEmail || ViaSms;
 }
 
 /// <summary>Response from POST /api/v1/ai/ask.</summary>
@@ -25,9 +60,14 @@ public class AskRequest
 /// <param name="LlmAvailable">False when no API key is configured (noop path).</param>
 /// <param name="TokensUsed">Total input + output tokens consumed across all loop iterations.</param>
 /// <param name="ModelId">The model that produced the answer.</param>
+/// <param name="DeliveredChannels">
+/// Channels the answer was queued for delivery on (e.g. "Email", "Sms"). Empty when no
+/// delivery was requested or no recipient could be resolved for a requested channel.
+/// </param>
 public record AskResponse(
     string Answer,
     List<string> ToolsUsed,
     bool LlmAvailable,
     int TokensUsed,
-    string ModelId);
+    string ModelId,
+    List<string>? DeliveredChannels = null);

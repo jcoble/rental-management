@@ -28,6 +28,18 @@ export interface AskResponse {
 	llmAvailable: boolean;
 	tokensUsed: number;
 	modelId: string;
+	/** Channels the answer was queued for delivery on (e.g. "Email", "Sms"). */
+	deliveredChannels?: string[] | null;
+}
+
+/** Optional "text me / email me this answer" delivery options for POST /ai/ask. */
+export interface AskDelivery {
+	deliverViaEmail?: boolean;
+	deliverViaSms?: boolean;
+	/** Override email recipient; defaults to the signed-in user's email server-side. */
+	deliverToEmail?: string;
+	/** Override phone recipient; defaults to a configured owner phone server-side. */
+	deliverToPhone?: string;
 }
 
 export interface AiChatResponse {
@@ -36,8 +48,8 @@ export interface AiChatResponse {
 
 export const ai = {
 	briefing: () => api.get<BriefingResponse>('/ai/briefing'),
-	ask: (question: string, history?: QaTurn[]) =>
-		api.post<AskResponse>('/ai/ask', { question, history }),
+	ask: (question: string, history?: QaTurn[], delivery?: AskDelivery) =>
+		api.post<AskResponse>('/ai/ask', { question, history, ...delivery }),
 	chat: (message: string) => api.post<AiChatResponse>('/ai/chat', { message }),
 	intake: (portfolioId: number, message: string) =>
 		api.post('/ai/intake', { portfolioId, message }),
