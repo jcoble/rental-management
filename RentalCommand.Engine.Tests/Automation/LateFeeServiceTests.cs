@@ -91,6 +91,7 @@ public class LateFeeServiceTests : IDisposable
             _ctx.Db,
             _publisher.Object,
             new FakeNotificationSettingsService(cfg),
+            Mock.Of<IDataUpdateService>(),
             Options.Create(cfg),
             new ConfigurationBuilder().Build(),
             NullLogger<LateFeeService>.Instance);

@@ -1,3 +1,5 @@
+using RentalCommand.Core.Enums;
+
 namespace RentalCommand.Core.Configuration;
 
 public class NotificationsConfig
@@ -38,6 +40,59 @@ public class NotificationsConfig
 
     // Keyed by 2-letter US state (e.g. "CA"); caps the late fee. Missing state = no cap (use lease amount).
     public Dictionary<string, LateFeeCap> StateLateFeeCaps { get; set; } = new();
+
+    /// <summary>
+    /// Resolved per-(NotificationType) channel matrix for the portfolio this runtime config was
+    /// loaded for. The settings service populates this (merging stored rows over defaults) so the
+    /// Engine workers can pick exactly the enabled channels without re-querying. Empty in tests /
+    /// when loaded without a portfolio — callers should fall back to <see cref="ResolveChannels"/>,
+    /// which returns sensible defaults for any missing type.
+    /// </summary>
+    public Dictionary<NotificationType, NotificationChannelPreference> ChannelPreferences { get; set; } = new();
+
+    /// <summary>
+    /// Channel matrix for <paramref name="type"/>: the stored row if present, else the default
+    /// (in-app + email on; SMS off) so callers never have to special-case a missing entry.
+    /// </summary>
+    public NotificationChannelPreference ResolveChannels(NotificationType type) =>
+        ChannelPreferences.TryGetValue(type, out var pref)
+            ? pref
+            : NotificationChannelPreference.Default(type);
+}
+
+/// <summary>
+/// Resolved In-app / Email / SMS toggles for one <see cref="NotificationType"/> in one portfolio.
+/// </summary>
+public sealed class NotificationChannelPreference
+{
+    public bool EnableInApp { get; set; } = true;
+    public bool EnableEmail { get; set; } = true;
+    public bool EnableSms { get; set; }
+
+    /// <summary>
+    /// Sensible default when no stored row exists: in-app ON, email ON for tenant-/owner-facing
+    /// events, SMS OFF (until a provider is configured). Resolved here so callers never pre-seed.
+    /// <para>
+    /// The Daily Briefing is the exception: it has no in-app surface and its SMS/email recipient
+    /// lists are themselves the opt-in, so its default leaves both wire channels ON (and in-app OFF)
+    /// to preserve the existing recipient-gated behaviour.
+    /// </para>
+    /// </summary>
+    public static NotificationChannelPreference Default(NotificationType type) => type switch
+    {
+        NotificationType.DailyBriefing => new NotificationChannelPreference
+        {
+            EnableInApp = false,
+            EnableEmail = true,
+            EnableSms = true,
+        },
+        _ => new NotificationChannelPreference
+        {
+            EnableInApp = true,
+            EnableEmail = true,
+            EnableSms = false,
+        },
+    };
 }
 
 public class TwilioOptions

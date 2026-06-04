@@ -3,6 +3,12 @@ namespace RentalCommand.Core.Entities;
 public class NotificationSettings
 {
     public int Id { get; set; }
+
+    /// <summary>
+    /// Portfolio this settings row belongs to. The audit flagged the original single global row;
+    /// settings are now per-portfolio. Legacy rows are backfilled to the lowest portfolio id.
+    /// </summary>
+    public int PortfolioId { get; set; }
     public string? SignalWireProjectIdCipherText { get; set; }
     public string? SignalWireTokenCipherText { get; set; }
     public string? SignalWireSpaceUrlCipherText { get; set; }

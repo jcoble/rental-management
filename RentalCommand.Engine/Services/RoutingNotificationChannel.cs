@@ -1,11 +1,13 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
 
@@ -21,17 +23,20 @@ public sealed class RoutingNotificationChannel : INotificationChannel
     private readonly HttpClient _http;
     private readonly NotificationsConfig _cfg;
     private readonly INotificationSettingsService _settings;
+    private readonly RentalCommandDbContext _db;
     private readonly ILogger<RoutingNotificationChannel> _logger;
 
     public RoutingNotificationChannel(
         HttpClient http,
         IOptions<NotificationsConfig> options,
         INotificationSettingsService settings,
+        RentalCommandDbContext db,
         ILogger<RoutingNotificationChannel> logger)
     {
         _http = http;
         _cfg  = options.Value;
         _settings = settings;
+        _db = db;
         _logger = logger;
     }
 
@@ -42,8 +47,20 @@ public sealed class RoutingNotificationChannel : INotificationChannel
         var normalizedTo = NormalizeSmsNumber(toPhoneNumber);
 
         // SignalWire (Twilio-compatible, cheaper) takes precedence when configured; Twilio is the fallback.
-        var runtime = await _settings.GetRuntimeAsync(ct);
-        var sw = runtime.SignalWire;
+        // The outbox transport is portfolio-agnostic, so resolve provider creds from the lowest-id
+        // portfolio's settings (the legacy/primary landlord). Falls back to appsettings Twilio below.
+        var sw = new SignalWireOptions();
+        var primaryPortfolioId = await _db.Portfolios
+            .Where(p => p.DeletedAt == null)
+            .OrderBy(p => p.Id)
+            .Select(p => (int?)p.Id)
+            .FirstOrDefaultAsync(ct);
+        if (primaryPortfolioId is int pid)
+        {
+            var runtime = await _settings.GetRuntimeAsync(pid, ct);
+            sw = runtime.SignalWire;
+        }
+
         if (sw.Enabled)
         {
             var space = sw.SpaceUrl!.Trim().TrimEnd('/');

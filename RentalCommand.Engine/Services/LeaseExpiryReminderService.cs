@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -27,38 +29,34 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
     private readonly RentalCommandDbContext _db;
     private readonly IMessagePublisher _publisher;
     private readonly INotificationSettingsService _settings;
+    private readonly IDataUpdateService _dataUpdate;
     private readonly ILogger<LeaseExpiryReminderService> _logger;
 
     public LeaseExpiryReminderService(
         RentalCommandDbContext db,
         IMessagePublisher publisher,
         INotificationSettingsService settings,
+        IDataUpdateService dataUpdate,
         ILogger<LeaseExpiryReminderService> logger)
     {
         _db = db;
         _publisher = publisher;
         _settings = settings;
+        _dataUpdate = dataUpdate;
         _logger = logger;
     }
 
     /// <inheritdoc/>
     public async Task<int> RemindAsync(CancellationToken ct = default)
     {
-        var cfg = await _settings.GetRuntimeAsync(ct);
-        if (!cfg.EnableLeaseExpiryReminders)
-        {
-            _logger.LogDebug("lease expiry reminders disabled");
-            return 0;
-        }
-
         var today = DateTime.UtcNow.Date;
-        var windowEnd = today.AddDays(cfg.LeaseExpiryReminderDays);
 
+        // Look-ahead can differ per portfolio (LeaseExpiryReminderDays is per-portfolio now). Load
+        // unsent active leases broadly, then filter/gate each against its own portfolio's settings.
         var leases = await _db.Leases
             .Where(l => l.Status == LeaseStatus.Active
                         && l.ExpiryReminderSentAt == null
-                        && l.EndDate >= today
-                        && l.EndDate <= windowEnd)
+                        && l.EndDate >= today)
             .Include(l => l.Property)
             .Include(l => l.Tenant)
             .ToListAsync(ct);
@@ -66,11 +64,26 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
         if (leases.Count == 0)
             return 0;
 
+        var notifier = new AutomationNotifier(_db, _publisher);
+        var configCache = new Dictionary<int, NotificationsConfig>();
+        var broadcast = new List<(int PortfolioId, Notification Row)>();
         var count = 0;
 
         foreach (var lease in leases)
         {
             ct.ThrowIfCancellationRequested();
+
+            if (!configCache.TryGetValue(lease.PortfolioId, out var cfg))
+            {
+                cfg = await _settings.GetRuntimeAsync(lease.PortfolioId, ct);
+                configCache[lease.PortfolioId] = cfg;
+            }
+
+            // Per-portfolio master gate + look-ahead window.
+            if (!cfg.EnableLeaseExpiryReminders)
+                continue;
+            if (lease.EndDate > today.AddDays(cfg.LeaseExpiryReminderDays))
+                continue;
 
             var daysLeft = (lease.EndDate.Date - today).Days;
             var tenantName = lease.Tenant is { } t
@@ -98,77 +111,70 @@ public sealed class LeaseExpiryReminderService : ILeaseExpiryReminderService
                 }
             }
 
-            // --- Send or skip ---
-            if (!string.IsNullOrWhiteSpace(email))
-            {
-                // Set the marker BEFORE publishing so the publisher's SaveChanges commits the outbox
-                // row and the marker in one transaction — a crash can't leave one without the other.
-                lease.ExpiryReminderSentAt = DateTime.UtcNow;
-                try
-                {
-                    await _publisher.PublishAsync(
-                        lease.PortfolioId,
-                        "email",
-                        new
-                        {
-                            to = email,
-                            subject = $"Lease {lease.LeaseNumber} expires {lease.EndDate:MMM d}",
-                            body = $"Lease {lease.LeaseNumber} for {tenantName} ends on "
-                                   + $"{lease.EndDate:MMMM d, yyyy} ({daysLeft} days). "
-                                   + "Consider a renewal or move-out plan.",
-                        },
-                        ct);
-                    count++;
-                }
-                catch (Exception ex)
-                {
-                    lease.ExpiryReminderSentAt = null;   // publish failed/rolled back → retry next cycle
-                    _logger.LogWarning(
-                        ex,
-                        "Failed to enqueue expiry-reminder email for portfolio {PortfolioId}, lease {LeaseId}",
-                        lease.PortfolioId, lease.Id);
-                }
-            }
-            else if (!string.IsNullOrWhiteSpace(phone))
-            {
-                lease.ExpiryReminderSentAt = DateTime.UtcNow;   // committed atomically with the outbox row below
-                try
-                {
-                    await _publisher.PublishAsync(
-                        lease.PortfolioId,
-                        "sms",
-                        new
-                        {
-                            to = phone,
-                            message = $"Lease {lease.LeaseNumber} for {tenantName} ends on "
-                                      + $"{lease.EndDate:MMMM d, yyyy} ({daysLeft} days). "
-                                      + "Consider a renewal or move-out plan.",
-                        },
-                        ct);
-                    count++;
-                }
-                catch (Exception ex)
-                {
-                    lease.ExpiryReminderSentAt = null;   // publish failed/rolled back → retry next cycle
-                    _logger.LogWarning(
-                        ex,
-                        "Failed to enqueue expiry-reminder SMS for portfolio {PortfolioId}, lease {LeaseId}",
-                        lease.PortfolioId, lease.Id);
-                }
-            }
-            else
+            var channels = cfg.ResolveChannels(NotificationType.LeaseExpiry);
+
+            // Nothing to deliver on for this lease: in-app off (or no staff) AND no owner contact for
+            // the enabled email/SMS channels. Skip without setting the marker so it retries once a
+            // channel/contact becomes available.
+            var hasEmailTarget = channels.EnableEmail && !string.IsNullOrWhiteSpace(email);
+            var hasSmsTarget = channels.EnableSms && !string.IsNullOrWhiteSpace(phone);
+            if (!channels.EnableInApp && !hasEmailTarget && !hasSmsTarget)
             {
                 _logger.LogWarning(
-                    "No owner contact found for portfolio {PortfolioId}, lease {LeaseId} — skipping reminder",
+                    "No enabled channel/contact for expiry reminder — portfolio {PortfolioId}, lease {LeaseId}; skipping",
                     lease.PortfolioId, lease.Id);
-                // ExpiryReminderSentAt intentionally not set; reminder will send once contact exists.
+                continue;
+            }
+
+            var body = $"Lease {lease.LeaseNumber} for {tenantName} ends on "
+                       + $"{lease.EndDate:MMMM d, yyyy} ({daysLeft} days). "
+                       + "Consider a renewal or move-out plan.";
+
+            // Set the marker BEFORE publishing so the publisher's SaveChanges commits the outbox
+            // row(s) and the marker in one transaction — a crash can't leave one without the other.
+            lease.ExpiryReminderSentAt = DateTime.UtcNow;
+            try
+            {
+                var inAppRows = await notifier.SendAsync(
+                    lease.PortfolioId,
+                    channels,
+                    new AutomationNotifier.InAppContent(
+                        Type: "LeaseExpiry",
+                        Title: $"Lease {lease.LeaseNumber} expires {lease.EndDate:MMM d}",
+                        Message: body,
+                        Severity: "Warning",
+                        ActionUrl: $"/leases/{lease.Id}",
+                        RelatedEntityType: "Lease",
+                        RelatedEntityId: lease.Id),
+                    new AutomationNotifier.EmailContent(email, $"Lease {lease.LeaseNumber} expires {lease.EndDate:MMM d}", body),
+                    new AutomationNotifier.SmsContent(phone, body),
+                    DateTime.UtcNow,
+                    ct);
+
+                foreach (var row in inAppRows)
+                    broadcast.Add((lease.PortfolioId, row));
+
+                count++;
+            }
+            catch (Exception ex)
+            {
+                lease.ExpiryReminderSentAt = null;   // publish failed/rolled back → retry next cycle
+                _logger.LogWarning(
+                    ex,
+                    "Failed to enqueue expiry reminder for portfolio {PortfolioId}, lease {LeaseId}",
+                    lease.PortfolioId, lease.Id);
             }
         }
 
-        // Each successful publish already committed its marker atomically with the outbox row (the
+        // Each successful publish already committed its marker atomically with the outbox row(s) (the
         // marker is set before PublishAsync, and the real publisher saves). This trailing save is a
-        // no-op in production but persists markers when the publisher is a test double that doesn't save.
+        // no-op in production but persists markers + in-app rows when the publisher is a test double
+        // that doesn't save.
         await _db.SaveChangesAsync(ct);
+
+        foreach (var (portfolioId, row) in broadcast)
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                portfolioId, "Notification", row.Id, NotificationResponse.FromEntity(row), ct);
 
         return count;
     }

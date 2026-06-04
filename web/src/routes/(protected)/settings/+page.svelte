@@ -2,6 +2,10 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { notifications } from '$lib/api/endpoints/notifications';
+	import type {
+		NotificationChannelPreference,
+		NotificationChannelType,
+	} from '$lib/api/types/notification';
 	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -43,6 +47,51 @@
 		signalWireFromNumber: '',
 		signalWireTokenSet: false,
 	});
+
+	// Per-notification × per-channel matrix. Ordered list of rows with plain-language
+	// labels for the non-technical landlord. The API always returns one entry per type,
+	// but we key by notificationType so order/labels are controlled here, not by the API.
+	const channelRows: { type: NotificationChannelType; label: string; description: string }[] = [
+		{ type: 'RentCharge', label: 'Rent reminders', description: 'Heads-up before rent is due.' },
+		{ type: 'LateFee', label: 'Late fees', description: 'When a late fee is added to a lease.' },
+		{ type: 'LeaseExpiry', label: 'Lease expiry / renewal', description: 'When a lease is coming up for renewal or move-out.' },
+		{ type: 'RentConfirmation', label: 'Rent confirmations', description: 'When a rent payment is recorded.' },
+		{ type: 'NoticeAutopilot', label: 'Lease notices (autopilot)', description: 'Automated notices sent to tenants.' },
+		{ type: 'DailyBriefing', label: 'Daily briefing', description: 'Your once-a-day summary of what needs attention.' },
+	];
+
+	type ChannelPrefs = { enableInApp: boolean; enableEmail: boolean; enableSms: boolean };
+
+	function emptyChannelPrefs(): Record<NotificationChannelType, ChannelPrefs> {
+		return Object.fromEntries(
+			channelRows.map((row) => [row.type, { enableInApp: false, enableEmail: false, enableSms: false }]),
+		) as Record<NotificationChannelType, ChannelPrefs>;
+	}
+
+	let channelPreferences = $state<Record<NotificationChannelType, ChannelPrefs>>(emptyChannelPrefs());
+
+	function applyChannelPreferences(prefs: NotificationChannelPreference[]) {
+		const next = emptyChannelPrefs();
+		for (const pref of prefs) {
+			if (pref.notificationType in next) {
+				next[pref.notificationType] = {
+					enableInApp: pref.enableInApp,
+					enableEmail: pref.enableEmail,
+					enableSms: pref.enableSms,
+				};
+			}
+		}
+		channelPreferences = next;
+	}
+
+	function channelPreferencesPayload(): NotificationChannelPreference[] {
+		return channelRows.map((row) => ({
+			notificationType: row.type,
+			enableInApp: channelPreferences[row.type].enableInApp,
+			enableEmail: channelPreferences[row.type].enableEmail,
+			enableSms: channelPreferences[row.type].enableSms,
+		}));
+	}
 
 	const portfolioQuery = createQuery(() => ({
 		queryKey: ['portfolio', portfolioId],
@@ -169,6 +218,7 @@
 				signalWireFromNumber: data.signalWireFromNumber ?? '',
 				signalWireTokenSet: data.signalWireTokenSet,
 			};
+			applyChannelPreferences(data.channelPreferences ?? []);
 			signalWireTokenInput = '';
 		}
 	});
@@ -210,6 +260,7 @@
 				signalWireToken: signalWireTokenInput.length > 0 ? signalWireTokenInput : undefined,
 				signalWireSpaceUrl: notificationSettingsForm.signalWireSpaceUrl.trim() || null,
 				signalWireFromNumber: notificationSettingsForm.signalWireFromNumber.trim() || null,
+				channelPreferences: channelPreferencesPayload(),
 			}),
 		onSuccess: (result) => {
 			notificationSettingsForm = {
@@ -230,6 +281,7 @@
 				signalWireFromNumber: result.signalWireFromNumber ?? '',
 				signalWireTokenSet: result.signalWireTokenSet,
 			};
+			applyChannelPreferences(result.channelPreferences ?? []);
 			signalWireTokenInput = '';
 			queryClient.invalidateQueries({ queryKey: ['notification-settings'] });
 			showSuccess('Notification delivery settings saved.');
@@ -320,6 +372,66 @@
 						{saveNotificationEmailMutation.isPending ? 'Saving…' : 'Save'}
 					</Button>
 				</div>
+			</div>
+
+			<!-- Per-notification × per-channel matrix -->
+			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" data-testid="settings-notification-channels">
+				<p class="text-sm font-semibold">How you get notified</p>
+				<p class="mb-3 text-xs text-muted-foreground">
+					Pick how you want to hear about each kind of update. In-app shows in the bell at the top.
+					Email goes to your notification email. Text (SMS) needs SignalWire set up below.
+				</p>
+
+				<div class="overflow-x-auto">
+					<table class="w-full min-w-[28rem] border-collapse text-sm">
+						<thead>
+							<tr class="border-b border-border text-xs text-muted-foreground">
+								<th class="py-2 pr-3 text-left font-medium">Notification</th>
+								<th class="px-3 py-2 text-center font-medium">In-app</th>
+								<th class="px-3 py-2 text-center font-medium">Email</th>
+								<th class="px-3 py-2 text-center font-medium">Text (SMS)</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each channelRows as row (row.type)}
+								<tr class="border-b border-border/60 last:border-0" data-testid={`settings-channel-row-${row.type}`}>
+									<td class="py-2 pr-3 align-top">
+										<span class="block font-medium leading-tight">{row.label}</span>
+										<span class="block text-xs text-muted-foreground">{row.description}</span>
+									</td>
+									<td class="px-3 py-2 text-center align-top">
+										<Checkbox
+											checked={channelPreferences[row.type].enableInApp}
+											onCheckedChange={(v) => (channelPreferences[row.type].enableInApp = v === true)}
+											aria-label={`${row.label} in-app`}
+											data-testid={`settings-channel-${row.type}-inapp`}
+										/>
+									</td>
+									<td class="px-3 py-2 text-center align-top">
+										<Checkbox
+											checked={channelPreferences[row.type].enableEmail}
+											onCheckedChange={(v) => (channelPreferences[row.type].enableEmail = v === true)}
+											aria-label={`${row.label} email`}
+											data-testid={`settings-channel-${row.type}-email`}
+										/>
+									</td>
+									<td class="px-3 py-2 text-center align-top">
+										<Checkbox
+											checked={channelPreferences[row.type].enableSms}
+											onCheckedChange={(v) => (channelPreferences[row.type].enableSms = v === true)}
+											aria-label={`${row.label} text message`}
+											data-testid={`settings-channel-${row.type}-sms`}
+										/>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+
+				<p class="mt-3 text-xs text-muted-foreground">
+					These save together with the delivery settings below.
+				</p>
 			</div>
 
 			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" data-testid="settings-notification-delivery">
