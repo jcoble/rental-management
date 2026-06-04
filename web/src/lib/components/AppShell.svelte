@@ -39,7 +39,9 @@
 		Briefcase,
 		Wallet,
 		Contact,
-		Bot
+		Bot,
+		BookOpen,
+		HelpCircle
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -158,9 +160,12 @@
 		},
 		{
 			id: 'ai',
-			label: 'AI',
+			label: 'AI & Help',
 			icon: Bot,
-			items: [{ href: '/ai', label: 'AI Assistant', icon: Sparkles, roles: ['Admin', 'Manager', 'Agent'] }]
+			items: [
+				{ href: '/ai', label: 'AI Assistant', icon: Sparkles, roles: ['Admin', 'Manager', 'Agent'] },
+				{ href: '/docs', label: 'Help & Docs', icon: BookOpen }
+			]
 		},
 		{
 			id: 'admin',
@@ -627,6 +632,17 @@
 						{@render countBadge(upcomingAppts)}
 					</a>
 				{/if}
+
+				<!-- Help & Docs -->
+				<a
+					href="/docs"
+					class="relative flex items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+					aria-label="Help and documentation"
+					title="Help & Docs"
+					data-testid="header-help"
+				>
+					<HelpCircle class="h-5 w-5" />
+				</a>
 
 				<!-- Notifications -->
 				<NotificationBell data-testid="notification-bell-header" placement="down" />
