@@ -5,19 +5,16 @@
 	import { appointments } from '$lib/api/endpoints/appointments';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
-	import type { Appointment } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { appointmentSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import * as Card from '$lib/components/ui/card';
-	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import * as Select from '$lib/components/ui/select';
-	import { Pencil, Trash2, CalendarCheck, CheckCircle, XCircle, UserX } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, CalendarCheck, CheckCircle, XCircle, UserX } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 
 	const queryClient = useQueryClient();
@@ -43,52 +40,65 @@
 
 	const appt = $derived(appointmentQuery.data);
 
+	const typeOptions = $derived(APPT_TYPES.map((value) => ({ value, label: value })));
+	const statusOptions = $derived(APPT_STATUSES.map((value) => ({ value, label: value })));
+	const propertyOptions = $derived([
+		{ value: '', label: 'No property' },
+		...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
+	]);
+	const tenantOptions = $derived([
+		{ value: '', label: 'No tenant' },
+		...(tenantsQuery.data ?? []).map((t) => ({
+			value: String(t.id),
+			label: t.fullName || `${t.firstName} ${t.lastName}`,
+		})),
+	]);
+
 	function invalidate() {
 		queryClient.invalidateQueries({ queryKey: ['appointment', id] });
 		queryClient.invalidateQueries({ queryKey: ['appointments', portfolioId] });
 	}
 
-	// ── Edit form ─────────────────────────────────────────────────────────────
-	const empty = {
+	// ── Inline edit ─────────────────────────────────────────────────────────────
+	let editing = $state(false);
+	let form = $state({
 		title: '', type: 'Showing', scheduledStart: '', scheduledEnd: '',
 		propertyId: '', tenantId: '', prospectName: '', prospectEmail: '', assignedTo: '', status: 'Scheduled',
-	};
-	let showForm = $state(false);
-	let form = $state({ ...empty });
+	});
 	let formErrors = $state<Record<string, string>>({});
 
-	function openEdit(a: Appointment) {
+	function startEditing() {
+		if (!appt) return;
 		form = {
-			title: a.title, type: a.type, status: a.status,
-			scheduledStart: a.scheduledStart?.slice(0, 16) ?? '',
-			scheduledEnd: a.scheduledEnd?.slice(0, 16) ?? '',
-			propertyId: a.propertyId != null ? String(a.propertyId) : '',
-			tenantId: a.tenantId != null ? String(a.tenantId) : '',
-			prospectName: a.prospectName ?? '', prospectEmail: a.prospectEmail ?? '', assignedTo: a.assignedTo ?? '',
+			title: appt.title, type: appt.type, status: appt.status,
+			scheduledStart: appt.scheduledStart?.slice(0, 16) ?? '',
+			scheduledEnd: appt.scheduledEnd?.slice(0, 16) ?? '',
+			propertyId: appt.propertyId != null ? String(appt.propertyId) : '',
+			tenantId: appt.tenantId != null ? String(appt.tenantId) : '',
+			prospectName: appt.prospectName ?? '', prospectEmail: appt.prospectEmail ?? '', assignedTo: appt.assignedTo ?? '',
 		};
 		formErrors = {};
-		showForm = true;
+		editing = true;
 	}
-	function closeForm() {
-		showForm = false;
+	function cancelEditing() {
+		editing = false;
 		formErrors = {};
 	}
-	function submit() {
+	function save() {
 		const result = parseForm(appointmentSchema, form);
 		if (result.errors) {
 			formErrors = result.errors;
 			return;
 		}
 		formErrors = {};
-		saveMutation.mutate({ id, data: { portfolioId, ...result.data } });
+		saveMutation.mutate({ portfolioId, ...result.data });
 	}
 
 	const saveMutation = createMutation(() => ({
-		mutationFn: ({ id: apptId, data }: { id: number; data: Record<string, unknown> }) =>
-			appointments.update(apptId, data),
+		mutationFn: (data: Record<string, unknown>) => appointments.update(id, data),
 		onSuccess: () => {
 			showSuccess('Appointment updated.');
-			closeForm();
+			editing = false;
 			invalidate();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -172,62 +182,73 @@
 
 			<!-- Action buttons -->
 			<div class="flex flex-wrap items-center gap-2">
-				<!-- Status actions -->
-				{#if appt.status === 'Scheduled'}
-					<Button
-						variant="outline"
-						size="sm"
-						data-testid="appointment-complete"
-						disabled={statusMutation.isPending}
-						onclick={() => statusMutation.mutate({ id: appt.id, status: 'Confirmed' })}
-					>
-						<CalendarCheck class="mr-1.5 h-4 w-4" />
-						Confirm
-					</Button>
-				{/if}
-				{#if appt.status !== 'Completed' && appt.status !== 'Cancelled' && appt.status !== 'NoShow'}
-					<Button
-						variant="outline"
-						size="sm"
-						data-testid="appointment-complete"
-						disabled={statusMutation.isPending}
-						onclick={() => statusMutation.mutate({ id: appt.id, status: 'Completed' })}
-					>
-						<CheckCircle class="mr-1.5 h-4 w-4" />
-						Mark complete
-					</Button>
-				{/if}
-				{#if appt.status !== 'Cancelled' && appt.status !== 'Completed'}
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={statusMutation.isPending}
-						onclick={() => statusMutation.mutate({ id: appt.id, status: 'Cancelled' })}
-					>
-						<XCircle class="mr-1.5 h-4 w-4" />
+				{#if editing}
+					<Button variant="outline" size="sm" data-testid="appointment-edit-cancel" onclick={cancelEditing} disabled={saveMutation.isPending}>
+						<X class="mr-1.5 h-4 w-4" />
 						Cancel
 					</Button>
-				{/if}
-				{#if appt.status === 'Scheduled' || appt.status === 'Confirmed'}
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={statusMutation.isPending}
-						onclick={() => statusMutation.mutate({ id: appt.id, status: 'NoShow' })}
-					>
-						<UserX class="mr-1.5 h-4 w-4" />
-						No-show
+					<Button size="sm" data-testid="appointment-edit-save" onclick={save} disabled={saveMutation.isPending}>
+						<Save class="mr-1.5 h-4 w-4" />
+						{saveMutation.isPending ? 'Saving…' : 'Save'}
+					</Button>
+				{:else}
+					<!-- Status actions -->
+					{#if appt.status === 'Scheduled'}
+						<Button
+							variant="outline"
+							size="sm"
+							data-testid="appointment-confirm"
+							disabled={statusMutation.isPending}
+							onclick={() => statusMutation.mutate({ id: appt.id, status: 'Confirmed' })}
+						>
+							<CalendarCheck class="mr-1.5 h-4 w-4" />
+							Confirm
+						</Button>
+					{/if}
+					{#if appt.status !== 'Completed' && appt.status !== 'Cancelled' && appt.status !== 'NoShow'}
+						<Button
+							variant="outline"
+							size="sm"
+							data-testid="appointment-complete"
+							disabled={statusMutation.isPending}
+							onclick={() => statusMutation.mutate({ id: appt.id, status: 'Completed' })}
+						>
+							<CheckCircle class="mr-1.5 h-4 w-4" />
+							Mark complete
+						</Button>
+					{/if}
+					{#if appt.status !== 'Cancelled' && appt.status !== 'Completed'}
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={statusMutation.isPending}
+							onclick={() => statusMutation.mutate({ id: appt.id, status: 'Cancelled' })}
+						>
+							<XCircle class="mr-1.5 h-4 w-4" />
+							Cancel
+						</Button>
+					{/if}
+					{#if appt.status === 'Scheduled' || appt.status === 'Confirmed'}
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={statusMutation.isPending}
+							onclick={() => statusMutation.mutate({ id: appt.id, status: 'NoShow' })}
+						>
+							<UserX class="mr-1.5 h-4 w-4" />
+							No-show
+						</Button>
+					{/if}
+
+					<!-- Edit / Delete -->
+					<Button variant="outline" size="sm" data-testid="appointment-edit" onclick={startEditing}>
+						<Pencil class="mr-1.5 h-4 w-4" />
+						Edit
+					</Button>
+					<Button variant="ghost" size="icon" data-testid="appointment-delete" aria-label="Delete appointment" onclick={() => (showDelete = true)}>
+						<Trash2 class="h-4 w-4" />
 					</Button>
 				{/if}
-
-				<!-- Edit / Delete -->
-				<Button variant="outline" size="sm" data-testid="appointment-edit" onclick={() => openEdit(appt)}>
-					<Pencil class="mr-1.5 h-4 w-4" />
-					Edit
-				</Button>
-				<Button variant="ghost" size="icon" data-testid="appointment-delete" aria-label="Delete appointment" onclick={() => (showDelete = true)}>
-					<Trash2 class="h-4 w-4" />
-				</Button>
 			</div>
 		</div>
 
@@ -237,57 +258,17 @@
 				<Card.Title class="text-base">Details</Card.Title>
 			</Card.Header>
 			<Card.Content>
-				<dl class="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Status</dt>
-						<dd class="mt-1"><StatusBadge status={appt.status} /></dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Type</dt>
-						<dd class="mt-1 text-sm">{appt.type}</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Start</dt>
-						<dd class="mt-1 text-sm">{fmtDateTime(appt.scheduledStart)}</dd>
-					</div>
-					{#if appt.scheduledEnd}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">End</dt>
-							<dd class="mt-1 text-sm">{fmtDateTime(appt.scheduledEnd)}</dd>
-						</div>
-					{/if}
-					{#if appt.propertyName}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Property</dt>
-							<dd class="mt-1 text-sm">{appt.propertyName}{appt.unitNumber ? ' · Unit ' + appt.unitNumber : ''}</dd>
-						</div>
-					{/if}
-					{#if appt.tenantName}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Tenant</dt>
-							<dd class="mt-1 text-sm">{appt.tenantName}</dd>
-						</div>
-					{/if}
-					{#if appt.prospectName}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Prospect</dt>
-							<dd class="mt-1 text-sm">{appt.prospectName}</dd>
-						</div>
-					{/if}
-					{#if appt.prospectEmail}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Prospect Email</dt>
-							<dd class="mt-1 text-sm">
-								<a href="mailto:{appt.prospectEmail}" class="text-primary hover:underline">{appt.prospectEmail}</a>
-							</dd>
-						</div>
-					{/if}
-					{#if appt.assignedTo}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Assigned To</dt>
-							<dd class="mt-1 text-sm">{appt.assignedTo}</dd>
-						</div>
-					{/if}
+				<div class="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+					<InlineField label="Title" bind:value={form.title} display={appt.title} {editing} onedit={startEditing} error={formErrors.title} testid="appointment-detail-title-field" class="sm:col-span-2 lg:col-span-3" />
+					<InlineField label="Type" bind:value={form.type} display={appt.type} {editing} onedit={startEditing} type="select" options={typeOptions} testid="appointment-detail-type-field" />
+					<InlineField label="Status" bind:value={form.status} display={appt.status} {editing} onedit={startEditing} type="select" options={statusOptions} testid="appointment-detail-status-field" />
+					<InlineField label="Start" bind:value={form.scheduledStart} display={fmtDateTime(appt.scheduledStart)} {editing} onedit={startEditing} type="datetime-local" error={formErrors.scheduledStart} testid="appointment-detail-start" />
+					<InlineField label="End" bind:value={form.scheduledEnd} display={appt.scheduledEnd ? fmtDateTime(appt.scheduledEnd) : ''} {editing} onedit={startEditing} type="datetime-local" error={formErrors.scheduledEnd} testid="appointment-detail-end" />
+					<InlineField label="Property" bind:value={form.propertyId} display={appt.propertyName ? `${appt.propertyName}${appt.unitNumber ? ' · Unit ' + appt.unitNumber : ''}` : ''} {editing} onedit={startEditing} type="select" options={propertyOptions} testid="appointment-detail-property" />
+					<InlineField label="Tenant" bind:value={form.tenantId} display={appt.tenantName ?? ''} {editing} onedit={startEditing} type="select" options={tenantOptions} testid="appointment-detail-tenant" />
+					<InlineField label="Prospect" bind:value={form.prospectName} display={appt.prospectName} {editing} onedit={startEditing} testid="appointment-detail-prospect-name" />
+					<InlineField label="Prospect email" bind:value={form.prospectEmail} display={appt.prospectEmail} {editing} onedit={startEditing} type="email" error={formErrors.prospectEmail} testid="appointment-detail-prospect-email" />
+					<InlineField label="Assigned to" bind:value={form.assignedTo} display={appt.assignedTo} {editing} onedit={startEditing} testid="appointment-detail-assigned" />
 					<div>
 						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Created</dt>
 						<dd class="mt-1 text-sm">{fmtDate(appt.createdAt)}</dd>
@@ -302,7 +283,7 @@
 							<dd class="mt-1 whitespace-pre-wrap text-sm">{appt.notes}</dd>
 						</div>
 					{/if}
-				</dl>
+				</div>
 			</Card.Content>
 		</Card.Root>
 
@@ -312,77 +293,6 @@
 		</div>
 	{/if}
 </div>
-
-<!-- Edit dialog (reusing same form as list page) -->
-<Dialog.Root
-	open={showForm}
-	onOpenChange={(v) => { if (!v) closeForm(); }}
->
-	<Dialog.Content class="max-w-2xl">
-		<Dialog.Header>
-			<Dialog.Title>Edit Appointment</Dialog.Title>
-		</Dialog.Header>
-		<div class="grid gap-3 md:grid-cols-3" data-testid="appointment-form">
-			<div class="md:col-span-2">
-				<Input data-testid="appointment-title-input" bind:value={form.title} placeholder="Appointment title" />
-				{#if formErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="appointment-title-error">{formErrors.title}</p>{/if}
-			</div>
-			<Select.Root type="single" bind:value={form.type}>
-				<Select.Trigger class="w-full" data-testid="appointment-type-input">
-					{form.type ? form.type : 'Select type'}
-				</Select.Trigger>
-				<Select.Content>
-					{#each APPT_TYPES as t}<Select.Item value={t} label={t}>{t}</Select.Item>{/each}
-				</Select.Content>
-			</Select.Root>
-			<div>
-				<Input data-testid="appointment-start-input" type="datetime-local" bind:value={form.scheduledStart} />
-				{#if formErrors.scheduledStart}<p class="mt-1 text-xs text-destructive" data-testid="appointment-start-error">{formErrors.scheduledStart}</p>{/if}
-			</div>
-			<Input data-testid="appointment-end-input" type="datetime-local" bind:value={form.scheduledEnd} />
-			<Select.Root type="single" bind:value={form.status}>
-				<Select.Trigger class="w-full" data-testid="appointment-status-input">
-					{form.status ? form.status : 'Select status'}
-				</Select.Trigger>
-				<Select.Content>
-					{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
-				</Select.Content>
-			</Select.Root>
-			<Select.Root type="single" bind:value={form.propertyId}>
-				<Select.Trigger class="w-full" data-testid="appointment-property-input">
-					{form.propertyId ? (propertiesQuery.data?.find((p) => String(p.id) === form.propertyId)?.name ?? form.propertyId) : 'No property'}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="No property">No property</Select.Item>
-					{#each propertiesQuery.data || [] as property}<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>{/each}
-				</Select.Content>
-			</Select.Root>
-			<Select.Root type="single" bind:value={form.tenantId}>
-				<Select.Trigger class="w-full" data-testid="appointment-tenant-input">
-					{#if form.tenantId}
-						{tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.fullName || (() => { const t = tenantsQuery.data?.find((t) => String(t.id) === form.tenantId); return t ? `${t.firstName} ${t.lastName}` : form.tenantId; })()}
-					{:else}
-						No tenant
-					{/if}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="No tenant">No tenant</Select.Item>
-					{#each tenantsQuery.data || [] as tenant}<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>{/each}
-				</Select.Content>
-			</Select.Root>
-			<Input data-testid="appointment-assigned-input" bind:value={form.assignedTo} placeholder="Assigned to" />
-			<Input data-testid="appointment-prospect-name-input" bind:value={form.prospectName} placeholder="Prospect name" />
-			<div>
-				<Input data-testid="appointment-prospect-email-input" bind:value={form.prospectEmail} placeholder="Prospect email" />
-				{#if formErrors.prospectEmail}<p class="mt-1 text-xs text-destructive" data-testid="appointment-prospect-email-error">{formErrors.prospectEmail}</p>{/if}
-			</div>
-		</div>
-		<Dialog.Footer>
-			<Button variant="outline" data-testid="appointment-form-cancel" onclick={closeForm}>Cancel</Button>
-			<Button data-testid="appointment-form-save" onclick={submit} disabled={saveMutation.isPending}>{saveMutation.isPending ? 'Saving…' : 'Save Appointment'}</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
 
 <ConfirmDialog
 	open={showDelete}

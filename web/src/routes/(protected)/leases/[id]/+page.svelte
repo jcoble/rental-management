@@ -15,12 +15,11 @@
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
-	import * as Dialog from '$lib/components/ui/dialog';
+	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import * as Select from '$lib/components/ui/select';
-	import { Pencil, Trash2 } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 
 	const queryClient = useQueryClient();
@@ -62,10 +61,10 @@
 	}));
 
 	const empty = {
-		propertyId: '', unitId: '', tenantId: '', startDate: '', endDate: '',
-		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1', status: 'Draft',
+		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', startDate: '', endDate: '',
+		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1', status: 'Draft', notes: '',
 	};
-	let showForm = $state(false);
+	let editing = $state(false);
 	let form = $state({ ...empty });
 	let formErrors = $state<Record<string, string>>({});
 	let showDeleteConfirm = $state(false);
@@ -85,7 +84,8 @@
 		mutationFn: (data: Record<string, unknown>) => leases.update(leaseId, data),
 		onSuccess: () => {
 			showSuccess('Lease updated.');
-			closeForm();
+			editing = false;
+			formErrors = {};
 			invalidateLease();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -137,9 +137,10 @@
 		askLeaseMutation.mutate(question);
 	}
 
-	function openEdit() {
+	function startEditing() {
 		if (!lease) return;
 		form = {
+			leaseNumber: lease.leaseNumber,
 			propertyId: String(lease.propertyId),
 			unitId: String(lease.unitId),
 			tenantId: String(lease.tenantId),
@@ -150,13 +151,14 @@
 			lateFeeAmount: String(lease.lateFeeAmount),
 			rentDueDay: String(lease.rentDueDay),
 			status: lease.status,
+			notes: lease.notes ?? '',
 		};
 		formPropertyId = String(lease.propertyId);
 		formErrors = {};
-		showForm = true;
+		editing = true;
 	}
-	function closeForm() {
-		showForm = false;
+	function cancelEditing() {
+		editing = false;
 		formErrors = {};
 	}
 
@@ -171,21 +173,26 @@
 		saveMutation.mutate({ portfolioId, ...result.data });
 	}
 
-	// Derived labels for select triggers
-	const selectedPropertyLabel = $derived(
-		propertiesQuery.data?.find((p) => String(p.id) === form.propertyId)?.name ?? ''
-	);
-	const selectedUnitLabel = $derived(
-		unitsForPropertyQuery.data?.find((u) => String(u.id) === form.unitId)
-			? `Unit ${unitsForPropertyQuery.data?.find((u) => String(u.id) === form.unitId)?.unitNumber} (${unitsForPropertyQuery.data?.find((u) => String(u.id) === form.unitId)?.status})`
-			: ''
-	);
-	const selectedTenantLabel = $derived(
-		tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)
-			? (tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.fullName ||
-				`${tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.firstName} ${tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.lastName}`)
-			: ''
-	);
+	// Select options for inline FK/enum fields
+	const statusOptions = $derived(LEASE_STATUSES.map((value) => ({ value, label: value })));
+	const propertyOptions = $derived([
+		{ value: '', label: 'Select property' },
+		...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
+	]);
+	const unitOptions = $derived([
+		{ value: '', label: 'Select unit' },
+		...(unitsForPropertyQuery.data ?? []).map((u) => ({
+			value: String(u.id),
+			label: `Unit ${u.unitNumber} (${u.status})`,
+		})),
+	]);
+	const tenantOptions = $derived([
+		{ value: '', label: 'Select tenant' },
+		...(tenantsQuery.data ?? []).map((t) => ({
+			value: String(t.id),
+			label: t.fullName || `${t.firstName} ${t.lastName}`,
+		})),
+	]);
 
 	// Payments DataGrid columns
 	const paymentColumns: ColumnDef<Payment>[] = [
@@ -290,23 +297,34 @@
 				</p>
 			</div>
 			<div class="flex flex-wrap items-center gap-2">
-				{#if lease.status !== 'Active'}
-					<Button data-testid="lease-set-active" variant="outline" size="sm" onclick={() => statusMutation.mutate('Active')} disabled={statusMutation.isPending}>
-						Set Active
+				{#if editing}
+					<Button data-testid="lease-detail-cancel" variant="outline" size="sm" class="gap-1.5" onclick={cancelEditing} disabled={saveMutation.isPending}>
+						<X class="h-4 w-4" />
+						Cancel
+					</Button>
+					<Button data-testid="lease-detail-save" size="sm" class="gap-1.5" onclick={submit} disabled={saveMutation.isPending}>
+						<Save class="h-4 w-4" />
+						{saveMutation.isPending ? 'Saving…' : 'Save'}
 					</Button>
 				{:else}
-					<Button data-testid="lease-give-notice" variant="outline" size="sm" onclick={() => statusMutation.mutate('NoticeGiven')} disabled={statusMutation.isPending}>
-						Give Notice
+					{#if lease.status !== 'Active'}
+						<Button data-testid="lease-set-active" variant="outline" size="sm" onclick={() => statusMutation.mutate('Active')} disabled={statusMutation.isPending}>
+							Set Active
+						</Button>
+					{:else}
+						<Button data-testid="lease-give-notice" variant="outline" size="sm" onclick={() => statusMutation.mutate('NoticeGiven')} disabled={statusMutation.isPending}>
+							Give Notice
+						</Button>
+					{/if}
+					<Button data-testid="lease-edit" variant="outline" size="sm" class="gap-1.5" onclick={startEditing}>
+						<Pencil class="h-4 w-4" />
+						Edit
+					</Button>
+					<Button data-testid="lease-delete" variant="outline" size="sm" class="gap-1.5 hover:text-destructive" onclick={() => (showDeleteConfirm = true)}>
+						<Trash2 class="h-4 w-4" />
+						Delete
 					</Button>
 				{/if}
-				<Button data-testid="lease-edit" variant="outline" size="sm" class="gap-1.5" onclick={openEdit}>
-					<Pencil class="h-4 w-4" />
-					Edit
-				</Button>
-				<Button data-testid="lease-delete" variant="outline" size="sm" class="gap-1.5 hover:text-destructive" onclick={() => (showDeleteConfirm = true)}>
-					<Trash2 class="h-4 w-4" />
-					Delete
-				</Button>
 			</div>
 		</div>
 
@@ -316,50 +334,32 @@
 				<Card.Title class="text-base">Lease Details</Card.Title>
 			</Card.Header>
 			<Card.Content>
-				<dl class="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-4">
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Start Date</dt>
-						<dd class="mt-0.5 text-sm font-medium" data-testid="lease-detail-start">{formatDate(lease.startDate)}</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">End Date</dt>
-						<dd class="mt-0.5 text-sm font-medium" data-testid="lease-detail-end">{formatDate(lease.endDate)}</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Monthly Rent</dt>
-						<dd class="mt-0.5 font-mono text-sm font-semibold tabular-nums" data-testid="lease-detail-rent">{formatCurrency(lease.monthlyRent)}</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Security Deposit</dt>
-						<dd class="mt-0.5 font-mono text-sm tabular-nums" data-testid="lease-detail-deposit">{formatCurrency(lease.securityDeposit)}</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Late Fee</dt>
-						<dd class="mt-0.5 font-mono text-sm tabular-nums">{formatCurrency(lease.lateFeeAmount)}</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Rent Due Day</dt>
-						<dd class="mt-0.5 text-sm">Day {lease.rentDueDay}</dd>
-					</div>
-					{#if lease.moveInDate}
+				<div class="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-4">
+					<InlineField label="Lease Number" bind:value={form.leaseNumber} display={lease.leaseNumber} {editing} onedit={startEditing} error={formErrors.leaseNumber} testid="lease-detail-number-field" />
+					<InlineField label="Status" bind:value={form.status} display={lease.status} {editing} onedit={startEditing} type="select" options={statusOptions} error={formErrors.status} testid="lease-detail-status" />
+					<InlineField label="Property" bind:value={form.propertyId} display={lease.propertyName} {editing} onedit={startEditing} type="select" options={propertyOptions} testid="lease-detail-property" />
+					<InlineField label="Unit" bind:value={form.unitId} display={lease.unitNumber ? `Unit ${lease.unitNumber}` : ''} {editing} onedit={startEditing} type="select" options={unitOptions} error={formErrors.unitId} testid="lease-detail-unit" />
+					<InlineField label="Tenant" bind:value={form.tenantId} display={lease.tenantName} {editing} onedit={startEditing} type="select" options={tenantOptions} error={formErrors.tenantId} testid="lease-detail-tenant" />
+					<InlineField label="Start Date" bind:value={form.startDate} display={formatDate(lease.startDate)} {editing} onedit={startEditing} type="date" error={formErrors.startDate} testid="lease-detail-start" />
+					<InlineField label="End Date" bind:value={form.endDate} display={formatDate(lease.endDate)} {editing} onedit={startEditing} type="date" error={formErrors.endDate} testid="lease-detail-end" />
+					<InlineField label="Monthly Rent" bind:value={form.monthlyRent} display={formatCurrency(lease.monthlyRent)} {editing} onedit={startEditing} type="number" error={formErrors.monthlyRent} testid="lease-detail-rent" />
+					<InlineField label="Security Deposit" bind:value={form.securityDeposit} display={formatCurrency(lease.securityDeposit)} {editing} onedit={startEditing} type="number" error={formErrors.securityDeposit} testid="lease-detail-deposit" />
+					<InlineField label="Late Fee" bind:value={form.lateFeeAmount} display={formatCurrency(lease.lateFeeAmount)} {editing} onedit={startEditing} type="number" error={formErrors.lateFeeAmount} testid="lease-detail-late-fee" />
+					<InlineField label="Rent Due Day" bind:value={form.rentDueDay} display={`Day ${lease.rentDueDay}`} {editing} onedit={startEditing} type="number" error={formErrors.rentDueDay} testid="lease-detail-due-day" />
+					{#if !editing && lease.moveInDate}
 						<div>
 							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-In</dt>
 							<dd class="mt-0.5 text-sm">{formatDate(lease.moveInDate)}</dd>
 						</div>
 					{/if}
-					{#if lease.moveOutDate}
+					{#if !editing && lease.moveOutDate}
 						<div>
 							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-Out</dt>
 							<dd class="mt-0.5 text-sm">{formatDate(lease.moveOutDate)}</dd>
 						</div>
 					{/if}
-					{#if lease.notes}
-						<div class="col-span-2 sm:col-span-3 lg:col-span-4">
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notes</dt>
-							<dd class="mt-0.5 text-sm text-muted-foreground">{lease.notes}</dd>
-						</div>
-					{/if}
-				</dl>
+					<InlineField label="Notes" bind:value={form.notes} display={lease.notes} {editing} onedit={startEditing} type="textarea" error={formErrors.notes} testid="lease-detail-notes" class="col-span-2 sm:col-span-3 lg:col-span-4" />
+				</div>
 			</Card.Content>
 		</Card.Root>
 
@@ -418,95 +418,6 @@
 		</div>
 	{/if}
 </div>
-
-<!-- Edit dialog -->
-<Dialog.Root
-	open={showForm}
-	onOpenChange={(v) => { if (!v) closeForm(); }}
->
-	<Dialog.Content class="max-w-2xl">
-		<Dialog.Header>
-			<Dialog.Title>Edit Lease</Dialog.Title>
-		</Dialog.Header>
-		<div class="grid gap-3 md:grid-cols-3" data-testid="lease-form">
-			<Select.Root type="single" bind:value={form.propertyId}>
-				<Select.Trigger class="w-full" data-testid="lease-property-input">
-					{selectedPropertyLabel ? selectedPropertyLabel : 'Select property'}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="Select property">Select property</Select.Item>
-					{#each propertiesQuery.data || [] as property}
-						<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-					{/each}
-				</Select.Content>
-			</Select.Root>
-			<div>
-				<Select.Root type="single" bind:value={form.unitId} disabled={!form.propertyId}>
-					<Select.Trigger class="w-full" data-testid="lease-unit-input" disabled={!form.propertyId}>
-						{selectedUnitLabel ? selectedUnitLabel : 'Select unit'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="Select unit">Select unit</Select.Item>
-						{#each unitsForPropertyQuery.data || [] as unit}
-							<Select.Item value={String(unit.id)} label="Unit {unit.unitNumber} ({unit.status})">Unit {unit.unitNumber} ({unit.status})</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				{#if formErrors.unitId}<p class="mt-1 text-xs text-destructive" data-testid="lease-unit-error">{formErrors.unitId}</p>{/if}
-			</div>
-			<div>
-				<Select.Root type="single" bind:value={form.tenantId}>
-					<Select.Trigger class="w-full" data-testid="lease-tenant-input">
-						{selectedTenantLabel ? selectedTenantLabel : 'Select tenant'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="Select tenant">Select tenant</Select.Item>
-						{#each tenantsQuery.data || [] as tenant}
-							<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				{#if formErrors.tenantId}<p class="mt-1 text-xs text-destructive" data-testid="lease-tenant-error">{formErrors.tenantId}</p>{/if}
-			</div>
-			<div>
-				<Input data-testid="lease-start-input" type="date" bind:value={form.startDate} />
-				{#if formErrors.startDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-start-error">{formErrors.startDate}</p>{/if}
-			</div>
-			<div>
-				<Input data-testid="lease-end-input" type="date" bind:value={form.endDate} />
-				{#if formErrors.endDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-end-error">{formErrors.endDate}</p>{/if}
-			</div>
-			<Select.Root type="single" bind:value={form.status}>
-				<Select.Trigger class="w-full" data-testid="lease-status-input">
-					{form.status ? form.status : 'Select status'}
-				</Select.Trigger>
-				<Select.Content>
-					{#each LEASE_STATUSES as s}
-						<Select.Item value={s} label={s}>{s}</Select.Item>
-					{/each}
-				</Select.Content>
-			</Select.Root>
-			<div>
-				<Input data-testid="lease-rent-input" bind:value={form.monthlyRent} placeholder="Monthly rent" />
-				{#if formErrors.monthlyRent}<p class="mt-1 text-xs text-destructive" data-testid="lease-rent-error">{formErrors.monthlyRent}</p>{/if}
-			</div>
-			<div>
-				<Input data-testid="lease-deposit-input" bind:value={form.securityDeposit} placeholder="Security deposit" />
-				{#if formErrors.securityDeposit}<p class="mt-1 text-xs text-destructive" data-testid="lease-deposit-error">{formErrors.securityDeposit}</p>{/if}
-			</div>
-			<div class="grid grid-cols-2 gap-2">
-				<Input data-testid="lease-late-fee-input" bind:value={form.lateFeeAmount} placeholder="Late fee" />
-				<Input data-testid="lease-due-day-input" bind:value={form.rentDueDay} placeholder="Due day" />
-			</div>
-		</div>
-		<Dialog.Footer>
-			<Button data-testid="lease-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
-			<Button data-testid="lease-form-save" onclick={submit} disabled={saveMutation.isPending}>
-				{saveMutation.isPending ? 'Saving…' : 'Save Lease'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
 
 <ConfirmDialog
 	open={showDeleteConfirm}

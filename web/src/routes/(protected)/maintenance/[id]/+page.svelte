@@ -4,26 +4,22 @@
 	import { page } from '$app/stores';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import { properties } from '$lib/api/endpoints/properties';
-	import type { WorkOrder } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { workOrderSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import * as Select from '$lib/components/ui/select';
+	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
-	import { Pencil, Trash2 } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const id = $derived(Number($page.params.id));
 
-	const WO_STATUSES = ['New', 'Scheduled', 'InProgress', 'WaitingParts', 'Completed', 'Cancelled'];
 	const WO_PRIORITIES = ['Low', 'Normal', 'High', 'Emergency'];
 
 	// Status transitions: map current status → allowed next statuses
@@ -49,37 +45,41 @@
 
 	const wo = $derived(workOrderQuery.data);
 
-	// --- Edit form/dialog ---
-	const emptyWo = { propertyId: '', title: '', description: '', priority: 'Normal', category: 'General' };
-	let showEditForm = $state(false);
-	let woForm = $state({ ...emptyWo });
-	let woErrors = $state<Record<string, string>>({});
+	const priorityOptions = $derived(WO_PRIORITIES.map((value) => ({ value, label: value })));
+	const propertyOptions = $derived(
+		(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name }))
+	);
+
+	// --- Inline edit ---
+	let editing = $state(false);
+	let form = $state({ propertyId: '', title: '', description: '', priority: 'Normal', category: 'General' });
+	let formErrors = $state<Record<string, string>>({});
 	let showDeleteConfirm = $state(false);
 
-	function openEdit() {
+	function startEditing() {
 		if (!wo) return;
-		woForm = {
+		form = {
 			propertyId: String(wo.propertyId),
 			title: wo.title,
 			description: wo.description,
 			priority: wo.priority,
 			category: wo.category,
 		};
-		woErrors = {};
-		showEditForm = true;
+		formErrors = {};
+		editing = true;
 	}
-	function closeEdit() {
-		showEditForm = false;
-		woErrors = {};
+	function cancelEditing() {
+		editing = false;
+		formErrors = {};
 	}
-	function submitEdit() {
-		const result = parseForm(workOrderSchema, woForm);
+	function save() {
+		const result = parseForm(workOrderSchema, form);
 		if (result.errors) {
-			woErrors = result.errors;
+			formErrors = result.errors;
 			return;
 		}
-		woErrors = {};
-		saveMutation.mutate({ id, data: { portfolioId, ...result.data } });
+		formErrors = {};
+		saveMutation.mutate({ portfolioId, ...result.data });
 	}
 
 	function invalidate() {
@@ -88,11 +88,10 @@
 	}
 
 	const saveMutation = createMutation(() => ({
-		mutationFn: ({ id: woId, data }: { id: number; data: Record<string, unknown> }) =>
-			workOrders.update(woId, data),
+		mutationFn: (data: Record<string, unknown>) => workOrders.update(id, data),
 		onSuccess: () => {
 			showSuccess('Work order updated.');
-			closeEdit();
+			editing = false;
 			invalidate();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -175,37 +174,59 @@
 				</div>
 			</div>
 			<div class="flex flex-wrap items-center gap-2">
-				<!-- Status transition buttons -->
-				{#each availableTransitions as nextStatus}
+				{#if editing}
 					<Button
 						variant="outline"
 						size="sm"
-						disabled={statusMutation.isPending}
-						data-testid="work-order-set-{nextStatus.toLowerCase()}"
-						onclick={() => statusMutation.mutate({ id: wo.id, status: nextStatus })}
+						data-testid="work-order-edit-cancel"
+						onclick={cancelEditing}
+						disabled={saveMutation.isPending}
 					>
-						{nextStatus === 'InProgress' ? 'In Progress' : nextStatus}
+						<X class="h-4 w-4" />
+						Cancel
 					</Button>
-				{/each}
-				<Button
-					variant="outline"
-					size="sm"
-					data-testid="work-order-edit"
-					onclick={openEdit}
-				>
-					<Pencil class="h-4 w-4" />
-					Edit
-				</Button>
-				<Button
-					variant="outline"
-					size="sm"
-					class="hover:text-destructive"
-					data-testid="work-order-delete"
-					onclick={() => (showDeleteConfirm = true)}
-				>
-					<Trash2 class="h-4 w-4" />
-					Delete
-				</Button>
+					<Button
+						size="sm"
+						data-testid="work-order-edit-save"
+						onclick={save}
+						disabled={saveMutation.isPending}
+					>
+						<Save class="h-4 w-4" />
+						{saveMutation.isPending ? 'Saving…' : 'Save'}
+					</Button>
+				{:else}
+					<!-- Status transition buttons -->
+					{#each availableTransitions as nextStatus}
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={statusMutation.isPending}
+							data-testid="work-order-set-{nextStatus.toLowerCase()}"
+							onclick={() => statusMutation.mutate({ id: wo.id, status: nextStatus })}
+						>
+							{nextStatus === 'InProgress' ? 'In Progress' : nextStatus}
+						</Button>
+					{/each}
+					<Button
+						variant="outline"
+						size="sm"
+						data-testid="work-order-edit"
+						onclick={startEditing}
+					>
+						<Pencil class="h-4 w-4" />
+						Edit
+					</Button>
+					<Button
+						variant="outline"
+						size="sm"
+						class="hover:text-destructive"
+						data-testid="work-order-delete"
+						onclick={() => (showDeleteConfirm = true)}
+					>
+						<Trash2 class="h-4 w-4" />
+						Delete
+					</Button>
+				{/if}
 			</div>
 		</div>
 
@@ -215,17 +236,12 @@
 				<Card.Title>Details</Card.Title>
 			</Card.Header>
 			<Card.Content>
-				<dl class="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-					{#if wo.description}
-						<div class="sm:col-span-2 lg:col-span-3">
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Description</dt>
-							<dd class="mt-1 text-sm" data-testid="work-order-detail-description">{wo.description}</dd>
-						</div>
-					{/if}
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Category</dt>
-						<dd class="mt-1 text-sm" data-testid="work-order-detail-category">{wo.category}</dd>
-					</div>
+				<div class="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+					<InlineField label="Title" bind:value={form.title} display={wo.title} {editing} onedit={startEditing} error={formErrors.title} testid="work-order-detail-title-field" class="sm:col-span-2 lg:col-span-3" />
+					<InlineField label="Description" bind:value={form.description} display={wo.description} {editing} onedit={startEditing} type="textarea" error={formErrors.description} testid="work-order-detail-description" class="sm:col-span-2 lg:col-span-3" />
+					<InlineField label="Property" bind:value={form.propertyId} display={wo.propertyName} {editing} onedit={startEditing} type="select" options={propertyOptions} error={formErrors.propertyId} testid="work-order-detail-property-field" />
+					<InlineField label="Priority" bind:value={form.priority} display={wo.priority} {editing} onedit={startEditing} type="select" options={priorityOptions} testid="work-order-detail-priority" />
+					<InlineField label="Category" bind:value={form.category} display={wo.category} {editing} onedit={startEditing} error={formErrors.category} testid="work-order-detail-category" />
 					<div>
 						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Requested</dt>
 						<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-requested">{formatDate(wo.requestedAt)}</dd>
@@ -254,7 +270,7 @@
 							<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-actual-cost">{formatCurrency(wo.actualCost)}</dd>
 						</div>
 					{/if}
-				</dl>
+				</div>
 			</Card.Content>
 		</Card.Root>
 
@@ -264,65 +280,6 @@
 		</div>
 	{/if}
 </div>
-
-<!-- Edit dialog -->
-{#if wo}
-	<Dialog.Root
-		open={showEditForm}
-		onOpenChange={(v) => { if (!v) closeEdit(); }}
-	>
-		<Dialog.Content class="max-w-lg">
-			<Dialog.Header>
-				<Dialog.Title>Edit Work Order</Dialog.Title>
-			</Dialog.Header>
-			<div class="space-y-2" data-testid="work-order-form">
-				<div>
-					<Select.Root type="single" bind:value={woForm.propertyId}>
-						<Select.Trigger class="w-full" data-testid="work-order-property-input">
-							{woForm.propertyId
-								? ((propertiesQuery.data || []).find((p) => String(p.id) === woForm.propertyId)?.name ?? 'Select property')
-								: 'Select property'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="" label="Select property">Select property</Select.Item>
-							{#each propertiesQuery.data || [] as property}
-								<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-					{#if woErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="work-order-property-error">{woErrors.propertyId}</p>{/if}
-				</div>
-				<div>
-					<Input data-testid="work-order-title-input" bind:value={woForm.title} placeholder="Issue title" />
-					{#if woErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="work-order-title-error">{woErrors.title}</p>{/if}
-				</div>
-				<div>
-					<textarea data-testid="work-order-description-input" bind:value={woForm.description} rows={3} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="Description"></textarea>
-					{#if woErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="work-order-description-error">{woErrors.description}</p>{/if}
-				</div>
-				<div class="grid grid-cols-2 gap-2">
-					<Select.Root type="single" bind:value={woForm.priority}>
-						<Select.Trigger class="w-full" data-testid="work-order-priority-input">
-							{woForm.priority || 'Priority'}
-						</Select.Trigger>
-						<Select.Content>
-							{#each WO_PRIORITIES as p}
-								<Select.Item value={p} label={p}>{p}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-					<Input data-testid="work-order-category-input" bind:value={woForm.category} placeholder="Category" />
-				</div>
-			</div>
-			<Dialog.Footer>
-				<Button data-testid="work-order-form-cancel" variant="outline" onclick={closeEdit}>Cancel</Button>
-				<Button data-testid="work-order-form-save" onclick={submitEdit} disabled={saveMutation.isPending}>
-					{saveMutation.isPending ? 'Saving…' : 'Save Work Order'}
-				</Button>
-			</Dialog.Footer>
-		</Dialog.Content>
-	</Dialog.Root>
-{/if}
 
 <ConfirmDialog
 	open={showDeleteConfirm}
