@@ -24,6 +24,13 @@ public class NotificationsConfig
     public SignalWireOptions SignalWire { get; set; } = new();
     public SendGridOptions SendGrid { get; set; } = new();
 
+    /// <summary>
+    /// Public base URL the SMS provider was configured to call (e.g. <c>https://app.example.com</c>),
+    /// used to recompute the webhook signature when the API sits behind a reverse proxy that rewrites
+    /// scheme/host. When null the signature is checked against the request's own absolute URI.
+    /// </summary>
+    public string? PublicWebhookBaseUrl { get; set; }
+
     // Keyed by 2-letter US state (e.g. "CA"); caps the late fee. Missing state = no cap (use lease amount).
     public Dictionary<string, LateFeeCap> StateLateFeeCaps { get; set; } = new();
 }
