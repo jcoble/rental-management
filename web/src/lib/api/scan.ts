@@ -40,6 +40,63 @@ export interface ScanConfirmResponse {
 	entityId?: number | null;
 }
 
+// ---- Bulk scan batches (e.g. importing many leases at once) ----
+
+/** Per-status tallies for the drafts in a batch. */
+export interface ScanBatchCounts {
+	total: number;
+	pending: number;
+	reviewing: number;
+	confirmed: number;
+	rejected: number;
+	failed: number;
+}
+
+/** Summary row for a batch (list view). ScanBatchStatus: Processing | Reviewing | Completed. */
+export interface ScanBatchSummary {
+	id: number;
+	name: string | null;
+	targetEntityType: string;
+	status: string;
+	fileCount: number;
+	createdAtUtc: string;
+	counts: ScanBatchCounts;
+}
+
+/** A single draft within a batch detail view. */
+export interface ScanBatchDraft {
+	id: number;
+	status: string; // Pending | Processing | Reviewing | Confirmed | Rejected | Failed
+	targetEntityType: string;
+	fileUrl: string;
+	tenant: string | null;
+	unit: string | null;
+	term: string | null;
+	/** Id of the entity (e.g. Lease) created once the draft is confirmed. */
+	createdEntityId: number | null;
+	createdAt: string;
+}
+
+/** Full batch detail with its drafts. */
+export interface ScanBatchDetail extends ScanBatchSummary {
+	drafts: ScanBatchDraft[];
+}
+
+/** Response from creating a batch. */
+export interface ScanBatchCreatedResponse {
+	batchId: number;
+	name: string | null;
+	targetEntityType: string;
+	status: string;
+	fileCount: number;
+	draftIds: number[];
+}
+
+export interface UploadBatchOptions {
+	targetEntityType?: string;
+	name?: string;
+}
+
 // ---- Typed API helpers ----
 
 export const scan = {
@@ -65,5 +122,27 @@ export const scan = {
 	},
 
 	reject: (id: number, reason: string): Promise<unknown> =>
-		api.post(`/scans/${id}/reject`, { reason })
+		api.post(`/scans/${id}/reject`, { reason }),
+
+	// ---- Bulk batch helpers ----
+
+	/** Upload many files as one batch of scan drafts (defaults to Lease). */
+	uploadBatch: (
+		files: File[],
+		options: UploadBatchOptions = {}
+	): Promise<ScanBatchCreatedResponse> => {
+		const fd = new FormData();
+		for (const file of files) {
+			fd.append('files', file);
+		}
+		fd.append('targetEntityType', options.targetEntityType ?? 'Lease');
+		if (options.name) fd.append('name', options.name);
+		return api.upload<ScanBatchCreatedResponse>('/scans/batch', fd);
+	},
+
+	listBatches: (): Promise<ScanBatchSummary[]> =>
+		api.get<ScanBatchSummary[]>('/scans/batches'),
+
+	getBatch: (id: number): Promise<ScanBatchDetail> =>
+		api.get<ScanBatchDetail>(`/scans/batches/${id}`)
 };

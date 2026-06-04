@@ -74,7 +74,7 @@ but the landlord cannot use the complete workflow in a logical place.
 | ------------------------------------ | ------- | ------------------------------------------------------------------ |
 | Guided 5-step setup wizard | Usable | `/onboarding` full-page stepped flow (Portfolio -> Owner -> Property+Units -> Tenants -> Lease) over the existing create endpoints + Zod schemas; remembers what it created so later steps prefill, marks already-done steps, and is safe to re-enter (no duplicates). Empty-portfolio banner on the dashboard + a Setup nav link. (Web; Frank is white-gloved, web is the SaaS on-ramp.) |
 | DO- CSV/bulk import                  | Missing | No bulk import workflow.                                           |
-| DO- Bulk lease PDF scan              | Missing | Single-document scanning exists; no bulk lease migration workflow. |
+| Bulk lease PDF scan | Usable | `POST /scans/batch` (many PDFs, field `files`) creates a `ScanBatch` of Lease drafts the existing Engine worker extracts; web bulk-import page (drag many PDFs) + a polling **batch review queue** (progress, per-draft Review -> scan->Lease confirm, links to created leases). Wired from the scan page + the onboarding wizard. |
 | DO- Opening balances/history scoping | Missing | No migration scoping workflow.                                     |
 
 ## Cross-cutting — Web UX

@@ -1,6 +1,9 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -25,6 +28,16 @@ public class ScanController : AuthenticatedPortfolioControllerBase
     {
         "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic"
     };
+
+    // Recognised scan targets. Empty/null at single-file upload is allowed (the worker auto-classifies);
+    // a batch always has a concrete target (defaulting to "Lease", the migration on-ramp).
+    private static readonly HashSet<string> ValidTargets = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Expense", "Payment", "WorkOrder", "Lease"
+    };
+
+    // Cap per batch so one request can't enqueue an unbounded number of (paid) LLM extractions.
+    private const int MaxBatchFiles = 100;
 
     public ScanController(IScanService scan, RentalCommandDbContext db, IFileStorage files)
     {
@@ -78,6 +91,283 @@ public class ScanController : AuthenticatedPortfolioControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // POST /api/v1/scans/batch  — bulk upload many documents into one batch
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Bulk-scan upload: accepts MANY files in one multipart request (field name <c>files</c>),
+    /// creates a <see cref="ScanBatch"/>, validates + stores each file, and creates one Pending
+    /// <see cref="ScanDraft"/> per file linked to the batch. The Engine worker then extracts each
+    /// draft → Reviewing. Returns the batch + the created draft ids.
+    /// </summary>
+    [HttpPost("batch")]
+    [Consumes("multipart/form-data")]
+    [ProducesResponseType(typeof(ScanBatchCreatedResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ScanBatchCreatedResponse>> UploadBatch(
+        [FromForm] List<IFormFile> files,
+        [FromForm] string? targetEntityType,
+        [FromForm] string? name,
+        CancellationToken ct)
+    {
+        var nonEmpty = (files ?? []).Where(f => f is { Length: > 0 }).ToList();
+        if (nonEmpty.Count == 0)
+            return BadRequest(new { error = "At least one non-empty file is required." });
+
+        if (nonEmpty.Count > MaxBatchFiles)
+            return BadRequest(new { error = $"A batch can contain at most {MaxBatchFiles} files (got {nonEmpty.Count})." });
+
+        // A batch always targets a concrete entity; default to the lease-import on-ramp.
+        var target = string.IsNullOrWhiteSpace(targetEntityType) ? "Lease" : targetEntityType.Trim();
+        if (!ValidTargets.Contains(target))
+            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease." });
+
+        // Normalize to the canonical casing so the worker's case-sensitive target checks match.
+        target = ValidTargets.First(t => string.Equals(t, target, StringComparison.OrdinalIgnoreCase));
+
+        var portfolioId = GetPortfolioId();
+
+        // Read all file bytes up front so a per-file validation failure rejects the whole batch
+        // before any draft is created (all-or-nothing intake — no half-imported batch to clean up).
+        var payloads = new List<(byte[] Bytes, string ContentType)>(nonEmpty.Count);
+        foreach (var file in nonEmpty)
+        {
+            using var ms = new MemoryStream();
+            await file.CopyToAsync(ms, ct);
+            payloads.Add((ms.ToArray(), file.ContentType));
+        }
+
+        var batch = new ScanBatch
+        {
+            PortfolioId = portfolioId,
+            Name = string.IsNullOrWhiteSpace(name) ? null : name.Trim(),
+            TargetEntityType = target,
+            Status = ScanBatchStatus.Processing,
+            FileCount = payloads.Count,
+            CreatedAtUtc = DateTime.UtcNow,
+        };
+        _db.ScanBatches.Add(batch);
+        await _db.SaveChangesAsync(ct);
+
+        var draftIds = new List<int>(payloads.Count);
+        try
+        {
+            foreach (var (bytes, contentType) in payloads)
+            {
+                var draft = await _scan.CreateBatchDraftAsync(portfolioId, batch.Id, bytes, contentType, target, ct);
+                draftIds.Add(draft.Id);
+            }
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+
+        return CreatedAtAction(
+            nameof(GetBatch),
+            new { id = batch.Id },
+            new ScanBatchCreatedResponse(
+                batch.Id, batch.Name, batch.TargetEntityType, batch.Status.ToString(), batch.FileCount, draftIds));
+    }
+
+    // -------------------------------------------------------------------------
+    // GET /api/v1/scans/batches  — list batches with rollup counts
+    // -------------------------------------------------------------------------
+
+    [HttpGet("batches")]
+    [ProducesResponseType(typeof(IReadOnlyList<ScanBatchSummaryResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<ScanBatchSummaryResponse>>> ListBatches(
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 50,
+        CancellationToken ct = default)
+    {
+        var portfolioId = GetPortfolioId();
+
+        var batches = await _db.ScanBatches
+            .Where(b => b.PortfolioId == portfolioId)
+            .OrderByDescending(b => b.CreatedAtUtc)
+            .ThenByDescending(b => b.Id)
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(ct);
+
+        if (batches.Count == 0)
+            return Ok(Array.Empty<ScanBatchSummaryResponse>());
+
+        var batchIds = batches.Select(b => b.Id).ToList();
+
+        // One grouped query for all the rollup counts (status per batch) instead of N per-batch queries.
+        var statusCounts = await _db.ScanDrafts
+            .Where(d => d.PortfolioId == portfolioId && d.BatchId != null && batchIds.Contains(d.BatchId.Value))
+            .GroupBy(d => new { BatchId = d.BatchId!.Value, d.Status })
+            .Select(g => new { g.Key.BatchId, g.Key.Status, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var countsByBatch = statusCounts
+            .GroupBy(x => x.BatchId)
+            .ToDictionary(g => g.Key, g => BuildCounts(g.Select(x => (x.Status, x.Count))));
+
+        var result = batches.Select(b =>
+        {
+            var counts = countsByBatch.TryGetValue(b.Id, out var c) ? c : EmptyCounts;
+            return new ScanBatchSummaryResponse(
+                b.Id, b.Name, b.TargetEntityType, ComputeStatus(b, counts).ToString(),
+                b.FileCount, b.CreatedAtUtc, counts);
+        }).ToList();
+
+        return Ok(result);
+    }
+
+    // -------------------------------------------------------------------------
+    // GET /api/v1/scans/batches/{id}  — batch + its drafts (the review queue)
+    // -------------------------------------------------------------------------
+
+    [HttpGet("batches/{id:int}", Name = nameof(GetBatch))]
+    [ProducesResponseType(typeof(ScanBatchDetailResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ScanBatchDetailResponse>> GetBatch(int id, CancellationToken ct)
+    {
+        var portfolioId = GetPortfolioId();
+
+        var batch = await _db.ScanBatches
+            .FirstOrDefaultAsync(b => b.Id == id && b.PortfolioId == portfolioId, ct);
+
+        if (batch is null)
+            return NotFound(new { error = "Scan batch not found" });
+
+        // Portfolio-scoped: only this portfolio's drafts in this batch (IDOR-safe — a foreign caller
+        // can neither read the batch above nor any draft here).
+        var drafts = await _db.ScanDrafts
+            .Where(d => d.PortfolioId == portfolioId && d.BatchId == id)
+            .OrderBy(d => d.CreatedAt)
+            .ThenBy(d => d.Id)
+            .ToListAsync(ct);
+
+        var counts = BuildCounts(drafts.Select(d => (d.Status, 1)));
+
+        // Resolve the created-entity id for any confirmed draft so the UI can link straight to the record.
+        var filePaths = drafts.Select(d => d.FilePath).ToHashSet(StringComparer.Ordinal);
+        var linkedFiles = await _db.StoredFiles
+            .AsNoTracking()
+            .Where(f => f.PortfolioId == portfolioId && filePaths.Contains(f.FilePath))
+            .ToDictionaryAsync(f => f.FilePath, ct);
+
+        var draftDtos = drafts.Select(d =>
+        {
+            linkedFiles.TryGetValue(d.FilePath, out var linkedFile);
+            var (tenant, unit, term) = SummarizeLeaseFields(d.ExtractedFields);
+            return new ScanBatchDraftResponse(
+                d.Id, d.Status, d.TargetEntityType, $"/api/v1/scans/{d.Id}/file",
+                tenant, unit, term,
+                d.Status == "Confirmed" ? linkedFile?.EntityId : null,
+                d.CreatedAt);
+        }).ToList();
+
+        return Ok(new ScanBatchDetailResponse(
+            batch.Id, batch.Name, batch.TargetEntityType, ComputeStatus(batch, counts).ToString(),
+            batch.FileCount, batch.CreatedAtUtc, counts, draftDtos));
+    }
+
+    // -------------------------------------------------------------------------
+    // Batch rollup helpers
+    // -------------------------------------------------------------------------
+
+    private static readonly ScanBatchCounts EmptyCounts = new(0, 0, 0, 0, 0, 0);
+
+    /// <summary>Folds per-status draft counts into a <see cref="ScanBatchCounts"/> rollup.</summary>
+    private static ScanBatchCounts BuildCounts(IEnumerable<(string Status, int Count)> statusCounts)
+    {
+        int total = 0, pending = 0, reviewing = 0, confirmed = 0, rejected = 0, failed = 0;
+        foreach (var (status, count) in statusCounts)
+        {
+            total += count;
+            switch (status)
+            {
+                // "Processing" (mid-extraction) and "Confirming" (mid-confirm) are transient; surface
+                // them under Pending so a batch still in flight reads as not-yet-reviewable.
+                case "Pending" or "Processing" or "Confirming": pending += count; break;
+                case "Reviewing": reviewing += count; break;
+                case "Confirmed": confirmed += count; break;
+                case "Rejected": rejected += count; break;
+                case "Failed": failed += count; break;
+            }
+        }
+        return new ScanBatchCounts(total, pending, reviewing, confirmed, rejected, failed);
+    }
+
+    /// <summary>
+    /// Computes the batch's effective status from its draft rollup (cheap on read so a confirm/reject
+    /// never has to touch the batch row): Completed when every draft is confirmed/rejected, Reviewing
+    /// when at least one draft is ready to review, otherwise still Processing.
+    /// </summary>
+    private static ScanBatchStatus ComputeStatus(ScanBatch batch, ScanBatchCounts counts)
+    {
+        if (counts.Total > 0 && counts.Pending == 0 && counts.Reviewing == 0)
+            return ScanBatchStatus.Completed;
+        if (counts.Reviewing > 0 || counts.Confirmed > 0 || counts.Rejected > 0)
+            return ScanBatchStatus.Reviewing;
+        return ScanBatchStatus.Processing;
+    }
+
+    /// <summary>
+    /// Pulls a short, human-friendly tenant / unit / term summary out of a lease draft's extracted-field
+    /// JSON (<c>{field:{value,confidence}}</c>) for the review queue. Returns nulls for non-lease drafts
+    /// or any field that isn't present; never throws on malformed JSON.
+    /// </summary>
+    private static (string? Tenant, string? Unit, string? Term) SummarizeLeaseFields(string? extractedFieldsJson)
+    {
+        if (string.IsNullOrWhiteSpace(extractedFieldsJson))
+            return (null, null, null);
+
+        try
+        {
+            using var doc = JsonDocument.Parse(extractedFieldsJson);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                return (null, null, null);
+
+            var tenant = ReadValue(root, "tenant_name") ?? ReadValue(root, "tenantName");
+            var unit = ReadValue(root, "unit_id") ?? ReadValue(root, "unitId");
+            var start = ReadValue(root, "start_date") ?? ReadValue(root, "startDate");
+            var end = ReadValue(root, "end_date") ?? ReadValue(root, "endDate");
+
+            string? term = (start, end) switch
+            {
+                ({ } s, { } e) => $"{s} – {e}",
+                ({ } s, null) => s,
+                (null, { } e) => e,
+                _ => null,
+            };
+
+            return (tenant, string.IsNullOrWhiteSpace(unit) ? null : unit, term);
+        }
+        catch
+        {
+            return (null, null, null);
+        }
+    }
+
+    /// <summary>Reads the <c>value</c> string from a <c>{key:{value,confidence}}</c> field; null if absent.</summary>
+    private static string? ReadValue(JsonElement root, string key)
+    {
+        if (!root.TryGetProperty(key, out var fieldEl))
+            return null;
+        if (fieldEl.ValueKind == JsonValueKind.Object &&
+            fieldEl.TryGetProperty("value", out var valueEl) &&
+            valueEl.ValueKind == JsonValueKind.String)
+        {
+            var s = valueEl.GetString();
+            return string.IsNullOrWhiteSpace(s) ? null : s;
+        }
+        if (fieldEl.ValueKind == JsonValueKind.String)
+        {
+            var s = fieldEl.GetString();
+            return string.IsNullOrWhiteSpace(s) ? null : s;
+        }
+        return null;
     }
 
     // -------------------------------------------------------------------------
