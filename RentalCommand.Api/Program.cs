@@ -18,6 +18,9 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
+// QuestPDF Community license (free for small businesses / OSS) — required before any PDF is generated.
+QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+
 var builder = WebApplication.CreateBuilder(args);
 
 var dataProtection = builder.Services.AddDataProtection().SetApplicationName("RentalCommand");
