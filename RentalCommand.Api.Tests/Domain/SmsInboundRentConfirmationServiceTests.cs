@@ -1,8 +1,12 @@
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Moq;
+using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -13,6 +17,18 @@ public class SmsInboundRentConfirmationServiceTests : IDisposable
 
     public void Dispose() => _ctx.Dispose();
 
+    // The side-effect dependencies (realtime broadcast, audit, outbox, LLM) are no-op doubles:
+    // these tests assert the core mark-paid behavior, and the service runs all notifications/
+    // audit inside a best-effort wrapper. With no LLM configured the classifier falls back to
+    // the deterministic Y/YES match, which is what these cases exercise.
+    private SmsInboundRentConfirmationService CreateSut() => new(
+        _ctx.Db,
+        Mock.Of<IDataUpdateService>(),
+        Mock.Of<IAuditTrailService>(),
+        Mock.Of<IMessagePublisher>(),
+        Mock.Of<ILlmProvider>(),
+        Mock.Of<ILogger<SmsInboundRentConfirmationService>>());
+
     [Fact]
     public async Task HandleAsync_YesFromTenantPhone_MarksOldestUnpaidRentPaid()
     {
@@ -22,7 +38,7 @@ public class SmsInboundRentConfirmationServiceTests : IDisposable
         var older = SeedPayment(lease, new DateTime(2026, 05, 01, 0, 0, 0, DateTimeKind.Utc), 1200m, PaymentStatus.Late);
         await _ctx.Db.SaveChangesAsync();
 
-        var sut = new SmsInboundRentConfirmationService(_ctx.Db);
+        var sut = CreateSut();
 
         var result = await sut.HandleAsync(
             fromPhone: "+16145550101",
@@ -51,7 +67,7 @@ public class SmsInboundRentConfirmationServiceTests : IDisposable
         var payment = SeedPayment(lease, new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc), 1200m, PaymentStatus.Scheduled);
         await _ctx.Db.SaveChangesAsync();
 
-        var sut = new SmsInboundRentConfirmationService(_ctx.Db);
+        var sut = CreateSut();
 
         var result = await sut.HandleAsync("+16145550101", "not yet", DateTime.UtcNow);
 

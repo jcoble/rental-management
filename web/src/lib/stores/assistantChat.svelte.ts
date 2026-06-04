@@ -1,4 +1,4 @@
-import { ai, type QaTurn } from '$lib/api/endpoints/ai';
+import { ai, type AskDelivery, type QaTurn } from '$lib/api/endpoints/ai';
 
 export type AssistantChatMessage = {
 	id: string;
@@ -6,6 +6,12 @@ export type AssistantChatMessage = {
 	content: string;
 	isLoading?: boolean;
 	isError?: boolean;
+	/** For assistant messages: the question that produced it, so it can be re-delivered. */
+	question?: string;
+	/** Channel currently being delivered ('email' | 'sms'), or null. */
+	deliveringChannel?: 'email' | 'sms' | null;
+	/** Short status note shown under the message after a delivery attempt. */
+	deliveryNote?: string | null;
 };
 
 class AssistantChatStore {
@@ -45,6 +51,7 @@ class AssistantChatStore {
 			role: 'assistant',
 			content: '',
 			isLoading: true,
+			question: text,
 		};
 
 		const history: QaTurn[] = this.messages
@@ -74,6 +81,53 @@ class AssistantChatStore {
 		} finally {
 			this.isLoading = false;
 		}
+	}
+
+	/**
+	 * Re-runs the question that produced an assistant message with delivery turned on, so the
+	 * landlord gets the answer as a text or email. Uses the existing /ai/ask endpoint (the server
+	 * enqueues an email/SMS outbox row after answering). Shows a transient per-message status.
+	 */
+	async deliver(messageId: string, channel: 'email' | 'sms') {
+		const target = this.messages.find((m) => m.id === messageId);
+		if (!target || target.role !== 'assistant' || !target.question || target.deliveringChannel) {
+			return;
+		}
+
+		const question = target.question;
+		const history: QaTurn[] = this.messages
+			.filter((m) => !m.isLoading && !m.isError && m.id !== messageId)
+			.slice(-8)
+			.map((m) => ({ role: m.role, content: m.content }));
+
+		const delivery: AskDelivery =
+			channel === 'email' ? { deliverViaEmail: true } : { deliverViaSms: true };
+
+		this.#patch(messageId, { deliveringChannel: channel, deliveryNote: null });
+
+		try {
+			const response = await ai.ask(question, history, delivery);
+			const delivered = response.deliveredChannels ?? [];
+			const ok =
+				channel === 'email'
+					? delivered.includes('Email')
+					: delivered.includes('Sms');
+			const note = ok
+				? channel === 'email'
+					? 'Emailed to you.'
+					: 'Texted to you.'
+				: channel === 'email'
+					? "Couldn't email — no address on file."
+					: "Couldn't text — no phone on file.";
+			this.#patch(messageId, { deliveringChannel: null, deliveryNote: note });
+		} catch (err) {
+			const note = err instanceof Error ? err.message : 'Delivery failed.';
+			this.#patch(messageId, { deliveringChannel: null, deliveryNote: note });
+		}
+	}
+
+	#patch(messageId: string, changes: Partial<AssistantChatMessage>) {
+		this.messages = this.messages.map((m) => (m.id === messageId ? { ...m, ...changes } : m));
 	}
 }
 

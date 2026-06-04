@@ -171,10 +171,12 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
 
     /// <summary>
     /// Builds a compact JSON grounding object — { vendors, properties, units, tenants } — of the
-    /// portfolio's known record names so the LLM can normalise extracted names to the exact
-    /// spellings on file. Active (non-soft-deleted) rows only, capped per list, read no-tracking.
-    /// Returns null when the portfolio has no records to ground against (keeps the prompt
-    /// unchanged in that case).
+    /// portfolio's known records so the LLM can normalise extracted names to the exact records on
+    /// file AND return their primary-key ids for auto-fill. Each entry is an {id, name} pair (units
+    /// also carry {unitNumber, propertyId}) so the model can hand back a real id that downstream
+    /// code validates against this same set before trusting it. Active (non-soft-deleted) rows only,
+    /// capped per list, read no-tracking. Returns null when the portfolio has no records to ground
+    /// against (keeps the prompt unchanged in that case).
     /// </summary>
     private static async Task<string?> BuildGroundingContextAsync(
         RentalCommandDbContext db, int portfolioId, CancellationToken ct)
@@ -182,14 +184,14 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
         var vendors = await db.Vendors.AsNoTracking()
             .Where(v => v.PortfolioId == portfolioId && v.DeletedAt == null)
             .OrderByDescending(v => v.UpdatedAt)
-            .Select(v => v.Name)
+            .Select(v => new { id = v.Id, name = v.Name })
             .Take(GroundingCap)
             .ToListAsync(ct);
 
         var properties = await db.Properties.AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId && p.DeletedAt == null)
             .OrderByDescending(p => p.UpdatedAt)
-            .Select(p => p.Name)
+            .Select(p => new { id = p.Id, name = p.Name })
             .Take(GroundingCap)
             .ToListAsync(ct);
 
@@ -200,14 +202,14 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                                                   && p.PortfolioId == portfolioId
                                                   && p.DeletedAt == null))
             .OrderByDescending(u => u.UpdatedAt)
-            .Select(u => u.UnitNumber)
+            .Select(u => new { id = u.Id, unitNumber = u.UnitNumber, propertyId = u.PropertyId })
             .Take(GroundingCap)
             .ToListAsync(ct);
 
         var tenants = await db.Tenants.AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId && t.DeletedAt == null)
             .OrderByDescending(t => t.UpdatedAt)
-            .Select(t => (t.FirstName + " " + t.LastName).Trim())
+            .Select(t => new { id = t.Id, name = (t.FirstName + " " + t.LastName).Trim() })
             .Take(GroundingCap)
             .ToListAsync(ct);
 

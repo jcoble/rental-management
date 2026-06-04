@@ -71,6 +71,14 @@ builder.Services.AddScoped<IDailyBriefingService, DailyBriefingService>();
 builder.Services.AddScoped<IDailyBriefingDeliveryService, DailyBriefingDeliveryService>();
 builder.Services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
 
+// Lease Lifecycle Autopilot: proactively draft renewal/late/move-out notices for one-tap approval.
+// Reuses the Api's NoticeDraftService (LLM copy + de-dup idempotency) — the same code the manual
+// "Generate" button runs. ConversationService is its constructor dependency (only used by the
+// approve path, which the worker never invokes; the Engine already provides IDataUpdateService).
+builder.Services.AddScoped<IConversationService, ConversationService>();
+builder.Services.AddScoped<INoticeDraftService, NoticeDraftService>();
+builder.Services.AddScoped<INoticeDraftGenerationService, NoticeDraftGenerationService>();
+
 // Engine resilience — persists worker heartbeats; consumed by the watchdog + health check.
 // Scoped (it opens its own scope per call to isolate DB access).
 builder.Services.AddScoped<EngineStatusReporter>();
@@ -82,6 +90,7 @@ builder.Services.AddHostedService<RentChargeWorker>();
 builder.Services.AddHostedService<LateFeeWorker>();
 builder.Services.AddHostedService<LeaseExpiryReminderWorker>();
 builder.Services.AddHostedService<DailyBriefingDeliveryWorker>();
+builder.Services.AddHostedService<NoticeDraftWorker>();
 
 // Watcher: monitors the advisory lock connection; triggers graceful shutdown if a newer Engine takes over.
 builder.Services.AddHostedService<AdvisoryLockWatcherService>();
