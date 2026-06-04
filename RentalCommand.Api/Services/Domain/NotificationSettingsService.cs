@@ -5,13 +5,17 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
 public sealed class NotificationSettingsService : INotificationSettingsService
 {
-    private const int SingletonId = 1;
+    // Every NotificationType the landlord controls, in display order. Drives the full matrix
+    // returned to the client and the defaults applied when no row is stored.
+    private static readonly NotificationType[] AllTypes = Enum.GetValues<NotificationType>();
+
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
 
@@ -21,15 +25,16 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         _protector = dataProtection.CreateProtector("RentalCommand.NotificationSettings.v1");
     }
 
-    public async Task<NotificationSettingsResponse> GetAdminAsync(CancellationToken ct = default)
+    public async Task<NotificationSettingsResponse> GetAdminAsync(int portfolioId, CancellationToken ct = default)
     {
-        var row = await GetOrCreateAsync(ct);
-        return ToAdminResponse(row);
+        var row = await GetOrCreateAsync(portfolioId, ct);
+        var prefs = await GetPreferenceMapAsync(portfolioId, ct);
+        return ToAdminResponse(row, prefs);
     }
 
-    public async Task<NotificationSettingsResponse> UpdateAsync(UpdateNotificationSettingsRequest request, CancellationToken ct = default)
+    public async Task<NotificationSettingsResponse> UpdateAsync(int portfolioId, UpdateNotificationSettingsRequest request, CancellationToken ct = default)
     {
-        var row = await GetOrCreateAsync(ct);
+        var row = await GetOrCreateAsync(portfolioId, ct);
         var now = DateTime.UtcNow;
 
         row.EnableRentCharges = request.EnableRentCharges;
@@ -53,13 +58,19 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         row.DailyBriefingEmailRecipientsCipherText = ProtectArray(request.DailyBriefingEmailRecipients);
         row.UpdatedAt = now;
 
+        await ApplyChannelPreferencesAsync(portfolioId, request.ChannelPreferences, now, ct);
+
         await _db.SaveChangesAsync(ct);
-        return ToAdminResponse(row);
+
+        var prefs = await GetPreferenceMapAsync(portfolioId, ct);
+        return ToAdminResponse(row, prefs);
     }
 
-    public async Task<NotificationsConfig> GetRuntimeAsync(CancellationToken ct = default)
+    public async Task<NotificationsConfig> GetRuntimeAsync(int portfolioId, CancellationToken ct = default)
     {
-        var row = await GetOrCreateAsync(ct);
+        var row = await GetOrCreateAsync(portfolioId, ct);
+        var prefs = await GetPreferenceMapAsync(portfolioId, ct);
+
         return new NotificationsConfig
         {
             EnableRentCharges = row.EnableRentCharges,
@@ -84,18 +95,25 @@ public sealed class NotificationSettingsService : INotificationSettingsService
                 SpaceUrl = UnprotectNullable(row.SignalWireSpaceUrlCipherText),
                 FromNumber = UnprotectNullable(row.SignalWireFromNumberCipherText),
             },
+            ChannelPreferences = AllTypes.ToDictionary(
+                t => t,
+                t => ToChannelPreference(t, prefs.GetValueOrDefault(t))),
         };
     }
 
-    private async Task<NotificationSettings> GetOrCreateAsync(CancellationToken ct)
+    // -------------------------------------------------------------------------------------------
+    // Per-portfolio settings row
+    // -------------------------------------------------------------------------------------------
+
+    private async Task<NotificationSettings> GetOrCreateAsync(int portfolioId, CancellationToken ct)
     {
-        var row = await _db.NotificationSettings.SingleOrDefaultAsync(s => s.Id == SingletonId, ct);
+        var row = await _db.NotificationSettings.SingleOrDefaultAsync(s => s.PortfolioId == portfolioId, ct);
         if (row is not null)
             return row;
 
         row = new NotificationSettings
         {
-            Id = SingletonId,
+            PortfolioId = portfolioId,
             EnableLeaseExpiryReminders = true,
             RentChargeLeadDays = 5,
             LateFeeGraceDays = 5,
@@ -109,7 +127,86 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         return row;
     }
 
-    private NotificationSettingsResponse ToAdminResponse(NotificationSettings row) => new()
+    // -------------------------------------------------------------------------------------------
+    // Channel preferences
+    // -------------------------------------------------------------------------------------------
+
+    private async Task<Dictionary<NotificationType, NotificationPreference>> GetPreferenceMapAsync(int portfolioId, CancellationToken ct)
+    {
+        var rows = await _db.NotificationPreferences
+            .Where(p => p.PortfolioId == portfolioId)
+            .ToListAsync(ct);
+
+        // A duplicate (PortfolioId, NotificationType) is impossible (unique index), but guard with
+        // a last-wins reduce so a malformed legacy state never throws on the dashboard.
+        var map = new Dictionary<NotificationType, NotificationPreference>();
+        foreach (var r in rows)
+            map[r.NotificationType] = r;
+        return map;
+    }
+
+    private async Task ApplyChannelPreferencesAsync(
+        int portfolioId,
+        IEnumerable<NotificationChannelPreferenceDto>? requested,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (requested is null)
+            return;
+
+        var existing = await _db.NotificationPreferences
+            .Where(p => p.PortfolioId == portfolioId)
+            .ToListAsync(ct);
+
+        // De-dupe the incoming list (last write wins) and ignore types outside the enum.
+        var byType = new Dictionary<NotificationType, NotificationChannelPreferenceDto>();
+        foreach (var dto in requested)
+        {
+            if (Enum.IsDefined(dto.NotificationType))
+                byType[dto.NotificationType] = dto;
+        }
+
+        foreach (var (type, dto) in byType)
+        {
+            var row = existing.FirstOrDefault(p => p.NotificationType == type);
+            if (row is null)
+            {
+                row = new NotificationPreference
+                {
+                    PortfolioId = portfolioId,
+                    NotificationType = type,
+                    CreatedAt = now,
+                };
+                _db.NotificationPreferences.Add(row);
+            }
+
+            row.EnableInApp = dto.EnableInApp;
+            row.EnableEmail = dto.EnableEmail;
+            row.EnableSms = dto.EnableSms;
+            row.UpdatedAt = now;
+        }
+    }
+
+    private static NotificationChannelPreference ToChannelPreference(NotificationType type, NotificationPreference? row)
+    {
+        if (row is null)
+            return NotificationChannelPreference.Default(type);
+
+        return new NotificationChannelPreference
+        {
+            EnableInApp = row.EnableInApp,
+            EnableEmail = row.EnableEmail,
+            EnableSms = row.EnableSms,
+        };
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Mapping
+    // -------------------------------------------------------------------------------------------
+
+    private NotificationSettingsResponse ToAdminResponse(
+        NotificationSettings row,
+        Dictionary<NotificationType, NotificationPreference> prefs) => new()
     {
         EnableRentCharges = row.EnableRentCharges,
         EnableLateFees = row.EnableLateFees,
@@ -128,6 +225,18 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         SignalWireToken = null,
         SignalWireSpaceUrl = UnprotectNullable(row.SignalWireSpaceUrlCipherText),
         SignalWireFromNumber = UnprotectNullable(row.SignalWireFromNumberCipherText),
+        // Always emit every known type so the client renders the full matrix; fill gaps with defaults.
+        ChannelPreferences = AllTypes.Select(type =>
+        {
+            var pref = ToChannelPreference(type, prefs.GetValueOrDefault(type));
+            return new NotificationChannelPreferenceDto
+            {
+                NotificationType = type,
+                EnableInApp = pref.EnableInApp,
+                EnableEmail = pref.EnableEmail,
+                EnableSms = pref.EnableSms,
+            };
+        }).ToList(),
     };
 
     private string? ProtectNullable(string? value) =>

@@ -27,6 +27,21 @@ export interface NotificationEmailResponse {
 	email: string | null;
 }
 
+export type NotificationChannelType =
+	| 'RentCharge'
+	| 'LateFee'
+	| 'LeaseExpiry'
+	| 'RentConfirmation'
+	| 'NoticeAutopilot'
+	| 'DailyBriefing';
+
+export interface NotificationChannelPreference {
+	notificationType: NotificationChannelType;
+	enableInApp: boolean;
+	enableEmail: boolean;
+	enableSms: boolean;
+}
+
 export interface NotificationSettingsResponse {
 	enableRentCharges: boolean;
 	enableLateFees: boolean;
@@ -45,6 +60,7 @@ export interface NotificationSettingsResponse {
 	signalWireToken: string | null;
 	signalWireSpaceUrl: string | null;
 	signalWireFromNumber: string | null;
+	channelPreferences: NotificationChannelPreference[];
 }
 
 export interface UpdateNotificationSettingsRequest {
@@ -64,4 +80,5 @@ export interface UpdateNotificationSettingsRequest {
 	signalWireToken?: string | null;
 	signalWireSpaceUrl: string | null;
 	signalWireFromNumber: string | null;
+	channelPreferences: NotificationChannelPreference[];
 }

@@ -10,6 +10,7 @@ import '../maintenance/work_orders_screen.dart';
 import '../notices/notices_screen.dart';
 import '../owner_reports/owner_reports_screen.dart';
 import '../payments/payments_screen.dart';
+import '../settings/settings_screen.dart';
 import '../team/team_screen.dart';
 import '../tenants/tenants_list_screen.dart';
 
@@ -200,6 +201,19 @@ class _MoreMenu extends StatelessWidget {
             onTap: () {
               Navigator.of(context).push<void>(
                 MaterialPageRoute<void>(builder: (_) => const TeamScreen()),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _MenuTile(
+            icon: Icons.settings_outlined,
+            activeIcon: Icons.settings,
+            label: 'Settings',
+            subtitle: 'Notifications and reminders',
+            color: colorScheme.secondary,
+            onTap: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
               );
             },
           ),
