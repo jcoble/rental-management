@@ -99,6 +99,96 @@ public class AccountingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetSnapshotAsync_AggregatesMonthToDateWithPlainEnglishExplanations()
+    {
+        // Anchor everything to "now" so the figures land inside the current month-to-date window
+        // regardless of when the test runs.
+        var now = DateTime.UtcNow;
+        var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var inMonth = monthStart.AddHours(6);
+
+        var (property, lease) = SeedPropertyAndLease(now);
+
+        // Collected this month: $1,200 rent paid.
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1200m,
+            DueDate = inMonth,
+            PaidDate = inMonth,
+            Method = "Check",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        // Past due: $1,200 rent overdue (due yesterday, still scheduled) on the same lease.
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1200m,
+            DueDate = now.AddDays(-1),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.SaveChanges();
+
+        // Spent this month: $456.88 in repairs paid.
+        SeedExpense(
+            description: "ComfortZone HVAC",
+            amount: 456.88m,
+            incurredAt: inMonth,
+            category: ScheduleECategory.Repairs,
+            status: ExpenseStatus.Paid,
+            propertyId: property.Id);
+
+        var snapshot = await _sut.GetSnapshotAsync(PortfolioId, CancellationToken.None);
+
+        snapshot.Collected.Should().Be(1200m);
+        snapshot.Spent.Should().Be(456.88m);
+        snapshot.Net.Should().Be(1200m - 456.88m);
+        snapshot.PastDueAmount.Should().Be(1200m);
+        snapshot.PastDueCount.Should().Be(1);
+        snapshot.PeriodStart.Should().Be(monthStart);
+
+        snapshot.Explanations.Collected.Should().Contain("collected").And.Contain("$1,200");
+        snapshot.Explanations.Spent.Should().Contain("spent");
+        snapshot.Explanations.Net.Should().Contain("keeping");
+        snapshot.Explanations.PastDue.Should().Contain("1 tenant").And.Contain("behind");
+    }
+
+    [Fact]
+    public async Task GetReportsAsync_LedgerEntriesCarryPlainEnglishExplanations()
+    {
+        var now = new DateTime(2026, 03, 03, 12, 0, 0, DateTimeKind.Utc);
+        var (_, lease) = SeedPropertyAndLease(now);
+
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1200m,
+            DueDate = new DateTime(2026, 03, 01, 0, 0, 0, DateTimeKind.Utc),
+            PaidDate = now,
+            Method = "Check",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.SaveChanges();
+
+        var reports = await _sut.GetReportsAsync(PortfolioId, CancellationToken.None);
+
+        var paymentEntry = reports.Ledger.Single(l => l.Type == "Payment");
+        paymentEntry.Explanation.Should().Be("Payment of $1,200 received by check on Mar 3.");
+    }
+
+    [Fact]
     public async Task GetTransactionsAsync_FiltersByKindStatusPropertyAndDescription()
     {
         var property = SeedPropertyLeaseAndPayment(DateTime.UtcNow);
@@ -200,6 +290,56 @@ public class AccountingServiceTests : IDisposable
         reports.Ledger.Should().ContainSingle(l => l.Type == "Bank" && l.Description == "Tenant ACH");
         reports.Ledger.Should().ContainSingle(l => l.Type == "Bank" && l.Description == "Hardware supply");
         reports.Ledger.Should().NotContain(l => l.Description == "Matched duplicate deposit");
+    }
+
+    private (Property Property, Lease Lease) SeedPropertyAndLease(DateTime now)
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "General",
+            AddressLine1 = "1 Main",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43219",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "12",
+            MarketRent = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Maria",
+            LastName = "Tenant",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var lease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = "L-001",
+            Status = LeaseStatus.Active,
+            StartDate = now.AddMonths(-1),
+            EndDate = now.AddYears(1),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            LateFeeAmount = 50m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Leases.Add(lease);
+        _db.SaveChanges();
+        return (property, lease);
     }
 
     private Property SeedPropertyLeaseAndPayment(DateTime now)

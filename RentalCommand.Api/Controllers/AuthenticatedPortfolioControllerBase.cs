@@ -59,4 +59,15 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
 
     protected IEnumerable<string> GetRoles() =>
         User.FindAll(ClaimTypes.Role).Select(c => c.Value);
+
+    /// <summary>
+    /// Tenant id from the <c>tenantId</c> claim, or <c>null</c> when the caller is not a tenant
+    /// (landlord/staff/owner). Used to constrain otherwise portfolio-wide management reads to a
+    /// tenant's own records when a tenant calls them.
+    /// </summary>
+    protected int? GetTenantIdOrNull()
+    {
+        var claim = User.FindFirst("tenantId");
+        return claim != null && int.TryParse(claim.Value, out var tenantId) ? tenantId : null;
+    }
 }

@@ -77,6 +77,35 @@ public class LeaseResponse
     }
 }
 
+/// <summary>
+/// Tenant-facing ledger for a single lease: every charge and payment, newest first, each carrying a
+/// plain-English <see cref="LedgerTransactionResponse.Explanation"/> ("why") so a tenant can see
+/// exactly what each line is. <see cref="Balance"/> is what the tenant still owes (charges minus
+/// payments); negative means a credit/overpayment.
+/// </summary>
+public class LeaseLedgerResponse
+{
+    public int LeaseId { get; set; }
+    public string LeaseNumber { get; set; } = string.Empty;
+    public string? TenantName { get; set; }
+    public string? PropertyName { get; set; }
+
+    /// <summary>Sum of charges (rent, fees, deposits) owed on this lease.</summary>
+    public decimal TotalCharged { get; set; }
+
+    /// <summary>Sum of payments received on this lease.</summary>
+    public decimal TotalPaid { get; set; }
+
+    /// <summary>Outstanding balance: <see cref="TotalCharged"/> minus <see cref="TotalPaid"/>. Negative = credit.</summary>
+    public decimal Balance { get; set; }
+
+    /// <summary>Ledger entries (charges and payments), newest first. Each has a plain-English explanation.</summary>
+    public IReadOnlyList<LedgerTransactionResponse> Entries { get; set; } = [];
+
+    /// <summary>Stable selector for frontend tests.</summary>
+    public string TestId => $"lease-ledger-{LeaseId}";
+}
+
 public class CreateLeaseRequest
 {
     [Required]

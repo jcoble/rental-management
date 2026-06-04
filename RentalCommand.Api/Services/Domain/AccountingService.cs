@@ -112,7 +112,109 @@ public class AccountingService : IAccountingService
         };
     }
 
-    private static MoneySnapshotResponse BuildMoneySnapshot(
+    public async Task<MoneySnapshotResponse> GetSnapshotAsync(int portfolioId, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var last30Start = now.AddDays(-30);
+
+        // Money in: payments actually collected. Use PaidDate when present (that's when the cash
+        // landed), falling back to DueDate. Bank deposits not yet matched to a payment also count as
+        // money in, so the snapshot reflects real cash movement.
+        var paidPayments = await _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
+            .Select(p => new { p.Amount, When = p.PaidDate ?? p.DueDate })
+            .ToListAsync(ct);
+
+        var collectedMtd = paidPayments.Where(p => p.When >= monthStart).Sum(p => p.Amount);
+        var collected30 = paidPayments.Where(p => p.When >= last30Start).Sum(p => p.Amount);
+
+        var unmatchedDeposits = await _db.BankTransactions
+            .AsNoTracking()
+            .Where(t => t.PortfolioId == portfolioId && t.MatchStatus != "Removed" &&
+                        t.Amount > 0 && t.MatchedPaymentId == null)
+            .Select(t => new { t.Amount, t.PostedAt })
+            .ToListAsync(ct);
+
+        collectedMtd += unmatchedDeposits.Where(t => t.PostedAt >= monthStart).Sum(t => t.Amount);
+        collected30 += unmatchedDeposits.Where(t => t.PostedAt >= last30Start).Sum(t => t.Amount);
+
+        // Money out: expenses (paid date when present, else incurred date) plus unmatched bank
+        // withdrawals — same approach as the summary, kept period-scoped.
+        var expenses = await _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId)
+            .Select(e => new { e.Amount, When = e.PaidAt ?? e.IncurredAt })
+            .ToListAsync(ct);
+
+        var spentMtd = expenses.Where(e => e.When >= monthStart).Sum(e => e.Amount);
+        var spent30 = expenses.Where(e => e.When >= last30Start).Sum(e => e.Amount);
+
+        var unmatchedWithdrawals = await _db.BankTransactions
+            .AsNoTracking()
+            .Where(t => t.PortfolioId == portfolioId && t.MatchStatus != "Removed" &&
+                        t.Amount < 0 && t.MatchedExpenseId == null)
+            .Select(t => new { t.Amount, t.PostedAt })
+            .ToListAsync(ct);
+
+        spentMtd += unmatchedWithdrawals.Where(t => t.PostedAt >= monthStart).Sum(t => -t.Amount);
+        spent30 += unmatchedWithdrawals.Where(t => t.PostedAt >= last30Start).Sum(t => -t.Amount);
+
+        // Past due: anyone behind right now (not period-bound). Count distinct leases (≈ tenants behind).
+        var pastDue = await _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId &&
+                        (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late) &&
+                        (p.Status == PaymentStatus.Late || p.DueDate < now))
+            .Select(p => new { p.Amount, p.LeaseId })
+            .ToListAsync(ct);
+
+        var pastDueAmount = pastDue.Sum(p => p.Amount);
+        var pastDueCount = pastDue.Select(p => p.LeaseId).Distinct().Count();
+
+        var netMtd = collectedMtd - spentMtd;
+        var net30 = collected30 - spent30;
+
+        return new MoneySnapshotResponse
+        {
+            PortfolioId = portfolioId,
+            PeriodLabel = $"{monthStart:MMMM yyyy} (so far)",
+            PeriodStart = monthStart,
+            PeriodEnd = now,
+            Collected = collectedMtd,
+            Spent = spentMtd,
+            Net = netMtd,
+            PastDueAmount = pastDueAmount,
+            PastDueCount = pastDueCount,
+            CollectedLast30Days = collected30,
+            SpentLast30Days = spent30,
+            NetLast30Days = net30,
+            Explanations = BuildSnapshotExplanations(collectedMtd, spentMtd, netMtd, pastDueAmount, pastDueCount),
+        };
+    }
+
+    private static MoneySnapshotExplanations BuildSnapshotExplanations(
+        decimal collected, decimal spent, decimal net, decimal pastDueAmount, int pastDueCount)
+    {
+        var netExplanation = net >= 0
+            ? $"You're keeping {Money(net)} this month after {Money(spent)} of expenses."
+            : $"You spent {Money(-net)} more than you collected this month, after {Money(spent)} of expenses.";
+
+        var pastDueExplanation = pastDueCount == 0
+            ? "Everyone is caught up — no tenants are behind right now."
+            : $"{pastDueCount} tenant{(pastDueCount == 1 ? " is" : "s are")} behind, owing {Money(pastDueAmount)} in total.";
+
+        return new MoneySnapshotExplanations
+        {
+            Collected = $"You collected {Money(collected)} in rent and other payments this month.",
+            Spent = $"You spent {Money(spent)} on expenses this month.",
+            Net = netExplanation,
+            PastDue = pastDueExplanation,
+        };
+    }
+
+    private static MoneySnapshotCardResponse BuildMoneySnapshot(
         PaymentRollup rollup,
         decimal totalExpenses,
         IReadOnlyList<ScheduleECategoryTotal> expensesByCategory)
@@ -149,7 +251,7 @@ public class AccountingService : IAccountingService
             bullets.Add($"{topExpense.CategoryName} is the largest expense bucket at {Money(topExpense.Total)}.");
         }
 
-        return new MoneySnapshotResponse
+        return new MoneySnapshotCardResponse
         {
             Title = title,
             Summary = rollup.Overdue > 0
@@ -380,6 +482,8 @@ public class AccountingService : IAccountingService
                 Category = p.Method,
                 Status = p.Status.ToString(),
                 SourceHref = $"/accounting/payments/{p.Id}",
+                Explanation = LedgerExplanation.ForPayment(
+                    p.PaymentType, p.Status, p.Amount, p.DueDate, p.PaidDate, p.Method),
             })
             .Concat(expenseRows.Select(e => new LedgerTransactionResponse
             {
@@ -394,6 +498,8 @@ public class AccountingService : IAccountingService
                 Category = e.Category.ToString(),
                 Status = e.Status.ToString(),
                 SourceHref = $"/accounting/expenses/{e.Id}",
+                Explanation = LedgerExplanation.ForExpense(
+                    e.Category, e.Status, e.Amount, e.PaidAt ?? e.IncurredAt, e.VendorName, e.Description),
             }))
             .Concat(bankRows
                 .Where(b => b.MatchedPaymentId == null && b.MatchedExpenseId == null)
@@ -410,6 +516,7 @@ public class AccountingService : IAccountingService
                     Category = b.Category ?? (b.Amount >= 0 ? "Deposit" : "Withdrawal"),
                     Status = b.MatchStatus,
                     SourceHref = "/banking",
+                    Explanation = LedgerExplanation.ForBank(b.Amount, b.PostedAt, b.MerchantName ?? b.InstitutionName),
             }))
             .OrderByDescending(l => l.Date)
             .ThenByDescending(l => l.Id)
