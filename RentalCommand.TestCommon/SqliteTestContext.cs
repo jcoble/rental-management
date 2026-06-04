@@ -76,6 +76,7 @@ internal sealed class AutomationTestDbContext : RentalCommandDbContext
         // Calling ToTable() without a builder action replaces the existing table configuration
         // (including check constraints) with a plain mapping.
         modelBuilder.Entity<Lease>().ToTable("Leases");
+        modelBuilder.Entity<VendorRating>().ToTable("VendorRatings");
 
         // ---- Replace the partial unique index on Payments ----
         // HasFilter("\"PeriodKey\" IS NOT NULL") is Postgres syntax; SQLite ignores it

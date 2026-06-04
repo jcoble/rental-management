@@ -14,6 +14,7 @@ import '../payments/payments_screen.dart';
 import '../settings/settings_screen.dart';
 import '../team/team_screen.dart';
 import '../tenants/tenants_list_screen.dart';
+import '../vendors/vendors_list_screen.dart';
 
 /// "More" tab — hosts Payments and Maintenance (work orders) sub-screens
 /// inside their own local Navigator so back navigation stays within the tab.
@@ -68,6 +69,21 @@ class _MoreMenu extends StatelessWidget {
               Navigator.of(context).push<void>(
                 MaterialPageRoute<void>(
                   builder: (_) => const WorkOrdersScreen(),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _MenuTile(
+            icon: Icons.handyman_outlined,
+            activeIcon: Icons.handyman,
+            label: 'Vendors',
+            subtitle: 'Text jobs, ratings and scorecards',
+            color: colorScheme.tertiary,
+            onTap: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => const VendorsListScreen(),
                 ),
               );
             },
