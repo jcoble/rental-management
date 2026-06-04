@@ -10,7 +10,7 @@ test.describe('New features (message center, owners report, owner email)', () =>
 		await page.goto('/messages');
 		await expect(page.getByTestId('messages-page')).toBeVisible();
 		await page.waitForLoadState('networkidle');
-		await expect(page.getByTestId('messages-list')).toBeVisible();
+		await expect(page.getByTestId('conversation-list')).toBeVisible();
 	});
 
 	test('owners report page renders', async ({ page }) => {

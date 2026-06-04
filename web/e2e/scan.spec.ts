@@ -1,8 +1,10 @@
 import { test, expect } from '@playwright/test';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import { login } from './helpers';
 
-const RECEIPT_PATH = path.join(__dirname, 'fixtures', 'receipt.png');
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const RECEIPT_PATH = path.join(HERE, 'fixtures', 'receipt.png');
 
 test.describe('Scan intake', () => {
 	/**
@@ -18,6 +20,10 @@ test.describe('Scan intake', () => {
 		// Locate the file-drop input and upload the fixture.
 		const fileInput = page.getByTestId('file-drop-input');
 		await fileInput.setInputFiles(RECEIPT_PATH);
+		// Svelte 5 delegates change; setInputFiles does not trip it. Settle first to avoid a
+		// double-fire race with Playwright's own post-setInputFiles event, then dispatch once.
+		await page.waitForTimeout(400);
+		await fileInput.dispatchEvent('change');
 
 		// After upload the app navigates to /scan/<id> with the review form.
 		await expect(page).toHaveURL(/\/scan\/\d+/, { timeout: 15_000 });
@@ -36,6 +42,10 @@ test.describe('Scan intake', () => {
 
 		const fileInput = page.getByTestId('file-drop-input');
 		await fileInput.setInputFiles(RECEIPT_PATH);
+		// Svelte 5 delegates change; setInputFiles does not trip it. Settle first to avoid a
+		// double-fire race with Playwright's own post-setInputFiles event, then dispatch once.
+		await page.waitForTimeout(400);
+		await fileInput.dispatchEvent('change');
 
 		await expect(page).toHaveURL(/\/scan\/\d+/, { timeout: 15_000 });
 		await expect(page.getByTestId('scan-review')).toBeVisible({ timeout: 15_000 });
@@ -59,8 +69,9 @@ test.describe('Scan intake', () => {
 		// Click confirm.
 		await page.getByTestId('scan-confirm').click();
 
-		// Expect a success toast and navigation to /accounting.
-		await expect(page.getByTestId('scan-success-toast')).toBeVisible({ timeout: 15_000 });
-		await expect(page).toHaveURL(/\/accounting/, { timeout: 15_000 });
+		// After confirm the page keeps context: a success card with a link to the
+		// created record (the app intentionally no longer dumps you onto /accounting).
+		await expect(page.getByTestId('scan-confirm-success')).toBeVisible({ timeout: 15_000 });
+		await expect(page.getByTestId('scan-view-record')).toBeVisible();
 	});
 });
