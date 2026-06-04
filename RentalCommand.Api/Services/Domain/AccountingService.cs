@@ -14,10 +14,17 @@ public class AccountingService : IAccountingService
     private const string KindBank = "Bank";
 
     private readonly RentalCommandDbContext _db;
+    private readonly IScheduleEService _scheduleE;
+    private readonly IYearEndPacketPdfGenerator _packetPdf;
 
-    public AccountingService(RentalCommandDbContext db)
+    public AccountingService(
+        RentalCommandDbContext db,
+        IScheduleEService scheduleE,
+        IYearEndPacketPdfGenerator packetPdf)
     {
         _db = db;
+        _scheduleE = scheduleE;
+        _packetPdf = packetPdf;
     }
 
     public async Task<AccountingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default)
@@ -624,6 +631,206 @@ public class AccountingService : IAccountingService
             Properties = propertyReports,
             ScheduleE = scheduleE,
             Vendors1099 = vendorReports,
+        };
+    }
+
+    public async Task<byte[]> GetYearEndPacketAsync(int portfolioId, int year, CancellationToken ct = default)
+    {
+        var data = await GetYearEndPacketDataAsync(portfolioId, year, ct);
+        return _packetPdf.Generate(data);
+    }
+
+    public async Task<YearEndPacketData> GetYearEndPacketDataAsync(
+        int portfolioId, int year, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+
+        // ── Portfolio header ────────────────────────────────────────────────────────────────────
+        var portfolio = await _db.Portfolios
+            .AsNoTracking()
+            .Where(p => p.Id == portfolioId)
+            .Select(p => new { p.Name, p.ManagementCompanyName })
+            .FirstOrDefaultAsync(ct);
+
+        // ── Schedule E (reused so the packet matches the existing CSV/report exactly) ─────────────
+        var scheduleE = await _scheduleE.GetReportAsync(portfolioId, year, ct);
+
+        // ── Per-property P&L for the year ─────────────────────────────────────────────────────────
+        // Income: Paid Rent payments whose PaidDate falls in the year, keyed by property via Lease.
+        var incomeRows = await _db.Payments
+            .AsNoTracking()
+            .Where(p =>
+                p.PortfolioId == portfolioId &&
+                p.PaymentType == PaymentType.Rent &&
+                p.Status == PaymentStatus.Paid &&
+                p.PaidDate != null &&
+                p.PaidDate.Value.Year == year)
+            .Select(p => new { PropertyId = (int?)p.Lease!.PropertyId, p.Amount })
+            .ToListAsync(ct);
+
+        var incomeByProperty = incomeRows
+            .Where(r => r.PropertyId.HasValue)
+            .GroupBy(r => r.PropertyId!.Value)
+            .ToDictionary(g => g.Key, g => g.Sum(r => r.Amount));
+
+        // Expenses for the year, keyed by property + Schedule E category.
+        var expenseRows = await _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId && e.IncurredAt.Year == year && e.PropertyId != null)
+            .Select(e => new { PropertyId = e.PropertyId!.Value, e.Category, e.Amount })
+            .ToListAsync(ct);
+
+        var expensesByProperty = expenseRows
+            .GroupBy(e => e.PropertyId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.GroupBy(e => e.Category)
+                      .ToDictionary(cg => cg.Key, cg => cg.Sum(e => e.Amount)));
+
+        var properties = await _db.Properties
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId)
+            .OrderBy(p => p.Name)
+            .Select(p => new { p.Id, p.Name })
+            .ToListAsync(ct);
+
+        var propertyPnL = new List<YearEndPropertyPnL>(properties.Count);
+        foreach (var prop in properties)
+        {
+            var income = incomeByProperty.GetValueOrDefault(prop.Id, 0m);
+            var catMap = expensesByProperty.GetValueOrDefault(prop.Id);
+
+            var categories = new List<ScheduleECategoryAmount>();
+            if (catMap != null)
+            {
+                // Enum-declared order, zero amounts omitted — same shape as ScheduleEService.
+                foreach (ScheduleECategory cat in Enum.GetValues<ScheduleECategory>())
+                {
+                    if (catMap.TryGetValue(cat, out var amount) && amount != 0m)
+                        categories.Add(new ScheduleECategoryAmount(cat.ToString(), amount));
+                }
+            }
+
+            var totalExpenses = categories.Sum(c => c.Amount);
+
+            // Skip properties with no activity this year to keep the packet tight.
+            if (income == 0m && totalExpenses == 0m)
+                continue;
+
+            propertyPnL.Add(new YearEndPropertyPnL
+            {
+                PropertyId = prop.Id,
+                PropertyName = prop.Name,
+                Income = income,
+                ExpensesByCategory = categories,
+                TotalExpenses = totalExpenses,
+                Net = income - totalExpenses,
+            });
+        }
+
+        // ── Cash flow by month ────────────────────────────────────────────────────────────────────
+        // Money in: paid payments (cash landed on PaidDate, falling back to DueDate) in the year.
+        var paidPayments = await _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
+            .Select(p => new { p.Amount, When = p.PaidDate ?? p.DueDate })
+            .ToListAsync(ct);
+
+        // Money out: expenses paid (PaidAt, falling back to IncurredAt) in the year.
+        var expensePayments = await _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId)
+            .Select(e => new { e.Amount, When = e.PaidAt ?? e.IncurredAt })
+            .ToListAsync(ct);
+
+        var cashFlow = new List<YearEndCashFlowMonth>(12);
+        for (var month = 1; month <= 12; month++)
+        {
+            var moneyIn = paidPayments
+                .Where(p => p.When.Year == year && p.When.Month == month)
+                .Sum(p => p.Amount);
+            var moneyOut = expensePayments
+                .Where(e => e.When.Year == year && e.When.Month == month)
+                .Sum(e => e.Amount);
+
+            cashFlow.Add(new YearEndCashFlowMonth
+            {
+                Month = month,
+                MonthName = System.Globalization.CultureInfo.InvariantCulture
+                    .DateTimeFormat.GetAbbreviatedMonthName(month),
+                MoneyIn = moneyIn,
+                MoneyOut = moneyOut,
+                Net = moneyIn - moneyOut,
+            });
+        }
+
+        var cashIn = cashFlow.Sum(m => m.MoneyIn);
+        var cashOut = cashFlow.Sum(m => m.MoneyOut);
+
+        // ── Rent roll ─────────────────────────────────────────────────────────────────────────────
+        // Current leases (active or under notice). Past-due balance is owed rent/charges due in the past.
+        var leases = await _db.Leases
+            .AsNoTracking()
+            .Where(l => l.PortfolioId == portfolioId &&
+                        (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven))
+            .Select(l => new
+            {
+                l.Id,
+                PropertyName = l.Property!.Name,
+                UnitNumber = l.Unit!.UnitNumber,
+                TenantFirstName = l.Tenant!.FirstName,
+                TenantLastName = l.Tenant!.LastName,
+                l.MonthlyRent,
+                l.StartDate,
+                l.EndDate,
+                l.Status,
+            })
+            .ToListAsync(ct);
+
+        var leaseIds = leases.Select(l => l.Id).ToHashSet();
+
+        var pastDueByLease = (await _db.Payments
+                .AsNoTracking()
+                .Where(p => p.PortfolioId == portfolioId &&
+                            leaseIds.Contains(p.LeaseId) &&
+                            (p.Status == PaymentStatus.Scheduled ||
+                             p.Status == PaymentStatus.Partial ||
+                             p.Status == PaymentStatus.Late))
+                .Select(p => new { p.LeaseId, p.Amount, p.Status, p.DueDate })
+                .ToListAsync(ct))
+            .Where(p => p.Status == PaymentStatus.Late || p.DueDate < now)
+            .GroupBy(p => p.LeaseId)
+            .ToDictionary(g => g.Key, g => g.Sum(p => p.Amount));
+
+        var rentRoll = leases
+            .Select(l => new YearEndRentRollRow
+            {
+                PropertyName = l.PropertyName,
+                UnitNumber = l.UnitNumber,
+                TenantName = FullName(l.TenantFirstName, l.TenantLastName),
+                MonthlyRent = l.MonthlyRent,
+                LeaseStart = l.StartDate,
+                LeaseEnd = l.EndDate,
+                LeaseStatus = l.Status.ToString(),
+                PastDueBalance = pastDueByLease.GetValueOrDefault(l.Id, 0m),
+            })
+            .OrderBy(r => r.PropertyName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.UnitNumber, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new YearEndPacketData
+        {
+            Year = year,
+            PortfolioName = portfolio?.Name ?? string.Empty,
+            ManagementCompanyName = portfolio?.ManagementCompanyName ?? string.Empty,
+            GeneratedAt = now,
+            ScheduleE = scheduleE,
+            Properties = propertyPnL,
+            CashFlow = cashFlow,
+            CashFlowMoneyIn = cashIn,
+            CashFlowMoneyOut = cashOut,
+            CashFlowNet = cashIn - cashOut,
+            RentRoll = rentRoll,
         };
     }
 
