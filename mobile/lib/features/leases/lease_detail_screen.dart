@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
@@ -48,6 +51,11 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
   bool _askingLease = false;
   String? _leaseAnswer;
   String? _leaseAskError;
+
+  // Lease-agreement PDF actions.
+  bool _generatingDoc = false;
+  bool _openingDoc = false;
+  String? _docError;
 
   @override
   void initState() {
@@ -119,6 +127,66 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
       if (mounted) setState(() => _leaseAskError = e.message);
     } finally {
       if (mounted) setState(() => _askingLease = false);
+    }
+  }
+
+  /// Builds (or rebuilds) the standard lease-agreement PDF from the lease's
+  /// captured terms, then opens it for the landlord to review.
+  Future<void> _generateDocument() async {
+    if (_generatingDoc) return;
+    setState(() {
+      _generatingDoc = true;
+      _docError = null;
+    });
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(leasesRepositoryProvider).generateDocument(_lease.id);
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Lease agreement generated.')),
+        );
+      await _openDocument();
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _docError = e.message);
+    } finally {
+      if (mounted) setState(() => _generatingDoc = false);
+    }
+  }
+
+  /// Fetches the generated PDF bytes (authed), writes them to a temp file, and
+  /// hands the file off to the platform viewer via url_launcher.
+  Future<void> _openDocument() async {
+    if (_openingDoc) return;
+    setState(() {
+      _openingDoc = true;
+      _docError = null;
+    });
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final bytes =
+          await ref.read(leasesRepositoryProvider).documentBytes(_lease.id);
+      final path =
+          '${Directory.systemTemp.path}/lease-${_lease.id}-agreement.pdf';
+      final file = File(path);
+      await file.writeAsBytes(bytes, flush: true);
+      final ok = await launchUrl(
+        Uri.file(path),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!mounted) return;
+      if (!ok) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(content: Text('No app available to open the PDF.')),
+          );
+      }
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _docError = e.message);
+    } finally {
+      if (mounted) setState(() => _openingDoc = false);
     }
   }
 
@@ -198,6 +266,18 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
                   ),
                 ),
               ),
+            ),
+            const SizedBox(height: 12),
+
+            // ── Lease agreement (PDF) ──────────────────────────────────────
+            _LeaseDocumentCard(
+              generating: _generatingDoc,
+              opening: _openingDoc,
+              error: _docError,
+              onGenerate: _generateDocument,
+              onView: _openDocument,
+              theme: theme,
+              colorScheme: colorScheme,
             ),
             const SizedBox(height: 12),
 
@@ -326,6 +406,92 @@ class _LeaseAskCard extends StatelessWidget {
             if (error != null) ...[
               const SizedBox(height: 12),
               Text(error!, style: TextStyle(color: colorScheme.error)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Lease agreement (PDF) card ──────────────────────────────────────────────────
+
+class _LeaseDocumentCard extends StatelessWidget {
+  const _LeaseDocumentCard({
+    required this.generating,
+    required this.opening,
+    required this.onGenerate,
+    required this.onView,
+    required this.theme,
+    required this.colorScheme,
+    this.error,
+  });
+
+  final bool generating;
+  final bool opening;
+  final String? error;
+  final VoidCallback onGenerate;
+  final VoidCallback onView;
+  final ThemeData theme;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = generating || opening;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Lease Agreement',
+              style:
+                  theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Create a standard residential lease agreement from this '
+              'lease’s terms, then open it to print or share.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                FilledButton.icon(
+                  onPressed: busy ? null : onGenerate,
+                  icon: generating
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.description_outlined, size: 18),
+                  label: const Text('Generate lease agreement (PDF)'),
+                ),
+                OutlinedButton.icon(
+                  onPressed: busy ? null : onView,
+                  icon: opening
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.open_in_new, size: 18),
+                  label: const Text('View agreement'),
+                ),
+              ],
+            ),
+            if (error != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                error!,
+                style: TextStyle(color: colorScheme.error, fontSize: 13),
+              ),
             ],
           ],
         ),

@@ -40,7 +40,12 @@ public class LeaseLedgerServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new LeaseService(_db, new NoopDataUpdateService());
+        _sut = new LeaseService(
+            _db,
+            new NoopDataUpdateService(),
+            new LedgerInMemoryFileStorage(),
+            new LeaseAgreementPdfGenerator(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance);
     }
 
     public void Dispose()
@@ -181,5 +186,32 @@ public class LeaseLedgerServiceTests : IDisposable
 
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
             => Task.CompletedTask;
+    }
+
+    private sealed class LedgerInMemoryFileStorage : IFileStorage
+    {
+        private readonly Dictionary<string, byte[]> _files = new();
+
+        public async Task<string> UploadAsync(Stream content, string fileName, string contentType, CancellationToken ct = default)
+        {
+            using var ms = new MemoryStream();
+            await content.CopyToAsync(ms, ct);
+            var key = $"{Guid.NewGuid():N}_{fileName}";
+            _files[key] = ms.ToArray();
+            return key;
+        }
+
+        public Task<Stream> DownloadAsync(string path, CancellationToken ct = default)
+        {
+            if (!_files.TryGetValue(path, out var bytes))
+                throw new FileNotFoundException(path);
+            return Task.FromResult<Stream>(new MemoryStream(bytes));
+        }
+
+        public Task DeleteAsync(string path, CancellationToken ct = default)
+        {
+            _files.Remove(path);
+            return Task.CompletedTask;
+        }
     }
 }

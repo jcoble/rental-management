@@ -14,11 +14,22 @@ public class LeaseService : ILeaseService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly IFileStorage _storage;
+    private readonly ILeaseAgreementPdfGenerator _pdf;
+    private readonly ILogger<LeaseService> _logger;
 
-    public LeaseService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public LeaseService(
+        RentalCommandDbContext db,
+        IDataUpdateService dataUpdate,
+        IFileStorage storage,
+        ILeaseAgreementPdfGenerator pdf,
+        ILogger<LeaseService> logger)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _storage = storage;
+        _pdf = pdf;
+        _logger = logger;
     }
 
     public async Task<IReadOnlyList<LeaseResponse>> ListAsync(int portfolioId, int? tenantId, int? propertyId, ListQuery query, CancellationToken ct = default)
@@ -265,5 +276,133 @@ public class LeaseService : ILeaseService
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
+    }
+
+    public async Task<LeaseDocumentResponse?> GenerateDocumentAsync(int portfolioId, int id, CancellationToken ct = default)
+    {
+        var lease = await _db.Leases
+            .AsNoTracking()
+            .Include(l => l.Tenant)
+            .Include(l => l.Unit)
+            .Include(l => l.Property)
+            .FirstOrDefaultAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
+        if (lease == null)
+        {
+            return null;
+        }
+
+        var portfolio = await _db.Portfolios
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct);
+
+        var landlordName = !string.IsNullOrWhiteSpace(portfolio?.ManagementCompanyName)
+            ? portfolio!.ManagementCompanyName
+            : portfolio?.Name ?? "Landlord";
+
+        var tenantName = lease.Tenant == null
+            ? string.Empty
+            : $"{lease.Tenant.FirstName} {lease.Tenant.LastName}".Trim();
+
+        var property = lease.Property;
+        var propertyAddress = property == null
+            ? string.Empty
+            : string.Join(", ", new[]
+            {
+                property.AddressLine1,
+                property.AddressLine2,
+                $"{property.City}, {property.State} {property.PostalCode}".Trim(),
+            }.Where(s => !string.IsNullOrWhiteSpace(s)));
+
+        var data = new LeaseAgreementData
+        {
+            Lease = lease,
+            LandlordName = landlordName,
+            TenantName = tenantName,
+            PropertyName = property?.Name ?? string.Empty,
+            PropertyAddress = propertyAddress,
+            UnitNumber = lease.Unit?.UnitNumber,
+            State = property?.State ?? string.Empty,
+        };
+
+        var pdfBytes = _pdf.Generate(data);
+
+        // Write the blob first to get its key, then persist the StoredFile row; clean up the blob if the
+        // row fails (mirrors the inspection-report storage pattern).
+        var fileName = $"lease-{lease.Id}-agreement.pdf";
+        string storageKey;
+        await using (var ms = new MemoryStream(pdfBytes))
+        {
+            storageKey = await _storage.UploadAsync(ms, fileName, "application/pdf", ct);
+        }
+
+        var stored = new StoredFile
+        {
+            PortfolioId = portfolioId,
+            FileName = fileName,
+            FilePath = storageKey,
+            ContentType = "application/pdf",
+            FileSize = pdfBytes.Length,
+            EntityType = EntityType,
+            EntityId = lease.Id,
+            UploadedAt = DateTime.UtcNow,
+        };
+
+        try
+        {
+            _db.StoredFiles.Add(stored);
+            await _db.SaveChangesAsync(ct);
+        }
+        catch
+        {
+            try { await _storage.DeleteAsync(storageKey, ct); } catch { /* best-effort */ }
+            throw;
+        }
+
+        return new LeaseDocumentResponse(
+            stored.Id,
+            lease.Id,
+            stored.FileName,
+            stored.FileSize,
+            $"/api/v1/leases/{lease.Id}/document",
+            stored.UploadedAt);
+    }
+
+    public async Task<(Stream Stream, string FileName, string ContentType)?> GetDocumentAsync(int portfolioId, int id, CancellationToken ct = default)
+    {
+        // The lease must be in the caller's portfolio (IDOR guard) before we surface any document for it.
+        var leaseExists = await _db.Leases
+            .AnyAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
+        if (!leaseExists)
+        {
+            return null;
+        }
+
+        // Latest generated agreement for this lease, in this portfolio.
+        var file = await _db.StoredFiles
+            .AsNoTracking()
+            .Where(f => f.PortfolioId == portfolioId
+                && f.EntityType == EntityType
+                && f.EntityId == id
+                && f.DeletedAt == null)
+            .OrderByDescending(f => f.UploadedAt)
+            .ThenByDescending(f => f.Id)
+            .FirstOrDefaultAsync(ct);
+        if (file == null)
+        {
+            return null;
+        }
+
+        Stream stream;
+        try
+        {
+            stream = await _storage.DownloadAsync(file.FilePath, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Lease agreement blob missing for lease {LeaseId} (file {FileId})", id, file.Id);
+            return null;
+        }
+
+        return (stream, file.FileName, file.ContentType);
     }
 }

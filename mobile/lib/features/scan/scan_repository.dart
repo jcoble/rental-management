@@ -143,19 +143,29 @@ class ScanRepository {
     }
   }
 
-  /// Confirms a draft, creating the target entity (Expense, Payment, or WorkOrder).
+  /// Confirms a draft, creating the target entity (Expense, Payment, WorkOrder,
+  /// or Lease).
   ///
   /// [overrides] keys match what the API's [ConfirmScanRequest] expects:
   ///   — scalar fields: snake_case names as-is (vendor_name, total, etc.)
   ///   — legacy camelCase mappings: vendorName, amount, transactionDate, etc.
   ///   — Expense toggle: is_paid (bool)
   ///   — Payment lease: leaseId (int)
-  Future<void> confirm(int id, Map<String, dynamic> overrides) async {
+  ///   — Lease: propertyId + unitId (required), tenantId? (optional), plus the
+  ///     edited lease terms (lease_number, start_date, monthly_rent, …).
+  ///
+  /// Returns the JSON response body so callers can read the created entity id
+  /// (e.g. `leaseId`) for navigation. May be `null` for empty responses.
+  Future<Map<String, dynamic>?> confirm(
+    int id,
+    Map<String, dynamic> overrides,
+  ) async {
     try {
-      await _dio.post<dynamic>(
+      final response = await _dio.post<Map<String, dynamic>>(
         '/scans/$id/confirm',
         data: {'overridesJson': jsonEncode(overrides)},
       );
+      return response.data;
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

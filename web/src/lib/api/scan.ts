@@ -35,6 +35,7 @@ export interface ScanConfirmResponse {
 	expenseId?: number | null;
 	paymentId?: number | null;
 	workOrderId?: number | null;
+	leaseId?: number | null;
 	entityType?: string | null;
 	entityId?: number | null;
 }

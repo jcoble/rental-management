@@ -21,6 +21,8 @@ public sealed class ScanService : IScanService
     private readonly IExpenseService _expenses;
     private readonly IPaymentService _payments;
     private readonly IWorkOrderService _workOrders;
+    private readonly ILeaseService _leases;
+    private readonly ITenantService _tenants;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<ScanService> _logger;
 
@@ -30,6 +32,8 @@ public sealed class ScanService : IScanService
         IExpenseService expenses,
         IPaymentService payments,
         IWorkOrderService workOrders,
+        ILeaseService leases,
+        ITenantService tenants,
         IAuditTrailService audit,
         ILogger<ScanService> logger)
     {
@@ -38,6 +42,8 @@ public sealed class ScanService : IScanService
         _expenses = expenses;
         _payments = payments;
         _workOrders = workOrders;
+        _leases = leases;
+        _tenants = tenants;
         _audit = audit;
         _logger = logger;
     }
@@ -122,7 +128,7 @@ public sealed class ScanService : IScanService
         if (draft.Status != "Reviewing")
             return new ScanConfirmResult(false, null, "Draft is not ready to confirm; it must be reviewed first.");
 
-        if (draft.TargetEntityType is not ("Expense" or "Payment" or "WorkOrder"))
+        if (draft.TargetEntityType is not ("Expense" or "Payment" or "WorkOrder" or "Lease"))
             return new ScanConfirmResult(false, null, $"Unsupported target '{draft.TargetEntityType}'");
 
         // Start from the extracted fields, then apply the user's reviewed overrides (overrides win).
@@ -159,6 +165,7 @@ public sealed class ScanService : IScanService
         {
             "Payment" => await ConfirmAsPaymentAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct),
             "WorkOrder" => await ConfirmAsWorkOrderAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
+            "Lease" => await ConfirmAsLeaseAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
             _ => await ConfirmAsExpenseAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct),
         };
 
@@ -495,6 +502,185 @@ public sealed class ScanService : IScanService
             ct: ct);
 
         return new ScanConfirmResult(true, workOrder.Id, null, "WorkOrder");
+    }
+
+    // -------------------------------------------------------------------------
+    // ConfirmAsLeaseAsync  (called by the router) — the "import your PDF leases" path
+    // -------------------------------------------------------------------------
+
+    private async Task<ScanConfirmResult> ConfirmAsLeaseAsync(
+        int portfolioId,
+        int draftId,
+        int userId,
+        ScanDraft draft,
+        string overridesJson,
+        CancellationToken ct)
+    {
+        var fields = BuildLeaseFields(draft.ExtractedFields);
+
+        // The property/unit/tenant ids above came straight from the LLM. Drop any that aren't actually
+        // in THIS portfolio before we trust them: a hallucinated or foreign id must never link another
+        // portfolio's row (IDOR). Foreign/unknown ids fall back to 0/null so the reviewer picks manually.
+        await ValidateLeaseIdsInPortfolioAsync(portfolioId, fields, ct);
+
+        // Trusted user selections from the review UI win and are re-validated in-portfolio below.
+        ApplyLeaseOverrides(fields, overridesJson);
+
+        if (fields.PropertyId <= 0)
+            return new ScanConfirmResult(false, null, "Select a property for this lease");
+
+        if (fields.UnitId is not > 0)
+            return new ScanConfirmResult(false, null, "Select a unit for this lease");
+
+        // Re-validate the (possibly override-supplied) ids — never trust a raw override id either.
+        if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId, ct))
+            return new ScanConfirmResult(false, null, "Selected property is not in this portfolio");
+
+        if (!await _db.EnsureUnitInPortfolioAsync(portfolioId, fields.UnitId.Value, fields.PropertyId, ct))
+            return new ScanConfirmResult(false, null, "Selected unit is not in this portfolio");
+
+        // Resolve the tenant: an override-supplied tenantId wins (validated in-portfolio); otherwise, if
+        // the extracted tenant_name doesn't match an existing tenant, chain a new in-portfolio Tenant from
+        // the name. An imported lease's tenant is frequently not yet on file, so creating one keeps the
+        // "the computer does the typing" promise instead of dead-ending the import.
+        int tenantId;
+        if (fields.TenantId is > 0)
+        {
+            if (!await _db.EnsureTenantInPortfolioAsync(portfolioId, fields.TenantId.Value, ct))
+                return new ScanConfirmResult(false, null, "Selected tenant is not in this portfolio");
+            tenantId = fields.TenantId.Value;
+        }
+        else
+        {
+            var resolved = await ResolveOrCreateTenantAsync(portfolioId, fields.TenantName, ct);
+            if (resolved is null)
+                return new ScanConfirmResult(false, null, "Select a tenant for this lease");
+            tenantId = resolved.Value;
+        }
+
+        if (fields.StartDate is null || fields.EndDate is null)
+            return new ScanConfirmResult(false, null, "Lease start and end dates are required");
+
+        if (fields.MonthlyRent is not > 0m)
+            return new ScanConfirmResult(false, null, "Monthly rent must be greater than zero");
+
+        var leaseNumber = string.IsNullOrWhiteSpace(fields.LeaseNumber)
+            ? $"SCAN-{DateTime.UtcNow:yyyyMMddHHmmss}"
+            : fields.LeaseNumber!;
+
+        var request = new CreateLeaseRequest
+        {
+            PropertyId      = fields.PropertyId,
+            UnitId          = fields.UnitId.Value,
+            TenantId        = tenantId,
+            LeaseNumber     = leaseNumber,
+            Status          = LeaseStatus.Active,
+            StartDate       = fields.StartDate.Value,
+            EndDate         = fields.EndDate.Value,
+            MonthlyRent     = fields.MonthlyRent.Value,
+            SecurityDeposit = fields.SecurityDeposit ?? 0m,
+            LateFeeAmount   = fields.LateFee ?? 0m,
+            RentDueDay      = fields.RentDueDay is >= 1 and <= 31 ? fields.RentDueDay.Value : 1,
+            Notes           = "Imported from scanned lease PDF.",
+        };
+
+        LeaseResponse? lease;
+        try
+        {
+            lease = await _leases.CreateAsync(portfolioId, request, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Lease creation threw while confirming scan draft {DraftId}", draftId);
+            lease = null;
+        }
+
+        if (lease is null)
+            return new ScanConfirmResult(false, null, "Lease creation failed");
+
+        // Re-attach the source PDF to the created lease (FinalizeDraft re-keys the StoredFile + marks Confirmed).
+        await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "Lease", lease.Id, ct);
+
+        var appliedJson = JsonSerializer.Serialize(new
+        {
+            request.PropertyId,
+            request.UnitId,
+            request.TenantId,
+            request.LeaseNumber,
+            Status = request.Status.ToString(),
+            request.StartDate,
+            request.EndDate,
+            request.MonthlyRent,
+            request.SecurityDeposit,
+            request.LateFeeAmount,
+            request.RentDueDay,
+        });
+
+        await _audit.LogAsync(
+            portfolioId,
+            "Lease",
+            lease.Id,
+            AuditLogOperation.Created,
+            userId: userId,
+            oldValues: draft.ExtractedFields,
+            newValues: appliedJson,
+            changeReason: "Created from scan draft #" + draftId,
+            ct: ct);
+
+        return new ScanConfirmResult(true, lease.Id, null, "Lease");
+    }
+
+    /// <summary>
+    /// Resolves the tenant for an imported lease from the extracted name: returns an existing tenant's id
+    /// when the name matches (case-insensitive on the combined first+last), otherwise creates a new
+    /// in-portfolio Tenant from the name ("chained Tenant") and returns its id. Returns null only when
+    /// there is no usable name to create from.
+    /// </summary>
+    private async Task<int?> ResolveOrCreateTenantAsync(int portfolioId, string? tenantName, CancellationToken ct)
+    {
+        var name = tenantName?.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+            return null;
+
+        // Match against existing in-portfolio tenants by full name (case-insensitive). Whitespace-collapse
+        // both sides so "Jane   Doe" still matches "Jane Doe".
+        var normalized = CollapseWhitespace(name);
+        var existing = await _db.Tenants
+            .Where(t => t.PortfolioId == portfolioId && t.DeletedAt == null)
+            .Select(t => new { t.Id, FullName = (t.FirstName + " " + t.LastName).Trim() })
+            .ToListAsync(ct);
+
+        var match = existing.FirstOrDefault(t =>
+            string.Equals(CollapseWhitespace(t.FullName), normalized, StringComparison.OrdinalIgnoreCase));
+        if (match is not null)
+            return match.Id;
+
+        // No match — chain a new Tenant. Split the name into first/last on the last space.
+        var (firstName, lastName) = SplitName(name);
+        var created = await _tenants.CreateAsync(
+            portfolioId,
+            new CreateTenantRequest
+            {
+                FirstName = firstName,
+                LastName = lastName,
+                Notes = "Created from scanned lease PDF.",
+            },
+            ct);
+
+        return created.Id;
+    }
+
+    private static string CollapseWhitespace(string value) =>
+        string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    private static (string FirstName, string LastName) SplitName(string fullName)
+    {
+        var parts = fullName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0)
+            return ("Tenant", "(scanned)");
+        if (parts.Length == 1)
+            return (parts[0], "(scanned)"); // LastName is [Required] on the create request — never empty.
+        return (string.Join(' ', parts[..^1]), parts[^1]);
     }
 
     // -------------------------------------------------------------------------
@@ -1025,6 +1211,130 @@ public sealed class ScanService : IScanService
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Lease extraction helpers
+    // -------------------------------------------------------------------------
+
+    private LeaseDraftFields BuildLeaseFields(string? extractedFieldsJson)
+    {
+        var fields = new LeaseDraftFields();
+        if (string.IsNullOrWhiteSpace(extractedFieldsJson))
+            return fields;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(extractedFieldsJson);
+            var root = doc.RootElement;
+
+            fields.PropertyId = ParseIntField(root, "property_id") ?? ParseIntField(root, "propertyId") ?? 0;
+            fields.UnitId = ParseIntField(root, "unit_id") ?? ParseIntField(root, "unitId");
+            fields.TenantId = ParseIntField(root, "tenant_id") ?? ParseIntField(root, "tenantId");
+            fields.TenantName = ReadFieldValue(root, "tenant_name") ?? ReadFieldValue(root, "tenantName");
+            fields.LeaseNumber = ReadFieldValue(root, "lease_number") ?? ReadFieldValue(root, "leaseNumber");
+            fields.StartDate = ParseDateField(root, "start_date") ?? ParseDateField(root, "startDate");
+            fields.EndDate = ParseDateField(root, "end_date") ?? ParseDateField(root, "endDate");
+            fields.MonthlyRent = ParseDecimalField(root, "monthly_rent") ?? ParseDecimalField(root, "monthlyRent");
+            fields.SecurityDeposit = ParseDecimalField(root, "security_deposit") ?? ParseDecimalField(root, "securityDeposit");
+            fields.LateFee = ParseDecimalField(root, "late_fee") ?? ParseDecimalField(root, "lateFee");
+            fields.RentDueDay = ParseIntField(root, "rent_due_day") ?? ParseIntField(root, "rentDueDay");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse lease extraction JSON.");
+        }
+
+        return fields;
+    }
+
+    /// <summary>
+    /// Verifies each LLM-suggested id (property/unit/tenant) belongs to this portfolio and clears any that
+    /// don't — same IDOR-safe pattern as the work-order path. Unit must additionally belong to the matched
+    /// property. Bad ids fall back to 0/null for manual selection rather than failing the whole confirm.
+    /// </summary>
+    private async Task ValidateLeaseIdsInPortfolioAsync(
+        int portfolioId, LeaseDraftFields fields, CancellationToken ct)
+    {
+        if (fields.PropertyId > 0 &&
+            !await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId, ct))
+        {
+            fields.PropertyId = 0;
+        }
+
+        if (fields.UnitId is > 0 &&
+            !await _db.EnsureUnitInPortfolioAsync(
+                portfolioId, fields.UnitId.Value, fields.PropertyId > 0 ? fields.PropertyId : null, ct))
+        {
+            fields.UnitId = null;
+        }
+
+        if (fields.TenantId is > 0 &&
+            !await _db.EnsureTenantInPortfolioAsync(portfolioId, fields.TenantId.Value, ct))
+        {
+            fields.TenantId = null;
+        }
+    }
+
+    private void ApplyLeaseOverrides(LeaseDraftFields fields, string overridesJson)
+    {
+        if (string.IsNullOrWhiteSpace(overridesJson))
+            return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(overridesJson);
+            var root = doc.RootElement;
+
+            if (TryGetOverrideInt(root, out var propertyId, "propertyId", "property_id"))
+                fields.PropertyId = propertyId;
+            if (TryGetOverrideInt(root, out var unitId, "unitId", "unit_id"))
+                fields.UnitId = unitId > 0 ? unitId : null;
+            if (TryGetOverrideInt(root, out var tenantId, "tenantId", "tenant_id"))
+                fields.TenantId = tenantId > 0 ? tenantId : null;
+            if (TryGetOverrideString(root, out var tenantName, "tenantName", "tenant_name"))
+                fields.TenantName = tenantName;
+            if (TryGetOverrideString(root, out var leaseNumber, "leaseNumber", "lease_number"))
+                fields.LeaseNumber = leaseNumber;
+            if (TryGetOverrideString(root, out var startStr, "startDate", "start_date") &&
+                DateTime.TryParse(startStr, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var start))
+            {
+                fields.StartDate = start;
+            }
+            if (TryGetOverrideString(root, out var endStr, "endDate", "end_date") &&
+                DateTime.TryParse(endStr, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var end))
+            {
+                fields.EndDate = end;
+            }
+            if (TryGetOverrideDecimal(root, out var rent, "monthlyRent", "monthly_rent"))
+                fields.MonthlyRent = rent;
+            if (TryGetOverrideDecimal(root, out var deposit, "securityDeposit", "security_deposit"))
+                fields.SecurityDeposit = deposit;
+            if (TryGetOverrideDecimal(root, out var lateFee, "lateFee", "late_fee"))
+                fields.LateFee = lateFee;
+            if (TryGetOverrideInt(root, out var dueDay, "rentDueDay", "rent_due_day"))
+                fields.RentDueDay = dueDay;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse lease overridesJson; skipping overrides.");
+        }
+    }
+
+    /// <summary>Parses an ISO date from a field's "value" sub-property, normalized to UTC. Null on failure.</summary>
+    private static DateTime? ParseDateField(JsonElement root, string key)
+    {
+        var str = ReadFieldValue(root, key);
+        if (string.IsNullOrWhiteSpace(str)) return null;
+        return DateTime.TryParse(str, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AdjustToUniversal |
+            System.Globalization.DateTimeStyles.AssumeUniversal, out var date)
+            ? date
+            : null;
+    }
+
     private static int? ParseIntField(JsonElement root, string key)
     {
         var str = ReadFieldValue(root, key);
@@ -1091,5 +1401,20 @@ public sealed class ScanService : IScanService
         public string? Category { get; set; }
         public WorkOrderPriority Priority { get; set; } = WorkOrderPriority.Normal;
         public decimal? EstimatedCost { get; set; }
+    }
+
+    private sealed class LeaseDraftFields
+    {
+        public int PropertyId { get; set; }
+        public int? UnitId { get; set; }
+        public int? TenantId { get; set; }
+        public string? TenantName { get; set; }
+        public string? LeaseNumber { get; set; }
+        public DateTime? StartDate { get; set; }
+        public DateTime? EndDate { get; set; }
+        public decimal? MonthlyRent { get; set; }
+        public decimal? SecurityDeposit { get; set; }
+        public decimal? LateFee { get; set; }
+        public int? RentDueDay { get; set; }
     }
 }
