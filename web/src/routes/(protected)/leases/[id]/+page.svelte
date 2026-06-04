@@ -20,6 +20,7 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
@@ -498,6 +499,44 @@
 	<title>{lease ? `Lease ${lease.leaseNumber}` : 'Lease'} - Rental Command</title>
 </svelte:head>
 
+<!-- Inline date field: mirrors InlineField's edit/display structure (same testids) but
+     uses the shared DatePicker when editing. value is bound `yyyy-MM-dd`. -->
+{#snippet dateField(opts: {
+	label: string;
+	value: string;
+	setValue: (v: string) => void;
+	display: string;
+	testid: string;
+	error?: string;
+	min?: string;
+	max?: string;
+})}
+	<div data-testid={`${opts.testid}-field`}>
+		<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${opts.testid}-input`}>{opts.label}</label>
+		{#if editing}
+			<DatePicker
+				id={`${opts.testid}-input`}
+				testid={`${opts.testid}-input`}
+				value={opts.value}
+				onchange={opts.setValue}
+				placeholder={opts.label}
+				min={opts.min}
+				max={opts.max}
+			/>
+			{#if opts.error}<p class="mt-1 text-xs text-destructive" data-testid={`${opts.testid}-error`}>{opts.error}</p>{/if}
+		{:else}
+			<button
+				type="button"
+				class="min-h-10 w-full rounded-md border border-transparent py-2 text-left text-sm font-medium text-foreground transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+				data-testid={`${opts.testid}-value`}
+				onclick={startEditing}
+			>
+				{opts.display === '' ? '-' : opts.display}
+			</button>
+		{/if}
+	</div>
+{/snippet}
+
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="lease-detail-page">
 	{#if leaseQuery.isLoading}
 		<div class="flex h-48 items-center justify-center" data-testid="lease-detail-loading">
@@ -628,8 +667,8 @@
 							</Card.Title>
 						</Card.Header>
 						<Card.Content class="grid grid-cols-2 gap-x-6 gap-y-4">
-							<InlineField label="Start Date" bind:value={form.startDate} display={formatDate(lease.startDate)} {editing} onedit={startEditing} type="date" error={formErrors.startDate} testid="lease-detail-start" />
-							<InlineField label="End Date" bind:value={form.endDate} display={formatDate(lease.endDate)} {editing} onedit={startEditing} type="date" error={formErrors.endDate} testid="lease-detail-end" />
+							{@render dateField({ label: 'Start Date', value: form.startDate, setValue: (v) => (form.startDate = v), display: formatDate(lease.startDate), error: formErrors.startDate, max: form.endDate || undefined, testid: 'lease-detail-start' })}
+							{@render dateField({ label: 'End Date', value: form.endDate, setValue: (v) => (form.endDate = v), display: formatDate(lease.endDate), error: formErrors.endDate, min: form.startDate || undefined, testid: 'lease-detail-end' })}
 							<InlineField label="Rent Due Day" bind:value={form.rentDueDay} display={`Day ${lease.rentDueDay}`} {editing} onedit={startEditing} type="number" error={formErrors.rentDueDay} testid="lease-detail-due-day" />
 							<InlineField label="Status" bind:value={form.status} display={lease.status} {editing} onedit={startEditing} type="select" options={statusOptions} error={formErrors.status} testid="lease-detail-status" />
 							{#if !editing && lease.moveInDate}
@@ -998,10 +1037,10 @@
 			</div>
 			<div>
 				<span class="mb-1 block text-xs text-muted-foreground">As of date</span>
-				<Input
-					data-testid="lease-opening-balance-date"
+				<DatePicker
+					testid="lease-opening-balance-date"
 					bind:value={openingAsOfDate}
-					type="date"
+					placeholder="As of date"
 				/>
 				{#if openingErrors.asOfDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-opening-balance-date-error">{openingErrors.asOfDate}</p>{/if}
 			</div>

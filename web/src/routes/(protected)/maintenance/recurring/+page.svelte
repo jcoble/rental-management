@@ -17,6 +17,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
@@ -400,7 +401,7 @@
 				</div>
 				<div>
 					<label class="mb-1 block text-sm font-medium" for="rt-next">Next due</label>
-					<Input id="rt-next" type="date" data-testid="recurring-task-next-due-input" bind:value={form.nextDueDate} />
+					<DatePicker id="rt-next" testid="recurring-task-next-due-input" bind:value={form.nextDueDate} placeholder="Next due date" />
 					{#if errors.nextDueDate}<p class="mt-1 text-xs text-destructive" data-testid="recurring-task-next-due-error">{errors.nextDueDate}</p>{/if}
 				</div>
 			</div>

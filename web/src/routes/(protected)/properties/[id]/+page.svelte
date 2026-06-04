@@ -15,6 +15,8 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import StateSelect from '$lib/components/shared/StateSelect.svelte';
+	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -327,6 +329,39 @@
 	<StatusBadge status={l.status} />
 {/snippet}
 
+<!--
+  Mirrors InlineField's display/edit wrapper (same testid family: -field/-value/
+  -error) but lets us drop in a custom editing control (StateSelect /
+  AddressAutocomplete) instead of a plain <input>. The `control` child renders
+  only when editing.
+-->
+{#snippet inlineFieldWrap(
+	testid: string,
+	label: string,
+	display: string,
+	error: string | undefined,
+	control: import('svelte').Snippet
+)}
+	<div data-testid={`${testid}-field`}>
+		<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${testid}-input`}>{label}</label>
+		{#if editingProperty}
+			{@render control()}
+			{#if error}
+				<p class="mt-1 text-xs text-destructive" data-testid={`${testid}-error`}>{error}</p>
+			{/if}
+		{:else}
+			<button
+				type="button"
+				class="min-h-10 w-full rounded-md border border-transparent py-2 text-left text-sm font-medium text-foreground transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+				data-testid={`${testid}-value`}
+				onclick={startEditingProperty}
+			>
+				{display === '' ? '-' : display}
+			</button>
+		{/if}
+	</div>
+{/snippet}
+
 <svelte:head>
 	<title>{property?.name ?? 'Property'} - Rental Command</title>
 </svelte:head>
@@ -418,9 +453,15 @@
 					<InlineField label="Name" bind:value={propertyForm.name} display={property.name} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.name} testid="property-detail-name-field" />
 					<InlineField label="Type" bind:value={propertyForm.type} display={property.type} editing={editingProperty} onedit={startEditingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" />
 					<InlineField label="Owner" bind:value={propertyForm.ownerId} display={property.ownerName ?? 'No owner assigned'} editing={editingProperty} onedit={startEditingProperty} type="select" options={ownerOptions} testid="property-detail-owner" />
-					<InlineField label="Address" bind:value={propertyForm.addressLine1} display={`${property.addressLine1}${property.addressLine2 ? `, ${property.addressLine2}` : ''}`} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.addressLine1} testid="property-detail-address" />
+					{#snippet addressControl()}
+						<AddressAutocomplete id="property-detail-address-input" testid="property-detail-address-input" bind:value={propertyForm.addressLine1} placeholder="Address" />
+					{/snippet}
+					{@render inlineFieldWrap('property-detail-address', 'Address', `${property.addressLine1}${property.addressLine2 ? `, ${property.addressLine2}` : ''}`, propertyFormErrors.addressLine1, addressControl)}
 					<InlineField label="City" bind:value={propertyForm.city} display={property.city} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.city} testid="property-detail-city" />
-					<InlineField label="State" bind:value={propertyForm.state} display={property.state} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.state} testid="property-detail-state" />
+					{#snippet stateControl()}
+						<StateSelect id="property-detail-state-input" testid="property-detail-state-input" bind:value={propertyForm.state} placeholder="State" />
+					{/snippet}
+					{@render inlineFieldWrap('property-detail-state', 'State', property.state ?? '', propertyFormErrors.state, stateControl)}
 					<InlineField label="ZIP" bind:value={propertyForm.postalCode} display={property.postalCode} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.postalCode} testid="property-detail-zip" />
 					{#if !editingProperty && property.yearBuilt}
 						<div>
