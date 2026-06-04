@@ -831,11 +831,13 @@
 						</p>
 					{:else if signature?.esignStatus === 'Sent'}
 						<p class="mt-2 text-xs text-muted-foreground" data-testid="lease-esign-sent-note">
-							Waiting for {lease?.tenantName ?? 'the tenant'} to sign. This updates automatically once they do.
+							Sent {lease?.tenantName ?? 'the tenant'} a secure signing link. Waiting for them to sign — this updates automatically once they do.
 						</p>
 					{:else if signature?.esignStatus === 'Signed'}
 						<p class="mt-2 text-xs text-success" data-testid="lease-esign-signed-note">
-							Signed. You can download the signed lease above.
+							{signature?.hasSignedDocument
+								? 'Signed. You can download the signed lease above.'
+								: 'Signed. The executed copy is being finalized — the download will appear here shortly.'}
 						</p>
 					{:else if signature?.esignStatus === 'Declined'}
 						<p class="mt-2 text-xs text-muted-foreground" data-testid="lease-esign-declined-note">
