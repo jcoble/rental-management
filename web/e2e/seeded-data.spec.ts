@@ -119,9 +119,10 @@ test.describe('Leases', () => {
 		await page.getByTestId('datagrid-row').first().click();
 		await expect(page.getByTestId('lease-detail-page')).toBeVisible({ timeout: 15_000 });
 
-		// The lease detail shows the lease number
+		// The lease detail shows the lease number (Overview tab is the default)
 		await expect(page.getByTestId('lease-detail-number')).toBeVisible();
-		// The payments grid is present
+		// After the tabbed redesign the payments grid lives on the Ledger tab
+		await page.getByTestId('lease-tab-ledger').click();
 		await expect(page.getByTestId('lease-payments-grid')).toBeVisible();
 	});
 });
@@ -150,31 +151,36 @@ test.describe('Accounting', () => {
 		expect(collectedText).not.toMatch(/\$0$/);
 	});
 
-	test('Payments grid has rows', async ({ page }) => {
+	test('Transactions grid has rows', async ({ page }) => {
 		await login(page);
 		await page.goto('/accounting');
 		await expect(page.getByTestId('accounting-page')).toBeVisible();
 
-		// Wait for the payments list to render
-		await expect(page.getByTestId('payments-list')).toBeVisible();
-		await expect(page.getByTestId('payment-row').first()).toBeVisible({ timeout: 15_000 });
-
-		const rows = page.getByTestId('payment-row');
-		const count = await rows.count();
-		expect(count).toBeGreaterThanOrEqual(1);
+		// Accounting redesign: payments + expenses now share one unified, paged
+		// transactions grid on the Ledger tab (the default tab). Rows carry a
+		// per-kind testid like `transaction-row-expense-123`.
+		const grid = page.getByTestId('transactions-list');
+		await expect(grid).toBeVisible();
+		const rows = grid.locator('[data-testid^="transaction-row-"]');
+		await expect(rows.first()).toBeVisible({ timeout: 15_000 });
+		expect(await rows.count()).toBeGreaterThanOrEqual(1);
 	});
 
-	test('Expenses grid has rows', async ({ page }) => {
+	test('Transactions grid filters to expenses', async ({ page }) => {
 		await login(page);
 		await page.goto('/accounting');
 		await expect(page.getByTestId('accounting-page')).toBeVisible();
 
-		await expect(page.getByTestId('expenses-list')).toBeVisible();
-		await expect(page.getByTestId('expense-row').first()).toBeVisible({ timeout: 15_000 });
+		const grid = page.getByTestId('transactions-list');
+		await expect(grid.locator('[data-testid^="transaction-row-"]').first()).toBeVisible({ timeout: 15_000 });
 
-		const rows = page.getByTestId('expense-row');
-		const count = await rows.count();
-		expect(count).toBeGreaterThanOrEqual(1);
+		// Narrow the unified grid to expenses via the kind filter (a redesign feature).
+		await page.getByTestId('transaction-kind-filter').click();
+		await page.getByRole('option', { name: 'Expenses', exact: true }).click();
+
+		const expenseRows = grid.locator('[data-testid^="transaction-row-expense-"]');
+		await expect(expenseRows.first()).toBeVisible({ timeout: 15_000 });
+		expect(await expenseRows.count()).toBeGreaterThanOrEqual(1);
 	});
 });
 
