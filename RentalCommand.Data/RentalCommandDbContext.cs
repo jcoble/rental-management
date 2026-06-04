@@ -49,6 +49,11 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<ScreeningResult> ScreeningResults => Set<ScreeningResult>();
     public DbSet<AdverseActionNotice> AdverseActionNotices => Set<AdverseActionNotice>();
 
+    // Native e-signature (envelope + per-signer tokens + append-only audit trail)
+    public DbSet<SignatureRequest> SignatureRequests => Set<SignatureRequest>();
+    public DbSet<SignatureSigner> SignatureSigners => Set<SignatureSigner>();
+    public DbSet<SignatureAuditEvent> SignatureAuditEvents => Set<SignatureAuditEvent>();
+
     // Auth + audit + infrastructure entities (Task 3)
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
@@ -431,6 +436,79 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasOne(e => e.StoredFile)
                 .WithMany()
                 .HasForeignKey(e => e.StoredFileId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<SignatureRequest>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.PublicId).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.DocumentName).IsRequired().HasMaxLength(260);
+            entity.Property(e => e.Subject).HasMaxLength(200);
+            entity.Property(e => e.ContentSha256).HasMaxLength(64);
+            // Stored as the string enum name to match the app-wide string-enum convention.
+            entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
+            // The envelope is resolved by its opaque PublicId (webhook/status path) — unique + indexed.
+            entity.HasIndex(e => e.PublicId).IsUnique();
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.LeaseId);
+            entity.HasIndex(e => e.Status);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Lease)
+                .WithMany()
+                .HasForeignKey(e => e.LeaseId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // The stored files outlive the request row; never cascade a file delete back into it.
+            entity.HasOne(e => e.OriginalStoredFile)
+                .WithMany()
+                .HasForeignKey(e => e.OriginalStoredFileId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(e => e.SignedStoredFile)
+                .WithMany()
+                .HasForeignKey(e => e.SignedStoredFileId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<SignatureSigner>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Email).IsRequired().HasMaxLength(256);
+            entity.Property(e => e.Token).IsRequired().HasMaxLength(64);
+            entity.Property(e => e.TypedName).HasMaxLength(200);
+            entity.Property(e => e.IpAddress).HasMaxLength(64);
+            entity.Property(e => e.UserAgent).HasMaxLength(512);
+            // Stored as string enum names to match the app-wide string-enum convention.
+            entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.SignatureType).HasConversion<string>().HasMaxLength(40);
+            // The public signing endpoints resolve a session by this token only — unique + indexed.
+            entity.HasIndex(e => e.Token).IsUnique();
+            entity.HasIndex(e => e.SignatureRequestId);
+            entity.HasOne(e => e.SignatureRequest)
+                .WithMany(r => r.Signers)
+                .HasForeignKey(e => e.SignatureRequestId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<SignatureAuditEvent>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Type).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.IpAddress).HasMaxLength(64);
+            entity.Property(e => e.UserAgent).HasMaxLength(512);
+            entity.Property(e => e.Detail).HasMaxLength(2000);
+            entity.HasIndex(e => e.SignatureRequestId);
+            entity.HasOne(e => e.SignatureRequest)
+                .WithMany(r => r.AuditEvents)
+                .HasForeignKey(e => e.SignatureRequestId)
+                .OnDelete(DeleteBehavior.Cascade);
+            // The signer link is optional (request-level events carry null) and never cascades.
+            entity.HasOne(e => e.Signer)
+                .WithMany()
+                .HasForeignKey(e => e.SignerId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 
