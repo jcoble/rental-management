@@ -36,6 +36,13 @@ public class NotificationsConfig
     public SignalWireOptions SignalWire { get; set; } = new();
     public SendGridOptions SendGrid { get; set; } = new();
 
+    /// <summary>SMTP email transport (e.g. Zoho). Lets email be sent over an already-DKIM/SPF-authenticated
+    /// mailbox domain when SendGrid mail fails DMARC. Selected via <see cref="Email"/>.Transport == "Smtp".</summary>
+    public SmtpOptions Smtp { get; set; } = new();
+
+    /// <summary>Chooses which email transport <c>SendEmailAsync</c> uses (SendGrid vs SMTP).</summary>
+    public EmailTransportOptions Email { get; set; } = new();
+
     /// <summary>
     /// Public base URL the SMS provider was configured to call (e.g. <c>https://app.example.com</c>),
     /// used to recompute the webhook signature when the API sits behind a reverse proxy that rewrites
@@ -131,6 +138,48 @@ public class SendGridOptions
     public string? FromEmail { get; set; }
     public string? FromName { get; set; }
     public bool Enabled => !string.IsNullOrWhiteSpace(ApiKey) && !string.IsNullOrWhiteSpace(FromEmail);
+}
+
+/// <summary>
+/// SMTP email transport — e.g. Zoho (<c>smtp.zoho.com:465</c>, SSL on connect). Use this when the
+/// sending domain is authenticated (DKIM/SPF) with the mailbox provider rather than SendGrid, so mail
+/// passes DMARC alignment and actually delivers. Defaults match Zoho's implicit-TLS endpoint.
+/// </summary>
+public class SmtpOptions
+{
+    public string? Host { get; set; }
+    /// <summary>465 = implicit SSL/TLS on connect (Zoho default). 587 = STARTTLS.</summary>
+    public int Port { get; set; } = 465;
+    /// <summary>True → SSL-on-connect (port 465). False → STARTTLS (port 587).</summary>
+    public bool UseSsl { get; set; } = true;
+    public string? Username { get; set; }
+    public string? Password { get; set; }
+    public string? FromEmail { get; set; }
+    public string? FromName { get; set; }
+    /// <summary>Socket/operation timeout (seconds) so a dead relay can't stall the outbox dispatcher.</summary>
+    public int TimeoutSeconds { get; set; } = 30;
+
+    /// <summary>Configured when host + credentials are present. From falls back to Username if unset.</summary>
+    public bool Enabled =>
+        !string.IsNullOrWhiteSpace(Host)
+        && !string.IsNullOrWhiteSpace(Username)
+        && !string.IsNullOrWhiteSpace(Password);
+}
+
+/// <summary>
+/// Selects which email transport <c>SendEmailAsync</c> uses. Defaults to "SendGrid" so existing
+/// behaviour is unchanged; set Transport = "Smtp" (with <see cref="NotificationsConfig.Smtp"/>
+/// configured) to send over SMTP/Zoho instead.
+/// </summary>
+public class EmailTransportOptions
+{
+    public const string SendGrid = "SendGrid";
+    public const string Smtp = "Smtp";
+
+    /// <summary>"SendGrid" (default) | "Smtp".</summary>
+    public string Transport { get; set; } = SendGrid;
+
+    public bool UseSmtp => string.Equals(Transport, Smtp, StringComparison.OrdinalIgnoreCase);
 }
 
 public class DailyBriefingOptions
