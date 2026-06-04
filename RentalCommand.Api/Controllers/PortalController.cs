@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Api.Services.Payments;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -17,11 +18,16 @@ public class PortalController : AuthenticatedPortfolioControllerBase
 {
     private readonly IPortalService _service;
     private readonly IConversationService _conversations;
+    private readonly IStripePaymentService _stripe;
 
-    public PortalController(IPortalService service, IConversationService conversations)
+    public PortalController(
+        IPortalService service,
+        IConversationService conversations,
+        IStripePaymentService stripe)
     {
         _service = service;
         _conversations = conversations;
+        _stripe = stripe;
     }
 
     /// <summary>Tenant id from the <c>tenantId</c> JWT claim, or null when the caller is not a tenant.</summary>
@@ -74,6 +80,116 @@ public class PortalController : AuthenticatedPortfolioControllerBase
 
         var items = await _service.GetPaymentsAsync(GetPortfolioId(), tenantId.Value, ct);
         return Ok(items);
+    }
+
+    // -----------------------------------------------------------------------------------------------
+    // Online rent payment (optional convenience). Hosted Stripe Checkout — neither the web nor the
+    // Flutter app needs a payment SDK; the tenant is redirected to {checkoutUrl}. Every path is
+    // ownership-checked (a tenant pays only their own rent) and Stripe-gated (503 when not configured).
+    // -----------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Starts a hosted Stripe Checkout session (card or ACH) for ONE of the signed-in tenant's own
+    /// rent payments and returns <c>{ checkoutUrl }</c> to redirect to. A payment that isn't on this
+    /// tenant's lease returns 404 (never reveals another tenant's payment). 503 when Stripe is off.
+    /// </summary>
+    [HttpPost("payments/{paymentId:int}/checkout")]
+    [ProducesResponseType(typeof(CheckoutSessionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> CreatePaymentCheckout(
+        int paymentId, [FromBody] PortalCheckoutRequest? request, CancellationToken ct)
+    {
+        var tenantId = GetTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        var result = await _stripe.CreatePaymentCheckoutSessionAsync(
+            GetPortfolioId(), tenantId.Value, paymentId, request?.SuccessUrl, request?.CancelUrl, ct);
+
+        return result.Result switch
+        {
+            CheckoutResult.Outcome.NotEnabled =>
+                StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Online payments are not enabled." }),
+            CheckoutResult.Outcome.NotFound =>
+                NotFound(new { error = "Payment not found" }),
+            _ => Ok(new CheckoutSessionResponse { CheckoutUrl = result.CheckoutUrl! }),
+        };
+    }
+
+    /// <summary>
+    /// Tenant's autopay enrollment status for a lease (defaults to their most relevant lease when
+    /// <c>leaseId</c> is omitted). Returns Active=false when not enrolled.
+    /// </summary>
+    [HttpGet("autopay")]
+    [ProducesResponseType(typeof(AutopayStatusResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetAutopay([FromQuery] int? leaseId, CancellationToken ct)
+    {
+        var tenantId = GetTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        var status = await _service.GetAutopayStatusAsync(GetPortfolioId(), tenantId.Value, leaseId, ct);
+        return status == null ? NotFound(new { error = "Lease not found" }) : Ok(status);
+    }
+
+    /// <summary>
+    /// Enrolls one of the tenant's own leases in autopay: starts a setup-mode Checkout session that
+    /// saves a reusable payment method, and returns <c>{ checkoutUrl }</c>. The enrollment is only
+    /// recorded once the setup session completes (webhook). 404 if the lease isn't the tenant's;
+    /// 503 when Stripe is off.
+    /// </summary>
+    [HttpPost("autopay/enroll")]
+    [ProducesResponseType(typeof(CheckoutSessionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> EnrollAutopay([FromBody] AutopayEnrollRequest request, CancellationToken ct)
+    {
+        var tenantId = GetTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        var result = await _stripe.CreateAutopaySetupSessionAsync(
+            GetPortfolioId(), tenantId.Value, request.LeaseId, request.SuccessUrl, request.CancelUrl, ct);
+
+        return result.Result switch
+        {
+            CheckoutResult.Outcome.NotEnabled =>
+                StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "Online payments are not enabled." }),
+            CheckoutResult.Outcome.NotFound =>
+                NotFound(new { error = "Lease not found" }),
+            _ => Ok(new CheckoutSessionResponse { CheckoutUrl = result.CheckoutUrl! }),
+        };
+    }
+
+    /// <summary>
+    /// Cancels autopay on one of the tenant's own leases (deactivates the enrollment so the Engine
+    /// stops charging). 404 if the lease isn't the tenant's. Not Stripe-gated — purely local state.
+    /// </summary>
+    [HttpPost("autopay/cancel")]
+    [ProducesResponseType(typeof(AutopayStatusResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> CancelAutopay([FromBody] AutopayCancelRequest request, CancellationToken ct)
+    {
+        var tenantId = GetTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        var status = await _service.CancelAutopayAsync(GetPortfolioId(), tenantId.Value, request.LeaseId, ct);
+        return status == null ? NotFound(new { error = "Lease not found" }) : Ok(status);
     }
 
     [HttpGet("work-orders")]

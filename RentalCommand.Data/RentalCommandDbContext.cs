@@ -64,6 +64,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     // Stripe payment groundwork
     public DbSet<PaymentTransaction> PaymentTransactions => Set<PaymentTransaction>();
     public DbSet<StripeWebhookEvent> StripeWebhookEvents => Set<StripeWebhookEvent>();
+    public DbSet<AutopayEnrollment> AutopayEnrollments => Set<AutopayEnrollment>();
 
     // Engine resilience — worker heartbeats written by each background worker every poll cycle
     public DbSet<EngineWorkerHeartbeat> EngineWorkerHeartbeats => Set<EngineWorkerHeartbeat>();
@@ -1134,6 +1135,32 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.EventId).IsRequired().HasMaxLength(200);
             entity.Property(e => e.EventType).IsRequired().HasMaxLength(200);
             entity.HasIndex(e => e.EventId).IsUnique();
+        });
+
+        modelBuilder.Entity<AutopayEnrollment>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.StripeCustomerId).HasMaxLength(200);
+            entity.Property(e => e.StripePaymentMethodId).HasMaxLength(200);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.TenantId);
+            // At most one Active enrollment per lease. Filtered so cancelled (inactive) rows never
+            // collide and a tenant can re-enroll after cancelling.
+            entity.HasIndex(e => e.LeaseId)
+                  .IsUnique()
+                  .HasFilter("\"Active\" = true");
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Lease)
+                .WithMany()
+                .HasForeignKey(e => e.LeaseId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Tenant)
+                .WithMany()
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<EngineWorkerHeartbeat>(entity =>
