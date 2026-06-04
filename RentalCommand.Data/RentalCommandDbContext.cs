@@ -54,6 +54,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<QueuedJob> QueuedJobs => Set<QueuedJob>();
     public DbSet<StoredFile> StoredFiles => Set<StoredFile>();
     public DbSet<ScanDraft> ScanDrafts => Set<ScanDraft>();
+    public DbSet<ScanBatch> ScanBatches => Set<ScanBatch>();
     public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
     public DbSet<SecurityDepositHolding> SecurityDepositHoldings => Set<SecurityDepositHolding>();
 
@@ -165,6 +166,28 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.ExtractedFields).HasColumnType("jsonb");
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => e.BatchId);
+            // The owning batch is optional (single-file scans carry null). SetNull rather than Cascade
+            // so a draft (and the record it created) survives if a batch row is ever removed.
+            entity.HasOne(e => e.Batch)
+                .WithMany()
+                .HasForeignKey(e => e.BatchId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<ScanBatch>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Name).HasMaxLength(200);
+            entity.Property(e => e.TargetEntityType).IsRequired().HasMaxLength(120);
+            // Stored as the string enum name to match the app-wide string-enum convention.
+            entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.Status);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<DeviceToken>(entity =>

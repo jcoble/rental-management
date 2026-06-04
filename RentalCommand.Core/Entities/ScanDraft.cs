@@ -9,6 +9,13 @@ public class ScanDraft
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
+
+    /// <summary>
+    /// Owning bulk-scan batch, when this draft was created via a batch upload; null for single-file
+    /// scans. Links the draft into a <see cref="ScanBatch"/> review queue.
+    /// </summary>
+    public int? BatchId { get; set; }
+
     public string FilePath { get; set; } = string.Empty;
 
     /// <summary>Storage key of a small downscaled JPEG preview; null until generated (or for
@@ -31,4 +38,5 @@ public class ScanDraft
     public DateTime? ConfirmedAt { get; set; }
 
     public Portfolio? Portfolio { get; set; }
+    public ScanBatch? Batch { get; set; }
 }

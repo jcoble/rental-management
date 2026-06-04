@@ -837,6 +837,15 @@
 								Link a tenant to a unit and set the rent. We've filled in what we can from the
 								steps above — just confirm.
 							</p>
+							<div class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2.5" data-testid="onboarding-lease-bulk-import">
+								<span class="text-sm text-foreground">
+									Have existing leases on paper? Import them all at once instead.
+								</span>
+								<Button variant="outline" size="sm" class="gap-1" href="/scan/batch" data-testid="onboarding-import-leases">
+									<FileText class="h-4 w-4" />
+									Import leases
+								</Button>
+							</div>
 							{#if leaseProperties.length === 0 || leaseTenants.length === 0}
 								<div class="rounded-md border border-warning/40 bg-warning/10 px-3 py-3 text-sm text-foreground" data-testid="onboarding-lease-blocked">
 									You'll need at least one property with a unit and one tenant before you can create a
