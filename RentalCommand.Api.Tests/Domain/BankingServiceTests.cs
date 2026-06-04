@@ -224,6 +224,138 @@ public class BankingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SuggestMatch_PrefersCandidateWhoseNameMatchesTheMerchantLine()
+    {
+        // Two rent payments, same $1,500 amount and same date. One tenant's name (Carlos Reyes)
+        // appears on the bank line's merchant text; the other (Emily Chen) does not. The named
+        // candidate must win, even though both clear the amount + date gate.
+        var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+        var emily = SeedRentPaymentFor("Emily", "Chen", 1500m, date, "L-EMILY");
+        var carlos = SeedRentPaymentFor("Carlos", "Reyes", 1500m, date, "L-CARLOS");
+
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Test Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "name-txn-1",
+                    PostedAt = date,
+                    Description = "ACH CREDIT",
+                    MerchantName = "Carlos Reyes",
+                    Amount = 1500m,
+                },
+            ],
+        });
+
+        var suggestion = imported.Transactions.Single().SuggestedMatch;
+        suggestion.Should().NotBeNull();
+        suggestion!.EntityType.Should().Be("Payment");
+        suggestion.EntityId.Should().Be(carlos.Id);
+        suggestion.EntityId.Should().NotBe(emily.Id);
+    }
+
+    [Fact]
+    public async Task SuggestMatch_NameMatchYieldsHigherConfidenceThanDateOnlyMatch()
+    {
+        var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+
+        // Named match: merchant text contains the tenant name.
+        var namedCtx = new SqliteTestContext();
+        try
+        {
+            SeedRentPaymentInto(namedCtx, "Carlos", "Reyes", 1500m, date, "L-1");
+            var namedSvc = CreateServiceFor(namedCtx);
+            var namedResult = await namedSvc.ImportAsync(1, BankImport("named-1", date, "Carlos Reyes", 1500m));
+            var namedScore = namedResult.Transactions.Single().SuggestedMatch!.Confidence;
+
+            // Date-only match: no merchant name overlap, same amount + date.
+            var anonCtx = new SqliteTestContext();
+            try
+            {
+                SeedRentPaymentInto(anonCtx, "Carlos", "Reyes", 1500m, date, "L-1");
+                var anonSvc = CreateServiceFor(anonCtx);
+                var anonResult = await anonSvc.ImportAsync(1, BankImport("anon-1", date, null, 1500m));
+                var anonScore = anonResult.Transactions.Single().SuggestedMatch!.Confidence;
+
+                namedScore.Should().BeGreaterThan(anonScore);
+            }
+            finally { anonCtx.Dispose(); }
+        }
+        finally { namedCtx.Dispose(); }
+    }
+
+    [Fact]
+    public async Task IgnoreTransaction_MarksRemoved_DropsFromUnmatchedQueue_StaysListableUnderFilter()
+    {
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Test Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "personal-txn-1",
+                    PostedAt = new DateTime(2026, 06, 05, 0, 0, 0, DateTimeKind.Utc),
+                    Description = "STARBUCKS",
+                    MerchantName = "Starbucks",
+                    Amount = -6.45m,
+                },
+            ],
+        });
+        var transactionId = imported.Transactions.Single().Id;
+
+        var ignored = await _sut.IgnoreTransactionAsync(1, transactionId);
+
+        ignored.Should().NotBeNull();
+        ignored!.MatchStatus.Should().Be("Removed");
+        ignored.MatchedPaymentId.Should().BeNull();
+        ignored.MatchedExpenseId.Should().BeNull();
+        ignored.SuggestedMatch.Should().BeNull();
+        ignored.Notes.Should().Contain("personal");
+
+        // Gone from the unmatched feed and the review queue...
+        var unmatched = await _sut.ListTransactionsAsync(1, "Unmatched");
+        unmatched.Should().NotContain(t => t.Id == transactionId);
+        (await _sut.GetReviewQueueAsync(1)).Items.Should().NotContain(i => i.Transaction.Id == transactionId);
+
+        // ...but still listable under the Removed filter.
+        var removed = await _sut.ListTransactionsAsync(1, "Removed");
+        removed.Should().ContainSingle(t => t.Id == transactionId);
+    }
+
+    [Fact]
+    public async Task IgnoreTransaction_ReturnsNull_ForTransactionInAnotherPortfolio()
+    {
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Test Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "personal-txn-2",
+                    PostedAt = new DateTime(2026, 06, 05, 0, 0, 0, DateTimeKind.Utc),
+                    Description = "UBER",
+                    Amount = -18.30m,
+                },
+            ],
+        });
+        var transactionId = imported.Transactions.Single().Id;
+
+        // A different portfolio must not be able to ignore this line (IDOR guard).
+        var result = await _sut.IgnoreTransactionAsync(999, transactionId);
+        result.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetPlaidSettingsAsync_ReturnsSafeConfigStatus()
     {
         var settings = await _sut.GetPlaidSettingsAsync(1);
@@ -413,6 +545,103 @@ public class BankingServiceTests : IDisposable
         removed.MatchStatus.Should().Be("Removed");
         removed.Notes.Should().Be("Removed by Plaid sync.");
     }
+
+    private static ImportBankTransactionsRequest BankImport(string providerId, DateTime postedAt, string? merchant, decimal amount) =>
+        new()
+        {
+            Provider = "Manual",
+            InstitutionName = "Test Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = providerId,
+                    PostedAt = postedAt,
+                    Description = "ACH CREDIT",
+                    MerchantName = merchant,
+                    Amount = amount,
+                },
+            ],
+        };
+
+    private Payment SeedRentPaymentFor(string firstName, string lastName, decimal amount, DateTime paidAt, string leaseNumber) =>
+        SeedRentPaymentInto(_ctx, firstName, lastName, amount, paidAt, leaseNumber);
+
+    private static Payment SeedRentPaymentInto(
+        SqliteTestContext ctx, string firstName, string lastName, decimal amount, DateTime paidAt, string leaseNumber)
+    {
+        var property = new Property
+        {
+            PortfolioId = 1,
+            Name = "Short North Condo",
+            AddressLine1 = "1 Main",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = paidAt,
+            UpdatedAt = paidAt,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "4B",
+            MarketRent = amount,
+            CreatedAt = paidAt,
+            UpdatedAt = paidAt,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = 1,
+            FirstName = firstName,
+            LastName = lastName,
+            CreatedAt = paidAt,
+            UpdatedAt = paidAt,
+        };
+        var lease = new Lease
+        {
+            PortfolioId = 1,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = leaseNumber,
+            Status = LeaseStatus.Active,
+            StartDate = paidAt.AddMonths(-12),
+            EndDate = paidAt.AddMonths(12),
+            MonthlyRent = amount,
+            SecurityDeposit = amount,
+            LateFeeAmount = 70m,
+            CreatedAt = paidAt,
+            UpdatedAt = paidAt,
+        };
+        var payment = new Payment
+        {
+            PortfolioId = 1,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = amount,
+            DueDate = paidAt,
+            PaidDate = paidAt,
+            CreatedAt = paidAt,
+            UpdatedAt = paidAt,
+        };
+        ctx.Db.Payments.Add(payment);
+        ctx.Db.SaveChanges();
+        return payment;
+    }
+
+    private BankingService CreateServiceFor(SqliteTestContext ctx) =>
+        new(
+            ctx.Db,
+            new EphemeralDataProtectionProvider(),
+            _plaid.Object,
+            Options.Create(new PlaidOptions
+            {
+                Environment = "sandbox",
+                ClientId = "client-id",
+                Secret = "secret",
+            }));
 
     private Payment SeedRentPayment(DateTime paidAt)
     {
