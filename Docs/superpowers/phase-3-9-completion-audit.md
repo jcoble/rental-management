@@ -32,10 +32,10 @@ but the landlord cannot use the complete workflow in a logical place.
 
 | Feature                        | Status  | Notes                                                                                                                            |
 | ------------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Scan check to payment          | Usable  | Scan service handles `RentCheck` and creates payments. Web and Flutter review screens can confirm scans.                       |
+| MAKE SURE DONE E2E - Scan check to payment | Usable  | Scan service handles `RentCheck` and creates payments. Web and Flutter review screens can confirm scans. (Verify end-to-end, not rebuild.) |
 | Read-only Plaid reconciliation | Usable | Plaid sandbox Link, encrypted access tokens, bank connections/transactions, sync, matching, accounting ledger/totals, and Flutter/web banking surfaces are wired. |
-| Transparent tenant ledger      | Partial | Lease ledger endpoint exists, but explanatory "why" tooltips are not consistently surfaced.                                      |
-| Plain-English money snapshots  | Partial | Briefing and accounting reports provide inputs. Needs an explicit snapshot card/API surface.                                     |
+| DO- Transparent tenant ledger      | Partial | Lease ledger endpoint exists, but explanatory "why" tooltips are not consistently surfaced.                                      |
+| DO- Plain-English money snapshots  | Partial | Briefing and accounting reports provide inputs. Needs an explicit snapshot card/API surface.                                     |
 | DO- Online card/ACH            | Partial | Stripe payment intent/webhook exists. ACH/Plaid payment path is not complete.                                                    |
 
 ## Phase 6 - Applications, Screening, E-sign
@@ -51,12 +51,12 @@ but the landlord cannot use the complete workflow in a logical place.
 
 | Feature                           | Status  | Notes                                                                                                                           |
 | --------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Expense Schedule E categorization | Usable  | Scan and expense forms use Schedule E-style categories.                                                                         |
-| Receipt/deposit dedupe            | Partial | Bank transactions now suggest and store matches against payments/expenses. Needs a more explicit duplicate-review queue.        |
-| Year-end export packet            | Partial | Schedule E CSV, tax page, owner reports, P&L and 1099 review exist. Full PDF packet/cash-flow/rent-roll export is not complete. |
-| 1099/W-9 checklist and texts      | Partial | Vendor fields and accounting review exist. Text request flow is not implemented.                                                |
-| Ownership/entity modeling UI      | Usable  | Owners/entities pages exist and tie into reports.                                                                               |
-| Security deposit tracking         | Partial | Deposits exist. Photo-backed move-out statements are not complete.                                                              |
+| DO- Expense Schedule E categorization | Usable  | Scan and expense forms use Schedule E-style categories. (Verify/polish the workflow.)                                       |
+| DO- Receipt/deposit dedupe            | Partial | Bank transactions now suggest and store matches against payments/expenses. Needs a more explicit duplicate-review queue.        |
+| DO- Year-end export packet            | Partial | Schedule E CSV, tax page, owner reports, P&L and 1099 review exist. Full PDF packet/cash-flow/rent-roll export is not complete. |
+| DO- 1099/W-9 checklist and texts      | Partial | Vendor fields and accounting review exist. Text request flow is not implemented.                                                |
+| DO- Ownership/entity modeling UI      | Usable  | Owners/entities pages exist and tie into reports. (Verify/polish the workflow.)                                             |
+| DO- Security deposit tracking         | Partial | Deposits exist. Photo-backed move-out statements are not complete.                                                              |
 
 ## Phase 8 - Inspections and Maintenance Mobile
 
@@ -73,7 +73,7 @@ but the landlord cannot use the complete workflow in a logical place.
 | Feature                              | Status  | Notes                                                              |
 | ------------------------------------ | ------- | ------------------------------------------------------------------ |
 | DO- Guided 5-step setup wizard       | Missing | No onboarding wizard.                                              |
-| CSV/bulk import                      | Missing | No bulk import workflow.                                           |
+| DO- CSV/bulk import                  | Missing | No bulk import workflow.                                           |
 | DO- Bulk lease PDF scan              | Missing | Single-document scanning exists; no bulk lease migration workflow. |
 | DO- Opening balances/history scoping | Missing | No migration scoping workflow.                                     |
 
