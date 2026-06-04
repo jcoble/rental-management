@@ -495,6 +495,21 @@ export interface MatchBankTransactionRequest {
 	entityId: number;
 }
 
+export interface ConfirmBankMatchRequest {
+	paymentId?: number;
+	expenseId?: number;
+}
+
+export interface BankReviewQueueItem {
+	transaction: BankTransaction;
+	suggestion: BankMatchSuggestion;
+}
+
+export interface BankReviewQueueResponse {
+	count: number;
+	items: BankReviewQueueItem[];
+}
+
 export interface NoticeDraft {
 	id: number;
 	leaseId: number;

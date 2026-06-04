@@ -292,6 +292,43 @@ public class AccountingServiceTests : IDisposable
         reports.Ledger.Should().NotContain(l => l.Description == "Matched duplicate deposit");
     }
 
+    [Fact]
+    public async Task GetSummaryAndSnapshot_ExcludeConfirmedMatchedDeposit_ButCountDismissedDeposit()
+    {
+        // Anchor to "now" so the snapshot's month-to-date window includes the seeded rows regardless
+        // of when the test runs. SeedPropertyLeaseAndPayment seeds a Scheduled (not Paid) payment, so
+        // recorded payments contribute $0 to Collected here.
+        var now = DateTime.UtcNow;
+        SeedPropertyLeaseAndPayment(now);
+
+        // Confirmed match (Matched + a payment link): the bank deposit is the SAME money as the
+        // recorded payment, so it must NOT be added on top — no double count.
+        SeedBankTransaction(
+            description: "Confirmed rent deposit",
+            merchantName: "Tenant",
+            amount: 1200m,
+            postedAt: now,
+            category: "Deposit",
+            matchStatus: "Matched",
+            matchedPaymentId: 1);
+        // Dismissed deposit: reviewed, decided NOT a match, no link. It is real money that should
+        // still be counted as collected.
+        SeedBankTransaction(
+            description: "Dismissed deposit",
+            merchantName: "Other",
+            amount: 300m,
+            postedAt: now,
+            category: "Deposit",
+            matchStatus: "Dismissed");
+
+        var summary = await _sut.GetSummaryAsync(PortfolioId, CancellationToken.None);
+        var snapshot = await _sut.GetSnapshotAsync(PortfolioId, CancellationToken.None);
+
+        // Only the dismissed $300 counts; the confirmed/matched $1,200 is excluded as already-recorded.
+        summary.Payments.Collected.Should().Be(300m);
+        snapshot.Collected.Should().Be(300m);
+    }
+
     private (Property Property, Lease Lease) SeedPropertyAndLease(DateTime now)
     {
         var property = new Property
