@@ -35,3 +35,6 @@ Thumbs.db
 
 # Local mkcert dev certificates
 web/.cert/
+samples/scans/.venv/
+samples/**/__pycache__/
+*.pyc
