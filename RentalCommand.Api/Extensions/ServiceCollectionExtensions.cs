@@ -81,6 +81,7 @@ public static class ServiceCollectionExtensions
         // --- AI (phase 3) ---
         services.AddScoped<IDailyBriefingService, DailyBriefingService>();
         services.AddScoped<IPortfolioQaService, PortfolioQaService>();
+        services.AddScoped<IFairHousingReviewService, FairHousingReviewService>();
 
         // --- document hub ---
         services.AddScoped<IDocumentService, DocumentService>();
