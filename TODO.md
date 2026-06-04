@@ -644,6 +644,16 @@ Plan:
   one-way Go Live wipes demo → Live; ISandboxGuard suppresses outbound (email/SMS/Stripe/e-sign)
   while sandbox; amber banner + Go Live confirm dialog + Settings card. Api 231/231, Engine 23/23.
 
+### Wave 7 — Native e-signature merged in PR #89 (main `d06c7a1`)
+- **#23** Migration AddNativeEsign (SignatureRequest/Signer/AuditEvent); NativeEsignProvider is the
+  default (Dropbox stays gated) so e-sign works with no 3rd party; public /sign/[token] page
+  (consent + typed/drawn signature + audit IP/UA); ExecutedLeasePdfGenerator stamps signatures +
+  Certificate of Completion + SHA-256; completion flips the lease to Active. Api 241/241.
+  (Standalone module #26 still deferred.)
+
+### ✅ ALL FIVE DECISION-SPEC FEATURES SHIPPED (PRs #85–#89)
+Reports Hub (#17) · Bank reconciliation (#4/#5) · Docs+KB (#13/#14) · Sandbox (#11) · Native e-sign (#23).
+
 ### Decisions LOCKED (spec: Docs/superpowers/specs/2026-06-04-remaining-features-decisions.md)
 Bank reconciliation = ALWAYS one-tap confirm · Docs/KB = simple retrieval · Sandbox =
 graduate-once→wipe · E-sign = build native (defer module #26). Implementing in this order:
