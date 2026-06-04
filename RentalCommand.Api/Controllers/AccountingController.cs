@@ -104,6 +104,23 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
         return File(bytes, "text/csv", $"schedule-e-{reportYear}.csv");
     }
 
+    /// <summary>
+    /// Downloads the year-end accountant packet as a single PDF: cover page, Schedule E summary,
+    /// per-property profit &amp; loss, a month-by-month cash-flow summary, and a rent roll. This is the
+    /// "clean books" document a landlord hands their accountant. Defaults to the previous calendar year
+    /// when <paramref name="year"/> is omitted (that's the year you file for).
+    /// </summary>
+    [HttpGet("year-end-packet")]
+    [Produces("application/pdf")]
+    [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
+    public async Task<IActionResult> YearEndPacket([FromQuery] int? year, CancellationToken ct)
+    {
+        var reportYear = year ?? DateTime.UtcNow.Year - 1;
+        var pdf = await _service.GetYearEndPacketAsync(GetPortfolioId(), reportYear, ct);
+        // Inline so it previews in the browser; the filename still applies on download/save.
+        return File(pdf, "application/pdf", $"year-end-{reportYear}.pdf");
+    }
+
     // ── Owner Statement endpoints ────────────────────────────────────────────────────────────────
 
     /// <summary>

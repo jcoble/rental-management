@@ -36,6 +36,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IExpenseService, ExpenseService>();
         services.AddScoped<IAccountingService, AccountingService>();
         services.AddScoped<IScheduleEService, ScheduleEService>();
+        // Year-end accountant packet PDF rendering (QuestPDF). Stateless → singleton.
+        services.AddSingleton<IYearEndPacketPdfGenerator, YearEndPacketPdfGenerator>();
         services.AddScoped<IOwnerStatementService, OwnerStatementService>();
         services.AddScoped<IOwnerStatementEmailService, OwnerStatementEmailService>();
         services.AddScoped<ISecurityDepositService, SecurityDepositService>();
