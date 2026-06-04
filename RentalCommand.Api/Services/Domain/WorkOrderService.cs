@@ -64,16 +64,27 @@ public class WorkOrderService : IWorkOrderService
         return items.Select(WorkOrderResponse.FromEntity).ToList();
     }
 
-    public async Task<WorkOrderResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+    public async Task<WorkOrderDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
         var entity = await _db.WorkOrders
             .AsNoTracking()
             .FirstOrDefaultAsync(w => w.Id == id && w.PortfolioId == portfolioId, ct);
+        if (entity == null)
+        {
+            return null;
+        }
 
-        return entity == null ? null : WorkOrderResponse.FromEntity(entity);
+        var events = await _db.WorkOrderStatusEvents
+            .AsNoTracking()
+            .Where(e => e.WorkOrderId == id && e.PortfolioId == portfolioId)
+            .OrderBy(e => e.CreatedAtUtc)
+            .ThenBy(e => e.Id)
+            .ToListAsync(ct);
+
+        return WorkOrderDetailResponse.FromEntity(entity, events);
     }
 
-    public async Task<WorkOrderResponse?> CreateAsync(int portfolioId, CreateWorkOrderRequest request, CancellationToken ct = default)
+    public async Task<WorkOrderResponse?> CreateAsync(int portfolioId, CreateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default)
     {
         // Verify the referenced property (required) and optional unit/tenant/lease/vendor are in scope.
         if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
@@ -129,6 +140,20 @@ public class WorkOrderService : IWorkOrderService
         };
 
         _db.WorkOrders.Add(entity);
+
+        // Initial timeline entry: null → the created status. Same save as the work order so the
+        // stream can never diverge from the current status.
+        entity.StatusEvents.Add(new WorkOrderStatusEvent
+        {
+            PortfolioId = portfolioId,
+            FromStatus = null,
+            ToStatus = entity.Status,
+            Note = null,
+            ChangedByUserId = changedByUserId,
+            ChangedByLabel = changedByLabel,
+            CreatedAtUtc = now,
+        });
+
         await _db.SaveChangesAsync(ct);
 
         var response = WorkOrderResponse.FromEntity(entity);
@@ -136,7 +161,7 @@ public class WorkOrderService : IWorkOrderService
         return response;
     }
 
-    public async Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, CancellationToken ct = default)
+    public async Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default)
     {
         var entity = await _db.WorkOrders
             .FirstOrDefaultAsync(w => w.Id == id && w.PortfolioId == portfolioId, ct);
@@ -177,12 +202,32 @@ public class WorkOrderService : IWorkOrderService
         if (request.Description != null) entity.Description = request.Description;
         if (request.Category != null) entity.Category = request.Category;
         if (request.Priority.HasValue) entity.Priority = request.Priority.Value;
+
+        // Capture the status transition (if any) so we can append a timeline entry in the same save.
+        var previousStatus = entity.Status;
+        var statusChanged = request.Status.HasValue && request.Status.Value != previousStatus;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
+
         if (request.ScheduledFor.HasValue) entity.ScheduledFor = request.ScheduledFor.ToUtc();
         if (request.CompletedAt.HasValue) entity.CompletedAt = request.CompletedAt.ToUtc();
         if (request.EstimatedCost.HasValue) entity.EstimatedCost = request.EstimatedCost;
         if (request.ActualCost.HasValue) entity.ActualCost = request.ActualCost;
-        entity.UpdatedAt = DateTime.UtcNow;
+        var now = DateTime.UtcNow;
+        entity.UpdatedAt = now;
+
+        if (statusChanged)
+        {
+            entity.StatusEvents.Add(new WorkOrderStatusEvent
+            {
+                PortfolioId = portfolioId,
+                FromStatus = previousStatus,
+                ToStatus = entity.Status,
+                Note = string.IsNullOrWhiteSpace(request.StatusNote) ? null : request.StatusNote.Trim(),
+                ChangedByUserId = changedByUserId,
+                ChangedByLabel = changedByLabel,
+                CreatedAtUtc = now,
+            });
+        }
 
         await _db.SaveChangesAsync(ct);
 

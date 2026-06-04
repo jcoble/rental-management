@@ -24,6 +24,7 @@ import '../messages/messages_repository.dart';
 import '../payments/payments_screen.dart';
 import '../portal/tenant_account_history_screen.dart';
 import '../portal/tenant_portal_repository.dart';
+import '../portal/tenant_work_order_detail_screen.dart';
 import '../properties/properties_tab.dart';
 import '../scan/scan_tab.dart';
 import '../tenants/tenants_list_screen.dart';
@@ -437,6 +438,13 @@ class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
                         child: ListTile(
                           title: Text(w.title),
                           subtitle: Text('${w.status} · ${w.priority}'),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  TenantWorkOrderDetailScreen(workOrderId: w.id),
+                            ),
+                          ),
                         ),
                       ),
                     )

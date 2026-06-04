@@ -1,8 +1,14 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
+import '../../core/models/models.dart';
+import '../properties/properties_repository.dart';
+import 'work_order_timeline.dart';
 import 'work_orders_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -40,17 +46,8 @@ const _allStatuses = [
   'Cancelled',
 ];
 
-/// Human-readable labels for status values.
-String _statusLabel(String s) {
-  switch (s) {
-    case 'InProgress':
-      return 'In Progress';
-    case 'WaitingParts':
-      return 'Waiting Parts';
-    default:
-      return s;
-  }
-}
+/// Human-readable labels for status values (delegates to the shared helper).
+String _statusLabel(String s) => workOrderStatusLabel(s);
 
 Color _priorityColor(String priority, ColorScheme cs) {
   switch (priority.toLowerCase()) {
@@ -108,12 +105,21 @@ Color _statusTextColor(String status, ColorScheme cs) {
   }
 }
 
+String _mimeFromExtension(String filename) {
+  final lower = filename.toLowerCase();
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.heic')) return 'image/heic';
+  return 'image/jpeg';
+}
+
 // ── Entry widget ──────────────────────────────────────────────────────────────
 
 /// Detail screen for a single work order.
 ///
-/// Shows full details, an edit bottom sheet, and status-transition buttons
-/// for all valid [_allStatuses] except the current one.
+/// Shows full details, a live status timeline, a before/after photo strip with
+/// camera/gallery capture, a tap-to-navigate action, and status transitions
+/// (each able to record an optional note on the timeline).
 class WorkOrderDetailScreen extends ConsumerStatefulWidget {
   const WorkOrderDetailScreen({super.key, required this.workOrderId});
 
@@ -127,15 +133,140 @@ class WorkOrderDetailScreen extends ConsumerStatefulWidget {
 class _WorkOrderDetailScreenState
     extends ConsumerState<WorkOrderDetailScreen> {
   bool _statusUpdating = false;
+  bool _uploadingPhoto = false;
 
-  Future<void> _transitionStatus(String status) async {
+  Future<void> _refresh() => ref
+      .read(workOrderDetailProvider(widget.workOrderId).notifier)
+      .refresh();
+
+  void _showError(Object error) {
+    if (!mounted) return;
+    final message = error is ApiException ? error.message : error.toString();
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _changeStatus(String status) async {
+    final note = await showModalBottomSheet<String?>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _StatusNoteSheet(status: status),
+    );
+    // A null result means the sheet was dismissed without confirming.
+    if (note == null || !mounted) return;
+
     setState(() => _statusUpdating = true);
     try {
       await ref
           .read(workOrderDetailProvider(widget.workOrderId).notifier)
-          .updateStatus(status);
+          .updateStatus(status, note: note.isEmpty ? null : note);
     } finally {
       if (mounted) setState(() => _statusUpdating = false);
+    }
+  }
+
+  Future<void> _addPhoto(ImageSource source) async {
+    final picked = await ImagePicker().pickImage(
+      source: source,
+      imageQuality: 80,
+      maxWidth: 1600,
+      maxHeight: 1600,
+    );
+    if (picked == null || !mounted) return;
+
+    setState(() => _uploadingPhoto = true);
+    try {
+      final bytes = Uint8List.fromList(await picked.readAsBytes());
+      await ref.read(workOrdersRepositoryProvider).uploadWorkOrderPhoto(
+            workOrderId: widget.workOrderId,
+            bytes: bytes,
+            fileName: picked.name,
+            contentType: _mimeFromExtension(picked.name),
+          );
+      if (!mounted) return;
+      ref.invalidate(workOrderDocumentsProvider(widget.workOrderId));
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Photo added.')));
+    } on ApiException catch (e) {
+      _showError(e);
+    } finally {
+      if (mounted) setState(() => _uploadingPhoto = false);
+    }
+  }
+
+  void _showPhotoSourceSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetCtx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: const Text('Take photo'),
+              onTap: () {
+                Navigator.of(sheetCtx).pop();
+                _addPhoto(ImageSource.camera);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('Choose from gallery'),
+              onTap: () {
+                Navigator.of(sheetCtx).pop();
+                _addPhoto(ImageSource.gallery);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _navigateToProperty(WorkOrder wo) async {
+    var query = [
+      if (wo.propertyName != null && wo.propertyName!.isNotEmpty)
+        wo.propertyName!,
+    ].join(', ');
+
+    // The work-order payload has no address, so fall back to the property
+    // record for a real street address when we can fetch it.
+    try {
+      final property = await ref
+          .read(propertiesRepositoryProvider)
+          .getProperty(wo.propertyId);
+      final addressParts = [
+        property.addressLine1,
+        if (property.addressLine2 != null && property.addressLine2!.isNotEmpty)
+          property.addressLine2!,
+        property.city,
+        property.state,
+        property.postalCode,
+      ].where((p) => p.trim().isNotEmpty).toList();
+      if (addressParts.isNotEmpty) {
+        query = addressParts.join(', ');
+      } else if (property.name.isNotEmpty) {
+        query = property.name;
+      }
+    } on ApiException {
+      // Keep the property-name query we already have.
+    }
+
+    if (query.isEmpty) {
+      _showError('No address available for this work order.');
+      return;
+    }
+
+    final uri = Uri.parse(
+      'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(query)}',
+    );
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && mounted) {
+      _showError('Could not open Maps.');
     }
   }
 
@@ -159,7 +290,7 @@ class _WorkOrderDetailScreenState
 
   @override
   Widget build(BuildContext context) {
-    final woAsync =
+    final detailAsync =
         ref.watch(workOrderDetailProvider(widget.workOrderId));
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
@@ -168,21 +299,19 @@ class _WorkOrderDetailScreenState
       appBar: AppBar(
         title: const Text('Work Order'),
         actions: [
-          woAsync.whenOrNull(
-                data: (wo) => IconButton(
+          detailAsync.whenOrNull(
+                data: (detail) => IconButton(
                   icon: const Icon(Icons.edit_outlined),
                   tooltip: 'Edit',
-                  onPressed: () => _showEditSheet(context, wo),
+                  onPressed: () => _showEditSheet(context, detail.workOrder),
                 ),
               ) ??
               const SizedBox.shrink(),
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: () => ref
-            .read(workOrderDetailProvider(widget.workOrderId).notifier)
-            .refresh(),
-        child: woAsync.when(
+        onRefresh: _refresh,
+        child: detailAsync.when(
           loading: () =>
               const Center(child: CircularProgressIndicator()),
           error: (e, _) => Center(
@@ -201,22 +330,22 @@ class _WorkOrderDetailScreenState
                   ),
                   const SizedBox(height: 16),
                   FilledButton.tonal(
-                    onPressed: () => ref
-                        .read(workOrderDetailProvider(widget.workOrderId)
-                            .notifier)
-                        .refresh(),
+                    onPressed: _refresh,
                     child: const Text('Retry'),
                   ),
                 ],
               ),
             ),
           ),
-          data: (wo) => _DetailBody(
-            workOrder: wo,
+          data: (detail) => _DetailBody(
+            detail: detail,
             colorScheme: colorScheme,
             theme: theme,
             statusUpdating: _statusUpdating,
-            onTransition: _transitionStatus,
+            uploadingPhoto: _uploadingPhoto,
+            onTransition: _changeStatus,
+            onAddPhoto: _showPhotoSourceSheet,
+            onNavigate: () => _navigateToProperty(detail.workOrder),
           ),
         ),
       ),
@@ -228,21 +357,28 @@ class _WorkOrderDetailScreenState
 
 class _DetailBody extends StatelessWidget {
   const _DetailBody({
-    required this.workOrder,
+    required this.detail,
     required this.colorScheme,
     required this.theme,
     required this.statusUpdating,
+    required this.uploadingPhoto,
     required this.onTransition,
+    required this.onAddPhoto,
+    required this.onNavigate,
   });
 
-  final WorkOrder workOrder;
+  final WorkOrderDetail detail;
   final ColorScheme colorScheme;
   final ThemeData theme;
   final bool statusUpdating;
+  final bool uploadingPhoto;
   final void Function(String) onTransition;
+  final VoidCallback onAddPhoto;
+  final VoidCallback onNavigate;
 
   @override
   Widget build(BuildContext context) {
+    final workOrder = detail.workOrder;
     final otherStatuses =
         _allStatuses.where((s) => s != workOrder.status).toList();
 
@@ -257,17 +393,25 @@ class _DetailBody extends StatelessWidget {
               ?.copyWith(fontWeight: FontWeight.w700),
         ),
         const SizedBox(height: 8),
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
             _PriorityChip(
                 priority: workOrder.priority, colorScheme: colorScheme),
-            const SizedBox(width: 8),
-            _StatusChip(
-                status: workOrder.status, colorScheme: colorScheme),
-            const SizedBox(width: 8),
+            _StatusChip(status: workOrder.status, colorScheme: colorScheme),
             _CategoryChip(
                 category: workOrder.category, colorScheme: colorScheme),
           ],
+        ),
+
+        const SizedBox(height: 16),
+
+        // ── Navigate ───────────────────────────────────────────────────
+        FilledButton.tonalIcon(
+          onPressed: onNavigate,
+          icon: const Icon(Icons.directions_outlined),
+          label: const Text('Open in Maps'),
         ),
 
         const SizedBox(height: 20),
@@ -282,9 +426,39 @@ class _DetailBody extends StatelessWidget {
         // ── Details grid ───────────────────────────────────────────────
         _SectionLabel(label: 'Details', theme: theme),
         const SizedBox(height: 8),
-        _DetailGrid(workOrder: workOrder, colorScheme: colorScheme, theme: theme),
+        _DetailGrid(
+            workOrder: workOrder, colorScheme: colorScheme, theme: theme),
 
         const SizedBox(height: 20),
+
+        // ── Photos ─────────────────────────────────────────────────────
+        Row(
+          children: [
+            Expanded(child: _SectionLabel(label: 'Photos', theme: theme)),
+            TextButton.icon(
+              onPressed: uploadingPhoto ? null : onAddPhoto,
+              icon: uploadingPhoto
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.add_a_photo_outlined, size: 18),
+              label: Text(uploadingPhoto ? 'Uploading...' : 'Add photo'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        _PhotoStrip(workOrderId: workOrder.id),
+
+        const SizedBox(height: 20),
+
+        // ── Timeline ───────────────────────────────────────────────────
+        _SectionLabel(label: 'Status timeline', theme: theme),
+        const SizedBox(height: 8),
+        WorkOrderTimeline(events: detail.timeline),
+
+        const SizedBox(height: 24),
 
         // ── Status transitions ─────────────────────────────────────────
         _SectionLabel(label: 'Update Status', theme: theme),
@@ -311,6 +485,228 @@ class _DetailBody extends StatelessWidget {
                 .toList(),
           ),
       ],
+    );
+  }
+}
+
+// ── Photo strip ───────────────────────────────────────────────────────────────
+
+class _PhotoStrip extends ConsumerWidget {
+  const _PhotoStrip({required this.workOrderId});
+
+  final int workOrderId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final docsAsync = ref.watch(workOrderDocumentsProvider(workOrderId));
+    final cs = Theme.of(context).colorScheme;
+
+    return docsAsync.when(
+      loading: () => const SizedBox(
+        height: 96,
+        child: Center(child: CircularProgressIndicator()),
+      ),
+      error: (_, _) => _PhotoStripMessage(
+        icon: Icons.broken_image_outlined,
+        text: "Couldn't load photos.",
+      ),
+      data: (docs) {
+        final images = docs.where((d) => d.isImage).toList();
+        if (images.isEmpty) {
+          return const _PhotoStripMessage(
+            icon: Icons.photo_outlined,
+            text: 'No photos yet — add before/after evidence.',
+          );
+        }
+        return SizedBox(
+          height: 96,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: images.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (_, i) => _PhotoThumb(document: images[i], cs: cs),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _PhotoStripMessage extends StatelessWidget {
+  const _PhotoStripMessage({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: cs.onSurfaceVariant, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(color: cs.onSurfaceVariant),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PhotoThumb extends ConsumerWidget {
+  const _PhotoThumb({required this.document, required this.cs});
+
+  final Document document;
+  final ColorScheme cs;
+
+  void _openFullScreen(BuildContext context, Uint8List bytes) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            foregroundColor: Colors.white,
+          ),
+          body: Center(
+            child: InteractiveViewer(child: Image.memory(bytes)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final bytesAsync = ref.watch(documentBytesProvider(document.id));
+
+    return bytesAsync.when(
+      loading: () => Container(
+        width: 96,
+        height: 96,
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Center(
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      ),
+      error: (_, _) => Container(
+        width: 96,
+        height: 96,
+        decoration: BoxDecoration(
+          color: cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Icon(Icons.broken_image_outlined, color: cs.onSurfaceVariant),
+      ),
+      data: (bytes) => GestureDetector(
+        onTap: () => _openFullScreen(context, bytes),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Image.memory(
+            bytes,
+            width: 96,
+            height: 96,
+            fit: BoxFit.cover,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Status-note bottom sheet ──────────────────────────────────────────────────
+
+/// Pops `null` if dismissed, or the (possibly empty) note string on confirm.
+class _StatusNoteSheet extends StatefulWidget {
+  const _StatusNoteSheet({required this.status});
+
+  final String status;
+
+  @override
+  State<_StatusNoteSheet> createState() => _StatusNoteSheetState();
+}
+
+class _StatusNoteSheetState extends State<_StatusNoteSheet> {
+  final _noteCtrl = TextEditingController();
+
+  @override
+  void dispose() {
+    _noteCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Set status: ${_statusLabel(widget.status)}',
+            style:
+                theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Add an optional note for the timeline.',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _noteCtrl,
+            maxLines: 3,
+            autofocus: true,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+              labelText: 'Note (optional)',
+              hintText: 'e.g. Parts ordered, tenant let us in...',
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton(
+                  onPressed: () =>
+                      Navigator.of(context).pop(_noteCtrl.text.trim()),
+                  child: const Text('Update'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }

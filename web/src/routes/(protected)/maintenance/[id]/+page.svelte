@@ -8,13 +8,15 @@
 	import { workOrderSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
-	import { Pencil, Save, Trash2, X } from '@lucide/svelte';
+	import { History, Pencil, Save, Trash2, X } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
+	import WorkOrderTimeline from '$lib/components/shared/WorkOrderTimeline.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -97,11 +99,30 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
+	// Status change with an optional short note recorded on the timeline.
+	let pendingStatus = $state<string | null>(null);
+	let statusNote = $state('');
+
+	function openStatusChange(next: string) {
+		pendingStatus = next;
+		statusNote = '';
+	}
+	function cancelStatusChange() {
+		pendingStatus = null;
+		statusNote = '';
+	}
+	function confirmStatusChange() {
+		if (!wo || !pendingStatus) return;
+		statusMutation.mutate({ id: wo.id, status: pendingStatus, note: statusNote.trim() || undefined });
+	}
+
 	const statusMutation = createMutation(() => ({
-		mutationFn: ({ id: woId, status }: { id: number; status: string }) =>
-			workOrders.updateStatus(woId, status),
+		mutationFn: ({ id: woId, status, note }: { id: number; status: string; note?: string }) =>
+			workOrders.updateStatus(woId, status, note),
 		onSuccess: () => {
 			showSuccess('Status updated.');
+			pendingStatus = null;
+			statusNote = '';
 			invalidate();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -202,7 +223,7 @@
 							size="sm"
 							disabled={statusMutation.isPending}
 							data-testid="work-order-set-{nextStatus.toLowerCase()}"
-							onclick={() => statusMutation.mutate({ id: wo.id, status: nextStatus })}
+							onclick={() => openStatusChange(nextStatus)}
 						>
 							{nextStatus === 'InProgress' ? 'In Progress' : nextStatus}
 						</Button>
@@ -274,12 +295,62 @@
 			</Card.Content>
 		</Card.Root>
 
+		<!-- Status history timeline -->
+		<Card.Root class="mt-6" data-testid="work-order-detail-timeline">
+			<Card.Header>
+				<Card.Title class="flex items-center gap-2 text-base">
+					<History class="h-4 w-4 text-muted-foreground" />
+					Status history
+				</Card.Title>
+			</Card.Header>
+			<Card.Content>
+				<WorkOrderTimeline timeline={wo.timeline} />
+			</Card.Content>
+		</Card.Root>
+
 		<!-- Documents section -->
 		<div class="mt-6" data-testid="work-order-detail-documents">
-			<DocumentsPanel entityType="WorkOrder" entityId={id} />
+			<DocumentsPanel entityType="WorkOrder" entityId={id} title="Photos & documents" />
 		</div>
 	{/if}
 </div>
+
+<!-- Status change: optional note recorded on the timeline -->
+<Dialog.Root open={pendingStatus !== null} onOpenChange={(v) => { if (!v) cancelStatusChange(); }}>
+	<Dialog.Content data-testid="work-order-status-note-dialog">
+		<Dialog.Header>
+			<Dialog.Title>
+				{pendingStatus === 'InProgress' ? 'Mark In Progress' : `Mark ${pendingStatus ?? ''}`}
+			</Dialog.Title>
+		</Dialog.Header>
+		{#if wo && pendingStatus}
+			<p class="text-sm text-muted-foreground">
+				Change status from <span class="font-medium text-foreground">{wo.status}</span> to
+				<span class="font-medium text-foreground">{pendingStatus === 'InProgress' ? 'In Progress' : pendingStatus}</span>.
+			</p>
+		{/if}
+		<div class="space-y-1.5">
+			<label for="status-note" class="text-xs font-medium text-muted-foreground">Note (optional)</label>
+			<textarea
+				id="status-note"
+				bind:value={statusNote}
+				rows={3}
+				maxlength={2000}
+				placeholder="Add a note for the history (e.g. parts ordered, tenant notified)…"
+				class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+				data-testid="work-order-status-note-input"
+			></textarea>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={cancelStatusChange} disabled={statusMutation.isPending} data-testid="work-order-status-note-cancel">
+				Cancel
+			</Button>
+			<Button onclick={confirmStatusChange} disabled={statusMutation.isPending} data-testid="work-order-status-note-confirm">
+				{statusMutation.isPending ? 'Updating…' : 'Update status'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	open={showDeleteConfirm}
