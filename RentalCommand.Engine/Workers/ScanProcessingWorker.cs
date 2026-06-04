@@ -35,7 +35,18 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
     public static ExtractionSchema ChooseExtractionSchema(string? targetEntityType)
         => string.Equals(targetEntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase)
             ? new ExtractionSchema(WorkOrderExtractionSchema.Instructions, WorkOrderExtractionSchema.Fields)
-            : new ExtractionSchema(ReceiptExtractionSchema.Instructions, ReceiptExtractionSchema.Fields);
+            : IsLeaseTarget(targetEntityType)
+                ? new ExtractionSchema(LeaseExtractionSchema.Instructions, LeaseExtractionSchema.Fields)
+                : new ExtractionSchema(ReceiptExtractionSchema.Instructions, ReceiptExtractionSchema.Fields);
+
+    /// <summary>
+    /// A lease import is requested either by the explicit upload target "Lease", or by a document the
+    /// model classified as a lease ("Lease"/"LeaseAgreement"). Both pick the lease extraction schema and
+    /// confirm as a Lease.
+    /// </summary>
+    private static bool IsLeaseTarget(string? targetEntityType) =>
+        string.Equals(targetEntityType, "Lease", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(targetEntityType, "LeaseAgreement", StringComparison.OrdinalIgnoreCase);
 
     protected override async Task<int> ExecuteCycleAsync(IServiceProvider scoped, CancellationToken ct)
     {
@@ -113,17 +124,31 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                 draft.TokensUsed = extracted.TokensUsed;
                 draft.CostUsd = EstimateCost(extracted.ModelId, extracted.InputTokens, extracted.OutputTokens);
 
-                if (!string.Equals(draft.TargetEntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(draft.TargetEntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Route by classified document kind: rent checks become Payments, everything else Expenses.
-                    var classifiedKind = extracted.Fields.TryGetValue("document_kind", out var kindField)
-                        ? kindField.Value ?? string.Empty
-                        : string.Empty;
-                    draft.TargetEntityType = classifiedKind == "RentCheck" ? "Payment" : "Expense";
+                    draft.TargetEntityType = "WorkOrder";
+                }
+                else if (IsLeaseTarget(draft.TargetEntityType))
+                {
+                    // A lease PDF was uploaded with the Lease target (the "import your PDF leases" path):
+                    // it was extracted with the lease schema, so confirm it as a Lease.
+                    draft.TargetEntityType = "Lease";
                 }
                 else
                 {
-                    draft.TargetEntityType = "WorkOrder";
+                    // Route by classified document kind: a lease agreement the model recognised becomes a
+                    // Lease, rent checks become Payments, everything else Expenses. (A document classified
+                    // as a lease here was extracted with the receipt schema, so the confirm step still asks
+                    // the reviewer to fill the lease terms — but it lands on the correct review branch.)
+                    var classifiedKind = extracted.Fields.TryGetValue("document_kind", out var kindField)
+                        ? kindField.Value ?? string.Empty
+                        : string.Empty;
+                    draft.TargetEntityType = classifiedKind switch
+                    {
+                        "Lease" or "LeaseAgreement" => "Lease",
+                        "RentCheck" => "Payment",
+                        _ => "Expense",
+                    };
                 }
 
                 draft.Status = "Reviewing";

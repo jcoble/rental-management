@@ -54,9 +54,10 @@ public class ScanController : AuthenticatedPortfolioControllerBase
         if (!string.IsNullOrEmpty(targetEntityType)
             && !string.Equals(targetEntityType, "Expense", StringComparison.OrdinalIgnoreCase)
             && !string.Equals(targetEntityType, "Payment", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(targetEntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase))
+            && !string.Equals(targetEntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(targetEntityType, "Lease", StringComparison.OrdinalIgnoreCase))
         {
-            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment, WorkOrder (or omit to auto-classify)." });
+            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease (or omit to auto-classify)." });
         }
 
         using var ms = new MemoryStream();
@@ -232,6 +233,7 @@ public class ScanController : AuthenticatedPortfolioControllerBase
         {
             "Payment" => Ok(new { paymentId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
             "WorkOrder" => Ok(new { workOrderId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
+            "Lease" => Ok(new { leaseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
             _ => Ok(new { expenseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
         };
     }
