@@ -44,6 +44,7 @@ public static class ServiceCollectionExtensions
 
         // --- controllers-ops-misc sub-unit ---
         services.AddScoped<IWorkOrderService, WorkOrderService>();
+        services.AddScoped<IRecurringMaintenanceTaskService, RecurringMaintenanceTaskService>();
         services.AddScoped<IAppointmentService, AppointmentService>();
         services.AddScoped<IInspectionService, InspectionService>();
         services.AddScoped<IActivityService, ActivityService>();

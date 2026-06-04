@@ -16,6 +16,11 @@ public class NotificationsConfig
     // landlord still approves each one (and picks channels) before anything leaves the building.
     public bool EnableNoticeAutopilot { get; set; } = true;
 
+    // Recurring maintenance: auto-create a work order each period for standing chores
+    // (HVAC filter every 90 days, quarterly gutter cleaning, …). Defaults ON because each task's own
+    // IsActive flag is the real switch — this is just a master kill switch for the whole feature.
+    public bool EnableRecurringMaintenance { get; set; } = true;
+
     // Whether to enqueue tenant-facing SMS/email notices from the automations (off until providers set).
     public bool NotifyTenants { get; set; } = false;
 
