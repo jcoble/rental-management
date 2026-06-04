@@ -35,13 +35,6 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
     /// <inheritdoc/>
     public async Task<int> GenerateAllAsync(CancellationToken ct = default)
     {
-        var cfg = await _settings.GetRuntimeAsync(ct);
-        if (!cfg.EnableNoticeAutopilot)
-        {
-            _logger.LogDebug("notice autopilot disabled");
-            return 0;
-        }
-
         var portfolioIds = await _db.Portfolios
             .Where(p => p.DeletedAt == null)
             .OrderBy(p => p.Id)
@@ -52,6 +45,15 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
         foreach (var portfolioId in portfolioIds)
         {
             ct.ThrowIfCancellationRequested();
+
+            // NoticeAutopilot is a per-portfolio master gate now.
+            var cfg = await _settings.GetRuntimeAsync(portfolioId, ct);
+            if (!cfg.EnableNoticeAutopilot)
+            {
+                _logger.LogDebug("notice autopilot disabled for portfolio {PortfolioId}", portfolioId);
+                continue;
+            }
+
             try
             {
                 // GenerateAsync is idempotent (it skips notice types that already have an open Draft

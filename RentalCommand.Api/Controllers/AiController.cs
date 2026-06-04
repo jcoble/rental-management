@@ -49,21 +49,17 @@ public class AiController : AuthenticatedPortfolioControllerBase
     }
 
     /// <summary>
-    /// Maps the request's delivery flags to resolved <see cref="QaDeliveryOptions"/>, filling in
-    /// the signed-in user's email as the default email recipient when none is supplied.
+    /// Maps the request's delivery flags to resolved <see cref="QaDeliveryOptions"/>. The recipient
+    /// is never client-supplied: email is the authenticated user's own claim email, and the phone is
+    /// resolved server-side (the portfolio owner's number) inside the service. This keeps the feature
+    /// to "send this answer to me" and prevents using the assistant as an email/SMS open relay.
     /// </summary>
     private QaDeliveryOptions BuildDelivery(AskRequest req)
     {
         if (!req.DeliverViaEmail && !req.DeliverViaSms)
             return QaDeliveryOptions.None;
 
-        var toEmail = !string.IsNullOrWhiteSpace(req.DeliverToEmail)
-            ? req.DeliverToEmail!.Trim()
-            : GetUserEmail();
-
-        var toPhone = string.IsNullOrWhiteSpace(req.DeliverToPhone) ? null : req.DeliverToPhone!.Trim();
-
-        return new QaDeliveryOptions(req.DeliverViaEmail, req.DeliverViaSms, toEmail, toPhone);
+        return new QaDeliveryOptions(req.DeliverViaEmail, req.DeliverViaSms, GetUserEmail());
     }
 
     /// <summary>The signed-in user's email from claims (mapped or raw), or null when absent.</summary>

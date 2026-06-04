@@ -85,6 +85,7 @@ public class RentChargeServiceTests : IDisposable
             _ctx.Db,
             _publisher.Object,
             new FakeNotificationSettingsService(cfg),
+            Mock.Of<IDataUpdateService>(),
             new ConfigurationBuilder().Build(),
             NullLogger<RentChargeService>.Instance);
     }

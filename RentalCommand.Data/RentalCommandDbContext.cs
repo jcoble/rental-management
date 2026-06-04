@@ -34,6 +34,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<ConversationMessage> ConversationMessages => Set<ConversationMessage>();
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<NotificationSettings> NotificationSettings => Set<NotificationSettings>();
+    public DbSet<NotificationPreference> NotificationPreferences => Set<NotificationPreference>();
     public DbSet<BankConnection> BankConnections => Set<BankConnection>();
     public DbSet<BankTransaction> BankTransactions => Set<BankTransaction>();
     public DbSet<NoticeDraft> NoticeDrafts => Set<NoticeDraft>();
@@ -204,6 +205,21 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.RentChargeLeadDays).HasDefaultValue(5);
             entity.Property(e => e.LateFeeGraceDays).HasDefaultValue(5);
             entity.Property(e => e.LeaseExpiryReminderDays).HasDefaultValue(60);
+            // Per-portfolio now (was a single global row). One settings row per portfolio.
+            entity.HasIndex(e => e.PortfolioId).IsUnique();
+        });
+
+        modelBuilder.Entity<NotificationPreference>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            // Stored as the string enum name to match the app-wide string-enum convention and to keep
+            // the unique key stable if the enum is ever reordered.
+            entity.Property(e => e.NotificationType).HasConversion<string>().HasMaxLength(40);
+            entity.HasIndex(e => new { e.PortfolioId, e.NotificationType }).IsUnique();
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<BankConnection>(entity =>

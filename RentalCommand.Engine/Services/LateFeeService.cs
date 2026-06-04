@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -27,6 +28,7 @@ public sealed class LateFeeService : ILateFeeService
     private readonly RentalCommandDbContext _db;
     private readonly IMessagePublisher _publisher;
     private readonly INotificationSettingsService _settings;
+    private readonly IDataUpdateService _dataUpdate;
     private readonly NotificationsConfig _defaults;
     private readonly TimeZoneInfo _businessTimeZone;
     private readonly ILogger<LateFeeService> _logger;
@@ -35,6 +37,7 @@ public sealed class LateFeeService : ILateFeeService
         RentalCommandDbContext db,
         IMessagePublisher publisher,
         INotificationSettingsService settings,
+        IDataUpdateService dataUpdate,
         IOptions<NotificationsConfig> options,
         IConfiguration configuration,
         ILogger<LateFeeService> logger)
@@ -42,6 +45,7 @@ public sealed class LateFeeService : ILateFeeService
         _db = db;
         _publisher = publisher;
         _settings = settings;
+        _dataUpdate = dataUpdate;
         _defaults = options.Value;
         _logger = logger;
 
@@ -58,21 +62,15 @@ public sealed class LateFeeService : ILateFeeService
     /// <inheritdoc />
     public async Task<int> AssessAsync(CancellationToken ct = default)
     {
-        var cfg = await _settings.GetRuntimeAsync(ct);
-        cfg.StateLateFeeCaps = _defaults.StateLateFeeCaps;
-
-        if (!cfg.EnableLateFees)
-            return 0;
-
         // DA#4: derive the business "today" from the landlord's LOCAL zone so the grace cutoff and
         // "past due" decision use their calendar day, not UTC's. Rent DueDates are stored as UTC
         // midnight, so express today/cutoff as UTC-midnight too (Kind=Utc) to compare like-for-like
         // and to keep the late-fee row's DueDate a UTC value.
         var localToday = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date;
         var today = new DateTime(localToday.Year, localToday.Month, localToday.Day, 0, 0, 0, DateTimeKind.Utc);
-        var cutoff = today.AddDays(-cfg.LateFeeGraceDays);
 
-        // Load all overdue rent payments that are still unpaid / partially paid / already late.
+        // Grace days are per-portfolio now, so the cutoff is too. Load overdue rent broadly and gate
+        // each payment against its own portfolio's cutoff + master flag below.
         var overdueRent = await _db.Payments
             .Where(p =>
                 p.PaymentType == PaymentType.Rent &&
@@ -80,7 +78,7 @@ public sealed class LateFeeService : ILateFeeService
                 (p.Status == PaymentStatus.Scheduled ||
                  p.Status == PaymentStatus.Late ||
                  p.Status == PaymentStatus.Partial) &&
-                p.DueDate < cutoff)
+                p.DueDate < today)       // can't be past any grace window if not yet past due
             .Include(p => p.Lease)
                 .ThenInclude(l => l!.Property)
             .ToListAsync(ct);
@@ -88,9 +86,8 @@ public sealed class LateFeeService : ILateFeeService
         if (overdueRent.Count == 0)
             return 0;
 
-        _logger.LogDebug("LateFeeService found {Count} overdue rent payment(s) past grace cutoff {Cutoff:yyyy-MM-dd}",
-            overdueRent.Count, cutoff);
-
+        var notifier = new AutomationNotifier(_db, _publisher);
+        var configCache = new Dictionary<int, NotificationsConfig>();
         var now = DateTime.UtcNow;
         var count = 0;
 
@@ -103,6 +100,21 @@ public sealed class LateFeeService : ILateFeeService
                 _logger.LogWarning("Payment {PaymentId} has no Lease navigation; skipping", rp.Id);
                 continue;
             }
+
+            // Resolve (and memoize) this payment's portfolio config; apply the global state caps.
+            if (!configCache.TryGetValue(rp.PortfolioId, out var cfg))
+            {
+                cfg = await _settings.GetRuntimeAsync(rp.PortfolioId, ct);
+                cfg.StateLateFeeCaps = _defaults.StateLateFeeCaps;
+                configCache[rp.PortfolioId] = cfg;
+            }
+
+            if (!cfg.EnableLateFees)
+                continue;
+
+            // Per-portfolio grace cutoff: only assess once the payment is past this portfolio's window.
+            if (rp.DueDate >= today.AddDays(-cfg.LateFeeGraceDays))
+                continue;
 
             // Billing-period key from the auto-generated rent row (the query excludes manual rows,
             // so PeriodKey is always set here — keeps late fees paired 1:1 with the rent charge).
@@ -175,49 +187,51 @@ public sealed class LateFeeService : ILateFeeService
             // without the fee). Wrap them in one EF transaction; the publisher shares this DbContext,
             // so its outbox insert enlists here too. A rollback lets the next cycle retry both
             // together (the idempotency check above prevents duplicates).
+            var inAppRows = (IReadOnlyList<Notification>)Array.Empty<Notification>();
             await using var tx = await _db.Database.BeginTransactionAsync(ct);
             try
             {
                 await _db.SaveChangesAsync(ct);
 
-                // ---- Optional tenant notification (enqueued inside the same transaction) ----
-            if (cfg.NotifyTenants)
+                // ---- Notification on the channels enabled for LateFee in this portfolio ----
+                if (cfg.NotifyTenants)
                 {
                     // Fetch the tenant's contact details for this lease.
                     // FirstOrDefaultAsync respects the soft-delete global query filter;
                     // FindAsync bypasses it and would return deleted tenants.
                     var tenant = await _db.Tenants.FirstOrDefaultAsync(t => t.Id == rp.Lease.TenantId, ct);
 
-                    if (tenant is not null && !string.IsNullOrWhiteSpace(tenant.Email))
-                    {
-                        await _publisher.PublishAsync(
-                            rp.PortfolioId,
-                            "email",
-                            new
-                            {
-                                to      = tenant.Email,
-                                subject = $"Late fee notice — {periodKey}",
-                                body    = $"A late fee of ${fee:F2} has been assessed on your account for the {periodKey} billing period. " +
-                                          "Please contact your property manager if you have questions.",
-                            },
-                            ct);
-                    }
-                    else if (tenant is not null && !string.IsNullOrWhiteSpace(tenant.Phone))
-                    {
-                        await _publisher.PublishAsync(
-                            rp.PortfolioId,
-                            "sms",
-                            new
-                            {
-                                to      = tenant.Phone,
-                                message = $"A late fee of ${fee:F2} has been assessed for {periodKey}. Contact your manager with questions.",
-                            },
-                            ct);
-                    }
+                    var channels = cfg.ResolveChannels(NotificationType.LateFee);
+                    var emailBody = $"A late fee of ${fee:F2} has been assessed on your account for the {periodKey} billing period. "
+                                    + "Please contact your property manager if you have questions.";
+                    var smsBody = $"A late fee of ${fee:F2} has been assessed for {periodKey}. Contact your manager with questions.";
+
+                    inAppRows = await notifier.SendAsync(
+                        rp.PortfolioId,
+                        channels,
+                        new AutomationNotifier.InAppContent(
+                            Type: "LateFee",
+                            Title: $"Late fee assessed — {periodKey}",
+                            Message: $"A late fee of ${fee:F2} was assessed on lease {rp.Lease.LeaseNumber} for {periodKey}.",
+                            Severity: "Warning",
+                            ActionUrl: $"/payments/{lateFeePayment.Id}",
+                            RelatedEntityType: "Payment",
+                            RelatedEntityId: lateFeePayment.Id),
+                        new AutomationNotifier.EmailContent(tenant?.Email, $"Late fee notice — {periodKey}", emailBody),
+                        new AutomationNotifier.SmsContent(tenant?.Phone, smsBody),
+                        now,
+                        ct);
+
+                    if (inAppRows.Count > 0)
+                        await _db.SaveChangesAsync(ct);
                 }
 
                 await tx.CommitAsync(ct);
                 count++;
+
+                foreach (var row in inAppRows)
+                    await _dataUpdate.BroadcastEntityUpdateAsync(
+                        rp.PortfolioId, "Notification", row.Id, NotificationResponse.FromEntity(row), ct);
 
                 _logger.LogInformation(
                     "Late fee ${Fee} assessed for lease {LeaseId} period {Period} (rent payment {RentPaymentId})",

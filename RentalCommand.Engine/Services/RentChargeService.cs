@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
@@ -21,6 +22,7 @@ public sealed class RentChargeService : IRentChargeService
     private readonly RentalCommandDbContext _db;
     private readonly IMessagePublisher _publisher;
     private readonly INotificationSettingsService _settings;
+    private readonly IDataUpdateService _dataUpdate;
     private readonly TimeZoneInfo _businessTimeZone;
     private readonly ILogger<RentChargeService> _logger;
 
@@ -28,12 +30,14 @@ public sealed class RentChargeService : IRentChargeService
         RentalCommandDbContext db,
         IMessagePublisher publisher,
         INotificationSettingsService settings,
+        IDataUpdateService dataUpdate,
         IConfiguration configuration,
         ILogger<RentChargeService> logger)
     {
         _db = db;
         _publisher = publisher;
         _settings = settings;
+        _dataUpdate = dataUpdate;
         _logger = logger;
 
         // The landlord's business day rolls over in their LOCAL zone, not UTC. Near month-end an
@@ -48,13 +52,6 @@ public sealed class RentChargeService : IRentChargeService
     /// <inheritdoc/>
     public async Task<int> GenerateAsync(CancellationToken ct = default)
     {
-        var cfg = await _settings.GetRuntimeAsync(ct);
-        if (!cfg.EnableRentCharges)
-        {
-            _logger.LogDebug("rent charges disabled");
-            return 0;
-        }
-
         // Business "today" in the landlord's local zone (drives period key + due-day math only).
         // Every value WRITTEN to the DB below stays UTC (DateTime.UtcNow / Kind=Utc).
         var today = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date;
@@ -65,11 +62,24 @@ public sealed class RentChargeService : IRentChargeService
             .Include(l => l.Tenant)
             .ToListAsync(ct);
 
+        var notifier = new AutomationNotifier(_db, _publisher);
+        var configCache = new Dictionary<int, NotificationsConfig>();
         var created = 0;
 
         foreach (var lease in leases)
         {
             ct.ThrowIfCancellationRequested();
+
+            // Settings are per-portfolio now. Resolve (and memoize) this lease's portfolio config;
+            // the master EnableRentCharges flag is the outer gate for that portfolio.
+            if (!configCache.TryGetValue(lease.PortfolioId, out var cfg))
+            {
+                cfg = await _settings.GetRuntimeAsync(lease.PortfolioId, ct);
+                configCache[lease.PortfolioId] = cfg;
+            }
+
+            if (!cfg.EnableRentCharges)
+                continue;
 
             // Don't create $0 scheduled rent (e.g. unset/peppercorn leases) — nothing to bill.
             if (lease.MonthlyRent <= 0)
@@ -113,44 +123,46 @@ public sealed class RentChargeService : IRentChargeService
             // a crash between two separate saves could leave a payment without its tenant notice
             // (or vice-versa). Wrap both saves in one EF transaction; the next cycle's idempotency
             // check re-attempts both together if this rolls back.
+            var inAppRows = (IReadOnlyList<Notification>)Array.Empty<Notification>();
             await using var tx = await _db.Database.BeginTransactionAsync(ct);
             try
             {
                 await _db.SaveChangesAsync(ct);
 
-                // Optional tenant notification (email preferred; fall back to SMS). The outbox
-                // publisher shares this DbContext, so its insert enlists in the same transaction.
+                // Optional notification on exactly the channels enabled for RentCharge in this
+                // portfolio (in-app for staff + tenant email/SMS). NotifyTenants stays the gate for
+                // tenant-facing email/SMS; the publisher shares this DbContext so inserts enlist here.
                 if (cfg.NotifyTenants && lease.Tenant is { } tenant)
                 {
-                    if (!string.IsNullOrWhiteSpace(tenant.Email))
-                    {
-                        await _publisher.PublishAsync(
-                            lease.PortfolioId,
-                            "email",
-                            new
-                            {
-                                to = tenant.Email,
-                                subject = $"Rent due {dueDate:MMM d}",
-                                body = $"Hi {tenant.FirstName}, your rent of {lease.MonthlyRent:C} is due on {dueDate:MMMM d}.",
-                            },
-                            ct);
-                    }
-                    else if (!string.IsNullOrWhiteSpace(tenant.Phone))
-                    {
-                        await _publisher.PublishAsync(
-                            lease.PortfolioId,
-                            "sms",
-                            new
-                            {
-                                to = tenant.Phone,
-                                message = $"Hi {tenant.FirstName}, your rent of {lease.MonthlyRent:C} is due on {dueDate:MMMM d}.",
-                            },
-                            ct);
-                    }
+                    var channels = cfg.ResolveChannels(NotificationType.RentCharge);
+                    var message = $"Hi {tenant.FirstName}, your rent of {lease.MonthlyRent:C} is due on {dueDate:MMMM d}.";
+                    inAppRows = await notifier.SendAsync(
+                        lease.PortfolioId,
+                        channels,
+                        new AutomationNotifier.InAppContent(
+                            Type: "RentCharge",
+                            Title: $"Rent due {dueDate:MMM d}",
+                            Message: $"{tenant.FirstName} {tenant.LastName}".Trim() + $" — rent of {lease.MonthlyRent:C} due {dueDate:MMMM d}.",
+                            Severity: "Info",
+                            ActionUrl: $"/payments/{payment.Id}",
+                            RelatedEntityType: "Payment",
+                            RelatedEntityId: payment.Id),
+                        new AutomationNotifier.EmailContent(tenant.Email, $"Rent due {dueDate:MMM d}", message),
+                        new AutomationNotifier.SmsContent(tenant.Phone, message),
+                        DateTime.UtcNow,
+                        ct);
+
+                    // The in-app rows were added before this save; persist them inside the transaction.
+                    if (inAppRows.Count > 0)
+                        await _db.SaveChangesAsync(ct);
                 }
 
                 await tx.CommitAsync(ct);
                 created++;
+
+                foreach (var row in inAppRows)
+                    await _dataUpdate.BroadcastEntityUpdateAsync(
+                        lease.PortfolioId, "Notification", row.Id, NotificationResponse.FromEntity(row), ct);
             }
             catch (DbUpdateException ex)
             {

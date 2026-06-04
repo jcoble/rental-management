@@ -78,6 +78,7 @@ public class LeaseExpiryReminderServiceTests : IDisposable
             _ctx.Db,
             _publisher.Object,
             new FakeNotificationSettingsService(cfg),
+            Mock.Of<IDataUpdateService>(),
             NullLogger<LeaseExpiryReminderService>.Instance);
     }
 

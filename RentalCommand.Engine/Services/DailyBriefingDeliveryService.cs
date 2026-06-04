@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -31,15 +32,6 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
 
     public async Task<int> EnqueueDueAsync(DateTime? utcNow = null, CancellationToken ct = default)
     {
-        var config = await _settings.GetRuntimeAsync(ct);
-        if (!config.EnableDailyBriefingMessages)
-            return 0;
-
-        var smsRecipients = CleanRecipients(config.DailyBriefing.SmsRecipients);
-        var emailRecipients = CleanRecipients(config.DailyBriefing.EmailRecipients);
-        if (smsRecipients.Count == 0 && emailRecipients.Count == 0)
-            return 0;
-
         var now = utcNow ?? DateTime.UtcNow;
         var portfolios = await _db.Portfolios
             .Where(p => p.DeletedAt == null)
@@ -49,6 +41,17 @@ public sealed class DailyBriefingDeliveryService : IDailyBriefingDeliveryService
         var queued = 0;
         foreach (var portfolio in portfolios)
         {
+            // Settings (gate, recipients, send-hour, channel matrix) are per-portfolio now.
+            var config = await _settings.GetRuntimeAsync(portfolio.Id, ct);
+            if (!config.EnableDailyBriefingMessages)
+                continue;
+
+            var channels = config.ResolveChannels(NotificationType.DailyBriefing);
+            var smsRecipients = channels.EnableSms ? CleanRecipients(config.DailyBriefing.SmsRecipients) : [];
+            var emailRecipients = channels.EnableEmail ? CleanRecipients(config.DailyBriefing.EmailRecipients) : [];
+            if (smsRecipients.Count == 0 && emailRecipients.Count == 0)
+                continue;
+
             var localNow = ToPortfolioLocalTime(now, portfolio.TimeZone);
             if (localNow.Hour < config.DailyBriefing.SendHourLocal)
                 continue;
