@@ -57,10 +57,18 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
   bool _openingDoc = false;
   String? _docError;
 
+  // E-signature workflow.
+  LeaseSignatureStatus? _signature;
+  bool _loadingSignature = false;
+  bool _sendingSignature = false;
+  bool _openingSignedDoc = false;
+  String? _signatureError;
+
   @override
   void initState() {
     super.initState();
     _lease = widget.lease;
+    _loadSignatureStatus();
   }
 
   @override
@@ -190,6 +198,102 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
     }
   }
 
+  /// Loads the current e-signature status for the lease. Silently ignores a
+  /// 503 (provider not configured) — the card stays in its default state and
+  /// the action handles the gentle messaging when the user actually tries.
+  Future<void> _loadSignatureStatus() async {
+    if (_loadingSignature) return;
+    setState(() {
+      _loadingSignature = true;
+      _signatureError = null;
+    });
+    try {
+      final status =
+          await ref.read(leasesRepositoryProvider).signatureStatus(_lease.id);
+      if (mounted) setState(() => _signature = status);
+    } on ApiException catch (e) {
+      // 503 = gated/not configured; leave the card in its neutral state.
+      if (e.statusCode != 503 && mounted) {
+        setState(() => _signatureError = e.message);
+      }
+    } finally {
+      if (mounted) setState(() => _loadingSignature = false);
+    }
+  }
+
+  /// Sends the lease to the e-sign provider, then refreshes the status. On a
+  /// 503 (not configured) shows a gentle snackbar instead of an error.
+  Future<void> _sendForSignature() async {
+    if (_sendingSignature) return;
+    setState(() {
+      _sendingSignature = true;
+      _signatureError = null;
+    });
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final status =
+          await ref.read(leasesRepositoryProvider).sendForSignature(_lease.id);
+      if (!mounted) return;
+      setState(() => _signature = status);
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Lease sent for signature.')),
+        );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.statusCode == 503) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('E-signature isn’t set up yet.'),
+            ),
+          );
+      } else {
+        setState(() => _signatureError = e.message);
+      }
+    } finally {
+      if (mounted) setState(() => _sendingSignature = false);
+    }
+  }
+
+  /// Fetches the signed lease PDF bytes (authed), writes them to a temp file,
+  /// and hands the file off to the platform viewer via url_launcher.
+  Future<void> _openSignedDocument() async {
+    if (_openingSignedDoc) return;
+    setState(() {
+      _openingSignedDoc = true;
+      _signatureError = null;
+    });
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final bytes = await ref
+          .read(leasesRepositoryProvider)
+          .signedDocumentBytes(_lease.id);
+      final path =
+          '${Directory.systemTemp.path}/lease-${_lease.id}-signed.pdf';
+      final file = File(path);
+      await file.writeAsBytes(bytes, flush: true);
+      final ok = await launchUrl(
+        Uri.file(path),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!mounted) return;
+      if (!ok) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(content: Text('No app available to open the PDF.')),
+          );
+      }
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _signatureError = e.message);
+    } finally {
+      if (mounted) setState(() => _openingSignedDoc = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -276,6 +380,20 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
               error: _docError,
               onGenerate: _generateDocument,
               onView: _openDocument,
+              theme: theme,
+              colorScheme: colorScheme,
+            ),
+            const SizedBox(height: 12),
+
+            // ── E-signature ────────────────────────────────────────────────
+            _LeaseSignatureCard(
+              signature: _signature,
+              loading: _loadingSignature,
+              sending: _sendingSignature,
+              openingSigned: _openingSignedDoc,
+              error: _signatureError,
+              onSend: _sendForSignature,
+              onViewSigned: _openSignedDocument,
               theme: theme,
               colorScheme: colorScheme,
             ),
@@ -484,6 +602,175 @@ class _LeaseDocumentCard extends StatelessWidget {
                       : const Icon(Icons.open_in_new, size: 18),
                   label: const Text('View agreement'),
                 ),
+              ],
+            ),
+            if (error != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                error!,
+                style: TextStyle(color: colorScheme.error, fontSize: 13),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── E-signature card ────────────────────────────────────────────────────────────
+
+class _LeaseSignatureCard extends StatelessWidget {
+  const _LeaseSignatureCard({
+    required this.loading,
+    required this.sending,
+    required this.openingSigned,
+    required this.onSend,
+    required this.onViewSigned,
+    required this.theme,
+    required this.colorScheme,
+    this.signature,
+    this.error,
+  });
+
+  final LeaseSignatureStatus? signature;
+  final bool loading;
+  final bool sending;
+  final bool openingSigned;
+  final String? error;
+  final VoidCallback onSend;
+  final VoidCallback onViewSigned;
+  final ThemeData theme;
+  final ColorScheme colorScheme;
+
+  ({String label, Color bg, Color fg, IconData icon}) _statusChip() {
+    final s = signature;
+    if (s == null || s.esignStatus.toLowerCase() == 'none') {
+      return (
+        label: 'Not sent',
+        bg: colorScheme.surfaceContainerHighest,
+        fg: colorScheme.onSurfaceVariant,
+        icon: Icons.drafts_outlined,
+      );
+    }
+    if (s.isSigned) {
+      return (
+        label: 'Signed',
+        bg: colorScheme.primaryContainer,
+        fg: colorScheme.onPrimaryContainer,
+        icon: Icons.verified_outlined,
+      );
+    }
+    if (s.isDeclined) {
+      return (
+        label: 'Declined',
+        bg: colorScheme.errorContainer,
+        fg: colorScheme.onErrorContainer,
+        icon: Icons.cancel_outlined,
+      );
+    }
+    // Sent — waiting.
+    return (
+      label: 'Sent — waiting',
+      bg: colorScheme.tertiaryContainer,
+      fg: colorScheme.onTertiaryContainer,
+      icon: Icons.schedule_outlined,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final chip = _statusChip();
+    final busy = sending || openingSigned;
+    final hasSignedDoc = signature?.hasSignedDocument ?? false;
+    final isSigned = signature?.isSigned ?? false;
+    // Once signed, "Send for signature" no longer makes sense.
+    final canSend = !isSigned;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'E-Signature',
+                    style: theme.textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
+                if (loading)
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: chip.bg,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(chip.icon, size: 14, color: chip.fg),
+                        const SizedBox(width: 4),
+                        Text(
+                          chip.label,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: chip.fg,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Send this lease to the tenant for electronic signature, then '
+              'download the signed copy once it’s returned.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (canSend)
+                  FilledButton.icon(
+                    onPressed: busy ? null : onSend,
+                    icon: sending
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send_outlined, size: 18),
+                    label: const Text('Send for signature'),
+                  ),
+                if (hasSignedDoc)
+                  OutlinedButton.icon(
+                    onPressed: busy ? null : onViewSigned,
+                    icon: openingSigned
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.download_outlined, size: 18),
+                    label: const Text('Download signed lease'),
+                  ),
               ],
             ),
             if (error != null) ...[
