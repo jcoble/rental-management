@@ -1,4 +1,6 @@
 <script lang="ts">
+	import * as Select from '$lib/components/ui/select';
+
 	type Option = {
 		value: string;
 		label: string;
@@ -34,17 +36,31 @@
 	const displayText = $derived(display == null || display === '' ? '-' : String(display));
 	const inputClass =
 		'h-10 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30';
+	// Label shown inside the Select trigger for the currently-bound value.
+	const selectedLabel = $derived(
+		options.find((o) => o.value === value)?.label ?? placeholder ?? 'Select…'
+	);
 </script>
 
 <div class={className} data-testid={`${testid}-field`}>
 	<label class="mb-1 block text-xs font-medium text-muted-foreground" for={fieldId}>{label}</label>
 	{#if editing}
 		{#if type === 'select'}
-			<select id={fieldId} data-testid={fieldId} bind:value class={inputClass}>
-				{#each options as option}
-					<option value={option.value}>{option.label}</option>
-				{/each}
-			</select>
+			<Select.Root type="single" bind:value>
+				<Select.Trigger
+					id={fieldId}
+					data-testid={fieldId}
+					class="h-10 w-full bg-background"
+					aria-label={label}
+				>
+					{selectedLabel}
+				</Select.Trigger>
+				<Select.Content>
+					{#each options as option}
+						<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
 		{:else if type === 'textarea'}
 			<textarea
 				id={fieldId}
