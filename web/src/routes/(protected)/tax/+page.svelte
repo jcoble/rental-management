@@ -1,20 +1,28 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
-	import { accounting, downloadScheduleECsv } from '$lib/api/endpoints/accounting';
+	import {
+		accounting,
+		downloadScheduleECsv,
+		downloadYearEndPacket
+	} from '$lib/api/endpoints/accounting';
 	import type { ScheduleEReport } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
-	import { Receipt } from '@lucide/svelte';
+	import { FileText, Receipt } from '@lucide/svelte';
 
 	const CURRENT_YEAR = new Date().getFullYear();
 	const YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - i);
+	// Default the year-end packet to the previous calendar year — the filing year.
+	const PACKET_YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - 1 - i);
 
 	const portfolioId = $derived(getCurrentPortfolioId());
 	let selectedYear = $state(String(CURRENT_YEAR));
 	let downloading = $state(false);
+	let packetYear = $state(String(CURRENT_YEAR - 1));
+	let downloadingPacket = $state(false);
 
 	const scheduleEQuery = createQuery(() => ({
 		queryKey: ['schedule-e', portfolioId, selectedYear],
@@ -40,6 +48,17 @@
 			showError('Could not download CSV. Please try again.');
 		} finally {
 			downloading = false;
+		}
+	}
+
+	async function handlePacketDownload() {
+		downloadingPacket = true;
+		try {
+			await downloadYearEndPacket(Number(packetYear));
+		} catch {
+			showError('Could not download the year-end packet. Please try again.');
+		} finally {
+			downloadingPacket = false;
 		}
 	}
 </script>
@@ -81,6 +100,44 @@
 			</Button>
 		</div>
 	</div>
+
+	<!-- Year-end packet: a single PDF to hand the accountant -->
+	<Card.Root class="mb-6 gap-0 py-0" data-testid="year-end-packet">
+		<Card.Content class="p-4">
+			<div class="flex flex-wrap items-start justify-between gap-4">
+				<div class="flex items-start gap-3">
+					<FileText class="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+					<div>
+						<p class="font-semibold">Year-end packet (PDF)</p>
+						<p class="mt-1 max-w-xl text-sm text-muted-foreground">
+							A single PDF to hand your accountant: Schedule E summary, per-property P&amp;L, cash
+							flow, and rent roll.
+						</p>
+					</div>
+				</div>
+				<div class="flex items-center gap-2">
+					<Select.Root type="single" bind:value={packetYear}>
+						<Select.Trigger class="w-28" data-testid="packet-year-select">
+							{packetYear}
+						</Select.Trigger>
+						<Select.Content>
+							{#each PACKET_YEAR_OPTIONS as year}
+								<Select.Item value={String(year)} label={String(year)}>{year}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					<Button
+						variant="outline"
+						onclick={handlePacketDownload}
+						disabled={downloadingPacket}
+						data-testid="packet-download-pdf"
+					>
+						{downloadingPacket ? 'Preparing…' : 'Download packet'}
+					</Button>
+				</div>
+			</div>
+		</Card.Content>
+	</Card.Root>
 
 	{#if scheduleEQuery.isLoading}
 		<p class="py-12 text-center text-sm text-muted-foreground" data-testid="tax-loading">

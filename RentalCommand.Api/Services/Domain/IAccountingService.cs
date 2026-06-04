@@ -23,4 +23,17 @@ public interface IAccountingService
         int portfolioId,
         AccountingTransactionsQuery query,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Gathers every section of the year-end accountant packet (Schedule E summary, per-property P&amp;L,
+    /// month-by-month cash flow, and rent roll) for <paramref name="year"/>, scoped to the portfolio.
+    /// Reuses the Schedule E computation so the packet reconciles with the existing CSV/report.
+    /// </summary>
+    Task<YearEndPacketData> GetYearEndPacketDataAsync(int portfolioId, int year, CancellationToken ct = default);
+
+    /// <summary>
+    /// Renders the year-end packet to PDF bytes (cover + Schedule E summary + per-property P&amp;L +
+    /// cash-flow summary + rent roll) for <paramref name="year"/>, scoped to the portfolio.
+    /// </summary>
+    Task<byte[]> GetYearEndPacketAsync(int portfolioId, int year, CancellationToken ct = default);
 }
