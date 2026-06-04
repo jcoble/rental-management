@@ -42,7 +42,7 @@ but the landlord cannot use the complete workflow in a logical place.
 
 | Feature                                           | Status  | Notes                                                                                                                          |
 | ------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| DO- No-login application + ID autofill            | Missing | No public application workflow.                                                                                                |
+| No-login application + ID autofill            | Usable | Public `/apply/{token}` form (no login) with "scan your ID to autofill" (gated LLM), FCRA consent capture, and portfolio resolved by token (IDOR-safe, ID number never stored). Landlord reviews on web + Flutter (list/detail, approve→creates Tenant, decline/withdraw, shareable link). TransUnion screening is the next wave (consent seam in place). |
 | DO- TransUnion screening with FCRA flow           | Missing | `IScreeningProvider` exists only as an interface. No application consent/adverse-action workflow.                            |
 | DO- Lease scanner + 5-question generator + e-sign | Partial | Lease entity supports `PendingSignature` and `IEsignProvider` exists, but there is no complete generator/signing workflow. |
 | DO- Fair-Housing-safe copy                        | Missing | No explicit fair-housing review/generation surface.                                                                            |
