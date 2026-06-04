@@ -59,10 +59,20 @@ public record QaDeliveryOptions(
 /// Channels the answer was queued for delivery on (e.g. "Email", "Sms"). Empty when no
 /// delivery was requested or no recipient could be resolved for a requested channel.
 /// </param>
+/// <param name="Source">
+/// How the answer was produced: "Data" (live portfolio data via tools) or "Docs" (grounded in
+/// knowledge-base articles). Lets the web render the right affordance (e.g. doc links).
+/// </param>
+/// <param name="Citations">
+/// For "Docs" answers: the knowledge-base articles the answer was grounded in, so the web can
+/// link to <c>/docs/{slug}</c>. Null/empty for data answers.
+/// </param>
 public record AskResponse(
     string Answer,
     List<string> ToolsUsed,
     bool LlmAvailable,
     int TokensUsed,
     string ModelId,
-    List<string>? DeliveredChannels = null);
+    List<string>? DeliveredChannels = null,
+    string Source = "Data",
+    List<KbCitation>? Citations = null);

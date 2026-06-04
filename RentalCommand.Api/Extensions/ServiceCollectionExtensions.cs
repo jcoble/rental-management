@@ -97,6 +97,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IDailyBriefingService, DailyBriefingService>();
         services.AddScoped<IPortfolioQaService, PortfolioQaService>();
         services.AddScoped<IFairHousingReviewService, FairHousingReviewService>();
+        // Knowledge base: markdown docs loaded + cached in memory once, shared by the public docs
+        // endpoints and the chatbot how-to path. Pure file-load + in-memory retrieval (no DB, no
+        // embeddings). Singleton so the parsed cache lives for the process lifetime.
+        services.AddSingleton<IKnowledgeBaseService, KnowledgeBaseService>();
 
         // --- document hub ---
         services.AddScoped<IDocumentService, DocumentService>();
