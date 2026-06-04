@@ -1,0 +1,346 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/api/api_exception.dart';
+import 'leases_repository.dart';
+
+const _monthNames = [
+  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+String _fmtDate(DateTime d) {
+  if (d.year <= 1) return '';
+  return '${_monthNames[d.month]} ${d.day}, ${d.year}';
+}
+
+String _money(double value) {
+  final negative = value < 0;
+  final rounded = value.abs().toStringAsFixed(2);
+  final parts = rounded.split('.');
+  final whole = parts[0];
+  final buf = StringBuffer();
+  final start = whole.length % 3;
+  if (start > 0) buf.write(whole.substring(0, start));
+  for (var i = start; i < whole.length; i += 3) {
+    if (i > 0) buf.write(',');
+    buf.write(whole.substring(i, i + 3));
+  }
+  return '${negative ? '-' : ''}\$$buf.${parts[1]}';
+}
+
+/// A self-contained, scrollable "account history" for one lease: the running
+/// totals card followed by every charge/payment with its plain-English "why".
+///
+/// Used both on the tenant portal (transparency) and the landlord lease detail.
+class LeaseLedgerView extends ConsumerWidget {
+  const LeaseLedgerView({super.key, required this.leaseId});
+
+  final int leaseId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final ledgerAsync = ref.watch(leaseLedgerProvider(leaseId));
+
+    return RefreshIndicator(
+      onRefresh: () async => ref.invalidate(leaseLedgerProvider(leaseId)),
+      child: ledgerAsync.when(
+        loading: () => ListView(
+          children: const [
+            SizedBox(height: 120),
+            Center(child: CircularProgressIndicator()),
+          ],
+        ),
+        error: (err, _) => ListView(
+          padding: const EdgeInsets.all(20),
+          children: [
+            const SizedBox(height: 40),
+            Icon(
+              Icons.receipt_long_outlined,
+              size: 40,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              "Couldn't load account history.",
+              textAlign: TextAlign.center,
+              style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              err is ApiException ? err.message : 'Please try again.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Center(
+              child: FilledButton.tonal(
+                onPressed: () => ref.invalidate(leaseLedgerProvider(leaseId)),
+                child: const Text('Retry'),
+              ),
+            ),
+          ],
+        ),
+        data: (ledger) => ListView(
+          padding: const EdgeInsets.all(16),
+          children: [
+            _BalanceCard(ledger: ledger),
+            const SizedBox(height: 16),
+            Text(
+              'Account history',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (ledger.entries.isEmpty)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.check_circle_outline,
+                        color: theme.colorScheme.onSurfaceVariant,
+                        size: 20,
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(
+                        child: Text('No charges or payments yet.'),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              for (final entry in ledger.entries) ...[
+                _LedgerEntryCard(entry: entry),
+                const SizedBox(height: 8),
+              ],
+            const SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BalanceCard extends StatelessWidget {
+  const _BalanceCard({required this.ledger});
+
+  final LeaseLedger ledger;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final owes = ledger.balance > 0;
+    final credit = ledger.balance < 0;
+
+    final String balanceLabel;
+    final Color balanceColor;
+    if (credit) {
+      balanceLabel = 'Credit';
+      balanceColor = Colors.green.shade700;
+    } else if (owes) {
+      balanceLabel = 'Balance due';
+      balanceColor = cs.error;
+    } else {
+      balanceLabel = 'Balance';
+      balanceColor = Colors.green.shade700;
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              balanceLabel,
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              owes || credit ? _money(ledger.balance.abs()) : _money(0),
+              style: theme.textTheme.headlineMedium?.copyWith(
+                fontFeatures: const [FontFeature.tabularFigures()],
+                fontWeight: FontWeight.w700,
+                color: balanceColor,
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Divider(height: 1),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _Total(
+                    label: 'Charged',
+                    value: _money(ledger.totalCharged),
+                  ),
+                ),
+                Expanded(
+                  child: _Total(
+                    label: 'Paid',
+                    value: _money(ledger.totalPaid),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Total extends StatelessWidget {
+  const _Total({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: theme.textTheme.titleMedium?.copyWith(
+            fontFeatures: const [FontFeature.tabularFigures()],
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _LedgerEntryCard extends StatelessWidget {
+  const _LedgerEntryCard({required this.entry});
+
+  final LeaseLedgerEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    // A payment reduces what's owed; show it green and signed.
+    final isPayment = entry.type.toLowerCase() == 'payment';
+    final amountColor = isPayment ? Colors.green.shade700 : cs.onSurface;
+    final signedAmount =
+        '${isPayment ? '-' : ''}${_money(entry.amount.abs())}';
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: isPayment
+                        ? Colors.green.shade50
+                        : cs.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    isPayment
+                        ? Icons.payments_outlined
+                        : Icons.request_quote_outlined,
+                    size: 16,
+                    color: isPayment ? Colors.green.shade700 : cs.primary,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        entry.description.isEmpty ? entry.type : entry.description,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (_fmtDate(entry.date).isNotEmpty) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          [
+                            _fmtDate(entry.date),
+                            if (entry.status.isNotEmpty) entry.status,
+                          ].join(' · '),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  signedAmount,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                    fontWeight: FontWeight.w700,
+                    color: amountColor,
+                  ),
+                ),
+              ],
+            ),
+            if (entry.explanation.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: cs.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 15,
+                      color: cs.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        entry.explanation,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: cs.onSurface,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}

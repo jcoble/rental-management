@@ -10,6 +10,14 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IAccountingService
 {
     Task<AccountingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Plain-English money snapshot (month-to-date + trailing 30 days) for a one-glance card and the
+    /// daily briefing: money in, money out, what's kept, and who's behind, each with a jargon-free
+    /// explanation.
+    /// </summary>
+    Task<MoneySnapshotResponse> GetSnapshotAsync(int portfolioId, CancellationToken ct = default);
+
     Task<AccountingReportsResponse> GetReportsAsync(int portfolioId, CancellationToken ct = default);
     Task<AccountingTransactionsResponse> GetTransactionsAsync(
         int portfolioId,

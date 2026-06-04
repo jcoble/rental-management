@@ -98,6 +98,119 @@ class LeasesRepository {
       throw ApiException.fromDioException(e);
     }
   }
+
+  /// Transparent ledger for a lease: every charge and payment, newest first,
+  /// each with a plain-English explanation of what it is plus running totals.
+  Future<LeaseLedger> ledger(int id) async {
+    try {
+      final response =
+          await _dio.get<Map<String, dynamic>>('/leases/$id/ledger');
+      return LeaseLedger.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+}
+
+/// One line in a lease ledger — a charge or a payment.
+class LeaseLedgerEntry {
+  const LeaseLedgerEntry({
+    required this.date,
+    required this.type,
+    required this.id,
+    required this.description,
+    required this.amount,
+    required this.status,
+    required this.explanation,
+    this.propertyName,
+    this.counterparty,
+    this.category,
+    this.sourceHref,
+  });
+
+  final DateTime date;
+
+  /// Entry kind (e.g. "Charge", "Payment").
+  final String type;
+  final int id;
+  final String description;
+  final double amount;
+  final String status;
+
+  /// Ready-to-show plain-English "why" for this entry.
+  final String explanation;
+
+  final String? propertyName;
+  final String? counterparty;
+  final String? category;
+  final String? sourceHref;
+
+  factory LeaseLedgerEntry.fromJson(Map<String, dynamic> json) {
+    return LeaseLedgerEntry(
+      date: DateTime.tryParse(json['date'] as String? ?? '') ?? DateTime(0),
+      type: json['type'] as String? ?? '',
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      description: json['description'] as String? ?? '',
+      amount: (json['amount'] as num?)?.toDouble() ?? 0,
+      status: json['status'] as String? ?? '',
+      explanation: json['explanation'] as String? ?? '',
+      propertyName: json['propertyName'] as String?,
+      counterparty: json['counterparty'] as String?,
+      category: json['category'] as String?,
+      sourceHref: json['sourceHref'] as String?,
+    );
+  }
+}
+
+/// Full response from `GET /api/v1/leases/{id}/ledger`.
+class LeaseLedger {
+  const LeaseLedger({
+    required this.leaseId,
+    required this.leaseNumber,
+    required this.totalCharged,
+    required this.totalPaid,
+    required this.balance,
+    required this.entries,
+    this.tenantName,
+    this.propertyName,
+  });
+
+  final int leaseId;
+  final String leaseNumber;
+
+  /// Sum of charges owed on this lease.
+  final double totalCharged;
+
+  /// Sum of payments received on this lease.
+  final double totalPaid;
+
+  /// Outstanding balance (charges minus payments). Negative means a credit.
+  final double balance;
+
+  final List<LeaseLedgerEntry> entries;
+  final String? tenantName;
+  final String? propertyName;
+
+  factory LeaseLedger.fromJson(Map<String, dynamic> json) {
+    final rawEntries = json['entries'];
+    final entries = rawEntries is List
+        ? rawEntries
+            .whereType<Map<String, dynamic>>()
+            .map(LeaseLedgerEntry.fromJson)
+            .toList()
+        : <LeaseLedgerEntry>[];
+
+    return LeaseLedger(
+      leaseId: (json['leaseId'] as num?)?.toInt() ?? 0,
+      leaseNumber: json['leaseNumber'] as String? ?? '',
+      totalCharged: (json['totalCharged'] as num?)?.toDouble() ?? 0,
+      totalPaid: (json['totalPaid'] as num?)?.toDouble() ?? 0,
+      balance: (json['balance'] as num?)?.toDouble() ?? 0,
+      entries: entries,
+      tenantName: json['tenantName'] as String?,
+      propertyName: json['propertyName'] as String?,
+    );
+  }
 }
 
 class LeaseQuestionResponse {
@@ -217,3 +330,12 @@ final leaseDetailProvider =
     NotifierProvider.family<LeaseDetailNotifier, AsyncValue<Lease>, int>(
   LeaseDetailNotifier.new,
 );
+
+// ── Lease ledger ──────────────────────────────────────────────────────────────
+
+/// Transparent ledger for a single lease, keyed by lease id. autoDispose so it
+/// refreshes whenever the ledger view is reopened.
+final leaseLedgerProvider =
+    FutureProvider.autoDispose.family<LeaseLedger, int>((ref, leaseId) {
+  return ref.watch(leasesRepositoryProvider).ledger(leaseId);
+});

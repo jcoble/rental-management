@@ -25,6 +25,8 @@
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
 	import { Checkbox } from '$lib/components/ui/checkbox';
+	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -646,19 +648,26 @@
 					<span class="hidden text-xs text-muted-foreground group-open:inline">Hide</span>
 				</summary>
 				<div class="border-t px-4 py-3">
-					<div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-					{#each recentLedger as row}
-						<a href={row.sourceHref} class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-muted/60">
-							<span class="min-w-0">
-								<span class="block truncate text-sm">{row.description}</span>
-								<span class="block text-xs text-muted-foreground">{row.type} · {row.counterparty ?? row.propertyName ?? 'General'}</span>
-							</span>
-							<span class="shrink-0 font-mono text-sm tabular-nums">{money(row.amount)}</span>
-						</a>
-					{:else}
-						<p class="text-sm text-muted-foreground">No ledger activity yet.</p>
-					{/each}
-					</div>
+					<Tooltip.Provider delayDuration={150}>
+						<div class="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+						{#each recentLedger as row}
+							<a href={row.sourceHref} class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-muted/60">
+								<span class="min-w-0">
+									<span class="flex items-center gap-1.5">
+										<span class="truncate text-sm">{row.description}</span>
+										{#if row.explanation}
+											<HelpTooltip text={row.explanation} label="Why this is here" />
+										{/if}
+									</span>
+									<span class="block text-xs text-muted-foreground">{row.type} · {row.counterparty ?? row.propertyName ?? 'General'}</span>
+								</span>
+								<span class="shrink-0 font-mono text-sm tabular-nums">{money(row.amount)}</span>
+							</a>
+						{:else}
+							<p class="text-sm text-muted-foreground">No ledger activity yet.</p>
+						{/each}
+						</div>
+					</Tooltip.Provider>
 				</div>
 			</details>
 			<details class="group rounded-lg border bg-card">

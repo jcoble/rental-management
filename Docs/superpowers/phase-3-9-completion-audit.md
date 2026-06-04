@@ -32,10 +32,10 @@ but the landlord cannot use the complete workflow in a logical place.
 
 | Feature                        | Status  | Notes                                                                                                                            |
 | ------------------------------ | ------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| MAKE SURE DONE E2E - Scan check to payment | Usable  | Scan service handles `RentCheck` and creates payments. Web and Flutter review screens can confirm scans. (Verify end-to-end, not rebuild.) |
+| Scan check to payment | Usable  | Scan service handles `RentCheck` and creates a paid Payment; web + Flutter review screens confirm. Now locked by a unit test (`ConfirmAndCreateAsync_ReviewingRentCheckDraft_CreatesPaidPayment`). |
 | Read-only Plaid reconciliation | Usable | Plaid sandbox Link, encrypted access tokens, bank connections/transactions, sync, matching, accounting ledger/totals, and Flutter/web banking surfaces are wired. |
-| DO- Transparent tenant ledger      | Partial | Lease ledger endpoint exists, but explanatory "why" tooltips are not consistently surfaced.                                      |
-| DO- Plain-English money snapshots  | Partial | Briefing and accounting reports provide inputs. Needs an explicit snapshot card/API surface.                                     |
+| Transparent tenant ledger      | Usable | `GET /leases/{id}/ledger` (was 404 — no backend; now built, tenant-ownership-scoped) returns each charge/payment with a deterministic plain-English "why" + running balance. Surfaced on web lease detail (Account History), accounting ledger tooltips, and the tenant portal; Flutter has a `LeaseLedgerView` + portal Account History. |
+| Plain-English money snapshots  | Usable | `GET /accounting/snapshot` returns collected/spent/kept + past-due with ready-to-show plain-English sentences; "Your money" card on the web dashboard and Flutter home. |
 | DO- Online card/ACH            | Partial | Stripe payment intent/webhook exists. ACH/Plaid payment path is not complete.                                                    |
 
 ## Phase 6 - Applications, Screening, E-sign

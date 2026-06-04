@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -74,6 +75,103 @@ public class LeaseService : ILeaseService
             .FirstOrDefaultAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
 
         return entity == null ? null : LeaseResponse.FromEntity(entity, includeNavigations: true);
+    }
+
+    public async Task<LeaseLedgerResponse?> GetLedgerAsync(
+        int portfolioId, int id, int? restrictToTenantId = null, CancellationToken ct = default)
+    {
+        var query = _db.Leases
+            .AsNoTracking()
+            .Include(l => l.Tenant)
+            .Include(l => l.Property)
+            .Where(l => l.Id == id && l.PortfolioId == portfolioId);
+
+        // When a tenant calls this, they may only read THEIR OWN lease's ledger — the lookup itself
+        // requires the tenant match, so a non-owned (or non-existent) lease returns null/404 without
+        // revealing whether it exists. Landlord/staff callers pass null and see any lease in scope.
+        if (restrictToTenantId is > 0)
+        {
+            query = query.Where(l => l.TenantId == restrictToTenantId.Value);
+        }
+
+        var lease = await query.FirstOrDefaultAsync(ct);
+
+        if (lease == null)
+        {
+            return null;
+        }
+
+        var payments = await _db.Payments
+            .AsNoTracking()
+            .Where(p => p.LeaseId == id && p.PortfolioId == portfolioId)
+            .Select(p => new
+            {
+                p.Id,
+                p.PaymentType,
+                p.Status,
+                p.Amount,
+                p.DueDate,
+                p.PaidDate,
+                p.Method,
+            })
+            .ToListAsync(ct);
+
+        var tenantName = $"{lease.Tenant?.FirstName} {lease.Tenant?.LastName}".Trim();
+        if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "Tenant";
+
+        var entries = payments
+            .Select(p =>
+            {
+                // A collected payment credits the tenant's balance (money in, shown positive). An
+                // outstanding charge debits it (money owed, shown negative) so the running total reads
+                // as "still owed".
+                var isCollected = p.Status == PaymentStatus.Paid;
+                var signedAmount = isCollected ? p.Amount : -p.Amount;
+
+                return new LedgerTransactionResponse
+                {
+                    Date = p.PaidDate ?? p.DueDate,
+                    Type = isCollected ? "Payment" : "Charge",
+                    Id = p.Id,
+                    Description = p.PaymentType.ToString(),
+                    Amount = signedAmount,
+                    PropertyId = lease.PropertyId,
+                    PropertyName = lease.Property?.Name,
+                    Counterparty = tenantName,
+                    Category = p.PaymentType.ToString(),
+                    Status = p.Status.ToString(),
+                    SourceHref = $"/accounting/payments/{p.Id}",
+                    Explanation = LedgerExplanation.ForPayment(
+                        p.PaymentType, p.Status, p.Amount, p.DueDate, p.PaidDate, p.Method),
+                };
+            })
+            .OrderByDescending(e => e.Date)
+            .ThenByDescending(e => e.Id)
+            .ToList();
+
+        // Each payment row is a billed charge (rent, fee, deposit). "Charged" is every real charge;
+        // "Paid" is what's been collected. Balance (charged − paid) is exactly what's still owed.
+        // Waived/Failed/Refunded rows aren't money owed and weren't collected, so they're excluded
+        // from both totals and net to zero in the balance.
+        var totalCharged = payments
+            .Where(p => p.Status is PaymentStatus.Scheduled or PaymentStatus.Partial
+                or PaymentStatus.Late or PaymentStatus.Paid)
+            .Sum(p => p.Amount);
+        var totalPaid = payments
+            .Where(p => p.Status == PaymentStatus.Paid)
+            .Sum(p => p.Amount);
+
+        return new LeaseLedgerResponse
+        {
+            LeaseId = lease.Id,
+            LeaseNumber = lease.LeaseNumber,
+            TenantName = tenantName,
+            PropertyName = lease.Property?.Name,
+            TotalCharged = totalCharged,
+            TotalPaid = totalPaid,
+            Balance = totalCharged - totalPaid,
+            Entries = entries,
+        };
     }
 
     public async Task<LeaseResponse?> CreateAsync(int portfolioId, CreateLeaseRequest request, CancellationToken ct = default)
