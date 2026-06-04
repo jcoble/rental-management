@@ -23,9 +23,10 @@
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
+	import * as Tabs from '$lib/components/ui/tabs';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { Pencil, Save, Trash2, X, FileText, Download, PenLine } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, Building2, DollarSign, Users, StickyNote, CalendarRange } from '@lucide/svelte';
 	import { ApiError } from '$lib/api/client';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
@@ -241,25 +242,6 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	let leaseQuestion = $state('');
-	let leaseAnswer = $state('');
-	let leaseAnswerSources = $state<string[]>([]);
-
-	const askLeaseMutation = createMutation(() => ({
-		mutationFn: (question: string) => leases.ask(leaseId, question),
-		onSuccess: (result) => {
-			leaseAnswer = result.answer;
-			leaseAnswerSources = result.sources;
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	function askLease() {
-		const question = leaseQuestion.trim();
-		if (!question) return;
-		askLeaseMutation.mutate(question);
-	}
-
 	// --- Lease agreement PDF (generate + authed blob download) ---
 	// Whether a generated agreement already exists. Probed once on load with a
 	// no-download GET; 404 → only show Generate, 200 → also show Download.
@@ -474,6 +456,25 @@
 		const d = new Date(val);
 		return isNaN(d.getTime()) ? val : d.toLocaleDateString();
 	}
+
+	// Active tab for the detail page.
+	let activeTab = $state('overview');
+	const tabs = [
+		{ value: 'overview', label: 'Overview' },
+		{ value: 'agreement', label: 'Agreement & Signing' },
+		{ value: 'ledger', label: 'Ledger' },
+	];
+
+	// Subtle tint for the hero rent figure / status-keyed accent bar.
+	const heroAccent = $derived.by(() => {
+		switch (lease?.status) {
+			case 'Active': return 'from-success/10';
+			case 'Expired':
+			case 'Terminated': return 'from-destructive/10';
+			case 'NoticeGiven': return 'from-warning/10';
+			default: return 'from-primary/10';
+		}
+	});
 </script>
 
 {#snippet paymentStatusCell(payment: Payment)}
@@ -563,43 +564,139 @@
 			</div>
 		</div>
 
-		<!-- Info card -->
-		<Card.Root class="mb-6">
-			<Card.Header>
-				<Card.Title class="text-base">Lease Details</Card.Title>
-			</Card.Header>
-			<Card.Content>
-				<div class="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-4">
-					<InlineField label="Lease Number" bind:value={form.leaseNumber} display={lease.leaseNumber} {editing} onedit={startEditing} error={formErrors.leaseNumber} testid="lease-detail-number-field" />
-					<InlineField label="Status" bind:value={form.status} display={lease.status} {editing} onedit={startEditing} type="select" options={statusOptions} error={formErrors.status} testid="lease-detail-status" />
-					<InlineField label="Property" bind:value={form.propertyId} display={lease.propertyName} {editing} onedit={startEditing} type="select" options={propertyOptions} testid="lease-detail-property" />
-					<InlineField label="Unit" bind:value={form.unitId} display={lease.unitNumber ? `Unit ${lease.unitNumber}` : ''} {editing} onedit={startEditing} type="select" options={unitOptions} error={formErrors.unitId} testid="lease-detail-unit" />
-					<InlineField label="Tenant" bind:value={form.tenantId} display={lease.tenantName} {editing} onedit={startEditing} type="select" options={tenantOptions} error={formErrors.tenantId} testid="lease-detail-tenant" />
-					<InlineField label="Start Date" bind:value={form.startDate} display={formatDate(lease.startDate)} {editing} onedit={startEditing} type="date" error={formErrors.startDate} testid="lease-detail-start" />
-					<InlineField label="End Date" bind:value={form.endDate} display={formatDate(lease.endDate)} {editing} onedit={startEditing} type="date" error={formErrors.endDate} testid="lease-detail-end" />
-					<InlineField label="Monthly Rent" bind:value={form.monthlyRent} display={formatCurrency(lease.monthlyRent)} {editing} onedit={startEditing} type="number" error={formErrors.monthlyRent} testid="lease-detail-rent" />
-					<InlineField label="Security Deposit" bind:value={form.securityDeposit} display={formatCurrency(lease.securityDeposit)} {editing} onedit={startEditing} type="number" error={formErrors.securityDeposit} testid="lease-detail-deposit" />
-					<InlineField label="Late Fee" bind:value={form.lateFeeAmount} display={formatCurrency(lease.lateFeeAmount)} {editing} onedit={startEditing} type="number" error={formErrors.lateFeeAmount} testid="lease-detail-late-fee" />
-					<InlineField label="Rent Due Day" bind:value={form.rentDueDay} display={`Day ${lease.rentDueDay}`} {editing} onedit={startEditing} type="number" error={formErrors.rentDueDay} testid="lease-detail-due-day" />
-					{#if !editing && lease.moveInDate}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-In</dt>
-							<dd class="mt-0.5 text-sm">{formatDate(lease.moveInDate)}</dd>
-						</div>
-					{/if}
-					{#if !editing && lease.moveOutDate}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-Out</dt>
-							<dd class="mt-0.5 text-sm">{formatDate(lease.moveOutDate)}</dd>
-						</div>
-					{/if}
-					<InlineField label="Notes" bind:value={form.notes} display={lease.notes} {editing} onedit={startEditing} type="textarea" error={formErrors.notes} testid="lease-detail-notes" class="col-span-2 sm:col-span-3 lg:col-span-4" />
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<Tabs.Root bind:value={activeTab} class="w-full">
+			<Tabs.List class="mb-6" data-testid="lease-detail-tabs">
+				{#each tabs as t}
+					<Tabs.Trigger value={t.value} data-testid="lease-tab-{t.value}">{t.label}</Tabs.Trigger>
+				{/each}
+			</Tabs.List>
 
+			<!-- ───────────────────────── OVERVIEW ───────────────────────── -->
+			<Tabs.Content value="overview" class="space-y-6">
+				<!-- Hero: the few things that matter most + a state-aware primary CTA -->
+				<Card.Root class="overflow-hidden" data-testid="lease-hero">
+					<div class="bg-gradient-to-br {heroAccent} to-transparent">
+						<Card.Content class="flex flex-wrap items-end justify-between gap-6 p-6">
+							<div class="min-w-0">
+								<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Monthly Rent</p>
+								<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="lease-hero-rent">
+									{formatCurrency(lease.monthlyRent)}
+								</p>
+								<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+									<StatusBadge status={lease.status} />
+									{#if lease.tenantName}
+										<a href="/tenants/{lease.tenantId}" class="font-medium text-foreground underline-offset-4 hover:underline">{lease.tenantName}</a>
+									{/if}
+									{#if lease.propertyName}
+										<span aria-hidden="true">·</span>
+										<a href="/properties/{lease.propertyId}" class="underline-offset-4 hover:underline">{lease.propertyName}</a>{#if lease.unitNumber}<span>, Unit {lease.unitNumber}</span>{/if}
+									{/if}
+								</div>
+							</div>
+							<div class="flex flex-col items-stretch gap-2">
+								{#if ledger && Math.abs(ledger.balance) > 0.005}
+									<div class="rounded-lg border border-border bg-background/70 px-4 py-2 text-right">
+										<p class="text-[11px] uppercase tracking-wide text-muted-foreground">Balance</p>
+										<p class="font-mono text-lg font-bold tabular-nums {ledger.balance > 0.005 ? 'text-warning' : 'text-success'}">{formatCurrency(ledger.balance)}</p>
+									</div>
+								{/if}
+								{#if !editing}
+									{#if lease.status === 'Active'}
+										<Button data-testid="lease-hero-cta" size="sm" class="gap-1.5" onclick={() => activeTab = 'ledger'}>
+											<DollarSign class="h-4 w-4" />
+											View ledger
+										</Button>
+									{:else}
+										<Button data-testid="lease-hero-cta" size="sm" class="gap-1.5" onclick={() => statusMutation.mutate('Active')} disabled={statusMutation.isPending}>
+											Set lease active
+										</Button>
+									{/if}
+								{/if}
+							</div>
+						</Card.Content>
+					</div>
+				</Card.Root>
+
+				<!-- Grouped detail cards. Inline-edit happens within each card's context. -->
+				<div class="grid gap-6 lg:grid-cols-2">
+					<!-- Term -->
+					<Card.Root data-testid="lease-card-term">
+						<Card.Header class="pb-3">
+							<Card.Title class="flex items-center gap-2 text-base">
+								<CalendarRange class="h-4 w-4 text-primary" />
+								Term
+							</Card.Title>
+						</Card.Header>
+						<Card.Content class="grid grid-cols-2 gap-x-6 gap-y-4">
+							<InlineField label="Start Date" bind:value={form.startDate} display={formatDate(lease.startDate)} {editing} onedit={startEditing} type="date" error={formErrors.startDate} testid="lease-detail-start" />
+							<InlineField label="End Date" bind:value={form.endDate} display={formatDate(lease.endDate)} {editing} onedit={startEditing} type="date" error={formErrors.endDate} testid="lease-detail-end" />
+							<InlineField label="Rent Due Day" bind:value={form.rentDueDay} display={`Day ${lease.rentDueDay}`} {editing} onedit={startEditing} type="number" error={formErrors.rentDueDay} testid="lease-detail-due-day" />
+							<InlineField label="Status" bind:value={form.status} display={lease.status} {editing} onedit={startEditing} type="select" options={statusOptions} error={formErrors.status} testid="lease-detail-status" />
+							{#if !editing && lease.moveInDate}
+								<div>
+									<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-In</dt>
+									<dd class="mt-0.5 text-sm">{formatDate(lease.moveInDate)}</dd>
+								</div>
+							{/if}
+							{#if !editing && lease.moveOutDate}
+								<div>
+									<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-Out</dt>
+									<dd class="mt-0.5 text-sm">{formatDate(lease.moveOutDate)}</dd>
+								</div>
+							{/if}
+						</Card.Content>
+					</Card.Root>
+
+					<!-- Financials -->
+					<Card.Root data-testid="lease-card-financials">
+						<Card.Header class="pb-3">
+							<Card.Title class="flex items-center gap-2 text-base">
+								<DollarSign class="h-4 w-4 text-success" />
+								Financials
+							</Card.Title>
+						</Card.Header>
+						<Card.Content class="grid grid-cols-2 gap-x-6 gap-y-4">
+							<InlineField label="Monthly Rent" bind:value={form.monthlyRent} display={formatCurrency(lease.monthlyRent)} {editing} onedit={startEditing} type="number" error={formErrors.monthlyRent} testid="lease-detail-rent" />
+							<InlineField label="Security Deposit" bind:value={form.securityDeposit} display={formatCurrency(lease.securityDeposit)} {editing} onedit={startEditing} type="number" error={formErrors.securityDeposit} testid="lease-detail-deposit" />
+							<InlineField label="Late Fee" bind:value={form.lateFeeAmount} display={formatCurrency(lease.lateFeeAmount)} {editing} onedit={startEditing} type="number" error={formErrors.lateFeeAmount} testid="lease-detail-late-fee" />
+							<InlineField label="Lease Number" bind:value={form.leaseNumber} display={lease.leaseNumber} {editing} onedit={startEditing} error={formErrors.leaseNumber} testid="lease-detail-number-field" />
+						</Card.Content>
+					</Card.Root>
+
+					<!-- Parties -->
+					<Card.Root data-testid="lease-card-parties">
+						<Card.Header class="pb-3">
+							<Card.Title class="flex items-center gap-2 text-base">
+								<Users class="h-4 w-4 text-primary" />
+								Parties
+							</Card.Title>
+						</Card.Header>
+						<Card.Content class="grid grid-cols-2 gap-x-6 gap-y-4">
+							<InlineField label="Property" bind:value={form.propertyId} display={lease.propertyName} {editing} onedit={startEditing} type="select" options={propertyOptions} testid="lease-detail-property" />
+							<InlineField label="Unit" bind:value={form.unitId} display={lease.unitNumber ? `Unit ${lease.unitNumber}` : ''} {editing} onedit={startEditing} type="select" options={unitOptions} error={formErrors.unitId} testid="lease-detail-unit" />
+							<InlineField label="Tenant" bind:value={form.tenantId} display={lease.tenantName} {editing} onedit={startEditing} type="select" options={tenantOptions} error={formErrors.tenantId} testid="lease-detail-tenant" class="col-span-2" />
+						</Card.Content>
+					</Card.Root>
+
+					<!-- Notes -->
+					<Card.Root data-testid="lease-card-notes">
+						<Card.Header class="pb-3">
+							<Card.Title class="flex items-center gap-2 text-base">
+								<StickyNote class="h-4 w-4 text-muted-foreground" />
+								Notes
+							</Card.Title>
+						</Card.Header>
+						<Card.Content>
+							<InlineField label="Notes" bind:value={form.notes} display={lease.notes} {editing} onedit={startEditing} type="textarea" error={formErrors.notes} testid="lease-detail-notes" />
+						</Card.Content>
+					</Card.Root>
+				</div>
+			</Tabs.Content>
+
+			<!-- ───────────────────── AGREEMENT & SIGNING ───────────────────── -->
+			<Tabs.Content value="agreement" class="space-y-6">
 		<!-- Lease agreement PDF — generate, then download an authed blob -->
-		<Card.Root class="mb-6" data-testid="lease-agreement-card">
+		<Card.Root data-testid="lease-agreement-card">
 			<Card.Header>
 				<Card.Title class="text-base">Lease Agreement</Card.Title>
 				<Card.Description>Create a printable lease-agreement PDF from this lease's details, download it, or send it to the tenant to sign.</Card.Description>
@@ -713,44 +810,12 @@
 				</div>
 			</Card.Content>
 		</Card.Root>
+			</Tabs.Content>
 
-		<Card.Root class="mb-6" data-testid="lease-qa-card">
-			<Card.Header>
-				<Card.Title class="text-base">Ask This Lease</Card.Title>
-				<Card.Description>Answers are grounded in stored lease dates, rent, fees, deposit, and notes.</Card.Description>
-			</Card.Header>
-			<Card.Content class="space-y-3">
-				<div class="flex flex-col gap-2 sm:flex-row">
-					<Input
-						data-testid="lease-question-input"
-						bind:value={leaseQuestion}
-						placeholder="Can I have a dog? When is rent due?"
-						onkeydown={(e) => { if (e.key === 'Enter') askLease(); }}
-					/>
-					<Button data-testid="lease-question-submit" onclick={askLease} disabled={askLeaseMutation.isPending || !leaseQuestion.trim()}>
-						{askLeaseMutation.isPending ? 'Answering...' : 'Ask'}
-					</Button>
-				</div>
-				{#if leaseAnswer}
-					<div class="rounded-md border border-border bg-muted/30 p-3" data-testid="lease-question-answer">
-						<p class="text-sm leading-6">{leaseAnswer}</p>
-						{#if leaseAnswerSources.length > 0}
-							<details class="mt-2 text-xs text-muted-foreground">
-								<summary>Lease facts used</summary>
-								<ul class="mt-2 list-disc space-y-1 pl-5">
-									{#each leaseAnswerSources as source}
-										<li>{source}</li>
-									{/each}
-								</ul>
-							</details>
-						{/if}
-					</div>
-				{/if}
-			</Card.Content>
-		</Card.Root>
-
+			<!-- ───────────────────────── LEDGER ───────────────────────── -->
+			<Tabs.Content value="ledger" class="space-y-6">
 		<!-- Account history (plain-English ledger with a "why" per line) -->
-		<Card.Root class="mb-6" data-testid="lease-ledger-card">
+		<Card.Root data-testid="lease-ledger-card">
 			<Card.Header>
 				<Card.Title class="text-base">Account History</Card.Title>
 				<Card.Description>Every charge and payment on this lease, in plain English.</Card.Description>
@@ -770,9 +835,9 @@
 							<p class="text-xs text-muted-foreground">Charged</p>
 							<p class="mt-0.5 font-mono tabular-nums text-lg font-bold">{formatCurrency(ledger.totalCharged)}</p>
 						</div>
-						<div class="rounded-md border border-border bg-background p-3" data-testid="lease-ledger-paid">
+						<div class="rounded-md border border-success/30 bg-success/5 p-3" data-testid="lease-ledger-paid">
 							<p class="text-xs text-muted-foreground">Paid</p>
-							<p class="mt-0.5 font-mono tabular-nums text-lg font-bold">{formatCurrency(ledger.totalPaid)}</p>
+							<p class="mt-0.5 font-mono tabular-nums text-lg font-bold text-success">{formatCurrency(ledger.totalPaid)}</p>
 						</div>
 						<div class="rounded-md border border-border bg-background p-3" data-testid="lease-ledger-balance">
 							<p class="text-xs text-muted-foreground">Balance</p>
@@ -858,23 +923,27 @@
 		</Card.Root>
 
 		<!-- Payments section -->
-		<div class="mb-2 flex items-center justify-between">
-			<h2 class="text-lg font-semibold">Payments</h2>
-			<a href="/deposits" class="text-xs text-muted-foreground underline-offset-4 hover:underline">View Deposits</a>
+		<div>
+			<div class="mb-2 flex items-center justify-between">
+				<h2 class="text-lg font-semibold">Payments</h2>
+				<a href="/deposits" class="text-xs text-muted-foreground underline-offset-4 hover:underline">View Deposits</a>
+			</div>
+			<DataGrid
+				data={paymentsQuery.data ?? []}
+				columns={paymentColumns}
+				loading={paymentsQuery.isLoading}
+				emptyMessage="No payments recorded for this lease."
+				getRowKey={(p) => p.id}
+				data-testid="lease-payments-grid"
+			/>
 		</div>
-		<DataGrid
-			data={paymentsQuery.data ?? []}
-			columns={paymentColumns}
-			loading={paymentsQuery.isLoading}
-			emptyMessage="No payments recorded for this lease."
-			getRowKey={(p) => p.id}
-			data-testid="lease-payments-grid"
-		/>
 
 		<!-- Documents section -->
-		<div class="mt-6" data-testid="lease-detail-documents">
+		<div data-testid="lease-detail-documents">
 			<DocumentsPanel entityType="Lease" entityId={leaseId} />
 		</div>
+			</Tabs.Content>
+		</Tabs.Root>
 	{/if}
 </div>
 
