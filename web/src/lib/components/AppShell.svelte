@@ -31,7 +31,8 @@
 		ClipboardList,
 		Home,
 		BellRing,
-		Rocket
+		Rocket,
+		FileSpreadsheet
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -78,6 +79,7 @@
 	const staffNavItems: NavItem[] = [
 		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
 		{ href: '/onboarding', label: 'Setup', icon: Rocket, roles: ['Admin', 'Manager'] },
+		{ href: '/import', label: 'Import Data', icon: FileSpreadsheet, roles: ['Admin', 'Manager'] },
 		{ href: '/scan', label: 'Scan', icon: ScanLine, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/properties', label: 'Properties', icon: Building, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/tenants', label: 'Tenants', icon: Users, roles: ['Admin', 'Manager', 'Agent'] },
