@@ -134,3 +134,79 @@ class BankMatchSuggestion {
     );
   }
 }
+
+/// A single bank line that may be a duplicate of a payment/expense already on
+/// record. The backend pairs the raw [transaction] with a [suggestion].
+class BankReviewItem {
+  const BankReviewItem({
+    required this.transaction,
+    required this.suggestion,
+  });
+
+  final BankReviewTransaction transaction;
+  final BankMatchSuggestion suggestion;
+
+  factory BankReviewItem.fromJson(Map<String, dynamic> json) {
+    final rawSuggestion = json['suggestion'];
+    return BankReviewItem(
+      transaction: BankReviewTransaction.fromJson(
+        (json['transaction'] as Map<String, dynamic>?) ?? const {},
+      ),
+      suggestion: BankMatchSuggestion.fromJson(
+        rawSuggestion is Map<String, dynamic> ? rawSuggestion : const {},
+      ),
+    );
+  }
+}
+
+/// Lightweight bank line returned inside the review queue.
+class BankReviewTransaction {
+  const BankReviewTransaction({
+    required this.id,
+    required this.postedAt,
+    required this.amount,
+    required this.description,
+    this.merchantName,
+    required this.matchStatus,
+  });
+
+  final int id;
+  final DateTime postedAt;
+  final double amount;
+  final String description;
+  final String? merchantName;
+  final String matchStatus;
+
+  factory BankReviewTransaction.fromJson(Map<String, dynamic> json) {
+    return BankReviewTransaction(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      postedAt: DateTime.tryParse(json['postedAt'] as String? ?? '') ?? DateTime(0),
+      amount: (json['amount'] as num?)?.toDouble() ?? 0,
+      description: json['description'] as String? ?? '',
+      merchantName: json['merchantName'] as String?,
+      matchStatus: json['matchStatus'] as String? ?? 'Unmatched',
+    );
+  }
+}
+
+/// The full duplicate-review queue: a [count] and the list of [items].
+class BankReviewQueue {
+  const BankReviewQueue({
+    required this.count,
+    required this.items,
+  });
+
+  final int count;
+  final List<BankReviewItem> items;
+
+  factory BankReviewQueue.fromJson(Map<String, dynamic> json) {
+    final items = (json['items'] as List? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(BankReviewItem.fromJson)
+        .toList();
+    return BankReviewQueue(
+      count: (json['count'] as num?)?.toInt() ?? items.length,
+      items: items,
+    );
+  }
+}
