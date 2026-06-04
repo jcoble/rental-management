@@ -47,6 +47,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMoveOutStatementPdfGenerator, MoveOutStatementPdfGenerator>();
         services.AddScoped<IBankingService, BankingService>();
         services.AddHttpClient<IPlaidBankingProvider, PlaidBankingProvider>();
+        // Per-lease carried-over balance from before the landlord migrated onto Rental Command.
+        services.AddScoped<IOpeningBalanceService, OpeningBalanceService>();
 
         // --- controllers-ops-misc sub-unit ---
         services.AddScoped<IWorkOrderService, WorkOrderService>();

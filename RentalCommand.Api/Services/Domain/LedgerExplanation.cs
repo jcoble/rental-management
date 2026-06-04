@@ -104,6 +104,20 @@ public static class LedgerExplanation
     }
 
     /// <summary>
+    /// Explanation for a lease's opening balance — the figure carried over from before the landlord
+    /// started using Rental Command. A positive amount means the tenant already owed that much; a
+    /// negative amount means they had a credit on the books.
+    /// </summary>
+    public static string ForOpeningBalance(decimal amount, DateTime asOfDate)
+    {
+        var money = Money(Math.Abs(amount));
+        var when = LongDate(asOfDate);
+        return amount < 0
+            ? $"Opening credit carried over from before Rental Command — {money} in the tenant's favor as of {when}."
+            : $"Opening balance carried over from before Rental Command — {money} as of {when}.";
+    }
+
+    /// <summary>
     /// Explanation for an unmatched bank-feed entry (a deposit or withdrawal not yet tied to a
     /// payment/expense).
     /// </summary>
@@ -131,6 +145,8 @@ public static class LedgerExplanation
     private static string Money(decimal value) => value.ToString("$#,0.##;$-#,0.##;$0");
 
     private static string ShortDate(DateTime date) => date.ToString("MMM d");
+
+    private static string LongDate(DateTime date) => date.ToString("MMM d, yyyy");
 
     private static string MonthYear(DateTime date) => date.ToString("MMMM yyyy");
 }

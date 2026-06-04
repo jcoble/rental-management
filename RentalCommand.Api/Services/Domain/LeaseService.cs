@@ -127,6 +127,14 @@ public class LeaseService : ILeaseService
             })
             .ToListAsync(ct);
 
+        // A lease may carry an opening balance migrated in from before Rental Command. It anchors the
+        // ledger as the oldest entry so pre-app history isn't silently dropped.
+        var opening = await _db.OpeningBalances
+            .AsNoTracking()
+            .Where(o => o.LeaseId == id && o.PortfolioId == portfolioId)
+            .Select(o => new { o.Id, o.Amount, o.AsOfDate })
+            .FirstOrDefaultAsync(ct);
+
         var tenantName = $"{lease.Tenant?.FirstName} {lease.Tenant?.LastName}".Trim();
         if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "Tenant";
 
@@ -171,6 +179,32 @@ public class LeaseService : ILeaseService
         var totalPaid = payments
             .Where(p => p.Status == PaymentStatus.Paid)
             .Sum(p => p.Amount);
+
+        if (opening != null)
+        {
+            // Anchor the ledger with the carried-over balance as its oldest entry. A positive amount
+            // (tenant owed) reads as a charge; a negative amount (credit) reads like a prepayment. Folded
+            // into the totals so the running balance reflects pre-app history: a positive opening adds to
+            // "charged", a credit adds to "paid", keeping Balance = TotalCharged − TotalPaid exact.
+            totalCharged += Math.Max(opening.Amount, 0m);
+            totalPaid += Math.Max(-opening.Amount, 0m);
+
+            entries.Add(new LedgerTransactionResponse
+            {
+                Date = opening.AsOfDate,
+                Type = "Opening",
+                Id = opening.Id,
+                Description = "Opening balance",
+                Amount = opening.Amount,
+                PropertyId = lease.PropertyId,
+                PropertyName = lease.Property?.Name,
+                Counterparty = tenantName,
+                Category = "Opening",
+                Status = "Opening",
+                SourceHref = $"/accounting/opening-balances/{opening.Id}",
+                Explanation = LedgerExplanation.ForOpeningBalance(opening.Amount, opening.AsOfDate),
+            });
+        }
 
         return new LeaseLedgerResponse
         {
