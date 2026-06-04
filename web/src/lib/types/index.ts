@@ -42,11 +42,21 @@ export interface Portfolio {
 	timeZone: string;
 	status: PortfolioStatus;
 	settings?: string;
+	/** Account-wide sandbox/live state. True = seeded demo sandbox (real outbound suppressed). */
+	isSandbox?: boolean;
 	propertyCount?: number;
 	unitCount?: number;
 	activeLeaseCount?: number;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** Sandbox/Live lifecycle state for the caller's portfolio (`GET /portfolio/sandbox-state`). */
+export interface SandboxState {
+	portfolioId: number;
+	isSandbox: boolean;
+	/** When the sandbox demo data was seeded; null once graduated to Live. */
+	sandboxSeededAtUtc?: string | null;
 }
 
 export type OwnerEntityType = 'Person' | 'LLC' | 'Trust';
