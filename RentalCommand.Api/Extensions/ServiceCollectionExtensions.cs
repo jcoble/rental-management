@@ -52,6 +52,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
         services.AddScoped<INoticeDraftService, NoticeDraftService>();
         services.AddScoped<ISmsInboundRentConfirmationService, SmsInboundRentConfirmationService>();
+        services.AddScoped<RentalCommand.Api.Services.Security.ISmsWebhookSignatureValidator,
+            RentalCommand.Api.Services.Security.SmsWebhookSignatureValidator>();
 
         // Aggregated read-only KPI rollup for the web dashboard.
         services.AddScoped<IDashboardService, DashboardService>();
