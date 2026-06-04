@@ -9,6 +9,7 @@
 	import { paymentSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 
@@ -98,6 +99,40 @@
 	<title>Payment - Rental Command</title>
 </svelte:head>
 
+<!-- Inline date field: mirrors InlineField's edit/display structure (same testids) but
+     uses the shared DatePicker when editing. value is bound `yyyy-MM-dd`. -->
+{#snippet dateField(opts: {
+	label: string;
+	value: string;
+	setValue: (v: string) => void;
+	display: string;
+	testid: string;
+	error?: string;
+})}
+	<div data-testid={`${opts.testid}-field`}>
+		<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${opts.testid}-input`}>{opts.label}</label>
+		{#if editing}
+			<DatePicker
+				id={`${opts.testid}-input`}
+				testid={`${opts.testid}-input`}
+				value={opts.value}
+				onchange={opts.setValue}
+				placeholder={opts.label}
+			/>
+			{#if opts.error}<p class="mt-1 text-xs text-destructive" data-testid={`${opts.testid}-error`}>{opts.error}</p>{/if}
+		{:else}
+			<button
+				type="button"
+				class="min-h-10 w-full rounded-md border border-transparent py-2 text-left text-sm font-medium text-foreground transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+				data-testid={`${opts.testid}-value`}
+				onclick={startEditing}
+			>
+				{opts.display === '' ? '-' : opts.display}
+			</button>
+		{/if}
+	</div>
+{/snippet}
+
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="payment-detail-page">
 	<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
 		<div>
@@ -132,10 +167,10 @@
 				<div class="grid gap-4 md:grid-cols-3">
 					<InlineField label="Lease" bind:value={form.leaseId} display={payment.leaseNumber} {editing} onedit={startEditing} type="select" options={leaseOptions} error={formErrors.leaseId} testid="payment-detail-lease" />
 					<InlineField label="Amount" bind:value={form.amount} display={`$${payment.amount}`} {editing} onedit={startEditing} error={formErrors.amount} testid="payment-detail-amount" />
-					<InlineField label="Due date" bind:value={form.dueDate} display={new Date(payment.dueDate).toLocaleDateString()} {editing} onedit={startEditing} type="date" error={formErrors.dueDate} testid="payment-detail-due-date" />
+					{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: new Date(payment.dueDate).toLocaleDateString(), error: formErrors.dueDate, testid: 'payment-detail-due-date' })}
 					<InlineField label="Payment type" bind:value={form.paymentType} display={payment.paymentType} {editing} onedit={startEditing} type="select" options={typeOptions} testid="payment-detail-type" />
 					<InlineField label="Status" bind:value={form.status} display={payment.status} {editing} onedit={startEditing} type="select" options={statusOptions} testid="payment-detail-status" />
-					<InlineField label="Paid date" bind:value={form.paidDate} display={payment.paidDate ? new Date(payment.paidDate).toLocaleDateString() : ''} {editing} onedit={startEditing} type="date" testid="payment-detail-paid-date" />
+					{@render dateField({ label: 'Paid date', value: form.paidDate, setValue: (v) => (form.paidDate = v), display: payment.paidDate ? new Date(payment.paidDate).toLocaleDateString() : '', testid: 'payment-detail-paid-date' })}
 					<InlineField label="Method" bind:value={form.method} display={payment.method} {editing} onedit={startEditing} testid="payment-detail-method" />
 					<InlineField label="Reference" bind:value={form.externalReference} display={payment.externalReference} {editing} onedit={startEditing} testid="payment-detail-reference" />
 					<InlineField label="Notes" bind:value={form.notes} display={payment.notes} {editing} onedit={startEditing} type="textarea" testid="payment-detail-notes" class="md:col-span-3" />

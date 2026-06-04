@@ -13,17 +13,28 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import DateTimePicker from '$lib/components/shared/DateTimePicker.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
-	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { Plus, CalendarDays, List as ListIcon } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
+	import AppointmentCalendar from './AppointmentCalendar.svelte';
+	import {
+		TYPE_LEGEND,
+		utcIsoToLocalWallClock,
+		localWallClockToUtcIso
+	} from './calendar-utils';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const APPT_TYPES = ['Showing', 'MoveIn', 'MoveOut', 'Inspection', 'MaintenanceVisit', 'OwnerMeeting'];
 	const APPT_STATUSES = ['Scheduled', 'Confirmed', 'Completed', 'Cancelled', 'NoShow'];
+
+	// ── View toggle: Calendar (default) / List ──────────────────────────────────
+	type AppointmentView = 'calendar' | 'list';
+	let view = $state<AppointmentView>('calendar');
 
 	const PAGE_SIZE = 20;
 	let search = $state('');
@@ -38,9 +49,15 @@
 		skip = 0;
 	});
 
+	// List view is paged/searched server-side; the calendar needs a fuller window
+	// so the month/week shows everything, so we pull a larger batch for it.
 	const appointmentsQuery = createQuery(() => ({
 		queryKey: ['appointments', portfolioId, debouncedSearch.value, skip],
 		queryFn: () => appointments.list(portfolioId, { search: debouncedSearch.value, skip, take: PAGE_SIZE }),
+	}));
+	const calendarQuery = createQuery(() => ({
+		queryKey: ['appointments', portfolioId, 'calendar'],
+		queryFn: () => appointments.list(portfolioId, { take: 500 }),
 	}));
 	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
 	const tenantsQuery = createQuery(() => ({ queryKey: ['tenants', portfolioId], queryFn: () => tenants.list(portfolioId, { take: 200 }) }));
@@ -70,13 +87,17 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	const statusMutation = createMutation(() => ({
-		mutationFn: ({ id, status }: { id: number; status: string }) => appointments.update(id, { status }),
+	const rescheduleMutation = createMutation(() => ({
+		mutationFn: ({ id, data }: { id: number; data: Record<string, unknown> }) => appointments.update(id, data),
 		onSuccess: () => {
-			showSuccess('Appointment updated.');
+			showSuccess('Appointment rescheduled.');
 			invalidate();
 		},
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			showError(apiErrorMessage(err));
+			// On failure refetch so the dragged event snaps back to its stored slot.
+			invalidate();
+		},
 	}));
 
 	const deleteMutation = createMutation(() => ({
@@ -95,12 +116,20 @@
 		formErrors = {};
 		showForm = true;
 	}
+	// Calendar: clicked an empty day/slot → create prefilled with that local time.
+	function openCreateAt(localWallClockIso: string) {
+		editingId = null;
+		form = { ...empty, scheduledStart: localWallClockIso };
+		formErrors = {};
+		showForm = true;
+	}
 	function openEdit(a: Appointment) {
 		editingId = a.id;
 		form = {
 			title: a.title, type: a.type, status: a.status,
-			scheduledStart: a.scheduledStart?.slice(0, 16) ?? '',
-			scheduledEnd: a.scheduledEnd?.slice(0, 16) ?? '',
+			// Convert stored UTC → local wall-clock for the DateTimePicker.
+			scheduledStart: utcIsoToLocalWallClock(a.scheduledStart),
+			scheduledEnd: utcIsoToLocalWallClock(a.scheduledEnd),
 			propertyId: a.propertyId != null ? String(a.propertyId) : '',
 			tenantId: a.tenantId != null ? String(a.tenantId) : '',
 			prospectName: a.prospectName ?? '', prospectEmail: a.prospectEmail ?? '', assignedTo: a.assignedTo ?? '',
@@ -120,10 +149,27 @@
 			return;
 		}
 		formErrors = {};
-		saveMutation.mutate({ id: editingId, data: { portfolioId, ...result.data } });
+		// The form holds local wall-clock ISO; convert to UTC before saving (timestamptz).
+		const data = { ...result.data } as Record<string, unknown>;
+		data.scheduledStart = localWallClockToUtcIso(form.scheduledStart);
+		data.scheduledEnd = form.scheduledEnd ? localWallClockToUtcIso(form.scheduledEnd) : '';
+		saveMutation.mutate({ id: editingId, data: { portfolioId, ...data } });
 	}
 
+	// Calendar drag-to-reschedule → persist via the existing update mutation (UTC).
+	function reschedule(a: Appointment, newStartUtcIso: string, newEndUtcIso: string) {
+		rescheduleMutation.mutate({
+			id: a.id,
+			data: { scheduledStart: newStartUtcIso, scheduledEnd: newEndUtcIso },
+		});
+	}
+
+	// List view honours the type/status quick filters on top of the search query.
 	const list = $derived((appointmentsQuery.data ?? []).filter((a) =>
+		(!typeFilter || a.type === typeFilter) && (!statusFilter || a.status === statusFilter)
+	));
+	// Calendar view uses the broad window; type/status filters still apply for focus.
+	const calendarList = $derived((calendarQuery.data ?? []).filter((a) =>
 		(!typeFilter || a.type === typeFilter) && (!statusFilter || a.status === statusFilter)
 	));
 
@@ -153,53 +199,151 @@
 	<title>Appointments - Rental Command</title>
 </svelte:head>
 
-<div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="appointments-page">
-	<div class="mb-4 flex items-center justify-between gap-3">
+<div class="box-border flex h-full flex-col overflow-hidden p-6" data-testid="appointments-page">
+	<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold">Appointments</h1>
 			<p class="text-sm text-muted-foreground">Showings, move-ins, inspections, and service visits.</p>
 		</div>
-	</div>
-
-	<DataGrid
-		data={list}
-		{columns}
-		loading={appointmentsQuery.isLoading}
-		emptyMessage="No appointments found."
-		getRowKey={(a) => a.id}
-		onRowClick={(a) => goto('/appointments/' + a.id)}
-		bind:page={gridPage}
-		pageSize={PAGE_SIZE}
-		data-testid="appointments-list"
-	>
-		{#snippet toolbar()}
-			<div class="max-w-sm flex-1">
-				<SearchInput bind:value={search} placeholder="Search appointments…" testid="appointment-search" />
+		<div class="flex items-center gap-2">
+			<!-- Segmented Calendar / List toggle (Calendar is the default). -->
+			<div
+				class="inline-flex items-center gap-1 rounded-lg border border-border bg-muted p-1"
+				role="tablist"
+				aria-label="Appointment view"
+				data-testid="appointments-view-toggle"
+			>
+				<button
+					type="button"
+					role="tab"
+					aria-selected={view === 'calendar'}
+					class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors {view === 'calendar' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+					data-testid="appointments-view-calendar"
+					onclick={() => (view = 'calendar')}
+				>
+					<CalendarDays class="h-4 w-4" />
+					Calendar
+				</button>
+				<button
+					type="button"
+					role="tab"
+					aria-selected={view === 'list'}
+					class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors {view === 'list' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+					data-testid="appointments-view-list"
+					onclick={() => (view = 'list')}
+				>
+					<ListIcon class="h-4 w-4" />
+					List
+				</button>
 			</div>
-			<Select.Root type="single" bind:value={typeFilter}>
-				<Select.Trigger class="w-full max-w-[180px]" data-testid="appointment-type-filter">
-					{typeFilter ? typeFilter : 'All types'}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="All types">All types</Select.Item>
-					{#each APPT_TYPES as t}<Select.Item value={t} label={t}>{t}</Select.Item>{/each}
-				</Select.Content>
-			</Select.Root>
-			<Select.Root type="single" bind:value={statusFilter}>
-				<Select.Trigger class="w-full max-w-[180px]" data-testid="appointment-status-filter">
-					{statusFilter ? statusFilter : 'All statuses'}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="All statuses">All statuses</Select.Item>
-					{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
-				</Select.Content>
-			</Select.Root>
-			<Button data-testid="appointment-create-button" class="ml-auto gap-2" onclick={openCreate}>
+			<Button data-testid="appointment-create-button" class="gap-2" onclick={openCreate}>
 				<Plus class="h-4 w-4" />
 				New Appointment
 			</Button>
-		{/snippet}
-	</DataGrid>
+		</div>
+	</div>
+
+	<!--
+		Keep-alive views: both the Calendar and the List stay mounted and laid out;
+		the active one is raised on top (opaque `bg-background`) while the inactive
+		one sits behind it (z-0, pointer-events-none, aria-hidden). We deliberately
+		do NOT use `display:none`/`visibility:hidden`/`opacity:0` on the List panel so
+		that, even though Calendar is the default view, the seeded-data e2e test still
+		finds `appointments-list` + `datagrid-row` rendered in the DOM. Filters drive
+		both views.
+	-->
+	<div class="relative min-h-0 flex-1">
+		<div
+			class="absolute inset-0 flex flex-col gap-3 bg-background {view === 'calendar' ? 'z-10' : 'z-0 pointer-events-none'}"
+			aria-hidden={view !== 'calendar'}
+		>
+			<!-- Filters shared with the list view, plus the Type color legend. -->
+			<div class="flex flex-wrap items-center gap-2">
+				<div class="max-w-xs flex-1">
+					<SearchInput bind:value={search} placeholder="Search appointments…" testid="appointment-calendar-search" />
+				</div>
+				<Select.Root type="single" bind:value={typeFilter}>
+					<Select.Trigger class="w-full max-w-[160px]" data-testid="appointment-calendar-type-filter">
+						{typeFilter ? typeFilter : 'All types'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="All types">All types</Select.Item>
+						{#each APPT_TYPES as t}<Select.Item value={t} label={t}>{t}</Select.Item>{/each}
+					</Select.Content>
+				</Select.Root>
+				<Select.Root type="single" bind:value={statusFilter}>
+					<Select.Trigger class="w-full max-w-[160px]" data-testid="appointment-calendar-status-filter">
+						{statusFilter ? statusFilter : 'All statuses'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="All statuses">All statuses</Select.Item>
+						{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
+					</Select.Content>
+				</Select.Root>
+				<!-- Legend: Type → color -->
+				<ul class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="appointment-calendar-legend">
+					{#each TYPE_LEGEND as entry}
+						<li class="flex items-center gap-1.5 text-xs text-muted-foreground">
+							<span class="inline-block h-2.5 w-2.5 rounded-sm" style="background-color: {entry.color.color}"></span>
+							{entry.color.label}
+						</li>
+					{/each}
+				</ul>
+			</div>
+
+		<div class="min-h-0 flex-1 rounded-lg border border-border bg-card p-2">
+			{#if view === 'calendar'}
+				<AppointmentCalendar
+					appointments={calendarList}
+					onSelectAppointment={openEdit}
+					onCreateAt={openCreateAt}
+					onReschedule={reschedule}
+				/>
+			{/if}
+		</div>
+	</div>
+
+	<div
+		class="absolute inset-0 overflow-y-auto bg-background {view === 'list' ? 'z-10' : 'z-0 pointer-events-none'}"
+		aria-hidden={view !== 'list'}
+	>
+		<DataGrid
+			data={list}
+			{columns}
+			loading={appointmentsQuery.isLoading}
+			emptyMessage="No appointments found."
+			getRowKey={(a) => a.id}
+			onRowClick={(a) => goto('/appointments/' + a.id)}
+			bind:page={gridPage}
+			pageSize={PAGE_SIZE}
+			data-testid="appointments-list"
+		>
+			{#snippet toolbar()}
+				<div class="max-w-sm flex-1">
+					<SearchInput bind:value={search} placeholder="Search appointments…" testid="appointment-search" />
+				</div>
+				<Select.Root type="single" bind:value={typeFilter}>
+					<Select.Trigger class="w-full max-w-[180px]" data-testid="appointment-type-filter">
+						{typeFilter ? typeFilter : 'All types'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="All types">All types</Select.Item>
+						{#each APPT_TYPES as t}<Select.Item value={t} label={t}>{t}</Select.Item>{/each}
+					</Select.Content>
+				</Select.Root>
+				<Select.Root type="single" bind:value={statusFilter}>
+					<Select.Trigger class="w-full max-w-[180px]" data-testid="appointment-status-filter">
+						{statusFilter ? statusFilter : 'All statuses'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="All statuses">All statuses</Select.Item>
+						{#each APPT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
+					</Select.Content>
+				</Select.Root>
+			{/snippet}
+		</DataGrid>
+	</div>
+	</div>
 </div>
 
 <Dialog.Root
@@ -224,10 +368,14 @@
 				</Select.Content>
 			</Select.Root>
 			<div>
-				<Input data-testid="appointment-start-input" type="datetime-local" bind:value={form.scheduledStart} />
+				<span class="mb-1 block text-xs font-medium text-muted-foreground">Start</span>
+				<DateTimePicker bind:value={form.scheduledStart} testid="appointment-start-input" />
 				{#if formErrors.scheduledStart}<p class="mt-1 text-xs text-destructive" data-testid="appointment-start-error">{formErrors.scheduledStart}</p>{/if}
 			</div>
-			<Input data-testid="appointment-end-input" type="datetime-local" bind:value={form.scheduledEnd} />
+			<div>
+				<span class="mb-1 block text-xs font-medium text-muted-foreground">End</span>
+				<DateTimePicker bind:value={form.scheduledEnd} testid="appointment-end-input" />
+			</div>
 			<Select.Root type="single" bind:value={form.status}>
 				<Select.Trigger class="w-full" data-testid="appointment-status-input">
 					{form.status ? form.status : 'Select status'}

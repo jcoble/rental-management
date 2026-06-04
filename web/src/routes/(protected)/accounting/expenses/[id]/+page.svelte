@@ -10,6 +10,7 @@
 	import { expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 
@@ -111,6 +112,40 @@
 	<title>{expense?.description ?? 'Expense'} - Rental Command</title>
 </svelte:head>
 
+<!-- Inline date field: mirrors InlineField's edit/display structure (same testids) but
+     uses the shared DatePicker when editing. value is bound `yyyy-MM-dd`. -->
+{#snippet dateField(opts: {
+	label: string;
+	value: string;
+	setValue: (v: string) => void;
+	display: string;
+	testid: string;
+	error?: string;
+})}
+	<div data-testid={`${opts.testid}-field`}>
+		<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${opts.testid}-input`}>{opts.label}</label>
+		{#if editing}
+			<DatePicker
+				id={`${opts.testid}-input`}
+				testid={`${opts.testid}-input`}
+				value={opts.value}
+				onchange={opts.setValue}
+				placeholder={opts.label}
+			/>
+			{#if opts.error}<p class="mt-1 text-xs text-destructive" data-testid={`${opts.testid}-error`}>{opts.error}</p>{/if}
+		{:else}
+			<button
+				type="button"
+				class="min-h-10 w-full rounded-md border border-transparent py-2 text-left text-sm font-medium text-foreground transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+				data-testid={`${opts.testid}-value`}
+				onclick={startEditing}
+			>
+				{opts.display === '' ? '-' : opts.display}
+			</button>
+		{/if}
+	</div>
+{/snippet}
+
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="expense-detail-page">
 	<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
 		<div class="min-w-0">
@@ -145,9 +180,9 @@
 				<div class="grid gap-4 md:grid-cols-3">
 					<InlineField label="Description" bind:value={form.description} display={expense.description} {editing} onedit={startEditing} error={formErrors.description} testid="expense-detail-description" class="md:col-span-2" />
 					<InlineField label="Amount" bind:value={form.amount} display={`$${expense.amount}`} {editing} onedit={startEditing} error={formErrors.amount} testid="expense-detail-amount" />
-					<InlineField label="Incurred date" bind:value={form.incurredAt} display={new Date(expense.incurredAt).toLocaleDateString()} {editing} onedit={startEditing} type="date" error={formErrors.incurredAt} testid="expense-detail-incurred" />
-					<InlineField label="Due date" bind:value={form.dueDate} display={expense.dueDate ? new Date(expense.dueDate).toLocaleDateString() : ''} {editing} onedit={startEditing} type="date" testid="expense-detail-due-date" />
-					<InlineField label="Paid date" bind:value={form.paidAt} display={expense.paidAt ? new Date(expense.paidAt).toLocaleDateString() : ''} {editing} onedit={startEditing} type="date" testid="expense-detail-paid-date" />
+					{@render dateField({ label: 'Incurred date', value: form.incurredAt, setValue: (v) => (form.incurredAt = v), display: new Date(expense.incurredAt).toLocaleDateString(), error: formErrors.incurredAt, testid: 'expense-detail-incurred' })}
+					{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: expense.dueDate ? new Date(expense.dueDate).toLocaleDateString() : '', testid: 'expense-detail-due-date' })}
+					{@render dateField({ label: 'Paid date', value: form.paidAt, setValue: (v) => (form.paidAt = v), display: expense.paidAt ? new Date(expense.paidAt).toLocaleDateString() : '', testid: 'expense-detail-paid-date' })}
 					<InlineField label="Category" bind:value={form.category} display={expense.category} {editing} onedit={startEditing} type="select" options={categoryOptions} testid="expense-detail-category" />
 					<InlineField label="Status" bind:value={form.status} display={expense.status} {editing} onedit={startEditing} type="select" options={statusOptions} testid="expense-detail-status" />
 					<InlineField label="Property" bind:value={form.propertyId} display={expense.propertyName ?? 'General'} {editing} onedit={startEditing} type="select" options={propertyOptions} testid="expense-detail-property" />

@@ -23,6 +23,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import Progress from '$lib/components/ui/Progress.svelte';
+	import StateSelect from '$lib/components/shared/StateSelect.svelte';
+	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import {
 		Building,
 		UserCircle2,
@@ -709,9 +712,9 @@
 								</div>
 								<div>
 									<label for="ob-prop-address" class="mb-1 block text-xs font-medium text-muted-foreground">Street address</label>
-									<Input
+									<AddressAutocomplete
 										id="ob-prop-address"
-										data-testid="onboarding-property-address"
+										testid="onboarding-property-address"
 										bind:value={propertyForm.addressLine1}
 										placeholder="123 Main St"
 									/>
@@ -724,7 +727,7 @@
 								</div>
 								<div>
 									<label for="ob-prop-state" class="mb-1 block text-xs font-medium text-muted-foreground">State</label>
-									<Input id="ob-prop-state" data-testid="onboarding-property-state" bind:value={propertyForm.state} placeholder="State" />
+									<StateSelect id="ob-prop-state" testid="onboarding-property-state" bind:value={propertyForm.state} placeholder="State" />
 									{#if propertyErrors.state}<p class="mt-1 text-xs text-destructive">{propertyErrors.state}</p>{/if}
 								</div>
 								<div>
@@ -920,12 +923,12 @@
 									</div>
 									<div>
 										<label for="ob-lease-start" class="mb-1 block text-xs font-medium text-muted-foreground">Start date</label>
-										<Input id="ob-lease-start" type="date" data-testid="onboarding-lease-start" bind:value={leaseForm.startDate} />
+										<DatePicker id="ob-lease-start" testid="onboarding-lease-start" bind:value={leaseForm.startDate} placeholder="Start date" />
 										{#if leaseErrors.startDate}<p class="mt-1 text-xs text-destructive">{leaseErrors.startDate}</p>{/if}
 									</div>
 									<div>
 										<label for="ob-lease-end" class="mb-1 block text-xs font-medium text-muted-foreground">End date</label>
-										<Input id="ob-lease-end" type="date" data-testid="onboarding-lease-end" bind:value={leaseForm.endDate} />
+										<DatePicker id="ob-lease-end" testid="onboarding-lease-end" bind:value={leaseForm.endDate} placeholder="End date" />
 										{#if leaseErrors.endDate}<p class="mt-1 text-xs text-destructive">{leaseErrors.endDate}</p>{/if}
 									</div>
 									<div>

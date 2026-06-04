@@ -15,6 +15,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import { Plus } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -316,11 +317,11 @@
 				{#if formErrors.tenantId}<p class="mt-1 text-xs text-destructive" data-testid="lease-tenant-error">{formErrors.tenantId}</p>{/if}
 			</div>
 			<div>
-				<Input data-testid="lease-start-input" type="date" bind:value={form.startDate} />
+				<DatePicker testid="lease-start-input" bind:value={form.startDate} placeholder="Start date" max={form.endDate || undefined} />
 				{#if formErrors.startDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-start-error">{formErrors.startDate}</p>{/if}
 			</div>
 			<div>
-				<Input data-testid="lease-end-input" type="date" bind:value={form.endDate} />
+				<DatePicker testid="lease-end-input" bind:value={form.endDate} placeholder="End date" min={form.startDate || undefined} />
 				{#if formErrors.endDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-end-error">{formErrors.endDate}</p>{/if}
 			</div>
 			<Select.Root type="single" bind:value={form.status}>
