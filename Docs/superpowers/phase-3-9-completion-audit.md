@@ -72,7 +72,7 @@ but the landlord cannot use the complete workflow in a logical place.
 
 | Feature                              | Status  | Notes                                                              |
 | ------------------------------------ | ------- | ------------------------------------------------------------------ |
-| DO- Guided 5-step setup wizard       | Missing | No onboarding wizard.                                              |
+| Guided 5-step setup wizard | Usable | `/onboarding` full-page stepped flow (Portfolio -> Owner -> Property+Units -> Tenants -> Lease) over the existing create endpoints + Zod schemas; remembers what it created so later steps prefill, marks already-done steps, and is safe to re-enter (no duplicates). Empty-portfolio banner on the dashboard + a Setup nav link. (Web; Frank is white-gloved, web is the SaaS on-ramp.) |
 | DO- CSV/bulk import                  | Missing | No bulk import workflow.                                           |
 | DO- Bulk lease PDF scan              | Missing | Single-document scanning exists; no bulk lease migration workflow. |
 | DO- Opening balances/history scoping | Missing | No migration scoping workflow.                                     |
