@@ -143,6 +143,64 @@ class LeasesRepository {
       throw ApiException.fromDioException(e);
     }
   }
+
+  /// Kicks off the e-signature workflow for a lease by sending it to the
+  /// configured e-sign provider. Returns the resulting signature status.
+  ///
+  /// The backend is gated: until provider keys are configured the call returns
+  /// **503** (surfaced as an [ApiException] with statusCode 503), which the UI
+  /// treats as "not set up yet" rather than a hard error.
+  ///
+  /// POST /leases/{id}/send-for-signature → { leaseId, esignStatus, … }
+  Future<LeaseSignatureStatus> sendForSignature(
+    int id, {
+    String? signerName,
+    String? signerEmail,
+  }) async {
+    try {
+      final body = <String, dynamic>{
+        'signerName': signerName,
+        'signerEmail': signerEmail,
+      }..removeWhere((_, v) => v == null);
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/leases/$id/send-for-signature',
+        data: body.isNotEmpty ? body : null,
+      );
+      return LeaseSignatureStatus.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Current e-signature status for a lease.
+  ///
+  /// GET /leases/{id}/signature-status → { leaseId, esignStatus, … }
+  Future<LeaseSignatureStatus> signatureStatus(int id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/leases/$id/signature-status',
+      );
+      return LeaseSignatureStatus.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Downloads the signed lease PDF bytes (authed via the shared Dio
+  /// interceptor). The API returns 404 until a signed document exists.
+  ///
+  /// GET /leases/{id}/signed-document → application/pdf
+  Future<Uint8List> signedDocumentBytes(int id) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '/leases/$id/signed-document',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return Uint8List.fromList(response.data ?? const []);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
 }
 
 /// One line in a lease ledger — a charge or a payment.
@@ -273,6 +331,41 @@ class LeaseDocument {
       fileSize: (json['fileSize'] as num?)?.toInt() ?? 0,
       downloadUrl: json['downloadUrl'] as String?,
       generatedAt: DateTime.tryParse(json['generatedAt'] as String? ?? ''),
+    );
+  }
+}
+
+/// E-signature status for a lease, returned by the send-for-signature and
+/// signature-status endpoints. Shared shape across both.
+///
+/// `esignStatus` is one of: None, Sent, Signed, Declined.
+/// `leaseStatus` may be e.g. Draft, PendingSignature, Active.
+class LeaseSignatureStatus {
+  const LeaseSignatureStatus({
+    required this.leaseId,
+    required this.esignStatus,
+    required this.leaseStatus,
+    required this.hasSignedDocument,
+    this.envelopeId,
+  });
+
+  final int leaseId;
+  final String esignStatus;
+  final String leaseStatus;
+  final bool hasSignedDocument;
+  final String? envelopeId;
+
+  bool get isSent => esignStatus.toLowerCase() == 'sent';
+  bool get isSigned => esignStatus.toLowerCase() == 'signed';
+  bool get isDeclined => esignStatus.toLowerCase() == 'declined';
+
+  factory LeaseSignatureStatus.fromJson(Map<String, dynamic> json) {
+    return LeaseSignatureStatus(
+      leaseId: (json['leaseId'] as num?)?.toInt() ?? 0,
+      esignStatus: json['esignStatus'] as String? ?? 'None',
+      leaseStatus: json['leaseStatus'] as String? ?? '',
+      hasSignedDocument: json['hasSignedDocument'] as bool? ?? false,
+      envelopeId: json['envelopeId'] as String?,
     );
   }
 }

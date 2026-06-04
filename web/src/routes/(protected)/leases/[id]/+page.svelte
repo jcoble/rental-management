@@ -25,7 +25,8 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { Pencil, Save, Trash2, X, FileText, Download } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, FileText, Download, PenLine } from '@lucide/svelte';
+	import { ApiError } from '$lib/api/client';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -304,6 +305,73 @@
 		}
 	}
 
+	// --- E-signature (gated: provider stays dormant until keys are set) ---
+	// Whether the e-sign provider replied "not configured" (HTTP 503). When true we
+	// show a calm, unobtrusive note instead of a scary error.
+	let esignNotConfigured = $state(false);
+	let downloadingSignedDocument = $state(false);
+
+	const signatureStatusQuery = createQuery(() => ({
+		queryKey: ['lease-signature-status', leaseId],
+		queryFn: () => leases.signatureStatus(leaseId),
+		enabled: leaseId > 0,
+		// While we're waiting on a signature, poll so the card flips to "Signed"
+		// automatically once the tenant signs. Stop polling otherwise.
+		refetchInterval: (query) => (query.state.data?.esignStatus === 'Sent' ? 5000 : false),
+	}));
+	const signature = $derived(signatureStatusQuery.data);
+
+	const esignStatusLabel = $derived.by(() => {
+		switch (signature?.esignStatus) {
+			case 'Sent':
+				return 'Sent — waiting for signature';
+			case 'Signed':
+				return 'Signed';
+			case 'Declined':
+				return 'Declined';
+			default:
+				return 'Not sent';
+		}
+	});
+
+	function invalidateSignatureStatus() {
+		queryClient.invalidateQueries({ queryKey: ['lease-signature-status', leaseId] });
+		// Status changes flip the lease status too (e.g. PendingSignature).
+		invalidateLease();
+	}
+
+	const sendForSignatureMutation = createMutation(() => ({
+		mutationFn: () => leases.sendForSignature(leaseId),
+		onSuccess: () => {
+			esignNotConfigured = false;
+			showSuccess(`Sent to ${lease?.tenantName ?? 'the tenant'} for signature.`);
+			invalidateSignatureStatus();
+		},
+		onError: (err) => {
+			// 503 = no e-sign provider configured. Stay calm: show an inline note, not a toast.
+			if (err instanceof ApiError && err.status === 503) {
+				esignNotConfigured = true;
+				return;
+			}
+			showError(apiErrorMessage(err));
+		},
+	}));
+
+	async function handleSignedDocumentDownload() {
+		downloadingSignedDocument = true;
+		try {
+			const ok = await leases.downloadSignedDocument(leaseId);
+			if (!ok) {
+				showError('The signed lease isn’t available yet.');
+				invalidateSignatureStatus();
+			}
+		} catch {
+			showError('Could not download the signed lease. Please try again.');
+		} finally {
+			downloadingSignedDocument = false;
+		}
+	}
+
 	function startEditing() {
 		if (!lease) return;
 		form = {
@@ -534,7 +602,7 @@
 		<Card.Root class="mb-6" data-testid="lease-agreement-card">
 			<Card.Header>
 				<Card.Title class="text-base">Lease Agreement</Card.Title>
-				<Card.Description>Create a printable lease-agreement PDF from this lease's details, then download it.</Card.Description>
+				<Card.Description>Create a printable lease-agreement PDF from this lease's details, download it, or send it to the tenant to sign.</Card.Description>
 			</Card.Header>
 			<Card.Content>
 				<div class="flex flex-wrap items-center gap-2">
@@ -569,6 +637,80 @@
 				{#if !hasDocument && !generateDocMutation.isPending}
 					<p class="mt-2 text-xs text-muted-foreground">No agreement has been generated yet.</p>
 				{/if}
+
+				<!-- E-signature: send the lease to the tenant to sign, track status, download the signed copy -->
+				<div class="mt-4 border-t border-border pt-4" data-testid="lease-esign">
+					<div class="flex flex-wrap items-center justify-between gap-2">
+						<div class="flex items-center gap-2">
+							<p class="text-sm font-medium">E-signature</p>
+							<span
+								class="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs font-medium text-muted-foreground"
+								data-testid="lease-esign-status"
+							>
+								{esignStatusLabel}
+							</span>
+							{#if signature?.leaseStatus === 'PendingSignature'}
+								<span
+									class="inline-flex items-center rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning"
+									data-testid="lease-esign-pending"
+								>
+									Lease pending signature
+								</span>
+							{/if}
+						</div>
+						<div class="flex flex-wrap items-center gap-2">
+							<Button
+								data-testid="lease-send-for-signature"
+								variant="outline"
+								size="sm"
+								class="gap-1.5"
+								onclick={() => sendForSignatureMutation.mutate()}
+								disabled={sendForSignatureMutation.isPending}
+							>
+								<PenLine class="h-4 w-4" />
+								{sendForSignatureMutation.isPending
+									? 'Sending…'
+									: signature?.esignStatus === 'Sent'
+										? 'Resend for signature'
+										: 'Send for signature'}
+							</Button>
+							{#if signature?.hasSignedDocument}
+								<Button
+									data-testid="lease-download-signed-document"
+									size="sm"
+									class="gap-1.5"
+									onclick={handleSignedDocumentDownload}
+									disabled={downloadingSignedDocument}
+								>
+									<Download class="h-4 w-4" />
+									{downloadingSignedDocument ? 'Preparing…' : 'Download signed lease'}
+								</Button>
+							{/if}
+						</div>
+					</div>
+
+					{#if esignNotConfigured}
+						<p class="mt-2 text-xs text-muted-foreground" data-testid="lease-esign-not-configured">
+							E-signature isn’t set up yet (no e-sign provider configured).
+						</p>
+					{:else if signature?.esignStatus === 'Sent'}
+						<p class="mt-2 text-xs text-muted-foreground" data-testid="lease-esign-sent-note">
+							Waiting for {lease?.tenantName ?? 'the tenant'} to sign. This updates automatically once they do.
+						</p>
+					{:else if signature?.esignStatus === 'Signed'}
+						<p class="mt-2 text-xs text-success" data-testid="lease-esign-signed-note">
+							Signed. You can download the signed lease above.
+						</p>
+					{:else if signature?.esignStatus === 'Declined'}
+						<p class="mt-2 text-xs text-muted-foreground" data-testid="lease-esign-declined-note">
+							The signer declined. You can send it again when you’re ready.
+						</p>
+					{:else}
+						<p class="mt-2 text-xs text-muted-foreground">
+							Send this lease to {lease?.tenantName ?? 'the tenant'} to sign electronically. We’ll generate the agreement if needed.
+						</p>
+					{/if}
+				</div>
 			</Card.Content>
 		</Card.Root>
 

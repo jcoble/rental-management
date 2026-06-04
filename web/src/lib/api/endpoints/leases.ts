@@ -1,4 +1,4 @@
-import type { Lease, LeaseLedger, LeaseQuestionResponse } from '$lib/types';
+import type { EsignStatus, Lease, LeaseLedger, LeaseQuestionResponse, LeaseStatus } from '$lib/types';
 import { api, refreshToken } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
 import { CLIENT_API_BASE_URL } from '$lib/config';
@@ -13,6 +13,16 @@ export interface LeaseDocumentResponse {
 	fileSize: number;
 	downloadUrl: string;
 	generatedAt: string;
+}
+
+/** Response from GET /api/v1/leases/{id}/signature-status (and the send-for-signature POST). */
+export interface LeaseSignatureStatusResponse {
+	leaseId: number;
+	esignStatus: EsignStatus;
+	leaseStatus: LeaseStatus;
+	envelopeId?: string | null;
+	hasSignedDocument: boolean;
+	testId?: string | null;
 }
 
 export const leases = {
@@ -77,6 +87,61 @@ export const leases = {
 			document.body.removeChild(a);
 			URL.revokeObjectURL(objectUrl);
 		}
+		return true;
+	},
+
+	/**
+	 * POST /api/v1/leases/{id}/send-for-signature — kicks off the e-sign workflow.
+	 * Defaults the signer to the lease's tenant when no name/email is supplied.
+	 * Returns 503 (surfaced as ApiError.status) when no e-sign provider is configured;
+	 * callers should treat that as "not set up yet" rather than a hard failure.
+	 */
+	sendForSignature: (id: number, body?: { signerName?: string; signerEmail?: string }) =>
+		api.post<LeaseSignatureStatusResponse>(`/leases/${id}/send-for-signature`, body ?? {}),
+
+	/** GET /api/v1/leases/{id}/signature-status — current e-sign + lease status for this lease. */
+	signatureStatus: (id: number) =>
+		api.get<LeaseSignatureStatusResponse>(`/leases/${id}/signature-status`),
+
+	/**
+	 * GET /api/v1/leases/{id}/signed-document — streams the signed PDF with the bearer
+	 * token attached, triggering a browser download via a temporary object URL. Mirrors
+	 * downloadDocument above. Returns false when no signed document exists yet (404).
+	 */
+	downloadSignedDocument: async (id: number): Promise<boolean> => {
+		if (!browser) return false;
+
+		// Proactively refresh if near expiry, mirroring the main client logic.
+		if (isTokenExpired(120)) {
+			try {
+				await refreshToken();
+			} catch {
+				// Proceed; bearer may still be usable.
+			}
+		}
+
+		const { accessToken } = getAuthState();
+		const url = `${CLIENT_API_BASE_URL}/leases/${id}/signed-document`;
+
+		const response = await fetch(url, {
+			credentials: 'include',
+			headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
+		});
+
+		if (response.status === 404) return false;
+		if (!response.ok) {
+			throw new Error(`Signed lease download failed (${response.status})`);
+		}
+
+		const blob = await response.blob();
+		const objectUrl = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = objectUrl;
+		a.download = `signed-lease-${id}.pdf`;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(objectUrl);
 		return true;
 	},
 };
