@@ -52,6 +52,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
         services.AddScoped<INoticeDraftService, NoticeDraftService>();
         services.AddScoped<ISmsInboundRentConfirmationService, SmsInboundRentConfirmationService>();
+        services.AddScoped<IApplicationService, ApplicationService>();
         services.AddScoped<RentalCommand.Api.Services.Security.ISmsWebhookSignatureValidator,
             RentalCommand.Api.Services.Security.SmsWebhookSignatureValidator>();
 

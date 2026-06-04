@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../ai/ai_tab.dart';
 import '../analytics/insights_screen.dart';
+import '../applications/applications_list_screen.dart';
 import '../appointments/appointments_screen.dart';
 import '../banking/banking_screen.dart';
 import '../deposits/deposits_screen.dart';
@@ -109,6 +110,20 @@ class _MoreMenu extends StatelessWidget {
             onTap: () {
               Navigator.of(context).push<void>(
                 MaterialPageRoute<void>(builder: (_) => const LeasesListScreen()),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _MenuTile(
+            icon: Icons.assignment_ind_outlined,
+            activeIcon: Icons.assignment_ind,
+            label: 'Applications',
+            subtitle: 'Review and approve applicants',
+            color: colorScheme.tertiary,
+            onTap: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                    builder: (_) => const ApplicationsListScreen()),
               );
             },
           ),
