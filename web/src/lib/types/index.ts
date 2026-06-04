@@ -679,6 +679,56 @@ export interface Inspection {
 	updatedAt: string;
 }
 
+export type InspectionItemResult = 'Pending' | 'Pass' | 'Fail' | 'NotApplicable';
+
+export interface InspectionItem {
+	id: number;
+	inspectionId: number;
+	area: string;
+	label: string;
+	result: InspectionItemResult;
+	note?: string;
+	photoStoredFileId?: number;
+	spawnedWorkOrderId?: number;
+	sortOrder: number;
+}
+
+/** Inspection detail/create response: the inspection fields plus checklist items. */
+export interface InspectionDetail extends Inspection {
+	templateId?: number;
+	reportStoredFileId?: number;
+	inspector?: string;
+	items: InspectionItem[];
+}
+
+export interface InspectionTemplateItem {
+	area: string;
+	label: string;
+	sortOrder: number;
+}
+
+export interface InspectionTemplate {
+	/** Built-in templates have NEGATIVE ids (e.g. -1, -2). Pass them back to create as-is. */
+	id: number;
+	portfolioId?: number;
+	name: string;
+	inspectionType: InspectionType;
+	isBuiltIn: boolean;
+	items: InspectionTemplateItem[];
+}
+
+export interface InspectionCompleteResult {
+	inspectionId: number;
+	status: InspectionStatus;
+	totalItems: number;
+	passCount: number;
+	failCount: number;
+	notApplicableCount: number;
+	pendingCount: number;
+	reportStoredFileId?: number;
+	createdWorkOrderIds: number[];
+}
+
 export interface ActivityLog {
 	id: number;
 	portfolioId: number;

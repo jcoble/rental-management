@@ -99,18 +99,31 @@
 	}
 
 	// --- Inspection form/dialog ---
-	const emptyInspection = { propertyId: '', type: 'Routine', scheduledFor: '' };
+	const emptyInspection = { propertyId: '', type: 'Routine', scheduledFor: '', templateId: '', inspector: '' };
 	let showInspectionForm = $state(false);
 	let inspectionForm = $state({ ...emptyInspection });
 	let inspectionErrors = $state<Record<string, string>>({});
 
+	// Smart-checklist templates (built-ins have negative ids). Loaded only when the form is open.
+	const templatesQuery = createQuery(() => ({
+		queryKey: ['inspection-templates'],
+		queryFn: () => inspections.templates(),
+		enabled: showInspectionForm,
+	}));
+	const templateOptions = $derived(templatesQuery.data ?? []);
+	const selectedTemplateName = $derived(
+		templateOptions.find((t) => String(t.id) === inspectionForm.templateId)?.name ?? 'No checklist (blank)'
+	);
+
 	const createInspectionMutation = createMutation(() => ({
 		mutationFn: (data: Record<string, unknown>) => inspections.create(data),
-		onSuccess: () => {
+		onSuccess: (created) => {
 			showSuccess('Inspection scheduled.');
 			showInspectionForm = false;
 			inspectionForm = { ...emptyInspection };
 			queryClient.invalidateQueries({ queryKey: ['inspections', portfolioId] });
+			// Jump straight into the checklist so Maria can start ticking items.
+			goto('/maintenance/inspections/' + created.id);
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
@@ -251,14 +264,22 @@
 				<Card.Title class="text-base font-semibold">Inspections</Card.Title>
 			</Card.Header>
 			<Card.Content class="max-h-[55vh] space-y-2 overflow-y-auto p-3" data-testid="inspections-list">
+				{#if (inspectionsQuery.data || []).length === 0}
+					<p class="py-6 text-center text-sm text-muted-foreground" data-testid="inspections-empty">No inspections scheduled yet.</p>
+				{/if}
 				{#each inspectionsQuery.data || [] as inspection (inspection.id)}
-					<div class="rounded border border-border bg-background p-3 text-sm" data-testid="inspection-row">
-						<div class="flex items-center justify-between">
+					<button
+						type="button"
+						class="block w-full rounded border border-border bg-background p-3 text-left text-sm transition-colors hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+						data-testid="inspection-row"
+						onclick={() => goto('/maintenance/inspections/' + inspection.id)}
+					>
+						<div class="flex items-center justify-between gap-2">
 							<p class="font-medium">{inspection.type} · {inspection.propertyName}</p>
 							<StatusBadge status={inspection.status} />
 						</div>
 						<p class="font-mono tabular-nums text-xs text-muted-foreground">{new Date(inspection.scheduledFor).toLocaleString()}</p>
-					</div>
+					</button>
 				{/each}
 			</Card.Content>
 		</Card.Root>
@@ -358,7 +379,38 @@
 				</Select.Content>
 			</Select.Root>
 			<div>
-				<Input data-testid="inspection-scheduled-input" type="datetime-local" bind:value={inspectionForm.scheduledFor} />
+				<label for="inspection-template" class="mb-1 block text-xs font-medium text-muted-foreground">Checklist (optional)</label>
+				<Select.Root
+					type="single"
+					value={inspectionForm.templateId}
+					onValueChange={(v) => {
+						inspectionForm.templateId = v;
+						// Match the inspection type to the chosen checklist for a sensible default.
+						const tpl = templateOptions.find((t) => String(t.id) === v);
+						if (tpl) inspectionForm.type = tpl.inspectionType;
+					}}
+				>
+					<Select.Trigger id="inspection-template" class="w-full" data-testid="inspection-template-input">
+						{selectedTemplateName}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="No checklist (blank)">No checklist (blank)</Select.Item>
+						{#each templateOptions as tpl (tpl.id)}
+							<Select.Item value={String(tpl.id)} label={tpl.name}>
+								{tpl.name}{tpl.isBuiltIn ? ' · built-in' : ''}
+							</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+				<p class="mt-1 text-xs text-muted-foreground">Pick a checklist to load the items for this inspection.</p>
+			</div>
+			<div>
+				<label for="inspection-inspector" class="mb-1 block text-xs font-medium text-muted-foreground">Inspector (optional)</label>
+				<Input id="inspection-inspector" data-testid="inspection-inspector-input" bind:value={inspectionForm.inspector} placeholder="Who's doing this inspection?" />
+			</div>
+			<div>
+				<label for="inspection-scheduled" class="mb-1 block text-xs font-medium text-muted-foreground">Scheduled for</label>
+				<Input id="inspection-scheduled" data-testid="inspection-scheduled-input" type="datetime-local" bind:value={inspectionForm.scheduledFor} />
 				{#if inspectionErrors.scheduledFor}<p class="mt-1 text-xs text-destructive" data-testid="inspection-scheduled-error">{inspectionErrors.scheduledFor}</p>{/if}
 			</div>
 		</div>

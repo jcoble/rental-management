@@ -47,6 +47,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRecurringMaintenanceTaskService, RecurringMaintenanceTaskService>();
         services.AddScoped<IAppointmentService, AppointmentService>();
         services.AddScoped<IInspectionService, InspectionService>();
+        // Inspection report PDF rendering (QuestPDF). Stateless → singleton.
+        services.AddSingleton<IInspectionReportPdfGenerator, InspectionReportPdfGenerator>();
         services.AddScoped<IActivityService, ActivityService>();
         services.AddScoped<IPortalService, PortalService>();
         services.AddScoped<IConversationService, ConversationService>();

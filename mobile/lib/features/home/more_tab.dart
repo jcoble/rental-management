@@ -6,6 +6,7 @@ import '../applications/applications_list_screen.dart';
 import '../appointments/appointments_screen.dart';
 import '../banking/banking_screen.dart';
 import '../deposits/deposits_screen.dart';
+import '../inspections/inspections_list_screen.dart';
 import '../leases/leases_list_screen.dart';
 import '../maintenance/work_orders_screen.dart';
 import '../notices/notices_screen.dart';
@@ -85,6 +86,21 @@ class _MoreMenu extends StatelessWidget {
               Navigator.of(context).push<void>(
                 MaterialPageRoute<void>(
                   builder: (_) => const RecurringMaintenanceListScreen(),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 12),
+          _MenuTile(
+            icon: Icons.fact_check_outlined,
+            activeIcon: Icons.fact_check,
+            label: 'Inspections',
+            subtitle: 'Walk units with smart checklists',
+            color: colorScheme.tertiary,
+            onTap: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (_) => const InspectionsListScreen(),
                 ),
               );
             },
