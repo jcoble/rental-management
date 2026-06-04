@@ -14,10 +14,12 @@ namespace RentalCommand.Api.Controllers;
 public class ApplicationsController : AuthenticatedPortfolioControllerBase
 {
     private readonly IApplicationService _service;
+    private readonly IScreeningService _screening;
 
-    public ApplicationsController(IApplicationService service)
+    public ApplicationsController(IApplicationService service, IScreeningService screening)
     {
         _service = service;
+        _screening = screening;
     }
 
     /// <summary>Lists applications in the portfolio, newest first; optionally filtered by <c>?status=</c>.</summary>
@@ -89,6 +91,59 @@ public class ApplicationsController : AuthenticatedPortfolioControllerBase
         {
             return BadRequest(new { error = ex.Message });
         }
+    }
+
+    /// <summary>
+    /// Runs a background/credit screening (FCRA) for the application. Requires recorded FCRA consent
+    /// (400 otherwise). The screening provider is gated: when no key is configured this returns 503
+    /// "screening not configured" and records nothing. On success a screening result is created and the
+    /// application moves to UnderReview.
+    /// </summary>
+    [HttpPost("{id:int}/screen")]
+    [ProducesResponseType(typeof(ScreeningResultResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> Screen(int id, CancellationToken ct)
+    {
+        try
+        {
+            var result = await _screening.RequestScreeningAsync(GetPortfolioId(), id, GetUserId(), ct);
+            return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
+        }
+        catch (ConsentRequiredException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (ScreeningNotConfiguredException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = ex.Message });
+        }
+    }
+
+    /// <summary>Returns the screening result(s) recorded for the application, newest first.</summary>
+    [HttpGet("{id:int}/screening")]
+    [ProducesResponseType(typeof(IReadOnlyList<ScreeningResultResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetScreening(int id, CancellationToken ct)
+    {
+        var results = await _screening.GetScreeningResultsAsync(GetPortfolioId(), id, ct);
+        return results == null ? NotFound(new { error = "Application not found" }) : Ok(results);
+    }
+
+    /// <summary>
+    /// Generates an FCRA adverse-action (denial) notice PDF for the application, stores it, and
+    /// (optionally) emails it to the applicant. Pairs with declining the application.
+    /// </summary>
+    [HttpPost("{id:int}/adverse-action")]
+    [ProducesResponseType(typeof(AdverseActionNoticeResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GenerateAdverseAction(
+        int id, [FromBody] GenerateAdverseActionRequest? body, CancellationToken ct)
+    {
+        var result = await _screening.GenerateAdverseActionAsync(
+            GetPortfolioId(), id, GetUserId(), body ?? new GenerateAdverseActionRequest(), ct);
+        return result == null ? NotFound(new { error = "Application not found" }) : Ok(result);
     }
 
     /// <summary>

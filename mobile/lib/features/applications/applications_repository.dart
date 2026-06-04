@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -96,6 +98,71 @@ class ApplicationsRepository {
       throw ApiException.fromDioException(e);
     }
   }
+
+  /// Runs a tenant-screening request — returns the new result.
+  ///
+  /// Throws [ApiException] with `statusCode == 400` when FCRA consent is
+  /// missing, and `statusCode == 503` when screening is not configured (the
+  /// provider is dormant).
+  Future<ScreeningResult> screen(int id) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/applications/$id/screen',
+        data: {},
+      );
+      return ScreeningResult.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Lists all screening results for an application (newest typically first).
+  Future<List<ScreeningResult>> screening(int id) async {
+    try {
+      final response =
+          await _dio.get<List<dynamic>>('/applications/$id/screening');
+      return (response.data ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(ScreeningResult.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Generates an FCRA adverse-action notice for a declined application.
+  Future<AdverseActionNotice> adverseAction(
+    int id, {
+    String? reason,
+    required bool sendToApplicant,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/applications/$id/adverse-action',
+        data: {
+          if (reason != null && reason.isNotEmpty) 'reason': reason,
+          'sendToApplicant': sendToApplicant,
+        },
+      );
+      return AdverseActionNotice.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Raw bytes for a stored file (authed via the shared interceptor) — used to
+  /// open the generated adverse-action PDF.
+  Future<Uint8List> documentBytes(int storedFileId) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '/documents/$storedFileId/file',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return Uint8List.fromList(response.data ?? const []);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
 }
 
 // ── Providers ─────────────────────────────────────────────────────────────────
@@ -114,4 +181,10 @@ final applicationsProvider = FutureProvider.autoDispose
 final applicationDetailProvider = FutureProvider.autoDispose
     .family<RentalApplication, int>((ref, id) {
   return ref.watch(applicationsRepositoryProvider).get(id);
+});
+
+/// Screening results for an application (auto-disposes so it re-fetches on open).
+final applicationScreeningProvider = FutureProvider.autoDispose
+    .family<List<ScreeningResult>, int>((ref, id) {
+  return ref.watch(applicationsRepositoryProvider).screening(id);
 });
