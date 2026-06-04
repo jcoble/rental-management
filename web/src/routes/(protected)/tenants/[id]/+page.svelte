@@ -13,11 +13,10 @@
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import * as Card from '$lib/components/ui/card';
-	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Mail, Phone, AlertCircle, Pencil, Trash2, User } from '@lucide/svelte';
+	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 
 	const queryClient = useQueryClient();
@@ -42,14 +41,14 @@
 		tenant ? (tenant.fullName ?? `${tenant.firstName} ${tenant.lastName}`) : ''
 	);
 
-	// ── Edit dialog ────────────────────────────────────────────────────────────
+	// ── Inline edit ────────────────────────────────────────────────────────────
 	const empty = { firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' };
-	let showForm = $state(false);
+	let editing = $state(false);
 	let form = $state({ ...empty });
 	let formErrors = $state<Record<string, string>>({});
 	let showDeleteConfirm = $state(false);
 
-	function openEdit() {
+	function startEditing() {
 		if (!tenant) return;
 		form = {
 			firstName: tenant.firstName,
@@ -59,10 +58,10 @@
 			emergencyContact: tenant.emergencyContact ?? '',
 		};
 		formErrors = {};
-		showForm = true;
+		editing = true;
 	}
-	function closeForm() {
-		showForm = false;
+	function cancelEditing() {
+		editing = false;
 		formErrors = {};
 	}
 
@@ -81,7 +80,8 @@
 			tenants.update(tid, data),
 		onSuccess: () => {
 			showSuccess('Tenant updated.');
-			closeForm();
+			editing = false;
+			formErrors = {};
 			queryClient.invalidateQueries({ queryKey: ['tenant', id] });
 			queryClient.invalidateQueries({ queryKey: ['tenants', portfolioId] });
 		},
@@ -209,19 +209,30 @@
 				</div>
 			</div>
 			<div class="flex items-center gap-2">
-				<Button variant="outline" class="gap-2" onclick={openEdit} data-testid="tenant-detail-edit">
-					<Pencil class="h-4 w-4" />
-					Edit
-				</Button>
-				<Button
-					variant="destructive"
-					class="gap-2"
-					onclick={() => (showDeleteConfirm = true)}
-					data-testid="tenant-detail-delete"
-				>
-					<Trash2 class="h-4 w-4" />
-					Delete
-				</Button>
+				{#if editing}
+					<Button variant="outline" class="gap-2" onclick={cancelEditing} disabled={saveMutation.isPending} data-testid="tenant-detail-cancel">
+						<X class="h-4 w-4" />
+						Cancel
+					</Button>
+					<Button class="gap-2" onclick={submit} disabled={saveMutation.isPending} data-testid="tenant-detail-save">
+						<Save class="h-4 w-4" />
+						{saveMutation.isPending ? 'Saving…' : 'Save'}
+					</Button>
+				{:else}
+					<Button variant="outline" class="gap-2" onclick={startEditing} data-testid="tenant-detail-edit">
+						<Pencil class="h-4 w-4" />
+						Edit
+					</Button>
+					<Button
+						variant="destructive"
+						class="gap-2"
+						onclick={() => (showDeleteConfirm = true)}
+						data-testid="tenant-detail-delete"
+					>
+						<Trash2 class="h-4 w-4" />
+						Delete
+					</Button>
+				{/if}
 			</div>
 		</div>
 
@@ -231,27 +242,12 @@
 				<Card.Title>Tenant Details</Card.Title>
 			</Card.Header>
 			<Card.Content>
-				<dl class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">First Name</dt>
-						<dd class="mt-1 text-sm text-foreground">{tenant.firstName}</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Last Name</dt>
-						<dd class="mt-1 text-sm text-foreground">{tenant.lastName}</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Email</dt>
-						<dd class="mt-1 text-sm text-foreground">{tenant.email ?? '–'}</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Phone</dt>
-						<dd class="mt-1 text-sm text-foreground">{tenant.phone ?? '–'}</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Emergency Contact</dt>
-						<dd class="mt-1 text-sm text-foreground">{tenant.emergencyContact ?? '–'}</dd>
-					</div>
+				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+					<InlineField label="First Name" bind:value={form.firstName} display={tenant.firstName} {editing} onedit={startEditing} error={formErrors.firstName} testid="tenant-detail-first-name" />
+					<InlineField label="Last Name" bind:value={form.lastName} display={tenant.lastName} {editing} onedit={startEditing} error={formErrors.lastName} testid="tenant-detail-last-name" />
+					<InlineField label="Email" bind:value={form.email} display={tenant.email} {editing} onedit={startEditing} type="email" error={formErrors.email} testid="tenant-detail-email" />
+					<InlineField label="Phone" bind:value={form.phone} display={tenant.phone} {editing} onedit={startEditing} type="tel" error={formErrors.phone} testid="tenant-detail-phone" />
+					<InlineField label="Emergency Contact" bind:value={form.emergencyContact} display={tenant.emergencyContact} {editing} onedit={startEditing} error={formErrors.emergencyContact} testid="tenant-detail-emergency" />
 					{#if tenant.dateOfBirth}
 						<div>
 							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Date of Birth</dt>
@@ -278,7 +274,7 @@
 							<dd class="mt-1 text-sm text-foreground">{tenant.notes}</dd>
 						</div>
 					{/if}
-				</dl>
+				</div>
 			</Card.Content>
 		</Card.Root>
 
@@ -303,37 +299,6 @@
 		</div>
 	{/if}
 </div>
-
-<!-- Edit dialog -->
-<Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
-	<Dialog.Content class="max-w-lg">
-		<Dialog.Header>
-			<Dialog.Title>Edit Tenant</Dialog.Title>
-		</Dialog.Header>
-		<div class="grid gap-3 md:grid-cols-2" data-testid="tenant-form">
-			<div>
-				<Input data-testid="tenant-first-name-input" bind:value={form.firstName} placeholder="First name" />
-				{#if formErrors.firstName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-first-name-error">{formErrors.firstName}</p>{/if}
-			</div>
-			<div>
-				<Input data-testid="tenant-last-name-input" bind:value={form.lastName} placeholder="Last name" />
-				{#if formErrors.lastName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-last-name-error">{formErrors.lastName}</p>{/if}
-			</div>
-			<div>
-				<Input data-testid="tenant-email-input" bind:value={form.email} placeholder="Email" />
-				{#if formErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="tenant-email-error">{formErrors.email}</p>{/if}
-			</div>
-			<Input data-testid="tenant-phone-input" bind:value={form.phone} placeholder="Phone" />
-			<Input data-testid="tenant-emergency-input" bind:value={form.emergencyContact} class="md:col-span-2" placeholder="Emergency contact" />
-		</div>
-		<div class="mt-4 flex justify-end gap-2">
-			<Button data-testid="tenant-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
-			<Button data-testid="tenant-form-save" onclick={submit} disabled={saveMutation.isPending}>
-				{saveMutation.isPending ? 'Saving…' : 'Save Tenant'}
-			</Button>
-		</div>
-	</Dialog.Content>
-</Dialog.Root>
 
 <ConfirmDialog
 	open={showDeleteConfirm}
