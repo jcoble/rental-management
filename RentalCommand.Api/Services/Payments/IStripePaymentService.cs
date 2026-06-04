@@ -15,11 +15,41 @@ public interface IStripePaymentService
     Task<CreateIntentResult> CreatePaymentIntentAsync(int portfolioId, int paymentId, CancellationToken ct);
 
     /// <summary>
+    /// Tenant-safe hosted-Checkout path for paying a single rent <c>Payment</c>. Verifies the
+    /// payment belongs to the calling tenant's own lease (otherwise <see cref="CheckoutResult.Outcome.NotFound"/>),
+    /// then creates a Stripe Checkout Session (card + ACH) and a pending <c>PaymentTransaction</c>.
+    /// Gated: returns <see cref="CheckoutResult.Outcome.NotEnabled"/> when Stripe is not configured.
+    /// </summary>
+    Task<CheckoutResult> CreatePaymentCheckoutSessionAsync(
+        int portfolioId, int tenantId, int paymentId, string? successUrl, string? cancelUrl, CancellationToken ct);
+
+    /// <summary>
+    /// Creates a Stripe Checkout Session in <c>setup</c> mode so the tenant saves a reusable payment
+    /// method for off-session autopay on the given lease. Verifies the lease belongs to the calling
+    /// tenant (otherwise <see cref="CheckoutResult.Outcome.NotFound"/>). Gated.
+    /// </summary>
+    Task<CheckoutResult> CreateAutopaySetupSessionAsync(
+        int portfolioId, int tenantId, int leaseId, string? successUrl, string? cancelUrl, CancellationToken ct);
+
+    /// <summary>
     /// Verifies the Stripe webhook signature and processes the event. Idempotent — duplicate
     /// deliveries are detected and skipped. Throws <see cref="Stripe.StripeException"/> on bad
     /// signature (caller should return 400).
     /// </summary>
     Task HandleWebhookEventAsync(string json, string signature, CancellationToken ct);
+}
+
+/// <summary>Result returned by the hosted-Checkout creation methods.</summary>
+public class CheckoutResult
+{
+    public enum Outcome { Ok, NotEnabled, NotFound }
+
+    public Outcome Result { get; init; }
+    public string? CheckoutUrl { get; init; }
+
+    public static CheckoutResult NotEnabled() => new() { Result = Outcome.NotEnabled };
+    public static CheckoutResult NotFound() => new() { Result = Outcome.NotFound };
+    public static CheckoutResult Ok(string checkoutUrl) => new() { Result = Outcome.Ok, CheckoutUrl = checkoutUrl };
 }
 
 /// <summary>Result returned by <see cref="IStripePaymentService.CreatePaymentIntentAsync"/>.</summary>

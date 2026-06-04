@@ -50,6 +50,27 @@ class TenantNotification {
   }
 }
 
+/// Autopay enrollment state for one of the tenant's own leases.
+class AutopayStatus {
+  const AutopayStatus({
+    required this.leaseId,
+    required this.active,
+    this.enrolledAt,
+  });
+
+  final int leaseId;
+  final bool active;
+  final DateTime? enrolledAt;
+
+  factory AutopayStatus.fromJson(Map<String, dynamic> json) {
+    return AutopayStatus(
+      leaseId: (json['leaseId'] as num?)?.toInt() ?? 0,
+      active: json['active'] as bool? ?? false,
+      enrolledAt: DateTime.tryParse(json['enrolledAt'] as String? ?? ''),
+    );
+  }
+}
+
 class TenantPortalSnapshot {
   const TenantPortalSnapshot({
     required this.balance,
@@ -144,6 +165,68 @@ class TenantPortalRepository {
     }
   }
 
+  // --- Online rent payment + autopay (GATED — Stripe-hosted Checkout) --------
+  // No payment SDK: each method returns a hosted Checkout URL to open in the
+  // browser. When Stripe is off the API replies 503, surfaced here as an
+  // [ApiException] with statusCode 503 so the UI can show a gentle message
+  // rather than an error. Success/cancel URLs are omitted; the API defaults
+  // them server-side (the tenant just returns to the app and pulls to refresh).
+
+  /// POST /portal/payments/{paymentId}/checkout → hosted Checkout URL for ONE
+  /// of the tenant's own rent payments. 503 when Stripe is off, 404 if the
+  /// payment isn't theirs.
+  Future<String> payCheckout(int paymentId) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/portal/payments/$paymentId/checkout',
+      );
+      return response.data?['checkoutUrl'] as String? ?? '';
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// GET /portal/autopay?leaseId={id} → the autopay enrollment state. Omit
+  /// [leaseId] to let the API pick the tenant's most relevant lease.
+  Future<AutopayStatus> autopayStatus([int? leaseId]) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/portal/autopay',
+        queryParameters: leaseId == null ? null : {'leaseId': leaseId},
+      );
+      return AutopayStatus.fromJson(response.data ?? const {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// POST /portal/autopay/enroll → hosted setup Checkout URL that saves a
+  /// reusable payment method for the lease. 503 when Stripe is off.
+  Future<String> autopayEnroll(int leaseId) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/portal/autopay/enroll',
+        data: {'leaseId': leaseId},
+      );
+      return response.data?['checkoutUrl'] as String? ?? '';
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// POST /portal/autopay/cancel → deactivates autopay on the tenant's lease.
+  Future<AutopayStatus> autopayCancel(int leaseId) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/portal/autopay/cancel',
+        data: {'leaseId': leaseId},
+      );
+      return AutopayStatus.fromJson(response.data ?? const {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<void> uploadWorkOrderPhoto({
     required int workOrderId,
     required Uint8List bytes,
@@ -181,4 +264,11 @@ final tenantPortalSnapshotProvider =
 final tenantWorkOrderDetailProvider = FutureProvider.autoDispose
     .family<WorkOrderDetail, int>((ref, id) {
       return ref.watch(tenantPortalRepositoryProvider).getWorkOrderDetail(id);
+    });
+
+/// Autopay enrollment status for a single lease. Refresh by invalidating this
+/// provider (the UI does so after enroll/cancel and on pull-to-refresh).
+final tenantAutopayStatusProvider = FutureProvider.autoDispose
+    .family<AutopayStatus, int>((ref, leaseId) {
+      return ref.watch(tenantPortalRepositoryProvider).autopayStatus(leaseId);
     });

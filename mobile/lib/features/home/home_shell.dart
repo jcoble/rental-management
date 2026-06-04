@@ -3,7 +3,9 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/models/models.dart';
@@ -200,13 +202,115 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 // _HomeTab — the actual dashboard
 // ---------------------------------------------------------------------------
 
-class _TenantHomeTab extends ConsumerWidget {
+class _TenantHomeTab extends ConsumerStatefulWidget {
   const _TenantHomeTab({required this.user});
 
   final AuthUser? user;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_TenantHomeTab> createState() => _TenantHomeTabState();
+}
+
+class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
+  /// Payment id currently starting a Checkout session (button shows a spinner).
+  int? _payingPaymentId;
+
+  /// Lease id whose autopay enroll/cancel is in flight.
+  int? _busyAutopayLeaseId;
+
+  AuthUser? get user => widget.user;
+
+  /// Rent items the tenant can pay online: anything not already settled.
+  static const _settledStatuses = {'Paid', 'Waived', 'Refunded', 'Cancelled'};
+
+  Future<void> _open(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  /// Starts hosted Checkout for one rent item and opens it in the browser.
+  /// A 503 (Stripe off) shows a gentle, non-error message.
+  Future<void> _payNow(Payment payment) async {
+    if (_payingPaymentId != null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _payingPaymentId = payment.id);
+    try {
+      final url = await ref
+          .read(tenantPortalRepositoryProvider)
+          .payCheckout(payment.id);
+      if (url.isEmpty) return;
+      await _open(url);
+    } on ApiException catch (e) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              e.statusCode == 503
+                  ? "Online payments aren't set up yet."
+                  : e.message,
+            ),
+          ),
+        );
+    } finally {
+      if (mounted) setState(() => _payingPaymentId = null);
+    }
+  }
+
+  /// Enrolls the lease in autopay and opens the setup Checkout in the browser.
+  Future<void> _enrollAutopay(int leaseId) async {
+    if (_busyAutopayLeaseId != null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busyAutopayLeaseId = leaseId);
+    try {
+      final url = await ref
+          .read(tenantPortalRepositoryProvider)
+          .autopayEnroll(leaseId);
+      if (url.isNotEmpty) await _open(url);
+      // The tenant finishes setup in the browser; refresh status on return.
+      ref.invalidate(tenantAutopayStatusProvider(leaseId));
+    } on ApiException catch (e) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              e.statusCode == 503
+                  ? "Online payments aren't set up yet."
+                  : e.message,
+            ),
+          ),
+        );
+    } finally {
+      if (mounted) setState(() => _busyAutopayLeaseId = null);
+    }
+  }
+
+  /// Turns autopay off for the lease, then refreshes the status.
+  Future<void> _cancelAutopay(int leaseId) async {
+    if (_busyAutopayLeaseId != null) return;
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _busyAutopayLeaseId = leaseId);
+    try {
+      await ref.read(tenantPortalRepositoryProvider).autopayCancel(leaseId);
+      ref.invalidate(tenantAutopayStatusProvider(leaseId));
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('Autopay turned off.')),
+        );
+    } on ApiException catch (e) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _busyAutopayLeaseId = null);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final snapshot = ref.watch(tenantPortalSnapshotProvider);
     final theme = Theme.of(context);
 
@@ -224,7 +328,20 @@ class _TenantHomeTab extends ConsumerWidget {
         ],
       ),
       body: RefreshIndicator(
-        onRefresh: () async => ref.invalidate(tenantPortalSnapshotProvider),
+        onRefresh: () async {
+          ref.invalidate(tenantPortalSnapshotProvider);
+          // Refresh autopay state too; the tenant may have just returned from
+          // a hosted Checkout in the browser.
+          final leaseId = ref
+              .read(tenantPortalSnapshotProvider)
+              .value
+              ?.leases
+              .firstOrNull
+              ?.id;
+          if (leaseId != null) {
+            ref.invalidate(tenantAutopayStatusProvider(leaseId));
+          }
+        },
         child: snapshot.when(
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (err, _) => ListView(
@@ -250,15 +367,14 @@ class _TenantHomeTab extends ConsumerWidget {
                 .toList();
             final unpaid =
                 data.payments
-                    .where(
-                      (p) => !{'Paid', 'Waived', 'Refunded'}.contains(p.status),
-                    )
+                    .where((p) => !_settledStatuses.contains(p.status))
                     .toList()
                   ..sort((a, b) => a.dueDate.compareTo(b.dueDate));
             final nextPayment = unpaid.isEmpty ? null : unpaid.first;
             final unreadNotifications = data.notifications
                 .where((n) => !n.isRead)
                 .length;
+            final primaryLeaseId = data.leases.firstOrNull?.id;
 
             return ListView(
               padding: const EdgeInsets.all(20),
@@ -305,6 +421,43 @@ class _TenantHomeTab extends ConsumerWidget {
                       ? 'No unpaid rent scheduled'
                       : '${_money(nextPayment.amount)} due',
                 ),
+
+                // ── Pay rent ──────────────────────────────────────────────
+                if (unpaid.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    'Pay rent',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final payment in unpaid)
+                    _PayItemCard(
+                      payment: payment,
+                      busy: _payingPaymentId == payment.id,
+                      // Disable other buttons while one Checkout is starting.
+                      enabled:
+                          _payingPaymentId == null ||
+                          _payingPaymentId == payment.id,
+                      onPay: () => _payNow(payment),
+                    ),
+                ],
+
+                // ── Autopay ───────────────────────────────────────────────
+                if (primaryLeaseId != null) ...[
+                  const SizedBox(height: 8),
+                  _AutopayCard(
+                    statusAsync: ref.watch(
+                      tenantAutopayStatusProvider(primaryLeaseId),
+                    ),
+                    busy: _busyAutopayLeaseId == primaryLeaseId,
+                    onEnroll: () => _enrollAutopay(primaryLeaseId),
+                    onCancel: () => _cancelAutopay(primaryLeaseId),
+                  ),
+                ],
+
+                const SizedBox(height: 8),
                 _TenantCard(
                   icon: Icons.build_outlined,
                   title: 'Open maintenance',
@@ -320,6 +473,210 @@ class _TenantHomeTab extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// A single unpaid/scheduled/late rent item with a "Pay now" action that opens
+/// a hosted Stripe Checkout in the browser.
+class _PayItemCard extends StatelessWidget {
+  const _PayItemCard({
+    required this.payment,
+    required this.busy,
+    required this.enabled,
+    required this.onPay,
+  });
+
+  final Payment payment;
+  final bool busy;
+  final bool enabled;
+  final VoidCallback onPay;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isLate = payment.dueDate.isBefore(
+      DateTime.now().subtract(const Duration(days: 1)),
+    );
+    final dueLabel = isLate
+        ? 'Past due'
+        : 'Due ${_shortDate(payment.dueDate)}';
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Icon(
+              isLate ? Icons.warning_amber_outlined : Icons.payments_outlined,
+              color: isLate ? cs.error : cs.primary,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _money(payment.amount),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    '${payment.type.isEmpty ? 'Rent' : payment.type} · $dueLabel',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: isLate ? cs.error : cs.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            FilledButton(
+              onPressed: enabled && !busy ? onPay : null,
+              child: busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Pay now'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Autopay enrollment card — plain language, with set-up / turn-off actions.
+class _AutopayCard extends StatelessWidget {
+  const _AutopayCard({
+    required this.statusAsync,
+    required this.busy,
+    required this.onEnroll,
+    required this.onCancel,
+  });
+
+  final AsyncValue<AutopayStatus> statusAsync;
+  final bool busy;
+  final VoidCallback onEnroll;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Icon(Icons.autorenew, color: cs.primary),
+            const SizedBox(width: 14),
+            Expanded(
+              child: statusAsync.when(
+                loading: () => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Autopay',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Checking…',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+                error: (_, _) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Autopay',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      "Couldn't load autopay status.",
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+                data: (status) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Autopay',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      status.active
+                          ? "You're set up. Rent is paid automatically each month."
+                          : 'Set up autopay so rent is paid automatically each month.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            statusAsync.maybeWhen(
+              data: (status) => busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : status.active
+                  ? OutlinedButton(
+                      onPressed: onCancel,
+                      child: const Text('Turn off'),
+                    )
+                  : FilledButton(
+                      onPressed: onEnroll,
+                      child: const Text('Set up'),
+                    ),
+              orElse: () => const SizedBox.shrink(),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _shortDate(DateTime date) {
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  if (date.year <= 1) return '';
+  return '${months[date.month - 1]} ${date.day}';
 }
 
 class _TenantMaintenanceTab extends ConsumerStatefulWidget {

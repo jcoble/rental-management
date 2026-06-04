@@ -36,7 +36,7 @@ but the landlord cannot use the complete workflow in a logical place.
 | Read-only Plaid reconciliation | Usable | Plaid sandbox Link, encrypted access tokens, bank connections/transactions, sync, matching, accounting ledger/totals, and Flutter/web banking surfaces are wired. |
 | Transparent tenant ledger      | Usable | `GET /leases/{id}/ledger` (was 404 — no backend; now built, tenant-ownership-scoped) returns each charge/payment with a deterministic plain-English "why" + running balance. Surfaced on web lease detail (Account History), accounting ledger tooltips, and the tenant portal; Flutter has a `LeaseLedgerView` + portal Account History. |
 | Plain-English money snapshots  | Usable | `GET /accounting/snapshot` returns collected/spent/kept + past-due with ready-to-show plain-English sentences; "Your money" card on the web dashboard and Flutter home. |
-| DO- Online card/ACH            | Partial | Stripe payment intent/webhook exists. ACH/Plaid payment path is not complete.                                                    |
+| Online card/ACH | Usable | Tenant pays rent via **Stripe-hosted Checkout** (card + ACH) — `POST /portal/payments/{id}/checkout` (ownership-checked) returns a checkout URL; the webhook (`checkout.session.completed`) marks the payment Paid. **Autopay**: `AutopayEnrollment` (saved method via setup Checkout) + an Engine `AutopayChargeWorker` charges off-session when rent is due (idempotent). GATED (dormant/503 until Stripe keys). Web + Flutter tenant portal. |
 
 ## Phase 6 - Applications, Screening, E-sign
 

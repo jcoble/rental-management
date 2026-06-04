@@ -44,6 +44,51 @@ public class PortalPaymentResponse
     public string TestId => $"portal-payment-{Id}";
 }
 
+/// <summary>
+/// Optional per-request override of where Stripe Checkout returns the tenant. When omitted the
+/// server falls back to its configured (or built-in) success/cancel URLs.
+/// </summary>
+public class PortalCheckoutRequest
+{
+    [MaxLength(2048)]
+    public string? SuccessUrl { get; set; }
+
+    [MaxLength(2048)]
+    public string? CancelUrl { get; set; }
+}
+
+/// <summary>Hosted-Checkout response: the URL the frontend redirects the tenant to.</summary>
+public class CheckoutSessionResponse
+{
+    public string CheckoutUrl { get; set; } = string.Empty;
+}
+
+/// <summary>Request to enroll a lease in autopay (setup-mode Checkout). Lease must be the tenant's own.</summary>
+public class AutopayEnrollRequest
+{
+    public int LeaseId { get; set; }
+
+    [MaxLength(2048)]
+    public string? SuccessUrl { get; set; }
+
+    [MaxLength(2048)]
+    public string? CancelUrl { get; set; }
+}
+
+/// <summary>Request to cancel autopay for one of the tenant's leases.</summary>
+public class AutopayCancelRequest
+{
+    public int LeaseId { get; set; }
+}
+
+/// <summary>The tenant's autopay enrollment status for a lease.</summary>
+public class AutopayStatusResponse
+{
+    public int LeaseId { get; set; }
+    public bool Active { get; set; }
+    public DateTime? EnrolledAt { get; set; }
+}
+
 public class CreateTenantWorkOrderRequest
 {
     [Required]
