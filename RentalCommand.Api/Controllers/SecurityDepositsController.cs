@@ -85,4 +85,23 @@ public class SecurityDepositsController : AuthenticatedPortfolioControllerBase
             ? NotFound(new { error = "Security deposit holding not found or already returned" })
             : Ok(updated);
     }
+
+    /// <summary>
+    /// Downloads an itemised, photo-backed move-out statement PDF for the holding: deposit held, each
+    /// deduction (reason + amount), any photos attached to the deposit, and the net refund (or amount
+    /// owed). This is the dispute-proof document handed to the departing tenant. 404 if not in portfolio.
+    /// </summary>
+    [HttpGet("{id:int}/move-out-statement")]
+    [Produces("application/pdf")]
+    [ProducesResponseType(typeof(FileResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> MoveOutStatement(int id, CancellationToken ct)
+    {
+        var pdf = await _service.GetMoveOutStatementAsync(GetPortfolioId(), id, ct);
+        if (pdf == null)
+            return NotFound(new { error = "Security deposit holding not found" });
+
+        // Inline so it previews in the browser; the filename still applies on download/save.
+        return File(pdf, "application/pdf", $"move-out-statement-{id}.pdf");
+    }
 }

@@ -41,6 +41,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IOwnerStatementService, OwnerStatementService>();
         services.AddScoped<IOwnerStatementEmailService, OwnerStatementEmailService>();
         services.AddScoped<ISecurityDepositService, SecurityDepositService>();
+        // Security-deposit move-out statement PDF rendering (QuestPDF). Stateless → singleton.
+        services.AddSingleton<IMoveOutStatementPdfGenerator, MoveOutStatementPdfGenerator>();
         services.AddScoped<IBankingService, BankingService>();
         services.AddHttpClient<IPlaidBankingProvider, PlaidBankingProvider>();
 
