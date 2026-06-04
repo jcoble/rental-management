@@ -741,6 +741,27 @@ public class DemoDataSeeder
             (6,  InspectionType.Routine,     InspectionStatus.Scheduled,    13,   10, null),
         };
 
+        // Pick the built-in template that matches an inspection's type so the seeded inspections
+        // carry a real checklist (the PASS/FAIL/N-A tiles populate). Falls back to the Routine →
+        // Annual Safety list when an exact type match isn't a built-in.
+        InspectionTemplate TemplateForType(InspectionType type) =>
+            InspectionTemplateCatalog.BuiltIns.FirstOrDefault(t => t.InspectionType == type)
+            ?? InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.AnnualSafety);
+
+        // Deterministic-but-varied result for a completed inspection's checklist item. Most items
+        // pass; a couple per inspection fail (to spawn follow-ups / populate the FAIL tile) and a
+        // couple are N/A — so demo inspections look like real walkthroughs.
+        static (InspectionItemResult Result, string? Note) ResultForCompletedItem(int inspectionSeed, int itemIndex, string label)
+        {
+            var slot = (inspectionSeed * 7 + itemIndex) % 11;
+            return slot switch
+            {
+                3 => (InspectionItemResult.Fail, $"{label}: needs attention — follow-up work order created."),
+                7 => (InspectionItemResult.NotApplicable, $"{label}: not present in this unit."),
+                _ => (InspectionItemResult.Pass, null),
+            };
+        }
+
         var inspections = new List<Inspection>();
         for (int i = 0; i < inspDefs.Length; i++)
         {
@@ -753,7 +774,10 @@ public class DemoDataSeeder
                 inspLease = activeLeasesForPayments[id.tenantIdx.Value];
 
             var scheduled = now.AddDays(id.daysOffset).Date.AddHours(9);
-            inspections.Add(new Inspection
+            var template  = TemplateForType(id.type);
+            var completed = id.status == InspectionStatus.Completed;
+
+            var inspection = new Inspection
             {
                 PortfolioId  = 1,
                 PropertyId   = prop.Id,
@@ -762,11 +786,35 @@ public class DemoDataSeeder
                 Type         = id.type,
                 Status       = id.status,
                 ScheduledFor = scheduled,
-                CompletedAt  = id.status == InspectionStatus.Completed ? scheduled.AddHours(1) : null,
+                CompletedAt  = completed ? scheduled.AddHours(1) : null,
                 Outcome      = id.outcome,
+                Inspector    = "Property Manager",
+                TemplateId   = template.Id,
                 CreatedAt    = now.AddDays(id.daysOffset - 5),
                 UpdatedAt    = now
-            });
+            };
+
+            // Materialize the template's checklist. Completed inspections get realistic
+            // pass/fail/N-A results; the scheduled (not-yet-walked) one stays all-Pending.
+            var sortOrder = 0;
+            foreach (var templateItem in template.Items.OrderBy(it => it.SortOrder))
+            {
+                var (result, note) = completed
+                    ? ResultForCompletedItem(i, sortOrder, templateItem.Label)
+                    : (InspectionItemResult.Pending, (string?)null);
+
+                inspection.Items.Add(new InspectionItem
+                {
+                    PortfolioId = 1,
+                    Area        = templateItem.Area,
+                    Label       = templateItem.Label,
+                    Result      = result,
+                    Note        = note,
+                    SortOrder   = sortOrder++,
+                });
+            }
+
+            inspections.Add(inspection);
         }
 
         _db.Inspections.AddRange(inspections);

@@ -82,6 +82,31 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         return Ok(items);
     }
 
+    /// <summary>
+    /// Answers a tenant's plain-English question grounded in their OWN lease (rent, dates, deposit,
+    /// late fee, notes). Scope is the tenant's lease only: an explicit <c>leaseId</c> that isn't theirs
+    /// — or no lease at all — returns 404, never another tenant's lease. Falls back to a deterministic
+    /// answer when no LLM key is configured.
+    /// </summary>
+    [HttpPost("lease/ask")]
+    [ProducesResponseType(typeof(LeaseQuestionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseQuestionResponse>> AskLease(
+        [FromQuery] int? leaseId, [FromBody] LeaseQuestionRequest request, CancellationToken ct)
+    {
+        var tenantId = GetTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        var answer = await _service.AskLeaseAsync(GetPortfolioId(), tenantId.Value, leaseId, request.Question, ct);
+        return answer == null
+            ? NotFound(new { error = "No lease was found for this tenant, or the question was empty." })
+            : Ok(answer);
+    }
+
     // -----------------------------------------------------------------------------------------------
     // Online rent payment (optional convenience). Hosted Stripe Checkout — neither the web nor the
     // Flutter app needs a payment SDK; the tenant is redirected to {checkoutUrl}. Every path is

@@ -11,6 +11,7 @@
 		type SubmitApplicationBody,
 	} from '$lib/api/public-applications';
 	import { Building, ScanLine, CheckCircle2, Loader2, AlertCircle, Sparkles } from '@lucide/svelte';
+	import * as Select from '$lib/components/ui/select';
 
 	const token = $derived($page.params.token ?? '');
 
@@ -29,8 +30,15 @@
 	);
 
 	// ── Form state ──────────────────────────────────────────────────────────────
-	let propertyId = $state<number | null>(null);
-	let unitId = $state<number | null>(null);
+	// shadcn Select binds strings; bits-ui treats '' as "no selection", so 'none' is the
+	// "No preference" sentinel. propertyId/unitId derive the numeric ids used on submit.
+	const NO_PREFERENCE = 'none';
+	let propertyValue = $state(NO_PREFERENCE);
+	let unitValue = $state(NO_PREFERENCE);
+	const propertyId = $derived<number | null>(
+		propertyValue === NO_PREFERENCE ? null : Number(propertyValue)
+	);
+	const unitId = $derived<number | null>(unitValue === NO_PREFERENCE ? null : Number(unitValue));
 	let firstName = $state('');
 	let lastName = $state('');
 	let email = $state('');
@@ -54,9 +62,23 @@
 	const selectedProperty = $derived(properties.find((p) => p.id === propertyId) ?? null);
 	const availableUnits = $derived(selectedProperty?.units ?? []);
 
+	function propertyOptionLabel(p: PublicApplicationProperty): string {
+		return `${p.name}${p.addressLine1 ? ` — ${p.addressLine1}` : ''}${p.city ? `, ${p.city}` : ''}`;
+	}
+	const propertySelectLabel = $derived(
+		selectedProperty ? propertyOptionLabel(selectedProperty) : 'No preference'
+	);
+	const unitSelectLabel = $derived.by(() => {
+		if (unitValue === NO_PREFERENCE) {
+			return availableUnits.length === 0 ? 'No specific unit' : 'No preference';
+		}
+		const u = availableUnits.find((x) => String(x.id) === unitValue);
+		return u ? `Unit ${u.unitNumber}` : 'No preference';
+	});
+
 	function onPropertyChange() {
 		// Reset unit when property changes; clear if no longer valid.
-		if (!availableUnits.some((u) => u.id === unitId)) unitId = null;
+		if (!availableUnits.some((u) => String(u.id) === unitValue)) unitValue = NO_PREFERENCE;
 	}
 
 	// ── Scan-to-autofill ─────────────────────────────────────────────────────────
@@ -298,36 +320,42 @@
 					<div class="rounded-2xl border border-border bg-card p-5">
 						<h2 class="mb-3 text-base font-semibold text-foreground">Where would you like to live?</h2>
 						<div class="grid gap-4 sm:grid-cols-2">
-							<label class="block">
+							<div class="block">
 								<span class="mb-1.5 block text-sm font-medium text-foreground">Property</span>
-								<select
-									bind:value={propertyId}
-									onchange={onPropertyChange}
-									class="h-12 w-full rounded-xl border border-input bg-background px-3 text-base text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40"
-									data-testid="apply-property-select"
+								<Select.Root
+									type="single"
+									bind:value={propertyValue}
+									onValueChange={onPropertyChange}
 								>
-									<option value={null}>No preference</option>
-									{#each properties as p (p.id)}
-										<option value={p.id}>
-											{p.name}{p.addressLine1 ? ` — ${p.addressLine1}` : ''}{p.city ? `, ${p.city}` : ''}
-										</option>
-									{/each}
-								</select>
-							</label>
-							<label class="block">
+									<Select.Trigger class="h-12 w-full text-base" data-testid="apply-property-select">
+										{propertySelectLabel}
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value={NO_PREFERENCE} label="No preference">No preference</Select.Item>
+										{#each properties as p (p.id)}
+											<Select.Item value={String(p.id)} label={propertyOptionLabel(p)}>
+												{propertyOptionLabel(p)}
+											</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+							<div class="block">
 								<span class="mb-1.5 block text-sm font-medium text-foreground">Unit</span>
-								<select
-									bind:value={unitId}
-									disabled={availableUnits.length === 0}
-									class="h-12 w-full rounded-xl border border-input bg-background px-3 text-base text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
-									data-testid="apply-unit-select"
-								>
-									<option value={null}>{availableUnits.length === 0 ? 'No specific unit' : 'No preference'}</option>
-									{#each availableUnits as u (u.id)}
-										<option value={u.id}>Unit {u.unitNumber}</option>
-									{/each}
-								</select>
-							</label>
+								<Select.Root type="single" bind:value={unitValue} disabled={availableUnits.length === 0}>
+									<Select.Trigger class="h-12 w-full text-base" data-testid="apply-unit-select">
+										{unitSelectLabel}
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value={NO_PREFERENCE} label={availableUnits.length === 0 ? 'No specific unit' : 'No preference'}>
+											{availableUnits.length === 0 ? 'No specific unit' : 'No preference'}
+										</Select.Item>
+										{#each availableUnits as u (u.id)}
+											<Select.Item value={String(u.id)} label={`Unit ${u.unitNumber}`}>Unit {u.unitNumber}</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
 						</div>
 					</div>
 				{/if}

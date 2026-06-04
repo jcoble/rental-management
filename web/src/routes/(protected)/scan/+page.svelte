@@ -145,6 +145,28 @@
 	];
 
 	const draftsList = $derived((scansQuery.data ?? []) as ScanDraftResponse[]);
+
+	// Where a CONFIRMED draft's created record lives (Payment/Expense/WorkOrder/Lease). Mirrors the
+	// review page's linkedRecordHref. Returns null when there is no created record to link to (the
+	// caller then falls back to the draft itself).
+	function linkedRecordHref(draft: ScanDraftResponse): string | null {
+		const type = draft.createdEntityType;
+		const id = draft.createdEntityId;
+		if (!type || !id) return null;
+		if (type === 'Payment') return `/accounting/payments/${id}`;
+		if (type === 'WorkOrder') return `/maintenance/${id}`;
+		if (type === 'Lease') return `/leases/${id}`;
+		return `/accounting/expenses/${id}`;
+	}
+
+	// A confirmed draft is terminal: its action/row-click should jump straight to the created record
+	// (the editable source of truth) rather than the read-only draft.
+	function rowHref(draft: ScanDraftResponse): string {
+		if (draft.status === 'Confirmed') {
+			return linkedRecordHref(draft) ?? `/scan/${draft.id}`;
+		}
+		return `/scan/${draft.id}`;
+	}
 </script>
 
 {#snippet statusCellSnippet(draft: ScanDraftResponse)}
@@ -152,9 +174,16 @@
 {/snippet}
 
 {#snippet actionCellSnippet(draft: ScanDraftResponse)}
-	<Button variant="link" href="/scan/{draft.id}" class="h-auto p-0">
-		Review
-	</Button>
+	{#if draft.status === 'Confirmed' && linkedRecordHref(draft)}
+		<!-- Confirmed: link straight to the created record, not the read-only draft. -->
+		<Button variant="link" href={linkedRecordHref(draft)} class="h-auto p-0" data-testid="scan-view-record">
+			View record
+		</Button>
+	{:else}
+		<Button variant="link" href="/scan/{draft.id}" class="h-auto p-0">
+			Review
+		</Button>
+	{/if}
 {/snippet}
 
 <svelte:head>
@@ -281,7 +310,7 @@
 				{columns}
 				loading={scansQuery.isLoading}
 				emptyMessage="No scan drafts found."
-				onRowClick={(draft) => goto(`/scan/${draft.id}`)}
+				onRowClick={(draft) => goto(rowHref(draft))}
 				getRowKey={(draft) => draft.id}
 				getRowTestId={() => 'scan-row'}
 				data-testid="scans-list"
