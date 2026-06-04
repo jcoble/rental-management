@@ -29,6 +29,17 @@ public class Lease
     /// <summary>When a lease-expiry reminder was last sent (idempotency for the reminder worker).</summary>
     public DateTime? ExpiryReminderSentAt { get; set; }
 
+    // --- Electronic signature (e-sign) state ---
+
+    /// <summary>Provider-side signature request / envelope id once the agreement has been sent out. Null until sent.</summary>
+    public string? EsignEnvelopeId { get; set; }
+
+    /// <summary>Where this lease sits in the e-sign workflow. <see cref="EsignStatus.None"/> until a request is sent.</summary>
+    public EsignStatus EsignStatus { get; set; } = EsignStatus.None;
+
+    /// <summary>The <see cref="StoredFile"/> id of the fully-signed agreement PDF, set when the provider reports "signed".</summary>
+    public int? SignedDocumentStoredFileId { get; set; }
+
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }

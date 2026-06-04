@@ -32,6 +32,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITenantService, TenantService>();
         services.AddScoped<ILeaseService, LeaseService>();
         services.AddScoped<ILeaseQaService, LeaseQaService>();
+        // Lease e-sign workflow (send for signature, status, signed-document, webhook completion).
+        services.AddScoped<ILeaseEsignService, LeaseEsignService>();
+        services.AddScoped<RentalCommand.Api.Services.Security.IEsignWebhookSignatureValidator,
+            RentalCommand.Api.Services.Security.EsignWebhookSignatureValidator>();
         // Residential lease agreement PDF rendering (QuestPDF). Stateless → singleton.
         services.AddSingleton<ILeaseAgreementPdfGenerator, LeaseAgreementPdfGenerator>();
         services.AddScoped<IPaymentService, PaymentService>();

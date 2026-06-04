@@ -55,6 +55,8 @@ builder.Services.Configure<RentalCommand.Core.Configuration.StripeConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.StripeConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.ReportsConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.ReportsConfig.SectionName));
+builder.Services.Configure<RentalCommand.Core.Configuration.EsignConfig>(
+    builder.Configuration.GetSection(RentalCommand.Core.Configuration.EsignConfig.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
@@ -221,6 +223,25 @@ builder.Services.AddHostedService<RentalCommand.Api.Services.ScheduledOwnerState
 
 // --- Stripe payment services (gated — no-ops when Stripe keys are absent) ---
 builder.Services.AddScoped<IStripePaymentService, StripePaymentService>();
+
+// --- E-sign provider (gated — like Stripe/LLM, the real provider is only wired when a key is set;
+// otherwise a no-op provider returns a clear "not configured" result and never contacts a third party).
+var esignConfig = builder.Configuration.GetSection(RentalCommand.Core.Configuration.EsignConfig.SectionName)
+    .Get<RentalCommand.Core.Configuration.EsignConfig>() ?? new RentalCommand.Core.Configuration.EsignConfig();
+if (esignConfig.Enabled)
+{
+    builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.IEsignProvider,
+        RentalCommand.Api.Services.Esign.DropboxSignEsignProvider>(c =>
+    {
+        c.BaseAddress = new Uri("https://api.hellosign.com/v3/");
+        c.Timeout = TimeSpan.FromSeconds(90);
+    });
+}
+else
+{
+    builder.Services.AddScoped<RentalCommand.Core.Interfaces.IEsignProvider,
+        RentalCommand.Api.Services.Esign.DisabledEsignProvider>();
+}
 
 var app = builder.Build();
 
