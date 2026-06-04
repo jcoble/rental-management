@@ -19,6 +19,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import { Pencil, Trash2, Plus, Download, FileBarChart, Landmark } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -814,8 +815,8 @@
 							{/each}
 						</Select.Content>
 					</Select.Root>
-					<Input data-testid="transaction-from-filter" type="date" bind:value={transactionFromFilter} aria-label="From date" />
-					<Input data-testid="transaction-to-filter" type="date" bind:value={transactionToFilter} aria-label="To date" />
+					<DatePicker testid="transaction-from-filter" bind:value={transactionFromFilter} placeholder="From date" max={transactionToFilter || undefined} />
+					<DatePicker testid="transaction-to-filter" bind:value={transactionToFilter} placeholder="To date" min={transactionFromFilter || undefined} />
 				</div>
 			{/snippet}
 		</DataGrid>
@@ -884,7 +885,7 @@
 					{#if paymentErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-error">{paymentErrors.amount}</p>{/if}
 				</div>
 				<div>
-					<Input data-testid="payment-due-date-input" type="date" bind:value={paymentForm.dueDate} />
+					<DatePicker testid="payment-due-date-input" bind:value={paymentForm.dueDate} placeholder="Due date" />
 					{#if paymentErrors.dueDate}<p class="mt-1 text-xs text-destructive" data-testid="payment-due-date-error">{paymentErrors.dueDate}</p>{/if}
 				</div>
 			</div>
@@ -952,16 +953,16 @@
 			<div class="grid grid-cols-3 gap-2">
 				<div>
 					<span class="mb-1 block text-xs text-muted-foreground">Incurred</span>
-					<Input data-testid="expense-incurred-input" type="date" bind:value={expenseForm.incurredAt} />
+					<DatePicker testid="expense-incurred-input" bind:value={expenseForm.incurredAt} placeholder="Incurred date" />
 					{#if expenseErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expense-incurred-error">{expenseErrors.incurredAt}</p>{/if}
 				</div>
 				<div>
 					<span class="mb-1 block text-xs text-muted-foreground">Due date</span>
-					<Input data-testid="expense-due-input" type="date" bind:value={expenseForm.dueDate} />
+					<DatePicker testid="expense-due-input" bind:value={expenseForm.dueDate} placeholder="Due date" />
 				</div>
 				<div>
 					<span class="mb-1 block text-xs text-muted-foreground">Paid date</span>
-					<Input data-testid="expense-paid-input" type="date" bind:value={expenseForm.paidAt} />
+					<DatePicker testid="expense-paid-input" bind:value={expenseForm.paidAt} placeholder="Paid date" />
 				</div>
 			</div>
 			<div class="grid grid-cols-2 gap-2">

@@ -12,6 +12,8 @@
 	} from '$lib/api/public-applications';
 	import { Building, ScanLine, CheckCircle2, Loader2, AlertCircle, Sparkles } from '@lucide/svelte';
 	import * as Select from '$lib/components/ui/select';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 
 	const token = $derived($page.params.token ?? '');
 
@@ -372,7 +374,7 @@
 						{@render field('Desired move-in date', 'desiredMoveInDate', desiredMoveInDate, (v) => (desiredMoveInDate = v), { type: 'date' })}
 					</div>
 					<div class="mt-4 grid gap-4">
-						{@render field('Current address', 'currentAddress', currentAddress, (v) => (currentAddress = v), { full: true })}
+						{@render field('Current address', 'currentAddress', currentAddress, (v) => (currentAddress = v), { full: true, address: true })}
 					</div>
 				</div>
 
@@ -453,7 +455,7 @@
 	name: string,
 	value: string,
 	setter: (v: string) => void,
-	opts: { required?: boolean; type?: string; inputMode?: 'text' | 'decimal' | 'tel' | 'email'; full?: boolean; prefix?: string } = {}
+	opts: { required?: boolean; type?: string; inputMode?: 'text' | 'decimal' | 'tel' | 'email'; full?: boolean; prefix?: string; address?: boolean } = {}
 )}
 	<label class="block {opts.full ? 'sm:col-span-2' : ''}">
 		<span class="mb-1.5 block text-sm font-medium text-foreground">
@@ -468,14 +470,30 @@
 			{#if opts.prefix}
 				<span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-base text-muted-foreground">{opts.prefix}</span>
 			{/if}
-			<input
-				type={opts.type ?? 'text'}
-				value={value}
-				inputmode={opts.inputMode}
-				oninput={(e) => { setter((e.currentTarget as HTMLInputElement).value); clearAutoFill(name); }}
-				class="h-12 w-full rounded-xl border border-input bg-background text-base text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40 {opts.prefix ? 'pl-7 pr-3' : 'px-3'}"
-				data-testid="apply-{name}-input"
-			/>
+			{#if opts.type === 'date'}
+				<DatePicker
+					value={value}
+					onchange={(v) => { setter(v); clearAutoFill(name); }}
+					placeholder={label}
+					testid="apply-{name}-input"
+				/>
+			{:else if opts.address}
+				<AddressAutocomplete
+					value={value}
+					onchange={(v) => { setter(v); clearAutoFill(name); }}
+					placeholder={label}
+					testid="apply-{name}-input"
+				/>
+			{:else}
+				<input
+					type={opts.type ?? 'text'}
+					value={value}
+					inputmode={opts.inputMode}
+					oninput={(e) => { setter((e.currentTarget as HTMLInputElement).value); clearAutoFill(name); }}
+					class="h-12 w-full rounded-xl border border-input bg-background text-base text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40 {opts.prefix ? 'pl-7 pr-3' : 'px-3'}"
+					data-testid="apply-{name}-input"
+				/>
+			{/if}
 		</div>
 		{#if formErrors[name]}
 			<p class="mt-1 text-sm text-destructive" data-testid="apply-{name}-error">{formErrors[name]}</p>
