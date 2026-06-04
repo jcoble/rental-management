@@ -10,6 +10,7 @@
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { Mic, Square, Layers } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -205,7 +206,15 @@
 	<!-- Document type selector -->
 	{#if !uploadMutation.isPending}
 		<div class="mb-4" data-testid="scan-doc-type">
-			<span class="mb-1.5 block text-sm font-medium">What are you scanning?</span>
+			<div class="mb-1.5 flex items-center gap-1.5">
+				<span class="block text-sm font-medium">What are you scanning?</span>
+				<HelpPopover
+					title="Pick the kind of document"
+					summary="Tell us what you're uploading and we turn it into the right draft — a Receipt or Bill becomes an expense, a Rent Check becomes a payment, and so on."
+					detail="The computer reads the document and fills in the fields; you just review and confirm the draft."
+					learnMoreUrl={undefined}
+				/>
+			</div>
 			<div class="grid max-w-3xl gap-3 sm:grid-cols-2 lg:grid-cols-4">
 				{#each DOC_TYPES as opt}
 					<button
@@ -258,6 +267,12 @@
 				Record voice note
 			{/if}
 		</Button>
+		<HelpPopover
+			title="Record voice note"
+			summary="Speak instead of type. Describe an expense or repair out loud and we transcribe it, then pull out a draft for you to confirm."
+			detail="Great for capturing a bill or a maintenance request on the go without filling in a form."
+			learnMoreUrl={undefined}
+		/>
 		{#if voiceMutation.isPending}
 			<span class="text-sm text-muted-foreground">Creating draft...</span>
 		{:else if isRecording}
