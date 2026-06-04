@@ -306,9 +306,8 @@ public class PortfolioQaService : IPortfolioQaService
 
             if (delivery.ViaSms)
             {
-                var to = string.IsNullOrWhiteSpace(delivery.ToPhone)
-                    ? await ResolveDefaultOwnerPhoneAsync(portfolioId, ct)
-                    : delivery.ToPhone!.Trim();
+                // Recipient is never client-supplied — always the portfolio owner's own number.
+                var to = await ResolveDefaultOwnerPhoneAsync(portfolioId, ct);
                 if (!string.IsNullOrWhiteSpace(to))
                 {
                     await _publisher.PublishAsync(portfolioId, "sms", new { to, message = body }, ct);

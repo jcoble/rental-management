@@ -18,19 +18,16 @@ public class AskRequest
     /// <summary>Prior turns in the conversation, oldest first (optional).</summary>
     public List<QaTurn>? History { get; set; }
 
-    /// <summary>When true, also email the answer to the landlord after responding.</summary>
+    /// <summary>When true, also email the answer to the signed-in user (their own claim email).</summary>
     public bool DeliverViaEmail { get; set; }
 
-    /// <summary>When true, also text (SMS) the answer to the landlord after responding.</summary>
+    /// <summary>When true, also text (SMS) the answer to the portfolio owner's phone.</summary>
     public bool DeliverViaSms { get; set; }
 
-    /// <summary>Optional email recipient override; defaults to the signed-in user's email.</summary>
-    [MaxLength(256)]
-    public string? DeliverToEmail { get; set; }
-
-    /// <summary>Optional phone recipient override; defaults to a configured owner phone.</summary>
-    [MaxLength(32)]
-    public string? DeliverToPhone { get; set; }
+    // NOTE: no client-supplied recipient overrides. Delivery is "send this answer to ME" — the
+    // recipient is always resolved server-side (the authenticated user's email / the portfolio
+    // owner's phone) so the assistant can never be used to relay arbitrary content to arbitrary
+    // recipients on the landlord's email/SMS account.
 }
 
 /// <summary>
@@ -39,16 +36,14 @@ public class AskRequest
 /// </summary>
 /// <param name="ViaEmail">Email the answer when true.</param>
 /// <param name="ViaSms">Text the answer when true.</param>
-/// <param name="ToEmail">Email recipient (override or the user's email); null when unknown.</param>
-/// <param name="ToPhone">Phone recipient (override); null when unknown.</param>
+/// <param name="ToEmail">Email recipient — always the authenticated user's own email; null when unknown.</param>
 public record QaDeliveryOptions(
     bool ViaEmail,
     bool ViaSms,
-    string? ToEmail,
-    string? ToPhone)
+    string? ToEmail)
 {
     /// <summary>No delivery requested.</summary>
-    public static readonly QaDeliveryOptions None = new(false, false, null, null);
+    public static readonly QaDeliveryOptions None = new(false, false, null);
 
     /// <summary>True when at least one channel is requested.</summary>
     public bool AnyRequested => ViaEmail || ViaSms;
