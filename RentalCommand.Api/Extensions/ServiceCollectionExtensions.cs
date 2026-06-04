@@ -32,6 +32,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITenantService, TenantService>();
         services.AddScoped<ILeaseService, LeaseService>();
         services.AddScoped<ILeaseQaService, LeaseQaService>();
+        // Residential lease agreement PDF rendering (QuestPDF). Stateless → singleton.
+        services.AddSingleton<ILeaseAgreementPdfGenerator, LeaseAgreementPdfGenerator>();
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IExpenseService, ExpenseService>();
         services.AddScoped<IAccountingService, AccountingService>();

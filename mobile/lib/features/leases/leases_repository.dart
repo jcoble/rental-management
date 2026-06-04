@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -94,6 +96,37 @@ class LeasesRepository {
         data: {'question': question},
       );
       return LeaseQuestionResponse.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Generates a standard residential lease-agreement PDF from the lease's
+  /// captured terms, stores it against the lease, and returns its reference.
+  ///
+  /// POST /leases/{id}/generate-document → { storedFileId, leaseId, fileName, … }
+  Future<LeaseDocument> generateDocument(int id) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/leases/$id/generate-document',
+      );
+      return LeaseDocument.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Downloads the latest generated lease-agreement PDF bytes (authed via the
+  /// shared Dio interceptor). The API returns 404 until one has been generated.
+  ///
+  /// GET /leases/{id}/document → application/pdf
+  Future<Uint8List> documentBytes(int id) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '/leases/$id/document',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return Uint8List.fromList(response.data ?? const []);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -209,6 +242,37 @@ class LeaseLedger {
       entries: entries,
       tenantName: json['tenantName'] as String?,
       propertyName: json['propertyName'] as String?,
+    );
+  }
+}
+
+/// Reference to a generated lease-agreement PDF, returned by
+/// `POST /leases/{id}/generate-document`.
+class LeaseDocument {
+  const LeaseDocument({
+    required this.storedFileId,
+    required this.leaseId,
+    required this.fileName,
+    required this.fileSize,
+    this.downloadUrl,
+    this.generatedAt,
+  });
+
+  final int storedFileId;
+  final int leaseId;
+  final String fileName;
+  final int fileSize;
+  final String? downloadUrl;
+  final DateTime? generatedAt;
+
+  factory LeaseDocument.fromJson(Map<String, dynamic> json) {
+    return LeaseDocument(
+      storedFileId: (json['storedFileId'] as num?)?.toInt() ?? 0,
+      leaseId: (json['leaseId'] as num?)?.toInt() ?? 0,
+      fileName: json['fileName'] as String? ?? 'lease-agreement.pdf',
+      fileSize: (json['fileSize'] as num?)?.toInt() ?? 0,
+      downloadUrl: json['downloadUrl'] as String?,
+      generatedAt: DateTime.tryParse(json['generatedAt'] as String? ?? ''),
     );
   }
 }

@@ -19,7 +19,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { Pencil, Save, Trash2, X } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, FileText, Download } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -151,6 +151,51 @@
 		const question = leaseQuestion.trim();
 		if (!question) return;
 		askLeaseMutation.mutate(question);
+	}
+
+	// --- Lease agreement PDF (generate + authed blob download) ---
+	// Whether a generated agreement already exists. Probed once on load with a
+	// no-download GET; 404 → only show Generate, 200 → also show Download.
+	let hasDocument = $state(false);
+	let documentChecked = $state(false);
+	let downloadingDocument = $state(false);
+
+	$effect(() => {
+		if (leaseId > 0 && !documentChecked) {
+			documentChecked = true;
+			leases
+				.downloadDocument(leaseId, false)
+				.then((exists) => {
+					hasDocument = exists;
+				})
+				.catch(() => {
+					// Probe failure is non-fatal — leave the Generate button available.
+				});
+		}
+	});
+
+	const generateDocMutation = createMutation(() => ({
+		mutationFn: () => leases.generateDocument(leaseId),
+		onSuccess: () => {
+			hasDocument = true;
+			showSuccess('Lease agreement created. You can download it now.');
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	async function handleDocumentDownload() {
+		downloadingDocument = true;
+		try {
+			const ok = await leases.downloadDocument(leaseId);
+			if (!ok) {
+				hasDocument = false;
+				showError('No lease agreement has been generated yet.');
+			}
+		} catch {
+			showError('Could not download the lease agreement. Please try again.');
+		} finally {
+			downloadingDocument = false;
+		}
 	}
 
 	function startEditing() {
@@ -376,6 +421,48 @@
 					{/if}
 					<InlineField label="Notes" bind:value={form.notes} display={lease.notes} {editing} onedit={startEditing} type="textarea" error={formErrors.notes} testid="lease-detail-notes" class="col-span-2 sm:col-span-3 lg:col-span-4" />
 				</div>
+			</Card.Content>
+		</Card.Root>
+
+		<!-- Lease agreement PDF — generate, then download an authed blob -->
+		<Card.Root class="mb-6" data-testid="lease-agreement-card">
+			<Card.Header>
+				<Card.Title class="text-base">Lease Agreement</Card.Title>
+				<Card.Description>Create a printable lease-agreement PDF from this lease's details, then download it.</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				<div class="flex flex-wrap items-center gap-2">
+					<Button
+						data-testid="lease-generate-document"
+						variant={hasDocument ? 'outline' : 'default'}
+						size="sm"
+						class="gap-1.5"
+						onclick={() => generateDocMutation.mutate()}
+						disabled={generateDocMutation.isPending}
+					>
+						<FileText class="h-4 w-4" />
+						{generateDocMutation.isPending
+							? 'Generating…'
+							: hasDocument
+								? 'Regenerate lease agreement (PDF)'
+								: 'Generate lease agreement (PDF)'}
+					</Button>
+					{#if hasDocument}
+						<Button
+							data-testid="lease-download-document"
+							size="sm"
+							class="gap-1.5"
+							onclick={handleDocumentDownload}
+							disabled={downloadingDocument}
+						>
+							<Download class="h-4 w-4" />
+							{downloadingDocument ? 'Preparing…' : 'Download agreement'}
+						</Button>
+					{/if}
+				</div>
+				{#if !hasDocument && !generateDocMutation.isPending}
+					<p class="mt-2 text-xs text-muted-foreground">No agreement has been generated yet.</p>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 

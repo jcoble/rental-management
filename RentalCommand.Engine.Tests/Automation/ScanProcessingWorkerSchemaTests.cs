@@ -30,4 +30,23 @@ public class ScanProcessingWorkerSchemaTests
         schema.Instructions.Should().Be(ReceiptExtractionSchema.Instructions);
         schema.Fields.Select(f => f.Name).Should().Contain("document_kind");
     }
+
+    [Fact]
+    public void ChooseExtractionSchema_LeaseTarget_UsesLeaseSchema()
+    {
+        var schema = ScanProcessingWorker.ChooseExtractionSchema("Lease");
+
+        schema.Instructions.Should().Be(LeaseExtractionSchema.Instructions);
+        schema.Fields.Select(f => f.Name).Should().Contain([
+            "tenant_name",
+            "property_id",
+            "unit_id",
+            "start_date",
+            "end_date",
+            "monthly_rent",
+            "security_deposit",
+            "late_fee",
+            "rent_due_day",
+        ]);
+    }
 }

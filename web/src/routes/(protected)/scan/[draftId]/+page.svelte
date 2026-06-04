@@ -6,6 +6,7 @@
 	import { scan, type ScanFieldDto } from '$lib/api/scan';
 	import { leases } from '$lib/api/endpoints/leases';
 	import { properties } from '$lib/api/endpoints/properties';
+	import { tenants } from '$lib/api/endpoints/tenants';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
@@ -95,6 +96,7 @@
 	// Whether this draft targets a Payment (rent check) rather than an Expense
 	const isPayment = $derived(data?.targetEntityType === 'Payment');
 	const isWorkOrder = $derived(data?.targetEntityType === 'WorkOrder');
+	const isLease = $derived(data?.targetEntityType === 'Lease');
 
 	// The worker is still reading the document while Pending or Processing.
 	const isProcessing = $derived(data?.status === 'Pending' || data?.status === 'Processing');
@@ -120,6 +122,79 @@
 		queryFn: () => properties.list(getCurrentPortfolioId(), { take: 200 }),
 		enabled: !isPayment
 	}));
+
+	// --- Lease draft selectors ---
+	// Property + unit are REQUIRED for a Lease confirm; tenant is optional (when
+	// omitted the server matches the extracted tenant_name or creates a new tenant).
+	// String-backed for the shadcn Select; converted to numbers at confirm time.
+	const NO_TENANT = 'none';
+	let selectedLeasePropertyId = $state<string>('');
+	let selectedLeaseUnitId = $state<string>('');
+	let selectedTenantId = $state<string>(NO_TENANT);
+
+	// Units scoped to the chosen property (required pick). Re-fetches per property.
+	const leaseUnitsQuery = createQuery(() => ({
+		queryKey: ['units-for-lease-scan', selectedLeasePropertyId],
+		queryFn: () => properties.listUnits(Number(selectedLeasePropertyId)),
+		enabled: isLease && !!selectedLeasePropertyId
+	}));
+
+	const tenantsQuery = createQuery(() => ({
+		queryKey: ['tenants', getCurrentPortfolioId()],
+		queryFn: () => tenants.list(getCurrentPortfolioId(), { take: 200 }),
+		enabled: isLease
+	}));
+
+	// Extracted tenant name from the scan (drives the "create new tenant" default).
+	const extractedTenantName = $derived((fieldValue('tenant_name') ?? '').trim());
+
+	const selectedLeasePropertyLabel = $derived.by(() => {
+		if (!selectedLeasePropertyId) return '— Select a property —';
+		const sel = propertiesQuery.data?.find((p) => String(p.id) === selectedLeasePropertyId);
+		return sel ? sel.name : '— Select a property —';
+	});
+
+	const selectedLeaseUnitLabel = $derived.by(() => {
+		if (!selectedLeaseUnitId) return '— Select a unit —';
+		const sel = leaseUnitsQuery.data?.find((u) => String(u.id) === selectedLeaseUnitId);
+		return sel ? `Unit ${sel.unitNumber}` : '— Select a unit —';
+	});
+
+	function tenantLabel(t: { fullName?: string | null; firstName: string; lastName: string }): string {
+		return t.fullName || `${t.firstName} ${t.lastName}`.trim();
+	}
+
+	const newTenantLabel = $derived(
+		extractedTenantName
+			? `Create "${extractedTenantName}" as a new tenant`
+			: 'Create a new tenant from the lease'
+	);
+
+	const selectedTenantLabel = $derived.by(() => {
+		if (selectedTenantId === NO_TENANT) return newTenantLabel;
+		const sel = tenantsQuery.data?.find((t) => String(t.id) === selectedTenantId);
+		return sel ? tenantLabel(sel) : newTenantLabel;
+	});
+
+	// Lease term fields shown as editable inputs (in display order).
+	const LEASE_TERM_FIELDS: { name: string; label: string; type: 'text' | 'date' | 'number' }[] = [
+		{ name: 'lease_number', label: 'Lease number', type: 'text' },
+		{ name: 'start_date', label: 'Start date', type: 'date' },
+		{ name: 'end_date', label: 'End date', type: 'date' },
+		{ name: 'monthly_rent', label: 'Monthly rent', type: 'number' },
+		{ name: 'security_deposit', label: 'Security deposit', type: 'number' },
+		{ name: 'late_fee', label: 'Late fee', type: 'number' },
+		{ name: 'rent_due_day', label: 'Rent due day', type: 'number' }
+	];
+
+	// Reset the unit pick whenever the property changes (units are property-scoped).
+	$effect(() => {
+		const _ = selectedLeasePropertyId;
+		// Clear a stale unit selection if it no longer belongs to the chosen property.
+		if (selectedLeaseUnitId && leaseUnitsQuery.data && !leaseUnitsQuery.data.some((u) => String(u.id) === selectedLeaseUnitId)) {
+			selectedLeaseUnitId = '';
+		}
+	});
 
 	const selectedPropertyLabel = $derived.by(() => {
 		if (!selectedPropertyId || selectedPropertyId === NO_PROPERTY) return '— No property —';
@@ -156,7 +231,11 @@
 	);
 
 	// Block confirming an expense whose amount is blank/0/negative (server rejects amount <= 0).
-	const amountInvalid = $derived(!isPayment && !isWorkOrder && (resolvedAmount == null || resolvedAmount <= 0));
+	// Only applies to Expense drafts — Payment, WorkOrder, and Lease have their own guards.
+	const amountInvalid = $derived(!isPayment && !isWorkOrder && !isLease && (resolvedAmount == null || resolvedAmount <= 0));
+
+	// Lease drafts require an in-portfolio property AND unit before confirm.
+	const leaseSelectionInvalid = $derived(isLease && (!selectedLeasePropertyId || !selectedLeaseUnitId));
 
 	// Paid / Unpaid toggle — true = already paid (receipt), false = unpaid bill
 	let isPaid = $state(true);
@@ -189,6 +268,21 @@
 			if ((data.targetEntityType === 'WorkOrder' || data.targetEntityType === 'Expense') && selectedPropertyId === NO_PROPERTY) {
 				const propertyField = data.fields.find((f) => f.name === 'property_id' || f.name === 'propertyId');
 				if (propertyField?.value) selectedPropertyId = propertyField.value;
+			}
+			// Lease drafts: seed the property/unit pickers from the extracted IDs (if present
+			// and the picked options exist). Tenant stays on "create new" unless the user picks.
+			if (data.targetEntityType === 'Lease') {
+				if (!selectedLeasePropertyId) {
+					const propertyField = data.fields.find((f) => f.name === 'property_id' || f.name === 'propertyId');
+					const val = propertyField?.value;
+					if (val && propertiesQuery.data?.some((p) => String(p.id) === val)) {
+						selectedLeasePropertyId = val;
+					}
+				}
+				if (!selectedLeaseUnitId) {
+					const unitField = data.fields.find((f) => f.name === 'unit_id' || f.name === 'unitId');
+					if (unitField?.value) selectedLeaseUnitId = unitField.value;
+				}
 			}
 		}
 	});
@@ -310,7 +404,8 @@
 	const fileUrl = $derived(data ? `/scan-file/${data.id}` : '');
 
 	// Success state — what was just created, so the landlord keeps context
-	// instead of being dumped onto /accounting.
+	// instead of being dumped onto /accounting. (Lease drafts navigate straight to
+	// the new lease instead, so they don't use this card.)
 	let confirmedRecord = $state<{ type: 'Expense' | 'Payment' | 'WorkOrder'; id: number | null; amount: number | null } | null>(null);
 	const linkedRecordHref = $derived((() => {
 		const type = confirmedRecord?.type ?? data?.createdEntityType;
@@ -318,6 +413,7 @@
 		if (!type || !id) return '/accounting';
 		if (type === 'Payment') return `/accounting/payments/${id}`;
 		if (type === 'WorkOrder') return `/maintenance/${id}`;
+		if (type === 'Lease') return `/leases/${id}`;
 		return `/accounting/expenses/${id}`;
 	})());
 
@@ -335,6 +431,16 @@
 		onSuccess: (result) => {
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			queryClient.invalidateQueries({ queryKey: ['scan', draftId] });
+			// Lease drafts go straight to the new lease detail page.
+			if (isLease) {
+				const leaseId = result.leaseId ?? result.entityId ?? null;
+				queryClient.invalidateQueries({ queryKey: ['leases'] });
+				toast.success('Lease created');
+				if (leaseId) {
+					goto(`/leases/${leaseId}`);
+					return;
+				}
+			}
 			// Capture the resolved amount before refetch can mutate editedFields.
 			const type = (result.entityType === 'Payment' || result.entityType === 'Expense' || result.entityType === 'WorkOrder')
 				? result.entityType
@@ -387,6 +493,19 @@
 		for (const [name, value] of Object.entries(editedFields)) {
 			if (name === LINE_ITEMS_FIELD) continue;
 			overrides[keyMap[name] ?? name] = value;
+		}
+
+		if (isLease) {
+			// Lease drafts: pass through the edited term fields (lease_number, start_date,
+			// end_date, monthly_rent, security_deposit, late_fee, rent_due_day — already in
+			// `overrides`) plus the required property/unit and the optional tenant.
+			// `tenantId` is omitted on "create new" so the server matches/creates by name.
+			overrides['propertyId'] = selectedLeasePropertyId ? Number(selectedLeasePropertyId) : null;
+			overrides['unitId'] = selectedLeaseUnitId ? Number(selectedLeaseUnitId) : null;
+			if (selectedTenantId && selectedTenantId !== NO_TENANT) {
+				overrides['tenantId'] = Number(selectedTenantId);
+			}
+			return JSON.stringify(overrides);
 		}
 
 		// Explicitly send the user-edited amount as a clean number under `total`
@@ -618,6 +737,112 @@
 								<p class="mt-1 text-xs text-muted-foreground">Loading leases…</p>
 							{/if}
 						</div>
+					{:else if isLease}
+						<!-- Lease selectors — property + unit required, tenant optional -->
+						<div class="mb-5 space-y-3 rounded-md border border-border bg-muted/30 p-3" data-testid="scan-lease-selectors">
+							<div>
+								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-property-select">
+									Which property is this lease for? <span class="text-red-500">*</span>
+								</label>
+								<Select.Root type="single" bind:value={selectedLeasePropertyId}>
+									<Select.Trigger id="scan-lease-property-select" data-testid="scan-lease-property-select" class="w-full">
+										{selectedLeasePropertyLabel}
+									</Select.Trigger>
+									<Select.Content>
+										{#if propertiesQuery.data}
+											{#each propertiesQuery.data as prop (prop.id)}
+												<Select.Item value={String(prop.id)} label={prop.name}>
+													{prop.name}
+												</Select.Item>
+											{/each}
+										{/if}
+									</Select.Content>
+								</Select.Root>
+								{#if propertiesQuery.isLoading}
+									<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
+								{/if}
+							</div>
+
+							<div>
+								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-unit-select">
+									Which unit? <span class="text-red-500">*</span>
+								</label>
+								<Select.Root type="single" bind:value={selectedLeaseUnitId} disabled={!selectedLeasePropertyId}>
+									<Select.Trigger id="scan-lease-unit-select" data-testid="scan-lease-unit-select" class="w-full">
+										{selectedLeaseUnitLabel}
+									</Select.Trigger>
+									<Select.Content>
+										{#if leaseUnitsQuery.data}
+											{#each leaseUnitsQuery.data as unit (unit.id)}
+												<Select.Item value={String(unit.id)} label={`Unit ${unit.unitNumber}`}>
+													Unit {unit.unitNumber} ({unit.status})
+												</Select.Item>
+											{/each}
+										{/if}
+									</Select.Content>
+								</Select.Root>
+								{#if !selectedLeasePropertyId}
+									<p class="mt-1 text-xs text-muted-foreground">Pick a property first to see its units.</p>
+								{:else if leaseUnitsQuery.isLoading}
+									<p class="mt-1 text-xs text-muted-foreground">Loading units…</p>
+								{:else if (leaseUnitsQuery.data?.length ?? 0) === 0}
+									<p class="mt-1 text-xs text-amber-600 dark:text-amber-400">This property has no units yet. Add a unit before creating the lease.</p>
+								{/if}
+							</div>
+
+							<div>
+								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-tenant-select">
+									Tenant <span class="font-normal text-muted-foreground">(optional)</span>
+								</label>
+								<Select.Root type="single" bind:value={selectedTenantId}>
+									<Select.Trigger id="scan-lease-tenant-select" data-testid="scan-lease-tenant-select" class="w-full">
+										{selectedTenantLabel}
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value={NO_TENANT} label={newTenantLabel}>{newTenantLabel}</Select.Item>
+										{#if tenantsQuery.data}
+											{#each tenantsQuery.data as t (t.id)}
+												<Select.Item value={String(t.id)} label={tenantLabel(t)}>
+													{tenantLabel(t)}
+												</Select.Item>
+											{/each}
+										{/if}
+									</Select.Content>
+								</Select.Root>
+								<p class="mt-1 text-xs text-muted-foreground">
+									Leave on "{newTenantLabel}" to use the name from the lease, or pick an existing tenant to match it.
+								</p>
+							</div>
+						</div>
+
+						<!-- Lease terms — editable, mapped from the extracted fields -->
+						<div class="mb-5" data-testid="scan-lease-terms">
+							<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Lease terms</h2>
+							<div class="grid grid-cols-2 gap-x-4 gap-y-3">
+								{#each LEASE_TERM_FIELDS as term (term.name)}
+									{@const field = data.fields.find((f) => f.name === term.name)}
+									{@const level = field ? confidenceLevel(field.confidence) : 'high'}
+									<div>
+										<div class="mb-1 flex items-center justify-between">
+											<label class="text-xs font-medium {level === 'medium' ? 'text-muted-foreground' : 'text-foreground'}" for="lease-term-{term.name}">
+												{term.label}
+											</label>
+											{#if field && level !== 'high'}
+												<span class="text-xs {level === 'low' ? 'text-red-500' : 'text-muted-foreground'}">
+													{confidenceLabel(field.confidence)}
+												</span>
+											{/if}
+										</div>
+										<Input
+											id="lease-term-{term.name}"
+											data-testid="scan-field-{term.name}"
+											type={term.type}
+											bind:value={editedFields[term.name]}
+										/>
+									</div>
+								{/each}
+							</div>
+						</div>
 					{:else}
 						<!-- Property selector for Expense/WorkOrder drafts (sends propertyId override) -->
 						<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
@@ -647,7 +872,10 @@
 							{/if}
 						</div>
 					{/if}
-					{#if data.fields.length === 0}
+					{#if isLease}
+						<!-- Lease terms + selectors are rendered above; the generic extracted-field
+						     groups are suppressed so the lease fields aren't duplicated. -->
+					{:else if data.fields.length === 0}
 						<p class="text-sm text-muted-foreground">
 							{#if isProcessing}
 								Fields will appear once extraction completes.
@@ -773,8 +1001,8 @@
 					{/if}
 				</Card.Content>
 
-				<!-- Paid / Unpaid toggle — hidden for Payment and WorkOrder drafts -->
-				{#if !isPayment && !isWorkOrder}
+				<!-- Paid / Unpaid toggle — hidden for Payment, WorkOrder, and Lease drafts -->
+				{#if !isPayment && !isWorkOrder && !isLease}
 				<div class="border-t border-border px-4 py-3" data-testid="scan-paid-toggle">
 					<span class="mb-1.5 block text-xs font-medium text-muted-foreground">Payment status</span>
 					<!-- Segmented control: a single bordered track with two equal segments -->
@@ -813,10 +1041,10 @@
 							<Button
 								data-testid="scan-confirm"
 								onclick={() => confirmMutation.mutate()}
-								disabled={confirmMutation.isPending || isProcessing || isTerminal || (isPayment && !selectedLeaseId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || amountInvalid}
+								disabled={confirmMutation.isPending || isProcessing || isTerminal || (isPayment && !selectedLeaseId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || amountInvalid}
 								class="flex-1"
 							>
-								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : 'Confirm & Create Expense'}
+								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : isLease ? 'Create Lease' : 'Confirm & Create Expense'}
 							</Button>
 							<Button
 								data-testid="scan-reject"
@@ -838,6 +1066,9 @@
 						{/if}
 						{#if isWorkOrder && selectedPropertyId === NO_PROPERTY && !isTerminal && !isProcessing}
 							<p class="text-center text-xs text-amber-600 dark:text-amber-400">Select a property above to enable work order creation.</p>
+						{/if}
+						{#if leaseSelectionInvalid && !isTerminal && !isProcessing}
+							<p class="text-center text-xs text-amber-600 dark:text-amber-400" data-testid="scan-lease-selection-error">Pick a property and a unit above to create this lease.</p>
 						{/if}
 						{#if data.status === 'Failed' && !isTerminal}
 							<p class="text-center text-xs text-muted-foreground">Couldn't read this document — enter the amount manually, or reject it.</p>
