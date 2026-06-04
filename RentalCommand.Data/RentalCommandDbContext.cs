@@ -472,6 +472,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Settings).HasMaxLength(10000);
             entity.Property(e => e.PublicApplicationToken).HasMaxLength(64);
             entity.Property(e => e.Status).HasConversion<int>();
+            // Account-wide sandbox/live flag. Defaults to false so every existing/seeded portfolio
+            // (incl. the dev-admin portfolio 1) stays Live and is unaffected by the migration.
+            entity.Property(e => e.IsSandbox).HasDefaultValue(false);
             entity.HasIndex(e => e.Status);
             // Resolve the public application link by token; unique + filtered so multiple null
             // tokens (portfolios not accepting applications) never collide.

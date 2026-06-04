@@ -38,6 +38,8 @@ builder.Services.AddDbContext<RentalCommandDbContext>(options => options.UseNpgs
 // DB-outbox publisher + notification channel (Twilio SMS / SendGrid email; logs when unconfigured).
 builder.Services.AddScoped<IMessagePublisher, OutboxMessagePublisher>();
 builder.Services.AddHttpClient<INotificationChannel, RoutingNotificationChannel>();
+// Sandbox guard: the outbox worker uses it to HARD-suppress any send scoped to a sandbox portfolio.
+builder.Services.AddScoped<ISandboxGuard, SandboxGuard>();
 
 // Scan pipeline: config, LLM provider, file storage, no-op data-update, worker.
 builder.Services.Configure<AssistantConfig>(builder.Configuration.GetSection(AssistantConfig.SectionName));

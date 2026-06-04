@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Identity;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -80,6 +82,8 @@ public class AuthService : IAuthService
     private readonly IJwtTokenService _tokenService;
     private readonly IUserMigrationService _userMigration;
     private readonly IAuthEmailSender _emailSender;
+    private readonly RentalCommandDbContext _db;
+    private readonly DemoDataSeeder _demoSeeder;
     private readonly ILogger<AuthService> _logger;
 
     public AuthService(
@@ -88,6 +92,8 @@ public class AuthService : IAuthService
         IJwtTokenService tokenService,
         IUserMigrationService userMigration,
         IAuthEmailSender emailSender,
+        RentalCommandDbContext db,
+        DemoDataSeeder demoSeeder,
         ILogger<AuthService> logger)
     {
         _userManager = userManager;
@@ -95,6 +101,8 @@ public class AuthService : IAuthService
         _tokenService = tokenService;
         _userMigration = userMigration;
         _emailSender = emailSender;
+        _db = db;
+        _demoSeeder = demoSeeder;
         _logger = logger;
     }
 
@@ -171,6 +179,13 @@ public class AuthService : IAuthService
                 createResult.Errors.Select(e => e.Description));
         }
 
+        // New signups start in SANDBOX: provision a demo portfolio, scope the user to it, and seed it
+        // with realistic demo data so they land in a populated sandbox to explore. While IsSandbox is
+        // true, all real outbound (email/SMS/Stripe/e-sign) is hard-suppressed. "Go Live" later wipes
+        // the demo data and flips to Live (one-way). Resilient: a seeding failure must NOT fail
+        // registration — the account is still created and usable (just with an empty sandbox).
+        await ProvisionSandboxPortfolioAsync(user);
+
         var emailToken = await _userManager.GenerateEmailConfirmationTokenAsync(user);
 
         await _emailSender.SendEmailConfirmationAsync(user, emailToken);
@@ -178,6 +193,51 @@ public class AuthService : IAuthService
         _logger.LogInformation("New user registered: {Email} (id {UserId}). Awaiting email verification.", request.Email, user.Id);
 
         return AuthResult.RegistrationPending(user.Id, emailToken);
+    }
+
+    /// <summary>
+    /// Creates a fresh Sandbox <see cref="Portfolio"/> for a just-registered user, scopes the user to it,
+    /// and seeds it with demo data. Best-effort and self-contained: any failure is logged and swallowed so
+    /// it can never fail the registration that already succeeded. If the portfolio is created but seeding
+    /// fails, the user still lands in an (empty) sandbox — IsSandbox/SandboxSeededAtUtc are still stamped.
+    /// </summary>
+    private async Task ProvisionSandboxPortfolioAsync(ApplicationUser user)
+    {
+        try
+        {
+            var now = DateTime.UtcNow;
+            var portfolio = new Portfolio
+            {
+                Name = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Portfolio" : $"{user.DisplayName}'s Portfolio",
+                ManagementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Company" : user.DisplayName!,
+                Status = PortfolioStatus.Active,
+                Currency = "USD",
+                IsSandbox = true,
+                SandboxSeededAtUtc = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            _db.Portfolios.Add(portfolio);
+            await _db.SaveChangesAsync();
+
+            // Scope the new user to their sandbox portfolio so their first JWT carries this portfolioId.
+            user.PortfolioId = portfolio.Id;
+            await _userManager.UpdateAsync(user);
+
+            // Seed demo data into the new sandbox portfolio (idempotent; its own inner transaction).
+            await _demoSeeder.SeedPortfolioAsync(portfolio.Id);
+
+            _logger.LogInformation(
+                "Provisioned sandbox portfolio {PortfolioId} for new user {Email} (id {UserId}).",
+                portfolio.Id, user.Email, user.Id);
+        }
+        catch (Exception ex)
+        {
+            // Never fail registration over sandbox provisioning — log and continue.
+            _logger.LogError(ex,
+                "Failed to provision/seed sandbox portfolio for new user {Email} (id {UserId}); registration still succeeds.",
+                user.Email, user.Id);
+        }
     }
 
     public async Task<AuthResult> RefreshAsync(string refreshToken, string? ipAddress = null, string? userAgent = null)

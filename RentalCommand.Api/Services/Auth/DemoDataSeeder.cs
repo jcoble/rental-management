@@ -6,10 +6,13 @@ using RentalCommand.Data;
 namespace RentalCommand.Api.Services.Auth;
 
 /// <summary>
-/// Idempotent demo-data seeder. When <c>Seed:DemoData=true</c> and portfolio 1 has no
-/// properties yet, creates a rich interlinked dataset (properties, units, tenants, leases,
-/// 12 months of payments, expenses, work orders, appointments, inspections, and security
-/// deposit holdings) so every report and analytics screen has realistic data.
+/// Idempotent demo-data seeder. Creates a rich interlinked dataset (properties, units, tenants,
+/// leases, 12 months of payments, expenses, work orders, appointments, inspections, and security
+/// deposit holdings) for a given portfolio so every report and analytics screen has realistic data.
+///
+/// Two callers: startup (seeds portfolio 1 = the dev admin when <c>Seed:DemoData=true</c>), and new
+/// signups (each new portfolio is seeded as a Sandbox to explore). Every row is parameterized on the
+/// passed portfolio id; nothing is hardcoded to portfolio 1.
 /// </summary>
 public class DemoDataSeeder
 {
@@ -22,12 +25,20 @@ public class DemoDataSeeder
         _logger = logger;
     }
 
-    public async Task SeedAsync(CancellationToken ct = default)
+    /// <summary>Startup convenience: seeds the dev-admin portfolio (id 1).</summary>
+    public Task SeedAsync(CancellationToken ct = default) => SeedPortfolioAsync(1, ct);
+
+    /// <summary>
+    /// Seeds the full demo dataset for an arbitrary portfolio. Idempotent: a no-op if the portfolio
+    /// already has any properties. Atomic: a failure mid-way rolls the whole thing back, so a partial
+    /// dataset can never strand the idempotency guard (which checks for any property).
+    /// </summary>
+    public async Task SeedPortfolioAsync(int portfolioId, CancellationToken ct = default)
     {
-        // Idempotency guard — if any properties exist for portfolio 1 we are already seeded.
-        if (await _db.Properties.AnyAsync(p => p.PortfolioId == 1, ct))
+        // Idempotency guard — if any properties exist for this portfolio we are already seeded.
+        if (await _db.Properties.AnyAsync(p => p.PortfolioId == portfolioId, ct))
         {
-            _logger.LogDebug("Demo data already present for portfolio 1; skipping.");
+            _logger.LogDebug("Demo data already present for portfolio {PortfolioId}; skipping.", portfolioId);
             return;
         }
 
@@ -42,7 +53,7 @@ public class DemoDataSeeder
         {
             new()
             {
-                PortfolioId = 1,
+                PortfolioId = portfolioId,
                 OwnerEntityType = OwnerEntityType.LLC,
                 Name = "Maple Ridge Properties LLC",
                 TaxId = "82-3456789",
@@ -53,7 +64,7 @@ public class DemoDataSeeder
             },
             new()
             {
-                PortfolioId = 1,
+                PortfolioId = portfolioId,
                 OwnerEntityType = OwnerEntityType.Person,
                 Name = "Robert J. Caldwell",
                 TaxId = "XXX-XX-7890",
@@ -69,12 +80,12 @@ public class DemoDataSeeder
         // ── 2. Vendors ────────────────────────────────────────────────────────────────
         var vendors = new List<Vendor>
         {
-            new() { PortfolioId = 1, Name = "Apex Plumbing Co.", ServiceType = "Plumbing", Email = "dispatch@apexplumbing.example", Phone = "614-555-0200", Is1099Eligible = true, W9OnFile = true, Preferred = true, CreatedAt = now, UpdatedAt = now },
-            new() { PortfolioId = 1, Name = "Reliable Electric LLC", ServiceType = "Electrical", Email = "office@relelectric.example", Phone = "614-555-0201", Is1099Eligible = true, W9OnFile = true, Preferred = true, CreatedAt = now, UpdatedAt = now },
-            new() { PortfolioId = 1, Name = "ComfortZone HVAC", ServiceType = "HVAC", Email = "service@comfortzonehvac.example", Phone = "614-555-0202", Is1099Eligible = true, W9OnFile = false, Preferred = false, CreatedAt = now, UpdatedAt = now },
-            new() { PortfolioId = 1, Name = "Green Thumb Landscaping", ServiceType = "Landscaping", Email = "contact@greenthumb.example", Phone = "614-555-0203", Is1099Eligible = true, W9OnFile = true, Preferred = true, CreatedAt = now, UpdatedAt = now },
-            new() { PortfolioId = 1, Name = "Handy Pro Services", ServiceType = "Handyman", Email = "jobs@handypro.example", Phone = "614-555-0204", Is1099Eligible = false, W9OnFile = false, Preferred = false, CreatedAt = now, UpdatedAt = now },
-            new() { PortfolioId = 1, Name = "Summit Roofing Inc.", ServiceType = "Roofing", Email = "bids@summitroofing.example", Phone = "614-555-0205", Is1099Eligible = true, W9OnFile = true, Preferred = false, CreatedAt = now, UpdatedAt = now }
+            new() { PortfolioId = portfolioId, Name = "Apex Plumbing Co.", ServiceType = "Plumbing", Email = "dispatch@apexplumbing.example", Phone = "614-555-0200", Is1099Eligible = true, W9OnFile = true, Preferred = true, CreatedAt = now, UpdatedAt = now },
+            new() { PortfolioId = portfolioId, Name = "Reliable Electric LLC", ServiceType = "Electrical", Email = "office@relelectric.example", Phone = "614-555-0201", Is1099Eligible = true, W9OnFile = true, Preferred = true, CreatedAt = now, UpdatedAt = now },
+            new() { PortfolioId = portfolioId, Name = "ComfortZone HVAC", ServiceType = "HVAC", Email = "service@comfortzonehvac.example", Phone = "614-555-0202", Is1099Eligible = true, W9OnFile = false, Preferred = false, CreatedAt = now, UpdatedAt = now },
+            new() { PortfolioId = portfolioId, Name = "Green Thumb Landscaping", ServiceType = "Landscaping", Email = "contact@greenthumb.example", Phone = "614-555-0203", Is1099Eligible = true, W9OnFile = true, Preferred = true, CreatedAt = now, UpdatedAt = now },
+            new() { PortfolioId = portfolioId, Name = "Handy Pro Services", ServiceType = "Handyman", Email = "jobs@handypro.example", Phone = "614-555-0204", Is1099Eligible = false, W9OnFile = false, Preferred = false, CreatedAt = now, UpdatedAt = now },
+            new() { PortfolioId = portfolioId, Name = "Summit Roofing Inc.", ServiceType = "Roofing", Email = "bids@summitroofing.example", Phone = "614-555-0205", Is1099Eligible = true, W9OnFile = true, Preferred = false, CreatedAt = now, UpdatedAt = now }
         };
         _db.Vendors.AddRange(vendors);
         await _db.SaveChangesAsync(ct);
@@ -200,7 +211,7 @@ public class DemoDataSeeder
         {
             var prop = new Property
             {
-                PortfolioId       = 1,
+                PortfolioId       = portfolioId,
                 OwnerEntityId     = pd.ownerIdx == 0 ? ownerLlc.Id : ownerPerson.Id,
                 Name              = pd.name,
                 AddressLine1      = pd.addr,
@@ -277,7 +288,7 @@ public class DemoDataSeeder
 
         var tenants = tenantData.Select((t, i) => new Tenant
         {
-            PortfolioId = 1,
+            PortfolioId = portfolioId,
             FirstName   = t.first,
             LastName    = t.last,
             Email       = t.email,
@@ -315,7 +326,7 @@ public class DemoDataSeeder
 
             var lease = new Lease
             {
-                PortfolioId     = 1,
+                PortfolioId     = portfolioId,
                 PropertyId      = prop.Id,
                 UnitId          = unit.Id,
                 TenantId        = tenant.Id,
@@ -348,7 +359,7 @@ public class DemoDataSeeder
 
             var expiredLease = new Lease
             {
-                PortfolioId     = 1,
+                PortfolioId     = portfolioId,
                 PropertyId      = prop.Id,
                 UnitId          = unit.Id,
                 TenantId        = tenant.Id,
@@ -388,7 +399,7 @@ public class DemoDataSeeder
             // Security deposit — paid at move-in
             payments.Add(new Payment
             {
-                PortfolioId  = 1,
+                PortfolioId  = portfolioId,
                 LeaseId      = lease.Id,
                 PaymentType  = PaymentType.SecurityDeposit,
                 Status       = PaymentStatus.Paid,
@@ -441,7 +452,7 @@ public class DemoDataSeeder
 
                 payments.Add(new Payment
                 {
-                    PortfolioId  = 1,
+                    PortfolioId  = portfolioId,
                     LeaseId      = lease.Id,
                     PaymentType  = PaymentType.Rent,
                     Status       = status,
@@ -467,7 +478,7 @@ public class DemoDataSeeder
 
                 payments.Add(new Payment
                 {
-                    PortfolioId  = 1,
+                    PortfolioId  = portfolioId,
                     LeaseId      = lease.Id,
                     PaymentType  = PaymentType.LateFee,
                     Status       = PaymentStatus.Paid,
@@ -496,7 +507,7 @@ public class DemoDataSeeder
                 var dueDate   = new DateTime(monthCursor.Year, monthCursor.Month, lease.RentDueDay, 0, 0, 0, DateTimeKind.Utc);
                 payments.Add(new Payment
                 {
-                    PortfolioId  = 1,
+                    PortfolioId  = portfolioId,
                     LeaseId      = lease.Id,
                     PaymentType  = PaymentType.Rent,
                     Status       = PaymentStatus.Paid,
@@ -519,7 +530,7 @@ public class DemoDataSeeder
         // ── 7. SecurityDepositHoldings ────────────────────────────────────────────────
         var holdings = activeLeasesForPayments.Select(l => new SecurityDepositHolding
         {
-            PortfolioId    = 1,
+            PortfolioId    = portfolioId,
             LeaseId        = l.Id,
             Amount         = l.SecurityDeposit,
             Status         = SecurityDepositStatus.Held,
@@ -581,7 +592,7 @@ public class DemoDataSeeder
             var incDate = now.AddDays(-ed.daysAgo);
             return new Expense
             {
-                PortfolioId    = 1,
+                PortfolioId    = portfolioId,
                 PropertyId     = prop.Id,
                 VendorId       = vendor.Id,
                 Category       = ed.cat,
@@ -649,7 +660,7 @@ public class DemoDataSeeder
             var requestedAt = now.AddDays(-wd.daysAgo);
             var wo = new WorkOrder
             {
-                PortfolioId   = 1,
+                PortfolioId   = portfolioId,
                 PropertyId    = prop.Id,
                 UnitId        = unit?.Id,
                 VendorId      = vendor.Id,
@@ -707,7 +718,7 @@ public class DemoDataSeeder
             var scheduledStart = now.AddDays(ad.daysOffset).Date.AddHours(10 + i % 4);
             appts.Add(new Appointment
             {
-                PortfolioId    = 1,
+                PortfolioId    = portfolioId,
                 PropertyId     = prop.Id,
                 UnitId         = propUnits2.Count > 0 ? propUnits2[i % propUnits2.Count].Id : null,
                 TenantId       = apptTenant?.Id,
@@ -779,7 +790,7 @@ public class DemoDataSeeder
 
             var inspection = new Inspection
             {
-                PortfolioId  = 1,
+                PortfolioId  = portfolioId,
                 PropertyId   = prop.Id,
                 UnitId       = propUnits3.Count > 0 ? propUnits3[i % propUnits3.Count].Id : null,
                 LeaseId      = inspLease?.Id,
@@ -805,7 +816,7 @@ public class DemoDataSeeder
 
                 inspection.Items.Add(new InspectionItem
                 {
-                    PortfolioId = 1,
+                    PortfolioId = portfolioId,
                     Area        = templateItem.Area,
                     Label       = templateItem.Label,
                     Result      = result,
@@ -824,11 +835,12 @@ public class DemoDataSeeder
 
         // ── Done ──────────────────────────────────────────────────────────────────────
         _logger.LogInformation(
-            "Demo data seeded for portfolio 1: " +
+            "Demo data seeded for portfolio {PortfolioId}: " +
             "{OwnerEntities} ownerEntities, {Vendors} vendors, {Properties} properties, " +
             "{Units} units, {Tenants} tenants, {Leases} leases ({Active} active / {Expired} expired), " +
             "{Payments} payments, {Holdings} security deposit holdings, " +
             "{Expenses} expenses, {WorkOrders} work orders, {Appointments} appointments, {Inspections} inspections.",
+            portfolioId,
             ownerEntities.Count,
             vendors.Count,
             properties.Count,

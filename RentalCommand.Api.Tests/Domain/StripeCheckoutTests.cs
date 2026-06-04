@@ -7,6 +7,7 @@ using RentalCommand.Api.Services.Payments;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Data;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -172,6 +173,7 @@ public class StripeCheckoutTests : IDisposable
         return new StripePaymentService(
             _ctx.Db,
             Options.Create(config),
+            new SandboxGuard(_ctx.Db),
             NullLogger<StripePaymentService>.Instance);
     }
 

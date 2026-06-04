@@ -1,0 +1,175 @@
+using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Data;
+
+namespace RentalCommand.Api.Services.Domain;
+
+/// <inheritdoc cref="ISandboxService"/>
+public sealed class SandboxService : ISandboxService
+{
+    private readonly RentalCommandDbContext _db;
+    private readonly ILogger<SandboxService> _logger;
+
+    public SandboxService(RentalCommandDbContext db, ILogger<SandboxService> logger)
+    {
+        _db = db;
+        _logger = logger;
+    }
+
+    public async Task<SandboxStateResponse?> GetStateAsync(int portfolioId, CancellationToken ct = default)
+    {
+        var portfolio = await _db.Portfolios
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct);
+
+        return portfolio is null ? null : ToState(portfolio);
+    }
+
+    public async Task<SandboxStateResponse?> GoLiveAsync(int portfolioId, CancellationToken ct = default)
+    {
+        // Scope strictly to the caller's own portfolio (IDOR guard): we only ever load + mutate this id.
+        var portfolio = await _db.Portfolios
+            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct);
+
+        if (portfolio is null)
+        {
+            return null;
+        }
+
+        // Idempotent: already Live → nothing to wipe, just return the current state.
+        if (!portfolio.IsSandbox)
+        {
+            return ToState(portfolio);
+        }
+
+        // Transactional: the data wipe and the flag flip commit together. A failure rolls everything
+        // back so we can never end up Live-but-still-holding-demo-data (or vice-versa).
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
+        await WipePortfolioDataAsync(portfolioId, ct);
+
+        portfolio.IsSandbox = false;
+        portfolio.SandboxSeededAtUtc = null;
+        portfolio.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        await tx.CommitAsync(ct);
+
+        _logger.LogInformation(
+            "Portfolio {PortfolioId} graduated from Sandbox to Live — demo data wiped.", portfolioId);
+
+        return ToState(portfolio);
+    }
+
+    /// <summary>
+    /// Deletes every portfolio-scoped DOMAIN row for the given portfolio, in child→parent order so no
+    /// foreign-key constraint is violated. Set-based <c>ExecuteDeleteAsync</c> (with query filters
+    /// ignored so soft-deleted rows go too) keeps the wipe fast and avoids loading thousands of entities.
+    ///
+    /// FK-order notes (the constraints that force ordering — the rest is plain child→parent):
+    ///   * PaymentTransaction → Payment is RESTRICT → must delete transactions before payments.
+    ///   * Conversation → Tenant is RESTRICT → must delete conversations (+ their messages) before tenants.
+    ///   * Unit / ConversationMessage carry no PortfolioId → deleted via a join on their parent.
+    /// The Portfolio row itself and account-level rows (the user's ApplicationUser/UserAccount, audit
+    /// log, notification settings, outbox) are intentionally KEPT — only the demo domain data is wiped.
+    /// </summary>
+    private async Task WipePortfolioDataAsync(int portfolioId, CancellationToken ct)
+    {
+        // 1. Online-payment + autopay rows (PaymentTransaction RESTRICTs Payment).
+        await _db.PaymentTransactions.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.AutopayEnrollments.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+
+        // 2. Conversations + their messages (Conversation RESTRICTs Tenant; messages have no PortfolioId).
+        await _db.ConversationMessages.IgnoreQueryFilters()
+            .Where(m => _db.Conversations.Any(c => c.Id == m.ConversationId && c.PortfolioId == portfolioId))
+            .ExecuteDeleteAsync(ct);
+        await _db.Conversations.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+
+        // 3. Tenant-screening chain (AdverseActionNotice / ScreeningResult → RentalApplication).
+        await _db.AdverseActionNotices.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.ScreeningResults.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.RentalApplications.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+
+        // 4. Inspections (items first → inspection).
+        await _db.InspectionItems.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.Inspections.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+
+        // 5. Appointments, deposits, opening balances, payments, notices (all → Lease/Property/etc.).
+        await _db.Appointments.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.SecurityDepositHoldings.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.OpeningBalances.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.Payments.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.NoticeDrafts.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+
+        // 6. Bank feed (transactions → connection).
+        await _db.BankTransactions.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.BankConnections.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+
+        // 7. Work-order graph (status events → expenses → ratings/dispatches → work orders).
+        await _db.WorkOrderStatusEvents.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.Expenses.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.VendorRatings.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.VendorDispatches.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.RecurringMaintenanceTasks.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.WorkOrders.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+
+        // 8. Leases (now free of payments/deposits/work-orders/appointments referencing them).
+        await _db.Leases.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+
+        // 9. Units (no PortfolioId → join via Property) then Properties.
+        await _db.Units.IgnoreQueryFilters()
+            .Where(u => _db.Properties.IgnoreQueryFilters().Any(p => p.Id == u.PropertyId && p.PortfolioId == portfolioId))
+            .ExecuteDeleteAsync(ct);
+        await _db.Properties.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+
+        // 10. People + companies (tenants now unreferenced by conversations/leases).
+        await _db.Tenants.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.Vendors.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.OwnerEntities.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.Owners.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+
+        // 11. Files, scan drafts/batches, activity (uploaded/captured demo artifacts).
+        await _db.ScanDrafts.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.ScanBatches.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.StoredFiles.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+        await _db.ActivityLogs.IgnoreQueryFilters()
+            .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
+    }
+
+    private static SandboxStateResponse ToState(Core.Entities.Portfolio p) => new()
+    {
+        PortfolioId = p.Id,
+        IsSandbox = p.IsSandbox,
+        SandboxSeededAtUtc = p.SandboxSeededAtUtc,
+    };
+}
