@@ -13,12 +13,12 @@ internal sealed class FakeNotificationSettingsService : INotificationSettingsSer
         _config = config;
     }
 
-    public Task<NotificationSettingsResponse> GetAdminAsync(CancellationToken ct = default)
+    public Task<NotificationSettingsResponse> GetAdminAsync(int portfolioId, CancellationToken ct = default)
         => throw new NotSupportedException();
 
-    public Task<NotificationSettingsResponse> UpdateAsync(UpdateNotificationSettingsRequest request, CancellationToken ct = default)
+    public Task<NotificationSettingsResponse> UpdateAsync(int portfolioId, UpdateNotificationSettingsRequest request, CancellationToken ct = default)
         => throw new NotSupportedException();
 
-    public Task<NotificationsConfig> GetRuntimeAsync(CancellationToken ct = default)
+    public Task<NotificationsConfig> GetRuntimeAsync(int portfolioId, CancellationToken ct = default)
         => Task.FromResult(_config);
 }

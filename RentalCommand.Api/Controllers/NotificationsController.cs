@@ -89,7 +89,7 @@ public class NotificationsController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(typeof(NotificationSettingsResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<NotificationSettingsResponse>> GetSettings(CancellationToken ct)
     {
-        return Ok(await _settings.GetAdminAsync(ct));
+        return Ok(await _settings.GetAdminAsync(GetPortfolioId(), ct));
     }
 
     [HttpPut("settings")]
@@ -98,6 +98,6 @@ public class NotificationsController : AuthenticatedPortfolioControllerBase
         [FromBody] UpdateNotificationSettingsRequest request,
         CancellationToken ct)
     {
-        return Ok(await _settings.UpdateAsync(request, ct));
+        return Ok(await _settings.UpdateAsync(GetPortfolioId(), request, ct));
     }
 }
