@@ -117,6 +117,75 @@ public sealed record LeaseDocumentResponse(
     string DownloadUrl,
     DateTime GeneratedAt);
 
+/// <summary>
+/// Body for <c>POST /leases/{id}/send-for-signature</c>. Both fields are optional; when omitted the
+/// lease's tenant name/email is used as the signer.
+/// </summary>
+public sealed class SendForSignatureRequest
+{
+    [MaxLength(200)]
+    public string? SignerName { get; set; }
+
+    [EmailAddress]
+    [MaxLength(256)]
+    public string? SignerEmail { get; set; }
+}
+
+/// <summary>Outcome of a send-for-signature attempt, mapped to HTTP by the controller.</summary>
+public sealed class SendForSignatureResult
+{
+    public SendForSignatureOutcome Outcome { get; init; }
+    public LeaseSignatureStatusResponse? Status { get; init; }
+
+    /// <summary>Human-readable explanation (used for the not-configured/error responses).</summary>
+    public string? Error { get; init; }
+
+    public static SendForSignatureResult NotFound()
+        => new() { Outcome = SendForSignatureOutcome.NotFound, Error = "Lease not found" };
+
+    public static SendForSignatureResult NotConfigured()
+        => new() { Outcome = SendForSignatureOutcome.NotConfigured, Error = "E-sign provider is not configured." };
+
+    public static SendForSignatureResult MissingSigner()
+        => new() { Outcome = SendForSignatureOutcome.MissingSigner, Error = "A signer name and email are required (the lease's tenant has none)." };
+
+    public static SendForSignatureResult ProviderError(string error)
+        => new() { Outcome = SendForSignatureOutcome.ProviderError, Error = error };
+
+    public static SendForSignatureResult Sent(LeaseSignatureStatusResponse status)
+        => new() { Outcome = SendForSignatureOutcome.Sent, Status = status };
+}
+
+public enum SendForSignatureOutcome
+{
+    Sent,
+    NotFound,
+    NotConfigured,
+    MissingSigner,
+    ProviderError
+}
+
+/// <summary>Signature-workflow snapshot for a lease, returned by the status endpoint and after sending.</summary>
+public sealed class LeaseSignatureStatusResponse
+{
+    public int LeaseId { get; init; }
+
+    /// <summary>Where the lease sits in the e-sign workflow: None | Sent | Signed | Declined (string on the wire).</summary>
+    public EsignStatus EsignStatus { get; init; }
+
+    /// <summary>The lease's overall status (e.g. PendingSignature, Active) — string on the wire.</summary>
+    public LeaseStatus LeaseStatus { get; init; }
+
+    /// <summary>Provider envelope/signature-request id once sent; null otherwise.</summary>
+    public string? EnvelopeId { get; init; }
+
+    /// <summary>True when a fully-signed PDF is stored and downloadable.</summary>
+    public bool HasSignedDocument { get; init; }
+
+    /// <summary>Stable selector for frontend tests.</summary>
+    public string TestId => $"lease-signature-{LeaseId}";
+}
+
 public class CreateLeaseRequest
 {
     [Required]

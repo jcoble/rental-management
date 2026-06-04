@@ -529,11 +529,16 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.LateFeeAmount).HasPrecision(18, 2);
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.Property(e => e.Status).HasConversion<int>();
+            // E-sign workflow state. Status stored as int to match Lease.Status; the envelope id is
+            // indexed because the anonymous webhook resolves the lease by it.
+            entity.Property(e => e.EsignStatus).HasConversion<int>();
+            entity.Property(e => e.EsignEnvelopeId).HasMaxLength(200);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
             entity.HasIndex(e => e.TenantId);
             entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => e.EsignEnvelopeId);
             entity.HasQueryFilter(e => e.DeletedAt == null);
             // StartDate must precede EndDate, and RentDueDay must be a valid day of month.
             entity.ToTable(t =>

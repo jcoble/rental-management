@@ -16,11 +16,13 @@ public class LeaseController : AuthenticatedPortfolioControllerBase
 {
     private readonly ILeaseService _service;
     private readonly ILeaseQaService _qa;
+    private readonly ILeaseEsignService _esign;
 
-    public LeaseController(ILeaseService service, ILeaseQaService qa)
+    public LeaseController(ILeaseService service, ILeaseQaService qa, ILeaseEsignService esign)
     {
         _service = service;
         _qa = qa;
+        _esign = esign;
     }
 
     [HttpGet]
@@ -120,6 +122,64 @@ public class LeaseController : AuthenticatedPortfolioControllerBase
         if (file == null)
         {
             return NotFound(new { error = "No generated lease agreement; generate it first." });
+        }
+
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        Response.Headers["Content-Disposition"] = $"inline; filename=\"{file.Value.FileName}\"";
+        return File(file.Value.Stream, file.Value.ContentType);
+    }
+
+    /// <summary>
+    /// Send the lease's generated agreement out for electronic signature. Generates the agreement PDF first
+    /// if none exists, defaults the signer to the lease's tenant, marks the lease
+    /// <c>EsignStatus=Sent</c> / <c>LeaseStatus=PendingSignature</c>, and returns the signature snapshot.
+    /// Returns 503 when the e-sign provider is not configured (gated) — the lease is left unchanged.
+    /// </summary>
+    [HttpPost("{id:int}/send-for-signature")]
+    [ProducesResponseType(typeof(LeaseSignatureStatusResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> SendForSignature(int id, [FromBody] SendForSignatureRequest request, CancellationToken ct)
+    {
+        var result = await _esign.SendForSignatureAsync(
+            GetPortfolioId(), id, request ?? new SendForSignatureRequest(),
+            GetUserId(), HttpContext.Connection.RemoteIpAddress?.ToString(), ct);
+
+        return result.Outcome switch
+        {
+            SendForSignatureOutcome.Sent => Ok(result.Status),
+            SendForSignatureOutcome.NotFound => NotFound(new { error = result.Error }),
+            SendForSignatureOutcome.MissingSigner => BadRequest(new { error = result.Error }),
+            SendForSignatureOutcome.NotConfigured =>
+                StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = result.Error }),
+            _ => StatusCode(StatusCodes.Status502BadGateway, new { error = result.Error }),
+        };
+    }
+
+    /// <summary>
+    /// Current signature status for the lease: <c>{ esignStatus, leaseStatus, envelopeId, hasSignedDocument }</c>.
+    /// When the provider is configured and a request is in flight, the status is refreshed from the provider.
+    /// </summary>
+    [HttpGet("{id:int}/signature-status")]
+    [ProducesResponseType(typeof(LeaseSignatureStatusResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseSignatureStatusResponse>> SignatureStatus(int id, CancellationToken ct)
+    {
+        var status = await _esign.GetSignatureStatusAsync(GetPortfolioId(), id, ct);
+        return status == null ? NotFound(new { error = "Lease not found" }) : Ok(status);
+    }
+
+    /// <summary>Download the stored fully-signed agreement PDF (404 until a signed document has been stored).</summary>
+    [HttpGet("{id:int}/signed-document")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SignedDocument(int id, CancellationToken ct)
+    {
+        var file = await _esign.GetSignedDocumentAsync(GetPortfolioId(), id, ct);
+        if (file == null)
+        {
+            return NotFound(new { error = "No signed agreement on file for this lease." });
         }
 
         Response.Headers["X-Content-Type-Options"] = "nosniff";
