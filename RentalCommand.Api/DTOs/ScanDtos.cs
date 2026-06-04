@@ -85,6 +85,31 @@ public sealed record ScanDraftResponse(
 
 public sealed record ScanCreatedResponse(int DraftId, string Status, string FileUrl);
 
+/// <summary>Response from a bulk-scan batch upload: the created batch + the ids of its drafts.</summary>
+public sealed record ScanBatchCreatedResponse(
+    int BatchId, string? Name, string TargetEntityType, string Status, int FileCount,
+    IReadOnlyList<int> DraftIds);
+
+/// <summary>Rollup counts for a batch's drafts, by status.</summary>
+public sealed record ScanBatchCounts(
+    int Total, int Pending, int Reviewing, int Confirmed, int Rejected, int Failed);
+
+/// <summary>A batch in the batch list, with its draft rollup counts.</summary>
+public sealed record ScanBatchSummaryResponse(
+    int Id, string? Name, string TargetEntityType, string Status, int FileCount,
+    DateTime CreatedAtUtc, ScanBatchCounts Counts);
+
+/// <summary>One draft in a batch's review queue: id, status, and a short extracted summary.</summary>
+public sealed record ScanBatchDraftResponse(
+    int Id, string Status, string TargetEntityType, string FileUrl,
+    string? Tenant, string? Unit, string? Term,
+    int? CreatedEntityId, DateTime CreatedAt);
+
+/// <summary>Full batch detail: the batch, its rollup counts, and its drafts for the review queue.</summary>
+public sealed record ScanBatchDetailResponse(
+    int Id, string? Name, string TargetEntityType, string Status, int FileCount,
+    DateTime CreatedAtUtc, ScanBatchCounts Counts, IReadOnlyList<ScanBatchDraftResponse> Drafts);
+
 /// <summary>Optional field override JSON applied when confirming a scan draft.</summary>
 public sealed class ConfirmScanRequest
 {

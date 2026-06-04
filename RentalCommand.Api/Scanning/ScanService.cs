@@ -52,12 +52,34 @@ public sealed class ScanService : IScanService
     // CreateDraftAsync
     // -------------------------------------------------------------------------
 
-    public async Task<ScanDraft> CreateDraftAsync(
+    public Task<ScanDraft> CreateDraftAsync(
         int portfolioId,
         byte[] fileBytes,
         string contentType,
         string targetEntityType,
         CancellationToken ct = default)
+        => CreateDraftCoreAsync(portfolioId, batchId: null, fileBytes, contentType, targetEntityType, ct);
+
+    public Task<ScanDraft> CreateBatchDraftAsync(
+        int portfolioId,
+        int batchId,
+        byte[] fileBytes,
+        string contentType,
+        string targetEntityType,
+        CancellationToken ct = default)
+        => CreateDraftCoreAsync(portfolioId, batchId, fileBytes, contentType, targetEntityType, ct);
+
+    /// <summary>
+    /// Shared store-file → preview → persist-draft path for both single-file and batch uploads.
+    /// <paramref name="batchId"/> links the draft into a bulk-scan batch when non-null.
+    /// </summary>
+    private async Task<ScanDraft> CreateDraftCoreAsync(
+        int portfolioId,
+        int? batchId,
+        byte[] fileBytes,
+        string contentType,
+        string targetEntityType,
+        CancellationToken ct)
     {
         var stored = await _files.StoreAsync(
             portfolioId,
@@ -88,6 +110,7 @@ public sealed class ScanService : IScanService
         var draft = new ScanDraft
         {
             PortfolioId = portfolioId,
+            BatchId = batchId,
             FilePath = stored.FilePath,
             ThumbnailPath = thumbnailPath,
             TargetEntityType = targetEntityType,

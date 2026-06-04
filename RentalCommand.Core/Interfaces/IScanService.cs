@@ -20,6 +20,19 @@ public interface IScanService
         string targetEntityType,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// Create a draft for one file inside a bulk-scan batch: stores the file, generates the preview,
+    /// and persists a Pending <see cref="ScanDraft"/> linked to <paramref name="batchId"/>. The Engine
+    /// worker then extracts it the same way it processes any Pending draft (no batch awareness needed).
+    /// </summary>
+    Task<ScanDraft> CreateBatchDraftAsync(
+        int portfolioId,
+        int batchId,
+        byte[] fileBytes,
+        string contentType,
+        string targetEntityType,
+        CancellationToken ct = default);
+
     /// <summary>Confirm a reviewed draft, creating the real record (Receipt→Expense in Phase 2).</summary>
     Task<ScanConfirmResult> ConfirmAndCreateAsync(
         int portfolioId, int draftId, int userId,
