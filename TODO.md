@@ -372,7 +372,17 @@ Data we touch constantly deserves proper inputs (currently plain text fields):
   Gate it like other externals: no key → fall back to manual entry.
 - **Dates → consistent date picker** component everywhere (we deal with dates a
   lot: lease start/end, move-in/out, due dates, payment/expense dates, report
-  ranges). One shared date-picker + ensure UTC-Kind handling on the wire.
+  ranges). Build ONE shared `DatePicker.svelte` (+ a range variant for reports)
+  from **shadcn-svelte Calendar + Popover**. Calendar isn't installed yet but its
+  deps ARE (`bits-ui`, `@internationalized/date`, `popover`):
+  `cd web && pnpm dlx shadcn-svelte@latest add calendar range-calendar`. shadcn
+  Calendar uses `CalendarDate`/`DateValue`, NOT JS Date — convert at the API
+  boundary and pin to UTC on the wire (keeps us clear of the timestamptz/Kind=Utc
+  foot-guns). NOTE: shadcn Calendar = date *picker* only; the Appointments
+  *event calendar* is a separate tool — see **#31**.
+
+**THIS IS THE "#19 DATE WAVE"** = #19 (state dropdown + address autocomplete + date
+pickers) **+ #31 (appointments event-calendar view)** done together.
 
 ### 20. Tax page: "Paid" and "W-9" columns collide (no spacing)
 `/tax` 1099 checklist table: columns ARE separate `<th>`/`<td>`
@@ -556,6 +566,28 @@ single-flight not deduping across SSR+client; rotated token not persisted back t
 cookie atomically (next refresh uses stale token); cookie exp vs JWT exp mismatch.
 FIX must make a normal session refresh reliably and NEVER self-trigger family
 revocation. Owned by the dedicated auth agent.
+
+### 31. Appointments: event-calendar view (not a grid) — part of the #19 date wave
+Appointments are time-based events (`Type` = Showing/MoveIn/MoveOut/Inspection/
+MaintenanceVisit/OwnerMeeting, `ScheduledStart`/`ScheduledEnd`, `Status`), so a
+calendar matches the mental model far better than the current 283-line DataGrid
+(`(protected)/appointments/+page.svelte`) — see "what's Thursday / am I double-
+booked / where are the gaps."
+Plan:
+- **Calendar = default view.** Month + Week (+ Agenda/list for "what's next").
+  Color events by **Type** using the semantic palette (showings blue, inspections
+  amber, move-ins green, etc.) for instant scanning.
+- **Keep the existing grid as a "List" toggle** (still better for filter-by-status/
+  type, search, flat past/upcoming). View toggle: **Calendar / List**, calendar
+  default. Nothing lost.
+- Click day → create; click event → open/edit; drag-to-reschedule (nice-to-have).
+- Feeds the header **Appointments badge** (#2, upcoming count).
+- Render in the landlord's LOCAL timezone; convert to UTC on save (timestamptz /
+  Kind=Utc discipline).
+- **Library:** use **`@event-calendar`** (Svelte-native, lightweight ~tens of KB,
+  MIT, month/week/day/list + drag-drop). NOT shadcn Calendar (that's a date
+  picker — #19) and NOT FullCalendar (heavyweight JS-core integration, overkill).
+- Pairs with #19's shared DatePicker for the create/edit FORM date+time fields.
 
 ## Done
 
