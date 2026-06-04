@@ -10,7 +10,7 @@
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import { Mic, Square } from '@lucide/svelte';
+	import { Mic, Square, Layers } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 
@@ -37,6 +37,13 @@
 		queryKey: ['scans', activeFilter],
 		queryFn: () => scan.list(activeFilter === 'All' ? undefined : activeFilter)
 	}));
+
+	// Recent bulk-import batches (lease imports). Shown as quick links back into review.
+	const batchesQuery = createQuery(() => ({
+		queryKey: ['scan-batches'],
+		queryFn: () => scan.listBatches()
+	}));
+	const recentBatches = $derived((batchesQuery.data ?? []).slice(0, 5));
 
 	const uploadMutation = createMutation(() => ({
 		mutationFn: (file: File) => scan.upload(file, docType),
@@ -155,9 +162,15 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="scan-page">
-	<div class="mb-4">
-		<h1 class="text-2xl font-bold">Scan a Document</h1>
-		<p class="text-sm text-muted-foreground">Upload a photo or PDF and the computer pulls out the details for you to confirm.</p>
+	<div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+		<div>
+			<h1 class="text-2xl font-bold">Scan a Document</h1>
+			<p class="text-sm text-muted-foreground">Upload a photo or PDF and the computer pulls out the details for you to confirm.</p>
+		</div>
+		<Button variant="outline" class="gap-2" href="/scan/batch" data-testid="scan-bulk-import-leases">
+			<Layers class="h-4 w-4" />
+			Bulk import leases
+		</Button>
 	</div>
 
 	<!-- Document type selector -->
@@ -222,6 +235,32 @@
 			<span class="text-sm text-muted-foreground">Recording...</span>
 		{/if}
 	</div>
+
+	<!-- Recent lease imports -->
+	{#if recentBatches.length > 0}
+		<div class="mb-6" data-testid="scan-recent-batches">
+			<h2 class="mb-2 text-sm font-semibold">Recent lease imports</h2>
+			<div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+				{#each recentBatches as batch (batch.id)}
+					<a
+						href="/scan/batch/{batch.id}"
+						class="flex items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-3 transition-colors hover:bg-secondary"
+						data-testid="scan-batch-row"
+					>
+						<div class="min-w-0">
+							<p class="truncate text-sm font-medium text-foreground">
+								{batch.name || `Import #${batch.id}`}
+							</p>
+							<p class="text-xs text-muted-foreground">
+								{batch.counts.confirmed} of {batch.counts.total} created
+							</p>
+						</div>
+						<StatusBadge status={batch.status} />
+					</a>
+				{/each}
+			</div>
+		</div>
+	{/if}
 
 	<!-- Filter tabs -->
 	<Tabs.Root
