@@ -629,6 +629,11 @@ Plan:
   P&L, occupancy, lease expirations, deposit register, vendor 1099, owner distributions, work
   orders + catalog; reuses Schedule E / Owner Statement / Year-End. Api tests 186/186.
 
+### Wave 4 — Bank reconciliation merged in PR #86 (main `9b0b54e`)
+- **#4/#5** Name-aware match suggestions; inline '✓ Cleared / Match?' badge on the Accounting
+  Ledger (one-tap confirm, never auto-match); Personal/Ignore action on Banking; Deposits
+  relabeled (money held in trust). No migration; Api tests 194/194.
+
 ### Decisions LOCKED (spec: Docs/superpowers/specs/2026-06-04-remaining-features-decisions.md)
 Bank reconciliation = ALWAYS one-tap confirm · Docs/KB = simple retrieval · Sandbox =
 graduate-once→wipe · E-sign = build native (defer module #26). Implementing in this order:
