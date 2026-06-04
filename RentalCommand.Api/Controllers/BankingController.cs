@@ -119,4 +119,48 @@ public class BankingController : AuthenticatedPortfolioControllerBase
         var updated = await _service.ClearMatchAsync(GetPortfolioId(), id, ct);
         return updated == null ? NotFound(new { error = "Bank transaction not found" }) : Ok(updated);
     }
+
+    /// <summary>
+    /// Duplicate / match review queue: imported bank lines with a suggested payment or expense
+    /// match that still need the landlord to confirm or dismiss, so a scanned receipt and the bank
+    /// deposit/withdrawal are not double-counted.
+    /// </summary>
+    [HttpGet("review-queue")]
+    [ProducesResponseType(typeof(BankReviewQueueResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<BankReviewQueueResponse>> ReviewQueue(CancellationToken ct)
+    {
+        return Ok(await _service.GetReviewQueueAsync(GetPortfolioId(), ct));
+    }
+
+    /// <summary>
+    /// Confirm a suggested match. Links the bank line to the payment/expense and marks it Matched so
+    /// accounting treats them as the same money. Body may name a paymentId or expenseId; if both are
+    /// omitted the current suggestion is used.
+    /// </summary>
+    [HttpPost("transactions/{id:int}/confirm-match")]
+    [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<BankTransactionResponse>> ConfirmMatch(
+        int id,
+        [FromBody] ConfirmBankMatchRequest? request,
+        CancellationToken ct)
+    {
+        var updated = await _service.ConfirmMatchAsync(GetPortfolioId(), id, request ?? new ConfirmBankMatchRequest(), ct);
+        return updated == null
+            ? NotFound(new { error = "Bank transaction, suggested match, or match target not found" })
+            : Ok(updated);
+    }
+
+    /// <summary>
+    /// Dismiss a suggested match (not a match). Clears any link and marks it Dismissed so it leaves
+    /// the review queue; the bank line stays in the books as its own real money.
+    /// </summary>
+    [HttpPost("transactions/{id:int}/dismiss-match")]
+    [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<BankTransactionResponse>> DismissMatch(int id, CancellationToken ct)
+    {
+        var updated = await _service.DismissMatchAsync(GetPortfolioId(), id, ct);
+        return updated == null ? NotFound(new { error = "Bank transaction not found" }) : Ok(updated);
+    }
 }

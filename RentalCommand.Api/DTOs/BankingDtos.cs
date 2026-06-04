@@ -131,3 +131,29 @@ public class MatchBankTransactionRequest
     public string EntityType { get; set; } = string.Empty;
     public int EntityId { get; set; }
 }
+
+/// <summary>
+/// Confirm a suggested match. Supply exactly one of <see cref="PaymentId"/> or
+/// <see cref="ExpenseId"/>; when both are omitted the transaction's current suggestion is used.
+/// </summary>
+public class ConfirmBankMatchRequest
+{
+    public int? PaymentId { get; set; }
+    public int? ExpenseId { get; set; }
+}
+
+/// <summary>
+/// One row in the duplicate / match review queue: the imported bank line together with the
+/// suggested payment or expense candidate so the landlord can confirm or dismiss the match.
+/// </summary>
+public class BankReviewQueueItemResponse
+{
+    public BankTransactionResponse Transaction { get; set; } = new();
+    public BankMatchSuggestionResponse Suggestion { get; set; } = new();
+}
+
+public class BankReviewQueueResponse
+{
+    public int Count { get; set; }
+    public IReadOnlyList<BankReviewQueueItemResponse> Items { get; set; } = [];
+}

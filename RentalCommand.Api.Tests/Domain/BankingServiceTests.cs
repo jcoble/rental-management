@@ -120,6 +120,110 @@ public class BankingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ReviewQueue_SurfacesSuggestedMatch_ConfirmLinksAndRemovesIt_DismissRemovesIt()
+    {
+        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Test Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "queue-txn-1",
+                    PostedAt = payment.PaidDate!.Value,
+                    Description = "ACH CREDIT EMILY CHEN RENT",
+                    Amount = payment.Amount,
+                },
+            ],
+        });
+        var transactionId = imported.Transactions.Single().Id;
+
+        // A suggested match shows up in the review queue.
+        var queue = await _sut.GetReviewQueueAsync(1);
+        queue.Count.Should().Be(1);
+        var item = queue.Items.Single();
+        item.Transaction.Id.Should().Be(transactionId);
+        item.Suggestion.EntityType.Should().Be("Payment");
+        item.Suggestion.EntityId.Should().Be(payment.Id);
+
+        // Confirming links the payment and removes the line from the queue.
+        var confirmed = await _sut.ConfirmMatchAsync(1, transactionId, new ConfirmBankMatchRequest());
+        confirmed.Should().NotBeNull();
+        confirmed!.MatchStatus.Should().Be("Matched");
+        confirmed.MatchedPaymentId.Should().Be(payment.Id);
+        confirmed.SuggestedMatch.Should().BeNull();
+        (await _sut.GetReviewQueueAsync(1)).Count.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task DismissMatch_MarksDismissed_AndRemovesFromQueue()
+    {
+        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Test Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "queue-txn-2",
+                    PostedAt = payment.PaidDate!.Value,
+                    Description = "ACH CREDIT EMILY CHEN RENT",
+                    Amount = payment.Amount,
+                },
+            ],
+        });
+        var transactionId = imported.Transactions.Single().Id;
+        (await _sut.GetReviewQueueAsync(1)).Count.Should().Be(1);
+
+        var dismissed = await _sut.DismissMatchAsync(1, transactionId);
+
+        dismissed.Should().NotBeNull();
+        dismissed!.MatchStatus.Should().Be("Dismissed");
+        dismissed.MatchedPaymentId.Should().BeNull();
+        dismissed.SuggestedMatch.Should().BeNull();
+        (await _sut.GetReviewQueueAsync(1)).Count.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ConfirmMatch_WithExplicitExpenseId_LinksExpense()
+    {
+        var expense = SeedExpense(new DateTime(2026, 06, 02, 0, 0, 0, DateTimeKind.Utc), 84.25m);
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Test Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "queue-txn-3",
+                    PostedAt = expense.PaidAt!.Value,
+                    Description = "HARDWARE STORE",
+                    Amount = -expense.Amount,
+                },
+            ],
+        });
+        var transactionId = imported.Transactions.Single().Id;
+
+        var confirmed = await _sut.ConfirmMatchAsync(1, transactionId, new ConfirmBankMatchRequest
+        {
+            ExpenseId = expense.Id,
+        });
+
+        confirmed.Should().NotBeNull();
+        confirmed!.MatchStatus.Should().Be("Matched");
+        confirmed.MatchedExpenseId.Should().Be(expense.Id);
+        confirmed.MatchedPaymentId.Should().BeNull();
+    }
+
+    [Fact]
     public async Task GetPlaidSettingsAsync_ReturnsSafeConfigStatus()
     {
         var settings = await _sut.GetPlaidSettingsAsync(1);
@@ -370,6 +474,45 @@ public class BankingServiceTests : IDisposable
         _ctx.Db.Payments.Add(payment);
         _ctx.Db.SaveChanges();
         return payment;
+    }
+
+    private Expense SeedExpense(DateTime paidAt, decimal amount)
+    {
+        var property = new Property
+        {
+            PortfolioId = 1,
+            Name = "Short North Condo",
+            AddressLine1 = "1 Main",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = paidAt,
+            UpdatedAt = paidAt,
+        };
+        var vendor = new Vendor
+        {
+            PortfolioId = 1,
+            Name = "Hardware Store",
+            CreatedAt = paidAt,
+            UpdatedAt = paidAt,
+        };
+        var expense = new Expense
+        {
+            PortfolioId = 1,
+            Property = property,
+            Vendor = vendor,
+            Category = ScheduleECategory.Repairs,
+            Description = "Hardware supply",
+            Status = ExpenseStatus.Paid,
+            Amount = amount,
+            IncurredAt = paidAt,
+            PaidAt = paidAt,
+            CreatedAt = paidAt,
+            UpdatedAt = paidAt,
+        };
+        _ctx.Db.Expenses.Add(expense);
+        _ctx.Db.SaveChanges();
+        return expense;
     }
 
     private BankingService CreateService(PlaidOptions? options = null) =>

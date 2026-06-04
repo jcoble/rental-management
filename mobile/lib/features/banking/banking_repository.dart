@@ -60,6 +60,48 @@ class BankingRepository {
       throw ApiException.fromDioException(e);
     }
   }
+
+  /// Bank lines that may already be on record as a payment or expense.
+  Future<BankReviewQueue> reviewQueue() async {
+    try {
+      final response =
+          await _dio.get<Map<String, dynamic>>('/banking/review-queue');
+      return BankReviewQueue.fromJson(response.data ?? const {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Confirm the duplicate. Omitting [paymentId]/[expenseId] accepts the
+  /// backend's suggestion (the common one-tap case).
+  Future<void> confirmMatch(
+    int transactionId, {
+    int? paymentId,
+    int? expenseId,
+  }) async {
+    try {
+      final body = <String, dynamic>{};
+      if (paymentId != null) body['paymentId'] = paymentId;
+      if (expenseId != null) body['expenseId'] = expenseId;
+      await _dio.post<Map<String, dynamic>>(
+        '/banking/transactions/$transactionId/confirm-match',
+        data: body,
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Not a duplicate — keep the bank line on its own.
+  Future<void> dismissMatch(int transactionId) async {
+    try {
+      await _dio.post<Map<String, dynamic>>(
+        '/banking/transactions/$transactionId/dismiss-match',
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
 }
 
 final bankingRepositoryProvider = Provider<BankingRepository>((ref) {
@@ -73,4 +115,9 @@ final bankingSummaryProvider = FutureProvider.autoDispose<BankingSummary>((ref) 
 final bankingTransactionsProvider =
     FutureProvider.autoDispose<List<BankTransaction>>((ref) {
   return ref.watch(bankingRepositoryProvider).transactions();
+});
+
+final bankingReviewQueueProvider =
+    FutureProvider.autoDispose<BankReviewQueue>((ref) {
+  return ref.watch(bankingRepositoryProvider).reviewQueue();
 });
