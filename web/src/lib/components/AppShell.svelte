@@ -143,6 +143,7 @@
 			icon: Wallet,
 			items: [
 				{ href: '/accounting', label: 'Accounting', icon: Calculator, roles: ['Admin', 'Manager'] },
+				{ href: '/reports', label: 'Reports', icon: BarChart3, roles: ['Admin', 'Manager'] },
 				{ href: '/banking', label: 'Banking', icon: Landmark, roles: ['Admin', 'Manager'] },
 				{ href: '/deposits', label: 'Deposits', icon: PiggyBank, roles: ['Admin', 'Manager'] },
 				{ href: '/tax', label: 'Tax', icon: Receipt, roles: ['Admin', 'Manager'] },

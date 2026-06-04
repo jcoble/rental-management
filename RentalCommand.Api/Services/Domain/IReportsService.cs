@@ -1,0 +1,57 @@
+using RentalCommand.Api.DTOs;
+
+namespace RentalCommand.Api.Services.Domain;
+
+/// <summary>
+/// Read-only Reports Hub: a thin reporting layer over existing portfolio data. Every method is a pure
+/// query that projects to a clean DTO — there is no create/update/delete here. All reports are scoped to
+/// the caller's portfolio (the id comes from the JWT claim, never a request parameter) and validate any
+/// inbound property filter against that portfolio (cross-tenant IDOR guard).
+///
+/// Reports already fully covered by an existing engine (Schedule E, Owner Statement, Year-End Packet)
+/// are intentionally NOT duplicated here; the catalog references their existing endpoints instead. This
+/// service adds the rent/occupancy/aging/deposit/operations queries plus a couple of range-scoped
+/// accounting views (cash flow, general ledger, property P&amp;L, owner distributions, 1099) that the
+/// existing accounting endpoints only expose lifetime-to-date or per-tax-year.
+/// </summary>
+public interface IReportsService
+{
+    /// <summary>The full catalog of available reports grouped by category, for the generic web UI.</summary>
+    ReportsCatalogResponse GetCatalog();
+
+    /// <summary>Current rent-roll snapshot: one row per active/under-notice lease, plus totals.</summary>
+    Task<RentRollResponse> GetRentRollAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+
+    /// <summary>Accrual rent ledger per lease over the range: charges due vs. payments received, running balance.</summary>
+    Task<RentLedgerResponse> GetRentLedgerAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+
+    /// <summary>Outstanding balances aged into 0-30 / 31-60 / 61-90 / 90+ buckets per lease, with totals.</summary>
+    Task<DelinquencyResponse> GetDelinquencyAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+
+    /// <summary>Income vs. expense by month over the range, with per-month net and grand totals.</summary>
+    Task<CashFlowResponse> GetCashFlowAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+
+    /// <summary>Every payment and expense over the range in date order with a running balance.</summary>
+    Task<GeneralLedgerResponse> GetGeneralLedgerAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+
+    /// <summary>Income / expense / net per property over the range, plus portfolio totals.</summary>
+    Task<PropertyProfitAndLossResponse> GetPropertyProfitAndLossAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+
+    /// <summary>Per-property unit occupancy/vacancy with occupancy %, plus portfolio totals.</summary>
+    Task<OccupancyResponse> GetOccupancyAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+
+    /// <summary>Leases ending within the next <paramref name="days"/> days (default 90), with totals.</summary>
+    Task<LeaseExpirationsResponse> GetLeaseExpirationsAsync(int portfolioId, ReportRangeQuery query, int days, CancellationToken ct = default);
+
+    /// <summary>Per-lease security-deposit register: held / deductions / returned / current balance + totals.</summary>
+    Task<SecurityDepositRegisterResponse> GetSecurityDepositRegisterAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+
+    /// <summary>Per 1099-eligible vendor: total paid in <paramref name="year"/>, W-9 status, review flags.</summary>
+    Task<Vendor1099Response> GetVendor1099Async(int portfolioId, int year, CancellationToken ct = default);
+
+    /// <summary>Per-owner net distribution for <paramref name="year"/> (reuses the owner-statement math).</summary>
+    Task<OwnerDistributionsResponse> GetOwnerDistributionsAsync(int portfolioId, int year, CancellationToken ct = default);
+
+    /// <summary>Work orders requested in the range, with status counts and a cost rollup.</summary>
+    Task<WorkOrderReportResponse> GetWorkOrdersAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+}
