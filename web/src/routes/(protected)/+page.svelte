@@ -5,10 +5,12 @@
 	import { ai } from '$lib/api/endpoints/ai';
 	import { messages } from '$lib/api/endpoints/messages';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
+	import { properties } from '$lib/api/endpoints/properties';
 	import type { Dashboard } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, Sparkles, MessageSquare, HandCoins, Receipt, PiggyBank } from '@lucide/svelte';
+	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, Sparkles, MessageSquare, HandCoins, Receipt, PiggyBank, Rocket, ArrowRight } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
+	import { Button } from '$lib/components/ui/button';
 
 	const dashboardQuery = createQuery(() => ({
 		queryKey: ['dashboard', getCurrentPortfolioId()],
@@ -30,6 +32,13 @@
 		queryKey: ['dashboard-work-orders', getCurrentPortfolioId()],
 		queryFn: () => workOrders.list(getCurrentPortfolioId(), { take: 10, sort: '-requestedAt' }),
 	}));
+	// Used only to detect an empty portfolio for the setup-wizard entry banner.
+	const propertiesQuery = createQuery(() => ({
+		queryKey: ['dashboard-properties-count', getCurrentPortfolioId()],
+		queryFn: () => properties.list(getCurrentPortfolioId(), { take: 1 }),
+	}));
+	// Empty = the query resolved with zero properties (avoid flashing the banner while loading).
+	const isEmptyPortfolio = $derived(propertiesQuery.isSuccess && (propertiesQuery.data?.length ?? 0) === 0);
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
@@ -120,6 +129,29 @@
 			<h1 class="text-2xl font-bold text-foreground">{data.portfolio.name}</h1>
 			<p class="mt-1 text-sm text-muted-foreground">{data.portfolio.managementCompanyName} · {data.portfolio.timeZone}</p>
 		</div>
+
+		{#if isEmptyPortfolio}
+			<!-- Empty-portfolio entry point into the guided setup wizard -->
+			<Card.Root class="mb-6 border-primary/40 bg-primary/5" data-testid="dashboard-onboarding-banner">
+				<Card.Content class="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+					<div class="flex items-start gap-3">
+						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+							<Rocket class="h-5 w-5" />
+						</div>
+						<div>
+							<p class="font-semibold text-foreground">Finish setting up your portfolio</p>
+							<p class="mt-0.5 text-sm text-muted-foreground">
+								Add your first property, tenants, and lease in a few guided steps — the computer does the typing.
+							</p>
+						</div>
+					</div>
+					<Button href="/onboarding" class="shrink-0 gap-2" data-testid="dashboard-onboarding-cta">
+						Start setup
+						<ArrowRight class="h-4 w-4" />
+					</Button>
+				</Card.Content>
+			</Card.Root>
+		{/if}
 
 		<!-- Plain-English money snapshot: collected / spent / kept, each with a sentence -->
 		<Card.Root class="mb-6 gap-0 py-0" data-testid="dashboard-money-snapshot">
