@@ -12,20 +12,32 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Link2, Copy, Check } from '@lucide/svelte';
 
 	let search = $state('');
-	let statusFilter = $state<ApplicationStatus | ''>('');
 
-	const STATUS_OPTIONS: { value: ApplicationStatus | ''; label: string }[] = [
-		{ value: '', label: 'All statuses' },
+	// shadcn Select binds a string; bits-ui treats '' as "no selection", so the "all" sentinel stands
+	// in for "no status filter". `statusFilter` (below) maps it back to '' for the query.
+	const ALL_STATUSES = 'all';
+	let statusValue = $state<string>(ALL_STATUSES);
+	const statusFilter = $derived<ApplicationStatus | ''>(
+		statusValue === ALL_STATUSES ? '' : (statusValue as ApplicationStatus)
+	);
+
+	const STATUS_OPTIONS: { value: string; label: string }[] = [
+		{ value: ALL_STATUSES, label: 'All statuses' },
 		{ value: 'Submitted', label: 'Submitted' },
 		{ value: 'UnderReview', label: 'Under Review' },
 		{ value: 'Approved', label: 'Approved' },
 		{ value: 'Declined', label: 'Declined' },
 		{ value: 'Withdrawn', label: 'Withdrawn' },
 	];
+
+	const statusFilterLabel = $derived(
+		STATUS_OPTIONS.find((o) => o.value === statusValue)?.label ?? 'All statuses'
+	);
 
 	// Status filter goes to the server; free-text search is filtered client-side
 	// so it works across name/email/phone without extra round-trips.
@@ -147,15 +159,16 @@
 		{#snippet toolbar()}
 			<div class="flex flex-1 flex-wrap items-center gap-2">
 				<SearchInput bind:value={search} placeholder="Search applicants…" testid="application-search" />
-				<select
-					bind:value={statusFilter}
-					class="h-9 rounded-md border border-border bg-card px-2.5 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring/50"
-					data-testid="application-status-filter"
-				>
-					{#each STATUS_OPTIONS as opt (opt.value)}
-						<option value={opt.value}>{opt.label}</option>
-					{/each}
-				</select>
+				<Select.Root type="single" bind:value={statusValue}>
+					<Select.Trigger class="h-9 w-44" data-testid="application-status-filter">
+						{statusFilterLabel}
+					</Select.Trigger>
+					<Select.Content>
+						{#each STATUS_OPTIONS as opt (opt.value)}
+							<Select.Item value={opt.value} label={opt.label}>{opt.label}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
 			</div>
 			<Button
 				class="gap-2 shrink-0"
