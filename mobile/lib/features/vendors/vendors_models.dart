@@ -11,6 +11,7 @@ class Vendor {
     this.email,
     this.phone,
     this.preferred = false,
+    this.w9OnFile = false,
     this.notes,
     this.averageRating,
     this.ratingCount = 0,
@@ -23,6 +24,11 @@ class Vendor {
   final String? email;
   final String? phone;
   final bool preferred;
+
+  /// True when a signed W-9 has been collected from this vendor (needed before
+  /// issuing a 1099). Toggled from the vendor detail screen.
+  final bool w9OnFile;
+
   final String? notes;
 
   /// Cached average star rating (1–5); null until the vendor has been rated.
@@ -51,10 +57,27 @@ class Vendor {
       email: asString('email'),
       phone: asString('phone'),
       preferred: json['preferred'] as bool? ?? false,
+      w9OnFile: json['w9OnFile'] as bool? ?? false,
       notes: asString('notes'),
       averageRating: (json['averageRating'] as num?)?.toDouble(),
       ratingCount: (json['ratingCount'] as num?)?.toInt() ?? 0,
       jobsCompleted: (json['jobsCompleted'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  Vendor copyWith({bool? w9OnFile}) {
+    return Vendor(
+      id: id,
+      name: name,
+      serviceType: serviceType,
+      email: email,
+      phone: phone,
+      preferred: preferred,
+      w9OnFile: w9OnFile ?? this.w9OnFile,
+      notes: notes,
+      averageRating: averageRating,
+      ratingCount: ratingCount,
+      jobsCompleted: jobsCompleted,
     );
   }
 }
@@ -88,6 +111,25 @@ class VendorScorecard {
       ratingCount: (json['ratingCount'] as num?)?.toInt() ?? 0,
       jobsCompleted: (json['jobsCompleted'] as num?)?.toInt() ?? 0,
       avgResponseHours: (json['avgResponseHours'] as num?)?.toDouble(),
+    );
+  }
+}
+
+/// Result of texting a vendor a W-9 request (`POST /vendors/{id}/request-w9`).
+class W9RequestResult {
+  const W9RequestResult({required this.queued, this.sentTo});
+
+  /// True when the request SMS was queued for delivery.
+  final bool queued;
+
+  /// The phone number the request was sent to, when the API reports it.
+  final String? sentTo;
+
+  factory W9RequestResult.fromJson(Map<String, dynamic> json) {
+    final to = json['sentTo'];
+    return W9RequestResult(
+      queued: json['queued'] as bool? ?? false,
+      sentTo: (to is String && to.isNotEmpty) ? to : null,
     );
   }
 }

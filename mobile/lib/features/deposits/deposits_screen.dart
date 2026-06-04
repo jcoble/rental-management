@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
@@ -300,6 +303,40 @@ class _DepositDetailSheetState
     );
   }
 
+  /// Fetches the move-out statement PDF bytes (authed), saves to a temp file,
+  /// and opens it with the platform viewer via url_launcher (file:// uri).
+  Future<void> _openMoveOutStatement() async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(content: Text('Preparing move-out statement…')),
+      );
+    try {
+      final bytes = await ref
+          .read(depositsRepositoryProvider)
+          .moveOutStatementBytes(_deposit.id);
+      final path =
+          '${Directory.systemTemp.path}/deposit-${_deposit.id}-move-out-statement.pdf';
+      final file = File(path);
+      await file.writeAsBytes(bytes, flush: true);
+      final ok = await launchUrl(
+        Uri.file(path),
+        mode: LaunchMode.externalApplication,
+      );
+      messenger.hideCurrentSnackBar();
+      if (!ok) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('No app available to open the PDF.')),
+        );
+      }
+    } on ApiException catch (e) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
   void _processReturnDialog() {
     final notesCtrl = TextEditingController();
     showDialog<void>(
@@ -468,7 +505,15 @@ class _DepositDetailSheetState
                 label: const Text('Process Return'),
                 onPressed: _processReturnDialog,
               ),
+              const SizedBox(height: 10),
             ],
+
+            // Move-out statement is useful before and after the return.
+            OutlinedButton.icon(
+              icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+              label: const Text('Move-out statement (PDF)'),
+              onPressed: _openMoveOutStatement,
+            ),
           ],
         ),
       ),
