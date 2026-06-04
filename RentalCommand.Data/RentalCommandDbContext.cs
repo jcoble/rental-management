@@ -46,6 +46,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<BankTransaction> BankTransactions => Set<BankTransaction>();
     public DbSet<NoticeDraft> NoticeDrafts => Set<NoticeDraft>();
     public DbSet<RentalApplication> RentalApplications => Set<RentalApplication>();
+    public DbSet<ScreeningResult> ScreeningResults => Set<ScreeningResult>();
+    public DbSet<AdverseActionNotice> AdverseActionNotices => Set<AdverseActionNotice>();
 
     // Auth + audit + infrastructure entities (Task 3)
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
@@ -385,6 +387,49 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasOne(e => e.ApprovedTenant)
                 .WithMany()
                 .HasForeignKey(e => e.ApprovedTenantId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<ScreeningResult>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.CreditScoreBand).HasMaxLength(40);
+            entity.Property(e => e.ProviderReference).HasMaxLength(200);
+            // Raw provider response, stored as Postgres jsonb.
+            entity.Property(e => e.RawResultJson).HasColumnType("jsonb");
+            // Stored as the string enum name to match the app-wide string-enum convention.
+            entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.Recommendation).HasConversion<string>().HasMaxLength(40);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.ApplicationId);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Application)
+                .WithMany()
+                .HasForeignKey(e => e.ApplicationId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AdverseActionNotice>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Reason).IsRequired().HasMaxLength(2000);
+            entity.Property(e => e.CreditReportingAgency).IsRequired().HasMaxLength(500);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.ApplicationId);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Application)
+                .WithMany()
+                .HasForeignKey(e => e.ApplicationId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.StoredFile)
+                .WithMany()
+                .HasForeignKey(e => e.StoredFileId)
                 .OnDelete(DeleteBehavior.SetNull);
         });
 

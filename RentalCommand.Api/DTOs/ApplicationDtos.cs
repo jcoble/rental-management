@@ -207,3 +207,73 @@ public class ApplicationLinkResult
     /// <summary>Relative public apply path, e.g. <c>/apply/{token}</c>.</summary>
     public string ApplyPath { get; set; } = string.Empty;
 }
+
+// ---------------------------------------------------------------------------
+// Screening (FCRA) shapes
+// ---------------------------------------------------------------------------
+
+/// <summary>Wire shape for a persisted <see cref="ScreeningResult"/> returned to the landlord.</summary>
+public class ScreeningResultResponse
+{
+    public int Id { get; set; }
+    public int ApplicationId { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public string? CreditScoreBand { get; set; }
+    public bool? HasCriminalRecord { get; set; }
+    public bool? HasEvictionRecord { get; set; }
+    public string? Recommendation { get; set; }
+    public string? ProviderReference { get; set; }
+    public DateTime RequestedAtUtc { get; set; }
+    public DateTime? CompletedAtUtc { get; set; }
+
+    public static ScreeningResultResponse FromEntity(ScreeningResult e) => new()
+    {
+        Id = e.Id,
+        ApplicationId = e.ApplicationId,
+        Status = e.Status.ToString(),
+        CreditScoreBand = e.CreditScoreBand,
+        HasCriminalRecord = e.HasCriminalRecord,
+        HasEvictionRecord = e.HasEvictionRecord,
+        Recommendation = e.Recommendation?.ToString(),
+        ProviderReference = e.ProviderReference,
+        RequestedAtUtc = e.RequestedAtUtc,
+        CompletedAtUtc = e.CompletedAtUtc,
+    };
+}
+
+/// <summary>Body for <c>POST /api/v1/applications/{id}/adverse-action</c>.</summary>
+public class GenerateAdverseActionRequest
+{
+    /// <summary>
+    /// Optional override for the principal reason printed on the notice. When omitted, the reason is
+    /// derived from the application's decision reason / screening recommendation.
+    /// </summary>
+    [MaxLength(1000)]
+    public string? Reason { get; set; }
+
+    /// <summary>When true (default), the notice is also enqueued to the applicant's email via the outbox.</summary>
+    public bool SendToApplicant { get; set; } = true;
+}
+
+/// <summary>Result of generating an FCRA adverse-action notice.</summary>
+public class AdverseActionNoticeResponse
+{
+    public int Id { get; set; }
+    public int ApplicationId { get; set; }
+    public string Reason { get; set; } = string.Empty;
+    public string CreditReportingAgency { get; set; } = string.Empty;
+    public DateTime GeneratedAtUtc { get; set; }
+    public int? StoredFileId { get; set; }
+    public DateTime? SentAtUtc { get; set; }
+
+    public static AdverseActionNoticeResponse FromEntity(AdverseActionNotice e) => new()
+    {
+        Id = e.Id,
+        ApplicationId = e.ApplicationId,
+        Reason = e.Reason,
+        CreditReportingAgency = e.CreditReportingAgency,
+        GeneratedAtUtc = e.GeneratedAtUtc,
+        StoredFileId = e.StoredFileId,
+        SentAtUtc = e.SentAtUtc,
+    };
+}

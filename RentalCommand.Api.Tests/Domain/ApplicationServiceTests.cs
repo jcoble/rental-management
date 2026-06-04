@@ -259,6 +259,7 @@ internal sealed class ApplicationTestDbContext : RentalCommandDbContext
 
         // jsonb is not understood by SQLite — remap those columns to plain text.
         modelBuilder.Entity<RentalApplication>().Property(e => e.IdExtractedFields).HasColumnType("TEXT");
+        modelBuilder.Entity<ScreeningResult>().Property(e => e.RawResultJson).HasColumnType("TEXT");
         modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
         modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");
         modelBuilder.Entity<AuditLog>().Property(e => e.NewValues).HasColumnType("TEXT");

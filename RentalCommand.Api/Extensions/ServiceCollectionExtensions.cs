@@ -71,6 +71,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISmsInboundVendorDoneService, SmsInboundVendorDoneService>();
         services.AddScoped<ISmsInboundRouter, SmsInboundRouter>();
         services.AddScoped<IApplicationService, ApplicationService>();
+        // Tenant screening (FCRA): request screening, read results, generate the adverse-action notice.
+        services.AddScoped<IScreeningService, ScreeningService>();
+        // Adverse-action notice PDF rendering (QuestPDF). Stateless → singleton.
+        services.AddSingleton<IAdverseActionNoticePdfGenerator, AdverseActionNoticePdfGenerator>();
         services.AddScoped<RentalCommand.Api.Services.Security.ISmsWebhookSignatureValidator,
             RentalCommand.Api.Services.Security.SmsWebhookSignatureValidator>();
 
