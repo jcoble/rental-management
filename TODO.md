@@ -639,6 +639,11 @@ Plan:
   public anonymous /docs site (sidebar + search + markdown articles, SSR); in-app Help; chatbot
   routes how-to questions to grounded doc answers with citations. Api tests 219/219.
 
+### Wave 6 — Sandbox mode merged in PR #88 (main `7247863`)
+- **#11** Portfolio.IsSandbox (migration AddPortfolioSandbox); new signups start in a seeded Sandbox;
+  one-way Go Live wipes demo → Live; ISandboxGuard suppresses outbound (email/SMS/Stripe/e-sign)
+  while sandbox; amber banner + Go Live confirm dialog + Settings card. Api 231/231, Engine 23/23.
+
 ### Decisions LOCKED (spec: Docs/superpowers/specs/2026-06-04-remaining-features-decisions.md)
 Bank reconciliation = ALWAYS one-tap confirm · Docs/KB = simple retrieval · Sandbox =
 graduate-once→wipe · E-sign = build native (defer module #26). Implementing in this order:
