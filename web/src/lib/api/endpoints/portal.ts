@@ -1,5 +1,5 @@
 import { api } from '../client';
-import type { Lease, Payment, WorkOrder, WorkOrderDetail } from '$lib/types';
+import type { Lease, LeaseQuestionResponse, Payment, WorkOrder, WorkOrderDetail } from '$lib/types';
 import type {
 	Conversation,
 	ConversationMessage,
@@ -45,6 +45,16 @@ export interface AutopayStatus {
 export const portal = {
 	overview: () => api.get('/portal/overview'),
 	leases: () => api.get<Lease[]>('/portal/leases'),
+	/**
+	 * Ask a plain-English question grounded in the tenant's OWN lease. Omit `leaseId` to use the
+	 * tenant's most relevant lease. Scoped server-side to the signed-in tenant; 404 if they have no
+	 * lease (or the lease isn't theirs).
+	 */
+	askLease: (question: string, leaseId?: number) =>
+		api.post<LeaseQuestionResponse>(
+			`/portal/lease/ask${leaseId != null ? `?leaseId=${leaseId}` : ''}`,
+			{ question }
+		),
 	balance: () => api.get('/portal/balance'),
 	payments: () => api.get<Payment[]>('/portal/payments'),
 	workOrders: () => api.get<WorkOrder[]>('/portal/work-orders'),

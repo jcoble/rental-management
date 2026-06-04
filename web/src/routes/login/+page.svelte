@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
-	import { Building } from '@lucide/svelte';
+	import { Building, Loader2 } from '@lucide/svelte';
 	import type { ActionData, PageData } from './$types';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import * as Card from '$lib/components/ui/card';
+	import AuthBrandPanel from '$lib/components/auth/AuthBrandPanel.svelte';
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let submitting = $state(false);
@@ -34,14 +34,25 @@
 	<title>Sign in - Rental Command</title>
 </svelte:head>
 
-<div class="auth-page-wrap">
-	<Card.Root class="w-full max-w-md shadow-xl">
-		<Card.Content class="p-6">
-			<div class="mb-5 flex items-center gap-2">
-				<Building class="h-6 w-6 text-primary" />
-				<h1 class="text-xl font-bold text-foreground">Rental Command</h1>
+<div class="grid h-dvh w-full grid-cols-1 overflow-y-auto bg-background lg:grid-cols-2">
+	<AuthBrandPanel />
+
+	<div class="flex items-center justify-center p-6 sm:p-10">
+		<div class="w-full max-w-sm">
+			<!-- Compact brand for narrow screens (the split panel is hidden there) -->
+			<div class="mb-8 flex items-center gap-2 lg:hidden">
+				<span
+					class="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
+				>
+					<Building class="h-5 w-5" />
+				</span>
+				<span class="text-lg font-semibold tracking-tight text-foreground">Rental Command</span>
 			</div>
-			<p class="mb-4 text-sm text-muted-foreground">Sign in to your account.</p>
+
+			<div class="mb-6">
+				<h1 class="text-2xl font-semibold tracking-tight text-foreground">Welcome back</h1>
+				<p class="mt-1 text-sm text-muted-foreground">Sign in to your account to continue.</p>
+			</div>
 
 			<form
 				method="POST"
@@ -53,14 +64,14 @@
 						submitting = false;
 					};
 				}}
-				class="space-y-3"
+				class="space-y-4"
 			>
 				{#if data.redirectTo}
 					<input type="hidden" name="redirectTo" value={data.redirectTo} />
 				{/if}
 
 				<div>
-					<label for="login-email" class="mb-1 block text-xs text-muted-foreground">Email</label>
+					<label for="login-email" class="mb-1.5 block text-sm font-medium text-foreground">Email</label>
 					<Input
 						id="login-email"
 						name="email"
@@ -70,15 +81,16 @@
 						bind:value={email}
 						required
 						placeholder="you@example.com"
+						class="h-11"
 					/>
 				</div>
 
 				<div>
-					<div class="mb-1 flex items-center justify-between">
-						<label for="login-password" class="block text-xs text-muted-foreground">Password</label>
+					<div class="mb-1.5 flex items-center justify-between">
+						<label for="login-password" class="block text-sm font-medium text-foreground">Password</label>
 						<a
 							href="/forgot-password"
-							class="text-xs text-primary underline-offset-4 hover:underline"
+							class="text-xs font-medium text-primary underline-offset-4 hover:underline"
 							data-testid="login-forgot-password-link"
 						>
 							Forgot password?
@@ -93,36 +105,31 @@
 						bind:value={password}
 						required
 						placeholder="••••••••"
+						class="h-11"
 					/>
 				</div>
 
-				<Button
-					type="submit"
-					data-testid="login-submit"
-					disabled={submitting}
-					class="w-full"
-				>
-					{submitting ? 'Signing in…' : 'Sign In'}
+				{#if form?.error}
+					<div
+						class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+						role="alert"
+						data-testid="login-error"
+					>
+						{form.error}
+					</div>
+				{/if}
+
+				<Button type="submit" data-testid="login-submit" disabled={submitting} class="h-11 w-full">
+					{#if submitting}
+						<Loader2 class="h-4 w-4 animate-spin" />
+						Signing in…
+					{:else}
+						Sign In
+					{/if}
 				</Button>
 
-				{#if isDev}
-					<Button
-						type="button"
-						variant="outline"
-						data-testid="login-fill-dev"
-						onclick={fillDevCredentials}
-						class="w-full border-dashed text-xs text-muted-foreground hover:text-muted-foreground"
-					>
-						Fill dev login (admin)
-					</Button>
-				{/if}
-
-				{#if form?.error}
-					<p class="text-sm text-destructive" role="alert" data-testid="login-error">{form.error}</p>
-				{/if}
-
 				{#if data.googleError}
-					<p class="text-sm text-muted-foreground" role="alert" data-testid="login-google-error">
+					<p class="text-center text-xs text-muted-foreground" role="alert" data-testid="login-google-error">
 						Google Sign-In is not available right now.
 					</p>
 				{/if}
@@ -130,17 +137,12 @@
 				{#if googleEnabled}
 					<div class="relative flex items-center py-1">
 						<div class="flex-grow border-t border-border"></div>
-						<span class="mx-2 flex-shrink text-xs text-muted-foreground">or</span>
+						<span class="mx-3 flex-shrink text-xs text-muted-foreground">or continue with</span>
 						<div class="flex-grow border-t border-border"></div>
 					</div>
 
-					<Button
-						href="/auth/google"
-						variant="outline"
-						data-testid="login-google-button"
-						class="w-full"
-					>
-						<svg class="mr-2 h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+					<a href="/auth/google" class="auth-google-button h-11" data-testid="login-google-button">
+						<svg class="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
 							<path
 								d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
 								fill="#4285F4"
@@ -159,14 +161,26 @@
 							/>
 						</svg>
 						Sign in with Google
+					</a>
+				{/if}
+
+				{#if isDev}
+					<Button
+						type="button"
+						variant="outline"
+						data-testid="login-fill-dev"
+						onclick={fillDevCredentials}
+						class="w-full border-dashed text-xs text-muted-foreground hover:text-muted-foreground"
+					>
+						Fill dev login (admin)
 					</Button>
 				{/if}
 
-				<p class="text-center text-xs text-muted-foreground">
+				<p class="text-center text-sm text-muted-foreground">
 					Don't have an account?
-					<a href="/register" class="text-primary underline-offset-4 hover:underline">Create one</a>
+					<a href="/register" class="font-medium text-primary underline-offset-4 hover:underline">Create one</a>
 				</p>
 			</form>
-		</Card.Content>
-	</Card.Root>
+		</div>
+	</div>
 </div>

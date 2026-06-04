@@ -6,13 +6,25 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
+	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
-	import { AlertTriangle, CheckCircle2, FileText, RefreshCw, Send, ShieldCheck, Trash2 } from '@lucide/svelte';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import { AlertTriangle, CheckCircle2, FileText, Mail, MessageSquare, MonitorSmartphone, RefreshCw, Send, ShieldCheck, Trash2 } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 
 	let statusFilter = $state('Draft');
+	const statusFilterOptions = [
+		{ value: 'Draft', label: 'Draft' },
+		{ value: 'Approved', label: 'Approved' },
+		{ value: 'Dismissed', label: 'Dismissed' },
+		{ value: '', label: 'All' }
+	];
+	const statusFilterLabel = $derived(
+		statusFilterOptions.find((o) => o.value === statusFilter)?.label ?? 'All'
+	);
 	let editingId = $state<number | null>(null);
 	let editSubject = $state('');
 	let editBody = $state('');
@@ -138,6 +150,17 @@
 		}
 	}
 
+	// A subtle left-edge accent + icon tint per notice meaning: renewals read
+	// positive (blue), late rent reads urgent (red), move-out reads warning (amber).
+	function noticeAccent(type: string) {
+		switch (type) {
+			case 'RenewalOffer': return { bar: 'bg-primary', icon: 'text-primary' };
+			case 'LateRentNotice': return { bar: 'bg-destructive', icon: 'text-destructive' };
+			case 'MoveOutReminder': return { bar: 'bg-warning', icon: 'text-warning' };
+			default: return { bar: 'bg-muted-foreground/40', icon: 'text-muted-foreground' };
+		}
+	}
+
 	function date(value: string) {
 		return new Date(value).toLocaleDateString();
 	}
@@ -159,12 +182,16 @@
 			</p>
 		</div>
 		<div class="flex flex-wrap items-center gap-2">
-			<select class="h-9 rounded-md border border-input bg-background px-3 text-sm" bind:value={statusFilter}>
-				<option value="Draft">Draft</option>
-				<option value="Approved">Approved</option>
-				<option value="Dismissed">Dismissed</option>
-				<option value="">All</option>
-			</select>
+			<Select.Root type="single" bind:value={statusFilter}>
+				<Select.Trigger class="w-36" data-testid="notice-status-filter">
+					{statusFilterLabel}
+				</Select.Trigger>
+				<Select.Content>
+					{#each statusFilterOptions as option}
+						<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
 			<Button onclick={() => generateMutation.mutate()} disabled={generateMutation.isPending} data-testid="generate-notices">
 				<RefreshCw class="mr-1.5 h-4 w-4" />
 				{generateMutation.isPending ? 'Generating...' : 'Generate drafts'}
@@ -185,19 +212,26 @@
 	{:else}
 		<div class="grid gap-4" data-testid="notice-draft-list">
 			{#each drafts as draft (draft.id)}
-				<Card.Root class="gap-0 py-0" data-testid="notice-draft-{draft.id}">
-					<Card.Header class="border-b border-border px-4 py-3">
+				{@const accent = noticeAccent(draft.noticeType)}
+				<Card.Root class="relative gap-0 overflow-hidden py-0" data-testid="notice-draft-{draft.id}">
+					<span class="absolute inset-y-0 left-0 w-1 {accent.bar}" aria-hidden="true"></span>
+					<Card.Header class="border-b border-border px-5 py-4">
 						<div class="flex flex-wrap items-start justify-between gap-3">
-							<div>
-								<Card.Title class="text-base">{noticeLabel(draft.noticeType)} - {draft.tenantName}</Card.Title>
-								<Card.Description>
-									{draft.propertyName ?? 'Property'}{draft.unitNumber ? ` / Unit ${draft.unitNumber}` : ''} / {draft.reason}
-								</Card.Description>
+							<div class="min-w-0">
+								<div class="flex items-center gap-2">
+									<FileText class="h-4 w-4 shrink-0 {accent.icon}" />
+									<h3 class="text-lg font-semibold leading-tight" data-testid="notice-draft-title">
+										{noticeLabel(draft.noticeType)} · {draft.tenantName}
+									</h3>
+								</div>
+								<p class="mt-1 text-xs text-muted-foreground">
+									{draft.propertyName ?? 'Property'}{draft.unitNumber ? ` · Unit ${draft.unitNumber}` : ''} · {draft.reason}
+								</p>
 							</div>
-							<span class="rounded-full bg-muted px-2 py-1 text-xs font-medium">{draft.status}</span>
+							<StatusBadge status={draft.status} />
 						</div>
 					</Card.Header>
-					<Card.Content class="space-y-4 p-4">
+					<Card.Content class="space-y-4 p-5">
 						{#if editingId === draft.id}
 							<div class="space-y-3">
 								<input class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" bind:value={editSubject} data-testid="notice-edit-subject" />
@@ -252,27 +286,34 @@
 							</div>
 						{:else}
 							<div>
-								<p class="text-sm font-medium">{draft.subject}</p>
-								<p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{draft.body}</p>
-								<p class="mt-3 text-xs text-muted-foreground">Trigger date: {date(draft.triggerDate)}</p>
+								<p class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Subject</p>
+								<p class="mt-0.5 text-base font-semibold leading-snug text-foreground">{draft.subject}</p>
+								<p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{draft.body}</p>
+								<p class="mt-3 text-xs text-muted-foreground/70">Triggered {date(draft.triggerDate)}</p>
 							</div>
 						{/if}
 
 						{#if draft.status === 'Draft'}
-							<div class="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
-								<div class="flex flex-wrap items-center gap-3 text-sm">
-									<label class="flex items-center gap-1.5">
-										<input type="checkbox" checked={approveChannels[draft.id]?.portal ?? true} onchange={(e) => setChannel(draft.id, 'portal', e.currentTarget.checked)} />
-										Portal
-									</label>
-									<label class="flex items-center gap-1.5">
-										<input type="checkbox" checked={approveChannels[draft.id]?.email ?? true} onchange={(e) => setChannel(draft.id, 'email', e.currentTarget.checked)} />
-										Email
-									</label>
-									<label class="flex items-center gap-1.5">
-										<input type="checkbox" checked={approveChannels[draft.id]?.sms ?? true} onchange={(e) => setChannel(draft.id, 'sms', e.currentTarget.checked)} />
-										SMS
-									</label>
+							<div class="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+								<div class="rounded-lg border border-border bg-muted/30 px-3 py-2">
+									<p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Send via</p>
+									<div class="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
+										<label class="flex cursor-pointer items-center gap-1.5">
+											<Checkbox checked={approveChannels[draft.id]?.portal ?? true} onCheckedChange={(v) => setChannel(draft.id, 'portal', v === true)} />
+											<MonitorSmartphone class="h-3.5 w-3.5 text-muted-foreground" />
+											Portal
+										</label>
+										<label class="flex cursor-pointer items-center gap-1.5">
+											<Checkbox checked={approveChannels[draft.id]?.email ?? true} onCheckedChange={(v) => setChannel(draft.id, 'email', v === true)} />
+											<Mail class="h-3.5 w-3.5 text-muted-foreground" />
+											Email
+										</label>
+										<label class="flex cursor-pointer items-center gap-1.5">
+											<Checkbox checked={approveChannels[draft.id]?.sms ?? true} onCheckedChange={(v) => setChannel(draft.id, 'sms', v === true)} />
+											<MessageSquare class="h-3.5 w-3.5 text-muted-foreground" />
+											SMS
+										</label>
+									</div>
 								</div>
 								<div class="flex flex-wrap gap-2">
 									<Button size="sm" variant="outline" onclick={() => startEdit(draft)}>Edit</Button>

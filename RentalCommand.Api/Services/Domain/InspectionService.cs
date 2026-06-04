@@ -296,6 +296,19 @@ public class InspectionService : IInspectionService
             .OrderBy(it => it.SortOrder).ThenBy(it => it.Id)
             .ToListAsync(ct);
 
+        // A completed inspection must have actually inspected something. Block completing an
+        // inspection with no checklist items, or one where every item is still Pending (nothing
+        // was walked). Guards meaningless "Completed, 0 PASS / 0 FAIL" records that are useless
+        // for move-out disputes and owner reports.
+        if (items.Count == 0)
+        {
+            return (null, "Add a checklist (pick a template) before completing this inspection — a completed inspection must record what was inspected.");
+        }
+        if (items.All(it => it.Result == InspectionItemResult.Pending))
+        {
+            return (null, "Mark at least one checklist item Pass, Fail, or N/A before completing — a completed inspection must record what was inspected.");
+        }
+
         var now = DateTime.UtcNow;
         var createdWorkOrderIds = new List<int>();
 

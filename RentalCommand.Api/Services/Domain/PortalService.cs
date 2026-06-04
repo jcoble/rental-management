@@ -10,10 +10,12 @@ namespace RentalCommand.Api.Services.Domain;
 public class PortalService : IPortalService
 {
     private readonly RentalCommandDbContext _db;
+    private readonly ILeaseQaService _leaseQa;
 
-    public PortalService(RentalCommandDbContext db)
+    public PortalService(RentalCommandDbContext db, ILeaseQaService leaseQa)
     {
         _db = db;
+        _leaseQa = leaseQa;
     }
 
     public async Task<IReadOnlyList<LeaseResponse>> GetLeasesAsync(int portfolioId, int tenantId, CancellationToken ct = default)
@@ -176,6 +178,23 @@ public class PortalService : IPortalService
         await _db.SaveChangesAsync(ct);
 
         return WorkOrderResponse.FromEntity(workOrder);
+    }
+
+    public async Task<LeaseQuestionResponse?> AskLeaseAsync(
+        int portfolioId, int tenantId, int? leaseId, string question, CancellationToken ct = default)
+    {
+        // Resolve to one of THIS tenant's own leases. An explicit leaseId is ownership-checked; a
+        // null one falls back to the tenant's most relevant lease. A lease that isn't the tenant's
+        // (or no lease at all) yields null → the controller maps that to 404, so a tenant can never
+        // ask about another tenant's lease. IDOR gate.
+        var resolvedLeaseId = await ResolveOwnedLeaseIdAsync(portfolioId, tenantId, leaseId, ct);
+        if (resolvedLeaseId == null)
+        {
+            return null;
+        }
+
+        // The Q&A service is portfolio-scoped; ownership has already been enforced above.
+        return await _leaseQa.AskAsync(portfolioId, resolvedLeaseId.Value, question, ct);
     }
 
     public async Task<AutopayStatusResponse?> GetAutopayStatusAsync(

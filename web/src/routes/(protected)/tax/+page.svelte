@@ -194,9 +194,9 @@
 					<table class="w-full text-sm" data-testid="vendors-1099-table">
 						<thead>
 							<tr class="border-b border-border">
-								<th class="py-1.5 text-left font-medium text-muted-foreground">Vendor</th>
-								<th class="py-1.5 text-right font-medium text-muted-foreground">Paid</th>
-								<th class="py-1.5 text-left font-medium text-muted-foreground">W-9</th>
+								<th class="py-1.5 pr-4 text-left font-medium text-muted-foreground">Vendor</th>
+								<th class="py-1.5 pr-6 text-right font-medium text-muted-foreground">Paid</th>
+								<th class="py-1.5 pr-4 text-left font-medium text-muted-foreground">W-9</th>
 								<th class="py-1.5 text-right font-medium text-muted-foreground">Action</th>
 							</tr>
 						</thead>
@@ -206,7 +206,7 @@
 									class="border-b border-border/50 last:border-0 {v.needsW9 ? 'bg-amber-50/60 dark:bg-amber-900/10' : ''}"
 									data-testid="vendor-1099-row-{v.vendorId}"
 								>
-									<td class="py-2">
+									<td class="py-2 pr-4">
 										<a
 											href="/owners/vendors/{v.vendorId}"
 											class="font-medium text-primary hover:underline"
@@ -215,12 +215,22 @@
 											{v.vendorName}
 										</a>
 									</td>
-									<td class="py-2 text-right tabular-nums">{money(v.totalPaid)}</td>
-									<td class="py-2">
+									<td class="py-2 pr-6 text-right tabular-nums">{money(v.totalPaid)}</td>
+									<td class="py-2 pr-4">
 										{#if v.w9OnFile}
-											<span class="text-green-600" data-testid="vendor-1099-w9-{v.vendorId}">On file</span>
+											<span
+												class="inline-flex items-center rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400"
+												data-testid="vendor-1099-w9-{v.vendorId}"
+											>
+												On file
+											</span>
 										{:else}
-											<span class="font-medium text-amber-700 dark:text-amber-500" data-testid="vendor-1099-w9-{v.vendorId}">Missing</span>
+											<span
+												class="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-400"
+												data-testid="vendor-1099-w9-{v.vendorId}"
+											>
+												Missing
+											</span>
 										{/if}
 									</td>
 									<td class="py-2 text-right">

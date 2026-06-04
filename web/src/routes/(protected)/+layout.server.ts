@@ -9,6 +9,11 @@ import type { LayoutServerLoad } from './$types';
 
 export const load: LayoutServerLoad = async ({ locals, url }) => {
 	if (!locals.user) {
+		// An unauthenticated visitor to the bare root sees the public marketing
+		// landing page rather than being bounced straight to the login form.
+		if (url.pathname === '/') {
+			throw redirect(303, '/welcome');
+		}
 		const redirectTo = url.pathname + url.search;
 		throw redirect(303, `/login?redirectTo=${encodeURIComponent(redirectTo)}`);
 	}

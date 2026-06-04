@@ -422,6 +422,26 @@
 		return val.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 	}
 
+	// A draft that was already confirmed in a PRIOR session (status Confirmed, no fresh in-session
+	// confirmedRecord, and not a Lease — leases navigate away on confirm). For these we show a
+	// prominent "view the created record" card instead of leaving a disabled Confirm button as the
+	// only signpost. Only show when we actually know what record to link to.
+	const alreadyConfirmed = $derived(
+		data?.status === 'Confirmed' && !confirmedRecord && !isLease && !!data?.createdEntityId
+	);
+
+	// Friendly label for the created record's type (drives the "View/Edit the Payment" button).
+	const createdTypeLabel = $derived.by(() => {
+		const type = confirmedRecord?.type ?? data?.createdEntityType;
+		switch (type) {
+			case 'Payment': return 'Payment';
+			case 'WorkOrder': return 'Work Order';
+			case 'Lease': return 'Lease';
+			case 'Expense': return 'Expense';
+			default: return 'Record';
+		}
+	});
+
 	// Confirm mutation
 	const confirmMutation = createMutation(() => ({
 		mutationFn: () => {
@@ -610,6 +630,28 @@
 				</div>
 				<div class="flex shrink-0 gap-2">
 					<Button size="sm" href={linkedRecordHref} data-testid="scan-view-record">View/Edit Record</Button>
+					<Button size="sm" variant="outline" href="/scan">Scan another</Button>
+				</div>
+			</div>
+		{:else if alreadyConfirmed}
+			<!-- design#16: a draft confirmed in a prior session is terminal. Front-and-center the link
+			     to the created (editable) record instead of leaving a disabled Confirm button as the
+			     only signpost. The draft stays an immutable, read-only summary below. -->
+			<div
+				class="mb-4 flex flex-col gap-3 rounded-lg border border-green-300 bg-green-50 px-4 py-4 text-sm text-green-900 dark:border-green-700 dark:bg-green-900/20 dark:text-green-200 sm:flex-row sm:items-center sm:justify-between"
+				data-testid="scan-already-confirmed"
+			>
+				<div class="flex items-center gap-3">
+					<span class="text-2xl leading-none">✓</span>
+					<div>
+						<p class="font-semibold">This scan was confirmed</p>
+						<p class="text-xs opacity-80">
+							It created a {createdTypeLabel}. This capture is read-only — make any edits on the record itself so your books stay the source of truth.
+						</p>
+					</div>
+				</div>
+				<div class="flex shrink-0 gap-2">
+					<Button size="sm" href={linkedRecordHref} data-testid="scan-view-record">View/Edit {createdTypeLabel}</Button>
 					<Button size="sm" variant="outline" href="/scan">Scan another</Button>
 				</div>
 			</div>
@@ -1073,10 +1115,10 @@
 						{#if data.status === 'Failed' && !isTerminal}
 							<p class="text-center text-xs text-muted-foreground">Couldn't read this document — enter the amount manually, or reject it.</p>
 						{/if}
-						{#if data.status === 'Confirmed' && !confirmedRecord}
+						{#if data.status === 'Confirmed' && !confirmedRecord && !alreadyConfirmed}
+							<!-- Confirmed but we don't know which record to link to (no createdEntityId) — note only. -->
 							<p class="text-center text-xs text-green-600 dark:text-green-400">
 								This scan has already been confirmed.
-								<a href={linkedRecordHref} class="underline underline-offset-2">View/edit the created record.</a>
 							</p>
 						{/if}
 						{#if data.status === 'Rejected'}

@@ -24,12 +24,20 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
+	import * as Tabs from '$lib/components/ui/tabs';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	// Landing on the day-to-day Ledger view; Reports and Overview are secondary.
+	let activeTab = $state('ledger');
+	const accountingTabs = [
+		{ value: 'ledger', label: 'Ledger' },
+		{ value: 'reports', label: 'Reports' },
+		{ value: 'overview', label: 'Overview' },
+	];
 	const PAGE_SIZE = 20;
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
@@ -505,82 +513,65 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="accounting-page">
-	<div class="mb-4">
+	<div class="mb-5">
 		<h1 class="text-2xl font-bold">Accounting</h1>
 		<p class="text-sm text-muted-foreground">Rent ledger, receivables, expenses, and owner-facing books.</p>
 	</div>
 
-	<div class="mb-5 grid gap-4 md:grid-cols-4">
-		<Card.Root class="gap-0 py-0" data-testid="accounting-collected">
+	<!-- Compact KPI strip — always visible across tabs so the headline numbers are one glance away. -->
+	<div class="mb-5 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
+		<Card.Root class="gap-0 border-success/30 bg-success/5 py-0" data-testid="accounting-collected">
 			<Card.Content class="p-4">
-				<p class="text-xs text-muted-foreground">Collected</p>
+				<p class="text-xs font-medium text-muted-foreground">Collected</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
 				{:else}
-					<p class="text-2xl font-bold font-mono tabular-nums">{money(summary?.payments.collected || 0)}</p>
+					<p class="font-mono text-2xl font-bold tabular-nums text-success">{money(summary?.payments.collected || 0)}</p>
 				{/if}
 			</Card.Content>
 		</Card.Root>
 		<Card.Root class="gap-0 py-0" data-testid="accounting-outstanding">
 			<Card.Content class="p-4">
-				<p class="text-xs text-muted-foreground">Outstanding</p>
+				<p class="text-xs font-medium text-muted-foreground">Outstanding</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
 				{:else}
-					<p class="text-2xl font-bold font-mono tabular-nums">{money(summary?.payments.outstanding || 0)}</p>
+					<p class="font-mono text-2xl font-bold tabular-nums">{money(summary?.payments.outstanding || 0)}</p>
 				{/if}
 			</Card.Content>
 		</Card.Root>
-		<Card.Root class="gap-0 py-0" data-testid="accounting-overdue">
+		<Card.Root class="gap-0 border-destructive/30 bg-destructive/5 py-0" data-testid="accounting-overdue">
 			<Card.Content class="p-4">
-				<p class="text-xs text-muted-foreground">Overdue</p>
+				<p class="text-xs font-medium text-muted-foreground">Overdue</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
 				{:else}
-					<p class="text-2xl font-bold font-mono tabular-nums">{money(summary?.payments.overdue || 0)}</p>
+					<p class="font-mono text-2xl font-bold tabular-nums {(summary?.payments.overdue || 0) > 0 ? 'text-destructive' : ''}">{money(summary?.payments.overdue || 0)}</p>
 				{/if}
 			</Card.Content>
 		</Card.Root>
 		<Card.Root class="gap-0 py-0" data-testid="accounting-expenses">
 			<Card.Content class="p-4">
-				<p class="text-xs text-muted-foreground">Expenses</p>
+				<p class="text-xs font-medium text-muted-foreground">Expenses</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
 				{:else}
-					<p class="text-2xl font-bold font-mono tabular-nums">{money(summary?.totalExpenses || 0)}</p>
+					<p class="font-mono text-2xl font-bold tabular-nums text-amber-500">{money(summary?.totalExpenses || 0)}</p>
 				{/if}
 			</Card.Content>
 		</Card.Root>
 	</div>
 
-	<Card.Root class="mb-6 gap-0 py-0" data-testid="accounting-money-snapshot">
-		<Card.Header class="px-4 pt-4 pb-2">
-			<Card.Title class="text-base">Money Snapshot</Card.Title>
-			<Card.Description>Plain-English accounting summary for this portfolio.</Card.Description>
-		</Card.Header>
-		<Card.Content class="px-4 pb-4 pt-0">
-			{#if accountingSummaryQuery.isLoading}
-				<div class="space-y-2">
-					<div class="h-5 w-64 animate-pulse rounded bg-muted"></div>
-					<div class="h-4 w-full max-w-2xl animate-pulse rounded bg-muted"></div>
-				</div>
-			{:else if summary?.snapshot}
-				<p class="font-medium">{summary.snapshot.title}</p>
-				<p class="mt-1 text-sm text-muted-foreground">{summary.snapshot.summary}</p>
-				<div class="mt-3 grid gap-2 md:grid-cols-2">
-					{#each summary.snapshot.bullets as bullet}
-						<div class="rounded-md border border-border bg-background px-3 py-2 text-sm text-muted-foreground">
-							{bullet}
-						</div>
-					{/each}
-				</div>
-			{:else}
-				<p class="text-sm text-muted-foreground">No money snapshot is available yet.</p>
-			{/if}
-		</Card.Content>
-	</Card.Root>
+	<Tabs.Root bind:value={activeTab} class="w-full">
+		<Tabs.List class="mb-5" data-testid="accounting-tabs">
+			{#each accountingTabs as t}
+				<Tabs.Trigger value={t.value} data-testid="accounting-tab-{t.value}">{t.label}</Tabs.Trigger>
+			{/each}
+		</Tabs.List>
 
-	<div class="mb-6" data-testid="accounting-reports">
+		<!-- ───────────────────────── REPORTS ───────────────────────── -->
+		<Tabs.Content value="reports">
+		<div data-testid="accounting-reports">
 		<div class="mb-3 flex items-center justify-between">
 			<div>
 				<h2 class="text-lg font-semibold">Reports</h2>
@@ -613,8 +604,8 @@
 			<Card.Root class="gap-0 py-0">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Net cash flow</p>
-					<p class="text-2xl font-bold font-mono tabular-nums">{money(reports?.netCashFlow || 0)}</p>
-					<p class="mt-1 text-xs text-muted-foreground">Income {money(reports?.totalIncome || 0)} / expenses {money(reports?.totalExpenses || 0)}</p>
+					<p class="font-mono text-2xl font-bold tabular-nums {(reports?.netCashFlow || 0) < 0 ? 'text-destructive' : (reports?.netCashFlow || 0) > 0 ? 'text-success' : ''}">{money(reports?.netCashFlow || 0)}</p>
+					<p class="mt-1 text-xs text-muted-foreground"><span class="text-success">{money(reports?.totalIncome || 0)}</span> income / <span class="text-amber-500">{money(reports?.totalExpenses || 0)}</span> expenses</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="gap-0 py-0">
@@ -634,7 +625,7 @@
 			<Card.Root class="gap-0 py-0">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">1099 review</p>
-					<p class="text-2xl font-bold font-mono tabular-nums">{vendorReviewCount}</p>
+					<p class="font-mono text-2xl font-bold tabular-nums {vendorReviewCount > 0 ? 'text-warning' : ''}">{vendorReviewCount}</p>
 					<p class="mt-1 text-xs text-muted-foreground">Vendors needing W-9 or review</p>
 				</Card.Content>
 			</Card.Root>
@@ -738,6 +729,10 @@
 		</div>
 	</div>
 
+		</Tabs.Content>
+
+		<!-- ───────────────────────── LEDGER ───────────────────────── -->
+		<Tabs.Content value="ledger">
 	<div>
 		<div class="mb-3 flex flex-wrap items-center justify-between gap-3">
 			<div>
@@ -825,6 +820,39 @@
 			{/snippet}
 		</DataGrid>
 	</div>
+		</Tabs.Content>
+
+		<!-- ───────────────────────── OVERVIEW ───────────────────────── -->
+		<Tabs.Content value="overview">
+			<Card.Root class="gap-0 py-0" data-testid="accounting-money-snapshot">
+				<Card.Header class="px-5 pb-2 pt-5">
+					<Card.Title class="text-base">Money Snapshot</Card.Title>
+					<Card.Description>Plain-English accounting summary for this portfolio.</Card.Description>
+				</Card.Header>
+				<Card.Content class="px-5 pb-5 pt-0">
+					{#if accountingSummaryQuery.isLoading}
+						<div class="space-y-2">
+							<div class="h-5 w-64 animate-pulse rounded bg-muted"></div>
+							<div class="h-4 w-full max-w-2xl animate-pulse rounded bg-muted"></div>
+						</div>
+					{:else if summary?.snapshot}
+						<p class="text-base font-semibold">{summary.snapshot.title}</p>
+						<p class="mt-1 text-sm text-muted-foreground">{summary.snapshot.summary}</p>
+						<div class="mt-3 grid gap-2 md:grid-cols-2">
+							{#each summary.snapshot.bullets as bullet}
+								<div class="flex items-start gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+									<span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary"></span>
+									<span>{bullet}</span>
+								</div>
+							{/each}
+						</div>
+					{:else}
+						<p class="text-sm text-muted-foreground">No money snapshot is available yet.</p>
+					{/if}
+				</Card.Content>
+			</Card.Root>
+		</Tabs.Content>
+	</Tabs.Root>
 </div>
 
 <Dialog.Root

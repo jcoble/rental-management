@@ -1,11 +1,54 @@
 <script lang="ts">
-	import { createQuery } from '@tanstack/svelte-query';
+	import { createMutation, createQuery } from '@tanstack/svelte-query';
 	import { portal } from '$lib/api/endpoints/portal';
-	import { FileText } from '@lucide/svelte';
+	import { FileText, MessageCircleQuestionMark } from '@lucide/svelte';
+	import * as Card from '$lib/components/ui/card';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 
 	const leasesQuery = createQuery(() => ({ queryKey: ['portal-lease-page'], queryFn: () => portal.leases() }));
+
+	// The lease the Q&A is grounded in. Portal leases come back newest-first, so the first one is
+	// the tenant's most relevant lease — the same lease the server falls back to when no id is sent.
+	const primaryLease = $derived(leasesQuery.data?.[0]);
+
 	function money(value: number | string | null | undefined) {
 		return Number(value ?? 0).toLocaleString(undefined, { style: 'currency', currency: 'USD' });
+	}
+
+	// --- "Ask This Lease" Q&A (grounded in the tenant's own lease) ---
+	let leaseQuestion = $state('');
+	let leaseAnswer = $state('');
+	let leaseAnswerSources = $state<string[]>([]);
+
+	const askLeaseMutation = createMutation(() => ({
+		mutationFn: (question: string) => portal.askLease(question, primaryLease?.id),
+		onSuccess: (res) => {
+			leaseAnswer = res.answer;
+			leaseAnswerSources = res.sources ?? [];
+		},
+		onError: () => {
+			leaseAnswer = 'Sorry, we could not answer that right now. Please try again or message your landlord.';
+			leaseAnswerSources = [];
+		}
+	}));
+
+	function askLease() {
+		const q = leaseQuestion.trim();
+		if (!q || askLeaseMutation.isPending) return;
+		askLeaseMutation.mutate(q);
+	}
+
+	const SUGGESTIONS = [
+		'Can I have a pet?',
+		'When is rent due?',
+		"What's the late fee?",
+		'How much is my security deposit?'
+	];
+
+	function askSuggestion(q: string) {
+		leaseQuestion = q;
+		askLease();
 	}
 </script>
 
@@ -24,4 +67,70 @@
 			<p class="text-sm text-muted-foreground">No lease is linked to this account.</p>
 		{/each}
 	</div>
+
+	{#if primaryLease}
+		<!-- Ask This Lease: self-serve answers grounded in the tenant's own lease -->
+		<Card.Root class="mt-6" data-testid="portal-lease-qa-card">
+			<Card.Header>
+				<Card.Title class="flex items-center gap-2 text-base">
+					<MessageCircleQuestionMark class="h-5 w-5 text-primary" />
+					Ask this lease
+				</Card.Title>
+				<Card.Description>
+					Get quick answers about your lease — rent, dates, deposit, late fee, and more. Answers are
+					based on your stored lease details.
+				</Card.Description>
+			</Card.Header>
+			<Card.Content class="space-y-3">
+				<div class="flex flex-col gap-2 sm:flex-row">
+					<Input
+						data-testid="portal-lease-question-input"
+						bind:value={leaseQuestion}
+						placeholder="Can I have a pet? When is rent due?"
+						onkeydown={(e) => { if (e.key === 'Enter') askLease(); }}
+					/>
+					<Button
+						data-testid="portal-lease-question-submit"
+						onclick={askLease}
+						disabled={askLeaseMutation.isPending || !leaseQuestion.trim()}
+					>
+						{askLeaseMutation.isPending ? 'Answering…' : 'Ask'}
+					</Button>
+				</div>
+
+				<div class="flex flex-wrap gap-2" data-testid="portal-lease-suggestions">
+					{#each SUGGESTIONS as s}
+						<button
+							type="button"
+							onclick={() => askSuggestion(s)}
+							disabled={askLeaseMutation.isPending}
+							class="rounded-full border border-border bg-muted/40 px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+						>
+							{s}
+						</button>
+					{/each}
+				</div>
+
+				{#if leaseAnswer}
+					<div class="rounded-md border border-border bg-muted/30 p-3" data-testid="portal-lease-question-answer">
+						<p class="text-sm leading-6">{leaseAnswer}</p>
+						{#if leaseAnswerSources.length > 0}
+							<details class="mt-2 text-xs text-muted-foreground">
+								<summary class="cursor-pointer">Lease facts used</summary>
+								<ul class="mt-2 list-disc space-y-1 pl-5">
+									{#each leaseAnswerSources as source}
+										<li>{source}</li>
+									{/each}
+								</ul>
+							</details>
+						{/if}
+					</div>
+				{/if}
+
+				<p class="text-xs text-muted-foreground">
+					This is a quick reference, not legal advice. For anything not covered here, message your landlord.
+				</p>
+			</Card.Content>
+		</Card.Root>
+	{/if}
 </div>
