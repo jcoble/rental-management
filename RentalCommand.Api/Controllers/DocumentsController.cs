@@ -272,6 +272,9 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
             case "inspection":
                 return (true, await _db.Inspections.AnyAsync(
                     e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
+            case "securitydeposit":
+                return (true, await _db.SecurityDepositHoldings.AnyAsync(
+                    e => e.Id == entityId && e.PortfolioId == portfolioId, ct));
             case "ownerentity":
                 return (true, await _db.OwnerEntities.AnyAsync(
                     e => e.Id == entityId && e.PortfolioId == portfolioId, ct));

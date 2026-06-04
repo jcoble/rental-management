@@ -7,10 +7,11 @@
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import StarRating from '$lib/components/shared/StarRating.svelte';
-	import { Star, Mail, Phone } from '@lucide/svelte';
+	import { Star, Mail, Phone, MessageSquare, Pencil } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -67,6 +68,61 @@
 		rateMutation.mutate({ stars: rateStars, comment: rateComment.trim() || undefined });
 	}
 
+	// --- Text W-9 request ---
+	const requestW9Mutation = createMutation(() => ({
+		mutationFn: () => vendors.requestW9(id),
+		onSuccess: (res) => {
+			showSuccess(`W-9 request texted to ${res.sentTo}.`);
+		},
+		// The API returns 400 { error } when the vendor has no phone — surface it.
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	// --- Toggle "W-9 on file" ---
+	const w9ToggleMutation = createMutation(() => ({
+		mutationFn: (value: boolean) => vendors.update(id, { w9OnFile: value }),
+		onSuccess: (_res, value) => {
+			showSuccess(value ? 'Marked W-9 as on file.' : 'Marked W-9 as missing.');
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	function toggleW9() {
+		if (!vendor) return;
+		w9ToggleMutation.mutate(!vendor.w9OnFile);
+	}
+
+	// --- Edit tax info (1099 eligible + Tax ID) ---
+	let showTaxEdit = $state(false);
+	let editIs1099 = $state(true);
+	let editTaxId = $state('');
+
+	function openTaxEdit() {
+		if (!vendor) return;
+		editIs1099 = vendor.is1099Eligible;
+		editTaxId = vendor.taxId ?? '';
+		showTaxEdit = true;
+	}
+	function closeTaxEdit() {
+		showTaxEdit = false;
+	}
+
+	const taxEditMutation = createMutation(() => ({
+		mutationFn: (data: { is1099Eligible: boolean; taxId: string | null }) =>
+			vendors.update(id, data),
+		onSuccess: () => {
+			showSuccess('Tax info saved.');
+			showTaxEdit = false;
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	function saveTaxEdit() {
+		taxEditMutation.mutate({ is1099Eligible: editIs1099, taxId: editTaxId.trim() || null });
+	}
+
 	function fmtHours(h: number | null | undefined): string {
 		if (h == null) return '—';
 		if (h < 1) return `${Math.round(h * 60)} min`;
@@ -114,10 +170,22 @@
 					{/if}
 				</div>
 			</div>
-			<Button variant="outline" size="sm" data-testid="vendor-rate-button" onclick={openRate}>
-				<Star class="h-4 w-4" />
-				Rate vendor
-			</Button>
+			<div class="flex flex-wrap items-center gap-2">
+				<Button
+					variant="outline"
+					size="sm"
+					data-testid="vendor-request-w9-button"
+					onclick={() => requestW9Mutation.mutate()}
+					disabled={requestW9Mutation.isPending}
+				>
+					<MessageSquare class="h-4 w-4" />
+					{requestW9Mutation.isPending ? 'Texting…' : 'Text W-9 request'}
+				</Button>
+				<Button variant="outline" size="sm" data-testid="vendor-rate-button" onclick={openRate}>
+					<Star class="h-4 w-4" />
+					Rate vendor
+				</Button>
+			</div>
 		</div>
 
 		<!-- Scorecard -->
@@ -165,8 +233,17 @@
 
 		<!-- Details -->
 		<Card.Root class="mt-6" data-testid="vendor-detail-card">
-			<Card.Header>
+			<Card.Header class="flex flex-row items-center justify-between space-y-0">
 				<Card.Title>Details</Card.Title>
+				<Button
+					variant="outline"
+					size="sm"
+					data-testid="vendor-edit-tax-button"
+					onclick={openTaxEdit}
+				>
+					<Pencil class="h-3.5 w-3.5" />
+					Edit tax info
+				</Button>
 			</Card.Header>
 			<Card.Content>
 				<div class="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -188,14 +265,24 @@
 					</div>
 					<div>
 						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">W-9 on file</dt>
-						<dd class="mt-1 text-sm" data-testid="vendor-detail-w9">{vendor.w9OnFile ? 'Yes' : 'Missing'}</dd>
+						<dd class="mt-1 flex items-center gap-2 text-sm">
+							<span data-testid="vendor-detail-w9">{vendor.w9OnFile ? 'Yes' : 'Missing'}</span>
+							<Button
+								variant="ghost"
+								size="sm"
+								class="h-6 px-2 text-xs"
+								data-testid="vendor-w9-toggle"
+								onclick={toggleW9}
+								disabled={w9ToggleMutation.isPending}
+							>
+								{vendor.w9OnFile ? 'Mark missing' : 'Mark on file'}
+							</Button>
+						</dd>
 					</div>
-					{#if vendor.taxId}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Tax ID</dt>
-							<dd class="mt-1 font-mono text-sm" data-testid="vendor-detail-taxid">{vendor.taxId}</dd>
-						</div>
-					{/if}
+					<div>
+						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Tax ID</dt>
+						<dd class="mt-1 font-mono text-sm" data-testid="vendor-detail-taxid">{vendor.taxId || '—'}</dd>
+					</div>
 					{#if vendor.notes}
 						<div class="sm:col-span-2 lg:col-span-3">
 							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notes</dt>
@@ -241,6 +328,39 @@
 			</Button>
 			<Button onclick={confirmRate} disabled={rateStars < 1 || rateMutation.isPending} data-testid="vendor-rate-confirm">
 				{rateMutation.isPending ? 'Saving…' : 'Save rating'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- Edit tax info -->
+<Dialog.Root open={showTaxEdit} onOpenChange={(v) => { if (!v) closeTaxEdit(); }}>
+	<Dialog.Content class="max-w-md" data-testid="vendor-tax-dialog">
+		<Dialog.Header>
+			<Dialog.Title>Edit tax info</Dialog.Title>
+			<Dialog.Description>Used for 1099 reporting at year end.</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-3">
+			<label class="flex items-center gap-2 text-sm">
+				<input type="checkbox" bind:checked={editIs1099} data-testid="vendor-tax-1099-input" />
+				1099 eligible
+			</label>
+			<div class="space-y-1.5">
+				<label for="vendor-tax-id" class="text-xs font-medium text-muted-foreground">Tax ID / EIN (optional)</label>
+				<Input
+					id="vendor-tax-id"
+					bind:value={editTaxId}
+					placeholder="e.g. 12-3456789"
+					data-testid="vendor-tax-id-input"
+				/>
+			</div>
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={closeTaxEdit} disabled={taxEditMutation.isPending} data-testid="vendor-tax-cancel">
+				Cancel
+			</Button>
+			<Button onclick={saveTaxEdit} disabled={taxEditMutation.isPending} data-testid="vendor-tax-save">
+				{taxEditMutation.isPending ? 'Saving…' : 'Save'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

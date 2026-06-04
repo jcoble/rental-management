@@ -11,6 +11,8 @@ import 'vendors_models.dart';
 ///   GET    /vendors                         — list (incl. rating summary)
 ///   GET    /vendors/{id}/scorecard          — performance scorecard
 ///   POST   /vendors/{id}/ratings            — record a 1–5 star rating
+///   POST   /vendors/{id}/request-w9         — text the vendor a W-9 request
+///   PATCH  /vendors/{id}                    — update vendor fields (e.g. w9OnFile)
 ///   POST   /work-orders/{id}/dispatch       — text a vendor the job
 class VendorsRepository {
   VendorsRepository(this._dio);
@@ -55,6 +57,31 @@ class VendorsRepository {
           if (trimmed != null && trimmed.isNotEmpty) 'comment': trimmed,
           'workOrderId': ?workOrderId,
         },
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Texts the vendor a request to send back their W-9. Throws [ApiException]
+  /// (400) when the vendor has no phone number on file.
+  Future<W9RequestResult> requestW9(int vendorId) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/vendors/$vendorId/request-w9',
+      );
+      return W9RequestResult.fromJson(response.data ?? const {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Marks whether a signed W-9 is on file for the vendor (PATCH /vendors/{id}).
+  Future<void> setW9OnFile(int vendorId, bool w9OnFile) async {
+    try {
+      await _dio.patch<Map<String, dynamic>>(
+        '/vendors/$vendorId',
+        data: {'w9OnFile': w9OnFile},
       );
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);

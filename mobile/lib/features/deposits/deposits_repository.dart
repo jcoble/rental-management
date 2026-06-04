@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -87,6 +89,7 @@ class SecurityDeposit {
 ///   POST /security-deposits              — create { leaseId, amount?, notes? }
 ///   POST /security-deposits/{id}/deductions { reason, amount, notes? }
 ///   POST /security-deposits/{id}/return  { notes? }
+///   GET  /security-deposits/{id}/move-out-statement — PDF bytes
 ///   GET  /leases                         — for the lease picker
 class DepositsRepository {
   DepositsRepository(this._dio);
@@ -144,6 +147,20 @@ class DepositsRepository {
         data: body,
       );
       return SecurityDeposit.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Fetches the security-deposit move-out statement PDF bytes (authed via the
+  /// shared Dio interceptor).
+  Future<Uint8List> moveOutStatementBytes(int id) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '/security-deposits/$id/move-out-statement',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return Uint8List.fromList(response.data ?? const []);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

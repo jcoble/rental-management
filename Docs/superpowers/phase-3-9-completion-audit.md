@@ -54,9 +54,9 @@ but the landlord cannot use the complete workflow in a logical place.
 | DO- Expense Schedule E categorization | Usable  | Scan and expense forms use Schedule E-style categories. (Verify/polish the workflow.)                                       |
 | DO- Receipt/deposit dedupe            | Partial | Bank transactions now suggest and store matches against payments/expenses. Needs a more explicit duplicate-review queue.        |
 | Year-end export packet | Usable | `GET /accounting/year-end-packet?year=` streams a single **QuestPDF** to hand the accountant: cover, Schedule-E summary (reconciles with the CSV), per-property P&L, monthly cash-flow, and rent roll. Downloadable from the web Tax page and the Flutter Owner Reports screen (year selector, default prior year). Schedule-E CSV/P&L/1099 review already existed. |
-| DO- 1099/W-9 checklist and texts      | Partial | Vendor fields and accounting review exist. Text request flow is not implemented.                                                |
+| 1099/W-9 checklist and texts | Usable | `POST /vendors/{id}/request-w9` texts the vendor a plain-language W-9 request; the 1099 checklist (`accounting/reports.vendors1099`, flags `Is1099Eligible && !W9OnFile`) is surfaced on the web Tax page with a per-vendor text action, and W-9-on-file is togglable on the vendor (web + Flutter). |
 | DO- Ownership/entity modeling UI      | Usable  | Owners/entities pages exist and tie into reports. (Verify/polish the workflow.)                                             |
-| DO- Security deposit tracking         | Partial | Deposits exist. Photo-backed move-out statements are not complete.                                                              |
+| Security deposit tracking | Usable | Deposits + itemized deductions, plus a **photo-backed move-out statement PDF** (`GET /security-deposits/{id}/move-out-statement`): deposit held, itemized deductions, attached photos (entityType=SecurityDeposit), net refund/owed. Downloadable on web deposit detail (with photo attach) + Flutter deposit detail. |
 
 ## Phase 8 - Inspections and Maintenance Mobile
 
