@@ -1,5 +1,5 @@
 import { api } from '../client';
-import type { Lease, Payment, WorkOrder } from '$lib/types';
+import type { Lease, Payment, WorkOrder, WorkOrderDetail } from '$lib/types';
 import type {
 	Conversation,
 	ConversationMessage,
@@ -27,6 +27,8 @@ export const portal = {
 	balance: () => api.get('/portal/balance'),
 	payments: () => api.get<Payment[]>('/portal/payments'),
 	workOrders: () => api.get<WorkOrder[]>('/portal/work-orders'),
+	/** One of the tenant's own work orders plus its status timeline (404 if not theirs). */
+	workOrder: (id: number) => api.get<WorkOrderDetail>(`/portal/work-orders/${id}`),
 	createTenantWorkOrder: (data: Record<string, unknown>) => api.post<WorkOrder>('/portal/tenant/work-orders', data),
 
 	/**

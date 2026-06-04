@@ -48,6 +48,47 @@ class WorkOrdersRepository {
     }
   }
 
+  /// GET /work-orders/{id} — single work order PLUS its status timeline.
+  Future<WorkOrderDetail> getWorkOrderDetail(int id) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>('/work-orders/$id');
+      return WorkOrderDetail.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// GET /documents?entityType=WorkOrder&entityId={id} — attachments for a WO.
+  Future<List<Document>> listWorkOrderDocuments(int workOrderId) async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/documents',
+        queryParameters: {'entityType': 'WorkOrder', 'entityId': workOrderId},
+      );
+      final data = response.data ?? [];
+      return data
+          .whereType<Map<String, dynamic>>()
+          .map(Document.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// GET /documents/{id}/file — raw blob bytes (authenticated via the shared
+  /// Dio interceptor, so this works for the photo strip thumbnails).
+  Future<Uint8List> downloadDocument(int documentId) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '/documents/$documentId/file',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return Uint8List.fromList(response.data ?? const []);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Create body: { propertyId, title, description, priority, category }
   Future<WorkOrder> createWorkOrder(Map<String, dynamic> data) async {
     try {
@@ -97,12 +138,18 @@ class WorkOrdersRepository {
     }
   }
 
-  /// PATCH /work-orders/{id}  body: { status: "..." }
-  Future<WorkOrder> updateStatus(int id, String status) async {
+  /// PATCH /work-orders/{id}  body: { status, statusNote? }
+  ///
+  /// [statusNote] is recorded on the status timeline for this transition.
+  Future<WorkOrder> updateStatus(int id, String status, {String? note}) async {
     try {
+      final trimmed = note?.trim();
       final response = await _dio.patch<Map<String, dynamic>>(
         '/work-orders/$id',
-        data: {'status': status},
+        data: {
+          'status': status,
+          if (trimmed != null && trimmed.isNotEmpty) 'statusNote': trimmed,
+        },
       );
       return WorkOrder.fromJson(response.data!);
     } on DioException catch (e) {
@@ -195,15 +242,15 @@ final workOrdersProvider =
       WorkOrdersNotifier.new,
     );
 
-// ── Single work order ─────────────────────────────────────────────────────────
+// ── Single work order (with status timeline) ──────────────────────────────────
 
-class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrder>> {
+class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrderDetail>> {
   WorkOrderDetailNotifier(this._id);
 
   final int _id;
 
   @override
-  AsyncValue<WorkOrder> build() {
+  AsyncValue<WorkOrderDetail> build() {
     Future.microtask(load);
     return const AsyncValue.loading();
   }
@@ -213,8 +260,8 @@ class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrder>> {
   Future<void> load() async {
     state = const AsyncValue.loading();
     try {
-      final wo = await _repo.getWorkOrder(_id);
-      state = AsyncValue.data(wo);
+      final detail = await _repo.getWorkOrderDetail(_id);
+      state = AsyncValue.data(detail);
     } on ApiException catch (e) {
       state = AsyncValue.error(e, StackTrace.current);
     }
@@ -222,10 +269,14 @@ class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrder>> {
 
   Future<void> refresh() => load();
 
-  Future<void> updateStatus(String status) async {
+  /// Changes status (optionally with a [note] recorded on the timeline), then
+  /// reloads so the new timeline entry is shown.
+  Future<void> updateStatus(String status, {String? note}) async {
     try {
-      final updated = await _repo.updateStatus(_id, status);
-      state = AsyncValue.data(updated);
+      await _repo.updateStatus(_id, status, note: note);
+      // Reload to pick up the freshly-appended timeline entry.
+      final detail = await _repo.getWorkOrderDetail(_id);
+      state = AsyncValue.data(detail);
       // Also refresh the list so the status change propagates there too.
       ref.read(workOrdersProvider.notifier).refresh();
     } on ApiException catch (e) {
@@ -235,8 +286,9 @@ class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrder>> {
 
   Future<void> update(Map<String, dynamic> data) async {
     try {
-      final updated = await _repo.updateWorkOrder(_id, data);
-      state = AsyncValue.data(updated);
+      await _repo.updateWorkOrder(_id, data);
+      final detail = await _repo.getWorkOrderDetail(_id);
+      state = AsyncValue.data(detail);
       ref.read(workOrdersProvider.notifier).refresh();
     } on ApiException catch (e) {
       state = AsyncValue.error(e, StackTrace.current);
@@ -247,9 +299,26 @@ class WorkOrderDetailNotifier extends Notifier<AsyncValue<WorkOrder>> {
 final workOrderDetailProvider =
     NotifierProvider.family<
       WorkOrderDetailNotifier,
-      AsyncValue<WorkOrder>,
+      AsyncValue<WorkOrderDetail>,
       int
     >(WorkOrderDetailNotifier.new);
+
+/// Photo/document strip for a work order. Auto-disposes so it re-fetches each
+/// time the detail screen is opened; invalidate it after an upload.
+final workOrderDocumentsProvider = FutureProvider.autoDispose
+    .family<List<Document>, int>((ref, workOrderId) {
+      return ref
+          .watch(workOrdersRepositoryProvider)
+          .listWorkOrderDocuments(workOrderId);
+    });
+
+/// Raw bytes for a single document, used to render authenticated thumbnails.
+final documentBytesProvider = FutureProvider.autoDispose
+    .family<Uint8List, int>((ref, documentId) {
+      return ref.watch(workOrdersRepositoryProvider).downloadDocument(
+        documentId,
+      );
+    });
 
 // ── Properties for dropdown ───────────────────────────────────────────────────
 

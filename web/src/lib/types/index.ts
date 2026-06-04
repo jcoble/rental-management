@@ -579,6 +579,23 @@ export interface WorkOrder {
 	vendorName?: string;
 }
 
+/** One status-change event in a work order's history (oldest→newest). */
+export interface WorkOrderTimelineEntry {
+	id: number;
+	/** null on the create event. */
+	fromStatus: WorkOrderStatus | null;
+	toStatus: WorkOrderStatus;
+	note?: string | null;
+	/** "Staff" / "Tenant" / a person's name. */
+	changedByLabel?: string | null;
+	createdAtUtc: string;
+}
+
+/** A single work order plus its status timeline (returned by GET /work-orders/{id} and the portal detail). */
+export interface WorkOrderDetail extends WorkOrder {
+	timeline?: WorkOrderTimelineEntry[];
+}
+
 export interface Appointment {
 	id: number;
 	portfolioId: number;

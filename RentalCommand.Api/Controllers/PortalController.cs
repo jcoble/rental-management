@@ -91,6 +91,27 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         return Ok(items);
     }
 
+    /// <summary>
+    /// One of the signed-in tenant's OWN work orders with its live status timeline (Received →
+    /// Assigned → In Progress → Done). Ownership is enforced server-side: a work order that isn't on
+    /// this tenant's lease/unit returns 404, so a tenant can never read another tenant's work order.
+    /// </summary>
+    [HttpGet("work-orders/{id:int}")]
+    [ProducesResponseType(typeof(WorkOrderDetailResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<WorkOrderDetailResponse>> WorkOrder(int id, CancellationToken ct)
+    {
+        var tenantId = GetTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        var item = await _service.GetWorkOrderDetailAsync(GetPortfolioId(), tenantId.Value, id, ct);
+        return item == null ? NotFound(new { error = "Work order not found" }) : Ok(item);
+    }
+
     [HttpPost("tenant/work-orders")]
     [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]

@@ -1,4 +1,5 @@
 export 'appointment.dart';
+export 'document.dart';
 export 'expense.dart';
 export 'inspection.dart';
 export 'lease.dart';

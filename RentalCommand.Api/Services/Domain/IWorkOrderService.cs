@@ -10,8 +10,14 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IWorkOrderService
 {
     Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? vendorId, ListQuery query, CancellationToken ct = default);
-    Task<WorkOrderResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
-    Task<WorkOrderResponse?> CreateAsync(int portfolioId, CreateWorkOrderRequest request, CancellationToken ct = default);
-    Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// Work-order detail including the status <see cref="WorkOrderDetailResponse.Timeline"/>
+    /// (oldest → newest). Returns null when the work order is not in the caller's portfolio.
+    /// </summary>
+    Task<WorkOrderDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
+
+    Task<WorkOrderResponse?> CreateAsync(int portfolioId, CreateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default);
+    Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default);
     Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
 }

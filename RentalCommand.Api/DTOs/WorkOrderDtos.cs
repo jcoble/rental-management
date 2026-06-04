@@ -54,6 +54,76 @@ public class WorkOrderResponse
     };
 }
 
+/// <summary>One entry in a work order's status timeline (oldest → newest in the parent list).</summary>
+public class WorkOrderStatusEventResponse
+{
+    public int Id { get; set; }
+
+    /// <summary>Status moved away from; null for the initial create event.</summary>
+    public WorkOrderStatus? FromStatus { get; set; }
+
+    /// <summary>Status moved into.</summary>
+    public WorkOrderStatus ToStatus { get; set; }
+
+    public string? Note { get; set; }
+
+    /// <summary>Human label for who/what made the change, e.g. "Staff", "Tenant", "System".</summary>
+    public string? ChangedByLabel { get; set; }
+
+    public DateTime CreatedAtUtc { get; set; }
+
+    public static WorkOrderStatusEventResponse FromEntity(WorkOrderStatusEvent e) => new()
+    {
+        Id = e.Id,
+        FromStatus = e.FromStatus,
+        ToStatus = e.ToStatus,
+        Note = e.Note,
+        ChangedByLabel = e.ChangedByLabel,
+        CreatedAtUtc = e.CreatedAtUtc,
+    };
+}
+
+/// <summary>
+/// Work-order detail: the full <see cref="WorkOrderResponse"/> plus the status <see cref="Timeline"/>
+/// (oldest → newest). Returned only on the single-work-order GET; the list endpoint stays lightweight.
+/// </summary>
+public class WorkOrderDetailResponse : WorkOrderResponse
+{
+    public IReadOnlyList<WorkOrderStatusEventResponse> Timeline { get; set; } = [];
+
+    public static WorkOrderDetailResponse FromEntity(WorkOrder e, IEnumerable<WorkOrderStatusEvent> events)
+    {
+        var detail = new WorkOrderDetailResponse
+        {
+            Id = e.Id,
+            PortfolioId = e.PortfolioId,
+            PropertyId = e.PropertyId,
+            UnitId = e.UnitId,
+            TenantId = e.TenantId,
+            LeaseId = e.LeaseId,
+            VendorId = e.VendorId,
+            Title = e.Title,
+            Description = e.Description,
+            Category = e.Category,
+            Priority = e.Priority,
+            Status = e.Status,
+            RequestedAt = e.RequestedAt,
+            ScheduledFor = e.ScheduledFor,
+            CompletedAt = e.CompletedAt,
+            EstimatedCost = e.EstimatedCost,
+            ActualCost = e.ActualCost,
+            CreatedBy = e.CreatedBy,
+            UpdatedAt = e.UpdatedAt,
+            Timeline = events
+                .OrderBy(ev => ev.CreatedAtUtc)
+                .ThenBy(ev => ev.Id)
+                .Select(WorkOrderStatusEventResponse.FromEntity)
+                .ToList(),
+        };
+        return detail;
+    }
+}
+
 public class CreateWorkOrderRequest
 {
     [Required]
@@ -125,6 +195,14 @@ public class UpdateWorkOrderRequest
 
     public WorkOrderPriority? Priority { get; set; }
     public WorkOrderStatus? Status { get; set; }
+
+    /// <summary>
+    /// Optional free-text note recorded on the status timeline when this update changes
+    /// <see cref="Status"/> (e.g. "parts ordered", "tenant let us in"). Ignored when the status
+    /// is unchanged.
+    /// </summary>
+    [MaxLength(2000)]
+    public string? StatusNote { get; set; }
 
     public DateTime? ScheduledFor { get; set; }
     public DateTime? CompletedAt { get; set; }
