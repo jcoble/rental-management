@@ -559,4 +559,28 @@ revocation. Owned by the dedicated auth agent.
 
 ## Done
 
-_(moved here as completed)_
+### Wave 1 — merged in PR #83 (main `35ee3e5`)
+- **#30** Auth bounce/refresh bug — root-caused (refresh-token reuse race) + fixed
+- **#1** Collapsible grouped nav  ·  **#2** Header quick-action bar (badges)
+- **#7** Site-wide design-system pass (semantic/chart colors, hierarchy)
+- **#29** Login + Register facelift (branded split-panel, gated Google button)
+- **#15** Landing page `/welcome` (animated scan→draft→confirm hero)
+- **#6** Accounting tabs + unified transactions grid
+- **#12** Lease detail tabs + hero + grouped cards
+- **#10** Notices hierarchy  ·  **#9** Native `<select>` → shadcn Select (all sites)
+- **#16** Scan confirmed-draft routing → created record
+- **#25** "Ask This Lease" moved to tenant portal
+- **#8** Inspections can't complete empty + realistic demo seed
+- **#20** Tax 1099 Paid/W-9 column fix + status pills
+- **#21** Sample scan-doc pack (`samples/scans/`)
+- Verified: .NET 0/0, Api 162 + Engine 23 tests, svelte-check 0/0, vite build,
+  **e2e 34/34** (fixed 6 incl. 2 scan specs that never ran), visual sweep cohesive.
+
+### Still open (next waves / need product decisions)
+Polish/feature: #19 (state dropdown + address autocomplete + date pickers — only
+the native-select swap is done), #22 (inline feature explainers), #24 (state-
+specific lease template), #27 (email deliverability — use Zoho SMTP), #28 (Google
+auth — just needs creds), #4/#5 (money-page reconciliation), #18 (onboarding skip
++ sandbox gating).
+Bigger projects: #3 (audit log unify), #11 (Sandbox mode), #13/#14 (docs + KB),
+#17 (Reports hub), #23/#26 (native e-sign + module).
