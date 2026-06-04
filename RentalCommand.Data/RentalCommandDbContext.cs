@@ -38,6 +38,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<BankConnection> BankConnections => Set<BankConnection>();
     public DbSet<BankTransaction> BankTransactions => Set<BankTransaction>();
     public DbSet<NoticeDraft> NoticeDrafts => Set<NoticeDraft>();
+    public DbSet<RentalApplication> RentalApplications => Set<RentalApplication>();
 
     // Auth + audit + infrastructure entities (Task 3)
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
@@ -317,6 +318,45 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .OnDelete(DeleteBehavior.SetNull);
         });
 
+        modelBuilder.Entity<RentalApplication>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.FirstName).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.LastName).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.Email).HasMaxLength(200);
+            entity.Property(e => e.Phone).HasMaxLength(50);
+            entity.Property(e => e.CurrentAddress).HasMaxLength(500);
+            entity.Property(e => e.Employer).HasMaxLength(200);
+            entity.Property(e => e.MonthlyIncome).HasPrecision(18, 2);
+            entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.DecisionReason).HasMaxLength(1000);
+            entity.Property(e => e.ConsentIpAddress).HasMaxLength(64);
+            // Provenance of the photo-ID/pay-stub autofill, stored as Postgres jsonb.
+            entity.Property(e => e.IdExtractedFields).HasColumnType("jsonb");
+            // Stored as the string enum name to match the app-wide string-enum convention.
+            entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => e.SubmittedAtUtc);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany(p => p.RentalApplications)
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Unit)
+                .WithMany()
+                .HasForeignKey(e => e.UnitId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.ApprovedTenant)
+                .WithMany()
+                .HasForeignKey(e => e.ApprovedTenantId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
         modelBuilder.Entity<OutboxMessage>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -353,8 +393,14 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Currency).IsRequired().HasMaxLength(8).HasDefaultValue("USD");
             entity.Property(e => e.Description).HasMaxLength(2000);
             entity.Property(e => e.Settings).HasMaxLength(10000);
+            entity.Property(e => e.PublicApplicationToken).HasMaxLength(64);
             entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.Status);
+            // Resolve the public application link by token; unique + filtered so multiple null
+            // tokens (portfolios not accepting applications) never collide.
+            entity.HasIndex(e => e.PublicApplicationToken)
+                  .IsUnique()
+                  .HasFilter("\"PublicApplicationToken\" IS NOT NULL");
             entity.HasQueryFilter(e => e.DeletedAt == null);
         });
 

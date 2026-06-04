@@ -12,6 +12,14 @@ public class Portfolio
     public PortfolioStatus Status { get; set; } = PortfolioStatus.Active;
     public string Currency { get; set; } = "USD";
     public string? Settings { get; set; }
+
+    /// <summary>
+    /// Opaque token embedded in the public, no-login rental-application link. Generated/rotated on
+    /// demand by the landlord. A null token means public applications are not currently accepted.
+    /// Public endpoints resolve the portfolio by this token only — never by a client-supplied id.
+    /// </summary>
+    public string? PublicApplicationToken { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -32,4 +40,5 @@ public class Portfolio
     public List<ActivityLog> Activities { get; set; } = [];
     public List<UserAccount> UserAccounts { get; set; } = [];
     public List<PortalMessage> PortalMessages { get; set; } = [];
+    public List<RentalApplication> RentalApplications { get; set; } = [];
 }
