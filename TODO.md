@@ -634,6 +634,11 @@ Plan:
   Ledger (one-tap confirm, never auto-match); Personal/Ignore action on Banking; Deposits
   relabeled (money held in trust). No migration; Api tests 194/194.
 
+### Wave 5 — Docs + KB merged in PR #87 (main `02317d0`)
+- **#13/#14** 24 help articles + KnowledgeBaseService (keyword/section retrieval, no embeddings);
+  public anonymous /docs site (sidebar + search + markdown articles, SSR); in-app Help; chatbot
+  routes how-to questions to grounded doc answers with citations. Api tests 219/219.
+
 ### Decisions LOCKED (spec: Docs/superpowers/specs/2026-06-04-remaining-features-decisions.md)
 Bank reconciliation = ALWAYS one-tap confirm · Docs/KB = simple retrieval · Sandbox =
 graduate-once→wipe · E-sign = build native (defer module #26). Implementing in this order:
