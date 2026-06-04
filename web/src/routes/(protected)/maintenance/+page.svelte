@@ -15,7 +15,7 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
-	import { Plus, ShieldCheck } from '@lucide/svelte';
+	import { Plus, ShieldCheck, RefreshCw } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -198,6 +198,7 @@
 		<div class="flex gap-2">
 			<Button data-testid="work-order-create-button" onclick={openCreateWo}><Plus class="h-4 w-4" /> Work Order</Button>
 			<Button data-testid="inspection-create-button" variant="outline" onclick={() => (showInspectionForm = true)}><ShieldCheck class="h-4 w-4" /> Inspection</Button>
+			<Button data-testid="recurring-maintenance-link" variant="outline" onclick={() => goto('/maintenance/recurring')}><RefreshCw class="h-4 w-4" /> Recurring</Button>
 		</div>
 	</div>
 

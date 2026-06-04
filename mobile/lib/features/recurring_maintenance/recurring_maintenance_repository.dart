@@ -1,0 +1,190 @@
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../core/api/api_exception.dart';
+import '../../core/api/dio_client.dart';
+import '../../core/models/models.dart' show Property, Unit;
+import '../properties/properties_repository.dart';
+import '../vendors/vendors_models.dart' show Vendor;
+import '../vendors/vendors_repository.dart';
+import 'recurring_maintenance_models.dart';
+
+/// Repository for recurring maintenance tasks.
+///
+/// Endpoints (all JWT-scoped, portfolio from claim):
+///   GET    /recurring-maintenance?propertyId&activeOnly  — list
+///   GET    /recurring-maintenance/{id}                    — single
+///   POST   /recurring-maintenance                         — create
+///   PATCH  /recurring-maintenance/{id}                    — update (partial)
+///   PATCH  /recurring-maintenance/{id}/active { isActive }— toggle active
+///   DELETE /recurring-maintenance/{id}                    — soft delete
+class RecurringMaintenanceRepository {
+  RecurringMaintenanceRepository(this._dio);
+
+  final Dio _dio;
+
+  Future<List<RecurringMaintenanceTask>> list({
+    int? propertyId,
+    bool? activeOnly,
+  }) async {
+    try {
+      final params = <String, dynamic>{};
+      if (propertyId != null) params['propertyId'] = propertyId;
+      if (activeOnly != null) params['activeOnly'] = activeOnly;
+      final response = await _dio.get<List<dynamic>>(
+        '/recurring-maintenance',
+        queryParameters: params.isEmpty ? null : params,
+      );
+      return (response.data ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(RecurringMaintenanceTask.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<RecurringMaintenanceTask> get(int id) async {
+    try {
+      final response =
+          await _dio.get<Map<String, dynamic>>('/recurring-maintenance/$id');
+      return RecurringMaintenanceTask.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Create body: { propertyId, unitId?, vendorId?, title, description?,
+  /// category?, recurrenceInterval, nextDueDate, isActive, priority }
+  Future<RecurringMaintenanceTask> create(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/recurring-maintenance',
+        data: data,
+      );
+      return RecurringMaintenanceTask.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Update body: any subset of the task fields (partial PATCH).
+  Future<RecurringMaintenanceTask> update(
+    int id,
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/recurring-maintenance/$id',
+        data: data,
+      );
+      return RecurringMaintenanceTask.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// PATCH /recurring-maintenance/{id}/active  body: { isActive }
+  Future<RecurringMaintenanceTask> setActive(int id, bool isActive) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/recurring-maintenance/$id/active',
+        data: {'isActive': isActive},
+      );
+      return RecurringMaintenanceTask.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Soft delete.
+  Future<void> delete(int id) async {
+    try {
+      await _dio.delete<dynamic>('/recurring-maintenance/$id');
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+}
+
+// ── Providers ─────────────────────────────────────────────────────────────────
+
+final recurringMaintenanceRepositoryProvider =
+    Provider<RecurringMaintenanceRepository>((ref) {
+  return RecurringMaintenanceRepository(ref.watch(dioProvider));
+});
+
+// ── Task list ─────────────────────────────────────────────────────────────────
+
+/// Loads recurring maintenance tasks and supports an active/all filter plus
+/// optimistic inline toggling and deletion.
+class RecurringMaintenanceNotifier
+    extends Notifier<AsyncValue<List<RecurringMaintenanceTask>>> {
+  bool _activeOnly = false;
+
+  bool get activeOnly => _activeOnly;
+
+  @override
+  AsyncValue<List<RecurringMaintenanceTask>> build() =>
+      const AsyncValue.loading();
+
+  RecurringMaintenanceRepository get _repo =>
+      ref.read(recurringMaintenanceRepositoryProvider);
+
+  Future<void> load() async {
+    state = const AsyncValue.loading();
+    try {
+      final list = await _repo.list(activeOnly: _activeOnly ? true : null);
+      state = AsyncValue.data(list);
+    } on ApiException catch (e) {
+      state = AsyncValue.error(e, StackTrace.current);
+    }
+  }
+
+  Future<void> refresh() => load();
+
+  void setActiveOnly(bool value) {
+    if (_activeOnly == value) return;
+    _activeOnly = value;
+    load();
+  }
+
+  /// Toggles the active flag for a task, refreshing the list afterward so the
+  /// active-only filter stays consistent.
+  Future<void> toggleActive(int id, bool isActive) async {
+    await _repo.setActive(id, isActive);
+    await load();
+  }
+
+  /// Soft-deletes a task, then reloads.
+  Future<void> delete(int id) async {
+    await _repo.delete(id);
+    await load();
+  }
+}
+
+final recurringMaintenanceProvider = NotifierProvider<
+    RecurringMaintenanceNotifier,
+    AsyncValue<List<RecurringMaintenanceTask>>>(
+  RecurringMaintenanceNotifier.new,
+);
+
+// ── Pickers (reuse existing repositories) ─────────────────────────────────────
+
+/// All properties for the property picker.
+final recurringPropertiesProvider =
+    FutureProvider.autoDispose<List<Property>>((ref) {
+  return ref.watch(propertiesRepositoryProvider).listProperties();
+});
+
+/// Units scoped to a property, for the (optional) unit picker.
+final recurringUnitsProvider =
+    FutureProvider.autoDispose.family<List<Unit>, int>((ref, propertyId) {
+  return ref.watch(propertiesRepositoryProvider).listUnits(propertyId);
+});
+
+/// All vendors for the (optional) vendor picker.
+final recurringVendorsProvider =
+    FutureProvider.autoDispose<List<Vendor>>((ref) {
+  return ref.watch(vendorsRepositoryProvider).list();
+});

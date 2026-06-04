@@ -35,6 +35,7 @@ public class Portfolio
     public List<Payment> Payments { get; set; } = [];
     public List<Expense> Expenses { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];
+    public List<RecurringMaintenanceTask> RecurringMaintenanceTasks { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];
     public List<Inspection> Inspections { get; set; } = [];
     public List<ActivityLog> Activities { get; set; } = [];

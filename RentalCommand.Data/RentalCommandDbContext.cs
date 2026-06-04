@@ -28,6 +28,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<VendorRating> VendorRatings => Set<VendorRating>();
     public DbSet<WorkOrder> WorkOrders => Set<WorkOrder>();
     public DbSet<WorkOrderStatusEvent> WorkOrderStatusEvents => Set<WorkOrderStatusEvent>();
+    public DbSet<RecurringMaintenanceTask> RecurringMaintenanceTasks => Set<RecurringMaintenanceTask>();
     public DbSet<Appointment> Appointments => Set<Appointment>();
     public DbSet<Inspection> Inspections => Set<Inspection>();
     public DbSet<ActivityLog> ActivityLogs => Set<ActivityLog>();
@@ -716,6 +717,41 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(w => w.StatusEvents)
                 .HasForeignKey(e => e.WorkOrderId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<RecurringMaintenanceTask>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Title).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Description).HasMaxLength(4000);
+            entity.Property(e => e.Category).HasMaxLength(120);
+            entity.Property(e => e.IsActive).HasDefaultValue(true);
+            // Stored as the string enum name to match the app-wide string-enum convention.
+            entity.Property(e => e.RecurrenceInterval).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.Priority).HasConversion<int>();
+            // The worker's hot path: scan active, not-yet-deleted tasks that are due. The query filter
+            // already excludes soft-deleted rows; this index serves the (active, due) scan per portfolio.
+            entity.HasIndex(e => new { e.PortfolioId, e.IsActive, e.NextDueDate });
+            entity.HasIndex(e => e.PropertyId);
+            entity.HasIndex(e => e.UnitId);
+            entity.HasIndex(e => e.VendorId);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany(p => p.RecurringMaintenanceTasks)
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Unit)
+                .WithMany()
+                .HasForeignKey(e => e.UnitId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Vendor)
+                .WithMany()
+                .HasForeignKey(e => e.VendorId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<Appointment>(entity =>
