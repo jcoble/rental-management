@@ -32,6 +32,7 @@
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	const queryClient = useQueryClient();
@@ -824,7 +825,15 @@
 	<div>
 		<div class="mb-3 flex flex-wrap items-center justify-between gap-3">
 			<div>
-				<h2 class="text-lg font-semibold">Transactions</h2>
+				<div class="flex items-center gap-1.5">
+					<h2 class="text-lg font-semibold">Transactions</h2>
+					<HelpPopover
+						title="Bank reconciliation"
+						summary="The Bank column confirms whether each recorded payment or expense actually cleared your bank."
+						detail="A green “Cleared” badge means it matched a bank line; a blue “Match?” chip is a suggested match — tap it to confirm. We never count anything twice."
+						learnMoreUrl={undefined}
+					/>
+				</div>
 				<p class="text-sm text-muted-foreground">Payments, expenses, deposits, and withdrawals in one paged ledger.</p>
 			</div>
 			<div class="flex flex-wrap gap-2">
@@ -914,7 +923,15 @@
 		<Tabs.Content value="overview">
 			<Card.Root class="gap-0 py-0" data-testid="accounting-money-snapshot">
 				<Card.Header class="px-5 pb-2 pt-5">
-					<Card.Title class="text-base">Money Snapshot</Card.Title>
+					<div class="flex items-center gap-1.5">
+						<Card.Title class="text-base">Money Snapshot</Card.Title>
+						<HelpPopover
+							title="Money Snapshot"
+							summary="A plain-English summary of your money for this portfolio — what came in, what went out, and where you stand."
+							detail="No accounting jargon: it reads the same numbers as the ledger and explains them in everyday terms."
+							learnMoreUrl={undefined}
+						/>
+					</div>
 					<Card.Description>Plain-English accounting summary for this portfolio.</Card.Description>
 				</Card.Header>
 				<Card.Content class="px-5 pb-5 pt-0">
