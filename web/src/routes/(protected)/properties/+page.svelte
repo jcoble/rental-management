@@ -14,6 +14,8 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import StateSelect from '$lib/components/shared/StateSelect.svelte';
+	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -301,7 +303,7 @@
 				</Select.Content>
 			</Select.Root>
 			<div class="md:col-span-2">
-				<Input data-testid="property-address-input" bind:value={form.addressLine1} placeholder="Address" />
+				<AddressAutocomplete testid="property-address-input" bind:value={form.addressLine1} placeholder="Address" />
 				{#if formErrors.addressLine1}<p class="mt-1 text-xs text-destructive" data-testid="property-address-error">{formErrors.addressLine1}</p>{/if}
 			</div>
 			<div>
@@ -310,7 +312,7 @@
 			</div>
 			<div class="grid grid-cols-2 gap-2">
 				<div>
-					<Input data-testid="property-state-input" bind:value={form.state} placeholder="State" />
+					<StateSelect testid="property-state-input" bind:value={form.state} placeholder="State" />
 					{#if formErrors.state}<p class="mt-1 text-xs text-destructive" data-testid="property-state-error">{formErrors.state}</p>{/if}
 				</div>
 				<div>

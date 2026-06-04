@@ -14,6 +14,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -394,7 +395,7 @@
 				</Select.Root>
 			</div>
 			<Input data-testid="owner-taxid-input" bind:value={ownerForm.taxId} placeholder="Tax ID / EIN (optional)" />
-			<Input data-testid="owner-address-input" bind:value={ownerForm.address} placeholder="Address (optional)" />
+			<AddressAutocomplete testid="owner-address-input" bind:value={ownerForm.address} placeholder="Address (optional)" />
 			<Input data-testid="owner-phone-input" bind:value={ownerForm.phone} placeholder="Phone (optional)" />
 			<div>
 				<Input data-testid="owner-email-input" bind:value={ownerForm.email} type="email" placeholder="Email (optional)" />
