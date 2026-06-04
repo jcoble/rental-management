@@ -54,7 +54,12 @@ public sealed class RecurringMaintenanceService : IRecurringMaintenanceService
     public async Task<int> GenerateAsync(CancellationToken ct = default)
     {
         // Business "today" in the landlord's local zone (drives the due comparison + interval math only).
-        var today = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date;
+        // NextDueDate is a timestamptz column, so the comparison value must be UTC-Kind or Npgsql rejects
+        // the parameter ("Cannot write DateTime with Kind=Unspecified to timestamp with time zone").
+        // NextDueDate is stored as UTC-midnight of the local calendar date, so we mark this the same way.
+        var today = DateTime.SpecifyKind(
+            TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date,
+            DateTimeKind.Utc);
 
         // Active, non-deleted tasks that are due. The query filter already excludes soft-deleted rows.
         var tasks = await _db.RecurringMaintenanceTasks
