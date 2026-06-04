@@ -15,7 +15,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Check, Landmark, Link2, RefreshCw, Upload, X } from '@lucide/svelte';
+	import { Ban, Check, Landmark, Link2, RefreshCw, RotateCcw, Upload, X } from '@lucide/svelte';
 
 	type PlaidWindow = Window &
 		typeof globalThis & {
@@ -35,7 +35,9 @@
 	const STATUS_FILTER_OPTIONS = [
 		{ value: ALL_STATUS, label: 'All' },
 		{ value: 'Unmatched', label: 'Unmatched' },
-		{ value: 'Matched', label: 'Matched' }
+		{ value: 'Matched', label: 'Matched' },
+		// Ignored/personal lines are stored server-side as MatchStatus="Removed".
+		{ value: 'Removed', label: 'Ignored' }
 	];
 	const statusFilterLabel = $derived(
 		STATUS_FILTER_OPTIONS.find((o) => o.value === statusValue)?.label ?? 'All'
@@ -170,6 +172,25 @@
 			refreshBanking();
 		},
 		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	// Mark a bank line as personal / not business money. Server sets MatchStatus="Removed": it leaves
+	// the unmatched queue and the business books, but stays visible under the "Ignored" filter and can
+	// be brought back via Clear (un-ignore). Tracks a pending id for per-row button disabling.
+	let pendingIgnoreId = $state<number | null>(null);
+	const ignoreMutation = createMutation(() => ({
+		mutationFn: (id: number) => banking.ignore(id),
+		onMutate: (id: number) => {
+			pendingIgnoreId = id;
+		},
+		onSuccess: () => {
+			showSuccess('Marked personal — kept out of your books.');
+			refreshBanking();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+		onSettled: () => {
+			pendingIgnoreId = null;
+		}
 	}));
 
 	let pendingReviewId = $state<number | null>(null);
@@ -426,7 +447,7 @@
 				<div class="flex flex-wrap items-center justify-between gap-3">
 					<div>
 						<Card.Title class="text-base">Bank transactions</Card.Title>
-						<Card.Description>Deposits are positive. Withdrawals are negative.</Card.Description>
+						<Card.Description>Deposits are positive. Withdrawals are negative. Mark personal lines (coffee, rideshare) <span class="font-medium">Ignore</span> to keep them out of your books.</Card.Description>
 					</div>
 					<Select.Root type="single" bind:value={statusValue}>
 						<Select.Trigger class="h-9 w-36" data-testid="banking-status-filter">
@@ -446,7 +467,9 @@
 				{:else if transactionsQuery.isError}
 					<p class="py-12 text-center text-sm text-destructive">Could not load bank transactions.</p>
 				{:else if transactions.length === 0}
-					<p class="py-12 text-center text-sm text-muted-foreground">No bank transactions yet.</p>
+					<p class="py-12 text-center text-sm text-muted-foreground">
+						{statusFilter === 'Removed' ? 'No ignored bank lines.' : 'No bank transactions yet.'}
+					</p>
 				{:else}
 					<div class="overflow-x-auto">
 						<table class="w-full text-sm">
@@ -482,23 +505,63 @@
 														Clear
 													</Button>
 												</div>
+											{:else if transaction.matchStatus === 'Removed'}
+												<div class="flex flex-wrap items-center gap-2">
+													<span class="rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">Personal · Ignored</span>
+													<Button
+														size="sm"
+														variant="outline"
+														onclick={() => clearMutation.mutate(transaction.id)}
+														disabled={clearMutation.isPending}
+														data-testid="bank-transaction-unignore-{transaction.id}"
+													>
+														<RotateCcw class="mr-1.5 h-3.5 w-3.5" />
+														Un-ignore
+													</Button>
+												</div>
 											{:else if transaction.suggestedMatch}
 												<div class="space-y-2">
 													<p class="text-xs text-muted-foreground">{transaction.suggestedMatch.reason}</p>
-													<Button
-														size="sm"
-														onclick={() => matchMutation.mutate({
-															id: transaction.id,
-															entityType: transaction.suggestedMatch!.entityType,
-															entityId: transaction.suggestedMatch!.entityId
-														})}
-														disabled={matchMutation.isPending}
-													>
-														Match {transaction.suggestedMatch.label}
-													</Button>
+													<div class="flex flex-wrap items-center gap-2">
+														<Button
+															size="sm"
+															onclick={() => matchMutation.mutate({
+																id: transaction.id,
+																entityType: transaction.suggestedMatch!.entityType,
+																entityId: transaction.suggestedMatch!.entityId
+															})}
+															disabled={matchMutation.isPending}
+														>
+															Match {transaction.suggestedMatch.label}
+														</Button>
+														<Button
+															size="sm"
+															variant="ghost"
+															class="text-muted-foreground"
+															onclick={() => ignoreMutation.mutate(transaction.id)}
+															disabled={pendingIgnoreId === transaction.id}
+															data-testid="bank-transaction-ignore-{transaction.id}"
+														>
+															<Ban class="mr-1.5 h-3.5 w-3.5" />
+															{pendingIgnoreId === transaction.id ? 'Ignoring…' : 'Ignore'}
+														</Button>
+													</div>
 												</div>
 											{:else}
-												<span class="text-xs text-muted-foreground">No suggestion yet</span>
+												<div class="flex flex-wrap items-center gap-2">
+													<span class="text-xs text-muted-foreground">No suggestion yet</span>
+													<Button
+														size="sm"
+														variant="ghost"
+														class="text-muted-foreground"
+														onclick={() => ignoreMutation.mutate(transaction.id)}
+														disabled={pendingIgnoreId === transaction.id}
+														data-testid="bank-transaction-ignore-{transaction.id}"
+													>
+														<Ban class="mr-1.5 h-3.5 w-3.5" />
+														{pendingIgnoreId === transaction.id ? 'Ignoring…' : 'Ignore'}
+													</Button>
+												</div>
 											{/if}
 										</td>
 									</tr>

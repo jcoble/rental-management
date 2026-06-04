@@ -35,5 +35,10 @@ export const banking = {
 	confirmMatch: (id: number, request: ConfirmBankMatchRequest = {}) =>
 		api.post<BankTransaction>(`/banking/transactions/${id}/confirm-match`, request),
 	dismissMatch: (id: number) =>
-		api.post<BankTransaction>(`/banking/transactions/${id}/dismiss-match`, {})
+		api.post<BankTransaction>(`/banking/transactions/${id}/dismiss-match`, {}),
+	// Mark a bank line as personal / not business money. It leaves the unmatched review queue and is
+	// excluded from the books (server sets MatchStatus="Removed"), but stays listable via ?status=Removed.
+	// Un-ignore by calling clearMatch (resets it back to Unmatched).
+	ignore: (id: number) =>
+		api.post<BankTransaction>(`/banking/transactions/${id}/ignore`, {})
 };

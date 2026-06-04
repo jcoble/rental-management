@@ -163,4 +163,18 @@ public class BankingController : AuthenticatedPortfolioControllerBase
         var updated = await _service.DismissMatchAsync(GetPortfolioId(), id, ct);
         return updated == null ? NotFound(new { error = "Bank transaction not found" }) : Ok(updated);
     }
+
+    /// <summary>
+    /// Mark a bank line as personal / not business money (e.g. Starbucks, Uber, an owner draw). It
+    /// drops out of the unmatched review queue and is excluded from the business books, but stays
+    /// listable under the "Removed" status filter so it can be reviewed or un-ignored later.
+    /// </summary>
+    [HttpPost("transactions/{id:int}/ignore")]
+    [ProducesResponseType(typeof(BankTransactionResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<BankTransactionResponse>> Ignore(int id, CancellationToken ct)
+    {
+        var updated = await _service.IgnoreTransactionAsync(GetPortfolioId(), id, ct);
+        return updated == null ? NotFound(new { error = "Bank transaction not found" }) : Ok(updated);
+    }
 }

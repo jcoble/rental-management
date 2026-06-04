@@ -548,6 +548,31 @@ public class BankingService : IBankingService
         return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
     }
 
+    public async Task<BankTransactionResponse?> IgnoreTransactionAsync(int portfolioId, int transactionId, CancellationToken ct = default)
+    {
+        var transaction = await BaseTransactions(portfolioId)
+            .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
+        if (transaction == null) return null;
+
+        // Personal / not-business money (Starbucks, Uber, an owner draw, etc.). We reuse the existing
+        // "Removed" status because that is the one accounting already excludes everywhere
+        // (MatchStatus != "Removed"), so an ignored line never inflates the business P&L. It also
+        // leaves the Unmatched review queue, yet stays listable via ?status=Removed. The Notes marker
+        // distinguishes a deliberate user "ignore" from a Plaid-sync removal.
+        // TODO(no-migration): persist a per-merchant "auto-ignore" memory so future lines from the
+        // same merchant are pre-suggested as ignore. That needs a new table (e.g. IgnoredMerchant),
+        // which is out of scope for this migration-free wave.
+        transaction.MatchedPaymentId = null;
+        transaction.MatchedExpenseId = null;
+        transaction.MatchStatus = "Removed";
+        transaction.MatchConfidence = null;
+        transaction.Notes = "Marked personal / ignored by the landlord.";
+        transaction.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
+    }
+
     private IQueryable<BankTransaction> BaseTransactions(int portfolioId)
     {
         return _db.BankTransactions
@@ -639,6 +664,7 @@ public class BankingService : IBankingService
 
         var paymentCandidates = await _db.Payments
             .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
+            .Include(p => p.Lease!).ThenInclude(l => l.Property)
             .Where(p => p.PortfolioId == portfolioId && p.Status != PaymentStatus.Failed && p.Status != PaymentStatus.Refunded)
             .ToListAsync(ct);
 
@@ -707,35 +733,139 @@ public class BankingService : IBankingService
         return null;
     }
 
+    // Amount is the hard gate; date proximity sets the base score; a merchant-name match against the
+    // payment's tenant/lease/property (or the expense's vendor/description) nudges the score up so a
+    // named candidate outranks an unnamed same-amount one. This only sharpens the SUGGESTION the user
+    // confirms — nothing is auto-matched.
     private static decimal ScorePayment(BankTransaction transaction, Payment payment)
     {
         if (Math.Abs(transaction.Amount - payment.Amount) > 0.01m) return 0m;
         var anchor = payment.PaidDate ?? payment.DueDate;
-        var days = Math.Abs((transaction.PostedAt.Date - anchor.Date).Days);
-        if (days > 7) return 0m;
-        return days switch
-        {
-            0 => 0.98m,
-            <= 2 => 0.90m,
-            <= 4 => 0.78m,
-            _ => 0.65m
-        };
+
+        // Names a deposit's merchant line might carry: the tenant, the lease number, the property.
+        var tenant = payment.Lease?.Tenant;
+        var nameMatch = NameMatchStrength(
+            transaction.MerchantName,
+            transaction.Description,
+            tenant == null ? null : $"{tenant.FirstName} {tenant.LastName}",
+            payment.Lease?.LeaseNumber,
+            payment.Lease?.Property?.Name);
+
+        return CombineScore(transaction.PostedAt, anchor, nameMatch);
     }
 
     private static decimal ScoreExpense(BankTransaction transaction, Expense expense)
     {
         if (Math.Abs(Math.Abs(transaction.Amount) - expense.Amount) > 0.01m) return 0m;
         var anchor = expense.PaidAt ?? expense.IncurredAt;
-        var days = Math.Abs((transaction.PostedAt.Date - anchor.Date).Days);
-        if (days > 7) return 0m;
-        return days switch
-        {
-            0 => 0.98m,
-            <= 2 => 0.90m,
-            <= 4 => 0.78m,
-            _ => 0.65m
-        };
+
+        var nameMatch = NameMatchStrength(
+            transaction.MerchantName,
+            transaction.Description,
+            expense.Vendor?.Name,
+            expense.Description);
+
+        return CombineScore(transaction.PostedAt, anchor, nameMatch);
     }
+
+    /// <summary>
+    /// Folds date proximity and merchant↔name similarity into a single confidence in (0,1].
+    /// A name match both raises the score and slightly relaxes the date window (so a clearly-named
+    /// line still suggests even if it posted a few days late); with no name signal the original
+    /// date-only band and 7-day cutoff are preserved.
+    /// </summary>
+    private static decimal CombineScore(DateTime postedAt, DateTime anchor, decimal nameMatch)
+    {
+        var days = Math.Abs((postedAt.Date - anchor.Date).Days);
+
+        // A strong name match buys a little extra date slack; otherwise keep the hard 7-day cutoff.
+        var maxDays = nameMatch >= 0.6m ? 14 : 7;
+        if (days > maxDays) return 0m;
+
+        var dateScore = days switch
+        {
+            0 => 0.80m,
+            <= 2 => 0.72m,
+            <= 4 => 0.62m,
+            <= 7 => 0.52m,
+            _ => 0.42m
+        };
+
+        // Name match contributes up to +0.20; the base bands sit below the old 0.98/0.90/... so a
+        // named match lands near the top and an unnamed match stays a notch lower.
+        var score = dateScore + nameMatch * 0.20m;
+        return Math.Min(score, 0.99m);
+    }
+
+    /// <summary>
+    /// Strength in [0,1] that the bank line's merchant/description refers to one of the candidate
+    /// names. 1.0 = a candidate name is fully contained in the bank text (or vice-versa); partial
+    /// credit for shared significant tokens; 0 when there is nothing to compare or no overlap.
+    /// </summary>
+    private static decimal NameMatchStrength(string? bankMerchant, string? bankDescription, params string?[] candidateNames)
+    {
+        var bankText = NormalizeName($"{bankMerchant} {bankDescription}");
+        if (bankText.Length == 0) return 0m;
+
+        var bankTokens = SignificantTokens(bankText);
+        if (bankTokens.Count == 0) return 0m;
+
+        var best = 0m;
+        foreach (var candidate in candidateNames)
+        {
+            var normalized = NormalizeName(candidate);
+            if (normalized.Length == 0) continue;
+
+            // Whole-name containment either way is the strongest signal.
+            if (bankText.Contains(normalized, StringComparison.Ordinal) ||
+                normalized.Contains(bankText, StringComparison.Ordinal))
+            {
+                return 1m;
+            }
+
+            var candidateTokens = SignificantTokens(normalized);
+            if (candidateTokens.Count == 0) continue;
+
+            var shared = candidateTokens.Count(t => bankTokens.Contains(t));
+            if (shared == 0) continue;
+
+            // Fraction of the candidate's significant tokens found in the bank text.
+            var fraction = (decimal)shared / candidateTokens.Count;
+            if (fraction > best) best = fraction;
+        }
+
+        return best;
+    }
+
+    private static string NormalizeName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+
+        var sb = new System.Text.StringBuilder(value.Length);
+        foreach (var ch in value.Trim().ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(ch)) sb.Append(ch);
+            else if (char.IsWhiteSpace(ch)) sb.Append(' ');
+            // drop punctuation entirely
+        }
+
+        // Collapse runs of spaces.
+        return string.Join(' ', sb.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    // Tokens with at least 2 characters that are not generic banking/transfer filler, so noise like
+    // "ach", "the", "llc" doesn't manufacture a false name match.
+    private static readonly HashSet<string> NameStopWords = new(StringComparer.Ordinal)
+    {
+        "ach", "the", "and", "llc", "inc", "co", "payment", "pmt", "deposit", "debit", "credit",
+        "transfer", "xfer", "online", "pos", "purchase", "rent", "from", "for", "ref", "id",
+    };
+
+    private static HashSet<string> SignificantTokens(string normalized) =>
+        normalized
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(t => t.Length >= 2 && !NameStopWords.Contains(t))
+            .ToHashSet(StringComparer.Ordinal);
 
     private static BankConnectionResponse MapConnection(BankConnection c) => new()
     {

@@ -1,7 +1,7 @@
 import type {
 	AccountingReports,
 	AccountingSummary,
-	AccountingTransactionsResponse,
+	AccountingTransaction,
 	MoneySnapshotResponse,
 	OwnerStatementReport,
 	OwnerStatementSummary,
@@ -22,6 +22,43 @@ export type AccountingTransactionParams = ListParams & {
 	to?: string;
 };
 
+/**
+ * A high-confidence, still-unmatched bank line the user can one-tap confirm against a
+ * Payment/Expense row. Powers the "Match?" chip on the accounting ledger. Nothing is auto-matched.
+ */
+export interface SuggestedBankMatch {
+	bankTransactionId: number;
+	name: string;
+	amount: number;
+	date: string;
+	confidence: number;
+}
+
+/**
+ * The bank-reconciliation fields the accounting transactions endpoint adds to Payment/Expense rows.
+ * Declared here (rather than on the shared AccountingTransaction type) to keep the reconciliation
+ * wave self-contained; merge `AccountingTransaction & ReconciledTransactionFields` at the call site.
+ */
+export interface ReconciledTransactionFields {
+	/** True when a bank line has been confirmed (Matched) against this row — it has "cleared". */
+	reconciled?: boolean;
+	/** Bank/institution name of the matched line, when reconciled. */
+	clearedBankName?: string | null;
+	/** Posted date of the matched bank line, when reconciled. */
+	clearedAt?: string | null;
+	/** Suggested (unconfirmed) bank line to one-tap confirm; null when none or already reconciled. */
+	suggestedBankMatch?: SuggestedBankMatch | null;
+}
+
+export type ReconciledAccountingTransaction = AccountingTransaction & ReconciledTransactionFields;
+
+export interface ReconciledAccountingTransactionsResponse {
+	items: ReconciledAccountingTransaction[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
 export const accounting = {
 	// GET /api/v1/accounting/summary — portfolio scope comes from the JWT claim.
 	// Returns expense totals by Schedule E category + a payment collection rollup
@@ -33,10 +70,16 @@ export const accounting = {
 	reports: () => api.get<AccountingReports>('/accounting/reports'),
 	transactions: (params?: AccountingTransactionParams) => {
 		const { kind, status, category, propertyId, from, to, ...list } = params ?? {};
-		return api.get<AccountingTransactionsResponse>(
+		return api.get<ReconciledAccountingTransactionsResponse>(
 			`/accounting/transactions${buildListQuery(list, { kind, status, category, propertyId, from, to })}`
 		);
 	},
+
+	// Confirm a suggested bank match for a Payment/Expense ledger row in one tap. The bank line id
+	// comes from the row's suggestedBankMatch; an empty body lets the server use the current
+	// suggestion. After this the row flips to "Cleared" (invalidate 'accounting-transactions').
+	confirmBankMatch: (bankTransactionId: number) =>
+		api.post(`/banking/transactions/${bankTransactionId}/confirm-match`, {}),
 
 	// GET /api/v1/accounting/schedule-e?year=YYYY
 	scheduleE: (year: number) => api.get<ScheduleEReport>(`/accounting/schedule-e?year=${year}`),
