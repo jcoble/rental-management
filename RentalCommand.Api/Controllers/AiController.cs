@@ -17,12 +17,18 @@ public class AiController : AuthenticatedPortfolioControllerBase
 {
     private readonly IDailyBriefingService _briefing;
     private readonly IPortfolioQaService _qa;
+    private readonly IFairHousingReviewService _fairHousing;
     private readonly ILlmProvider _llm;
 
-    public AiController(IDailyBriefingService briefing, IPortfolioQaService qa, ILlmProvider llm)
+    public AiController(
+        IDailyBriefingService briefing,
+        IPortfolioQaService qa,
+        IFairHousingReviewService fairHousing,
+        ILlmProvider llm)
     {
         _briefing = briefing;
         _qa = qa;
+        _fairHousing = fairHousing;
         _llm = llm;
     }
 
@@ -100,5 +106,22 @@ public class AiController : AuthenticatedPortfolioControllerBase
         }
 
         return Ok(new AiChatResponse { Reply = reply });
+    }
+
+    /// <summary>
+    /// Reviews landlord-written copy (a tenant notice or listing) for Fair Housing Act issues and
+    /// suggests a compliant rewrite. When no AI key is configured the result has <c>reviewed=false</c>
+    /// and is never reported as compliant — callers must surface "AI review unavailable".
+    /// </summary>
+    [HttpPost("fair-housing-check")]
+    [ProducesResponseType(typeof(FairHousingReviewResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<FairHousingReviewResult>> FairHousingCheck(
+        [FromBody] FairHousingCheckRequest request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.Text)) return BadRequest("Text is required.");
+        if (request.Text.Length > 8000) return BadRequest("Text is too long (max 8000 characters).");
+
+        return Ok(await _fairHousing.ReviewAsync(request.Text, ct));
     }
 }
