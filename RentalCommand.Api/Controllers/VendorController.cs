@@ -77,6 +77,28 @@ public class VendorController : AuthenticatedPortfolioControllerBase
             : CreatedAtAction(nameof(Scorecard), new { id }, created);
     }
 
+    /// <summary>
+    /// Text the vendor a friendly request to send their W-9 for 1099 tax reporting. Requires a phone
+    /// number on file (400 when absent). The SMS going out is the action — nothing is stored on the vendor.
+    /// </summary>
+    [HttpPost("{id:int}/request-w9")]
+    [ProducesResponseType(typeof(object), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> RequestW9(int id, CancellationToken ct)
+    {
+        var result = await _service.RequestW9Async(GetPortfolioId(), id, GetUserId(), ct);
+        return result.Outcome switch
+        {
+            RequestW9Outcome.Queued => Ok(new { queued = true, sentTo = result.Phone }),
+            RequestW9Outcome.VendorHasNoPhone => BadRequest(new
+            {
+                error = "This vendor has no phone number on file. Add a phone number, then request the W-9."
+            }),
+            _ => NotFound(new { error = "Vendor not found" }),
+        };
+    }
+
     /// <summary>Vendor performance scorecard: rating, jobs completed, and average DONE response time.</summary>
     [HttpGet("{id:int}/scorecard")]
     [ProducesResponseType(typeof(VendorScorecardResponse), StatusCodes.Status200OK)]

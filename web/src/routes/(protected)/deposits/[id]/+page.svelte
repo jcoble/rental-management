@@ -2,8 +2,12 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { securityDeposits } from '$lib/api/endpoints/securityDeposits';
-	import type { SecurityDepositHolding } from '$lib/types';
+	import {
+		securityDeposits,
+		downloadMoveOutStatement
+	} from '$lib/api/endpoints/securityDeposits';
+	import { documents, fileObjectUrl } from '$lib/api/endpoints/documents';
+	import type { DocumentItem, SecurityDepositHolding } from '$lib/types';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { depositDeductionSchema, parseForm } from '$lib/schemas';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
@@ -13,6 +17,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { FileText, Image as ImageIcon, Upload } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 
@@ -123,6 +128,85 @@
 		PartiallyReturned: { label: 'Partially Returned', class: 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800' },
 		Returned: { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
 	};
+
+	// --- Move-out statement PDF (authed blob download) ---
+	let downloadingStatement = $state(false);
+
+	async function handleStatementDownload() {
+		downloadingStatement = true;
+		try {
+			await downloadMoveOutStatement(depositId);
+		} catch {
+			showError('Could not download the move-out statement. Please try again.');
+		} finally {
+			downloadingStatement = false;
+		}
+	}
+
+	// --- Photos (attached as documents with entityType=SecurityDeposit) ---
+	const ENTITY_TYPE = 'SecurityDeposit';
+
+	const photosQuery = createQuery(() => ({
+		queryKey: ['deposit-documents', depositId],
+		queryFn: () => documents.list(ENTITY_TYPE, depositId),
+		enabled: depositId > 0,
+	}));
+
+	const photos = $derived(photosQuery.data ?? []);
+
+	// Cache of object URLs for image thumbnails, keyed by document id. Kept in a
+	// plain (untracked) map alongside the reactive one so the loader effect never
+	// re-runs just because a thumbnail finished loading.
+	let thumbUrls = $state<Record<number, string>>({});
+	const loadedUrls: Record<number, string> = {};
+
+	$effect(() => {
+		for (const doc of photos) {
+			if (!doc.isImage || loadedUrls[doc.id]) continue;
+			loadedUrls[doc.id] = ''; // mark in-flight so we don't double-fetch
+			fileObjectUrl(doc.id)
+				.then((url) => {
+					loadedUrls[doc.id] = url;
+					thumbUrls = { ...thumbUrls, [doc.id]: url };
+				})
+				.catch(() => {
+					// Leave it without a thumbnail; the icon fallback covers it.
+				});
+		}
+	});
+
+	// Revoke all object URLs once when the page tears down.
+	$effect(() => {
+		return () => {
+			for (const url of Object.values(loadedUrls)) {
+				if (url) URL.revokeObjectURL(url);
+			}
+		};
+	});
+
+	let photoInput: HTMLInputElement | undefined = $state();
+	let uploadingPhoto = $state(false);
+
+	async function handlePhotoChange(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		uploadingPhoto = true;
+		try {
+			await documents.upload(ENTITY_TYPE, depositId, file);
+			showSuccess(`"${file.name}" attached.`);
+			queryClient.invalidateQueries({ queryKey: ['deposit-documents', depositId] });
+		} catch (err) {
+			showError(apiErrorMessage(err, 'Upload failed.'));
+		} finally {
+			uploadingPhoto = false;
+			if (photoInput) photoInput.value = '';
+		}
+	}
+
+	function triggerPhotoUpload() {
+		photoInput?.click();
+	}
 </script>
 
 <svelte:head>
@@ -179,6 +263,16 @@
 				>
 					Process Return
 				</Button>
+				<Button
+					data-testid="deposit-download-statement"
+					variant="outline"
+					size="sm"
+					onclick={handleStatementDownload}
+					disabled={downloadingStatement}
+				>
+					<FileText class="h-3.5 w-3.5" />
+					{downloadingStatement ? 'Preparing…' : 'Download move-out statement (PDF)'}
+				</Button>
 			</div>
 		</div>
 
@@ -224,6 +318,63 @@
 						</div>
 					{/if}
 				</dl>
+			</Card.Content>
+		</Card.Root>
+
+		<!-- Photos — attach move-out condition photos so the statement can include them -->
+		<Card.Root class="mb-6" data-testid="deposit-photos">
+			<Card.Header class="flex flex-row items-center justify-between space-y-0 pb-3">
+				<div>
+					<Card.Title class="text-base">Photos</Card.Title>
+					<p class="mt-1 text-xs text-muted-foreground">
+						Attach move-out condition photos. They're included on the move-out statement.
+					</p>
+				</div>
+				<Button
+					size="sm"
+					variant="outline"
+					class="gap-1.5"
+					onclick={triggerPhotoUpload}
+					disabled={uploadingPhoto}
+					data-testid="deposit-photo-upload"
+				>
+					<Upload class="h-3.5 w-3.5" />
+					{uploadingPhoto ? 'Uploading…' : 'Add photo'}
+				</Button>
+				<input
+					bind:this={photoInput}
+					type="file"
+					accept="image/*"
+					class="hidden"
+					onchange={handlePhotoChange}
+					data-testid="deposit-photo-input"
+				/>
+			</Card.Header>
+			<Card.Content class="pt-0">
+				{#if photosQuery.isLoading}
+					<p class="py-4 text-sm text-muted-foreground" data-testid="deposit-photos-loading">Loading photos…</p>
+				{:else if photos.length === 0}
+					<p class="py-4 text-sm text-muted-foreground" data-testid="deposit-photos-empty">
+						No photos yet. Add a photo to document the unit's condition.
+					</p>
+				{:else}
+					<ul class="flex flex-wrap gap-3" data-testid="deposit-photos-list">
+						{#each photos as photo (photo.id)}
+							<li class="w-24" data-testid="deposit-photo-{photo.id}">
+								<div class="flex h-24 w-24 items-center justify-center overflow-hidden rounded-md border border-border bg-muted">
+									{#if photo.isImage && thumbUrls[photo.id]}
+										<img src={thumbUrls[photo.id]} alt={photo.fileName} class="h-full w-full object-cover" />
+									{:else if photo.isImage}
+										<ImageIcon class="h-6 w-6 text-muted-foreground" />
+									{:else}
+										<FileText class="h-6 w-6 text-muted-foreground" />
+									{/if}
+								</div>
+								<p class="mt-1 truncate text-xs text-muted-foreground" title={photo.fileName}>{photo.fileName}</p>
+							</li>
+						{/each}
+					</ul>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 

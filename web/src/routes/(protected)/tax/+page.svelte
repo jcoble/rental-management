@@ -1,17 +1,18 @@
 <script lang="ts">
-	import { createQuery } from '@tanstack/svelte-query';
+	import { createMutation, createQuery } from '@tanstack/svelte-query';
 	import {
 		accounting,
 		downloadScheduleECsv,
 		downloadYearEndPacket
 	} from '$lib/api/endpoints/accounting';
-	import type { ScheduleEReport } from '$lib/types';
+	import { vendors } from '$lib/api/endpoints/vendors';
+	import type { AccountingReports, ScheduleEReport } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { showError } from '$lib/utils/toast';
+	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
-	import { FileText, Receipt } from '@lucide/svelte';
+	import { FileText, Receipt, MessageSquare, AlertTriangle } from '@lucide/svelte';
 
 	const CURRENT_YEAR = new Date().getFullYear();
 	const YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - i);
@@ -31,6 +32,24 @@
 	}));
 
 	const report = $derived(scheduleEQuery.data as ScheduleEReport | undefined);
+
+	// 1099 checklist: 1099-eligible vendors + whether each has a W-9 on file.
+	const reportsQuery = createQuery(() => ({
+		queryKey: ['accounting-reports', portfolioId],
+		queryFn: () => accounting.reports(),
+		enabled: !!portfolioId
+	}));
+
+	const reports = $derived(reportsQuery.data as AccountingReports | undefined);
+	const vendors1099 = $derived(reports?.vendors1099 ?? []);
+	const vendorsNeedingW9 = $derived(vendors1099.filter((v) => v.needsW9).length);
+
+	const requestW9Mutation = createMutation(() => ({
+		mutationFn: (vendorId: number) => vendors.requestW9(vendorId),
+		onSuccess: (res) => showSuccess(`W-9 request texted to ${res.sentTo}.`),
+		// 400 { error } when the vendor has no phone on file — surface it plainly.
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', {
@@ -136,6 +155,96 @@
 					</Button>
 				</div>
 			</div>
+		</Card.Content>
+	</Card.Root>
+
+	<!-- 1099 checklist: who needs a W-9 before you file 1099s -->
+	<Card.Root class="mb-6 gap-0 py-0" data-testid="vendors-1099-card">
+		<Card.Header class="border-b border-border px-4 py-3">
+			<Card.Title class="text-base font-semibold">1099 checklist</Card.Title>
+			<p class="mt-1 text-sm text-muted-foreground">
+				These vendors need a W-9 before you file 1099s. A W-9 gives you their tax ID. Text a
+				request to anyone still missing one.
+			</p>
+		</Card.Header>
+		<Card.Content class="p-4">
+			{#if reportsQuery.isLoading}
+				<p class="py-6 text-center text-sm text-muted-foreground" data-testid="vendors-1099-loading">
+					Loading vendors…
+				</p>
+			{:else if reportsQuery.isError}
+				<p class="py-6 text-center text-sm text-destructive" data-testid="vendors-1099-error">
+					Could not load the 1099 checklist.
+				</p>
+			{:else if vendors1099.length === 0}
+				<p class="py-6 text-center text-sm text-muted-foreground" data-testid="vendors-1099-empty">
+					No 1099-eligible vendors yet.
+				</p>
+			{:else}
+				{#if vendorsNeedingW9 > 0}
+					<div
+						class="mb-3 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-400"
+						data-testid="vendors-1099-warning"
+					>
+						<AlertTriangle class="h-4 w-4 shrink-0" />
+						<span>{vendorsNeedingW9} vendor{vendorsNeedingW9 === 1 ? '' : 's'} still need a W-9.</span>
+					</div>
+				{/if}
+				<div class="overflow-x-auto">
+					<table class="w-full text-sm" data-testid="vendors-1099-table">
+						<thead>
+							<tr class="border-b border-border">
+								<th class="py-1.5 text-left font-medium text-muted-foreground">Vendor</th>
+								<th class="py-1.5 text-right font-medium text-muted-foreground">Paid</th>
+								<th class="py-1.5 text-left font-medium text-muted-foreground">W-9</th>
+								<th class="py-1.5 text-right font-medium text-muted-foreground">Action</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each vendors1099 as v (v.vendorId)}
+								<tr
+									class="border-b border-border/50 last:border-0 {v.needsW9 ? 'bg-amber-50/60 dark:bg-amber-900/10' : ''}"
+									data-testid="vendor-1099-row-{v.vendorId}"
+								>
+									<td class="py-2">
+										<a
+											href="/owners/vendors/{v.vendorId}"
+											class="font-medium text-primary hover:underline"
+											data-testid="vendor-1099-name-{v.vendorId}"
+										>
+											{v.vendorName}
+										</a>
+									</td>
+									<td class="py-2 text-right tabular-nums">{money(v.totalPaid)}</td>
+									<td class="py-2">
+										{#if v.w9OnFile}
+											<span class="text-green-600" data-testid="vendor-1099-w9-{v.vendorId}">On file</span>
+										{:else}
+											<span class="font-medium text-amber-700 dark:text-amber-500" data-testid="vendor-1099-w9-{v.vendorId}">Missing</span>
+										{/if}
+									</td>
+									<td class="py-2 text-right">
+										{#if v.needsW9}
+											<Button
+												variant="outline"
+												size="sm"
+												onclick={() => requestW9Mutation.mutate(v.vendorId)}
+												disabled={requestW9Mutation.isPending}
+												data-testid="vendor-1099-request-w9-{v.vendorId}"
+											>
+												<MessageSquare class="h-3.5 w-3.5" />
+												Text W-9 request
+											</Button>
+										{:else}
+											<span class="text-xs text-muted-foreground">—</span>
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
 		</Card.Content>
 	</Card.Root>
 

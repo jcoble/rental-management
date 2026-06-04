@@ -8,16 +8,87 @@ import 'vendors_models.dart';
 import 'vendors_repository.dart';
 
 /// Vendor detail with a performance scorecard (average rating, rating count,
-/// jobs completed, average DONE response time) and a "Rate vendor" action.
-class VendorDetailScreen extends ConsumerWidget {
+/// jobs completed, average DONE response time), a tax / W-9 section (text a
+/// W-9 request + a "W-9 on file" toggle), and a "Rate vendor" action.
+class VendorDetailScreen extends ConsumerStatefulWidget {
   const VendorDetailScreen({super.key, required this.vendor});
 
   final Vendor vendor;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<VendorDetailScreen> createState() => _VendorDetailScreenState();
+}
+
+class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
+  late Vendor _vendor;
+  bool _requestingW9 = false;
+  bool _savingW9OnFile = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _vendor = widget.vendor;
+  }
+
+  /// Texts the vendor a W-9 request; snackbars the result or the 400 reason
+  /// (e.g. no phone on file).
+  Future<void> _requestW9() async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _requestingW9 = true);
+    try {
+      final result =
+          await ref.read(vendorsRepositoryProvider).requestW9(_vendor.id);
+      if (!mounted) return;
+      final to = result.sentTo;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              to != null
+                  ? 'W-9 request texted to $to.'
+                  : 'W-9 request texted to the vendor.',
+            ),
+          ),
+        );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _requestingW9 = false);
+    }
+  }
+
+  /// Optimistically flips the W-9-on-file flag and PATCHes the vendor, reverting
+  /// on error.
+  Future<void> _setW9OnFile(bool value) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final previous = _vendor.w9OnFile;
+    setState(() {
+      _vendor = _vendor.copyWith(w9OnFile: value);
+      _savingW9OnFile = true;
+    });
+    try {
+      await ref.read(vendorsRepositoryProvider).setW9OnFile(_vendor.id, value);
+      if (mounted) ref.invalidate(vendorsProvider);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() => _vendor = _vendor.copyWith(w9OnFile: previous));
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _savingW9OnFile = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final vendor = _vendor;
     final scorecardAsync = ref.watch(vendorScorecardProvider(vendor.id));
 
     return Scaffold(
@@ -120,6 +191,65 @@ class VendorDetailScreen extends ConsumerWidget {
                     ref.invalidate(vendorScorecardProvider(vendor.id)),
               ),
               data: (card) => _ScorecardCard(card: card),
+            ),
+
+            // ── Tax / W-9 ─────────────────────────────────────────────────
+            const SizedBox(height: 24),
+            Text(
+              'Tax / W-9',
+              style: theme.textTheme.labelLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+                color: cs.onSurfaceVariant,
+                letterSpacing: 0.5,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: cs.outlineVariant),
+              ),
+              child: Column(
+                children: [
+                  SwitchListTile.adaptive(
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 16),
+                    title: const Text('W-9 on file'),
+                    subtitle: Text(
+                      vendor.w9OnFile
+                          ? 'A signed W-9 has been collected.'
+                          : 'No W-9 collected yet.',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                    value: vendor.w9OnFile,
+                    onChanged:
+                        _savingW9OnFile ? null : (v) => _setW9OnFile(v),
+                  ),
+                  Divider(height: 1, color: cs.outlineVariant),
+                  ListTile(
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 16),
+                    leading: Icon(Icons.sms_outlined, color: cs.primary),
+                    title: const Text('Text W-9 request'),
+                    subtitle: Text(
+                      'Send the vendor a text asking for their W-9.',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                    trailing: _requestingW9
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.chevron_right),
+                    onTap: _requestingW9 ? null : _requestW9,
+                  ),
+                ],
+              ),
             ),
           ],
         ),
