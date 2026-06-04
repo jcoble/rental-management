@@ -1,4 +1,7 @@
 import { api } from '../client';
+import type { DocCitation } from './docs';
+
+export type { DocCitation } from './docs';
 
 export interface BriefingBullet {
 	title: string;
@@ -30,6 +33,10 @@ export interface AskResponse {
 	modelId: string;
 	/** Channels the answer was queued for delivery on (e.g. "Email", "Sms"). */
 	deliveredChannels?: string[] | null;
+	/** Where the answer came from: portfolio "Data" or the "Docs" knowledge base. */
+	source?: 'Data' | 'Docs' | null;
+	/** When `source === 'Docs'`, the knowledge-base articles the answer drew on. */
+	citations?: DocCitation[] | null;
 }
 
 /** Optional "text me / email me this answer" delivery options for POST /ai/ask. */
