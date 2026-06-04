@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { goto } from '$app/navigation';
 	import { owners } from '$lib/api/endpoints/owners';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import type { Owner, Vendor } from '$lib/types';
+	import StarRating from '$lib/components/shared/StarRating.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { ownerSchema, vendorSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -217,6 +219,16 @@
 			accessor: (v) => v.serviceType,
 		},
 		{
+			key: 'rating',
+			title: 'Rating',
+			mobileRole: 'meta',
+			accessor: (v) =>
+				v.averageRating != null && v.ratingCount > 0
+					? `${v.averageRating.toFixed(1)} stars · ${v.jobsCompleted} jobs done`
+					: 'No ratings yet',
+			cell: vendorRatingCell,
+		},
+		{
 			key: 'contact',
 			title: 'Contact',
 			mobileRole: 'meta',
@@ -268,6 +280,17 @@
 
 {#snippet vendorNameCell(v: Vendor)}
 	<span data-testid="vendor-name">{v.name}</span>
+{/snippet}
+
+{#snippet vendorRatingCell(v: Vendor)}
+	{#if v.averageRating != null && v.ratingCount > 0}
+		<span class="flex items-center gap-1.5" data-testid="vendor-rating">
+			<StarRating value={v.averageRating} size="sm" testid="vendor-rating-stars" />
+			<span class="text-xs text-muted-foreground tabular-nums">{v.averageRating.toFixed(1)} · {v.jobsCompleted} done</span>
+		</span>
+	{:else}
+		<span class="text-xs text-muted-foreground" data-testid="vendor-rating">No ratings yet</span>
+	{/if}
 {/snippet}
 
 {#snippet vendorActionsCell(v: Vendor)}
@@ -331,6 +354,7 @@
 			emptyMessage="No vendors found."
 			getRowKey={(v) => v.id}
 			getRowTestId={() => 'vendor-row'}
+			onRowClick={(v) => goto(`/owners/vendors/${v.id}`)}
 			data-testid="vendors-list"
 		>
 			{#snippet toolbar()}

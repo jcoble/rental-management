@@ -8,6 +8,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../properties/properties_repository.dart';
+import '../vendors/dispatch_vendor_sheet.dart';
+import '../vendors/rate_vendor_sheet.dart';
 import 'work_order_timeline.dart';
 import 'work_orders_repository.dart';
 
@@ -270,6 +272,45 @@ class _WorkOrderDetailScreenState
     }
   }
 
+  Future<void> _dispatchVendor() async {
+    final vendor = await showDispatchVendorSheet(
+      context,
+      workOrderId: widget.workOrderId,
+    );
+    if (vendor == null || !mounted) return;
+
+    // Reload so the assigned vendor + any timeline entry show up.
+    await ref
+        .read(workOrderDetailProvider(widget.workOrderId).notifier)
+        .refresh();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            'Texted ${vendor.name}. They reply DONE to close this out.',
+          ),
+        ),
+      );
+  }
+
+  Future<void> _rateVendor(WorkOrder wo) async {
+    final vendorId = wo.vendorId;
+    if (vendorId == null) return;
+    final rated = await showRateVendorSheet(
+      context,
+      vendorId: vendorId,
+      vendorName: wo.vendorName ?? 'this vendor',
+      workOrderId: wo.id,
+    );
+    if (rated == true && mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text('Rating saved. Thanks!')));
+    }
+  }
+
   void _showEditSheet(BuildContext context, WorkOrder wo) {
     showModalBottomSheet<void>(
       context: context,
@@ -346,6 +387,8 @@ class _WorkOrderDetailScreenState
             onTransition: _changeStatus,
             onAddPhoto: _showPhotoSourceSheet,
             onNavigate: () => _navigateToProperty(detail.workOrder),
+            onDispatchVendor: _dispatchVendor,
+            onRateVendor: () => _rateVendor(detail.workOrder),
           ),
         ),
       ),
@@ -365,6 +408,8 @@ class _DetailBody extends StatelessWidget {
     required this.onTransition,
     required this.onAddPhoto,
     required this.onNavigate,
+    required this.onDispatchVendor,
+    required this.onRateVendor,
   });
 
   final WorkOrderDetail detail;
@@ -375,12 +420,16 @@ class _DetailBody extends StatelessWidget {
   final void Function(String) onTransition;
   final VoidCallback onAddPhoto;
   final VoidCallback onNavigate;
+  final VoidCallback onDispatchVendor;
+  final VoidCallback onRateVendor;
 
   @override
   Widget build(BuildContext context) {
     final workOrder = detail.workOrder;
     final otherStatuses =
         _allStatuses.where((s) => s != workOrder.status).toList();
+    final isCompleted = workOrder.status.toLowerCase() == 'completed';
+    final hasVendor = workOrder.vendorId != null;
 
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
@@ -407,11 +456,30 @@ class _DetailBody extends StatelessWidget {
 
         const SizedBox(height: 16),
 
-        // ── Navigate ───────────────────────────────────────────────────
-        FilledButton.tonalIcon(
-          onPressed: onNavigate,
-          icon: const Icon(Icons.directions_outlined),
-          label: const Text('Open in Maps'),
+        // ── Actions ────────────────────────────────────────────────────
+        Wrap(
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            FilledButton.tonalIcon(
+              onPressed: onNavigate,
+              icon: const Icon(Icons.directions_outlined),
+              label: const Text('Open in Maps'),
+            ),
+            // Dispatch is hidden once the job is closed out.
+            if (!isCompleted && workOrder.status.toLowerCase() != 'cancelled')
+              FilledButton.icon(
+                onPressed: onDispatchVendor,
+                icon: const Icon(Icons.sms_outlined),
+                label: const Text('Text a vendor'),
+              ),
+            if (isCompleted && hasVendor)
+              OutlinedButton.icon(
+                onPressed: onRateVendor,
+                icon: const Icon(Icons.star_outline_rounded),
+                label: const Text('Rate this vendor'),
+              ),
+          ],
         ),
 
         const SizedBox(height: 20),

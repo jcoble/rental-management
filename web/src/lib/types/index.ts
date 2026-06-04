@@ -549,8 +549,50 @@ export interface Vendor {
 	w9OnFile: boolean;
 	preferred: boolean;
 	notes?: string;
+	/** Cached average star rating (1–5); null until the vendor has been rated. */
+	averageRating?: number | null;
+	/** Number of ratings behind {@link averageRating}. */
+	ratingCount: number;
+	/** Count of work orders this vendor has completed. */
+	jobsCompleted: number;
 	createdAt: string;
 	updatedAt: string;
+}
+
+/** Vendor dispatch status (mirrors the API's VendorDispatchStatus enum, serialized as strings). */
+export type VendorDispatchStatus = 'Dispatched' | 'Acknowledged' | 'Completed' | 'Cancelled';
+
+/** Result of texting a job to a vendor (POST /work-orders/{id}/dispatch). */
+export interface VendorDispatch {
+	id: number;
+	portfolioId: number;
+	workOrderId: number;
+	vendorId: number;
+	status: VendorDispatchStatus;
+	dispatchedAtUtc: string;
+	respondedAtUtc?: string | null;
+	message?: string | null;
+}
+
+/** A recorded 1–5 star rating of a vendor (POST /vendors/{id}/ratings). */
+export interface VendorRating {
+	id: number;
+	vendorId: number;
+	workOrderId?: number | null;
+	stars: number;
+	comment?: string | null;
+	createdAtUtc: string;
+}
+
+/** Vendor performance scorecard (GET /vendors/{id}/scorecard). */
+export interface VendorScorecard {
+	vendorId: number;
+	name: string;
+	averageRating?: number | null;
+	ratingCount: number;
+	jobsCompleted: number;
+	/** Average hours from a job being texted to the vendor's DONE reply; null until one completes. */
+	avgResponseHours?: number | null;
 }
 
 export interface WorkOrder {

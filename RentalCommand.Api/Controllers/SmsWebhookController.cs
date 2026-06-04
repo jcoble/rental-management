@@ -12,16 +12,16 @@ namespace RentalCommand.Api.Controllers;
 [Route("api/v1/sms")]
 public class SmsWebhookController : ControllerBase
 {
-    private readonly ISmsInboundRentConfirmationService _rentConfirmation;
+    private readonly ISmsInboundRouter _router;
     private readonly ISmsWebhookSignatureValidator _signatureValidator;
     private readonly ILogger<SmsWebhookController> _logger;
 
     public SmsWebhookController(
-        ISmsInboundRentConfirmationService rentConfirmation,
+        ISmsInboundRouter router,
         ISmsWebhookSignatureValidator signatureValidator,
         ILogger<SmsWebhookController> logger)
     {
-        _rentConfirmation = rentConfirmation;
+        _router = router;
         _signatureValidator = signatureValidator;
         _logger = logger;
     }
@@ -34,9 +34,9 @@ public class SmsWebhookController : ControllerBase
         [FromForm(Name = "Body")] string? body,
         CancellationToken ct)
     {
-        // This endpoint mutates money (marks rent paid), so verify the provider signature before
-        // trusting the form. When no provider auth token is configured (local dev), enforcement is
-        // skipped but loudly logged so it is never silently off in a real deployment.
+        // This endpoint mutates money (marks rent paid) and closes work orders, so verify the provider
+        // signature before trusting the form. When no provider auth token is configured (local dev),
+        // enforcement is skipped but loudly logged so it is never silently off in a real deployment.
         if (_signatureValidator.IsEnforced)
         {
             if (!_signatureValidator.IsValid(Request))
@@ -51,8 +51,9 @@ public class SmsWebhookController : ControllerBase
                 "This endpoint is spoofable until a provider token is set.");
         }
 
-        var result = await _rentConfirmation.HandleAsync(from, body, DateTime.UtcNow, ct);
-        return Content(ToMessageResponse(result.ResponseMessage), "application/xml", Encoding.UTF8);
+        // Route to vendor-DONE (job completion) or fall back to tenant rent-YES confirmation.
+        var responseMessage = await _router.RouteAsync(from, body, DateTime.UtcNow, ct);
+        return Content(ToMessageResponse(responseMessage), "application/xml", Encoding.UTF8);
     }
 
     private static string ToMessageResponse(string message)
