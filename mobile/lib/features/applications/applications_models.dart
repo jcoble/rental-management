@@ -132,6 +132,129 @@ class ApplicationApproval {
   }
 }
 
+/// A tenant-screening result for an application.
+///
+/// Mirrors the API `ScreeningResultResponse` (camelCase, enums as strings).
+class ScreeningResult {
+  const ScreeningResult({
+    required this.id,
+    required this.applicationId,
+    required this.status,
+    this.creditScoreBand,
+    this.hasCriminalRecord,
+    this.hasEvictionRecord,
+    this.recommendation,
+    this.providerReference,
+    this.requestedAtUtc,
+    this.completedAtUtc,
+  });
+
+  final int id;
+  final int applicationId;
+
+  /// One of: Requested, Completed, Failed.
+  final String status;
+  final String? creditScoreBand;
+  final bool? hasCriminalRecord;
+  final bool? hasEvictionRecord;
+
+  /// One of: Accept, Conditional, Decline.
+  final String? recommendation;
+  final String? providerReference;
+  final DateTime? requestedAtUtc;
+  final DateTime? completedAtUtc;
+
+  bool get isCompleted => status == 'Completed';
+
+  factory ScreeningResult.fromJson(Map<String, dynamic> json) {
+    DateTime? parseDate(String key) {
+      final raw = json[key];
+      if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
+      return null;
+    }
+
+    String? asString(String key) {
+      final raw = json[key];
+      if (raw is String && raw.isNotEmpty) return raw;
+      return null;
+    }
+
+    return ScreeningResult(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      applicationId: (json['applicationId'] as num?)?.toInt() ?? 0,
+      status: json['status'] as String? ?? 'Requested',
+      creditScoreBand: asString('creditScoreBand'),
+      hasCriminalRecord: json['hasCriminalRecord'] as bool?,
+      hasEvictionRecord: json['hasEvictionRecord'] as bool?,
+      recommendation: asString('recommendation'),
+      providerReference: asString('providerReference'),
+      requestedAtUtc: parseDate('requestedAtUtc'),
+      completedAtUtc: parseDate('completedAtUtc'),
+    );
+  }
+}
+
+/// Human-friendly label for a screening status string.
+String friendlyScreeningStatus(String status) {
+  switch (status) {
+    case 'Requested':
+      return 'Requested';
+    case 'Completed':
+      return 'Completed';
+    case 'Failed':
+      return 'Failed';
+    default:
+      return status;
+  }
+}
+
+/// An FCRA adverse-action notice generated for a declined application.
+///
+/// Mirrors the API `AdverseActionNoticeResponse`.
+class AdverseActionNotice {
+  const AdverseActionNotice({
+    required this.id,
+    required this.applicationId,
+    this.reason,
+    this.creditReportingAgency,
+    this.generatedAtUtc,
+    this.storedFileId,
+    this.sentAtUtc,
+  });
+
+  final int id;
+  final int applicationId;
+  final String? reason;
+  final String? creditReportingAgency;
+  final DateTime? generatedAtUtc;
+  final int? storedFileId;
+  final DateTime? sentAtUtc;
+
+  factory AdverseActionNotice.fromJson(Map<String, dynamic> json) {
+    DateTime? parseDate(String key) {
+      final raw = json[key];
+      if (raw is String && raw.isNotEmpty) return DateTime.tryParse(raw);
+      return null;
+    }
+
+    String? asString(String key) {
+      final raw = json[key];
+      if (raw is String && raw.isNotEmpty) return raw;
+      return null;
+    }
+
+    return AdverseActionNotice(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      applicationId: (json['applicationId'] as num?)?.toInt() ?? 0,
+      reason: asString('reason'),
+      creditReportingAgency: asString('creditReportingAgency'),
+      generatedAtUtc: parseDate('generatedAtUtc'),
+      storedFileId: (json['storedFileId'] as num?)?.toInt(),
+      sentAtUtc: parseDate('sentAtUtc'),
+    );
+  }
+}
+
 // ── Status metadata ───────────────────────────────────────────────────────────
 
 /// Application statuses, in lifecycle order (matches the API enum).

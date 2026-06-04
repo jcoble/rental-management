@@ -57,6 +57,8 @@ builder.Services.Configure<RentalCommand.Core.Configuration.ReportsConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.ReportsConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.EsignConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.EsignConfig.SectionName));
+builder.Services.Configure<RentalCommand.Core.Configuration.ScreeningConfig>(
+    builder.Configuration.GetSection(RentalCommand.Core.Configuration.ScreeningConfig.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
@@ -241,6 +243,26 @@ else
 {
     builder.Services.AddScoped<RentalCommand.Core.Interfaces.IEsignProvider,
         RentalCommand.Api.Services.Esign.DisabledEsignProvider>();
+}
+
+// --- Tenant-screening provider (gated — like Stripe/LLM/e-sign, the real TransUnion call is only wired
+// when a key is set; otherwise a no-op provider returns a clear "not configured" result and never
+// contacts a third party. FCRA: screening is also never run without recorded applicant consent). ---
+var screeningConfig = builder.Configuration.GetSection(RentalCommand.Core.Configuration.ScreeningConfig.SectionName)
+    .Get<RentalCommand.Core.Configuration.ScreeningConfig>() ?? new RentalCommand.Core.Configuration.ScreeningConfig();
+if (screeningConfig.Enabled)
+{
+    builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.IScreeningProvider,
+        RentalCommand.Api.Services.Screening.TransUnionScreeningProvider>(c =>
+    {
+        c.BaseAddress = new Uri(screeningConfig.BaseUrl);
+        c.Timeout = TimeSpan.FromSeconds(90);
+    });
+}
+else
+{
+    builder.Services.AddScoped<RentalCommand.Core.Interfaces.IScreeningProvider,
+        RentalCommand.Api.Services.Screening.DisabledScreeningProvider>();
 }
 
 var app = builder.Build();

@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
 import 'applications_models.dart';
@@ -28,10 +31,15 @@ class _ApplicationDetailScreenState
   // Set after a successful approve so we can surface the new tenant.
   int? _createdTenantId;
 
+  // Set after generating an adverse-action notice so we can surface it inline.
+  AdverseActionNotice? _adverseAction;
+
   int get _id => widget.applicationId;
 
-  Future<void> _refresh() async =>
-      ref.invalidate(applicationDetailProvider(_id));
+  Future<void> _refresh() async {
+    ref.invalidate(applicationDetailProvider(_id));
+    ref.invalidate(applicationScreeningProvider(_id));
+  }
 
   void _snack(String message) {
     if (!mounted) return;
@@ -135,9 +143,89 @@ class _ApplicationDetailScreenState
     }
   }
 
+  // ── Screening ─────────────────────────────────────────────────────────────
+
+  Future<void> _runScreening() async {
+    setState(() => _busy = true);
+    try {
+      await ref.read(applicationsRepositoryProvider).screen(_id);
+      ref.invalidate(applicationScreeningProvider(_id));
+      _snack('Screening requested.');
+    } on ApiException catch (e) {
+      // Screening isn't configured (dormant provider) — gentle, not an error.
+      if (e.statusCode == 503) {
+        _snack("Screening isn't set up yet.");
+      } else {
+        _snack(e.message);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _generateAdverseAction(RentalApplication app) async {
+    final result = await showDialog<_AdverseActionInput>(
+      context: context,
+      builder: (_) => _AdverseActionDialog(
+        initialReason: app.decisionReason ?? '',
+      ),
+    );
+    if (result == null || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final notice = await ref.read(applicationsRepositoryProvider).adverseAction(
+            _id,
+            reason: result.reason.isEmpty ? null : result.reason,
+            sendToApplicant: result.sendToApplicant,
+          );
+      if (!mounted) return;
+      setState(() => _adverseAction = notice);
+      _snack(notice.sentAtUtc != null
+          ? 'Adverse-action notice generated and sent.'
+          : 'Adverse-action notice generated.');
+    } on ApiException catch (e) {
+      _snack(e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Fetches the notice PDF bytes (authed), saves to a temp file, and opens it
+  /// with the platform viewer via url_launcher (file:// uri).
+  Future<void> _viewNotice(int storedFileId) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Opening notice…')));
+    try {
+      final bytes = await ref
+          .read(applicationsRepositoryProvider)
+          .documentBytes(storedFileId);
+      final path =
+          '${Directory.systemTemp.path}/adverse-action-$storedFileId.pdf';
+      final file = File(path);
+      await file.writeAsBytes(bytes, flush: true);
+      final ok =
+          await launchUrl(Uri.file(path), mode: LaunchMode.externalApplication);
+      if (!ok) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(content: Text('No app available to open the PDF.')),
+          );
+      }
+    } on ApiException catch (e) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final detailAsync = ref.watch(applicationDetailProvider(_id));
+    final screeningAsync = ref.watch(applicationScreeningProvider(_id));
     final theme = Theme.of(context);
 
     return Scaffold(
@@ -164,9 +252,14 @@ class _ApplicationDetailScreenState
             theme: theme,
             busy: _busy,
             createdTenantId: _createdTenantId ?? app.approvedTenantId,
+            screeningAsync: screeningAsync,
+            adverseAction: _adverseAction,
             onApprove: _approve,
             onDecline: _decline,
             onWithdraw: _withdraw,
+            onRunScreening: _runScreening,
+            onGenerateAdverseAction: () => _generateAdverseAction(app),
+            onViewNotice: _viewNotice,
           ),
         ),
       ),
@@ -182,18 +275,28 @@ class _DetailBody extends StatelessWidget {
     required this.theme,
     required this.busy,
     required this.createdTenantId,
+    required this.screeningAsync,
+    required this.adverseAction,
     required this.onApprove,
     required this.onDecline,
     required this.onWithdraw,
+    required this.onRunScreening,
+    required this.onGenerateAdverseAction,
+    required this.onViewNotice,
   });
 
   final RentalApplication application;
   final ThemeData theme;
   final bool busy;
   final int? createdTenantId;
+  final AsyncValue<List<ScreeningResult>> screeningAsync;
+  final AdverseActionNotice? adverseAction;
   final VoidCallback onApprove;
   final VoidCallback onDecline;
   final VoidCallback onWithdraw;
+  final VoidCallback onRunScreening;
+  final VoidCallback onGenerateAdverseAction;
+  final void Function(int storedFileId) onViewNotice;
 
   @override
   Widget build(BuildContext context) {
@@ -361,6 +464,18 @@ class _DetailBody extends StatelessWidget {
             ],
           ),
         ),
+        const SizedBox(height: 12),
+
+        // ── Screening ──────────────────────────────────────────────────────
+        _ScreeningSection(
+          application: app,
+          busy: busy,
+          screeningAsync: screeningAsync,
+          adverseAction: adverseAction,
+          onRunScreening: onRunScreening,
+          onGenerateAdverseAction: onGenerateAdverseAction,
+          onViewNotice: onViewNotice,
+        ),
 
         // ── Actions ────────────────────────────────────────────────────────
         if (open) ...[
@@ -460,6 +575,387 @@ class _DeclineDialogState extends State<_DeclineDialog> {
           onPressed: () =>
               Navigator.of(context).pop(_controller.text.trim()),
           child: const Text('Decline'),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Screening section ───────────────────────────────────────────────────────────
+
+class _ScreeningSection extends StatelessWidget {
+  const _ScreeningSection({
+    required this.application,
+    required this.busy,
+    required this.screeningAsync,
+    required this.adverseAction,
+    required this.onRunScreening,
+    required this.onGenerateAdverseAction,
+    required this.onViewNotice,
+  });
+
+  final RentalApplication application;
+  final bool busy;
+  final AsyncValue<List<ScreeningResult>> screeningAsync;
+  final AdverseActionNotice? adverseAction;
+  final VoidCallback onRunScreening;
+  final VoidCallback onGenerateAdverseAction;
+  final void Function(int storedFileId) onViewNotice;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final app = application;
+    final hasConsent = app.consentGiven;
+
+    // The most recent result drives the summary (list is newest-first).
+    final latest = screeningAsync.maybeWhen(
+      data: (results) => results.isEmpty ? null : results.first,
+      orElse: () => null,
+    );
+    final hasCompletedScreening = screeningAsync.maybeWhen(
+      data: (results) => results.any((r) => r.isCompleted),
+      orElse: () => false,
+    );
+
+    return _SectionCard(
+      title: 'Screening',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // ── Latest result summary ──────────────────────────────────────
+          screeningAsync.when(
+            loading: () => const Padding(
+              padding: EdgeInsets.symmetric(vertical: 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+              ),
+            ),
+            error: (e, _) => _EmptyHint(
+              text: e is ApiException ? e.message : "Couldn't load screening.",
+            ),
+            data: (results) {
+              if (results.isEmpty) {
+                return _EmptyHint(text: 'No screening has been run yet.');
+              }
+              return _ScreeningResultView(result: results.first);
+            },
+          ),
+          const SizedBox(height: 12),
+
+          // ── Run screening ──────────────────────────────────────────────
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: (busy || !hasConsent) ? null : onRunScreening,
+              icon: const Icon(Icons.fact_check_outlined, size: 18),
+              label: Text(latest == null ? 'Run screening' : 'Re-run screening'),
+            ),
+          ),
+          if (!hasConsent) ...[
+            const SizedBox(height: 6),
+            _EmptyHint(
+              text: 'Screening needs the applicant’s FCRA consent on file.',
+            ),
+          ],
+
+          // ── Adverse-action (declined + screened) ───────────────────────
+          if (app.status == 'Declined' && hasCompletedScreening) ...[
+            const Divider(height: 28),
+            Text(
+              'Adverse action',
+              style: theme.textTheme.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'When you decline based on a screening report, the FCRA requires '
+              'giving the applicant an adverse-action notice naming the credit '
+              'reporting agency and their right to dispute it.',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: 12),
+            if (adverseAction != null) ...[
+              _AdverseActionView(notice: adverseAction!),
+              const SizedBox(height: 10),
+              if (adverseAction!.storedFileId != null)
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.tonalIcon(
+                    onPressed: () => onViewNotice(adverseAction!.storedFileId!),
+                    icon: const Icon(Icons.picture_as_pdf_outlined, size: 18),
+                    label: const Text('View notice (PDF)'),
+                  ),
+                ),
+            ] else
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: busy ? null : onGenerateAdverseAction,
+                  icon: const Icon(Icons.gavel_outlined, size: 18),
+                  label: const Text('Generate adverse-action notice'),
+                ),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Summary of a single screening result — status, credit band, criminal /
+/// eviction in plain language, and a recommendation chip.
+class _ScreeningResultView extends StatelessWidget {
+  const _ScreeningResultView({required this.result});
+
+  final ScreeningResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final r = result;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                friendlyScreeningStatus(r.status),
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(fontWeight: FontWeight.w700),
+              ),
+            ),
+            if (r.recommendation != null)
+              _RecommendationChip(recommendation: r.recommendation!),
+          ],
+        ),
+        const SizedBox(height: 8),
+        if (r.creditScoreBand != null)
+          _DetailRow(label: 'Credit band', value: r.creditScoreBand!),
+        _DetailRow(
+          label: 'Criminal',
+          value: r.hasCriminalRecord == null
+              ? 'Not reported'
+              : (r.hasCriminalRecord! ? 'Record found' : 'None found'),
+        ),
+        _DetailRow(
+          label: 'Eviction',
+          value: r.hasEvictionRecord == null
+              ? 'Not reported'
+              : (r.hasEvictionRecord! ? 'Record found' : 'None found'),
+        ),
+        if (r.completedAtUtc != null)
+          _DetailRow(
+            label: 'Completed',
+            value: formatApplicationDateTime(r.completedAtUtc!),
+          )
+        else if (r.requestedAtUtc != null)
+          _DetailRow(
+            label: 'Requested',
+            value: formatApplicationDateTime(r.requestedAtUtc!),
+          ),
+        if (r.status == 'Failed') ...[
+          const SizedBox(height: 4),
+          Text(
+            'This screening request failed. Try running it again.',
+            style: theme.textTheme.bodySmall?.copyWith(color: cs.error),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Accept / Conditional / Decline chip for a screening recommendation.
+class _RecommendationChip extends StatelessWidget {
+  const _RecommendationChip({required this.recommendation});
+
+  final String recommendation;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    Color bg;
+    Color fg;
+    switch (recommendation) {
+      case 'Accept':
+        bg = cs.tertiaryContainer;
+        fg = cs.onTertiaryContainer;
+        break;
+      case 'Conditional':
+        bg = cs.secondaryContainer;
+        fg = cs.onSecondaryContainer;
+        break;
+      case 'Decline':
+        bg = cs.errorContainer;
+        fg = cs.onErrorContainer;
+        break;
+      default:
+        bg = cs.surfaceContainerHighest;
+        fg = cs.onSurfaceVariant;
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Text(
+        recommendation,
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: fg),
+      ),
+    );
+  }
+}
+
+/// Inline summary of a generated adverse-action notice.
+class _AdverseActionView extends StatelessWidget {
+  const _AdverseActionView({required this.notice});
+
+  final AdverseActionNotice notice;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      color: cs.surfaceContainerHighest,
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.description_outlined, size: 18, color: cs.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Adverse-action notice generated',
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (notice.reason != null && notice.reason!.isNotEmpty)
+              _DetailRow(label: 'Reason', value: notice.reason!),
+            if (notice.creditReportingAgency != null)
+              _DetailRow(
+                label: 'Agency',
+                value: notice.creditReportingAgency!,
+              ),
+            if (notice.generatedAtUtc != null)
+              _DetailRow(
+                label: 'Generated',
+                value: formatApplicationDateTime(notice.generatedAtUtc!),
+              ),
+            _DetailRow(
+              label: 'Sent',
+              value: notice.sentAtUtc != null
+                  ? formatApplicationDateTime(notice.sentAtUtc!)
+                  : 'Not sent to applicant',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Adverse-action dialog ───────────────────────────────────────────────────────
+
+class _AdverseActionInput {
+  const _AdverseActionInput({required this.reason, required this.sendToApplicant});
+
+  final String reason;
+  final bool sendToApplicant;
+}
+
+class _AdverseActionDialog extends StatefulWidget {
+  const _AdverseActionDialog({required this.initialReason});
+
+  final String initialReason;
+
+  @override
+  State<_AdverseActionDialog> createState() => _AdverseActionDialogState();
+}
+
+class _AdverseActionDialogState extends State<_AdverseActionDialog> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initialReason);
+  bool _sendToApplicant = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('Adverse-action notice'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'This generates an FCRA-compliant notice for the declined applicant. '
+            'Add or adjust the reason below.',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            minLines: 2,
+            maxLines: 4,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+              labelText: 'Reason',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 4),
+          CheckboxListTile(
+            value: _sendToApplicant,
+            onChanged: (v) => setState(() => _sendToApplicant = v ?? false),
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text('Send to applicant'),
+            subtitle: const Text('Email the notice to the applicant now.'),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(
+            _AdverseActionInput(
+              reason: _controller.text.trim(),
+              sendToApplicant: _sendToApplicant,
+            ),
+          ),
+          child: const Text('Generate'),
         ),
       ],
     );
