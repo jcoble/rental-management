@@ -329,6 +329,116 @@ public class AccountingServiceTests : IDisposable
         snapshot.Collected.Should().Be(300m);
     }
 
+    [Fact]
+    public async Task GetTransactionsAsync_MatchedBankLine_MarksPaymentReconciledWithClearedFields()
+    {
+        var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+        SeedPropertyLeaseAndPayment(date); // seeds payment Id 1
+        var paymentId = _db.Payments.Single().Id;
+
+        // A bank deposit confirmed (Matched) against the payment → the payment row should read as
+        // "cleared" by that bank, on that date.
+        SeedBankTransaction(
+            description: "Tenant ACH",
+            merchantName: "Maria Tenant",
+            amount: 1200m,
+            postedAt: date,
+            category: "Deposit",
+            matchStatus: "Matched",
+            matchedPaymentId: paymentId);
+
+        var page = await _sut.GetTransactionsAsync(
+            PortfolioId,
+            new AccountingTransactionsQuery { Kind = "Payment", Take = 20 },
+            CancellationToken.None);
+
+        var paymentRow = page.Items.Single(t => t.Kind == "Payment" && t.Id == paymentId);
+        paymentRow.Reconciled.Should().BeTrue();
+        paymentRow.ClearedBankName.Should().Be("Sandbox Bank");
+        paymentRow.ClearedAt.Should().Be(date);
+        paymentRow.SuggestedBankMatch.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetTransactionsAsync_UnmatchedBankLine_SurfacesSuggestedBankMatchOnPayment()
+    {
+        var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+        SeedPropertyLeaseAndPayment(date); // tenant "Maria Tenant", payment $1,200 due that day
+        var paymentId = _db.Payments.Single().Id;
+
+        // An OPEN (Unmatched) deposit that lines up by amount + date, and whose merchant carries the
+        // tenant name → it should be offered as a one-tap suggestion (not auto-applied).
+        SeedBankTransaction(
+            description: "ACH CREDIT",
+            merchantName: "Maria Tenant",
+            amount: 1200m,
+            postedAt: date,
+            category: "Deposit",
+            matchStatus: "Unmatched");
+
+        var page = await _sut.GetTransactionsAsync(
+            PortfolioId,
+            new AccountingTransactionsQuery { Kind = "Payment", Take = 20 },
+            CancellationToken.None);
+
+        var paymentRow = page.Items.Single(t => t.Kind == "Payment" && t.Id == paymentId);
+        paymentRow.Reconciled.Should().BeFalse();
+        paymentRow.SuggestedBankMatch.Should().NotBeNull();
+        paymentRow.SuggestedBankMatch!.Amount.Should().Be(1200m);
+        paymentRow.SuggestedBankMatch.Date.Should().Be(date);
+        paymentRow.SuggestedBankMatch.Name.Should().Be("Maria Tenant");
+        paymentRow.SuggestedBankMatch.Confidence.Should().BeGreaterThan(0m);
+    }
+
+    [Fact]
+    public async Task GetTransactionsAsync_UnmatchedBankLine_SurfacesSuggestedBankMatchOnExpense()
+    {
+        var date = new DateTime(2026, 06, 02, 0, 0, 0, DateTimeKind.Utc);
+        var expense = SeedExpense(
+            description: "Hardware supply",
+            amount: 84.25m,
+            incurredAt: date,
+            category: ScheduleECategory.Repairs,
+            status: ExpenseStatus.Paid);
+
+        // Open withdrawal that matches the expense amount/date (expense amounts are positive; the
+        // bank withdrawal is negative).
+        SeedBankTransaction(
+            description: "HARDWARE STORE",
+            merchantName: "Hardware Store",
+            amount: -84.25m,
+            postedAt: date,
+            category: "Withdrawal",
+            matchStatus: "Unmatched");
+
+        var page = await _sut.GetTransactionsAsync(
+            PortfolioId,
+            new AccountingTransactionsQuery { Kind = "Expense", Take = 20 },
+            CancellationToken.None);
+
+        var expenseRow = page.Items.Single(t => t.Kind == "Expense" && t.Id == expense.Id);
+        expenseRow.Reconciled.Should().BeFalse();
+        expenseRow.SuggestedBankMatch.Should().NotBeNull();
+        expenseRow.SuggestedBankMatch!.Amount.Should().Be(-84.25m);
+    }
+
+    [Fact]
+    public async Task GetTransactionsAsync_NoOpenBankLine_LeavesPaymentUnreconciledWithNoSuggestion()
+    {
+        var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+        SeedPropertyLeaseAndPayment(date);
+        var paymentId = _db.Payments.Single().Id;
+
+        var page = await _sut.GetTransactionsAsync(
+            PortfolioId,
+            new AccountingTransactionsQuery { Kind = "Payment", Take = 20 },
+            CancellationToken.None);
+
+        var paymentRow = page.Items.Single(t => t.Kind == "Payment" && t.Id == paymentId);
+        paymentRow.Reconciled.Should().BeFalse();
+        paymentRow.SuggestedBankMatch.Should().BeNull();
+    }
+
     private (Property Property, Lease Lease) SeedPropertyAndLease(DateTime now)
     {
         var property = new Property
