@@ -34,5 +34,5 @@ public interface IScanService
 /// <param name="Success">Whether the confirm succeeded.</param>
 /// <param name="CreatedEntityId">The id of the created entity, or null on failure.</param>
 /// <param name="Error">Human-readable error message, or null on success.</param>
-/// <param name="EntityType">The type of the created entity ("Expense" or "Payment"), or null on failure.</param>
+/// <param name="EntityType">The type of the created entity ("Expense", "Payment", "WorkOrder", or "Lease"), or null on failure.</param>
 public sealed record ScanConfirmResult(bool Success, int? CreatedEntityId, string? Error, string? EntityType = null);

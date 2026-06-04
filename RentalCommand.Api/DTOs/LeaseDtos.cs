@@ -106,6 +106,17 @@ public class LeaseLedgerResponse
     public string TestId => $"lease-ledger-{LeaseId}";
 }
 
+/// <summary>
+/// Reference to a generated lease-agreement document, returned by the generate-document endpoint.
+/// </summary>
+public sealed record LeaseDocumentResponse(
+    int StoredFileId,
+    int LeaseId,
+    string FileName,
+    long FileSize,
+    string DownloadUrl,
+    DateTime GeneratedAt);
+
 public class CreateLeaseRequest
 {
     [Required]

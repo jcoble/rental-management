@@ -29,6 +29,8 @@ public class ScanServiceTests : IDisposable
     private readonly RecordingExpenseService _expenses;
     private readonly Mock<IPaymentService> _paymentsMock;
     private readonly RecordingWorkOrderService _workOrders;
+    private readonly RecordingLeaseService _leases;
+    private readonly RecordingTenantService _tenants;
     private readonly RecordingAuditService _audit;
     private readonly ScanService _sut;
 
@@ -61,6 +63,8 @@ public class ScanServiceTests : IDisposable
         _expenses     = new RecordingExpenseService();
         _paymentsMock = new Mock<IPaymentService>();
         _workOrders   = new RecordingWorkOrderService();
+        _leases       = new RecordingLeaseService();
+        _tenants      = new RecordingTenantService(_db);
         _audit        = new RecordingAuditService();
 
         _sut = new ScanService(
@@ -69,6 +73,8 @@ public class ScanServiceTests : IDisposable
             _expenses,
             _paymentsMock.Object,
             _workOrders,
+            _leases,
+            _tenants,
             _audit,
             NullLogger<ScanService>.Instance);
     }
@@ -259,6 +265,145 @@ public class ScanServiceTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
+    // Confirm: a scanned lease PDF becomes a Lease with the extracted terms, the unit
+    // linked, and a chained Tenant created from the extracted name (the "import your
+    // PDF leases" migration unlock).
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_ReviewingLeaseDraft_CreatesLeaseWithTermsAndChainsTenant()
+    {
+        const string extractedJson =
+            """{"target_entity_type":{"value":"Lease","confidence":0.95},"tenant_name":{"value":"Marcus Williams","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"lease_number":{"value":"L-2026-7","confidence":0.8},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9},"monthly_rent":{"value":"1450.00","confidence":0.9},"security_deposit":{"value":"1450.00","confidence":0.8},"late_fee":{"value":"75.00","confidence":0.7},"rent_due_day":{"value":"1","confidence":0.8}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _leases.SetupResponse(new LeaseResponse { Id = 321, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        result.EntityType.Should().Be("Lease");
+        result.CreatedEntityId.Should().Be(321);
+
+        _leases.LastRequest.Should().NotBeNull();
+        var req = _leases.LastRequest!;
+        req.PropertyId.Should().Be(10);
+        req.UnitId.Should().Be(20);
+        req.LeaseNumber.Should().Be("L-2026-7");
+        req.StartDate.Should().Be(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc));
+        req.EndDate.Should().Be(new DateTime(2026, 12, 31, 0, 0, 0, DateTimeKind.Utc));
+        req.MonthlyRent.Should().Be(1450.00m);
+        req.SecurityDeposit.Should().Be(1450.00m);
+        req.LateFeeAmount.Should().Be(75.00m);
+        req.RentDueDay.Should().Be(1);
+        req.Status.Should().Be(LeaseStatus.Active);
+
+        // A chained Tenant was created from the extracted name and its id linked on the lease.
+        _tenants.LastRequest.Should().NotBeNull();
+        _tenants.LastRequest!.FirstName.Should().Be("Marcus");
+        _tenants.LastRequest.LastName.Should().Be("Williams");
+        var createdTenant = await _db.Tenants.FirstOrDefaultAsync(t => t.PortfolioId == PortfolioId);
+        createdTenant.Should().NotBeNull();
+        req.TenantId.Should().Be(createdTenant!.Id);
+
+        // Draft confirmed + source PDF re-keyed to the lease.
+        string? draftStatus;
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = $"SELECT Status FROM ScanDrafts WHERE Id = {draft.Id}";
+            draftStatus = (string?)cmd.ExecuteScalar();
+        }
+        draftStatus.Should().Be("Confirmed");
+        _audit.Calls.Should().Contain(c => c.entityType == "Lease" && c.entityId == 321);
+    }
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LeaseDraftWithExistingTenantNameMatch_ReusesTenant()
+    {
+        // Seed an existing tenant whose full name matches the extracted name (case-insensitive).
+        _db.Tenants.Add(new Tenant
+        {
+            Id = 50,
+            PortfolioId = PortfolioId,
+            FirstName = "Marcus",
+            LastName = "Williams",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
+
+        const string extractedJson =
+            """{"tenant_name":{"value":"marcus williams","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9},"monthly_rent":{"value":"1450.00","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _leases.SetupResponse(new LeaseResponse { Id = 322, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _leases.LastRequest!.TenantId.Should().Be(50);
+        // No new tenant was created — the existing one was matched.
+        _tenants.LastRequest.Should().BeNull();
+        (await _db.Tenants.CountAsync(t => t.PortfolioId == PortfolioId)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LeaseDraftWithForeignPropertyId_IsRejected()
+    {
+        // property_id 999 is NOT in this portfolio: it must be dropped to 0 (IDOR guard), and with no
+        // override property the confirm fails rather than linking a foreign property.
+        const string extractedJson =
+            """{"tenant_name":{"value":"Jane Doe","confidence":0.9},"property_id":{"value":"999","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9},"monthly_rent":{"value":"1000.00","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _leases.SetupResponse(new LeaseResponse { Id = 999, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("property");
+        _leases.LastRequest.Should().BeNull(); // lease service was never called
+    }
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LeaseDraftWithOverrideTenantId_UsesOverrideTenant()
+    {
+        // A tenant the reviewer selected via overrides wins; it must be validated in-portfolio.
+        _db.Tenants.Add(new Tenant
+        {
+            Id = 60,
+            PortfolioId = PortfolioId,
+            FirstName = "Selected",
+            LastName = "Tenant",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
+
+        const string extractedJson =
+            """{"tenant_name":{"value":"Someone Else","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2026-12-31","confidence":0.9},"monthly_rent":{"value":"1200.00","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _leases.SetupResponse(new LeaseResponse { Id = 323, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(
+            PortfolioId, draft.Id, userId: 7, overridesJson: """{"tenantId":60}""");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _leases.LastRequest!.TenantId.Should().Be(60);
+        // The override tenant was used, so no chained tenant was created.
+        _tenants.LastRequest.Should().BeNull();
+    }
+
+    // -------------------------------------------------------------------------
     // Confirm: a scanned rent check becomes a paid Payment (the "scan the check"
     // money flow). MAKE-SURE-DONE-E2E: locks the RentCheck -> Payment confirm path.
     // -------------------------------------------------------------------------
@@ -334,6 +479,35 @@ public class ScanServiceTests : IDisposable
         _db.ScanDrafts.Add(draft);
         _db.SaveChanges();
         return draft;
+    }
+
+    /// <summary>Seeds property 10 + unit 20 in the test portfolio (the grounded ids the lease drafts carry).</summary>
+    private void SeedPropertyAndUnit()
+    {
+        _db.Properties.Add(new Property
+        {
+            Id = 10,
+            PortfolioId = PortfolioId,
+            Name = "Maple Court",
+            AddressLine1 = "10 Maple Ct",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 20,
+            PropertyId = 10,
+            UnitNumber = "1",
+            Bedrooms = 2,
+            Bathrooms = 1,
+            MarketRent = 1200m,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
     }
 
     private StoredFile SeedStoredFile(string filePath)
@@ -421,6 +595,87 @@ public class ScanServiceTests : IDisposable
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+    }
+
+    private sealed class RecordingLeaseService : ILeaseService
+    {
+        private LeaseResponse? _response = new() { Id = 0, PortfolioId = PortfolioId };
+
+        public CreateLeaseRequest? LastRequest { get; private set; }
+
+        public void SetupResponse(LeaseResponse? response) => _response = response;
+
+        public Task<LeaseResponse?> CreateAsync(int portfolioId, CreateLeaseRequest request, CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(_response);
+        }
+
+        public Task<IReadOnlyList<LeaseResponse>> ListAsync(int portfolioId, int? tenantId, int? propertyId, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<LeaseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<LeaseLedgerResponse?> GetLedgerAsync(int portfolioId, int id, int? restrictToTenantId = null, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<LeaseResponse?> UpdateAsync(int portfolioId, int id, UpdateLeaseRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<LeaseDocumentResponse?> GenerateDocumentAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<(Stream Stream, string FileName, string ContentType)?> GetDocumentAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+    }
+
+    /// <summary>
+    /// Recording tenant service that actually persists a Tenant to the shared test DbContext so the
+    /// "chained tenant" path produces a real, in-portfolio tenant id (mirrors production TenantService).
+    /// </summary>
+    private sealed class RecordingTenantService : ITenantService
+    {
+        private readonly RentalCommandDbContext _db;
+
+        public RecordingTenantService(RentalCommandDbContext db) => _db = db;
+
+        public CreateTenantRequest? LastRequest { get; private set; }
+
+        public async Task<TenantResponse> CreateAsync(int portfolioId, CreateTenantRequest request, CancellationToken ct = default)
+        {
+            LastRequest = request;
+            var now = DateTime.UtcNow;
+            var entity = new Tenant
+            {
+                PortfolioId = portfolioId,
+                FirstName = request.FirstName,
+                LastName = request.LastName,
+                Email = request.Email,
+                Phone = request.Phone,
+                Notes = request.Notes,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            _db.Tenants.Add(entity);
+            await _db.SaveChangesAsync(ct);
+            return TenantResponse.FromEntity(entity);
+        }
+
+        public Task<IReadOnlyList<TenantResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<TenantResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<TenantResponse?> UpdateAsync(int portfolioId, int id, UpdateTenantRequest request, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)

@@ -94,4 +94,36 @@ public class LeaseController : AuthenticatedPortfolioControllerBase
         var answer = await _qa.AskAsync(GetPortfolioId(), id, request.Question, ct);
         return answer == null ? NotFound(new { error = "Lease not found or question is empty" }) : Ok(answer);
     }
+
+    /// <summary>
+    /// Generate a standard residential lease agreement PDF from the lease's captured terms (the
+    /// "5-question generator"), store it as a document attached to the lease, and return its reference.
+    /// </summary>
+    [HttpPost("{id:int}/generate-document")]
+    [ProducesResponseType(typeof(LeaseDocumentResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseDocumentResponse>> GenerateDocument(int id, CancellationToken ct)
+    {
+        var doc = await _service.GenerateDocumentAsync(GetPortfolioId(), id, ct);
+        return doc == null
+            ? NotFound(new { error = "Lease not found" })
+            : CreatedAtAction(nameof(Document), new { id }, doc);
+    }
+
+    /// <summary>Download the latest generated lease agreement PDF (404 until one has been generated).</summary>
+    [HttpGet("{id:int}/document", Name = nameof(Document))]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Document(int id, CancellationToken ct)
+    {
+        var file = await _service.GetDocumentAsync(GetPortfolioId(), id, ct);
+        if (file == null)
+        {
+            return NotFound(new { error = "No generated lease agreement; generate it first." });
+        }
+
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        Response.Headers["Content-Disposition"] = $"inline; filename=\"{file.Value.FileName}\"";
+        return File(file.Value.Stream, file.Value.ContentType);
+    }
 }

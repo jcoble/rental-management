@@ -6,6 +6,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../leases/lease_detail_screen.dart';
+import '../leases/leases_repository.dart';
+import '../properties/properties_repository.dart';
+import '../tenants/tenants_repository.dart';
 import 'scan_models.dart';
 import 'scan_repository.dart';
 
@@ -43,6 +47,27 @@ final _leasesProvider = FutureProvider.autoDispose<List<Lease>>((ref) async {
   return ref.read(scanRepositoryProvider).listLeases();
 });
 
+/// Properties for the in-portfolio property picker (Lease drafts only).
+final _propertiesProvider = FutureProvider.autoDispose<List<Property>>((
+  ref,
+) async {
+  ref.keepAlive();
+  return ref.read(propertiesRepositoryProvider).listProperties();
+});
+
+/// Units for the selected property, scoping the unit picker (Lease drafts only).
+final _unitsForPropertyProvider = FutureProvider.autoDispose
+    .family<List<Unit>, int>((ref, propertyId) async {
+      ref.keepAlive();
+      return ref.read(propertiesRepositoryProvider).listUnits(propertyId);
+    });
+
+/// Tenants for the optional tenant picker (Lease drafts only).
+final _tenantsProvider = FutureProvider.autoDispose<List<Tenant>>((ref) async {
+  ref.keepAlive();
+  return ref.read(tenantsRepositoryProvider).listTenants();
+});
+
 // ---------------------------------------------------------------------------
 // Field groups (mirrors web review page)
 // ---------------------------------------------------------------------------
@@ -78,6 +103,18 @@ const _fieldGroups = <({String label, List<String> fields})>[
   (label: 'Details', fields: ['document_kind', 'category', 'notes']),
 ];
 
+// Lease-draft field group (target == 'Lease'). The property/unit/tenant are
+// chosen with pickers below, so only the lease *terms* live here.
+const _leaseFieldOrder = <String>[
+  'lease_number',
+  'start_date',
+  'end_date',
+  'monthly_rent',
+  'security_deposit',
+  'late_fee',
+  'rent_due_day',
+];
+
 const _knownScalarFields = {
   'vendor_name',
   'vendor_address',
@@ -111,9 +148,22 @@ const _moneyFields = {
   'tip',
   'discount',
   'shipping',
+  // Lease terms
+  'monthly_rent',
+  'security_deposit',
+  'late_fee',
 };
 
-const _dateFields = {'transaction_date', 'due_date'};
+const _dateFields = {
+  'transaction_date',
+  'due_date',
+  // Lease terms
+  'start_date',
+  'end_date',
+};
+
+// Whole-number fields use an integer keypad (e.g. the rent due day-of-month).
+const _intFields = {'rent_due_day'};
 
 // Friendly label overrides for keys where plain Title Case reads awkwardly.
 const _labelOverrides = <String, String>{
@@ -129,6 +179,15 @@ const _labelOverrides = <String, String>{
   'total': 'Total',
   'subtotal': 'Subtotal',
   'tax': 'Tax',
+  // Lease terms
+  'lease_number': 'Lease number',
+  'start_date': 'Start date',
+  'end_date': 'End date',
+  'monthly_rent': 'Monthly rent',
+  'security_deposit': 'Security deposit',
+  'late_fee': 'Late fee',
+  'rent_due_day': 'Rent due day (of month)',
+  'tenant_name': 'Tenant',
 };
 
 /// Turns a raw snake_case field name into a human-readable label, e.g.
@@ -190,8 +249,12 @@ Map<String, dynamic> buildOverridesMap({
   required Map<String, String> editedFields,
   required bool isPayment,
   required bool isWorkOrder,
+  required bool isLease,
   required bool isPaid,
   required int? selectedLeaseId,
+  required int? selectedPropertyId,
+  required int? selectedUnitId,
+  required int? selectedTenantId,
 }) {
   final overrides = <String, dynamic>{};
   for (final entry in editedFields.entries) {
@@ -199,7 +262,14 @@ Map<String, dynamic> buildOverridesMap({
     final key = _keyMap[entry.key] ?? entry.key;
     overrides[key] = entry.value;
   }
-  if (isPayment) {
+  if (isLease) {
+    // Property + unit are required; the API also accepts the edited lease terms
+    // (lease_number, start_date, monthly_rent, …) passed through above. When no
+    // tenant is selected the server matches/creates one from the tenant_name.
+    if (selectedPropertyId != null) overrides['propertyId'] = selectedPropertyId;
+    if (selectedUnitId != null) overrides['unitId'] = selectedUnitId;
+    if (selectedTenantId != null) overrides['tenantId'] = selectedTenantId;
+  } else if (isPayment) {
     overrides['leaseId'] = selectedLeaseId;
   } else if (!isWorkOrder) {
     overrides['is_paid'] = isPaid;
@@ -231,6 +301,14 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
 
   // Selected lease id (Payment only).
   int? _selectedLeaseId;
+
+  // Lease-draft selections. Property + unit are required; tenant is optional
+  // (null = create/match from the extracted tenant_name). Seeded once from any
+  // in-portfolio ids the backend already resolved.
+  int? _selectedPropertyId;
+  int? _selectedUnitId;
+  int? _selectedTenantId;
+  bool _leaseSelectionsInitialized = false;
 
   // Polling timer — used while draft is Pending.
   Timer? _pollTimer;
@@ -273,6 +351,17 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       _isPaid = _defaultIsPaidFromKind(kindField?.value);
     }
 
+    // Seed lease pickers once from any ids the backend grounding resolved (it
+    // only emits property_id/unit_id/tenant_id that are in-portfolio). The
+    // pickers still validate against the loaded lists, so a stale id just shows
+    // as "unselected" until the user chooses.
+    if (draft.isLease && !_leaseSelectionsInitialized && draft.fields.isNotEmpty) {
+      _leaseSelectionsInitialized = true;
+      _selectedPropertyId = _extractedInt(draft, 'property_id');
+      _selectedUnitId = _extractedInt(draft, 'unit_id');
+      _selectedTenantId = _extractedInt(draft, 'tenant_id');
+    }
+
     // Start/stop polling based on status. The worker flips the draft
     // Pending → Processing → Reviewing, so we must keep polling through BOTH
     // Pending and Processing to catch the final Reviewing state.
@@ -301,6 +390,14 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
     return !['Bill', 'Invoice', 'UtilityBill', 'PropertyTax'].contains(kind);
   }
 
+  /// Reads an extracted scalar field as a positive int, or null when absent /
+  /// unparsable / non-positive. Used to seed the lease pickers.
+  int? _extractedInt(ScanDraft draft, String name) {
+    final field = draft.fields.where((f) => f.name == name).firstOrNull;
+    final parsed = int.tryParse(field?.value.trim() ?? '');
+    return (parsed != null && parsed > 0) ? parsed : null;
+  }
+
   Future<void> _confirm(ScanDraft draft) async {
     if (_confirming) return;
     setState(() => _confirming = true);
@@ -309,10 +406,16 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         editedFields: _editedFields,
         isPayment: draft.isPayment,
         isWorkOrder: draft.isWorkOrder,
+        isLease: draft.isLease,
         isPaid: _isPaid,
         selectedLeaseId: _selectedLeaseId,
+        selectedPropertyId: _selectedPropertyId,
+        selectedUnitId: _selectedUnitId,
+        selectedTenantId: _selectedTenantId,
       );
-      await ref.read(scanRepositoryProvider).confirm(draft.id, overrides);
+      final result = await ref
+          .read(scanRepositoryProvider)
+          .confirm(draft.id, overrides);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -321,11 +424,30 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
                 ? 'Payment recorded!'
                 : draft.isWorkOrder
                 ? 'Work order created!'
+                : draft.isLease
+                ? 'Lease created!'
                 : 'Expense created!',
           ),
           backgroundColor: Colors.green,
         ),
       );
+
+      // For a lease, jump straight to the new lease so the landlord can review
+      // it (and generate the agreement). Replace this review screen so Back
+      // returns to the scan list rather than the consumed draft.
+      final leaseId = (result?['leaseId'] as num?)?.toInt();
+      if (draft.isLease && leaseId != null) {
+        final lease = await _loadLease(leaseId);
+        if (!mounted) return;
+        if (lease != null) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute<void>(
+              builder: (_) => LeaseDetailScreen(lease: lease),
+            ),
+          );
+          return;
+        }
+      }
       Navigator.of(context).pop();
     } on ApiException catch (e) {
       if (!mounted) return;
@@ -335,6 +457,16 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
       _showError('Something went wrong. Please try again.');
     } finally {
       if (mounted) setState(() => _confirming = false);
+    }
+  }
+
+  /// Fetches the just-created lease for navigation; returns null on failure so
+  /// confirm falls back to simply popping (the lease still exists).
+  Future<Lease?> _loadLease(int leaseId) async {
+    try {
+      return await ref.read(leasesRepositoryProvider).getLease(leaseId);
+    } catch (_) {
+      return null;
     }
   }
 
@@ -435,6 +567,17 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           onIsPaidChanged: (v) => setState(() => _isPaid = v),
           selectedLeaseId: _selectedLeaseId,
           onLeaseSelected: (id) => setState(() => _selectedLeaseId = id),
+          selectedPropertyId: _selectedPropertyId,
+          onPropertySelected: (id) => setState(() {
+            _selectedPropertyId = id;
+            // Changing the property invalidates any unit chosen under the old
+            // one, so clear it (the unit picker rescopes to the new property).
+            _selectedUnitId = null;
+          }),
+          selectedUnitId: _selectedUnitId,
+          onUnitSelected: (id) => setState(() => _selectedUnitId = id),
+          selectedTenantId: _selectedTenantId,
+          onTenantSelected: (id) => setState(() => _selectedTenantId = id),
           confirming: _confirming,
           rejecting: _rejecting,
           onConfirm: () => _confirm(draft),
@@ -458,6 +601,12 @@ class _ReviewBody extends ConsumerWidget {
     required this.onIsPaidChanged,
     required this.selectedLeaseId,
     required this.onLeaseSelected,
+    required this.selectedPropertyId,
+    required this.onPropertySelected,
+    required this.selectedUnitId,
+    required this.onUnitSelected,
+    required this.selectedTenantId,
+    required this.onTenantSelected,
     required this.confirming,
     required this.rejecting,
     required this.onConfirm,
@@ -471,6 +620,12 @@ class _ReviewBody extends ConsumerWidget {
   final ValueChanged<bool> onIsPaidChanged;
   final int? selectedLeaseId;
   final ValueChanged<int?> onLeaseSelected;
+  final int? selectedPropertyId;
+  final ValueChanged<int?> onPropertySelected;
+  final int? selectedUnitId;
+  final ValueChanged<int?> onUnitSelected;
+  final int? selectedTenantId;
+  final ValueChanged<int?> onTenantSelected;
   final bool confirming;
   final bool rejecting;
   final VoidCallback onConfirm;
@@ -495,12 +650,17 @@ class _ReviewBody extends ConsumerWidget {
     final busy = confirming || rejecting;
 
     // Confirm is only possible once the draft is ready for review (or Failed, so
-    // manual values can still be entered) and nothing is in flight.
+    // manual values can still be entered) and nothing is in flight. A lease also
+    // needs a property + unit chosen before it can be created.
+    final leaseReady =
+        !draft.isLease ||
+        (selectedPropertyId != null && selectedUnitId != null);
     final confirmEnabled =
         !actionsLocked &&
         !busy &&
         !isTerminal &&
-        (!draft.isPayment || selectedLeaseId != null);
+        (!draft.isPayment || selectedLeaseId != null) &&
+        leaseReady;
     // Reject stays available on Failed so a bad scan can always be cleared, but
     // never while processing, mid-action, or already terminal.
     final rejectEnabled = (!actionsLocked || isFailed) && !busy && !isTerminal;
@@ -566,30 +726,51 @@ class _ReviewBody extends ConsumerWidget {
                     onLeaseSelected: onLeaseSelected,
                   ),
 
-                // ---- Extracted field groups ----
-                if (draft.scalarFields.isNotEmpty)
-                  _FieldsSection(
-                    draft: draft,
-                    editedFields: editedFields,
-                    onFieldChanged: onFieldChanged,
-                  )
-                else if (draft.status != 'Pending')
-                  _ManualEntrySection(
-                    editedFields: editedFields,
-                    onFieldChanged: onFieldChanged,
+                if (draft.isLease) ...[
+                  // ---- Property / Unit / Tenant pickers ----
+                  _LeasePickers(
+                    extractedTenantName: editedFields['tenant_name'],
+                    selectedPropertyId: selectedPropertyId,
+                    onPropertySelected: onPropertySelected,
+                    selectedUnitId: selectedUnitId,
+                    onUnitSelected: onUnitSelected,
+                    selectedTenantId: selectedTenantId,
+                    onTenantSelected: onTenantSelected,
                   ),
 
-                // ---- Line items (read-only) ----
-                if (draft.lineItems.isNotEmpty)
-                  _LineItemsSection(items: draft.lineItems),
+                  // ---- Lease terms (editable) ----
+                  if (draft.scalarFields.isNotEmpty)
+                    _LeaseTermsSection(
+                      draft: draft,
+                      editedFields: editedFields,
+                      onFieldChanged: onFieldChanged,
+                    ),
+                ] else ...[
+                  // ---- Extracted field groups ----
+                  if (draft.scalarFields.isNotEmpty)
+                    _FieldsSection(
+                      draft: draft,
+                      editedFields: editedFields,
+                      onFieldChanged: onFieldChanged,
+                    )
+                  else if (draft.status != 'Pending')
+                    _ManualEntrySection(
+                      editedFields: editedFields,
+                      onFieldChanged: onFieldChanged,
+                    ),
 
-                // ---- Paid/Unpaid toggle (Expense only) ----
-                if (!draft.isPayment && !draft.isWorkOrder)
-                  _PaidToggle(
-                    isPaid: isPaid,
-                    dueDate: editedFields['due_date'],
-                    onChanged: onIsPaidChanged,
-                  ),
+                  // ---- Line items (read-only) ----
+                  if (draft.lineItems.isNotEmpty)
+                    _LineItemsSection(items: draft.lineItems),
+
+                  // ---- Paid/Unpaid toggle (Expense only) ----
+                  if (!draft.isPayment && !draft.isWorkOrder)
+                    _PaidToggle(
+                      isPaid: isPaid,
+                      dueDate: editedFields['due_date'],
+                      onChanged: onIsPaidChanged,
+                    ),
+                ],
 
                 const SizedBox(height: 8),
               ],
@@ -615,6 +796,15 @@ class _ReviewBody extends ConsumerWidget {
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
                   'Select a lease above to enable payment creation.',
+                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            if (draft.isLease && !leaseReady && !isTerminal)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Choose a property and unit above to create this lease.',
                   style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
                   textAlign: TextAlign.center,
                 ),
@@ -652,6 +842,8 @@ class _ReviewBody extends ConsumerWidget {
                                 ? 'Create Payment'
                                 : draft.isWorkOrder
                                 ? 'Create Work Order'
+                                : draft.isLease
+                                ? 'Create Lease'
                                 : 'Confirm & Create Expense',
                           ),
                   ),
@@ -893,6 +1085,326 @@ class _LeaseSelector extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
+// _LeasePickers — property (required) → unit (required, scoped) → tenant (opt.)
+// ---------------------------------------------------------------------------
+
+/// Builds a tenant's display name, preferring the server-provided full name.
+String _tenantLabel(Tenant t) {
+  final full = t.fullName?.trim();
+  if (full != null && full.isNotEmpty) return full;
+  final name = '${t.firstName} ${t.lastName}'.trim();
+  return name.isEmpty ? 'Tenant #${t.id}' : name;
+}
+
+class _LeasePickers extends ConsumerWidget {
+  const _LeasePickers({
+    required this.extractedTenantName,
+    required this.selectedPropertyId,
+    required this.onPropertySelected,
+    required this.selectedUnitId,
+    required this.onUnitSelected,
+    required this.selectedTenantId,
+    required this.onTenantSelected,
+  });
+
+  final String? extractedTenantName;
+  final int? selectedPropertyId;
+  final ValueChanged<int?> onPropertySelected;
+  final int? selectedUnitId;
+  final ValueChanged<int?> onUnitSelected;
+  final int? selectedTenantId;
+  final ValueChanged<int?> onTenantSelected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final propertiesAsync = ref.watch(_propertiesProvider);
+    final tenantsAsync = ref.watch(_tenantsProvider);
+
+    final newTenantName = (extractedTenantName ?? '').trim();
+    final createLabel = newTenantName.isEmpty
+        ? 'Create a new tenant'
+        : 'Create “$newTenantName”';
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Where does this lease belong?',
+            style: theme.textTheme.labelLarge?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'Pick the property and unit. The tenant is matched from the lease — '
+            'or you can choose one.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // ── Property (required) ──────────────────────────────────────────
+          _PickerLabel(text: 'Property', required: true),
+          propertiesAsync.when(
+            loading: () => const LinearProgressIndicator(),
+            error: (e, _) => Text(
+              'Could not load properties.',
+              style: TextStyle(color: colorScheme.error),
+            ),
+            data: (properties) {
+              final ids = properties.map((p) => p.id).toSet();
+              final value = ids.contains(selectedPropertyId)
+                  ? selectedPropertyId
+                  : null;
+              return DropdownButtonFormField<int>(
+                initialValue: value,
+                hint: const Text('Select a property'),
+                isExpanded: true,
+                decoration: _pickerDecoration,
+                items: properties
+                    .map(
+                      (p) => DropdownMenuItem(
+                        value: p.id,
+                        child: Text(p.name, overflow: TextOverflow.ellipsis),
+                      ),
+                    )
+                    .toList(),
+                onChanged: onPropertySelected,
+              );
+            },
+          ),
+          const SizedBox(height: 14),
+
+          // ── Unit (required, scoped to property) ──────────────────────────
+          _PickerLabel(text: 'Unit', required: true),
+          if (selectedPropertyId == null)
+            Text(
+              'Choose a property first.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            )
+          else
+            _UnitPicker(
+              propertyId: selectedPropertyId!,
+              selectedUnitId: selectedUnitId,
+              onUnitSelected: onUnitSelected,
+            ),
+          const SizedBox(height: 14),
+
+          // ── Tenant (optional) ────────────────────────────────────────────
+          _PickerLabel(text: 'Tenant', required: false),
+          tenantsAsync.when(
+            loading: () => const LinearProgressIndicator(),
+            error: (e, _) => Text(
+              'Could not load tenants.',
+              style: TextStyle(color: colorScheme.error),
+            ),
+            data: (tenants) {
+              final ids = tenants.map((t) => t.id).toSet();
+              final value = ids.contains(selectedTenantId)
+                  ? selectedTenantId
+                  : null;
+              return DropdownButtonFormField<int?>(
+                initialValue: value,
+                isExpanded: true,
+                decoration: _pickerDecoration,
+                // A null value means "let the server match/create from the
+                // extracted tenant_name" — surfaced as the first option.
+                items: <DropdownMenuItem<int?>>[
+                  DropdownMenuItem<int?>(
+                    value: null,
+                    child: Text(
+                      createLabel,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: colorScheme.primary),
+                    ),
+                  ),
+                  ...tenants.map(
+                    (t) => DropdownMenuItem<int?>(
+                      value: t.id,
+                      child: Text(
+                        _tenantLabel(t),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                ],
+                onChanged: onTenantSelected,
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  static const _pickerDecoration = InputDecoration(
+    border: OutlineInputBorder(),
+    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+  );
+}
+
+/// Unit dropdown scoped to a single property; rebuilds when [propertyId] changes.
+class _UnitPicker extends ConsumerWidget {
+  const _UnitPicker({
+    required this.propertyId,
+    required this.selectedUnitId,
+    required this.onUnitSelected,
+  });
+
+  final int propertyId;
+  final int? selectedUnitId;
+  final ValueChanged<int?> onUnitSelected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final unitsAsync = ref.watch(_unitsForPropertyProvider(propertyId));
+
+    return unitsAsync.when(
+      loading: () => const LinearProgressIndicator(),
+      error: (e, _) => Text(
+        'Could not load units.',
+        style: TextStyle(color: colorScheme.error),
+      ),
+      data: (units) {
+        if (units.isEmpty) {
+          return Text(
+            'This property has no units yet.',
+            style: TextStyle(color: colorScheme.error, fontSize: 13),
+          );
+        }
+        final ids = units.map((u) => u.id).toSet();
+        final value = ids.contains(selectedUnitId) ? selectedUnitId : null;
+        return DropdownButtonFormField<int>(
+          initialValue: value,
+          hint: const Text('Select a unit'),
+          isExpanded: true,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          ),
+          items: units
+              .map(
+                (u) => DropdownMenuItem(
+                  value: u.id,
+                  child: Text(
+                    'Unit ${u.unitNumber}',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              )
+              .toList(),
+          onChanged: onUnitSelected,
+        );
+      },
+    );
+  }
+}
+
+class _PickerLabel extends StatelessWidget {
+  const _PickerLabel({required this.text, required this.required});
+
+  final String text;
+  final bool required;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          Text(
+            text,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+          if (required) ...[
+            const SizedBox(width: 4),
+            Text(
+              '*',
+              style: TextStyle(fontSize: 12, color: colorScheme.error),
+            ),
+          ] else ...[
+            const SizedBox(width: 6),
+            Text(
+              '(optional)',
+              style: TextStyle(
+                fontSize: 11,
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _LeaseTermsSection — editable lease terms in a fixed, readable order
+// ---------------------------------------------------------------------------
+
+class _LeaseTermsSection extends StatelessWidget {
+  const _LeaseTermsSection({
+    required this.draft,
+    required this.editedFields,
+    required this.onFieldChanged,
+  });
+
+  final ScanDraft draft;
+  final Map<String, String> editedFields;
+  final void Function(String, String) onFieldChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fieldMap = {for (final f in draft.scalarFields) f.name: f};
+
+    // Show the lease terms in a stable order; the property/unit/tenant ids and
+    // tenant_name are handled by the pickers, so they're not repeated here.
+    final ordered = <ScanField>[
+      for (final name in _leaseFieldOrder)
+        fieldMap[name] ?? ScanField(name: name, value: '', confidence: 1.0),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'LEASE TERMS',
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...ordered.map(
+            (field) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _FieldInput(
+                field: field,
+                value: editedFields[field.name] ?? field.value,
+                onChanged: (v) => onFieldChanged(field.name, v),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // _FieldsSection — grouped editable fields with confidence indicators
 // ---------------------------------------------------------------------------
 
@@ -1026,6 +1538,7 @@ class _FieldInputState extends State<_FieldInput> {
     final fieldLabel = _prettifyLabel(widget.field.name);
     final isDate = _dateFields.contains(widget.field.name);
     final isMoney = _moneyFields.contains(widget.field.name);
+    final isInt = _intFields.contains(widget.field.name);
 
     // Date fields open a calendar picker so the landlord taps a date instead of
     // typing one (design#5). Free-text editing is still allowed as a fallback.
@@ -1098,9 +1611,11 @@ class _FieldInputState extends State<_FieldInput> {
           controller: _controller,
           onChanged: widget.onChanged,
           // Money fields get a decimal number pad so amounts are easy to enter
-          // on a phone (design#5).
+          // on a phone (design#5); integer fields get a plain number pad.
           keyboardType: isMoney
               ? const TextInputType.numberWithOptions(decimal: true)
+              : isInt
+              ? TextInputType.number
               : null,
           decoration: InputDecoration(
             border: const OutlineInputBorder(),
