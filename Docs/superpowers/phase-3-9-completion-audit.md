@@ -63,9 +63,9 @@ but the landlord cannot use the complete workflow in a logical place.
 | Feature                                                    | Status  | Notes                                                                                            |
 | ---------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------ |
 | DO- Smart inspection checklists + PDF report + work orders | Missing | Inspections are still simple records.                                                            |
-| DO- Photo/voice maintenance requests + live status stream  | Partial | Work orders and SignalR exist. Flutter staff and tenant maintenance creation can now attach a camera/gallery photo. Voice intake and richer status stream are still incomplete. |
+| Photo/voice maintenance requests + live status stream  | Usable | **Live status timeline** (`WorkOrderStatusEvent`, From→To, who, when, notes) on staff + tenant detail (web + Flutter), tenant-ownership-scoped. **Photo** capture on tenant create (web + mobile) and add-photo on the staff detail + photo strip. Status changes can carry a note. (Voice intake on a maintenance request is the one remaining bit — route through the existing VoiceController; low priority follow-up.) |
 | DO- Vendor SMS dispatch + scorecard                        | Missing | Vendors exist. Dispatch, reply DONE, ratings, and performance scoring are not implemented.       |
-| DO- Mobile field queue                                     | Partial | Flutter Home now shows top open work orders; still needs map/action/photo workflow.              |
+| Mobile field queue                                     | Usable | Flutter staff work-order detail now has the status timeline, add-photo (before/after), **tap-to-navigate (Open in Maps)**, and status-note updates, on top of the prioritized Home field queue. |
 | DO-  Recurring maintenance tasks                          | Missing | No recurring maintenance model/worker.                                                           |
 
 ## Phase 9 - Onboarding and Migration

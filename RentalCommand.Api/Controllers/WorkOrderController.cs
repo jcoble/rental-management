@@ -32,9 +32,9 @@ public class WorkOrderController : AuthenticatedPortfolioControllerBase
     }
 
     [HttpGet("{id:int}")]
-    [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(WorkOrderDetailResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<WorkOrderResponse>> Get(int id, CancellationToken ct)
+    public async Task<ActionResult<WorkOrderDetailResponse>> Get(int id, CancellationToken ct)
     {
         var item = await _service.GetAsync(GetPortfolioId(), id, ct);
         return item == null ? NotFound(new { error = "Work order not found" }) : Ok(item);
@@ -45,7 +45,7 @@ public class WorkOrderController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<WorkOrderResponse>> Create([FromBody] CreateWorkOrderRequest request, CancellationToken ct)
     {
-        var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
+        var created = await _service.CreateAsync(GetPortfolioId(), request, GetUserId(), "Staff", ct);
         return created == null
             ? NotFound(new { error = "Referenced property, unit, tenant, lease, or vendor not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
@@ -56,7 +56,7 @@ public class WorkOrderController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<WorkOrderResponse>> Update(int id, [FromBody] UpdateWorkOrderRequest request, CancellationToken ct)
     {
-        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, ct);
+        var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, GetUserId(), "Staff", ct);
         return updated == null ? NotFound(new { error = "Work order not found" }) : Ok(updated);
     }
 

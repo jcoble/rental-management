@@ -132,6 +132,18 @@ class TenantPortalRepository {
     }
   }
 
+  /// GET /portal/work-orders/{id} — the tenant's own work order PLUS its status
+  /// timeline, so they can watch Received → … → Done.
+  Future<WorkOrderDetail> getWorkOrderDetail(int id) async {
+    try {
+      final response =
+          await _dio.get<Map<String, dynamic>>('/portal/work-orders/$id');
+      return WorkOrderDetail.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<void> uploadWorkOrderPhoto({
     required int workOrderId,
     required Uint8List bytes,
@@ -163,4 +175,10 @@ final tenantPortalRepositoryProvider = Provider<TenantPortalRepository>((ref) {
 final tenantPortalSnapshotProvider =
     FutureProvider.autoDispose<TenantPortalSnapshot>((ref) {
       return ref.watch(tenantPortalRepositoryProvider).snapshot();
+    });
+
+/// The tenant's own work order + its status timeline, keyed by work-order id.
+final tenantWorkOrderDetailProvider = FutureProvider.autoDispose
+    .family<WorkOrderDetail, int>((ref, id) {
+      return ref.watch(tenantPortalRepositoryProvider).getWorkOrderDetail(id);
     });
