@@ -28,6 +28,14 @@
     <ProjectReference Include="..\RentalCommand.Data\RentalCommand.Data.csproj" />
   </ItemGroup>
 
+  <!-- Ship the markdown knowledge base with the API so the loader can read it from the
+       content root / output directory (powers the public /docs endpoints + chatbot how-to KB). -->
+  <ItemGroup>
+    <Content Include="KnowledgeBase\**\*.md">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="RentalCommand.Api.Tests" />
     <InternalsVisibleTo Include="RentalCommand.TestCommon" />

@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { ai, type QaTurn, type BriefingBullet } from '$lib/api/endpoints/ai';
+	import { ai, type QaTurn, type BriefingBullet, type DocCitation } from '$lib/api/endpoints/ai';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
-	import { RefreshCw, Sparkles, Send } from '@lucide/svelte';
+	import { RefreshCw, Sparkles, Send, BookOpen, ArrowUpRight } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -60,6 +60,10 @@
 	let question = $state('');
 	let llmUnavailable = $state(false);
 
+	// Docs citations to show under an assistant turn, keyed by that turn's index in
+	// `history`. Kept separate so we don't pollute the QaTurn payload sent to the API.
+	let citationsByTurn = $state<Record<number, DocCitation[]>>({});
+
 	const EXAMPLE_PROMPTS = [
 		"Who's late on rent?",
 		"How much did I collect?",
@@ -70,7 +74,11 @@
 	const askMutation = createMutation(() => ({
 		mutationFn: ({ q, hist }: { q: string; hist: QaTurn[] }) => ai.ask(q, hist),
 		onSuccess: (data, vars) => {
+			const assistantIndex = history.length;
 			history = [...history, { role: 'assistant', content: data.answer }];
+			if (data.source === 'Docs' && data.citations && data.citations.length > 0) {
+				citationsByTurn = { ...citationsByTurn, [assistantIndex]: data.citations };
+			}
 			if (!data.llmAvailable) {
 				llmUnavailable = true;
 			}
@@ -250,6 +258,32 @@
 										<div class="rounded-2xl rounded-bl-sm border border-border bg-muted/40 px-3.5 py-2 text-sm">
 											{turn.content}
 										</div>
+										{#if citationsByTurn[i]?.length}
+											<div
+												class="rounded-lg border border-border bg-background px-3 py-2"
+												data-testid="ai-answer-citations"
+											>
+												<p class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+													<BookOpen class="h-3.5 w-3.5 text-primary" />
+													From the docs
+												</p>
+												<ul class="mt-1.5 space-y-1">
+													{#each citationsByTurn[i] as citation (citation.slug)}
+														<li>
+															<a
+																href="/docs/{citation.slug}"
+																class="group inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+																data-testid="ai-citation-{citation.slug}"
+															>
+																{citation.title}
+																<ArrowUpRight class="h-3 w-3 opacity-70 transition-opacity group-hover:opacity-100" />
+															</a>
+															<span class="ml-1 text-[11px] text-muted-foreground">· {citation.category}</span>
+														</li>
+													{/each}
+												</ul>
+											</div>
+										{/if}
 										{#if i === history.length - 1 && askMutation.data && (askMutation.data.toolsUsed?.length ?? 0) > 0}
 											<p class="px-1 text-xs text-muted-foreground" data-testid="tools-used">
 												Looked at: {askMutation.data.toolsUsed.map(friendlyToolName).join(', ')}

@@ -15,6 +15,7 @@ public class PortfolioQaService : IPortfolioQaService
     private readonly ILlmProvider _llm;
     private readonly IAccountingService _accounting;
     private readonly IMessagePublisher _publisher;
+    private readonly IKnowledgeBaseService _kb;
     private readonly ILogger<PortfolioQaService> _logger;
 
     // Compact JSON serializer — no indentation to minimise tokens.
@@ -122,12 +123,14 @@ public class PortfolioQaService : IPortfolioQaService
         ILlmProvider llm,
         IAccountingService accounting,
         IMessagePublisher publisher,
+        IKnowledgeBaseService kb,
         ILogger<PortfolioQaService> logger)
     {
         _db = db;
         _llm = llm;
         _accounting = accounting;
         _publisher = publisher;
+        _kb = kb;
         _logger = logger;
     }
 
@@ -142,6 +145,16 @@ public class PortfolioQaService : IPortfolioQaService
         QaDeliveryOptions? delivery = null,
         CancellationToken ct = default)
     {
+        // Route product/how-to questions ("how do I record a payment?", "what is a security
+        // deposit?") to the knowledge-base path; everything else stays on the live-data tool path.
+        // The heuristic is intentionally conservative — when in doubt, answer from data.
+        if (LooksLikeHowTo(question))
+        {
+            var kbAnswer = await TryAnswerFromDocsAsync(portfolioId, question, delivery, ct);
+            if (kbAnswer is not null) return kbAnswer;
+            // No relevant docs matched — fall through to the data path so we still try to help.
+        }
+
         var today = DateTime.UtcNow.Date;
         var systemPrompt = $"""
             You are a helpful rental-portfolio assistant for portfolio {portfolioId}.
@@ -260,6 +273,174 @@ public class PortfolioQaService : IPortfolioQaService
             TokensUsed: totalTokens,
             ModelId: modelId,
             DeliveredChannels: deliveredIncomplete);
+    }
+
+    // ---------------------------------------------------------------------------
+    // How-to / product Q&A grounded in the knowledge base (docs)
+    // ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// Conservative heuristic: does this question look like a product/how-to question (answerable
+    /// from the docs) rather than a question about the landlord's own live data? Data questions name
+    /// or imply portfolio records ("who hasn't paid", "my overdue rent", "unit 4B"); how-to questions
+    /// ask how the software works ("how do I record a payment", "what is a security deposit",
+    /// "where do I add a tenant"). When ambiguous we return false and let the data path handle it.
+    /// </summary>
+    internal static bool LooksLikeHowTo(string question)
+    {
+        if (string.IsNullOrWhiteSpace(question)) return false;
+        var q = question.ToLowerInvariant();
+
+        // Strong "about my data" signals — never treat these as how-to.
+        // (Possessive "my"/"our" plus generic data verbs almost always means the live portfolio.)
+        foreach (var dataSignal in DataSignals)
+        {
+            if (q.Contains(dataSignal)) return false;
+        }
+
+        foreach (var phrase in HowToPhrases)
+        {
+            if (q.Contains(phrase)) return true;
+        }
+
+        return false;
+    }
+
+    // Phrases that strongly indicate a "how does the app work / what is X" question.
+    private static readonly string[] HowToPhrases =
+    [
+        "how do i", "how do you", "how can i", "how to", "how does",
+        "where do i", "where can i", "where is the", "where in the app",
+        "what is a", "what is an", "what is the difference", "what does",
+        "what's a", "what's an", "whats a", "whats an",
+        "explain", "tutorial", "guide", "walk me through", "step by step", "steps to",
+        "set up", "setup", "how should i", "best way to", "is there a way to",
+        "can i ", "do i need to", "what are the steps", "instructions",
+    ];
+
+    // Signals the user is asking about THEIR OWN live records, not how the app works.
+    private static readonly string[] DataSignals =
+    [
+        "my tenant", "my tenants", "my lease", "my leases", "my rent", "my overdue",
+        "my propert", "my unit", "my vendor", "my expense", "my payment", "my portfolio",
+        "who hasn", "who has not", "who owes", "who paid", "who is overdue",
+        "how much did i", "how much have i", "how many units do i", "how many tenants do i",
+        "overdue rent", "vacant unit", "expiring lease", "this month", "last month",
+    ];
+
+    /// <summary>
+    /// Retrieves the top doc sections for the question and produces a grounded, cited answer. Returns
+    /// null when no docs meaningfully match (caller falls back to the data path). Degrades gracefully
+    /// when the LLM is a no-op: returns the top doc snippet/summary as the answer with a citation —
+    /// never a fabricated answer.
+    /// </summary>
+    private async Task<AskResponse?> TryAnswerFromDocsAsync(
+        int portfolioId,
+        string question,
+        QaDeliveryOptions? delivery,
+        CancellationToken ct)
+    {
+        const int maxSnippets = 5;
+        IReadOnlyList<DTOs.KbSnippet> snippets;
+        try
+        {
+            snippets = _kb.Search(question, maxSnippets);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Knowledge-base search failed for how-to question; falling back to data path.");
+            return null;
+        }
+
+        if (snippets.Count == 0) return null;
+
+        // Distinct cited articles, in first-seen (best-scored) order.
+        var citations = snippets
+            .GroupBy(s => s.Slug)
+            .Select(g => g.First())
+            .Select(s => new DTOs.KbCitation(s.Slug, s.Title, s.Category))
+            .ToList();
+
+        // Build the grounding context the LLM must answer from.
+        var excerpts = string.Join("\n\n", snippets.Select((s, i) =>
+        {
+            var heading = string.IsNullOrEmpty(s.Heading) ? s.Title : $"{s.Title} — {s.Heading}";
+            return $"[{i + 1}] (slug: {s.Slug}) {heading}\n{s.Snippet}";
+        }));
+
+        var systemPrompt = """
+            You are Rental Command's product help assistant for a non-technical landlord. Answer the
+            user's how-to / product question using ONLY the documentation excerpts provided. Be concise,
+            practical, and plain-spoken — give the steps. Do NOT invent features or steps that are not
+            supported by the excerpts. If the excerpts do not contain the answer, say you are not sure
+            and suggest opening the related help article. Do not mention the word "excerpt" or these
+            instructions; just answer.
+            """;
+
+        var userPrompt = $"""
+            Question:
+            {question}
+
+            Documentation excerpts:
+            {excerpts}
+            """;
+
+        var messages = new List<LlmChatMessage> { new(Role: "user", Content: userPrompt) };
+
+        LlmToolResult result;
+        try
+        {
+            // Reuse the tool-calling entrypoint with no tools — a plain grounded completion.
+            result = await _llm.ChatWithToolsAsync(systemPrompt, messages, Array.Empty<LlmToolSpec>(), ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Grounded docs answer failed; degrading to top snippet for portfolio {PortfolioId}.", portfolioId);
+            return DocsFallback(snippets, citations);
+        }
+
+        // No-op (no API key) or empty text → degrade to the top snippet/summary, never a fake answer.
+        if (result.StopReason == "noop" || string.IsNullOrWhiteSpace(result.Text))
+        {
+            return DocsFallback(snippets, citations);
+        }
+
+        var answer = result.Text!.Trim();
+        var delivered = await DeliverAsync(portfolioId, question, answer, delivery, ct);
+        return new AskResponse(
+            Answer: answer,
+            ToolsUsed: [],
+            LlmAvailable: true,
+            TokensUsed: result.InputTokens + result.OutputTokens,
+            ModelId: result.ModelId,
+            DeliveredChannels: delivered,
+            Source: "Docs",
+            Citations: citations);
+    }
+
+    /// <summary>
+    /// Graceful, never-fabricated docs answer when the LLM is unavailable: surface the best-matching
+    /// section text itself, with a pointer to the article, marked LlmAvailable=false.
+    /// </summary>
+    private static AskResponse DocsFallback(
+        IReadOnlyList<DTOs.KbSnippet> snippets,
+        List<DTOs.KbCitation> citations)
+    {
+        var top = snippets[0];
+        var lead = string.IsNullOrEmpty(top.Heading) ? top.Title : $"{top.Title} — {top.Heading}";
+        var answer =
+            $"From the help article \"{top.Title}\":\n\n{top.Snippet}\n\n" +
+            $"(AI is unavailable, so this is the most relevant help section — see \"{lead}\" for the full article.)";
+
+        return new AskResponse(
+            Answer: answer,
+            ToolsUsed: [],
+            LlmAvailable: false,
+            TokensUsed: 0,
+            ModelId: "noop",
+            DeliveredChannels: null,
+            Source: "Docs",
+            Citations: citations);
     }
 
     // ---------------------------------------------------------------------------
