@@ -35,8 +35,11 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 
 builder.Services.AddDbContext<RentalCommandDbContext>(options => options.UseNpgsql(connectionString));
 
-// DB-outbox publisher + notification channel (Twilio SMS / SendGrid email; logs when unconfigured).
+// DB-outbox publisher + notification channel (SignalWire/Twilio SMS; SMTP/Zoho or SendGrid email,
+// config-selected; logs when unconfigured).
 builder.Services.AddScoped<IMessagePublisher, OutboxMessagePublisher>();
+// SMTP sender (MailKit) the channel delegates to when Notifications:Email:Transport == "Smtp".
+builder.Services.AddSingleton<ISmtpEmailSender, SmtpEmailSender>();
 builder.Services.AddHttpClient<INotificationChannel, RoutingNotificationChannel>();
 // Sandbox guard: the outbox worker uses it to HARD-suppress any send scoped to a sandbox portfolio.
 builder.Services.AddScoped<ISandboxGuard, SandboxGuard>();

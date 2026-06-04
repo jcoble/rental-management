@@ -10,6 +10,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { AlertTriangle, CheckCircle2, FileText, Mail, MessageSquare, MonitorSmartphone, RefreshCw, Send, ShieldCheck, Trash2 } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -192,6 +193,12 @@
 					{/each}
 				</Select.Content>
 			</Select.Root>
+			<HelpPopover
+				title="Generate drafts"
+				summary="Scans your leases and auto-creates notice drafts — renewal, late-rent, and move-out reminders — that are due."
+				detail="Nothing is sent automatically: each draft waits for you to review, edit, and approve before it goes out."
+				learnMoreUrl={undefined}
+			/>
 			<Button onclick={() => generateMutation.mutate()} disabled={generateMutation.isPending} data-testid="generate-notices">
 				<RefreshCw class="mr-1.5 h-4 w-4" />
 				{generateMutation.isPending ? 'Generating...' : 'Generate drafts'}
@@ -244,6 +251,12 @@
 										<ShieldCheck class="mr-1.5 h-4 w-4" />
 										{fhChecking ? 'Checking...' : 'Check for fair-housing issues'}
 									</Button>
+									<HelpPopover
+										title="Check for fair-housing issues"
+										summary="Scans your notice wording for Fair-Housing-risky language and suggests a compliant rewrite."
+										detail="It flags phrases that could imply discrimination against a protected class, with a reason for each. If AI is off it says so rather than passing it as clean."
+										learnMoreUrl={undefined}
+									/>
 									<Button size="sm" variant="outline" onclick={cancelEdit}>Cancel</Button>
 								</div>
 

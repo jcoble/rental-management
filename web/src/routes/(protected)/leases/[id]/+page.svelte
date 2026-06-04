@@ -31,6 +31,7 @@
 	import { ApiError } from '$lib/api/client';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	const queryClient = useQueryClient();
@@ -779,6 +780,12 @@
 					<div class="flex flex-wrap items-center justify-between gap-2">
 						<div class="flex items-center gap-2">
 							<p class="text-sm font-medium">E-signature</p>
+							<HelpPopover
+								title="Send for signature"
+								summary="Emails the tenant a secure link to sign this lease online — no printing or scanning."
+								detail="Once they sign, the lease flips to signed and the executed copy is saved here for download."
+								learnMoreUrl={undefined}
+							/>
 							<span
 								class="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs font-medium text-muted-foreground"
 								data-testid="lease-esign-status"

@@ -12,9 +12,10 @@ using RentalCommand.Data;
 namespace RentalCommand.Engine.Services;
 
 /// <summary>
-/// Phase 4 <see cref="INotificationChannel"/>: routes SMS through Twilio and email
-/// through SendGrid when the respective provider is configured. Falls back to a
-/// suppression log when unconfigured so callers never need to guard on provider state.
+/// Phase 4 <see cref="INotificationChannel"/>: routes SMS through SignalWire/Twilio and email
+/// through a config-selectable transport — SMTP (e.g. Zoho) when <c>Notifications:Email:Transport</c>
+/// is "Smtp" and SMTP creds are present, otherwise the SendGrid HTTP API. Falls back to a suppression
+/// log when nothing is configured so callers never need to guard on provider state.
 /// Register via <c>AddHttpClient&lt;INotificationChannel, RoutingNotificationChannel&gt;()</c>
 /// in Program.cs.
 /// </summary>
@@ -24,6 +25,7 @@ public sealed class RoutingNotificationChannel : INotificationChannel
     private readonly NotificationsConfig _cfg;
     private readonly INotificationSettingsService _settings;
     private readonly RentalCommandDbContext _db;
+    private readonly ISmtpEmailSender _smtp;
     private readonly ILogger<RoutingNotificationChannel> _logger;
 
     public RoutingNotificationChannel(
@@ -31,12 +33,14 @@ public sealed class RoutingNotificationChannel : INotificationChannel
         IOptions<NotificationsConfig> options,
         INotificationSettingsService settings,
         RentalCommandDbContext db,
+        ISmtpEmailSender smtp,
         ILogger<RoutingNotificationChannel> logger)
     {
         _http = http;
         _cfg  = options.Value;
         _settings = settings;
         _db = db;
+        _smtp = smtp;
         _logger = logger;
     }
 
@@ -136,20 +140,61 @@ public sealed class RoutingNotificationChannel : INotificationChannel
             provider, to, (int)response.StatusCode);
     }
 
-    // ------------------------------------------------------------------ Email (SendGrid)
+    // ------------------------------------------------------------------ Email (SMTP / SendGrid)
 
     public async Task SendEmailAsync(
         string toEmail, string subject, string body, CancellationToken ct = default)
     {
-        var sg = _cfg.SendGrid;
-
-        if (!sg.Enabled)
+        // Transport selection (config-gated; no creds → no behaviour change vs the original SendGrid-only path):
+        //   1. Transport == "Smtp" AND SMTP configured (host+user+pass) → send via SMTP (e.g. Zoho).
+        //   2. else SendGrid configured                                 → send via SendGrid (unchanged).
+        //   3. else                                                     → suppression log, never throw.
+        // The upstream sandbox suppression lives in OutboxDispatchWorker and is intentionally untouched.
+        var smtp = _cfg.Smtp;
+        if (_cfg.Email.UseSmtp && smtp.Enabled)
         {
-            _logger.LogInformation(
-                "[Email suppressed — SendGrid not configured] to {To}: {Subject}",
-                toEmail, subject);
+            await SendViaSmtpAsync(smtp, toEmail, subject, body, ct);
             return;
         }
+
+        if (_cfg.SendGrid.Enabled)
+        {
+            await SendViaSendGridAsync(toEmail, subject, body, ct);
+            return;
+        }
+
+        _logger.LogInformation(
+            "[Email suppressed — not configured] to {To}: {Subject}",
+            toEmail, subject);
+    }
+
+    // SMTP (e.g. Zoho): delegates the connect/auth/send to ISmtpEmailSender. Logs success/failure
+    // consistently with the SendGrid path. The sender throws on failure → propagates so the outbox
+    // worker retries (same contract as EnsureSuccessAsync below).
+    private async Task SendViaSmtpAsync(
+        SmtpOptions smtp, string toEmail, string subject, string body, CancellationToken ct)
+    {
+        try
+        {
+            await _smtp.SendAsync(smtp, toEmail, subject, body, ct);
+        }
+        catch (Exception ex)
+        {
+            // Surface why it failed (auth, bad host, rejected recipient, …) and re-throw for retry.
+            throw new InvalidOperationException(
+                $"SMTP send failed via {smtp.Host}:{smtp.Port}: {ex.Message}", ex);
+        }
+
+        _logger.LogInformation(
+            "[Email sent via SMTP] To={To} Subject={Subject} Host={Host}",
+            toEmail, subject, smtp.Host);
+    }
+
+    // SendGrid HTTP API — unchanged behaviour from the original implementation.
+    private async Task SendViaSendGridAsync(
+        string toEmail, string subject, string body, CancellationToken ct)
+    {
+        var sg = _cfg.SendGrid;
 
         var payload = new
         {

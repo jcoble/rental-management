@@ -7,6 +7,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { RefreshCw, Sparkles, Send, BookOpen, ArrowUpRight } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -146,7 +147,15 @@
 		<Card.Root class="flex flex-col gap-0 py-0" data-testid="briefing-card">
 			<Card.Header class="flex-row items-center justify-between border-b border-border px-4 py-3 space-y-0">
 				<div>
-					<Card.Title class="text-base font-semibold">Today's Briefing</Card.Title>
+					<div class="flex items-center gap-1.5">
+						<Card.Title class="text-base font-semibold">Today's Briefing</Card.Title>
+						<HelpPopover
+							title="Daily Briefing"
+							summary="A short AI summary of what needs your attention today — overdue rent, expiring leases, open work orders, and more."
+							detail="The bullets are pulled from your live portfolio data. Refresh to regenerate it."
+							learnMoreUrl={undefined}
+						/>
+					</div>
 					{#if briefingQuery.data?.date}
 						<p class="text-xs text-muted-foreground mt-0.5">{formatBriefingDate(briefingQuery.data.date)}</p>
 					{/if}
@@ -221,7 +230,15 @@
 		<!-- ── Right / Bottom: Ask box ─────────────────────────────────────── -->
 		<Card.Root class="flex flex-col gap-0 py-0" data-testid="ask-card">
 			<Card.Header class="border-b border-border px-4 py-3 space-y-0">
-				<Card.Title class="text-base font-semibold">Ask a Question</Card.Title>
+				<div class="flex items-center gap-1.5">
+					<Card.Title class="text-base font-semibold">Ask a Question</Card.Title>
+					<HelpPopover
+						title="Ask a Question"
+						summary="Ask about your own portfolio (“who’s behind on rent?”) or how the app works (“how do I record a payment?”)."
+						detail="Portfolio questions are answered from your live data; how-to questions are answered from the help docs, with links to read more."
+						learnMoreUrl={undefined}
+					/>
+				</div>
 				<p class="text-xs text-muted-foreground mt-0.5">Ask anything about your properties, tenants, or finances.</p>
 			</Card.Header>
 
