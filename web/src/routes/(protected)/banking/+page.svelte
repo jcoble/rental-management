@@ -2,6 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { banking } from '$lib/api/endpoints/banking';
 	import type {
+		BankReviewQueueResponse,
 		BankTransaction,
 		BankingSummary,
 		ExchangePlaidPublicTokenRequest,
@@ -12,7 +13,8 @@
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import { Landmark, Link2, RefreshCw, Upload } from '@lucide/svelte';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Check, Landmark, Link2, RefreshCw, Upload, X } from '@lucide/svelte';
 
 	type PlaidWindow = Window &
 		typeof globalThis & {
@@ -66,9 +68,18 @@
 		enabled: !!portfolioId
 	}));
 
+	const reviewQueueQuery = createQuery(() => ({
+		queryKey: ['banking-review-queue', portfolioId],
+		queryFn: () => banking.reviewQueue(),
+		enabled: !!portfolioId
+	}));
+
 	const summary = $derived(summaryQuery.data as BankingSummary | undefined);
 	const transactions = $derived((transactionsQuery.data as BankTransaction[] | undefined) ?? []);
 	const plaidSettings = $derived(plaidSettingsQuery.data as PlaidSettings | undefined);
+	const reviewQueue = $derived(reviewQueueQuery.data as BankReviewQueueResponse | undefined);
+	const reviewItems = $derived(reviewQueue?.items ?? []);
+	const reviewCount = $derived(reviewQueue?.count ?? reviewItems.length);
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
@@ -78,10 +89,17 @@
 		return new Date(value).toLocaleDateString();
 	}
 
+	function percent(value: number) {
+		return `${Math.round((value || 0) * 100)}%`;
+	}
+
 	function refreshBanking() {
 		queryClient.invalidateQueries({ queryKey: ['banking-summary', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['banking-transactions', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['banking-plaid-settings', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['banking-review-queue', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['accounting-summary', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['accounting-transactions', portfolioId] });
 	}
 
 	const linkTokenMutation = createMutation(() => ({
@@ -139,6 +157,38 @@
 			refreshBanking();
 		},
 		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	let pendingReviewId = $state<number | null>(null);
+
+	const confirmMatchMutation = createMutation(() => ({
+		mutationFn: (id: number) => banking.confirmMatch(id),
+		onMutate: (id: number) => {
+			pendingReviewId = id;
+		},
+		onSuccess: () => {
+			showSuccess('Confirmed. We won’t count this one twice.');
+			refreshBanking();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+		onSettled: () => {
+			pendingReviewId = null;
+		}
+	}));
+
+	const dismissMatchMutation = createMutation(() => ({
+		mutationFn: (id: number) => banking.dismissMatch(id),
+		onMutate: (id: number) => {
+			pendingReviewId = id;
+		},
+		onSuccess: () => {
+			showSuccess('Got it — not a match.');
+			refreshBanking();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+		onSettled: () => {
+			pendingReviewId = null;
+		}
 	}));
 
 	function importTransactions() {
@@ -270,6 +320,92 @@
 			</Card.Content>
 		</Card.Root>
 	</div>
+
+	<Card.Root class="mb-6 gap-0 py-0" data-testid="bank-review-queue">
+		<Card.Header class="border-b border-border px-4 py-3">
+			<div class="flex flex-wrap items-center justify-between gap-3">
+				<div>
+					<Card.Title class="flex items-center gap-2 text-base">
+						<Check class="h-4 w-4 text-primary" />
+						Review suggested matches
+						{#if reviewCount > 0}
+							<Badge variant="secondary" data-testid="bank-review-count">{reviewCount}</Badge>
+						{/if}
+					</Card.Title>
+					<Card.Description>
+						These bank deposits look like payments you already recorded — confirm so we don't count them twice.
+					</Card.Description>
+				</div>
+			</div>
+		</Card.Header>
+		<Card.Content class="p-0">
+			{#if reviewQueueQuery.isLoading}
+				<p class="py-12 text-center text-sm text-muted-foreground">Loading suggested matches...</p>
+			{:else if reviewQueueQuery.isError}
+				<p class="py-12 text-center text-sm text-destructive">Could not load suggested matches.</p>
+			{:else if reviewItems.length === 0}
+				<p class="py-12 text-center text-sm text-muted-foreground" data-testid="bank-review-empty">
+					Nothing to review.
+				</p>
+			{:else}
+				<ul class="divide-y divide-border">
+					{#each reviewItems as item (item.transaction.id)}
+						<li
+							class="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between"
+							data-testid="bank-review-item-{item.transaction.id}"
+						>
+							<div class="grid flex-1 gap-4 sm:grid-cols-2">
+								<div class="rounded-md border border-border bg-muted/30 p-3">
+									<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Bank line</p>
+									<p class="mt-1 font-medium">
+										{item.transaction.merchantName || item.transaction.description}
+									</p>
+									<p class="text-xs text-muted-foreground">{date(item.transaction.postedAt)}</p>
+									<p class="mt-1 font-mono text-sm {item.transaction.amount >= 0 ? 'text-green-600' : 'text-destructive'}">
+										{money(item.transaction.amount)}
+									</p>
+								</div>
+								<div class="rounded-md border border-border bg-muted/30 p-3">
+									<div class="flex items-center justify-between gap-2">
+										<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+											Already recorded as
+										</p>
+										<Badge variant="outline">{percent(item.suggestion.confidence)} match</Badge>
+									</div>
+									<p class="mt-1 font-medium">{item.suggestion.label}</p>
+									<p class="text-xs text-muted-foreground">{item.suggestion.entityType}</p>
+									<p class="mt-1 text-xs text-muted-foreground">{item.suggestion.reason}</p>
+								</div>
+							</div>
+							<div class="flex shrink-0 gap-2 lg:flex-col">
+								<Button
+									size="sm"
+									class="flex-1 lg:flex-none"
+									onclick={() => confirmMatchMutation.mutate(item.transaction.id)}
+									disabled={pendingReviewId === item.transaction.id}
+									data-testid="bank-review-confirm-{item.transaction.id}"
+								>
+									<Check class="mr-1.5 h-4 w-4" />
+									Confirm match
+								</Button>
+								<Button
+									size="sm"
+									variant="outline"
+									class="flex-1 lg:flex-none"
+									onclick={() => dismissMatchMutation.mutate(item.transaction.id)}
+									disabled={pendingReviewId === item.transaction.id}
+									data-testid="bank-review-dismiss-{item.transaction.id}"
+								>
+									<X class="mr-1.5 h-4 w-4" />
+									Not a match
+								</Button>
+							</div>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</Card.Content>
+	</Card.Root>
 
 	<div class="grid gap-6 xl:grid-cols-[1fr_420px]">
 		<Card.Root class="gap-0 py-0">

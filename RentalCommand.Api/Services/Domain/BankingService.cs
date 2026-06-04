@@ -443,6 +443,111 @@ public class BankingService : IBankingService
         return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
     }
 
+    public async Task<BankReviewQueueResponse> GetReviewQueueAsync(int portfolioId, CancellationToken ct = default)
+    {
+        // The review queue is every imported line that still needs a human decision: it is
+        // Unmatched (not yet confirmed, dismissed, or removed) AND the matcher currently has a
+        // payment/expense candidate for it. These are the lines at risk of double-counting a
+        // scanned receipt against the bank deposit/withdrawal.
+        var transactions = await BaseTransactions(portfolioId)
+            .Where(t => t.MatchStatus == "Unmatched")
+            .OrderByDescending(t => t.PostedAt)
+            .ThenByDescending(t => t.Id)
+            .ToListAsync(ct);
+
+        var mapped = await MapTransactionsWithSuggestionsAsync(portfolioId, transactions, ct);
+
+        var items = mapped
+            .Where(t => t.SuggestedMatch != null)
+            .Select(t => new BankReviewQueueItemResponse
+            {
+                Transaction = t,
+                Suggestion = t.SuggestedMatch!,
+            })
+            .ToList();
+
+        return new BankReviewQueueResponse
+        {
+            Count = items.Count,
+            Items = items,
+        };
+    }
+
+    public async Task<BankTransactionResponse?> ConfirmMatchAsync(
+        int portfolioId,
+        int transactionId,
+        ConfirmBankMatchRequest request,
+        CancellationToken ct = default)
+    {
+        var transaction = await BaseTransactions(portfolioId)
+            .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
+        if (transaction == null) return null;
+
+        // Resolve the target. An explicit paymentId/expenseId wins; otherwise fall back to the
+        // current suggestion so a one-tap "confirm" from the queue works without echoing the id.
+        int? paymentId = request.PaymentId;
+        int? expenseId = request.ExpenseId;
+
+        if (paymentId.HasValue && expenseId.HasValue)
+        {
+            throw new InvalidOperationException("Provide either a paymentId or an expenseId, not both.");
+        }
+
+        if (paymentId is null && expenseId is null)
+        {
+            var suggestion = (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct))
+                .Single().SuggestedMatch;
+            if (suggestion == null) return null;
+            if (suggestion.EntityType.Equals("Payment", StringComparison.OrdinalIgnoreCase))
+                paymentId = suggestion.EntityId;
+            else
+                expenseId = suggestion.EntityId;
+        }
+
+        if (paymentId.HasValue)
+        {
+            var exists = await _db.Payments.AnyAsync(p => p.PortfolioId == portfolioId && p.Id == paymentId.Value, ct);
+            if (!exists) return null;
+            transaction.MatchedPaymentId = paymentId.Value;
+            transaction.MatchedExpenseId = null;
+        }
+        else
+        {
+            var exists = await _db.Expenses.AnyAsync(e => e.PortfolioId == portfolioId && e.Id == expenseId!.Value, ct);
+            if (!exists) return null;
+            transaction.MatchedExpenseId = expenseId!.Value;
+            transaction.MatchedPaymentId = null;
+        }
+
+        // "Matched" + the matched id is what accounting uses to treat the bank line and the recorded
+        // payment/expense as the SAME money, so it is not counted twice.
+        transaction.MatchStatus = "Matched";
+        transaction.MatchConfidence = 1m;
+        transaction.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
+    }
+
+    public async Task<BankTransactionResponse?> DismissMatchAsync(int portfolioId, int transactionId, CancellationToken ct = default)
+    {
+        var transaction = await BaseTransactions(portfolioId)
+            .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
+        if (transaction == null) return null;
+
+        // Reviewed and decided to be NOT a match. The line is real bank money that does not
+        // correspond to a recorded payment/expense, so it leaves the queue but stays in the books
+        // (accounting still counts dismissed, unlinked bank activity — only the link is cleared).
+        transaction.MatchedPaymentId = null;
+        transaction.MatchedExpenseId = null;
+        transaction.MatchStatus = "Dismissed";
+        transaction.MatchConfidence = null;
+        transaction.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
+    }
+
     private IQueryable<BankTransaction> BaseTransactions(int portfolioId)
     {
         return _db.BankTransactions
@@ -552,7 +657,8 @@ public class BankingService : IBankingService
         IReadOnlyList<Payment> payments,
         IReadOnlyList<Expense> expenses)
     {
-        if (transaction.MatchStatus == "Matched") return null;
+        // Only Unmatched lines are still open for review; Matched/Dismissed/Removed have a decision.
+        if (transaction.MatchStatus != "Unmatched") return null;
 
         if (transaction.Amount > 0)
         {

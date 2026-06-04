@@ -1,7 +1,9 @@
 import type {
 	BankingSummary,
 	BankConnection,
+	BankReviewQueueResponse,
 	BankTransaction,
+	ConfirmBankMatchRequest,
 	ExchangePlaidPublicTokenRequest,
 	ImportBankTransactionsRequest,
 	ImportBankTransactionsResponse,
@@ -28,5 +30,10 @@ export const banking = {
 	match: (id: number, request: MatchBankTransactionRequest) =>
 		api.post<BankTransaction>(`/banking/transactions/${id}/match`, request),
 	clearMatch: (id: number) =>
-		api.post<BankTransaction>(`/banking/transactions/${id}/clear-match`, {})
+		api.post<BankTransaction>(`/banking/transactions/${id}/clear-match`, {}),
+	reviewQueue: () => api.get<BankReviewQueueResponse>('/banking/review-queue'),
+	confirmMatch: (id: number, request: ConfirmBankMatchRequest = {}) =>
+		api.post<BankTransaction>(`/banking/transactions/${id}/confirm-match`, request),
+	dismissMatch: (id: number) =>
+		api.post<BankTransaction>(`/banking/transactions/${id}/dismiss-match`, {})
 };

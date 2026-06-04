@@ -11,10 +11,12 @@ class BankingScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final summaryAsync = ref.watch(bankingSummaryProvider);
+    final reviewAsync = ref.watch(bankingReviewQueueProvider);
     final transactionsAsync = ref.watch(bankingTransactionsProvider);
 
     Future<void> refresh() async {
       ref.invalidate(bankingSummaryProvider);
+      ref.invalidate(bankingReviewQueueProvider);
       ref.invalidate(bankingTransactionsProvider);
     }
 
@@ -30,6 +32,52 @@ class BankingScreen extends ConsumerWidget {
               loading: () => const _LoadingCard(label: 'Loading banking summary...'),
               error: (e, _) => _ErrorCard(message: _message(e)),
               data: (summary) => _SummaryGrid(summary: summary),
+            ),
+            const SizedBox(height: 18),
+            reviewAsync.when(
+              loading: () => const _LoadingCard(label: 'Checking for possible duplicates...'),
+              error: (e, _) => Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _SectionHeader(title: 'Review suggested matches'),
+                  const SizedBox(height: 8),
+                  _ErrorCard(message: _message(e)),
+                ],
+              ),
+              data: (queue) {
+                if (queue.items.isEmpty) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _SectionHeader(title: 'Review suggested matches'),
+                      const SizedBox(height: 8),
+                      const _ReviewEmptyCard(),
+                    ],
+                  );
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _SectionHeader(
+                      title: 'Review suggested matches',
+                      count: queue.count,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'These bank lines look like money already on record. '
+                      'Confirm so we don\'t count it twice.',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                    ),
+                    const SizedBox(height: 8),
+                    for (final item in queue.items) ...[
+                      _ReviewCard(item: item),
+                      const SizedBox(height: 8),
+                    ],
+                  ],
+                );
+              },
             ),
             const SizedBox(height: 18),
             Text(
@@ -230,6 +278,200 @@ class _TransactionCard extends ConsumerWidget {
   }
 
   static String _date(DateTime value) => '${value.month}/${value.day}/${value.year}';
+}
+
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({required this.title, this.count});
+
+  final String title;
+  final int? count;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Text(
+          title,
+          style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        ),
+        if (count != null && count! > 0) ...[
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 2),
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(999),
+            ),
+            child: Text(
+              '$count',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _ReviewCard extends ConsumerWidget {
+  const _ReviewCard({required this.item});
+
+  final BankReviewItem item;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final transaction = item.transaction;
+    final suggestion = item.suggestion;
+    final confidencePct = (suggestion.confidence * 100).round();
+
+    Future<void> run(Future<void> Function() action, String done) async {
+      try {
+        await action();
+        ref.invalidate(bankingSummaryProvider);
+        ref.invalidate(bankingReviewQueueProvider);
+        ref.invalidate(bankingTransactionsProvider);
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(done)),
+          );
+        }
+      } catch (e) {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(BankingScreen._message(e))),
+          );
+        }
+      }
+    }
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Bank line
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    transaction.merchantName?.isNotEmpty == true
+                        ? transaction.merchantName!
+                        : transaction.description,
+                    style: theme.textTheme.titleSmall
+                        ?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Text(
+                  _money(transaction.amount),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    color: transaction.amount >= 0 ? Colors.green.shade700 : cs.error,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Bank line / ${_date(transaction.postedAt)}',
+              style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: 10),
+            // Suggested match
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerHighest.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Looks like: ${suggestion.label}',
+                          style: theme.textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      _StatusPill(label: '$confidencePct% sure'),
+                    ],
+                  ),
+                  if (suggestion.reason.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      suggestion.reason,
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: cs.onSurfaceVariant),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => run(
+                      () => ref
+                          .read(bankingRepositoryProvider)
+                          .confirmMatch(transaction.id),
+                      'Confirmed. We won\'t count it twice.',
+                    ),
+                    child: const Text('Confirm'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => run(
+                      () => ref
+                          .read(bankingRepositoryProvider)
+                          .dismissMatch(transaction.id),
+                      'Kept as a separate bank line.',
+                    ),
+                    child: const Text('Not a match'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _money(double value) {
+    final sign = value < 0 ? '-' : '';
+    return '$sign\$${value.abs().toStringAsFixed(2)}';
+  }
+
+  static String _date(DateTime value) => '${value.month}/${value.day}/${value.year}';
+}
+
+class _ReviewEmptyCard extends StatelessWidget {
+  const _ReviewEmptyCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Card(
+      child: Padding(
+        padding: EdgeInsets.all(16),
+        child: Text("Nothing to review. We'll flag any bank lines that look like a duplicate."),
+      ),
+    );
+  }
 }
 
 class _StatusPill extends StatelessWidget {
