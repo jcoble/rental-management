@@ -622,10 +622,29 @@ Plan:
 - REMAINING sub-item: address autocomplete is manual-only until a Maps/Places key is added
   (flip on via an `enabled` flag — no signature change); see #19 notes.
 
+### Wave 3 — Reports Hub merged in PR #85 (main `53f9483`)
+- **#17** New `/reports` catalog + `/reports/[report]` viewer (param bar w/ RangeDatePicker,
+  properties multi-select, CSV/Print/PDF export). Backend `ReportsController`/`ReportsService`
+  (no migration): rent roll, rent ledger, delinquency aging, cash flow, general ledger, property
+  P&L, occupancy, lease expirations, deposit register, vendor 1099, owner distributions, work
+  orders + catalog; reuses Schedule E / Owner Statement / Year-End. Api tests 186/186.
+
+### Decisions LOCKED (spec: Docs/superpowers/specs/2026-06-04-remaining-features-decisions.md)
+Bank reconciliation = ALWAYS one-tap confirm · Docs/KB = simple retrieval · Sandbox =
+graduate-once→wipe · E-sign = build native (defer module #26). Implementing in this order:
+reconciliation → docs+KB → sandbox(migration) → e-sign(migration).
+
 ### Still open (next waves / need product decisions)
 Polish/feature: #22 (inline feature explainers), #24 (state-specific lease template),
 #27 (email deliverability — use Zoho SMTP), #28 (Google auth — just needs creds),
-#4/#5 (money-page reconciliation), #18 (onboarding skip + sandbox gating),
-address-autocomplete API key (sub-item of #19).
-Bigger projects: #3 (audit log unify), #11 (Sandbox mode), #13/#14 (docs + KB),
-#17 (Reports hub), #23/#26 (native e-sign + module).
+#18 (onboarding skip + sandbox gating), address-autocomplete API key (sub-item of #19).
+Bigger projects: #3 (audit log unify), #4/#5 (reconciliation — IN PROGRESS),
+#11 (Sandbox), #13/#14 (docs + KB), #23/#26 (native e-sign + module).
+
+### FOLLOW-UP — auth flake under heavy e2e suite load (recurring)
+Across waves, 1–2 list pages (Appointments, Leases) intermittently bounce to /login during
+the FULL e2e suite, but pass in isolation. Each test logs in fresh, so it's not token expiry —
+likely a refresh race when a page fires many concurrent API calls on mount (appointments fires
+~4). Wave-1 fix (durable refresh cache + 30s grace) reduced but didn't eliminate it under
+extreme burst. Not user-facing in normal use; harden later (coalesce page-load bursts / make
+the client refresh more resilient to N-concurrent-401, or stabilize the suite).
