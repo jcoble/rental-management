@@ -177,4 +177,74 @@ public class PortalService : IPortalService
 
         return WorkOrderResponse.FromEntity(workOrder);
     }
+
+    public async Task<AutopayStatusResponse?> GetAutopayStatusAsync(
+        int portfolioId, int tenantId, int? leaseId, CancellationToken ct = default)
+    {
+        // Resolve which lease we're reporting on. An explicit leaseId is ownership-checked; a null
+        // one falls back to the tenant's most relevant lease (active-preferred, latest end).
+        var resolvedLeaseId = await ResolveOwnedLeaseIdAsync(portfolioId, tenantId, leaseId, ct);
+        if (resolvedLeaseId == null)
+        {
+            return null;
+        }
+
+        var enrollment = await _db.AutopayEnrollments
+            .AsNoTracking()
+            .FirstOrDefaultAsync(e => e.LeaseId == resolvedLeaseId.Value && e.Active, ct);
+
+        return new AutopayStatusResponse
+        {
+            LeaseId = resolvedLeaseId.Value,
+            Active = enrollment != null,
+            EnrolledAt = enrollment?.CreatedAt,
+        };
+    }
+
+    public async Task<AutopayStatusResponse?> CancelAutopayAsync(
+        int portfolioId, int tenantId, int leaseId, CancellationToken ct = default)
+    {
+        // Ownership: the lease must belong to this tenant or there is nothing to cancel (→ 404).
+        var owns = await _db.Leases
+            .AnyAsync(l => l.Id == leaseId && l.PortfolioId == portfolioId && l.TenantId == tenantId, ct);
+        if (!owns)
+        {
+            return null;
+        }
+
+        var enrollment = await _db.AutopayEnrollments
+            .FirstOrDefaultAsync(e => e.LeaseId == leaseId && e.Active, ct);
+        if (enrollment != null)
+        {
+            enrollment.Active = false;
+            enrollment.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+        }
+
+        return new AutopayStatusResponse { LeaseId = leaseId, Active = false };
+    }
+
+    /// <summary>
+    /// Validates that <paramref name="leaseId"/> (if given) is the tenant's own lease; when null,
+    /// returns the tenant's most relevant lease id (active-preferred). Returns null when the tenant
+    /// has no matching lease — the ownership/IDOR gate for the autopay endpoints.
+    /// </summary>
+    private async Task<int?> ResolveOwnedLeaseIdAsync(int portfolioId, int tenantId, int? leaseId, CancellationToken ct)
+    {
+        if (leaseId.HasValue)
+        {
+            var owns = await _db.Leases.AnyAsync(
+                l => l.Id == leaseId.Value && l.PortfolioId == portfolioId && l.TenantId == tenantId, ct);
+            return owns ? leaseId.Value : (int?)null;
+        }
+
+        var resolved = await _db.Leases
+            .Where(l => l.PortfolioId == portfolioId && l.TenantId == tenantId)
+            .OrderByDescending(l => l.Status == LeaseStatus.Active)
+            .ThenByDescending(l => l.EndDate)
+            .Select(l => (int?)l.Id)
+            .FirstOrDefaultAsync(ct);
+
+        return resolved;
+    }
 }

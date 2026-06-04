@@ -66,6 +66,9 @@ builder.Services.AddSingleton<IDataUpdateService, EngineDataUpdateService>();
 // Phase 4 automation services (gated by Notifications flags; financial ones default OFF).
 builder.Services.AddScoped<IRentChargeService, RentChargeService>();
 builder.Services.AddScoped<IRecurringMaintenanceService, RecurringMaintenanceService>();
+// Online-payments autopay charging (gated: no-op unless Stripe is configured).
+builder.Services.Configure<StripeConfig>(builder.Configuration.GetSection(StripeConfig.SectionName));
+builder.Services.AddScoped<IAutopayChargeService, AutopayChargeService>();
 builder.Services.AddScoped<ILateFeeService, LateFeeService>();
 builder.Services.AddScoped<ILeaseExpiryReminderService, LeaseExpiryReminderService>();
 builder.Services.AddScoped<IDailyBriefingService, DailyBriefingService>();
@@ -88,6 +91,7 @@ builder.Services.AddScoped<EngineStatusReporter>();
 builder.Services.AddHostedService<OutboxDispatchWorker>();
 builder.Services.AddHostedService<ScanProcessingWorker>();
 builder.Services.AddHostedService<RentChargeWorker>();
+builder.Services.AddHostedService<AutopayChargeWorker>();
 builder.Services.AddHostedService<RecurringMaintenanceWorker>();
 builder.Services.AddHostedService<LateFeeWorker>();
 builder.Services.AddHostedService<LeaseExpiryReminderWorker>();

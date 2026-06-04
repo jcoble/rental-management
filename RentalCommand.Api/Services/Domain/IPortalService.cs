@@ -22,4 +22,19 @@ public interface IPortalService
     Task<WorkOrderDetailResponse?> GetWorkOrderDetailAsync(int portfolioId, int tenantId, int workOrderId, CancellationToken ct = default);
 
     Task<WorkOrderResponse?> CreateTenantWorkOrderAsync(int portfolioId, int tenantId, CreateTenantWorkOrderRequest request, CancellationToken ct = default);
+
+    /// <summary>
+    /// The tenant's autopay enrollment for one of their leases. When <paramref name="leaseId"/> is
+    /// null, resolves the tenant's most relevant (active-preferred) lease. Returns a status with
+    /// Active=false when there is no enrollment. Ownership-checked: a lease not belonging to this
+    /// tenant yields null (→ caller maps to a not-enrolled/404 result). IDOR-critical.
+    /// </summary>
+    Task<AutopayStatusResponse?> GetAutopayStatusAsync(int portfolioId, int tenantId, int? leaseId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Deactivates any active autopay enrollment on the tenant's own lease. Returns the resulting
+    /// (Active=false) status, or null when the lease isn't the tenant's (→ 404). Stripe-free: this
+    /// only flips the local enrollment so the Engine stops charging. IDOR-critical.
+    /// </summary>
+    Task<AutopayStatusResponse?> CancelAutopayAsync(int portfolioId, int tenantId, int leaseId, CancellationToken ct = default);
 }

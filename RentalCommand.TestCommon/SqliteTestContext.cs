@@ -88,5 +88,13 @@ internal sealed class AutomationTestDbContext : RentalCommandDbContext
             .HasIndex(p => new { p.LeaseId, p.PaymentType, p.PeriodKey })
             .IsUnique()
             .HasFilter(null);
+
+        // ---- Replace the partial unique index on AutopayEnrollments ----
+        // HasFilter("\"Active\" = true") is Postgres syntax. Drop the filter for SQLite; the
+        // service's own AnyAsync(Active) check is what the tests exercise.
+        modelBuilder.Entity<AutopayEnrollment>()
+            .HasIndex(e => e.LeaseId)
+            .IsUnique()
+            .HasFilter(null);
     }
 }
