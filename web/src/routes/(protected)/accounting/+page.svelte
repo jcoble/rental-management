@@ -3,7 +3,11 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { payments } from '$lib/api/endpoints/payments';
 	import { expenses } from '$lib/api/endpoints/expenses';
-	import { accounting, downloadScheduleECsv } from '$lib/api/endpoints/accounting';
+	import {
+		accounting,
+		downloadScheduleECsv,
+		type ReconciledAccountingTransaction
+	} from '$lib/api/endpoints/accounting';
 	import { leases } from '$lib/api/endpoints/leases';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { properties } from '$lib/api/endpoints/properties';
@@ -20,7 +24,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
-	import { Pencil, Trash2, Plus, Download, FileBarChart, Landmark } from '@lucide/svelte';
+	import { Pencil, Trash2, Plus, Download, FileBarChart, Landmark, Check, Sparkles } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -328,6 +332,32 @@
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value || 0);
 	}
+	// Short, compact date for the inline reconciliation chips (e.g. "Jun 3").
+	function shortDate(value: string | null | undefined) {
+		if (!value) return '';
+		return new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+	}
+
+	// One-tap confirm of a suggested bank match for a ledger row. Optimistic: the row's
+	// suggestedBankMatch is consumed and `reconciled` flips to true so the chip becomes the green
+	// "Cleared" badge immediately; we invalidate accounting-transactions so the server truth (cleared
+	// bank name/date) lands. Never auto-confirmed — only fires when the user taps the chip.
+	let confirmingMatchId = $state<number | null>(null);
+	const confirmBankMatchMutation = createMutation(() => ({
+		mutationFn: (bankTransactionId: number) => accounting.confirmBankMatch(bankTransactionId),
+		onMutate: (bankTransactionId: number) => {
+			confirmingMatchId = bankTransactionId;
+		},
+		onSuccess: () => {
+			showSuccess('Matched to your bank — marked cleared.');
+			invalidatePayments();
+			invalidateExpenses();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+		onSettled: () => {
+			confirmingMatchId = null;
+		}
+	}));
 	const reportYear = $derived(new Date().getFullYear());
 	const transactionRows = $derived(transactionsQuery.data?.items ?? []);
 	const transactionTotalCount = $derived(transactionsQuery.data?.totalCount ?? 0);
@@ -363,7 +393,7 @@
 
 	// ── DataGrid column definitions ───────────────────────────────────────────────
 
-	const transactionColumns: ColumnDef<AccountingTransaction>[] = [
+	const transactionColumns: ColumnDef<ReconciledAccountingTransaction>[] = [
 		{
 			key: 'date',
 			title: 'Date',
@@ -415,6 +445,13 @@
 			cell: transactionStatusCell,
 		},
 		{
+			key: 'bank',
+			title: 'Bank',
+			mobileRole: 'meta',
+			width: '13rem',
+			cell: transactionBankCell,
+		},
+		{
 			key: 'hasReceipt',
 			title: 'Receipt',
 			mobileRole: 'hidden',
@@ -440,6 +477,56 @@
 
 {#snippet transactionStatusCell(t: AccountingTransaction)}
 	<StatusBadge status={t.status} />
+{/snippet}
+
+{#snippet transactionBankCell(t: ReconciledAccountingTransaction)}
+	{#if t.kind === 'Bank'}
+		<!-- Bank rows are the source of truth, not reconciled against anything. -->
+		<span class="text-xs text-muted-foreground">—</span>
+	{:else if t.reconciled}
+		<span
+			data-testid="txn-reconciled-{t.id}"
+			class="inline-flex max-w-full items-center gap-1 rounded-full border border-success/40 bg-success/10 px-2 py-0.5 text-xs font-medium text-success"
+			title={`Cleared${t.clearedBankName ? ' · ' + t.clearedBankName : ''}${t.clearedAt ? ' · ' + shortDate(t.clearedAt) : ''}`}
+		>
+			<Check class="h-3 w-3 shrink-0" />
+			<span class="truncate">
+				Cleared{t.clearedBankName ? ` · ${t.clearedBankName}` : ''}{t.clearedAt ? ` · ${shortDate(t.clearedAt)}` : ''}
+			</span>
+		</span>
+	{:else if t.suggestedBankMatch}
+		{@const match = t.suggestedBankMatch}
+		<Tooltip.Provider delayDuration={150}>
+			<Tooltip.Root>
+				<Tooltip.Trigger
+					data-testid="txn-match-chip-{t.id}"
+					class="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-60"
+					disabled={confirmingMatchId === match.bankTransactionId}
+					aria-label={`Confirm bank match: ${match.name}, ${money(match.amount)} on ${shortDate(match.date)}`}
+					onclick={(ev: MouseEvent) => {
+						ev.stopPropagation();
+						confirmBankMatchMutation.mutate(match.bankTransactionId);
+					}}
+				>
+					<Sparkles class="h-3 w-3 shrink-0" />
+					{confirmingMatchId === match.bankTransactionId ? 'Confirming…' : 'Match?'}
+				</Tooltip.Trigger>
+				<Tooltip.Content side="top" class="max-w-xs">
+					<div class="space-y-1" data-testid="txn-match-confirm-{t.id}">
+						<p class="text-xs font-semibold">Found a matching bank line</p>
+						<p class="text-xs">
+							{match.name} ·
+							<span class="font-mono tabular-nums">{money(match.amount)}</span>
+							· {shortDate(match.date)}
+						</p>
+						<p class="text-[11px] text-muted-foreground">Tap the chip to confirm — we won't count it twice.</p>
+					</div>
+				</Tooltip.Content>
+			</Tooltip.Root>
+		</Tooltip.Provider>
+	{:else}
+		<span class="text-xs text-muted-foreground">—</span>
+	{/if}
 {/snippet}
 
 {#snippet transactionReceiptCell(t: AccountingTransaction)}

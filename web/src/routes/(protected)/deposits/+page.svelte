@@ -15,7 +15,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import { Plus } from '@lucide/svelte';
+	import { Info, Plus } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -265,8 +265,25 @@
 	<div class="mb-4 flex items-center justify-between">
 		<div>
 			<h1 class="text-2xl font-bold">Security Deposits</h1>
-			<p class="text-sm text-muted-foreground">Track held deposits, deductions, and returns for each lease.</p>
+			<p class="text-sm text-muted-foreground">
+				Money held <span class="font-medium text-foreground">in trust</span> per lease — separate from rental income. Track held deposits, deductions, and returns for each lease.
+			</p>
 		</div>
+	</div>
+
+	<!-- Explainer so this page doesn't read like a duplicate of Payments: a deposit is the tenant's
+	     money you're safekeeping, not income you've earned. -->
+	<div
+		class="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-sm dark:border-blue-900/50 dark:bg-blue-950/30"
+		data-testid="deposits-explainer"
+	>
+		<Info class="mt-0.5 h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
+		<p class="text-blue-900 dark:text-blue-200">
+			A security deposit is the tenant's money held in trust until the lease ends — it is
+			<span class="font-medium">not rental income</span>. Rent and other payments live on the
+			<a href="/accounting" class="font-medium underline underline-offset-2">Accounting</a> page; this page only
+			tracks what you're safekeeping and what gets deducted or returned.
+		</p>
 	</div>
 
 	<DataGrid
