@@ -50,6 +50,43 @@ export interface ApplicationListParams {
 	search?: string;
 }
 
+/** Outcome of a screening request. */
+export type ScreeningStatus = 'Requested' | 'Completed' | 'Failed';
+
+/** Screening recommendation (string enum, matches the API). */
+export type ScreeningRecommendation = 'Accept' | 'Conditional' | 'Decline';
+
+/** Result of a gated tenant-screening run against an application. */
+export interface ScreeningResultResponse {
+	id: number;
+	applicationId: number;
+	status: ScreeningStatus;
+	creditScoreBand: string | null;
+	hasCriminalRecord: boolean;
+	hasEvictionRecord: boolean;
+	recommendation: ScreeningRecommendation | null;
+	providerReference: string | null;
+	requestedAtUtc: string | null;
+	completedAtUtc: string | null;
+}
+
+/** Request body for generating an FCRA adverse-action notice. */
+export interface AdverseActionRequest {
+	reason?: string;
+	sendToApplicant: boolean;
+}
+
+/** A generated FCRA adverse-action notice. */
+export interface AdverseActionNoticeResponse {
+	id: number;
+	applicationId: number;
+	reason: string | null;
+	creditReportingAgency: string | null;
+	generatedAtUtc: string | null;
+	storedFileId: number;
+	sentAtUtc: string | null;
+}
+
 function buildQuery(params?: ApplicationListParams): string {
 	const query = new URLSearchParams();
 	if (params?.status) query.set('status', params.status);
@@ -68,4 +105,11 @@ export const applications = {
 		api.post<ApplicationResponse>(`/applications/${id}/decline`, { reason: reason ?? null }),
 	withdraw: (id: number) => api.post<ApplicationResponse>(`/applications/${id}/withdraw`),
 	createLink: () => api.post<ApplicationLinkResult>('/applications/link'),
+	/** Run a (gated) tenant screening. Requires FCRA consent on the application. */
+	screen: (id: number) => api.post<ScreeningResultResponse>(`/applications/${id}/screen`),
+	/** Prior screening results for an application, newest first. */
+	screening: (id: number) => api.get<ScreeningResultResponse[]>(`/applications/${id}/screening`),
+	/** Generate an FCRA adverse-action notice (and optionally email the applicant). */
+	adverseAction: (id: number, body: AdverseActionRequest) =>
+		api.post<AdverseActionNoticeResponse>(`/applications/${id}/adverse-action`, body),
 };
