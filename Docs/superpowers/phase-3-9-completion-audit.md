@@ -53,7 +53,7 @@ but the landlord cannot use the complete workflow in a logical place.
 | --------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | DO- Expense Schedule E categorization | Usable  | Scan and expense forms use Schedule E-style categories. (Verify/polish the workflow.)                                       |
 | DO- Receipt/deposit dedupe            | Partial | Bank transactions now suggest and store matches against payments/expenses. Needs a more explicit duplicate-review queue.        |
-| DO- Year-end export packet            | Partial | Schedule E CSV, tax page, owner reports, P&L and 1099 review exist. Full PDF packet/cash-flow/rent-roll export is not complete. |
+| Year-end export packet | Usable | `GET /accounting/year-end-packet?year=` streams a single **QuestPDF** to hand the accountant: cover, Schedule-E summary (reconciles with the CSV), per-property P&L, monthly cash-flow, and rent roll. Downloadable from the web Tax page and the Flutter Owner Reports screen (year selector, default prior year). Schedule-E CSV/P&L/1099 review already existed. |
 | DO- 1099/W-9 checklist and texts      | Partial | Vendor fields and accounting review exist. Text request flow is not implemented.                                                |
 | DO- Ownership/entity modeling UI      | Usable  | Owners/entities pages exist and tie into reports. (Verify/polish the workflow.)                                             |
 | DO- Security deposit tracking         | Partial | Deposits exist. Photo-backed move-out statements are not complete.                                                              |

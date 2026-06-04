@@ -91,6 +91,46 @@ export async function downloadScheduleECsv(year: number): Promise<void> {
 }
 
 /**
+ * Download the year-end packet PDF for the given year with the bearer token attached.
+ * A plain <a href> can't send the Authorization header, so we fetch the blob
+ * manually and trigger a browser download via a temporary object URL.
+ */
+export async function downloadYearEndPacket(year: number): Promise<void> {
+	if (!browser) return;
+
+	// Proactively refresh if near expiry, mirroring the main client logic.
+	if (isTokenExpired(120)) {
+		try {
+			await refreshToken();
+		} catch {
+			// Proceed; bearer may still be usable.
+		}
+	}
+
+	const { accessToken } = getAuthState();
+	const url = `${CLIENT_API_BASE_URL}/accounting/year-end-packet?year=${year}`;
+
+	const response = await fetch(url, {
+		credentials: 'include',
+		headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
+	});
+
+	if (!response.ok) {
+		throw new Error(`Packet download failed (${response.status})`);
+	}
+
+	const blob = await response.blob();
+	const objectUrl = URL.createObjectURL(blob);
+	const a = document.createElement('a');
+	a.href = objectUrl;
+	a.download = `year-end-${year}.pdf`;
+	document.body.appendChild(a);
+	a.click();
+	document.body.removeChild(a);
+	URL.revokeObjectURL(objectUrl);
+}
+
+/**
  * Download the owner-statement CSV for the given owner and year with the bearer token attached.
  * Mirrors downloadScheduleECsv exactly.
  */

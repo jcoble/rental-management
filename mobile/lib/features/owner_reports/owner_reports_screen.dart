@@ -1,7 +1,11 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
+import '../accounting/accounting_repository.dart';
 import 'owner_reports_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -37,6 +41,10 @@ class OwnerReportsScreen extends ConsumerStatefulWidget {
 class _OwnerReportsScreenState extends ConsumerState<OwnerReportsScreen> {
   int _selectedYear = DateTime.now().year;
 
+  /// Year for the accountant packet. Defaults to the previous calendar year,
+  /// since that's the tax year landlords usually hand off.
+  int _packetYear = DateTime.now().year - 1;
+
   @override
   void initState() {
     super.initState();
@@ -51,6 +59,39 @@ class _OwnerReportsScreenState extends ConsumerState<OwnerReportsScreen> {
   void _changeYear(int year) {
     setState(() => _selectedYear = year);
     ref.read(ownerSummariesProvider.notifier).load(year: year);
+  }
+
+  /// Fetches the year-end packet PDF bytes (authed), saves to a temp file, and
+  /// opens it with the platform viewer via url_launcher (file:// uri).
+  Future<void> _openYearEndPacket(int year) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text('Preparing your $year packet…')),
+      );
+    try {
+      final bytes = await ref
+          .read(accountingRepositoryProvider)
+          .yearEndPacketBytes(year);
+      final path = '${Directory.systemTemp.path}/year-end-$year.pdf';
+      final file = File(path);
+      await file.writeAsBytes(bytes, flush: true);
+      final ok = await launchUrl(
+        Uri.file(path),
+        mode: LaunchMode.externalApplication,
+      );
+      messenger.hideCurrentSnackBar();
+      if (!ok) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('No app available to open the PDF.')),
+        );
+      }
+    } on ApiException catch (e) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(e.message)));
+    }
   }
 
   void _showStatement(OwnerSummary owner) {
@@ -95,25 +136,41 @@ class _OwnerReportsScreenState extends ConsumerState<OwnerReportsScreen> {
                 .refresh(),
           ),
           data: (list) {
+            final packetCard = _YearEndPacketCard(
+              year: _packetYear,
+              years: List.generate(5, (i) => now - 1 - i),
+              onYearChanged: (y) => setState(() => _packetYear = y),
+              onOpen: () => _openYearEndPacket(_packetYear),
+            );
             if (list.isEmpty) {
-              return CustomScrollView(
+              return ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                slivers: [
-                  SliverFillRemaining(
-                    child: _EmptyBody(year: _selectedYear),
-                  ),
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                children: [
+                  packetCard,
+                  const SizedBox(height: 24),
+                  _EmptyBody(year: _selectedYear),
                 ],
               );
             }
             return ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-              itemCount: list.length,
+              itemCount: list.length + 1,
               separatorBuilder: (context, index) => const SizedBox(height: 8),
-              itemBuilder: (_, i) => _OwnerSummaryCard(
-                owner: list[i],
-                onTap: () => _showStatement(list[i]),
-              ),
+              itemBuilder: (_, i) {
+                if (i == 0) {
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: packetCard,
+                  );
+                }
+                final owner = list[i - 1];
+                return _OwnerSummaryCard(
+                  owner: owner,
+                  onTap: () => _showStatement(owner),
+                );
+              },
             );
           },
         ),
@@ -151,6 +208,101 @@ class _YearSelector extends StatelessWidget {
       onChanged: (v) {
         if (v != null) onChanged(v);
       },
+    );
+  }
+}
+
+// ── Year-end Packet Card ──────────────────────────────────────────────────────
+
+/// Plain-language affordance to download the accountant packet PDF.
+class _YearEndPacketCard extends StatelessWidget {
+  const _YearEndPacketCard({
+    required this.year,
+    required this.years,
+    required this.onYearChanged,
+    required this.onOpen,
+  });
+
+  final int year;
+  final List<int> years;
+  final ValueChanged<int> onYearChanged;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Card(
+      color: cs.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.picture_as_pdf_outlined,
+                    color: cs.onSecondaryContainer, size: 22),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Year-end packet (PDF)',
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: cs.onSecondaryContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Hand your accountant a clean PDF: Schedule E, P&L, '
+              'cash flow, rent roll.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: cs.onSecondaryContainer.withValues(alpha: 0.85),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Text(
+                  'Tax year',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: cs.onSecondaryContainer.withValues(alpha: 0.85),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                DropdownButton<int>(
+                  value: year,
+                  underline: const SizedBox.shrink(),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: cs.onSecondaryContainer,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  dropdownColor: cs.surface,
+                  items: years
+                      .map((y) => DropdownMenuItem(
+                            value: y,
+                            child: Text('$y'),
+                          ))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) onYearChanged(v);
+                  },
+                ),
+                const Spacer(),
+                FilledButton.icon(
+                  onPressed: onOpen,
+                  icon: const Icon(Icons.download_outlined, size: 18),
+                  label: const Text('Download'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
