@@ -44,12 +44,23 @@ public interface IJwtTokenService
 /// </summary>
 public class JwtTokenService : IJwtTokenService
 {
-    // Single-flight only: collapse truly concurrent refreshes of the SAME token into one DB rotation
-    // so a benign client double-submit doesn't trip the reuse detector. We deliberately do NOT cache
-    // and re-serve completed results (that would hand the same bearer tokens to a replay/attacker);
-    // clients already serialize their own refreshes (web/src/lib/server/token-refresh.ts + the mobile
-    // Dio interceptor), so the server can safely treat a presented-already-rotated token as theft.
+    // Single-flight: collapse truly concurrent refreshes of the SAME token into one DB rotation
+    // so a benign client double-submit doesn't trip the reuse detector.
     private static readonly ConcurrentDictionary<string, Lazy<Task<TokenResult?>>> InFlightRefreshes = new();
+
+    // Reuse grace window. A legitimate session has several independent refresh triggers (SSR
+    // /auth/me 401, client 401-retry, proactive pre-expiry refresh, SignalR accessTokenFactory,
+    // and the mobile Dio interceptor — a SEPARATE process from the web node server) that can each
+    // read the same refresh cookie before the rotated one has propagated. The in-flight map only
+    // dedupes calls that overlap in time; a trigger that fires shortly AFTER the first rotation
+    // completed would present the now-used token and, without this grace, trip the family-revoke
+    // and bounce the user. So for a brief window after rotating a token we remember the successor
+    // it produced and re-serve THAT SAME successor idempotently if the same token is presented
+    // again. This does NOT weaken stolen-token protection: a replay outside the window (or of a
+    // token this process never rotated) still hits the hard family-revoke below.
+    private static readonly ConcurrentDictionary<string, (TokenResult Result, DateTime ExpiresAt)> RecentlyRotated = new();
+    private static readonly TimeSpan ReuseGraceWindow = TimeSpan.FromSeconds(30);
+    private static DateTime _lastGracePrune = DateTime.UtcNow;
 
     private readonly JwtSettings _settings;
     private readonly RentalCommandDbContext _dbContext;
@@ -205,12 +216,25 @@ public class JwtTokenService : IJwtTokenService
         }
 
         // Single-use rotation with token-family invalidation: presenting an already-rotated
-        // (used) or revoked token signals theft/replay of a leaked token, so we revoke EVERY
-        // active refresh token for the user and force re-authentication. Benign concurrent
-        // refreshes never reach here because they share the single-flight above and clients
-        // serialize their own refreshes.
+        // (used) or revoked token normally signals theft/replay of a leaked token, so we revoke
+        // EVERY active refresh token for the user and force re-authentication.
+        //
+        // EXCEPTION — the reuse grace window: if THIS process rotated this exact token moments
+        // ago, the presenter is almost certainly a legitimate straggler trigger (another tab, the
+        // SSR refresh, the mobile interceptor) that read the cookie just before the rotated one
+        // landed. Re-serve the SAME successor we already minted instead of nuking the family.
+        // This is idempotent and safe: it never issues a NEW token, only re-hands the one the
+        // valid refresh already produced, and only within ReuseGraceWindow of that rotation.
         if (storedToken.IsUsed || storedToken.IsRevoked)
         {
+            if (TryGetRecentlyRotated(tokenHash, out var graceResult))
+            {
+                _logger.LogInformation(
+                    "Refresh token presented again within the reuse grace window for user {UserId}; re-serving the rotated successor (no family revoke).",
+                    storedToken.UserId);
+                return graceResult;
+            }
+
             _logger.LogWarning(
                 "Refresh token reuse/revoked detected for user {UserId}; revoking the entire token family.",
                 storedToken.UserId);
@@ -240,7 +264,60 @@ public class JwtTokenService : IJwtTokenService
         storedToken.IsRevoked = true;
         await _dbContext.SaveChangesAsync();
 
-        return await GenerateTokensAsync(user, roles, ipAddress, userAgent);
+        var newTokens = await GenerateTokensAsync(user, roles, ipAddress, userAgent);
+
+        // Remember the successor briefly so a legitimate straggler that re-presents this exact
+        // (now-rotated) token within the grace window gets the same pair back instead of tripping
+        // the family-revoke. See RecentlyRotated / ReuseGraceWindow above.
+        RememberRotation(tokenHash, newTokens);
+
+        return newTokens;
+    }
+
+    /// <summary>
+    /// Records the successor token pair produced by rotating <paramref name="rotatedTokenHash"/>,
+    /// keyed by that token's hash, valid for <see cref="ReuseGraceWindow"/>. Bounded by an
+    /// opportunistic prune of expired entries so the map can't grow without limit.
+    /// </summary>
+    private static void RememberRotation(string rotatedTokenHash, TokenResult successor)
+    {
+        var now = DateTime.UtcNow;
+        RecentlyRotated[rotatedTokenHash] = (successor, now.Add(ReuseGraceWindow));
+
+        // Opportunistically evict expired entries (cheap, at most once per grace window).
+        if (now - _lastGracePrune > ReuseGraceWindow)
+        {
+            _lastGracePrune = now;
+            foreach (var kvp in RecentlyRotated)
+            {
+                if (now >= kvp.Value.ExpiresAt)
+                {
+                    RecentlyRotated.TryRemove(kvp.Key, out _);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Returns the successor pair for a just-rotated token if it is still within the reuse grace
+    /// window; otherwise false. Expired entries are removed.
+    /// </summary>
+    private static bool TryGetRecentlyRotated(string tokenHash, out TokenResult? result)
+    {
+        result = null;
+        if (!RecentlyRotated.TryGetValue(tokenHash, out var entry))
+        {
+            return false;
+        }
+
+        if (DateTime.UtcNow >= entry.ExpiresAt)
+        {
+            RecentlyRotated.TryRemove(tokenHash, out _);
+            return false;
+        }
+
+        result = entry.Result;
+        return true;
     }
 
     /// <summary>
