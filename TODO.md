@@ -608,11 +608,24 @@ Plan:
 - Verified: .NET 0/0, Api 162 + Engine 23 tests, svelte-check 0/0, vite build,
   **e2e 34/34** (fixed 6 incl. 2 scan specs that never ran), visual sweep cohesive.
 
+### Wave 2 — "date wave" merged in PR #84 (main `d9cc538`)
+- **#19** Consistent form inputs: shared **DatePicker / DateTimePicker / RangeDatePicker**
+  (shadcn Calendar), **StateSelect** (searchable US-state combobox), **AddressAutocomplete**
+  (manual-input fallback, gated for an address API later). Applied across accounting /
+  leases / maintenance / properties / owners / onboarding / apply forms. Scan draft date
+  fields left as raw inputs on purpose (LLM-extracted arbitrary formats).
+- **#31** Appointments **calendar-first** view via `@event-calendar` (Month/Week/Agenda,
+  color-coded by Type + legend), existing grid kept under a **List toggle**; DateTimePicker
+  in the form; local-tz render / UTC store.
+- Infra: shadcn calendar + range-calendar, @event-calendar/core, svelte 5.50→5.56.1.
+- Verified: svelte-check 0/0, vite build, **e2e 34/34**, visual sweep (calendar + pickers).
+- REMAINING sub-item: address autocomplete is manual-only until a Maps/Places key is added
+  (flip on via an `enabled` flag — no signature change); see #19 notes.
+
 ### Still open (next waves / need product decisions)
-Polish/feature: #19 (state dropdown + address autocomplete + date pickers — only
-the native-select swap is done), #22 (inline feature explainers), #24 (state-
-specific lease template), #27 (email deliverability — use Zoho SMTP), #28 (Google
-auth — just needs creds), #4/#5 (money-page reconciliation), #18 (onboarding skip
-+ sandbox gating).
+Polish/feature: #22 (inline feature explainers), #24 (state-specific lease template),
+#27 (email deliverability — use Zoho SMTP), #28 (Google auth — just needs creds),
+#4/#5 (money-page reconciliation), #18 (onboarding skip + sandbox gating),
+address-autocomplete API key (sub-item of #19).
 Bigger projects: #3 (audit log unify), #11 (Sandbox mode), #13/#14 (docs + KB),
 #17 (Reports hub), #23/#26 (native e-sign + module).
