@@ -1,17 +1,22 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
+	import { accounting } from '$lib/api/endpoints/accounting';
 	import { ai } from '$lib/api/endpoints/ai';
 	import { messages } from '$lib/api/endpoints/messages';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Dashboard } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, Sparkles, MessageSquare } from '@lucide/svelte';
+	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, Sparkles, MessageSquare, HandCoins, Receipt, PiggyBank } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
 
 	const dashboardQuery = createQuery(() => ({
 		queryKey: ['dashboard', getCurrentPortfolioId()],
 		queryFn: () => portfolios.dashboard(getCurrentPortfolioId()),
+	}));
+	const snapshotQuery = createQuery(() => ({
+		queryKey: ['accounting-snapshot', getCurrentPortfolioId()],
+		queryFn: () => accounting.snapshot(),
 	}));
 	const briefingQuery = createQuery(() => ({
 		queryKey: ['ai-briefing', getCurrentPortfolioId()],
@@ -115,6 +120,66 @@
 			<h1 class="text-2xl font-bold text-foreground">{data.portfolio.name}</h1>
 			<p class="mt-1 text-sm text-muted-foreground">{data.portfolio.managementCompanyName} · {data.portfolio.timeZone}</p>
 		</div>
+
+		<!-- Plain-English money snapshot: collected / spent / kept, each with a sentence -->
+		<Card.Root class="mb-6 gap-0 py-0" data-testid="dashboard-money-snapshot">
+			<Card.Header class="px-5 pt-5 pb-2">
+				<Card.Title class="flex items-center gap-2 text-base font-semibold">
+					<Wallet class="h-4 w-4 text-primary" />
+					Your money
+					{#if snapshotQuery.data}
+						<span class="font-normal text-muted-foreground">· {snapshotQuery.data.periodLabel}</span>
+					{/if}
+				</Card.Title>
+			</Card.Header>
+			<Card.Content class="px-5 pb-5 pt-0">
+				{#if snapshotQuery.isLoading}
+					<div class="grid gap-4 sm:grid-cols-3">
+						{#each [0, 1, 2] as _}
+							<div class="rounded-lg border border-border bg-background p-4">
+								<div class="h-4 w-20 animate-pulse rounded bg-muted"></div>
+								<div class="mt-2 h-9 w-28 animate-pulse rounded bg-muted"></div>
+								<div class="mt-2 h-3 w-full animate-pulse rounded bg-muted"></div>
+							</div>
+						{/each}
+					</div>
+				{:else if snapshotQuery.isError || !snapshotQuery.data}
+					<p class="text-sm text-muted-foreground">Your money snapshot is unavailable right now.</p>
+				{:else}
+					{@const snap = snapshotQuery.data}
+					<div class="grid gap-4 sm:grid-cols-3">
+						<div class="rounded-lg border border-border bg-background p-4" data-testid="dashboard-money-collected">
+							<div class="flex items-center gap-2 text-sm font-medium text-success">
+								<HandCoins class="h-4 w-4" /> Collected
+							</div>
+							<p class="mt-1 font-mono tabular-nums text-3xl font-bold text-foreground" data-testid="dashboard-money-collected-amount">{money(snap.collected)}</p>
+							<p class="mt-1.5 text-sm leading-snug text-muted-foreground">{snap.explanations.collected}</p>
+						</div>
+						<div class="rounded-lg border border-border bg-background p-4" data-testid="dashboard-money-spent">
+							<div class="flex items-center gap-2 text-sm font-medium text-warning">
+								<Receipt class="h-4 w-4" /> Spent
+							</div>
+							<p class="mt-1 font-mono tabular-nums text-3xl font-bold text-foreground" data-testid="dashboard-money-spent-amount">{money(snap.spent)}</p>
+							<p class="mt-1.5 text-sm leading-snug text-muted-foreground">{snap.explanations.spent}</p>
+						</div>
+						<div class="rounded-lg border border-border bg-background p-4" data-testid="dashboard-money-net">
+							<div class="flex items-center gap-2 text-sm font-medium {snap.net < 0 ? 'text-destructive' : 'text-success'}">
+								<PiggyBank class="h-4 w-4" /> Kept
+							</div>
+							<p class="mt-1 font-mono tabular-nums text-3xl font-bold text-foreground" data-testid="dashboard-money-net-amount">{money(snap.net)}</p>
+							<p class="mt-1.5 text-sm leading-snug text-muted-foreground">{snap.explanations.net}</p>
+						</div>
+					</div>
+					<div
+						class="mt-4 flex items-start gap-2 rounded-lg border px-4 py-3 text-sm {snap.pastDueCount > 0 ? 'border-warning/40 bg-warning/10 text-foreground' : 'border-border bg-background text-muted-foreground'}"
+						data-testid="dashboard-money-pastdue"
+					>
+						<AlertTriangle class="mt-0.5 h-4 w-4 shrink-0 {snap.pastDueCount > 0 ? 'text-warning' : 'text-muted-foreground'}" />
+						<span>{snap.explanations.pastDue}</span>
+					</div>
+				{/if}
+			</Card.Content>
+		</Card.Root>
 
 		<div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 			<Card.Root class="gap-0 py-0">

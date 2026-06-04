@@ -13,6 +13,14 @@ public interface ILeaseService
 {
     Task<IReadOnlyList<LeaseResponse>> ListAsync(int portfolioId, int? tenantId, int? propertyId, ListQuery query, CancellationToken ct = default);
     Task<LeaseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
+
+    /// <summary>
+    /// Tenant-facing ledger for one lease: all charges and payments, newest first, each with a
+    /// plain-English explanation of what it is, plus a running balance. Returns null when the lease is
+    /// not found in the portfolio.
+    /// </summary>
+    Task<LeaseLedgerResponse?> GetLedgerAsync(
+        int portfolioId, int id, int? restrictToTenantId = null, CancellationToken ct = default);
     Task<LeaseResponse?> CreateAsync(int portfolioId, CreateLeaseRequest request, CancellationToken ct = default);
     Task<LeaseResponse?> UpdateAsync(int portfolioId, int id, UpdateLeaseRequest request, CancellationToken ct = default);
     Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);

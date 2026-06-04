@@ -40,6 +40,19 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
         return Ok(summary);
     }
 
+    /// <summary>
+    /// Plain-English money snapshot for the current month-to-date (plus trailing 30 days): money in,
+    /// money out, what's kept, and how many tenants are behind — each with a one-sentence explanation a
+    /// non-technical landlord can read at a glance. Feeds a dashboard card and the daily briefing.
+    /// </summary>
+    [HttpGet("snapshot")]
+    [ProducesResponseType(typeof(MoneySnapshotResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<MoneySnapshotResponse>> Snapshot(CancellationToken ct)
+    {
+        var snapshot = await _service.GetSnapshotAsync(GetPortfolioId(), ct);
+        return Ok(snapshot);
+    }
+
     /// <summary>Ledger, property P&amp;L, Schedule E, and vendor 1099 review reports.</summary>
     [HttpGet("reports")]
     [ProducesResponseType(typeof(AccountingReportsResponse), StatusCodes.Status200OK)]

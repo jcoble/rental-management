@@ -21,6 +21,8 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Pencil, Save, Trash2, X } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
+	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -42,6 +44,20 @@
 		queryFn: () => payments.list(portfolioId, { leaseId, take: 200 }),
 		enabled: portfolioId > 0 && leaseId > 0,
 	}));
+
+	// Plain-English account history (charges, payments, balance) with a "why" per entry.
+	const ledgerQuery = createQuery(() => ({
+		queryKey: ['lease-ledger', leaseId],
+		queryFn: () => leases.ledger(leaseId),
+		enabled: leaseId > 0,
+	}));
+	const ledger = $derived(ledgerQuery.data);
+	const balanceLine = $derived.by(() => {
+		if (!ledger) return '';
+		if (ledger.balance > 0.005) return `${ledger.tenantName ?? 'This tenant'} still owes ${formatCurrency(ledger.balance)}.`;
+		if (ledger.balance < -0.005) return `Paid ahead by ${formatCurrency(Math.abs(ledger.balance))} (credit on the account).`;
+		return 'All caught up — nothing owed.';
+	});
 
 	// Form (edit dialog) state
 	const propertiesQuery = createQuery(() => ({
@@ -394,6 +410,69 @@
 							</details>
 						{/if}
 					</div>
+				{/if}
+			</Card.Content>
+		</Card.Root>
+
+		<!-- Account history (plain-English ledger with a "why" per line) -->
+		<Card.Root class="mb-6" data-testid="lease-ledger-card">
+			<Card.Header>
+				<Card.Title class="text-base">Account History</Card.Title>
+				<Card.Description>Every charge and payment on this lease, in plain English.</Card.Description>
+			</Card.Header>
+			<Card.Content>
+				{#if ledgerQuery.isLoading}
+					<div class="space-y-2">
+						{#each [0, 1, 2] as _}
+							<div class="h-12 w-full animate-pulse rounded border border-border bg-muted"></div>
+						{/each}
+					</div>
+				{:else if ledgerQuery.isError || !ledger}
+					<p class="text-sm text-muted-foreground">Account history is unavailable right now.</p>
+				{:else}
+					<div class="mb-4 grid grid-cols-3 gap-3">
+						<div class="rounded-md border border-border bg-background p-3" data-testid="lease-ledger-charged">
+							<p class="text-xs text-muted-foreground">Charged</p>
+							<p class="mt-0.5 font-mono tabular-nums text-lg font-bold">{formatCurrency(ledger.totalCharged)}</p>
+						</div>
+						<div class="rounded-md border border-border bg-background p-3" data-testid="lease-ledger-paid">
+							<p class="text-xs text-muted-foreground">Paid</p>
+							<p class="mt-0.5 font-mono tabular-nums text-lg font-bold">{formatCurrency(ledger.totalPaid)}</p>
+						</div>
+						<div class="rounded-md border border-border bg-background p-3" data-testid="lease-ledger-balance">
+							<p class="text-xs text-muted-foreground">Balance</p>
+							<p class="mt-0.5 font-mono tabular-nums text-lg font-bold {ledger.balance > 0.005 ? 'text-warning' : 'text-success'}">{formatCurrency(ledger.balance)}</p>
+						</div>
+					</div>
+					<p class="mb-4 text-sm font-medium" data-testid="lease-ledger-balance-line">{balanceLine}</p>
+
+					{#if ledger.entries.length === 0}
+						<p class="text-sm text-muted-foreground">No charges or payments recorded yet.</p>
+					{:else}
+						<Tooltip.Provider delayDuration={150}>
+							<ul class="space-y-2" data-testid="lease-ledger-entries">
+								{#each ledger.entries as entry}
+									<li class="rounded-md border border-border bg-background p-3" data-testid="lease-ledger-entry">
+										<div class="flex items-start justify-between gap-3">
+											<div class="min-w-0">
+												<div class="flex items-center gap-1.5">
+													<p class="truncate text-sm font-medium">{entry.description}</p>
+													{#if entry.explanation}
+														<HelpTooltip text={entry.explanation} label="Why this is here" />
+													{/if}
+												</div>
+												<p class="mt-0.5 text-xs text-muted-foreground">{formatDate(entry.date)} · {entry.type}{entry.status ? ` · ${entry.status}` : ''}</p>
+												{#if entry.explanation}
+													<p class="mt-1 text-xs leading-snug text-muted-foreground" data-testid="lease-ledger-entry-explanation">{entry.explanation}</p>
+												{/if}
+											</div>
+											<p class="shrink-0 font-mono tabular-nums text-sm font-semibold {entry.type === 'Payment' ? 'text-success' : ''}">{formatCurrency(entry.amount)}</p>
+										</div>
+									</li>
+								{/each}
+							</ul>
+						</Tooltip.Provider>
+					{/if}
 				{/if}
 			</Card.Content>
 		</Card.Root>

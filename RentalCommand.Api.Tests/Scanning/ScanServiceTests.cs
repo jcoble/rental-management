@@ -259,6 +259,43 @@ public class ScanServiceTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
+    // Confirm: a scanned rent check becomes a paid Payment (the "scan the check"
+    // money flow). MAKE-SURE-DONE-E2E: locks the RentCheck -> Payment confirm path.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_ReviewingRentCheckDraft_CreatesPaidPayment()
+    {
+        const string extractedJson =
+            """{"document_kind":{"value":"RentCheck","confidence":0.95},"payer_name":{"value":"Marcus Williams","confidence":0.9},"amount":{"value":"1200.00","confidence":0.9},"transaction_date":{"value":"2026-03-03","confidence":0.9},"check_number":{"value":"1487","confidence":0.8}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Payment");
+        SeedStoredFile(draft.FilePath);
+
+        CreatePaymentRequest? captured = null;
+        _paymentsMock
+            .Setup(p => p.CreateAsync(PortfolioId, It.IsAny<CreatePaymentRequest>(), It.IsAny<CancellationToken>()))
+            .Callback<int, CreatePaymentRequest, CancellationToken>((_, req, _) => captured = req)
+            .ReturnsAsync(new PaymentResponse { Id = 555, PortfolioId = PortfolioId });
+
+        // The review UI supplies the lease for payment routing via overrides.
+        var result = await _sut.ConfirmAndCreateAsync(
+            PortfolioId, draft.Id, userId: 9, overridesJson: """{"leaseId":42}""");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        result.EntityType.Should().Be("Payment");
+        result.CreatedEntityId.Should().Be(555);
+
+        captured.Should().NotBeNull();
+        captured!.LeaseId.Should().Be(42);
+        captured.PaymentType.Should().Be(PaymentType.Rent);
+        captured.Status.Should().Be(PaymentStatus.Paid);
+        captured.Amount.Should().Be(1200.00m);
+        captured.Method.Should().Be("Check");
+        captured.ExternalReference.Should().Be("1487");
+    }
+
+    // -------------------------------------------------------------------------
     // Reject: happy path
     // -------------------------------------------------------------------------
 
