@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { notices } from '$lib/api/endpoints/notices';
+	import { ai, type FairHousingReviewResult } from '$lib/api/endpoints/ai';
 	import type { NoticeDraft } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import { FileText, RefreshCw, Send, Trash2 } from '@lucide/svelte';
+	import { AlertTriangle, CheckCircle2, FileText, RefreshCw, Send, ShieldCheck, Trash2 } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -43,10 +44,51 @@
 		approveChannels = { ...approveChannels, [id]: { ...current, [key]: checked } };
 	}
 
+	// Fair Housing review state for the copy currently being edited.
+	let fhResult = $state<FairHousingReviewResult | null>(null);
+	let fhChecking = $state(false);
+
+	function resetFairHousing() {
+		fhResult = null;
+		fhChecking = false;
+	}
+
 	function startEdit(draft: NoticeDraft) {
 		editingId = draft.id;
 		editSubject = draft.subject;
 		editBody = draft.body;
+		resetFairHousing();
+	}
+
+	function cancelEdit() {
+		editingId = null;
+		resetFairHousing();
+	}
+
+	async function checkFairHousing() {
+		const text = editBody.trim();
+		if (text.length === 0) {
+			showError('Add some message text before checking.');
+			return;
+		}
+		fhChecking = true;
+		fhResult = null;
+		try {
+			fhResult = await ai.fairHousingCheck(text);
+		} catch (err) {
+			showError(apiErrorMessage(err));
+		} finally {
+			fhChecking = false;
+		}
+	}
+
+	function useSuggestedRewrite() {
+		if (fhResult?.suggestedRewrite) {
+			editBody = fhResult.suggestedRewrite;
+			// Re-checking the rewritten copy is the user's call; clear the stale verdict.
+			fhResult = null;
+			showSuccess('Suggested rewrite applied. You can re-check it if you like.');
+		}
 	}
 
 	const generateMutation = createMutation(() => ({
@@ -158,14 +200,55 @@
 					<Card.Content class="space-y-4 p-4">
 						{#if editingId === draft.id}
 							<div class="space-y-3">
-								<input class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" bind:value={editSubject} />
-								<textarea class="min-h-36 w-full rounded-md border border-input bg-background p-3 text-sm" bind:value={editBody}></textarea>
-								<div class="flex gap-2">
+								<input class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" bind:value={editSubject} data-testid="notice-edit-subject" />
+								<textarea class="min-h-36 w-full rounded-md border border-input bg-background p-3 text-sm" bind:value={editBody} data-testid="notice-edit-body"></textarea>
+								<div class="flex flex-wrap gap-2">
 									<Button size="sm" onclick={() => updateMutation.mutate({ id: draft.id, subject: editSubject, body: editBody })} disabled={updateMutation.isPending}>
 										Save draft
 									</Button>
-									<Button size="sm" variant="outline" onclick={() => editingId = null}>Cancel</Button>
+									<Button size="sm" variant="outline" onclick={checkFairHousing} disabled={fhChecking} data-testid="fair-housing-check">
+										<ShieldCheck class="mr-1.5 h-4 w-4" />
+										{fhChecking ? 'Checking...' : 'Check for fair-housing issues'}
+									</Button>
+									<Button size="sm" variant="outline" onclick={cancelEdit}>Cancel</Button>
 								</div>
+
+								{#if fhResult}
+									{#if !fhResult.reviewed}
+										<div class="flex items-start gap-2 rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground" data-testid="fair-housing-unavailable">
+											<AlertTriangle class="mt-0.5 h-4 w-4 shrink-0" />
+											<span>AI review unavailable (no AI key configured). The copy was not checked.</span>
+										</div>
+									{:else if fhResult.compliant}
+										<div class="flex items-start gap-2 rounded-md border border-green-600/40 bg-green-600/10 p-3 text-sm text-green-700 dark:text-green-400" data-testid="fair-housing-compliant">
+											<CheckCircle2 class="mt-0.5 h-4 w-4 shrink-0" />
+											<span>Looks compliant. No fair-housing issues found.</span>
+										</div>
+									{:else}
+										<div class="space-y-2 rounded-md border border-amber-600/40 bg-amber-600/10 p-3 text-sm" data-testid="fair-housing-issues">
+											<p class="flex items-center gap-2 font-medium text-amber-700 dark:text-amber-400">
+												<AlertTriangle class="h-4 w-4 shrink-0" />
+												Possible fair-housing issues
+											</p>
+											<ul class="space-y-1.5">
+												{#each fhResult.issues as issue (issue.phrase + issue.concern)}
+													<li class="text-muted-foreground">
+														<span class="font-medium text-foreground">&ldquo;{issue.phrase}&rdquo;</span> — {issue.concern}
+													</li>
+												{/each}
+											</ul>
+											{#if fhResult.suggestedRewrite}
+												<div class="border-t border-amber-600/30 pt-2">
+													<p class="text-xs text-muted-foreground">Suggested compliant rewrite:</p>
+													<p class="mt-1 whitespace-pre-wrap text-sm text-foreground">{fhResult.suggestedRewrite}</p>
+													<Button size="sm" variant="outline" class="mt-2" onclick={useSuggestedRewrite} data-testid="fair-housing-use-rewrite">
+														Use suggested rewrite
+													</Button>
+												</div>
+											{/if}
+										</div>
+									{/if}
+								{/if}
 							</div>
 						{:else}
 							<div>
