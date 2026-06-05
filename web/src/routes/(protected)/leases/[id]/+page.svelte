@@ -943,6 +943,7 @@
 				loading={paymentsQuery.isLoading}
 				emptyMessage="No payments recorded for this lease."
 				getRowKey={(p) => p.id}
+				onRowClick={(p) => goto(`/accounting/payments/${p.id}`)}
 				data-testid="lease-payments-grid"
 			/>
 		</div>
