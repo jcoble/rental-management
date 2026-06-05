@@ -6,8 +6,10 @@
 # cookies first-party to the SvelteKit origin plus a same-origin /api/auth/refresh proxy.
 # The API is NOT split onto a separate subdomain.
 #
-#   - https://${DOMAIN}/api/*  and  /health   -> api  (priority 10)
-#   - https://${DOMAIN}/*       (everything else)  -> web (priority 1, catch-all)
+#   - https://${DOMAIN}/api/v1/*  and  /health   -> api  (priority 10)
+#   - https://${DOMAIN}/*          (everything else)  -> web (priority 1, catch-all)
+#     ^ includes the SvelteKit same-origin refresh proxy at /api/auth/refresh — which is exactly
+#       why the api router matches /api/v1 and NOT a bare /api (a bare /api would steal that route).
 #
 # Both routers carry a Host(`${DOMAIN}`) rule so Traefik knows which cert to issue, and
 # both use tls.certresolver=letsencrypt so the single ${DOMAIN} cert covers the whole app.
@@ -185,8 +187,11 @@ services:
           cpus: "1.0"
     labels:
       - "traefik.enable=true"
-      # /api/* (and the /health probe) route to the API — highest priority.
-      - "traefik.http.routers.api.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/health`))"
+      # Route ONLY /api/v1/* (every .NET controller + webhooks + the SignalR hub live there) and
+      # the /health probe to the API. Crucially NOT a bare /api prefix: the SvelteKit app owns the
+      # same-origin refresh proxy at /api/auth/refresh, which must fall through to the web catch-all.
+      # A bare PathPrefix(/api) here 404s that proxy -> the browser can't refresh -> users get logged out.
+      - "traefik.http.routers.api.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api/v1`) || PathPrefix(`/health`))"
       - "traefik.http.routers.api.entrypoints=websecure"
       - "traefik.http.routers.api.tls=true"
       - "traefik.http.routers.api.tls.certresolver=letsencrypt"
