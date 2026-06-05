@@ -53,7 +53,7 @@
 		});
 	});
 
-	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', city: '', state: '', postalCode: '', ownerId: '' };
+	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerId: '' };
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
 	let form = $state({ ...emptyProperty });
@@ -98,6 +98,7 @@
 			name: p.name,
 			type: p.type ?? 'MultiFamily',
 			addressLine1: p.addressLine1,
+			addressLine2: p.addressLine2 ?? '',
 			city: p.city,
 			state: p.state,
 			postalCode: p.postalCode,
@@ -315,6 +316,9 @@
 					}}
 				/>
 				{#if formErrors.addressLine1}<p class="mt-1 text-xs text-destructive" data-testid="property-address-error">{formErrors.addressLine1}</p>{/if}
+			</div>
+			<div class="md:col-span-2">
+				<Input data-testid="property-address2-input" bind:value={form.addressLine2} placeholder="Apt / Suite / Unit # (optional)" />
 			</div>
 			<div>
 				<Input data-testid="property-city-input" bind:value={form.city} placeholder="City" />

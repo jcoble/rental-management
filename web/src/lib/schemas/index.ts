@@ -95,6 +95,7 @@ export const propertySchema = z.object({
 	name: required('Name'),
 	type: z.string(),
 	addressLine1: required('Address'),
+	addressLine2: optionalText,
 	city: required('City'),
 	state: required('State'),
 	postalCode: required('ZIP'),
