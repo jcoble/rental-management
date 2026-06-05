@@ -92,6 +92,16 @@ builder.Services.AddHttpClient<IAudioTranscriptionService, OpenAiAudioTranscript
     c.Timeout = TimeSpan.FromSeconds(90);
 });
 
+// Google Places (New) address autocomplete. Key from the "GooglePlaces" config section
+// (user-secrets in dev, container env in prod). Disabled gracefully when no key is set.
+builder.Services.Configure<RentalCommand.Core.Configuration.GooglePlacesConfig>(
+    builder.Configuration.GetSection(RentalCommand.Core.Configuration.GooglePlacesConfig.SectionName));
+builder.Services.AddHttpClient<RentalCommand.Api.Services.Places.GooglePlacesService>(c =>
+{
+    c.BaseAddress = new Uri("https://places.googleapis.com/");
+    c.Timeout = TimeSpan.FromSeconds(15);
+});
+
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
 
 // Fail fast on an unconfigured signing key. HS256 needs >= 256 bits (32 chars), and the

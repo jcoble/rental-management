@@ -1,13 +1,14 @@
 <!--
   AddressAutocomplete — street-address input with optional Google Places autocomplete.
 
-  Manual entry always works. When the server has a Google Places key configured
-  (GOOGLE_PLACES_API_KEY, see src/lib/server/places.ts), typing shows a suggestion
-  dropdown; picking one fills the street line and (when the parent provides
-  `onresolved`) autofills city/state/zip.
+  Manual entry always works. When the API has a Google Places key configured
+  (the "GooglePlaces:ApiKey" config section — user-secrets in dev, container env in
+  prod — read by RentalCommand.Api's PlacesController/GooglePlacesService), typing
+  shows a suggestion dropdown; picking one fills the street line and (when the parent
+  provides `onresolved`) autofills city/state/zip.
 
-  SELF-GATING: the component calls the same-origin `/places/autocomplete` endpoint,
-  which returns `enabled:false` when no key is configured. On the first such
+  SELF-GATING: the component calls the same-origin `/api/v1/places/autocomplete`
+  endpoint, which returns `enabled:false` when no key is configured. On the first such
   response (or any network error) the feature disables itself process-wide and the
   field behaves as a plain text input. So the manual-entry fallback can never break,
   with or without a key.
@@ -104,7 +105,7 @@
 		const mySeq = ++seq;
 		try {
 			const res = await fetch(
-				`/places/autocomplete?q=${encodeURIComponent(q)}&session=${sessionToken}`
+				`/api/v1/places/autocomplete?q=${encodeURIComponent(q)}&session=${sessionToken}`
 			);
 			if (!res.ok) {
 				placesDisabled = true;
@@ -135,7 +136,7 @@
 
 		try {
 			const res = await fetch(
-				`/places/details?placeId=${encodeURIComponent(s.placeId)}&session=${sessionToken}`
+				`/api/v1/places/details?placeId=${encodeURIComponent(s.placeId)}&session=${sessionToken}`
 			);
 			if (res.ok) {
 				const addr = (await res.json()) as {
