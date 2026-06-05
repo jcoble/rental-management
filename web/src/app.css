@@ -290,6 +290,148 @@
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Mobile-section phone frame: a self-contained capture -> extract -> confirm
+   loop. One 9s timeline, three stages cross-fade. Reduced-motion (below) freezes
+   it on the resolved end-state (draft + toast visible). */
+@layer utilities {
+  .phone-screen {
+    /* timeline knobs shared by every animated child so they stay in lockstep */
+    --phone-cycle: 9s;
+  }
+
+  /* Stage 1: camera viewfinder — visible at the start of each cycle, then snaps. */
+  .phone-stage-capture {
+    animation: rc-phone-capture var(--phone-cycle) ease-in-out infinite;
+  }
+  .phone-scanline {
+    animation: rc-phone-scanline var(--phone-cycle) ease-in-out infinite;
+  }
+  .phone-shutter {
+    animation: rc-phone-shutter var(--phone-cycle) ease-in-out infinite;
+  }
+
+  /* Stage 2: extracted draft — fades in after the snap. */
+  .phone-stage-draft {
+    opacity: 0;
+    animation: rc-phone-draft var(--phone-cycle) ease-in-out infinite;
+  }
+  /* fields fly in staggered (index via --phone-field-i) */
+  .phone-field {
+    animation: rc-phone-field var(--phone-cycle) ease-out infinite;
+    animation-delay: calc(var(--phone-field-i, 0) * 0.18s);
+  }
+  .phone-confirm {
+    animation: rc-phone-confirm var(--phone-cycle) ease-in-out infinite;
+  }
+
+  /* Stage 3: success toast — slides up at the end of the cycle. */
+  .phone-toast {
+    opacity: 0;
+    transform: translateY(120%);
+    animation: rc-phone-toast var(--phone-cycle) ease-out infinite;
+  }
+}
+
+@keyframes rc-phone-capture {
+  0%,
+  32% {
+    opacity: 1;
+  }
+  40%,
+  100% {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+@keyframes rc-phone-scanline {
+  0% {
+    top: 12%;
+    opacity: 0;
+  }
+  6% {
+    opacity: 1;
+  }
+  28% {
+    top: 78%;
+    opacity: 1;
+  }
+  32%,
+  100% {
+    opacity: 0;
+  }
+}
+/* shutter "press" right before the snap-to-draft */
+@keyframes rc-phone-shutter {
+  0%,
+  28% {
+    transform: scale(1);
+  }
+  31% {
+    transform: scale(0.82);
+  }
+  34%,
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes rc-phone-draft {
+  0%,
+  34% {
+    opacity: 0;
+  }
+  42%,
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes rc-phone-field {
+  0%,
+  42% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  /* fields settle in by ~58% (staggered via per-field delay) */
+  58%,
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* confirm button gets a press near the end */
+@keyframes rc-phone-confirm {
+  0%,
+  74% {
+    transform: scale(1);
+    filter: none;
+  }
+  78% {
+    transform: scale(0.96);
+    filter: brightness(1.15);
+  }
+  82%,
+  100% {
+    transform: scale(1);
+    filter: none;
+  }
+}
+@keyframes rc-phone-toast {
+  0%,
+  80% {
+    opacity: 0;
+    transform: translateY(120%);
+  }
+  86%,
+  96% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(120%);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .reveal {
     opacity: 1 !important;
@@ -301,8 +443,30 @@
   .animate-aurora,
   .animate-scan-sweep,
   .animate-blink,
-  .animate-grid-pan {
+  .animate-grid-pan,
+  .phone-stage-capture,
+  .phone-scanline,
+  .phone-shutter,
+  .phone-stage-draft,
+  .phone-field,
+  .phone-confirm,
+  .phone-toast {
     animation: none !important;
+  }
+  /* Freeze the phone on the resolved end-state: the completed draft + saved
+     toast, capture stage hidden. No motion, but the story still reads. */
+  .phone-stage-capture {
+    opacity: 0 !important;
+    pointer-events: none;
+  }
+  .phone-stage-draft,
+  .phone-field {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+  .phone-toast {
+    opacity: 1 !important;
+    transform: none !important;
   }
 }
 
