@@ -69,7 +69,7 @@
 	});
 
 	// ── Inline property edit ──────────────────────────────────────────────────
-	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', city: '', state: '', postalCode: '', ownerId: '' };
+	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerId: '' };
 	let editingProperty = $state(false);
 	let propertyForm = $state({ ...emptyProperty });
 	let propertyFormErrors = $state<Record<string, string>>({});
@@ -88,6 +88,7 @@
 			name: property.name,
 			type: property.type ?? 'MultiFamily',
 			addressLine1: property.addressLine1,
+			addressLine2: property.addressLine2 ?? '',
 			city: property.city,
 			state: property.state,
 			postalCode: property.postalCode,
@@ -501,6 +502,7 @@
 				<div class="sm:col-span-2">
 					{@render inlineFieldWrap('property-detail-address', 'Address', `${property.addressLine1}${property.addressLine2 ? `, ${property.addressLine2}` : ''}`, propertyFormErrors.addressLine1, addressControl)}
 				</div>
+				<InlineField label="Apt / Suite / Unit #" bind:value={propertyForm.addressLine2} display={property.addressLine2 ?? '—'} editing={editingProperty} error={propertyFormErrors.addressLine2} testid="property-detail-address2" />
 				<InlineField label="City" bind:value={propertyForm.city} display={property.city} editing={editingProperty} error={propertyFormErrors.city} testid="property-detail-city" />
 				{@render inlineFieldWrap('property-detail-state', 'State', property.state ?? '', propertyFormErrors.state, stateControl)}
 				<InlineField label="ZIP" bind:value={propertyForm.postalCode} display={property.postalCode} editing={editingProperty} error={propertyFormErrors.postalCode} testid="property-detail-zip" />
