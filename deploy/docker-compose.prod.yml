@@ -262,8 +262,10 @@ services:
       context: ..
       dockerfile: Dockerfile.web
       args:
-        # Same-origin: the browser hits /api on this host; Traefik routes it to the API.
-        VITE_API_URL: /api
+        # Same-origin: the browser hits this host; Traefik routes /api/* to the API.
+        # MUST include /v1 — the .NET API mounts every controller under /api/v1/*, and the
+        # web client appends bare paths (e.g. /portfolios). Bare /api would 404 every call.
+        VITE_API_URL: /api/v1
     image: rentalcommand-web:prod
     container_name: rentalcommand-web
     restart: unless-stopped
