@@ -1,11 +1,25 @@
 <script lang="ts">
-	import { ArrowLeft, ArrowRight, BookOpen, Menu, X } from '@lucide/svelte';
+	import { ArrowLeft, ArrowRight, BookOpen, ChevronRight, Menu, X } from '@lucide/svelte';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
 
 	const article = $derived(data.article);
 	const categories = $derived(data.index.categories ?? []);
+
+	// The category bucket this article belongs to, so the section nav shows only
+	// sibling articles — a quiet "in this section" nav, not the whole index.
+	const currentCategory = $derived(
+		categories.find((c) => c.articles.some((a) => a.slug === article.slug)) ?? null
+	);
+	const sectionArticles = $derived(currentCategory?.articles ?? []);
+	// First article in the category — the breadcrumb's category link target.
+	const categoryHref = $derived(
+		sectionArticles[0] ? `/docs/${sectionArticles[0].slug}` : '/docs'
+	);
+	// Only worth a section nav when there's more than the current article.
+	const showSectionNav = $derived(sectionArticles.length > 1);
+
 	let mobileNavOpen = $state(false);
 </script>
 
@@ -15,59 +29,61 @@
 </svelte:head>
 
 <div class="mx-auto max-w-6xl px-5 py-10 sm:px-8 lg:py-14">
-	<!-- Breadcrumb / back -->
-	<a
-		href="/docs"
-		class="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
-		data-testid="docs-back"
-	>
-		<ArrowLeft class="h-4 w-4" />
-		All docs
-	</a>
+	<!-- Breadcrumb: Docs / Category / Article -->
+	<nav class="flex items-center gap-1.5 text-sm text-muted-foreground" data-testid="docs-breadcrumb">
+		<a href="/docs" class="transition-colors hover:text-foreground" data-testid="docs-back">Docs</a>
+		{#if article.category}
+			<ChevronRight class="h-3.5 w-3.5 text-muted-foreground/40" />
+			<a href={categoryHref} class="transition-colors hover:text-foreground">{article.category}</a>
+		{/if}
+		<ChevronRight class="h-3.5 w-3.5 text-muted-foreground/40" />
+		<span class="truncate font-medium text-foreground">{article.title}</span>
+	</nav>
 
-	<div class="mt-6 grid gap-8 lg:grid-cols-[16rem_1fr]">
-		<!-- Sidebar: other articles -->
-		<aside class="lg:sticky lg:top-24 lg:self-start">
-			<button
-				type="button"
-				class="mb-3 flex w-full items-center justify-between rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium lg:hidden"
-				onclick={() => (mobileNavOpen = !mobileNavOpen)}
-				aria-expanded={mobileNavOpen}
-			>
-				<span class="flex items-center gap-2">
-					{#if mobileNavOpen}<X class="h-4 w-4" />{:else}<Menu class="h-4 w-4" />{/if}
-					Browse topics
-				</span>
-			</button>
+	<div class="mt-6 grid gap-8 {showSectionNav ? 'lg:grid-cols-[15rem_1fr]' : ''}">
+		<!-- Quiet section nav: only this category's articles, not the whole index. -->
+		{#if showSectionNav}
+			<aside class="lg:sticky lg:top-24 lg:self-start">
+				<button
+					type="button"
+					class="mb-3 flex w-full items-center justify-between rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium lg:hidden"
+					onclick={() => (mobileNavOpen = !mobileNavOpen)}
+					aria-expanded={mobileNavOpen}
+				>
+					<span class="flex items-center gap-2">
+						{#if mobileNavOpen}<X class="h-4 w-4" />{:else}<Menu class="h-4 w-4" />{/if}
+						In this section
+					</span>
+				</button>
 
-			<nav
-				class="{mobileNavOpen ? 'block' : 'hidden'} space-y-5 lg:block"
-				data-testid="docs-sidebar"
-			>
-				{#each categories as cat (cat.category)}
-					<div>
-						<p class="mb-1.5 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground/70">
-							{cat.category}
-						</p>
-						<ul class="space-y-0.5">
-							{#each cat.articles as item (item.slug)}
-								{@const active = item.slug === article.slug}
+				<nav
+					class="{mobileNavOpen ? 'block' : 'hidden'} lg:block"
+					data-testid="docs-section-nav"
+					aria-label="{currentCategory?.category} articles"
+				>
+					<p class="mb-1.5 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground/70">
+						{currentCategory?.category}
+					</p>
+					<ul class="space-y-0.5">
+						{#each sectionArticles as item (item.slug)}
+							{@const active = item.slug === article.slug}
+							<li>
 								<a
 									href="/docs/{item.slug}"
 									aria-current={active ? 'page' : undefined}
 									class="block rounded-md px-2 py-1.5 text-sm transition-colors {active
 										? 'bg-primary/10 font-medium text-primary'
 										: 'text-muted-foreground hover:bg-secondary hover:text-foreground'}"
-									data-testid="docs-sidebar-link-{item.slug}"
+									data-testid="docs-section-link-{item.slug}"
 								>
 									{item.title}
 								</a>
-							{/each}
-						</ul>
-					</div>
-				{/each}
-			</nav>
-		</aside>
+							</li>
+						{/each}
+					</ul>
+				</nav>
+			</aside>
+		{/if}
 
 		<!-- Article -->
 		<article class="min-w-0" data-testid="docs-article" data-doc-slug={article.slug}>
