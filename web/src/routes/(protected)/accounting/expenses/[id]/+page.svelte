@@ -44,6 +44,76 @@
 	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }) }));
 
 	const expense = $derived(expenseQuery.data);
+
+	// --- Scan extraction (saved in Expense.ReceiptData as a JSON string) ---
+	// The scan→draft→confirm flow stashes the full extraction (line items, card,
+	// payment method, document kind, vendor contact) here. We surface it as a
+	// readable table + labeled fields; the raw expander below stays as the full
+	// fallback. Parse defensively — the value may be empty, null, or malformed.
+	type ScanLineItem = {
+		description?: string | null;
+		quantity?: number | null;
+		unitPrice?: number | null;
+		amount?: number | null;
+	};
+	type ScanReceipt = {
+		documentKind?: string | null;
+		paymentMethod?: string | null;
+		cardLast4?: string | null;
+		vendor?: {
+			address?: string | null;
+			phone?: string | null;
+			website?: string | null;
+			taxId?: string | null;
+		} | null;
+		lineItems?: ScanLineItem[] | null;
+	};
+
+	const scan = $derived.by<ScanReceipt | null>(() => {
+		const raw = expense?.receiptData;
+		if (!raw || typeof raw !== 'string' || raw.trim() === '') return null;
+		try {
+			const parsed = JSON.parse(raw);
+			return parsed && typeof parsed === 'object' ? (parsed as ScanReceipt) : null;
+		} catch {
+			return null;
+		}
+	});
+
+	const scanLineItems = $derived(
+		(scan?.lineItems ?? []).filter(
+			(li): li is ScanLineItem =>
+				!!li &&
+				typeof li === 'object' &&
+				(!!li.description || li.amount != null || li.quantity != null || li.unitPrice != null)
+		)
+	);
+	const scanLineItemsTotal = $derived(
+		scanLineItems.reduce((sum, li) => sum + (typeof li.amount === 'number' ? li.amount : 0), 0)
+	);
+	// Only show a footer total when at least one line item carried a numeric amount,
+	// so we never display a misleading "$0.00" when amounts were absent/non-numeric.
+	const scanHasLineItemTotal = $derived(
+		scanLineItems.some((li) => typeof li.amount === 'number' && !Number.isNaN(li.amount))
+	);
+	const scanHasFields = $derived(
+		!!(
+			scan &&
+			(scan.cardLast4 ||
+				scan.paymentMethod ||
+				scan.documentKind ||
+				scan.vendor?.phone ||
+				scan.vendor?.address)
+		)
+	);
+
+	const currencyFmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+	const numberFmt = new Intl.NumberFormat('en-US');
+	const usd = (n: number | null | undefined) =>
+		typeof n === 'number' && !Number.isNaN(n) ? currencyFmt.format(n) : '';
+	const qty = (n: number | null | undefined) =>
+		typeof n === 'number' && !Number.isNaN(n) ? numberFmt.format(n) : '';
+
 	const statusOptions = $derived(STATUSES.map((value) => ({ value, label: value })));
 	const categoryOptions = $derived(CATEGORIES.map((value) => ({ value, label: value })));
 	const propertyOptions = $derived([{ value: '', label: 'No property' }, ...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name }))]);
@@ -202,6 +272,82 @@
 				<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal} {editing} testid="expense-detail-subtotal" />
 				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount} {editing} testid="expense-detail-tax" />
 				<InlineField label="Notes" bind:value={form.notes} display={expense.notes} {editing} type="textarea" testid="expense-detail-notes" class="sm:col-span-2" />
+
+				<!-- Scan extraction, surfaced. The scan→draft→confirm flow already saved
+				     line items + card/payment/document-kind/vendor into ReceiptData; we
+				     present them as readable rows instead of burying them in raw JSON.
+				     Each piece only renders when it actually has a value. -->
+				{#if scanLineItems.length > 0}
+					<div class="sm:col-span-2" data-testid="expense-detail-line-items">
+						<p class="mb-1 text-xs font-medium text-muted-foreground">Line items</p>
+						<div class="overflow-hidden rounded-md border border-border bg-background/40">
+							<table class="w-full text-sm">
+								<thead>
+									<tr class="border-b border-border text-xs text-muted-foreground">
+										<th class="px-3 py-2 text-left font-medium">Description</th>
+										<th class="px-3 py-2 text-right font-medium">Qty</th>
+										<th class="px-3 py-2 text-right font-medium">Unit price</th>
+										<th class="px-3 py-2 text-right font-medium">Amount</th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each scanLineItems as li}
+										<tr class="border-b border-border/60 last:border-b-0">
+											<td class="px-3 py-2 text-foreground">{li.description ?? '-'}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">{qty(li.quantity) || '-'}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">{usd(li.unitPrice) || '-'}</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums font-medium text-foreground">{usd(li.amount) || '-'}</td>
+										</tr>
+									{/each}
+								</tbody>
+								<tfoot>
+									<tr class="border-t border-border bg-muted/30">
+										<td class="px-3 py-2 text-xs text-muted-foreground" colspan="3">
+											{scanLineItems.length} {scanLineItems.length === 1 ? 'item' : 'items'}
+										</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums font-semibold text-foreground" data-testid="expense-detail-line-items-total">
+											{scanHasLineItemTotal ? usd(scanLineItemsTotal) : ''}
+										</td>
+									</tr>
+								</tfoot>
+							</table>
+						</div>
+					</div>
+				{/if}
+
+				{#if scanHasFields}
+					{#if scan?.cardLast4}
+						<div data-testid="expense-detail-scan-card-last4-field">
+							<p class="mb-1 block text-xs font-medium text-muted-foreground">Card last 4</p>
+							<p class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground" data-testid="expense-detail-scan-card-last4-value">•••• {scan.cardLast4}</p>
+						</div>
+					{/if}
+					{#if scan?.paymentMethod}
+						<div data-testid="expense-detail-scan-payment-method-field">
+							<p class="mb-1 block text-xs font-medium text-muted-foreground">Payment method</p>
+							<p class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground" data-testid="expense-detail-scan-payment-method-value">{scan.paymentMethod}</p>
+						</div>
+					{/if}
+					{#if scan?.documentKind}
+						<div data-testid="expense-detail-scan-document-kind-field">
+							<p class="mb-1 block text-xs font-medium text-muted-foreground">Document kind</p>
+							<p class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground" data-testid="expense-detail-scan-document-kind-value">{scan.documentKind}</p>
+						</div>
+					{/if}
+					{#if scan?.vendor?.phone}
+						<div data-testid="expense-detail-scan-vendor-phone-field">
+							<p class="mb-1 block text-xs font-medium text-muted-foreground">Vendor phone</p>
+							<p class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground" data-testid="expense-detail-scan-vendor-phone-value">{scan.vendor.phone}</p>
+						</div>
+					{/if}
+					{#if scan?.vendor?.address}
+						<div class="sm:col-span-2" data-testid="expense-detail-scan-vendor-address-field">
+							<p class="mb-1 block text-xs font-medium text-muted-foreground">Vendor address</p>
+							<p class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground" data-testid="expense-detail-scan-vendor-address-value">{scan.vendor.address}</p>
+						</div>
+					{/if}
+				{/if}
+
 				<!-- Raw receipt JSON is meaningless to a non-technical landlord, so it's tucked
 				     behind a collapsed-by-default disclosure (same feel as the accounting report
 				     expanders). It stays fully editable once opened. -->
