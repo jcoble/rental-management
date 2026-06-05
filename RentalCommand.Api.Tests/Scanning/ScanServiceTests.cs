@@ -93,7 +93,7 @@ public class ScanServiceTests : IDisposable
     public async Task ConfirmAndCreateAsync_ReviewingExpenseDraft_SucceedsAndReKeysStoredFile()
     {
         const string extractedJson =
-            """{"vendor_name":{"value":"ACME","confidence":0.9},"amount":{"value":"42.50","confidence":0.8},"transaction_date":{"value":"2026-01-15","confidence":0.95},"category":{"value":"Repairs","confidence":0.7},"notes":{"value":"","confidence":0.0}}""";
+            """{"vendor_name":{"value":"ACME","confidence":0.9},"amount":{"value":"42.50","confidence":0.8},"transaction_date":{"value":"2026-01-15","confidence":0.95},"category":{"value":"Repairs","confidence":0.7},"notes":{"value":"","confidence":0.0},"payment_method":{"value":"Visa","confidence":0.8},"card_last4":{"value":"4242","confidence":0.8},"document_kind":{"value":"Receipt","confidence":0.9},"line_items":{"value":"[{\"description\":\"Washer hose\",\"quantity\":2,\"unit_price\":6.50,\"amount\":13.00},{\"description\":\"Pipe tape\",\"amount\":3.00}]","confidence":0.7}}""";
 
         var draft = SeedDraft("Reviewing", extractedJson);
         var file  = SeedStoredFile(draft.FilePath);
@@ -107,6 +107,20 @@ public class ScanServiceTests : IDisposable
         result.Error.Should().BeNull("ScanService returned an error: " + result.Error);
         result.Success.Should().BeTrue("Unexpected: " + result.Error);
         result.CreatedEntityId.Should().Be(fixedExpenseId);
+
+        // Typed scalar columns + line items are threaded into the create request from the extraction.
+        _expenses.LastRequest.Should().NotBeNull();
+        _expenses.LastRequest!.PaymentMethod.Should().Be("Visa");
+        _expenses.LastRequest.CardLast4.Should().Be("4242");
+        _expenses.LastRequest.DocumentKind.Should().Be("Receipt");
+        _expenses.LastRequest.LineItems.Should().HaveCount(2);
+        var firstLine = _expenses.LastRequest.LineItems[0];
+        firstLine.Description.Should().Be("Washer hose");
+        firstLine.Quantity.Should().Be(2m);
+        firstLine.UnitPrice.Should().Be(6.50m);
+        firstLine.Amount.Should().Be(13.00m);
+        firstLine.LineNumber.Should().Be(1);
+        _expenses.LastRequest.LineItems[1].LineNumber.Should().Be(2);
 
         // Draft should be Confirmed. Query the DB directly via raw SQL on the shared connection,
         // bypassing EF's change tracker entirely.
@@ -412,7 +426,7 @@ public class ScanServiceTests : IDisposable
     public async Task ConfirmAndCreateAsync_ReviewingRentCheckDraft_CreatesPaidPayment()
     {
         const string extractedJson =
-            """{"document_kind":{"value":"RentCheck","confidence":0.95},"payer_name":{"value":"Marcus Williams","confidence":0.9},"amount":{"value":"1200.00","confidence":0.9},"transaction_date":{"value":"2026-03-03","confidence":0.9},"check_number":{"value":"1487","confidence":0.8}}""";
+            """{"document_kind":{"value":"RentCheck","confidence":0.95},"payer_name":{"value":"Marcus Williams","confidence":0.9},"bank_name":{"value":"First National","confidence":0.8},"amount":{"value":"1200.00","confidence":0.9},"transaction_date":{"value":"2026-03-03","confidence":0.9},"check_number":{"value":"1487","confidence":0.8}}""";
 
         var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Payment");
         SeedStoredFile(draft.FilePath);
@@ -438,6 +452,11 @@ public class ScanServiceTests : IDisposable
         captured.Amount.Should().Be(1200.00m);
         captured.Method.Should().Be("Check");
         captured.ExternalReference.Should().Be("1487");
+        // The promoted check fields + the full extraction superset are threaded through to the payment.
+        captured.PayerName.Should().Be("Marcus Williams");
+        captured.CheckNumber.Should().Be("1487");
+        captured.BankName.Should().Be("First National");
+        captured.ExtractedData.Should().Contain("RentCheck");
     }
 
     // -------------------------------------------------------------------------
@@ -697,6 +716,10 @@ internal sealed class RentalCommandTestDbContext : RentalCommandDbContext
 
         // jsonb is not understood by SQLite — remap those columns to plain text.
         modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
+        modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
+        modelBuilder.Entity<Payment>().Property(e => e.ExtractedData).HasColumnType("TEXT");
+        modelBuilder.Entity<Lease>().Property(e => e.ExtractedData).HasColumnType("TEXT");
+        modelBuilder.Entity<WorkOrder>().Property(e => e.ExtractedData).HasColumnType("TEXT");
 
         // Remove Postgres-specific jsonb from AuditLog, OutboxMessage, QueuedJob.
         modelBuilder.Entity<AuditLog>()

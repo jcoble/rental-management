@@ -88,6 +88,10 @@ public class PaymentService : IPaymentService
             Method = request.Method,
             ExternalReference = request.ExternalReference,
             Notes = request.Notes,
+            PayerName = request.PayerName,
+            CheckNumber = request.CheckNumber,
+            BankName = request.BankName,
+            ExtractedData = request.ExtractedData,
             CreatedAt = now,
             UpdatedAt = now,
         };

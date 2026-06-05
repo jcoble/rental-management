@@ -36,6 +36,15 @@ public class ExpenseResponse
     /// </summary>
     public string? ReceiptData { get; set; }
 
+    /// <summary>How the expense was paid (e.g. "Visa", "Cash"); from the scanned receipt.</summary>
+    public string? PaymentMethod { get; set; }
+
+    /// <summary>Last 4 digits of the card used; from the scanned receipt.</summary>
+    public string? CardLast4 { get; set; }
+
+    /// <summary>Document classification from the scan (e.g. "Receipt", "Bill").</summary>
+    public string? DocumentKind { get; set; }
+
     /// <summary>True when a <see cref="Core.Entities.StoredFile"/> is linked to this expense.</summary>
     public bool HasReceipt { get; set; }
 
@@ -66,6 +75,9 @@ public class ExpenseResponse
         Subtotal = e.Subtotal,
         TaxAmount = e.TaxAmount,
         ReceiptData = e.ReceiptData,
+        PaymentMethod = e.PaymentMethod,
+        CardLast4 = e.CardLast4,
+        DocumentKind = e.DocumentKind,
     };
 }
 
@@ -111,6 +123,35 @@ public class CreateExpenseRequest
 
     /// <summary>Full receipt details JSON (jsonb); populated when creating from a scan draft.</summary>
     public string? ReceiptData { get; set; }
+
+    /// <summary>How the expense was paid (e.g. "Visa", "Cash"); promoted from the scanned receipt.</summary>
+    [MaxLength(100)]
+    public string? PaymentMethod { get; set; }
+
+    /// <summary>Last 4 digits of the card used; promoted from the scanned receipt.</summary>
+    [MaxLength(20)]
+    public string? CardLast4 { get; set; }
+
+    /// <summary>Document classification from the scan (e.g. "Receipt", "Bill"); promoted from the scan.</summary>
+    [MaxLength(50)]
+    public string? DocumentKind { get; set; }
+
+    /// <summary>Itemized lines from the scanned receipt; persisted as ExpenseLineItem child rows.</summary>
+    public List<CreateExpenseLineItem> LineItems { get; set; } = new();
+}
+
+/// <summary>One scanned receipt line item to persist as an <see cref="Core.Entities.ExpenseLineItem"/>.</summary>
+public class CreateExpenseLineItem
+{
+    [MaxLength(1000)]
+    public string Description { get; set; } = string.Empty;
+
+    public decimal? Quantity { get; set; }
+    public decimal? UnitPrice { get; set; }
+    public decimal? Amount { get; set; }
+
+    /// <summary>1-based position of this line within the receipt.</summary>
+    public int LineNumber { get; set; }
 }
 
 public class UpdateExpenseRequest

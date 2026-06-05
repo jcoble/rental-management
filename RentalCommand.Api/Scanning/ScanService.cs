@@ -274,6 +274,21 @@ public sealed class ScanService : IScanService
             BillableToOwner = false,
             Notes       = dto.Notes,
             ReceiptData = receiptDataJson,
+            // Promote high-value scalars to typed columns (the ReceiptData jsonb keeps the full superset).
+            PaymentMethod = dto.PaymentMethod,
+            CardLast4     = dto.CardLast4,
+            DocumentKind  = dto.DocumentKind,
+            // Promote line items to queryable child rows; 1-based LineNumber preserves the printed order.
+            LineItems = dto.LineItems
+                .Select((li, i) => new CreateExpenseLineItem
+                {
+                    Description = li.Description ?? string.Empty,
+                    Quantity    = li.Quantity,
+                    UnitPrice   = li.UnitPrice,
+                    Amount      = li.Amount,
+                    LineNumber  = i + 1,
+                })
+                .ToList(),
         };
 
         if (isPaid)
@@ -390,6 +405,11 @@ public sealed class ScanService : IScanService
             Method            = "Check",
             ExternalReference = dto.CheckNumber,
             Notes             = string.IsNullOrWhiteSpace(notes) ? null : notes,
+            // Promote scanned check fields to typed columns; keep the full extraction as the jsonb extras.
+            PayerName         = dto.PayerName,
+            CheckNumber       = dto.CheckNumber,
+            BankName          = dto.BankName,
+            ExtractedData     = NormalizeExtractedData(draft.ExtractedFields),
         };
 
         PaymentResponse? payment;
@@ -483,6 +503,8 @@ public sealed class ScanService : IScanService
             RequestedAt = DateTime.UtcNow,
             EstimatedCost = fields.EstimatedCost,
             CreatedBy = userId.ToString(),
+            // Keep the full scan extraction superset as jsonb extras.
+            ExtractedData = NormalizeExtractedData(draft.ExtractedFields),
         };
 
         WorkOrderResponse? workOrder;
@@ -605,6 +627,8 @@ public sealed class ScanService : IScanService
             LateFeeAmount   = fields.LateFee ?? 0m,
             RentDueDay      = fields.RentDueDay is >= 1 and <= 31 ? fields.RentDueDay.Value : 1,
             Notes           = "Imported from scanned lease PDF.",
+            // Keep the full scan extraction superset as jsonb extras.
+            ExtractedData   = NormalizeExtractedData(draft.ExtractedFields),
         };
 
         LeaseResponse? lease;
@@ -997,6 +1021,26 @@ public sealed class ScanService : IScanService
         catch
         {
             return "{}";
+        }
+    }
+
+    /// <summary>
+    /// Returns the raw worker-written extraction JSON as the jsonb "extras" superset for
+    /// Payment/Lease/WorkOrder, but only when it parses as valid JSON — a jsonb column rejects
+    /// malformed text, so anything unparseable (or empty) becomes null rather than failing the save.
+    /// </summary>
+    private static string? NormalizeExtractedData(string? extractedFieldsJson)
+    {
+        if (string.IsNullOrWhiteSpace(extractedFieldsJson))
+            return null;
+        try
+        {
+            using var _ = JsonDocument.Parse(extractedFieldsJson);
+            return extractedFieldsJson;
+        }
+        catch
+        {
+            return null;
         }
     }
 

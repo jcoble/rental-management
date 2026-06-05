@@ -40,6 +40,12 @@ public class Lease
     /// <summary>The <see cref="StoredFile"/> id of the fully-signed agreement PDF, set when the provider reports "signed".</summary>
     public int? SignedDocumentStoredFileId { get; set; }
 
+    /// <summary>
+    /// JSON object (stored as jsonb) holding the full scan extraction superset for leases imported
+    /// from a scanned PDF. Null for manually entered leases.
+    /// </summary>
+    public string? ExtractedData { get; set; }
+
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }

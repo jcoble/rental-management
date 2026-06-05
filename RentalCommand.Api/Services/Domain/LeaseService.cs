@@ -255,6 +255,7 @@ public class LeaseService : ILeaseService
             LateFeeAmount = request.LateFeeAmount,
             RentDueDay = request.RentDueDay,
             Notes = request.Notes,
+            ExtractedData = request.ExtractedData,
             CreatedAt = now,
             UpdatedAt = now,
         };
