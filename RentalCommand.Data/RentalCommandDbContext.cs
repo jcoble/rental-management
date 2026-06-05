@@ -23,6 +23,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Lease> Leases => Set<Lease>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<Expense> Expenses => Set<Expense>();
+    public DbSet<ExpenseLineItem> ExpenseLineItems => Set<ExpenseLineItem>();
     public DbSet<Vendor> Vendors => Set<Vendor>();
     public DbSet<VendorDispatch> VendorDispatches => Set<VendorDispatch>();
     public DbSet<VendorRating> VendorRatings => Set<VendorRating>();
@@ -660,6 +661,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             // indexed because the anonymous webhook resolves the lease by it.
             entity.Property(e => e.EsignStatus).HasConversion<int>();
             entity.Property(e => e.EsignEnvelopeId).HasMaxLength(200);
+            // Full scan-extraction superset for leases imported from a scanned PDF (Postgres jsonb).
+            entity.Property(e => e.ExtractedData).HasColumnType("jsonb");
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
@@ -701,6 +704,11 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.PaymentType).HasConversion<int>();
             entity.Property(e => e.Status).HasConversion<int>();
             entity.Property(p => p.PeriodKey).HasMaxLength(7);
+            // Promoted scan-check fields + full extraction superset (Postgres jsonb).
+            entity.Property(e => e.PayerName).HasMaxLength(200);
+            entity.Property(e => e.CheckNumber).HasMaxLength(100);
+            entity.Property(e => e.BankName).HasMaxLength(200);
+            entity.Property(e => e.ExtractedData).HasColumnType("jsonb");
             // Idempotency: at most one auto-generated payment per (lease, type, period). Manual payments
             // (PeriodKey == null) are excluded by the filter, so they never collide.
             entity.HasIndex(p => new { p.LeaseId, p.PaymentType, p.PeriodKey })
@@ -728,6 +736,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Subtotal).HasPrecision(18, 2);
             entity.Property(e => e.TaxAmount).HasPrecision(18, 2);
             entity.Property(e => e.ReceiptData).HasColumnType("jsonb");
+            // Promoted scalar receipt fields (alongside the ReceiptData jsonb superset).
+            entity.Property(e => e.PaymentMethod).HasMaxLength(100);
+            entity.Property(e => e.CardLast4).HasMaxLength(20);
+            entity.Property(e => e.DocumentKind).HasMaxLength(50);
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
@@ -752,6 +764,20 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(w => w.Expenses)
                 .HasForeignKey(e => e.WorkOrderId)
                 .OnDelete(DeleteBehavior.SetNull);
+            entity.HasMany(e => e.LineItems)
+                .WithOne(li => li.Expense)
+                .HasForeignKey(li => li.ExpenseId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ExpenseLineItem>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Description).IsRequired().HasMaxLength(1000);
+            entity.Property(e => e.Quantity).HasPrecision(18, 2);
+            entity.Property(e => e.UnitPrice).HasPrecision(18, 2);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.HasIndex(e => e.ExpenseId);
         });
 
         modelBuilder.Entity<Vendor>(entity =>
@@ -828,6 +854,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.CreatedBy).HasMaxLength(120);
             entity.Property(e => e.Priority).HasConversion<int>();
             entity.Property(e => e.Status).HasConversion<int>();
+            // Full scan-extraction superset for work orders created from a scan draft (Postgres jsonb).
+            entity.Property(e => e.ExtractedData).HasColumnType("jsonb");
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);
