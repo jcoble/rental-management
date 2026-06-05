@@ -309,7 +309,7 @@
 					bind:value={form.addressLine1}
 					placeholder="Address"
 					onresolved={(a) => {
-						form.addressLine1 = a.line1;
+						// Street line is owned by the address input (manual edits stick); only fill the rest.
 						if (a.city) form.city = a.city;
 						if (a.state) form.state = a.state;
 						if (a.zip) form.postalCode = a.zip;
