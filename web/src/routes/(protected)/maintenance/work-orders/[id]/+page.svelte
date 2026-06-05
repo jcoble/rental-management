@@ -10,6 +10,8 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 
 	const queryClient = useQueryClient();
@@ -37,6 +39,16 @@
 	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
 
 	const workOrder = $derived(workOrderQuery.data);
+
+	// Context tone keyed by severity: an emergency reads red, high amber, else primary.
+	const heroTone = $derived.by<HeroTone>(() => {
+		switch (workOrder?.priority) {
+			case 'Emergency': return 'destructive';
+			case 'High': return 'warning';
+			default: return 'primary';
+		}
+	});
+
 	const priorityOptions = $derived(PRIORITIES.map((value) => ({ value, label: value })));
 	const statusOptions = $derived(STATUSES.map((value) => ({ value, label: value })));
 	const propertyOptions = $derived([{ value: '', label: 'Select property' }, ...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name }))]);
@@ -120,6 +132,31 @@
 	{:else if !workOrder}
 		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Work order not found.</div>
 	{:else}
+		<!-- Hero: the job + its severity, washed by priority (Emergency reads red). -->
+		<HeroCard tone={heroTone} testid="work-order-hero" contentClass="flex flex-wrap items-end justify-between gap-6" class="mb-6">
+			<div class="min-w-0">
+				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{workOrder.priority} priority{#if workOrder.category} · {workOrder.category}{/if}</p>
+				<p class="mt-1 text-2xl font-bold tracking-tight" data-testid="work-order-hero-title">{workOrder.title}</p>
+				<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+					<StatusBadge status={workOrder.status} />
+					{#if workOrder.propertyName}
+						<span aria-hidden="true">·</span>
+						<a href="/properties/{workOrder.propertyId}" class="font-medium text-foreground underline-offset-4 hover:underline">{workOrder.propertyName}</a>
+					{/if}
+					{#if workOrder.vendorName}
+						<span aria-hidden="true">·</span>
+						<span>{workOrder.vendorName}</span>
+					{/if}
+				</div>
+			</div>
+			{#if !editing}
+				<Button size="sm" data-testid="work-order-hero-cta" onclick={startEditing}>
+					<Pencil class="h-4 w-4" />
+					Update status
+				</Button>
+			{/if}
+		</HeroCard>
+
 		<div class="grid gap-6 lg:grid-cols-2">
 			<DetailCard title="Issue" icon={Wrench} accent="primary" testid="work-order-card-issue" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Issue title" bind:value={form.title} display={workOrder.title} {editing} error={formErrors.title} testid="work-order-detail-title" class="sm:col-span-2" />

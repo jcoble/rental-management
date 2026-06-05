@@ -10,7 +10,9 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 
 	const queryClient = useQueryClient();
@@ -37,6 +39,23 @@
 	const leasesQuery = createQuery(() => ({ queryKey: ['leases', portfolioId], queryFn: () => leases.list(portfolioId, { take: 200 }) }));
 
 	const payment = $derived(paymentQuery.data);
+
+	// Hero amount, formatted as currency (the page otherwise shows the raw value).
+	const heroAmount = $derived(
+		payment ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(payment.amount) || 0) : ''
+	);
+	// Context tone keyed by collection status: green = money in, warning = owed,
+	// destructive = failed, primary otherwise.
+	const heroTone = $derived.by<HeroTone>(() => {
+		switch (payment?.status) {
+			case 'Paid': return 'success';
+			case 'Late':
+			case 'Partial': return 'warning';
+			case 'Failed': return 'destructive';
+			default: return 'primary';
+		}
+	});
+
 	const typeOptions = $derived(PAYMENT_TYPES.map((value) => ({ value, label: value })));
 	const statusOptions = $derived(PAYMENT_STATUSES.map((value) => ({ value, label: value })));
 	const leaseOptions = $derived([{ value: '', label: 'Select lease' }, ...(leasesQuery.data ?? []).map((lease) => ({ value: String(lease.id), label: `${lease.leaseNumber} · ${lease.tenantName}` }))]);
@@ -156,6 +175,31 @@
 	{:else if !payment}
 		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Payment not found.</div>
 	{:else}
+		<!-- Hero: the amount + how it's being collected, washed by collection status. -->
+		<HeroCard tone={heroTone} testid="payment-hero" contentClass="flex flex-wrap items-end justify-between gap-6" class="mb-6">
+			<div class="min-w-0">
+				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{payment.paymentType} payment</p>
+				<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="payment-hero-amount">{heroAmount}</p>
+				<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+					<StatusBadge status={payment.status} />
+					{#if payment.leaseNumber}
+						<span aria-hidden="true">·</span>
+						<a href="/leases/{payment.leaseId}" class="font-medium text-foreground underline-offset-4 hover:underline">{payment.leaseNumber}</a>
+					{/if}
+					{#if payment.tenantName}
+						<span aria-hidden="true">·</span>
+						<span>{payment.tenantName}</span>
+					{/if}
+				</div>
+			</div>
+			{#if !editing && payment.status !== 'Paid' && payment.status !== 'Waived'}
+				<Button size="sm" data-testid="payment-hero-cta" onclick={startEditing}>
+					<Pencil class="h-4 w-4" />
+					Update payment
+				</Button>
+			{/if}
+		</HeroCard>
+
 		<div class="grid gap-6 lg:grid-cols-2">
 			<DetailCard title="Charge" icon={Receipt} accent="primary" testid="payment-card-charge" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Lease" bind:value={form.leaseId} display={payment.leaseNumber} {editing} type="select" options={leaseOptions} error={formErrors.leaseId} testid="payment-detail-lease" class="sm:col-span-2" />

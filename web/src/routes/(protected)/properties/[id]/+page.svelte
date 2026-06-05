@@ -16,6 +16,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import * as Card from '$lib/components/ui/card';
@@ -56,6 +57,16 @@
 	const property = $derived(propertyQuery.data);
 	const unitsList = $derived(unitsQuery.data ?? []);
 	const leasesList = $derived(leasesQuery.data ?? []);
+
+	// Hero occupancy + context tone: full occupancy reads green, vacancy is neutral.
+	const occupiedUnits = $derived(property?.occupiedUnits ?? 0);
+	const totalUnits = $derived(property?.unitCount ?? 0);
+	const heroTone = $derived.by<HeroTone>(() => {
+		if (property?.status === 'Inactive') return 'muted';
+		if (property?.status === 'UnderMaintenance') return 'warning';
+		if (totalUnits > 0 && occupiedUnits >= totalUnits) return 'success';
+		return 'primary';
+	});
 
 	// ── Inline property edit ──────────────────────────────────────────────────
 	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', city: '', state: '', postalCode: '', ownerId: '' };
@@ -462,6 +473,21 @@
 				{/if}
 			</div>
 		</div>
+
+		<!-- Hero: the property + its occupancy at a glance, washed by occupancy/status. -->
+		<HeroCard tone={heroTone} testid="property-hero" contentClass="flex flex-wrap items-end justify-between gap-6" class="mb-6">
+			<div class="min-w-0">
+				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Occupancy</p>
+				<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="property-hero-occupancy">
+					{occupiedUnits}<span class="text-2xl text-muted-foreground">/{totalUnits}</span>
+				</p>
+				<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+					<StatusBadge status={property.status} />
+					<span aria-hidden="true">·</span>
+					<span>{totalUnits === 1 ? '1 unit' : `${totalUnits} units`}{#if totalUnits > 0} · {Math.round((occupiedUnits / totalUnits) * 100)}% occupied{/if}</span>
+				</div>
+			</div>
+		</HeroCard>
 
 		<!-- Grouped detail cards -->
 		<div class="mb-6 grid gap-6 lg:grid-cols-2">
