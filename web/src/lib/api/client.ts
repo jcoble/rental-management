@@ -155,8 +155,6 @@ function buildErrorFromBody(response: Response, errorData: unknown): ApiError {
 /** Low-level authenticated fetch. Throws {@link ApiError} on non-2xx. */
 export async function fetchApi<T>(endpoint: string, options: FetchOptions = {}): Promise<T> {
 	const { requireAuth = true, timeoutMs = API_FETCH_TIMEOUT_MS, ...fetchOptions } = options;
-	const auth = getAuthState();
-
 	const headers: Record<string, string> = {
 		...(fetchOptions.headers as Record<string, string>)
 	};
@@ -165,13 +163,17 @@ export async function fetchApi<T>(endpoint: string, options: FetchOptions = {}):
 		headers['Content-Type'] = 'application/json';
 	}
 
-	if (requireAuth && auth.accessToken) {
-		// Proactively refresh if the token expires within 120s.
+	if (requireAuth) {
+		// Refresh BEFORE sending when the token is MISSING or expires within 120s. isTokenExpired()
+		// returns true when the in-memory token/expiration is absent too — e.g. a query/mutation that
+		// fires before hydration, or after idling on one page. The previous guard (`&& auth.accessToken`)
+		// skipped this whenever the token was momentarily falsy, so the request went out UNAUTHENTICATED
+		// and 401'd; for a multipart scan upload that meant re-uploading the whole file on the retry.
 		if (browser && isTokenExpired(120)) {
 			try {
 				await refreshToken();
 			} catch {
-				// Proactive refresh failed — proceed; the 401 retry handles it.
+				// Proactive refresh failed — proceed; the 401 retry below still covers it.
 			}
 		}
 		const currentAuth = getAuthState();
