@@ -395,7 +395,16 @@
 				</Select.Root>
 			</div>
 			<Input data-testid="owner-taxid-input" bind:value={ownerForm.taxId} placeholder="Tax ID / EIN (optional)" />
-			<AddressAutocomplete testid="owner-address-input" bind:value={ownerForm.address} placeholder="Address (optional)" />
+			<AddressAutocomplete
+				testid="owner-address-input"
+				bind:value={ownerForm.address}
+				placeholder="Address (optional)"
+				onresolved={(a) => {
+					ownerForm.address = [a.line1, a.city, [a.state, a.zip].filter(Boolean).join(' ')]
+						.filter(Boolean)
+						.join(', ');
+				}}
+			/>
 			<Input data-testid="owner-phone-input" bind:value={ownerForm.phone} placeholder="Phone (optional)" />
 			<div>
 				<Input data-testid="owner-email-input" bind:value={ownerForm.email} type="email" placeholder="Email (optional)" />
