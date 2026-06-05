@@ -236,7 +236,11 @@ export const ownerSchema = z.object({
 	name: required('Name'),
 	ownerEntityType: z.string(),
 	taxId: optionalText,
-	address: optionalText,
+	addressLine1: optionalText,
+	addressLine2: optionalText,
+	city: optionalText,
+	state: optionalText,
+	postalCode: optionalText,
 	phone: optionalText,
 	// email: server [EmailAddress] optional
 	email: optionalEmail,

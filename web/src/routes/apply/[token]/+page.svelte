@@ -46,7 +46,11 @@
 	let email = $state('');
 	let phone = $state('');
 	let dateOfBirth = $state('');
-	let currentAddress = $state('');
+	let currentAddressLine1 = $state('');
+	let currentAddressLine2 = $state('');
+	let currentCity = $state('');
+	let currentState = $state('');
+	let currentPostalCode = $state('');
 	let employer = $state('');
 	let monthlyIncome = $state('');
 	let desiredMoveInDate = $state('');
@@ -111,7 +115,7 @@
 		if (f.firstName?.value) { firstName = f.firstName.value; autoFilled.firstName = true; filled.push('first name'); }
 		if (f.lastName?.value) { lastName = f.lastName.value; autoFilled.lastName = true; filled.push('last name'); }
 		if (f.dateOfBirth?.value) { dateOfBirth = normalizeDate(f.dateOfBirth.value); autoFilled.dateOfBirth = true; filled.push('date of birth'); }
-		if (f.currentAddress?.value) { currentAddress = f.currentAddress.value; autoFilled.currentAddress = true; filled.push('current address'); }
+		if (f.currentAddress?.value) { currentAddressLine1 = f.currentAddress.value; autoFilled.currentAddressLine1 = true; filled.push('current address'); }
 		if (f.employer?.value) { employer = f.employer.value; autoFilled.employer = true; filled.push('employer'); }
 		if (f.monthlyIncome?.value) { monthlyIncome = f.monthlyIncome.value; autoFilled.monthlyIncome = true; filled.push('monthly income'); }
 		autoFilled = { ...autoFilled };
@@ -182,7 +186,11 @@
 			email: email.trim(),
 			phone: phone.trim(),
 			dateOfBirth: dateOfBirth || null,
-			currentAddress: currentAddress.trim() || null,
+			currentAddressLine1: currentAddressLine1.trim() || null,
+			currentAddressLine2: currentAddressLine2.trim() || null,
+			currentCity: currentCity.trim() || null,
+			currentState: currentState.trim() || null,
+			currentPostalCode: currentPostalCode.trim() || null,
 			employer: employer.trim() || null,
 			monthlyIncome: income != null && !isNaN(income) ? income : null,
 			desiredMoveInDate: desiredMoveInDate || null,
@@ -373,8 +381,34 @@
 						{@render field('Date of birth', 'dateOfBirth', dateOfBirth, (v) => (dateOfBirth = v), { type: 'date' })}
 						{@render field('Desired move-in date', 'desiredMoveInDate', desiredMoveInDate, (v) => (desiredMoveInDate = v), { type: 'date' })}
 					</div>
-					<div class="mt-4 grid gap-4">
-						{@render field('Current address', 'currentAddress', currentAddress, (v) => (currentAddress = v), { full: true, address: true })}
+					<div class="mt-4 grid gap-4 sm:grid-cols-2">
+						<label class="block sm:col-span-2">
+							<span class="mb-1.5 block text-sm font-medium text-foreground">
+								Current address
+								{#if autoFilled.currentAddressLine1}
+									<span class="ml-2 inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400" data-testid="apply-autofilled-currentAddressLine1">
+										<Sparkles class="h-3 w-3" /> Auto-filled
+									</span>
+								{/if}
+							</span>
+							<AddressAutocomplete
+								value={currentAddressLine1}
+								onchange={(v) => { currentAddressLine1 = v; clearAutoFill('currentAddressLine1'); }}
+								onresolved={(a) => {
+									if (a.city) currentCity = a.city;
+									if (a.state) currentState = a.state;
+									if (a.zip) currentPostalCode = a.zip;
+									clearAutoFill('currentAddressLine1');
+								}}
+								placeholder="Street address"
+								testid="apply-currentAddressLine1-input"
+								class="h-12 w-full rounded-xl border border-input bg-background px-3 text-base focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40"
+							/>
+						</label>
+						{@render field('Apt / Suite / Unit #', 'currentAddressLine2', currentAddressLine2, (v) => (currentAddressLine2 = v), { full: true })}
+						{@render field('City', 'currentCity', currentCity, (v) => (currentCity = v))}
+						{@render field('State', 'currentState', currentState, (v) => (currentState = v))}
+						{@render field('ZIP', 'currentPostalCode', currentPostalCode, (v) => (currentPostalCode = v))}
 					</div>
 				</div>
 

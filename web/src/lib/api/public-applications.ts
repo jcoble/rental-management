@@ -71,7 +71,11 @@ export interface SubmitApplicationBody {
 	email: string;
 	phone: string;
 	dateOfBirth?: string | null;
-	currentAddress?: string | null;
+	currentAddressLine1?: string | null;
+	currentAddressLine2?: string | null;
+	currentCity?: string | null;
+	currentState?: string | null;
+	currentPostalCode?: string | null;
 	employer?: string | null;
 	monthlyIncome?: number | null;
 	desiredMoveInDate?: string | null;

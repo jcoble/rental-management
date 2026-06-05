@@ -104,7 +104,17 @@ public sealed class ApplicationService : IApplicationService
             Email = request.Email,
             Phone = request.Phone,
             DateOfBirth = request.DateOfBirth.ToUtc(),
-            CurrentAddress = request.CurrentAddress,
+            CurrentAddressLine1 = request.CurrentAddressLine1,
+            CurrentAddressLine2 = request.CurrentAddressLine2,
+            CurrentCity = request.CurrentCity,
+            CurrentState = request.CurrentState,
+            CurrentPostalCode = request.CurrentPostalCode,
+            // Keep the legacy single-line CurrentAddress in sync (composed from the structured
+            // fields; falls back to any single-line value the caller still sends).
+            CurrentAddress = AddressComposer.Compose(
+                                 request.CurrentAddressLine1, request.CurrentAddressLine2,
+                                 request.CurrentCity, request.CurrentState, request.CurrentPostalCode)
+                             ?? request.CurrentAddress,
             Employer = request.Employer,
             MonthlyIncome = request.MonthlyIncome,
             DesiredMoveInDate = request.DesiredMoveInDate.ToUtc(),
