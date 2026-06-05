@@ -39,6 +39,14 @@
 	}));
 	// Empty = the query resolved with zero properties (avoid flashing the banner while loading).
 	const isEmptyPortfolio = $derived(propertiesQuery.isSuccess && (propertiesQuery.data?.length ?? 0) === 0);
+	// The setup banner points at /onboarding, which is live-only. Sandbox is pre-seeded demo data,
+	// so suppress the "finish setup" banner there.
+	const sandboxQuery = createQuery(() => ({
+		queryKey: ['sandbox-state', getCurrentPortfolioId()],
+		queryFn: () => portfolios.sandboxState(),
+		staleTime: 60_000,
+	}));
+	const isSandbox = $derived(sandboxQuery.data?.isSandbox === true);
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
@@ -130,8 +138,8 @@
 			<p class="mt-1 text-sm text-muted-foreground">{data.portfolio.managementCompanyName} · {data.portfolio.timeZone}</p>
 		</div>
 
-		{#if isEmptyPortfolio}
-			<!-- Empty-portfolio entry point into the guided setup wizard -->
+		{#if isEmptyPortfolio && !isSandbox}
+			<!-- Empty-portfolio entry point into the guided setup wizard (live accounts only) -->
 			<Card.Root class="mb-6 border-primary/40 bg-primary/5" data-testid="dashboard-onboarding-banner">
 				<Card.Content class="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
 					<div class="flex items-start gap-3">
