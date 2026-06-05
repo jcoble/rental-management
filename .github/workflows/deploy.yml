@@ -1,0 +1,168 @@
+name: Deploy
+
+# Production deploy for rc.coblesolutions.com.
+#
+# Triggers (never on a plain push to a branch — that only runs CI):
+#   • Push a version tag  ->  git tag v1.2.3 && git push --tags   (deploys that exact commit)
+#   • Manual              ->  Actions ▸ Deploy ▸ Run workflow      (optionally paste a SHA/ref)
+#
+# Model: build api/engine/web in GitHub Actions, push to GHCR, then the box only PULLS and
+# restarts (it never compiles — see deploy/docker-compose.prod.yml). Migrations self-apply on
+# boot under a shared Postgres advisory lock.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit SHA or ref to deploy (blank = the ref this run was launched from)"
+        required: false
+        default: ""
+
+# Never let two prod deploys overlap; queue them instead of cancelling an in-flight one.
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+env:
+  IMAGE_PREFIX: ghcr.io/jcoble/rentalcommand
+  DEPLOY_DOMAIN: rc.coblesolutions.com
+
+jobs:
+  build-push:
+    name: Build & push images (GHCR)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.sha }}
+
+      - name: Compute image tag (git short sha)
+        id: meta
+        run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push API
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.api
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-api:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}-api:latest
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build & push Engine
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.engine
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-engine:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}-engine:latest
+          cache-from: type=gha,scope=engine
+          cache-to: type=gha,scope=engine,mode=max
+
+      - name: Build & push Web
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.web
+          push: true
+          # VITE_API_URL is baked into the client bundle here. MUST be /api/v1 — the .NET API
+          # mounts every controller under /api/v1/* and the web client appends bare paths.
+          build-args: |
+            VITE_API_URL=/api/v1
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-web:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE_PREFIX }}-web:latest
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
+
+  deploy:
+    name: Pull & restart on prod box
+    needs: build-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    environment: production
+    steps:
+      - name: Checkout (for the compose file)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.sha }}
+
+      - name: Set up SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Copy compose file to box
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          scp -i ~/.ssh/id_deploy deploy/docker-compose.prod.yml \
+            "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/rental-command/deploy/docker-compose.prod.yml"
+
+      - name: Pull images & restart stack
+        env:
+          TAG: ${{ needs.build-push.outputs.tag }}
+          ACTOR: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          # Pipe the GHCR token via stdin so it never lands in the box's process list. docker
+          # login consumes it; the remaining commands run from the ssh command argument. TAG is a
+          # hex git sha and ACTOR a GitHub username — both come from env, not raw ${{ }} in shell.
+          printf '%s' "$GHCR_TOKEN" | ssh -i ~/.ssh/id_deploy \
+            "${DEPLOY_USER}@${DEPLOY_HOST}" \
+            "set -e
+             cd /opt/rental-command
+             docker login ghcr.io -u '$ACTOR' --password-stdin
+             grep -v '^IMAGE_TAG=' .env > .env.tmp 2>/dev/null || true
+             echo 'IMAGE_TAG=$TAG' >> .env.tmp
+             mv .env.tmp .env
+             chmod 600 .env
+             docker compose -f deploy/docker-compose.prod.yml --env-file .env pull api engine web
+             docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d
+             docker image prune -f >/dev/null 2>&1 || true
+             docker logout ghcr.io >/dev/null 2>&1 || true
+             echo \"deployed IMAGE_TAG=$TAG\""
+
+      - name: Health check
+        run: |
+          echo "Waiting for https://${DEPLOY_DOMAIN}/health ..."
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://${DEPLOY_DOMAIN}/health" || true)
+            if [ "$code" = "200" ]; then echo "healthy after $((i*5))s"; exit 0; fi
+            sleep 5
+          done
+          echo "::error::API did not become healthy at https://${DEPLOY_DOMAIN}/health"
+          exit 1

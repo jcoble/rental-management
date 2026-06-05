@@ -16,9 +16,13 @@
 # /api/v1/sms, signing links /sign/...) all live under the same host, so they Just Work
 # through the /api prefix and the web catch-all — no extra routers needed.
 #
-# Usage (on the box):
-#   cp deploy/.env.prod.example .env   # then fill it in
-#   docker compose -f deploy/docker-compose.prod.yml up -d --build
+# Deploys are CI-driven: GitHub Actions builds api/engine/web, pushes them to GHCR, and the
+# box only PULLS — it never compiles (the box is small; building belongs in CI). See
+# .github/workflows/deploy.yml. To ship: push a tag `vX.Y.Z` (or run the Deploy workflow).
+#
+# Manual fallback (on the box), e.g. to re-pull the last deployed tag:
+#   docker compose -f deploy/docker-compose.prod.yml --env-file .env pull
+#   docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d
 #
 # Migrations self-apply on boot (API + Engine both run EF Core migrations under a shared
 # PostgreSQL advisory lock, so they never race).
@@ -109,11 +113,10 @@ services:
           cpus: "1.0"
 
   # ── REST API (also serves /health and the SignalR hubs under /api/v1/hubs) ──
+  # Images are built in CI (GitHub Actions) and pulled from GHCR — never built on this box.
+  # IMAGE_TAG (a git short-sha) is written to .env by the deploy workflow; falls back to :latest.
   api:
-    build:
-      context: ..
-      dockerfile: Dockerfile.api
-    image: rentalcommand-api:prod
+    image: ghcr.io/jcoble/rentalcommand-api:${IMAGE_TAG:-latest}
     container_name: rentalcommand-api
     restart: unless-stopped
     security_opt:
@@ -194,10 +197,7 @@ services:
   # ── Background worker (outbox dispatch, rent charges, late fees, SMS/email,
   #     daily briefing, scan processing, autopay, lease autopilot). No HTTP port. ──
   engine:
-    build:
-      context: ..
-      dockerfile: Dockerfile.engine
-    image: rentalcommand-engine:prod
+    image: ghcr.io/jcoble/rentalcommand-engine:${IMAGE_TAG:-latest}
     container_name: rentalcommand-engine
     restart: unless-stopped
     security_opt:
@@ -257,16 +257,9 @@ services:
           cpus: "1.0"
 
   # ── SvelteKit frontend (adapter-node, :3000) ────────────────────────────────
+  # Built in CI with VITE_API_URL=/api/v1 baked in (see .github/workflows/deploy.yml).
   web:
-    build:
-      context: ..
-      dockerfile: Dockerfile.web
-      args:
-        # Same-origin: the browser hits this host; Traefik routes /api/* to the API.
-        # MUST include /v1 — the .NET API mounts every controller under /api/v1/*, and the
-        # web client appends bare paths (e.g. /portfolios). Bare /api would 404 every call.
-        VITE_API_URL: /api/v1
-    image: rentalcommand-web:prod
+    image: ghcr.io/jcoble/rentalcommand-web:${IMAGE_TAG:-latest}
     container_name: rentalcommand-web
     restart: unless-stopped
     security_opt:
