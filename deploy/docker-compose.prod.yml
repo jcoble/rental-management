@@ -283,6 +283,10 @@ services:
       - API_URL=http://api:8080
       # Web needs the public client id at runtime to show the Google button + build the consent URL.
       - PUBLIC_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      # Server-side Google Places (New) key for address autocomplete. The browser hits the
+      # same-origin /places/* endpoints; only the web container holds the key (never shipped to
+      # the client). Leave unset to keep address fields as plain manual-entry inputs (self-gates).
+      - GOOGLE_PLACES_API_KEY=${GOOGLE_PLACES_API_KEY:-}
     depends_on:
       - api
     networks:

@@ -303,7 +303,17 @@
 				</Select.Content>
 			</Select.Root>
 			<div class="md:col-span-2">
-				<AddressAutocomplete testid="property-address-input" bind:value={form.addressLine1} placeholder="Address" />
+				<AddressAutocomplete
+					testid="property-address-input"
+					bind:value={form.addressLine1}
+					placeholder="Address"
+					onresolved={(a) => {
+						form.addressLine1 = a.line1;
+						if (a.city) form.city = a.city;
+						if (a.state) form.state = a.state;
+						if (a.zip) form.postalCode = a.zip;
+					}}
+				/>
 				{#if formErrors.addressLine1}<p class="mt-1 text-xs text-destructive" data-testid="property-address-error">{formErrors.addressLine1}</p>{/if}
 			</div>
 			<div>
