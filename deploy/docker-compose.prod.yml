@@ -1,0 +1,307 @@
+# Rental Command — PRODUCTION stack for rc.coblesolutions.com
+#
+# Mirrors EdiPlatform's proven Hetzner prod setup (Traefik + Let's Encrypt ACME,
+# HTTP→HTTPS redirect, security-headers + CSP middleware) BUT keeps Rental Command's
+# same-origin, PATH-based routing — which is REQUIRED, because RC's auth uses httpOnly
+# cookies first-party to the SvelteKit origin plus a same-origin /api/auth/refresh proxy.
+# The API is NOT split onto a separate subdomain.
+#
+#   - https://${DOMAIN}/api/*  and  /health   -> api  (priority 10)
+#   - https://${DOMAIN}/*       (everything else)  -> web (priority 1, catch-all)
+#
+# Both routers carry a Host(`${DOMAIN}`) rule so Traefik knows which cert to issue, and
+# both use tls.certresolver=letsencrypt so the single ${DOMAIN} cert covers the whole app.
+#
+# Webhooks (Stripe /api/v1/payments/stripe, e-sign /api/v1/esign/webhook, SMS
+# /api/v1/sms, signing links /sign/...) all live under the same host, so they Just Work
+# through the /api prefix and the web catch-all — no extra routers needed.
+#
+# Usage (on the box):
+#   cp deploy/.env.prod.example .env   # then fill it in
+#   docker compose -f deploy/docker-compose.prod.yml up -d --build
+#
+# Migrations self-apply on boot (API + Engine both run EF Core migrations under a shared
+# PostgreSQL advisory lock, so they never race).
+
+services:
+  # ── Reverse proxy / TLS terminator (Let's Encrypt ACME) ─────────────────────
+  traefik:
+    image: traefik:v3.3
+    container_name: rentalcommand-traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # Global HTTP → HTTPS redirect.
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      # Let's Encrypt via the TLS-ALPN-01 challenge (needs port 443 reachable).
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "letsencrypt:/letsencrypt"
+    networks:
+      - web
+    depends_on:
+      - api
+      - web
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"
+    labels:
+      - "traefik.enable=true"
+      # ── Security headers (applied to both routers) ───────────────────────────
+      - "traefik.http.middlewares.security-headers.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.security-headers.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.security-headers.headers.frameDeny=true"
+      - "traefik.http.middlewares.security-headers.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.security-headers.headers.referrerPolicy=strict-origin-when-cross-origin"
+      - "traefik.http.middlewares.security-headers.headers.permissionsPolicy=camera=(self), microphone=(self), geolocation=()"
+      - "traefik.http.middlewares.security-headers.headers.customResponseHeaders.X-XSS-Protection=0"
+      # ── CSP (applied to the web/HTML responses) ──────────────────────────────
+      # Same-origin everything: connect-src 'self' covers the /api calls and the
+      # /api/v1/hubs SignalR endpoint (wss: for the websocket transport). Stripe is the
+      # only third party loaded in the browser (Checkout/Elements). The OpenAI/Anthropic
+      # LLMs are called server-side only, so they are deliberately NOT in the CSP.
+      # 'unsafe-inline'/'unsafe-eval' on script-src: SvelteKit's hydration + Stripe.js.
+      # img/media data: + blob: cover camera/scan capture previews and inline PDFs.
+      - "traefik.http.middlewares.csp.headers.contentSecurityPolicy=default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://js.stripe.com https://*.stripe.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.stripe.com; media-src 'self' blob:; font-src 'self' data:; connect-src 'self' wss://${DOMAIN} https://api.stripe.com https://*.stripe.com; frame-src 'self' https://js.stripe.com https://hooks.stripe.com; object-src 'none'; base-uri 'self'; form-action 'self'"
+
+  # ── PostgreSQL 16 ───────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: rentalcommand-postgres
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-rentalcommand_app}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      - POSTGRES_DB=${POSTGRES_DB:-rentalcommand}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_backup:/var/lib/postgresql/backup
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rentalcommand_app} -d ${POSTGRES_DB:-rentalcommand}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+  # ── REST API (also serves /health and the SignalR hubs under /api/v1/hubs) ──
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile.api
+    image: rentalcommand-api:prod
+    container_name: rentalcommand-api
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8080
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-rentalcommand_app};Password=${POSTGRES_PASSWORD}
+      # ── Auth / JWT ─────────────────────────────────────────────────────────
+      - Jwt__SecretKey=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      - Jwt__Issuer=${JWT_ISSUER:-RentalCommand}
+      - Jwt__Audience=${JWT_AUDIENCE:-RentalCommandWeb}
+      # ── CORS + public URLs ─────────────────────────────────────────────────
+      # Same-origin, so the only allowed origin is the app's own host.
+      - Cors__AllowedOrigins__0=https://${DOMAIN}
+      # Used to build /sign/{token} (e-sign) and password-reset/verify links in emails.
+      - App__WebBaseUrl=${APP_WEB_BASE_URL:-https://${DOMAIN}}
+      - App__TimeZone=${APP_TIMEZONE:-America/New_York}
+      # ── Uploads (scan/document storage) + DataProtection keys (shared w/ engine) ──
+      - Upload__BasePath=/var/lib/rentalcommand/uploads
+      - DataProtection__KeysPath=/var/lib/rentalcommand/dataprotection-keys
+      # ── LLM assistant (scan→draft, KB, daily briefing). Server-side only. ──
+      - Assistant__Provider=${ASSISTANT_PROVIDER:-openai}
+      - Assistant__ModelId=${ASSISTANT_MODEL_ID:-gpt-4o}
+      - Assistant__ApiKey=${ASSISTANT_API_KEY:-}
+      # ── Stripe (online rent payments / autopay) ────────────────────────────
+      - Stripe__SecretKey=${STRIPE_SECRET_KEY:-}
+      - Stripe__PublishableKey=${STRIPE_PUBLISHABLE_KEY:-}
+      - Stripe__WebhookSecret=${STRIPE_WEBHOOK_SECRET:-}
+      - Stripe__AllowedReturnHosts__0=${DOMAIN}
+      # ── Google OAuth sign-in ───────────────────────────────────────────────
+      - Authentication__Google__ClientId=${GOOGLE_CLIENT_ID:-}
+      - Authentication__Google__ClientSecret=${GOOGLE_CLIENT_SECRET:-}
+      # ── E-sign: native (ESIGN/UETA) is the default. Set Esign__ApiKey only to swap
+      #     to hosted Dropbox Sign. WebhookSecret verifies inbound Dropbox Sign events. ──
+      - Esign__ApiKey=${ESIGN_API_KEY:-}
+      - Esign__WebhookSecret=${ESIGN_WEBHOOK_SECRET:-}
+      # ── SMS inbound-webhook signature: recompute against the public URL (behind proxy) ──
+      - Notifications__PublicWebhookBaseUrl=${APP_WEB_BASE_URL:-https://${DOMAIN}}
+      - Notifications__SignalWire__ProjectId=${SIGNALWIRE_PROJECT_ID:-}
+      - Notifications__SignalWire__Token=${SIGNALWIRE_TOKEN:-}
+      - Notifications__SignalWire__SpaceUrl=${SIGNALWIRE_SPACE_URL:-}
+      - Notifications__SignalWire__FromNumber=${SIGNALWIRE_FROM_NUMBER:-}
+      - Notifications__Twilio__AccountSid=${TWILIO_ACCOUNT_SID:-}
+      - Notifications__Twilio__AuthToken=${TWILIO_AUTH_TOKEN:-}
+      - Notifications__Twilio__FromNumber=${TWILIO_FROM_NUMBER:-}
+    volumes:
+      - uploads:/var/lib/rentalcommand/uploads
+      - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - web
+      - internal
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    labels:
+      - "traefik.enable=true"
+      # /api/* (and the /health probe) route to the API — highest priority.
+      - "traefik.http.routers.api.rule=Host(`${DOMAIN}`) && (PathPrefix(`/api`) || PathPrefix(`/health`))"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.api.priority=10"
+      - "traefik.http.routers.api.middlewares=security-headers"
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
+
+  # ── Background worker (outbox dispatch, rent charges, late fees, SMS/email,
+  #     daily briefing, scan processing, autopay, lease autopilot). No HTTP port. ──
+  engine:
+    build:
+      context: ..
+      dockerfile: Dockerfile.engine
+    image: rentalcommand-engine:prod
+    container_name: rentalcommand-engine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - DOTNET_ENVIRONMENT=Production
+      - ConnectionStrings__DefaultConnection=Host=postgres;Port=5432;Database=${POSTGRES_DB:-rentalcommand};Username=${POSTGRES_USER:-rentalcommand_app};Password=${POSTGRES_PASSWORD}
+      - App__TimeZone=${APP_TIMEZONE:-America/New_York}
+      # Shared with the API: scan processing reads the same upload store + DP keys.
+      - Upload__BasePath=/var/lib/rentalcommand/uploads
+      - DataProtection__KeysPath=/var/lib/rentalcommand/dataprotection-keys
+      # ── LLM assistant (scan processing worker / daily briefing) ────────────
+      - Assistant__Provider=${ASSISTANT_PROVIDER:-openai}
+      - Assistant__ModelId=${ASSISTANT_MODEL_ID:-gpt-4o}
+      - Assistant__ApiKey=${ASSISTANT_API_KEY:-}
+      # ── Stripe (autopay charging from the engine) ──────────────────────────
+      - Stripe__SecretKey=${STRIPE_SECRET_KEY:-}
+      - Stripe__PublishableKey=${STRIPE_PUBLISHABLE_KEY:-}
+      - Stripe__WebhookSecret=${STRIPE_WEBHOOK_SECRET:-}
+      # ── Notification automations (financial ones default OFF; opt-in) ──────
+      - Notifications__NotifyTenants=${NOTIFY_TENANTS:-false}
+      - Notifications__EnableRentCharges=${ENABLE_RENT_CHARGES:-false}
+      - Notifications__EnableLateFees=${ENABLE_LATE_FEES:-false}
+      - Notifications__EnableRecurringMaintenance=${ENABLE_RECURRING_MAINTENANCE:-true}
+      # ── Email transport: SendGrid (default) OR Smtp (Zoho). Flip TRANSPORT=Smtp. ──
+      - Notifications__Email__Transport=${EMAIL_TRANSPORT:-SendGrid}
+      - Notifications__SendGrid__ApiKey=${SENDGRID_API_KEY:-}
+      - Notifications__SendGrid__FromEmail=${SENDGRID_FROM_EMAIL:-}
+      - Notifications__SendGrid__FromName=${SENDGRID_FROM_NAME:-Rental Command}
+      - Notifications__Smtp__Host=${SMTP_HOST:-}
+      - Notifications__Smtp__Port=${SMTP_PORT:-465}
+      - Notifications__Smtp__UseSsl=${SMTP_USE_SSL:-true}
+      - Notifications__Smtp__Username=${SMTP_USERNAME:-}
+      - Notifications__Smtp__Password=${SMTP_PASSWORD:-}
+      - Notifications__Smtp__FromEmail=${SMTP_FROM_EMAIL:-}
+      - Notifications__Smtp__FromName=${SMTP_FROM_NAME:-Rental Command}
+      # ── SMS (SignalWire preferred; Twilio fallback) ────────────────────────
+      - Notifications__SignalWire__ProjectId=${SIGNALWIRE_PROJECT_ID:-}
+      - Notifications__SignalWire__Token=${SIGNALWIRE_TOKEN:-}
+      - Notifications__SignalWire__SpaceUrl=${SIGNALWIRE_SPACE_URL:-}
+      - Notifications__SignalWire__FromNumber=${SIGNALWIRE_FROM_NUMBER:-}
+      - Notifications__Twilio__AccountSid=${TWILIO_ACCOUNT_SID:-}
+      - Notifications__Twilio__AuthToken=${TWILIO_AUTH_TOKEN:-}
+      - Notifications__Twilio__FromNumber=${TWILIO_FROM_NUMBER:-}
+    volumes:
+      - uploads:/var/lib/rentalcommand/uploads
+      - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+  # ── SvelteKit frontend (adapter-node, :3000) ────────────────────────────────
+  web:
+    build:
+      context: ..
+      dockerfile: Dockerfile.web
+      args:
+        # Same-origin: the browser hits /api on this host; Traefik routes it to the API.
+        VITE_API_URL: /api
+    image: rentalcommand-web:prod
+    container_name: rentalcommand-web
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # ORIGIN must match the public scheme+host so SvelteKit accepts POST/form actions
+      # and so the Google OAuth redirect URI ({origin}/auth/google/callback) is correct.
+      - ORIGIN=https://${DOMAIN}
+    depends_on:
+      - api
+    networks:
+      - web
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    labels:
+      - "traefik.enable=true"
+      # Catch-all (lowest priority): everything that is not /api or /health goes to web.
+      - "traefik.http.routers.web.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.web.entrypoints=websecure"
+      - "traefik.http.routers.web.tls=true"
+      - "traefik.http.routers.web.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.web.priority=1"
+      - "traefik.http.routers.web.middlewares=security-headers,csp"
+      - "traefik.http.services.web.loadbalancer.server.port=3000"
+
+networks:
+  web:
+    name: rentalcommand-web
+  internal:
+    name: rentalcommand-internal
+    internal: true
+
+volumes:
+  letsencrypt:
+  postgres_data:
+  postgres_backup:
+  uploads:
+  dataprotection_keys:
