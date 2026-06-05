@@ -6,8 +6,9 @@ name: Notion task sync
 #   - PR merged                        -> task Status = Done
 #   - issue opened/reopened            -> task created, Status = To Do
 #   - issue closed                     -> task Status = Done
-# Idempotency: a "Key" property (repo:branch or repo:issue:N) ties the
-# branch -> PR -> merge lifecycle to a single task. Requires repo secret NOTION_TOKEN.
+# Each created task gets a RICH body: commit list / PR or issue description,
+# author, and a link back to GitHub. Idempotent via a "Key" property
+# (repo:branch or repo:issue:N). Requires repo secret NOTION_TOKEN.
 
 on:
   push:
@@ -39,6 +40,7 @@ jobs:
             const DS = 'f62084c0-3d33-4560-8fce-de2834807ca3';        // Tasks data source
             const PROJECT = '376394b0-689d-81d5-a191-fb89c98a4fe4';   // Rental Command project page
             const V = '2026-03-11';
+            const owner = context.repo.owner;
             const repo = context.repo.repo;
 
             async function notion(path, method, body) {
@@ -60,22 +62,35 @@ jobs:
                 { filter: { property: 'Key', rich_text: { equals: key } }, page_size: 1 });
               return (r.results && r.results[0]) ? r.results[0].id : null;
             };
-            const createTask = async ({ key, title, status, bodyText }) => {
-              const children = bodyText ? [{ object: 'block', type: 'paragraph',
-                paragraph: { rich_text: [{ type: 'text', text: { content: bodyText.slice(0, 1900) } }] } }] : [];
+
+            // --- block helpers ---
+            const T = (s) => (s == null ? '' : String(s)).slice(0, 1900);
+            const para = (s) => ({ object: 'block', type: 'paragraph', paragraph: { rich_text: [{ type: 'text', text: { content: T(s) } }] } });
+            const h3 = (s) => ({ object: 'block', type: 'heading_3', heading_3: { rich_text: [{ type: 'text', text: { content: T(s) } }] } });
+            const bullet = (s) => ({ object: 'block', type: 'bulleted_list_item', bulleted_list_item: { rich_text: [{ type: 'text', text: { content: T(s) } }] } });
+            const bookmark = (url) => ({ object: 'block', type: 'bookmark', bookmark: { url } });
+            // render a multiline (lightly-markdown) string into blocks
+            const mdBlocks = (str) => (str || '').split('\n').map((l) => {
+              if (/^#{1,3} /.test(l)) return h3(l.replace(/^#{1,3} /, ''));
+              if (/^[-*] /.test(l)) return bullet(l.slice(2));
+              if (l.trim() === '') return null;
+              return para(l);
+            }).filter(Boolean).slice(0, 40);
+
+            async function createTask({ key, title, status, children }) {
               await notion('/pages', 'POST', {
                 parent: { type: 'data_source_id', data_source_id: DS },
                 properties: {
-                  Name: { title: [{ text: { content: title.slice(0, 200) } }] },
+                  Name: { title: [{ text: { content: T(title).slice(0, 200) } }] },
                   Status: { select: { name: status } },
                   Source: { select: { name: 'GitHub' } },
                   Project: { relation: [{ id: PROJECT }] },
                   Key: { rich_text: [{ text: { content: key } }] },
                 },
-                children,
+                children: (children || []).slice(0, 90),
               });
               core.info(`created task: ${key}`);
-            };
+            }
             const setStatus = async (id, status) => {
               await notion(`/pages/${id}`, 'PATCH', { properties: { Status: { select: { name: status } } } });
               core.info(`status -> ${status} (${id})`);
@@ -87,8 +102,22 @@ jobs:
               if (branch === 'main' || branch.startsWith('dependabot/')) return;
               const key = `${repo}:${branch}`;
               if (await findByKey(key)) return;
-              const msg = ((context.payload.head_commit && context.payload.head_commit.message) || branch).split('\n')[0];
-              await createTask({ key, title: msg, status: 'Doing', bodyText: `Branch \`${branch}\` — ${repo}` });
+              const commits = context.payload.commits || [];
+              const hc = context.payload.head_commit;
+              const sender = (context.payload.sender && context.payload.sender.login)
+                || (context.payload.pusher && context.payload.pusher.name) || '';
+              const title = (hc && hc.message) ? hc.message.split('\n')[0] : branch;
+              const children = [para(`🔀 Branch \`${branch}\` on ${owner}/${repo}${sender ? ' · pushed by ' + sender : ''}`)];
+              if (commits.length) {
+                children.push(h3(`Commits (${commits.length})`));
+                for (const c of commits.slice(0, 15)) children.push(bullet(c.message.split('\n')[0]));
+              }
+              if (hc && hc.message && hc.message.includes('\n')) {
+                children.push(h3('Latest commit message'));
+                children.push(...mdBlocks(hc.message.split('\n').slice(1).join('\n')));
+              }
+              children.push(bookmark(`https://github.com/${owner}/${repo}/tree/${branch}`));
+              await createTask({ key, title, status: 'Doing', children });
             } else if (ev === 'pull_request') {
               const pr = context.payload.pull_request;
               const action = context.payload.action;
@@ -98,8 +127,14 @@ jobs:
                 if (id) await setStatus(id, 'Done');
               } else if (['opened', 'reopened', 'ready_for_review'].includes(action)) {
                 const id = await findByKey(key);
-                if (id) await setStatus(id, 'Doing');
-                else await createTask({ key, title: pr.title, status: 'Doing', bodyText: `PR #${pr.number}: ${pr.html_url}` });
+                if (id) { await setStatus(id, 'Doing'); return; }
+                const children = [
+                  para(`🔀 PR #${pr.number}: ${pr.title}`),
+                  para(`\`${pr.head.ref}\` → \`${pr.base.ref}\`${pr.user ? ' · by ' + pr.user.login : ''}`),
+                ];
+                if (pr.body) { children.push(h3('Description')); children.push(...mdBlocks(pr.body)); }
+                children.push(bookmark(pr.html_url));
+                await createTask({ key, title: pr.title, status: 'Doing', children });
               }
             } else if (ev === 'issues') {
               const issue = context.payload.issue;
@@ -109,7 +144,11 @@ jobs:
                 const id = await findByKey(key);
                 if (id) await setStatus(id, 'Done');
               } else if (!(await findByKey(key))) {
-                await createTask({ key, title: `#${issue.number} ${issue.title}`, status: 'To Do',
-                  bodyText: `${(issue.body || '').slice(0, 1500)}\n\n${issue.html_url}` });
+                const labels = (issue.labels || []).map((l) => l.name).filter(Boolean).join(', ');
+                const children = [para(`🐛 Issue #${issue.number}: ${issue.title}${issue.user ? ' · by ' + issue.user.login : ''}`)];
+                if (issue.body) { children.push(h3('Details')); children.push(...mdBlocks(issue.body)); }
+                if (labels) children.push(para(`Labels: ${labels}`));
+                children.push(bookmark(issue.html_url));
+                await createTask({ key, title: `#${issue.number} ${issue.title}`, status: 'To Do', children });
               }
             }
