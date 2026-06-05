@@ -1,0 +1,115 @@
+name: Notion task sync
+
+# Mirrors GitHub work into the Notion Command Center "Tasks" DB:
+#   - push to a non-main branch        -> task created, Status = Doing
+#   - PR opened/reopened/ready         -> task ensured, Status = Doing
+#   - PR merged                        -> task Status = Done
+#   - issue opened/reopened            -> task created, Status = To Do
+#   - issue closed                     -> task Status = Done
+# Idempotency: a "Key" property (repo:branch or repo:issue:N) ties the
+# branch -> PR -> merge lifecycle to a single task. Requires repo secret NOTION_TOKEN.
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    types: [opened, reopened, ready_for_review, closed]
+  issues:
+    types: [opened, reopened, closed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: notion-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+        with:
+          script: |
+            const TOKEN = process.env.NOTION_TOKEN;
+            if (!TOKEN) { core.warning('NOTION_TOKEN not set; skipping'); return; }
+            const DS = 'f62084c0-3d33-4560-8fce-de2834807ca3';        // Tasks data source
+            const PROJECT = '376394b0-689d-81d5-a191-fb89c98a4fe4';   // Rental Command project page
+            const V = '2026-03-11';
+            const repo = context.repo.repo;
+
+            async function notion(path, method, body) {
+              const res = await fetch('https://api.notion.com/v1' + path, {
+                method,
+                headers: {
+                  'Authorization': 'Bearer ' + TOKEN,
+                  'Notion-Version': V,
+                  'Content-Type': 'application/json',
+                },
+                body: body ? JSON.stringify(body) : undefined,
+              });
+              const json = await res.json().catch(() => ({}));
+              if (!res.ok) core.warning(`Notion ${method} ${path} -> ${res.status} ${JSON.stringify(json)}`);
+              return json;
+            }
+            const findByKey = async (key) => {
+              const r = await notion(`/data_sources/${DS}/query`, 'POST',
+                { filter: { property: 'Key', rich_text: { equals: key } }, page_size: 1 });
+              return (r.results && r.results[0]) ? r.results[0].id : null;
+            };
+            const createTask = async ({ key, title, status, bodyText }) => {
+              const children = bodyText ? [{ object: 'block', type: 'paragraph',
+                paragraph: { rich_text: [{ type: 'text', text: { content: bodyText.slice(0, 1900) } }] } }] : [];
+              await notion('/pages', 'POST', {
+                parent: { type: 'data_source_id', data_source_id: DS },
+                properties: {
+                  Name: { title: [{ text: { content: title.slice(0, 200) } }] },
+                  Status: { select: { name: status } },
+                  Source: { select: { name: 'GitHub' } },
+                  Project: { relation: [{ id: PROJECT }] },
+                  Key: { rich_text: [{ text: { content: key } }] },
+                },
+                children,
+              });
+              core.info(`created task: ${key}`);
+            };
+            const setStatus = async (id, status) => {
+              await notion(`/pages/${id}`, 'PATCH', { properties: { Status: { select: { name: status } } } });
+              core.info(`status -> ${status} (${id})`);
+            };
+
+            const ev = context.eventName;
+            if (ev === 'push') {
+              const branch = context.ref.replace('refs/heads/', '');
+              if (branch === 'main' || branch.startsWith('dependabot/')) return;
+              const key = `${repo}:${branch}`;
+              if (await findByKey(key)) return;
+              const msg = ((context.payload.head_commit && context.payload.head_commit.message) || branch).split('\n')[0];
+              await createTask({ key, title: msg, status: 'Doing', bodyText: `Branch \`${branch}\` — ${repo}` });
+            } else if (ev === 'pull_request') {
+              const pr = context.payload.pull_request;
+              const action = context.payload.action;
+              const key = `${repo}:${pr.head.ref}`;
+              if (action === 'closed' && pr.merged) {
+                const id = await findByKey(key);
+                if (id) await setStatus(id, 'Done');
+              } else if (['opened', 'reopened', 'ready_for_review'].includes(action)) {
+                const id = await findByKey(key);
+                if (id) await setStatus(id, 'Doing');
+                else await createTask({ key, title: pr.title, status: 'Doing', bodyText: `PR #${pr.number}: ${pr.html_url}` });
+              }
+            } else if (ev === 'issues') {
+              const issue = context.payload.issue;
+              const action = context.payload.action;
+              const key = `${repo}:issue:${issue.number}`;
+              if (action === 'closed') {
+                const id = await findByKey(key);
+                if (id) await setStatus(id, 'Done');
+              } else if (!(await findByKey(key))) {
+                await createTask({ key, title: `#${issue.number} ${issue.title}`, status: 'To Do',
+                  bodyText: `${(issue.body || '').slice(0, 1500)}\n\n${issue.html_url}` });
+              }
+            }
