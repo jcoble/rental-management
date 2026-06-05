@@ -254,6 +254,10 @@ services:
       postgres:
         condition: service_healthy
     networks:
+      # internal = reach Postgres; web = internet EGRESS (the `internal` net is internal:true, i.e.
+      # no internet). The engine makes outbound calls to OpenAI (scan extraction), SendGrid, Twilio,
+      # and SignalWire — all of which fail if it's on the internal-only net. Mirrors the API's homing.
+      - web
       - internal
     deploy:
       resources:
