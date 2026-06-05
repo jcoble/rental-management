@@ -112,7 +112,7 @@
 			}
 		}
 		customRequest = '';
-		showSuccess("Thanks — we've noted your request. We'll look into adding it.");
+		showSuccess("Thanks — we've noted your request. Custom reports are a paid add-on, so we'll quote it before building anything.");
 	}
 </script>
 
@@ -201,6 +201,9 @@
 								<h3 class="font-semibold">Need a report you don't see?</h3>
 								<p class="mt-1 text-sm text-muted-foreground">
 									Tell us what you're trying to figure out and we'll look at adding it.
+								</p>
+								<p class="mt-2 text-sm text-amber-600 dark:text-amber-400" data-testid="custom-report-paid-note">
+									Custom reports are a paid add-on — we'll quote it before building anything, so there are no surprises.
 								</p>
 								<div class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
 									<textarea
