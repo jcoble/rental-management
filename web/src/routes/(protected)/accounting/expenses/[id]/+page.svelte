@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { ArrowLeft, Pencil, Save, Trash2, X, ReceiptText, Tags, FileText } from '@lucide/svelte';
+	import { ArrowLeft, Pencil, Save, Trash2, X, ReceiptText, Tags, FileText, ChevronDown } from '@lucide/svelte';
 	import { expenses } from '$lib/api/endpoints/expenses';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { vendors } from '$lib/api/endpoints/vendors';
@@ -202,7 +202,21 @@
 				<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal} {editing} testid="expense-detail-subtotal" />
 				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount} {editing} testid="expense-detail-tax" />
 				<InlineField label="Notes" bind:value={form.notes} display={expense.notes} {editing} type="textarea" testid="expense-detail-notes" class="sm:col-span-2" />
-				<InlineField label="Receipt details JSON" bind:value={form.receiptData} display={expense.receiptData} {editing} type="textarea" testid="expense-detail-receipt-data" class="sm:col-span-2" />
+				<!-- Raw receipt JSON is meaningless to a non-technical landlord, so it's tucked
+				     behind a collapsed-by-default disclosure (same feel as the accounting report
+				     expanders). It stays fully editable once opened. -->
+				<details class="group rounded-md border border-border bg-background/40 sm:col-span-2">
+					<summary
+						class="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-medium text-foreground"
+						data-testid="expense-detail-receipt-data-toggle"
+					>
+						<span>Receipt details (raw)</span>
+						<ChevronDown class="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+					</summary>
+					<div class="border-t border-border px-3 py-3">
+						<InlineField label="Receipt details JSON" bind:value={form.receiptData} display={expense.receiptData} {editing} type="textarea" testid="expense-detail-receipt-data" />
+					</div>
+				</details>
 			</DetailCard>
 		</div>
 	{/if}
