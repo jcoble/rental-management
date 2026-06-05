@@ -34,6 +34,15 @@ public class Expense
     /// </summary>
     public string? ReceiptData { get; set; }
 
+    /// <summary>How the expense was paid (e.g. "Visa", "Cash"); promoted from the scanned receipt.</summary>
+    public string? PaymentMethod { get; set; }
+
+    /// <summary>Last 4 digits of the card used, when the receipt showed it; promoted from the scan.</summary>
+    public string? CardLast4 { get; set; }
+
+    /// <summary>Document classification from the scan (e.g. "Receipt", "Bill", "Invoice", "UtilityBill").</summary>
+    public string? DocumentKind { get; set; }
+
     /// <summary>Soft-delete marker; null means active.</summary>
     public DateTime? DeletedAt { get; set; }
 
@@ -41,4 +50,7 @@ public class Expense
     public Property? Property { get; set; }
     public Vendor? Vendor { get; set; }
     public WorkOrder? WorkOrder { get; set; }
+
+    /// <summary>Itemized lines from the scanned receipt, promoted to a queryable child table.</summary>
+    public ICollection<ExpenseLineItem> LineItems { get; set; } = new List<ExpenseLineItem>();
 }

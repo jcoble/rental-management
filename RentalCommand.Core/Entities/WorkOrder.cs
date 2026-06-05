@@ -25,6 +25,12 @@ public class WorkOrder
     public DateTime UpdatedAt { get; set; }
     public DateTime? DeletedAt { get; set; }   // soft-delete (preserves maintenance history)
 
+    /// <summary>
+    /// JSON object (stored as jsonb) holding the full scan extraction superset for work orders created
+    /// from a scan draft. Null for manually created work orders.
+    /// </summary>
+    public string? ExtractedData { get; set; }
+
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }

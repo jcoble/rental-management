@@ -21,6 +21,15 @@ public class PaymentResponse
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>Name on the check / of the payer; from a scanned rent check.</summary>
+    public string? PayerName { get; set; }
+
+    /// <summary>Check number; from a scanned rent check.</summary>
+    public string? CheckNumber { get; set; }
+
+    /// <summary>Issuing bank name; from a scanned rent check.</summary>
+    public string? BankName { get; set; }
+
     /// <summary>Stable selector for frontend tests, e.g. <c>payment-1</c>.</summary>
     public string TestId => $"payment-{Id}";
 
@@ -39,6 +48,9 @@ public class PaymentResponse
         Notes = e.Notes,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
+        PayerName = e.PayerName,
+        CheckNumber = e.CheckNumber,
+        BankName = e.BankName,
     };
 }
 
@@ -67,6 +79,21 @@ public class CreatePaymentRequest
 
     [MaxLength(2000)]
     public string? Notes { get; set; }
+
+    /// <summary>Name on the check / of the payer; promoted from a scanned rent check.</summary>
+    [MaxLength(200)]
+    public string? PayerName { get; set; }
+
+    /// <summary>Check number; promoted from a scanned rent check.</summary>
+    [MaxLength(100)]
+    public string? CheckNumber { get; set; }
+
+    /// <summary>Issuing bank name; promoted from a scanned rent check.</summary>
+    [MaxLength(200)]
+    public string? BankName { get; set; }
+
+    /// <summary>Full scan-extraction superset JSON (jsonb); populated when creating from a scan draft.</summary>
+    public string? ExtractedData { get; set; }
 }
 
 public class UpdatePaymentRequest

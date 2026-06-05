@@ -136,6 +136,7 @@ public class WorkOrderService : IWorkOrderService
             EstimatedCost = request.EstimatedCost,
             ActualCost = request.ActualCost,
             CreatedBy = request.CreatedBy,
+            ExtractedData = request.ExtractedData,
             UpdatedAt = now,
         };
 

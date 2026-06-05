@@ -229,6 +229,9 @@ public class CreateLeaseRequest
 
     [MaxLength(2000)]
     public string? Notes { get; set; }
+
+    /// <summary>Full scan-extraction superset JSON (jsonb); populated when importing from a scanned PDF.</summary>
+    public string? ExtractedData { get; set; }
 }
 
 public class UpdateLeaseRequest
