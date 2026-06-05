@@ -27,6 +27,14 @@ public class RentalApplication
     public string? Email { get; set; }
     public string? Phone { get; set; }
     public DateTime? DateOfBirth { get; set; }
+
+    // Structured current address. CurrentAddress is kept as a legacy/composed single-line
+    // form (set from these on write) so older read paths (screening summary, etc.) keep working.
+    public string? CurrentAddressLine1 { get; set; }
+    public string? CurrentAddressLine2 { get; set; }
+    public string? CurrentCity { get; set; }
+    public string? CurrentState { get; set; }
+    public string? CurrentPostalCode { get; set; }
     public string? CurrentAddress { get; set; }
 
     // --- Employment / income ---

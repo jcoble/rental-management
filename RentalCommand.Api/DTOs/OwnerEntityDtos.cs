@@ -12,6 +12,11 @@ public class OwnerEntityResponse
     public OwnerEntityType OwnerEntityType { get; set; }
     public string Name { get; set; } = string.Empty;
     public string? TaxId { get; set; }
+    public string? AddressLine1 { get; set; }
+    public string? AddressLine2 { get; set; }
+    public string? City { get; set; }
+    public string? State { get; set; }
+    public string? PostalCode { get; set; }
     public string? Address { get; set; }
     public string? Phone { get; set; }
     public string? Email { get; set; }
@@ -28,6 +33,11 @@ public class OwnerEntityResponse
         OwnerEntityType = e.OwnerEntityType,
         Name = e.Name,
         TaxId = e.TaxId,
+        AddressLine1 = e.AddressLine1,
+        AddressLine2 = e.AddressLine2,
+        City = e.City,
+        State = e.State,
+        PostalCode = e.PostalCode,
         Address = e.Address,
         Phone = e.Phone,
         Email = e.Email,
@@ -46,6 +56,21 @@ public class CreateOwnerEntityRequest
 
     [MaxLength(50)]
     public string? TaxId { get; set; }
+
+    [MaxLength(250)]
+    public string? AddressLine1 { get; set; }
+
+    [MaxLength(250)]
+    public string? AddressLine2 { get; set; }
+
+    [MaxLength(120)]
+    public string? City { get; set; }
+
+    [MaxLength(60)]
+    public string? State { get; set; }
+
+    [MaxLength(20)]
+    public string? PostalCode { get; set; }
 
     [MaxLength(500)]
     public string? Address { get; set; }
@@ -67,6 +92,21 @@ public class UpdateOwnerEntityRequest
 
     [MaxLength(50)]
     public string? TaxId { get; set; }
+
+    [MaxLength(250)]
+    public string? AddressLine1 { get; set; }
+
+    [MaxLength(250)]
+    public string? AddressLine2 { get; set; }
+
+    [MaxLength(120)]
+    public string? City { get; set; }
+
+    [MaxLength(60)]
+    public string? State { get; set; }
+
+    [MaxLength(20)]
+    public string? PostalCode { get; set; }
 
     [MaxLength(500)]
     public string? Address { get; set; }

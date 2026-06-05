@@ -64,6 +64,21 @@ public class SubmitApplicationRequest
 
     public DateTime? DateOfBirth { get; set; }
 
+    [MaxLength(250)]
+    public string? CurrentAddressLine1 { get; set; }
+
+    [MaxLength(250)]
+    public string? CurrentAddressLine2 { get; set; }
+
+    [MaxLength(120)]
+    public string? CurrentCity { get; set; }
+
+    [MaxLength(60)]
+    public string? CurrentState { get; set; }
+
+    [MaxLength(20)]
+    public string? CurrentPostalCode { get; set; }
+
     [MaxLength(500)]
     public string? CurrentAddress { get; set; }
 
@@ -137,6 +152,11 @@ public class ApplicationResponse
     public string? Email { get; set; }
     public string? Phone { get; set; }
     public DateTime? DateOfBirth { get; set; }
+    public string? CurrentAddressLine1 { get; set; }
+    public string? CurrentAddressLine2 { get; set; }
+    public string? CurrentCity { get; set; }
+    public string? CurrentState { get; set; }
+    public string? CurrentPostalCode { get; set; }
     public string? CurrentAddress { get; set; }
     public string? Employer { get; set; }
     public decimal? MonthlyIncome { get; set; }
@@ -165,6 +185,11 @@ public class ApplicationResponse
         Email = e.Email,
         Phone = e.Phone,
         DateOfBirth = e.DateOfBirth,
+        CurrentAddressLine1 = e.CurrentAddressLine1,
+        CurrentAddressLine2 = e.CurrentAddressLine2,
+        CurrentCity = e.CurrentCity,
+        CurrentState = e.CurrentState,
+        CurrentPostalCode = e.CurrentPostalCode,
         CurrentAddress = e.CurrentAddress,
         Employer = e.Employer,
         MonthlyIncome = e.MonthlyIncome,

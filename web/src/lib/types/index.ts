@@ -67,6 +67,12 @@ export interface Owner {
 	ownerEntityType: OwnerEntityType;
 	name: string;
 	taxId?: string;
+	addressLine1?: string;
+	addressLine2?: string;
+	city?: string;
+	state?: string;
+	postalCode?: string;
+	/** Legacy/composed single-line address (kept in sync server-side for back-compat). */
 	address?: string;
 	phone?: string;
 	email?: string;
