@@ -33,6 +33,7 @@ public sealed class KnowledgeBaseService : IKnowledgeBaseService
         "Money",
         "Scan & Intake",
         "Operations",
+        "Mobile",
         "AI Assistant",
         "Tenant Portal",
         "Settings",
