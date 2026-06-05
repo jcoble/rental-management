@@ -80,6 +80,27 @@ public class SandboxGuardAndSeederTests : IDisposable
         (await _ctx.Db.Payments.CountAsync(p => p.PortfolioId == 2)).Should().BeGreaterThan(0);
         (await _ctx.Db.Tenants.IgnoreQueryFilters().CountAsync(t => t.PortfolioId == 2)).Should().BeGreaterThan(0);
 
+        // Scan-persistence demo data: a subset of expenses carry the typed scan columns + child line
+        // items, and a lease / deposit-check payment / work-order carry the ExtractedData superset — so
+        // reseeded or Sandbox-signup data exercises the scan schema (line-item table, payment chips,
+        // document-kind) exactly as a real scan→draft→confirm would.
+        var scannedExpenses = await _ctx.Db.Expenses.IgnoreQueryFilters()
+            .Include(e => e.LineItems)
+            .Where(e => e.PortfolioId == 2 && e.DocumentKind != null)
+            .ToListAsync();
+        scannedExpenses.Should().NotBeEmpty();
+        scannedExpenses.Should().OnlyContain(e => e.ReceiptData != null && e.Subtotal != null && e.TaxAmount != null);
+        scannedExpenses.Should().Contain(e => e.LineItems.Count > 0);
+        scannedExpenses.Should().Contain(e => e.CardLast4 != null && e.PaymentMethod != null); // a card receipt
+        scannedExpenses.Should().Contain(e => e.DocumentKind == "Invoice");                     // a vendor invoice
+
+        (await _ctx.Db.Leases.IgnoreQueryFilters()
+            .CountAsync(l => l.PortfolioId == 2 && l.ExtractedData != null)).Should().BeGreaterThan(0);
+        (await _ctx.Db.Payments
+            .CountAsync(p => p.PortfolioId == 2 && p.ExtractedData != null && p.CheckNumber != null)).Should().BeGreaterThan(0);
+        (await _ctx.Db.WorkOrders.IgnoreQueryFilters()
+            .CountAsync(w => w.PortfolioId == 2 && w.ExtractedData != null)).Should().BeGreaterThan(0);
+
         // The seeder does NOT touch the sandbox flag — that is the caller's (AuthService) responsibility.
         (await _ctx.Db.Portfolios.SingleAsync(p => p.Id == 2)).IsSandbox.Should().BeFalse();
 

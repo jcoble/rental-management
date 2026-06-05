@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -342,6 +343,25 @@ public class DemoDataSeeder
                 CreatedAt       = start.AddDays(-14),
                 UpdatedAt       = now
             };
+
+            // A couple of active leases simulate a lease document captured via the scan→draft→confirm
+            // flow — populate the ExtractedData JSONB superset so demo data exercises the scan
+            // persistence schema for the Lease record type too.
+            if (i < 2)
+            {
+                lease.ExtractedData = JsonSerializer.Serialize(new
+                {
+                    documentKind    = "Lease",
+                    tenantName      = $"{tenant.FirstName} {tenant.LastName}",
+                    monthlyRent     = rent,
+                    securityDeposit = deposit,
+                    startDate       = start.ToString("yyyy-MM-dd"),
+                    endDate         = end.ToString("yyyy-MM-dd"),
+                    termMonths      = 12,
+                    source          = "demo-seed",
+                });
+            }
+
             leases.Add(lease);
         }
 
@@ -397,7 +417,7 @@ public class DemoDataSeeder
             var leaseStart = lease.StartDate;
 
             // Security deposit — paid at move-in
-            payments.Add(new Payment
+            var depositPayment = new Payment
             {
                 PortfolioId  = portfolioId,
                 LeaseId      = lease.Id,
@@ -410,7 +430,35 @@ public class DemoDataSeeder
                 PeriodKey    = null, // one-off / manual
                 CreatedAt    = leaseStart,
                 UpdatedAt    = leaseStart
-            });
+            };
+
+            // The first few deposit checks simulate a paper check captured via the scan→draft→confirm
+            // flow — populate the check-specific typed columns (PayerName/CheckNumber/BankName) plus the
+            // ExtractedData JSONB superset, so demo data exercises the scan schema for the Payment type.
+            if (li < 3)
+            {
+                var depTenant = tenants[li];
+                depositPayment.PayerName   = $"{depTenant.FirstName} {depTenant.LastName}";
+                depositPayment.CheckNumber = (1040 + li * 7).ToString();
+                depositPayment.BankName    = (li % 3) switch
+                {
+                    0 => "Huntington National Bank",
+                    1 => "Chase Bank",
+                    _ => "PNC Bank",
+                };
+                depositPayment.ExtractedData = JsonSerializer.Serialize(new
+                {
+                    documentKind = "Check",
+                    payerName    = depositPayment.PayerName,
+                    checkNumber  = depositPayment.CheckNumber,
+                    bankName     = depositPayment.BankName,
+                    amount       = depositPayment.Amount,
+                    memo         = "Security deposit",
+                    source       = "demo-seed",
+                });
+            }
+
+            payments.Add(depositPayment);
 
             // Generate rent rows for each month from lease start through the current month.
             // "now" is at start of the month for DueDate purposes.
@@ -585,12 +633,58 @@ public class DemoDataSeeder
             (4, 1, ScheduleECategory.Repairs,             "Inspect and repair exterior outlets (code)",             225m,    5, false)
         };
 
+        // A subset of expenses simulate receipts/invoices captured via the scan→draft→confirm flow.
+        // For these we populate the full scan-persistence schema exactly as ScanService does on confirm:
+        // typed columns (Subtotal/TaxAmount/PaymentMethod/CardLast4/DocumentKind), the ReceiptData JSONB
+        // superset (same shape as ScanService.BuildReceiptDataJson, so the expense detail UI parses it
+        // identically to a real scan), and the ExpenseLineItem child rows. Keyed by index into expenseDefs.
+        // Line totals always sum to less than the expense Amount; the remainder becomes TaxAmount.
+        var scanReceipts =
+            new Dictionary<int, (string documentKind, string? paymentMethod, string? cardLast4,
+                                 string receiptNumber, decimal taxRate,
+                                 (string desc, decimal? qty, decimal? unitPrice, decimal amount)[] lines)>
+            {
+                [0] = ("Invoice", "Check", null, "APX-10432", 0m, new[]
+                {
+                    ("Service call & labor (1.5 hrs)", (decimal?)1.5m, (decimal?)90m, 135m),
+                    ("P-trap, supply line & fittings", (decimal?)null, (decimal?)null, 135m),
+                }),
+                [8] = ("Receipt", "Visa", "4821", "5582-1107", 0.075m, new[]
+                {
+                    ("First Alert smoke detector", (decimal?)3m, (decimal?)18.99m, 56.97m),
+                    ("Kidde carbon-monoxide detector", (decimal?)2m, (decimal?)24.49m, 48.98m),
+                }),
+                [10] = ("Invoice", "Check", null, "CZ-22841", 0m, new[]
+                {
+                    ("Carrier 96% AFUE furnace (60k BTU)", (decimal?)1m, (decimal?)1950m, 1950m),
+                    ("Installation labor", (decimal?)null, (decimal?)null, 700m),
+                    ("Permit & old-unit disposal", (decimal?)null, (decimal?)null, 150m),
+                }),
+                [16] = ("Invoice", "Check", null, "SR-9043", 0m, new[]
+                {
+                    ("Architectural shingles (2 sq)", (decimal?)2m, (decimal?)140m, 280m),
+                    ("Underlayment, flashing & nails", (decimal?)null, (decimal?)null, 160m),
+                    ("Roofing labor", (decimal?)null, (decimal?)null, 280m),
+                }),
+                [22] = ("Receipt", "Mastercard", "7012", "RW-330815", 0.075m, new[]
+                {
+                    ("LED outdoor wall lantern", (decimal?)4m, (decimal?)49.97m, 199.88m),
+                    ("Dusk-to-dawn photocell sensor", (decimal?)4m, (decimal?)12.50m, 50.00m),
+                }),
+                [29] = ("Invoice", "Check", null, "APX-11890", 0m, new[]
+                {
+                    ("Rheem 50-gal gas water heater", (decimal?)1m, (decimal?)749m, 749m),
+                    ("Installation labor", (decimal?)null, (decimal?)null, 350m),
+                    ("Expansion tank & fittings", (decimal?)null, (decimal?)null, 30m),
+                }),
+            };
+
         var expenses = expenseDefs.Select((ed, i) =>
         {
             var prop    = properties[ed.propIdx];
             var vendor  = vendors[ed.vendorIdx];
             var incDate = now.AddDays(-ed.daysAgo);
-            return new Expense
+            var expense = new Expense
             {
                 PortfolioId    = portfolioId,
                 PropertyId     = prop.Id,
@@ -605,6 +699,54 @@ public class DemoDataSeeder
                 CreatedAt      = incDate,
                 UpdatedAt      = now
             };
+
+            if (scanReceipts.TryGetValue(i, out var s))
+            {
+                var subtotal  = s.lines.Sum(l => l.amount);
+                var taxAmount = Math.Max(0m, Math.Round(ed.amount - subtotal, 2));
+
+                expense.Subtotal      = subtotal;
+                expense.TaxAmount     = taxAmount;
+                expense.PaymentMethod = s.paymentMethod;
+                expense.CardLast4     = s.cardLast4;
+                expense.DocumentKind  = s.documentKind;
+                expense.ReceiptData   = JsonSerializer.Serialize(new
+                {
+                    documentKind  = s.documentKind,
+                    dueDate       = (string?)null,
+                    vendor        = new { address = (string?)null, phone = vendor.Phone, website = (string?)null, taxId = (string?)null },
+                    receiptNumber = s.receiptNumber,
+                    paymentMethod = s.paymentMethod,
+                    cardLast4     = s.cardLast4,
+                    taxRate       = s.taxRate == 0m ? (decimal?)null : s.taxRate,
+                    tip           = (decimal?)null,
+                    discount      = (decimal?)null,
+                    shipping      = (decimal?)null,
+                    lineItems     = s.lines.Select(l => new
+                    {
+                        description = l.desc,
+                        quantity    = l.qty,
+                        unitPrice   = l.unitPrice,
+                        amount      = (decimal?)l.amount,
+                    }).ToArray(),
+                    extra         = new { taxAmount, source = "demo-seed" },
+                });
+
+                var lineNo = 1;
+                foreach (var l in s.lines)
+                {
+                    expense.LineItems.Add(new ExpenseLineItem
+                    {
+                        Description = l.desc,
+                        Quantity    = l.qty,
+                        UnitPrice   = l.unitPrice,
+                        Amount      = l.amount,
+                        LineNumber  = lineNo++,
+                    });
+                }
+            }
+
+            return expense;
         }).ToList();
 
         _db.Expenses.AddRange(expenses);
@@ -679,6 +821,22 @@ public class DemoDataSeeder
                 CreatedBy     = "admin@rentalcommand.local",
                 UpdatedAt     = now
             };
+
+            // The AC-replacement quote represents a vendor estimate captured via the scan flow —
+            // populate the ExtractedData JSONB so demo data exercises the WorkOrder scan record type.
+            if (i == 10)
+            {
+                wo.ExtractedData = JsonSerializer.Serialize(new
+                {
+                    documentKind  = "Estimate",
+                    vendorName    = vendor.Name,
+                    estimateTotal = 4200m,
+                    validUntil    = now.AddDays(30).ToString("yyyy-MM-dd"),
+                    scope         = "Replace central AC condenser + air handler — Unit 202",
+                    source        = "demo-seed",
+                });
+            }
+
             woList.Add(wo);
         }
 
