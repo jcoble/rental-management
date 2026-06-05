@@ -27,6 +27,7 @@
 -->
 <script lang="ts">
 	import { tick } from 'svelte';
+	import { cn } from '$lib/utils.js';
 
 	let {
 		value = $bindable(''),
@@ -36,7 +37,8 @@
 		placeholder = 'Street address',
 		disabled = false,
 		testid,
-		id
+		id,
+		class: className = ''
 	}: {
 		value?: string;
 		onchange?: (line1: string) => void;
@@ -46,6 +48,8 @@
 		disabled?: boolean;
 		testid?: string;
 		id?: string;
+		/** Extra classes merged onto the input (e.g. to match a host form's field style). */
+		class?: string;
 	} = $props();
 
 	interface Suggestion {
@@ -195,7 +199,7 @@
 <div class="relative" onfocusout={onFocusOut}>
 	<input
 		type="text"
-		class={inputClass}
+		class={cn(inputClass, className)}
 		{value}
 		oninput={handleInput}
 		onkeydown={onKeydown}

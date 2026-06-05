@@ -15,6 +15,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
+	import StateSelect from '$lib/components/shared/StateSelect.svelte';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -41,7 +42,7 @@
 	}));
 
 	// --- Owner form/dialog ---
-	const emptyOwner = { name: '', ownerEntityType: 'Person' as OwnerEntityType, taxId: '', address: '', phone: '', email: '' };
+	const emptyOwner = { name: '', ownerEntityType: 'Person' as OwnerEntityType, taxId: '', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', phone: '', email: '' };
 	let showOwnerForm = $state(false);
 	let editingOwnerId = $state<number | null>(null);
 	let ownerForm = $state({ ...emptyOwner });
@@ -81,7 +82,19 @@
 	}
 	function openEditOwner(o: Owner) {
 		editingOwnerId = o.id;
-		ownerForm = { name: o.name, ownerEntityType: o.ownerEntityType, taxId: o.taxId ?? '', address: o.address ?? '', phone: o.phone ?? '', email: o.email ?? '' };
+		ownerForm = {
+			name: o.name,
+			ownerEntityType: o.ownerEntityType,
+			taxId: o.taxId ?? '',
+			// Back-compat: older owners only have the legacy single-line `address` — seed line 1 with it.
+			addressLine1: o.addressLine1 ?? o.address ?? '',
+			addressLine2: o.addressLine2 ?? '',
+			city: o.city ?? '',
+			state: o.state ?? '',
+			postalCode: o.postalCode ?? '',
+			phone: o.phone ?? '',
+			email: o.email ?? '',
+		};
 		ownerErrors = {};
 		showOwnerForm = true;
 	}
@@ -398,14 +411,20 @@
 			<Input data-testid="owner-taxid-input" bind:value={ownerForm.taxId} placeholder="Tax ID / EIN (optional)" />
 			<AddressAutocomplete
 				testid="owner-address-input"
-				bind:value={ownerForm.address}
+				bind:value={ownerForm.addressLine1}
 				placeholder="Address (optional)"
 				onresolved={(a) => {
-					ownerForm.address = [a.line1, a.city, [a.state, a.zip].filter(Boolean).join(' ')]
-						.filter(Boolean)
-						.join(', ');
+					if (a.city) ownerForm.city = a.city;
+					if (a.state) ownerForm.state = a.state;
+					if (a.zip) ownerForm.postalCode = a.zip;
 				}}
 			/>
+			<Input data-testid="owner-address2-input" bind:value={ownerForm.addressLine2} placeholder="Apt / Suite / Unit # (optional)" />
+			<div class="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto]">
+				<Input data-testid="owner-city-input" bind:value={ownerForm.city} placeholder="City" />
+				<StateSelect testid="owner-state-input" bind:value={ownerForm.state} placeholder="State" />
+				<Input data-testid="owner-zip-input" bind:value={ownerForm.postalCode} placeholder="ZIP" />
+			</div>
 			<Input data-testid="owner-phone-input" bind:value={ownerForm.phone} placeholder="Phone (optional)" />
 			<div>
 				<Input data-testid="owner-email-input" bind:value={ownerForm.email} type="email" placeholder="Email (optional)" />

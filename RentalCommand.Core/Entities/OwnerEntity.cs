@@ -14,6 +14,15 @@ public class OwnerEntity
     public OwnerEntityType OwnerEntityType { get; set; } = OwnerEntityType.Person;
     public string Name { get; set; } = string.Empty;
     public string? TaxId { get; set; }
+
+    // Structured mailing address. <see cref="Address"/> is kept as a legacy/composed
+    // single-line form (set from these on write) so older read paths keep working.
+    public string? AddressLine1 { get; set; }
+    public string? AddressLine2 { get; set; }
+    public string? City { get; set; }
+    public string? State { get; set; }
+    public string? PostalCode { get; set; }
+
     public string? Address { get; set; }
     public string? Phone { get; set; }
     public string? Email { get; set; }   // for emailed owner statements
