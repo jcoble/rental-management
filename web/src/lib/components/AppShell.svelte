@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { page } from '$app/stores';
 	import { browser } from '$app/environment';
 	import { createQuery } from '@tanstack/svelte-query';
@@ -229,16 +230,20 @@
 		if (!browser) return;
 		try {
 			const raw = localStorage.getItem(STORAGE_KEY);
-			if (raw) openGroups = { ...openGroups, ...JSON.parse(raw) };
+			// untrack the openGroups read: this effect HYDRATES openGroups from storage, so it must not
+			// also depend on openGroups — otherwise its own write retriggers it forever
+			// (effect_update_depth_exceeded → the whole app freezes). With untrack it runs once on mount.
+			if (raw) openGroups = { ...untrack(() => openGroups), ...JSON.parse(raw) };
 		} catch {
 			/* ignore malformed storage */
 		}
 	});
 
 	// Default any group with no stored preference to open, and always force-open
-	// the group that contains the active route.
+	// the group that contains the active route. Reads openGroups untracked (it WRITES openGroups, and
+	// should only re-run when the route / visible groups change — not on its own write).
 	$effect(() => {
-		const next = { ...openGroups };
+		const next = { ...untrack(() => openGroups) };
 		let changed = false;
 		for (const g of visibleGroups) {
 			if (next[g.id] === undefined) {

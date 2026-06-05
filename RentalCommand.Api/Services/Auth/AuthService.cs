@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -227,8 +228,30 @@ public class AuthService : IAuthService
             // Seed demo data into the new sandbox portfolio (idempotent; its own inner transaction).
             await _demoSeeder.SeedPortfolioAsync(portfolio.Id);
 
+            // A self-service owner administers their own portfolio: grant the Admin role + a UserAccount
+            // staff row (mirrors the seeded admin). Without a role the nav only shows Dashboard + Help.
+            if (!await _userManager.IsInRoleAsync(user, nameof(UserRole.Admin)))
+            {
+                await _userManager.AddToRoleAsync(user, nameof(UserRole.Admin));
+            }
+            if (!await _db.UserAccounts.AnyAsync(a => a.PortfolioId == portfolio.Id && a.Email == user.Email))
+            {
+                _db.UserAccounts.Add(new UserAccount
+                {
+                    PortfolioId = portfolio.Id,
+                    Email = user.Email!,
+                    DisplayName = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email! : user.DisplayName!,
+                    PasswordHash = string.Empty, // Identity owns the credential
+                    Role = UserRole.Admin,
+                    IsActive = true,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                });
+                await _db.SaveChangesAsync();
+            }
+
             _logger.LogInformation(
-                "Provisioned sandbox portfolio {PortfolioId} for new user {Email} (id {UserId}).",
+                "Provisioned sandbox portfolio {PortfolioId} (Admin role + account) for new user {Email} (id {UserId}).",
                 portfolio.Id, user.Email, user.Id);
         }
         catch (Exception ex)

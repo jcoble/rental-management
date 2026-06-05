@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Configuration;
@@ -109,9 +110,11 @@ public sealed class GoogleAuthService : IGoogleAuthService
                 return GoogleAuthResult.Fail($"Failed to find or create user for email {email}.");
             }
 
-            // A brand-new Google user (or one created before this fix) has no portfolio. Provision a
-            // sandbox portfolio BEFORE issuing tokens so the JWT carries a portfolioId and the app works.
-            await EnsurePortfolioAsync(user);
+            // A brand-new Google user (or one created before this fix) needs a sandbox portfolio, the
+            // Admin role (a self-service owner administers their own portfolio), and a UserAccount staff
+            // row. Done BEFORE issuing tokens so the JWT carries portfolioId + roles. Each step is
+            // idempotent, so this also back-fills users created before these fixes.
+            await EnsureOwnerProvisioningAsync(user);
 
             // Step 4: Issue our own tokens.
             var roles = await _userManager.GetRolesAsync(user);
@@ -279,43 +282,78 @@ public sealed class GoogleAuthService : IGoogleAuthService
     }
 
     /// <summary>
-    /// Ensures the user has a <see cref="Portfolio"/>. Google sign-in (unlike email/password
-    /// registration) did not provision one, leaving the user with no portfolio so the dashboard could
-    /// not load. Mirrors <c>AuthService.ProvisionSandboxPortfolioAsync</c>. No-op when one already exists.
+    /// Ensures a Google user is fully provisioned as the owner of their portfolio: a sandbox
+    /// <see cref="Portfolio"/>, the <see cref="UserRole.Admin"/> Identity role, and a
+    /// <see cref="UserAccount"/> staff row. Google sign-in (unlike email/password registration) did
+    /// none of this, so the user had no portfolio (dashboard failed) and no role (only Dashboard +
+    /// Help showed in the nav). Mirrors the seeded-admin pattern and
+    /// <c>AuthService.ProvisionSandboxPortfolioAsync</c>. Every step is idempotent, so existing
+    /// role-less users created before this fix are back-filled on their next login.
     /// </summary>
-    private async Task EnsurePortfolioAsync(ApplicationUser user)
+    private async Task EnsureOwnerProvisioningAsync(ApplicationUser user)
     {
-        if (user.PortfolioId != null) return;
         try
         {
-            var now = DateTime.UtcNow;
-            var portfolio = new Portfolio
+            // 1) Sandbox portfolio — only if the user has none yet.
+            if (user.PortfolioId == null)
             {
-                Name = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Portfolio" : $"{user.DisplayName}'s Portfolio",
-                ManagementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Company" : user.DisplayName!,
-                Status = PortfolioStatus.Active,
-                Currency = "USD",
-                IsSandbox = true,
-                SandboxSeededAtUtc = now,
-                CreatedAt = now,
-                UpdatedAt = now,
-            };
-            _db.Portfolios.Add(portfolio);
-            await _db.SaveChangesAsync();
+                var now = DateTime.UtcNow;
+                var portfolio = new Portfolio
+                {
+                    Name = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Portfolio" : $"{user.DisplayName}'s Portfolio",
+                    ManagementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Company" : user.DisplayName!,
+                    Status = PortfolioStatus.Active,
+                    Currency = "USD",
+                    IsSandbox = true,
+                    SandboxSeededAtUtc = now,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                };
+                _db.Portfolios.Add(portfolio);
+                await _db.SaveChangesAsync();
 
-            user.PortfolioId = portfolio.Id;
-            await _userManager.UpdateAsync(user);
+                user.PortfolioId = portfolio.Id;
+                await _userManager.UpdateAsync(user);
 
-            await _demoSeeder.SeedPortfolioAsync(portfolio.Id);
+                await _demoSeeder.SeedPortfolioAsync(portfolio.Id);
 
-            _logger.LogInformation(
-                "Provisioned sandbox portfolio {PortfolioId} for Google user {Email} (id {UserId}).",
-                portfolio.Id, user.Email, user.Id);
+                _logger.LogInformation(
+                    "Provisioned sandbox portfolio {PortfolioId} for Google user {Email} (id {UserId}).",
+                    portfolio.Id, user.Email, user.Id);
+            }
+
+            // 2) Admin role — a self-service owner administers their own portfolio. Back-fills
+            //    existing role-less Google users too.
+            if (!await _userManager.IsInRoleAsync(user, nameof(UserRole.Admin)))
+            {
+                await _userManager.AddToRoleAsync(user, nameof(UserRole.Admin));
+                _logger.LogInformation("Granted Admin role to Google user {Email} (id {UserId}).", user.Email, user.Id);
+            }
+
+            // 3) UserAccount staff row (mirrors the seeded admin / AdminUsersController.Create) so the
+            //    owner appears under User Access and any UserAccount-scoped logic resolves them.
+            if (user.PortfolioId is int pid &&
+                !await _db.UserAccounts.AnyAsync(a => a.PortfolioId == pid && a.Email == user.Email))
+            {
+                var ts = DateTime.UtcNow;
+                _db.UserAccounts.Add(new UserAccount
+                {
+                    PortfolioId = pid,
+                    Email = user.Email!,
+                    DisplayName = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Email! : user.DisplayName!,
+                    PasswordHash = string.Empty, // Identity owns the credential
+                    Role = UserRole.Admin,
+                    IsActive = true,
+                    CreatedAt = ts,
+                    UpdatedAt = ts,
+                });
+                await _db.SaveChangesAsync();
+            }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex,
-                "Failed to provision/seed sandbox portfolio for Google user {Email} (id {UserId}); login still succeeds.",
+                "Failed owner provisioning (portfolio/role/account) for Google user {Email} (id {UserId}); login still succeeds.",
                 user.Email, user.Id);
         }
     }

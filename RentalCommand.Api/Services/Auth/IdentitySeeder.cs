@@ -41,13 +41,17 @@ public class IdentitySeeder
 
     public async Task SeedAsync(CancellationToken ct = default)
     {
+        // Identity roles (Admin/Manager/Agent/Owner/Tenant) are STRUCTURAL, not seed data: the whole
+        // authorization model and self-service signup (which assigns the owner the Admin role) depend
+        // on them existing. Ensure them in EVERY environment — independent of the Seed:Enabled gate,
+        // which only controls the demo admin user / portfolio / demo data (Development).
+        await EnsureRolesAsync();
+
         if (!_settings.Enabled)
         {
-            _logger.LogDebug("Identity seeding disabled (Seed:Enabled=false); skipping.");
+            _logger.LogDebug("Identity seeding disabled (Seed:Enabled=false); roles ensured, skipping admin/demo seed.");
             return;
         }
-
-        await EnsureRolesAsync();
 
         // If any user already exists, the system has been bootstrapped — don't re-seed the admin
         // password or duplicate the portfolio, but still ensure the UserAccount row exists
