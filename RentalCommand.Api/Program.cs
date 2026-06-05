@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -288,6 +289,18 @@ using (var scope = app.Services.CreateScope())
         await demoSeeder.SeedAsync();
     }
 }
+
+// Behind Traefik (TLS terminator) the API receives plain HTTP on :8080, so honor X-Forwarded-Proto
+// / X-Forwarded-For FIRST — otherwise Request.Scheme is "http", any absolute URL the API emits is
+// http:// (browser mixed-content "Not Secure"), and the client IP is the proxy's. The only ingress
+// is Traefik on the internal Docker network, so trust forwarded headers from any proxy.
+var forwardedHeadersOptions = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+};
+forwardedHeadersOptions.KnownIPNetworks.Clear();
+forwardedHeadersOptions.KnownProxies.Clear();
+app.UseForwardedHeaders(forwardedHeadersOptions);
 
 app.UseCors("WebApp");
 
