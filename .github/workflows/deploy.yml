@@ -140,7 +140,7 @@ jobs:
         run: |
           # Pipe the GHCR token via stdin so it never lands in the box's process list. docker
           # login consumes it; the remaining commands run from the ssh command argument. TAG is a
-          # hex git sha and ACTOR a GitHub username — both come from env, not raw ${{ }} in shell.
+          # hex git sha and ACTOR a GitHub username — both come from env (not interpolated in shell).
           printf '%s' "$GHCR_TOKEN" | ssh -i ~/.ssh/id_deploy \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "set -e
