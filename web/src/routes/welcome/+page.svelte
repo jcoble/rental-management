@@ -14,7 +14,13 @@
 		BarChart3,
 		ShieldCheck,
 		Bot,
-		Check
+		Check,
+		Receipt,
+		Zap,
+		Wifi,
+		BatteryFull,
+		Signal,
+		ChevronRight
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 
@@ -85,6 +91,34 @@
 		{ label: 'Monthly rent', value: '$1,850.00', conf: 0.99 },
 		{ label: 'Start date', value: 'Jul 1, 2026', conf: 0.94 },
 		{ label: 'Security deposit', value: '$1,850.00', conf: 0.91 }
+	];
+
+	// --- Mobile section -------------------------------------------------------
+	// The phone frame runs a self-contained capture -> extract -> confirm loop in
+	// CSS. These are the fields that "fly in" on the device screen — a receipt,
+	// which is the most phone-native capture (snap it the moment you're handed it).
+	const phoneReceiptFields = [
+		{ label: 'Vendor', value: "Hank's Plumbing", conf: 0.97 },
+		{ label: 'Amount', value: '$284.50', conf: 0.99 },
+		{ label: 'Date', value: 'Jun 3, 2026', conf: 0.95 },
+		{ label: 'Category', value: 'Repairs', conf: 0.92 }
+	];
+
+	// Two mobile pillars. "Capture" is LIVE today. "Voice" is forthcoming
+	// (ties to the Voice / App Actions task) — framed strictly as coming soon.
+	const mobilePillars = [
+		{
+			icon: Camera,
+			title: 'The computer does the typing for you',
+			body: 'Photograph a receipt, lease, or check. The app reads it, pulls the fields with a confidence score, and hands you a draft to confirm. Live today.',
+			status: 'live' as const
+		},
+		{
+			icon: Mic,
+			title: 'Say it and it happens',
+			body: '“Log a $40 repair on Maple St.” Speak the command and the app does the rest — no tapping through screens. Coming soon.',
+			status: 'soon' as const
+		}
 	];
 </script>
 
@@ -266,6 +300,245 @@
 					style="animation-delay: -3s"
 				>
 					<Mic class="h-4 w-4 text-chart-4" /> Voice
+				</div>
+			</div>
+		</div>
+	</section>
+
+	<!-- ===================== MOBILE STORY ===================== -->
+	<!--
+	  Sells the phone-first story: run the whole business from your phone.
+	  The phone frame runs a self-contained capture -> extract -> confirm loop
+	  (CSS `rc-phone-*` keyframes + staged field reveals; see app.css), with a
+	  graceful end-state under prefers-reduced-motion. The on-screen UI is a
+	  *representative mockup*, not a real device screenshot.
+
+	  TODO(real-screenshots): swap the mock device screen for actual Galaxy-S22
+	  app captures once available — drop them in /static/marketing/mobile/ and
+	  render inside `.phone-screen` (keep the device frame + the voice teaser).
+	  Keep the capture->draft->confirm framing (it's live); keep Voice as "coming soon".
+	-->
+	<section id="mobile" class="relative overflow-hidden border-t border-border/60" data-testid="mobile-section">
+		<!-- Ambient background, mirrored from the hero for cohesion -->
+		<div
+			class="animate-aurora pointer-events-none absolute inset-0 -z-10 opacity-50"
+			style="background-image: radial-gradient(40% 50% at 80% 8%, color-mix(in oklab, var(--primary) 18%, transparent), transparent), radial-gradient(45% 55% at 12% 90%, color-mix(in oklab, var(--chart-4) 14%, transparent), transparent);"
+			aria-hidden="true"
+		></div>
+
+		<div class="mx-auto grid max-w-6xl items-center gap-14 px-5 py-20 sm:px-8 lg:grid-cols-[1.05fr_0.95fr] lg:py-28">
+			<!-- Copy + pillars -->
+			<div use:reveal>
+				<span
+					class="inline-flex items-center gap-2 rounded-full border border-chart-4/25 bg-chart-4/10 px-3 py-1 text-xs font-medium text-chart-4"
+				>
+					<Camera class="h-3.5 w-3.5" />
+					Phone-first by design
+				</span>
+				<h2 class="mt-5 max-w-lg text-3xl font-semibold leading-[1.1] tracking-tight sm:text-4xl">
+					Run the whole business
+					<span class="text-primary">from your phone.</span>
+				</h2>
+				<p class="mt-5 max-w-md text-lg leading-relaxed text-muted-foreground">
+					No desk, no spreadsheet, no retyping. Handed a receipt at the property? Snap it on the
+					spot and you’re done. Rental Command was built thumb-first.
+				</p>
+
+				<div class="mt-9 space-y-4">
+					{#each mobilePillars as pillar, i}
+						<div
+							use:reveal={i * 120}
+							data-testid={pillar.status === 'live' ? 'mobile-pillar-capture' : 'mobile-pillar-voice'}
+							class="group relative flex gap-4 rounded-2xl border border-border bg-card/70 p-5 backdrop-blur transition-colors hover:border-primary/40"
+						>
+							<div
+								class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
+							>
+								<pillar.icon class="h-5 w-5" />
+							</div>
+							<div class="min-w-0">
+								<div class="flex flex-wrap items-center gap-2">
+									<h3 class="text-base font-semibold tracking-tight">{pillar.title}</h3>
+									{#if pillar.status === 'live'}
+										<span
+											class="inline-flex items-center gap-1 rounded-full bg-success/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-success ring-1 ring-inset ring-success/25"
+										>
+											<span class="h-1.5 w-1.5 animate-pulse rounded-full bg-success"></span>
+											Live today
+										</span>
+									{:else}
+										<span
+											class="inline-flex items-center gap-1 rounded-full bg-chart-4/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-chart-4 ring-1 ring-inset ring-chart-4/25"
+										>
+											<Zap class="h-3 w-3" />
+											Coming soon
+										</span>
+									{/if}
+								</div>
+								<p class="mt-1.5 text-sm leading-relaxed text-muted-foreground">{pillar.body}</p>
+							</div>
+						</div>
+					{/each}
+				</div>
+
+				<div class="mt-8 flex flex-wrap items-center gap-3">
+					<Button href="/register" size="lg" class="h-11" data-testid="mobile-cta-register">
+						Try it on your phone
+						<ArrowRight class="h-4 w-4" />
+					</Button>
+					<a
+						href="/docs"
+						class="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+						data-testid="mobile-link-docs"
+					>
+						See how it works
+						<ChevronRight class="h-4 w-4" />
+					</a>
+				</div>
+			</div>
+
+			<!-- Animated phone frame -->
+			<div class="relative flex justify-center" use:reveal={120}>
+				<!-- soft glow under the device -->
+				<div
+					class="pointer-events-none absolute bottom-6 left-1/2 -z-10 h-40 w-64 -translate-x-1/2 rounded-full bg-primary/20 blur-3xl"
+					aria-hidden="true"
+				></div>
+
+				<!-- Device -->
+				<div
+					class="phone-device animate-float-slow relative h-[560px] w-[270px] rounded-[2.75rem] border border-border bg-card p-2.5 shadow-2xl ring-1 ring-inset ring-white/5"
+					data-testid="mobile-phone-frame"
+					aria-label="Animated demo: snap a receipt and the app fills in a draft"
+				>
+					<!-- side buttons -->
+					<span class="absolute -left-[3px] top-28 h-12 w-[3px] rounded-l bg-border" aria-hidden="true"></span>
+					<span class="absolute -left-[3px] top-44 h-16 w-[3px] rounded-l bg-border" aria-hidden="true"></span>
+					<span class="absolute -right-[3px] top-36 h-20 w-[3px] rounded-r bg-border" aria-hidden="true"></span>
+
+					<!-- screen -->
+					<div class="phone-screen relative h-full w-full overflow-hidden rounded-[2.25rem] bg-background">
+						<!-- status bar -->
+						<div class="flex items-center justify-between px-5 pt-3 text-[10px] font-medium text-muted-foreground">
+							<span class="tabular-nums">9:41</span>
+							<div class="flex items-center gap-1.5" aria-hidden="true">
+								<Signal class="h-3 w-3" />
+								<Wifi class="h-3 w-3" />
+								<BatteryFull class="h-3.5 w-3.5" />
+							</div>
+						</div>
+
+						<!-- app header -->
+						<div class="flex items-center gap-2 px-5 pb-2 pt-2">
+							<span class="flex h-6 w-6 items-center justify-center rounded-md bg-primary/15 text-primary">
+								<Building class="h-3.5 w-3.5" />
+							</span>
+							<span class="text-xs font-semibold tracking-tight">New expense</span>
+							<span class="ml-auto inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[9px] font-medium text-primary">
+								<Sparkles class="h-2.5 w-2.5" /> AI
+							</span>
+						</div>
+
+						<!-- STAGE 1: camera viewfinder (a receipt being captured) -->
+						<div class="phone-stage phone-stage-capture absolute inset-x-3 top-[72px] bottom-3 rounded-2xl border border-border bg-secondary/40">
+							<div class="relative flex h-full flex-col overflow-hidden rounded-2xl">
+								<!-- viewfinder reticle corners -->
+								<div class="pointer-events-none absolute inset-3 rounded-xl" aria-hidden="true">
+									<span class="absolute left-0 top-0 h-5 w-5 rounded-tl-md border-l-2 border-t-2 border-primary/70"></span>
+									<span class="absolute right-0 top-0 h-5 w-5 rounded-tr-md border-r-2 border-t-2 border-primary/70"></span>
+									<span class="absolute bottom-0 left-0 h-5 w-5 rounded-bl-md border-b-2 border-l-2 border-primary/70"></span>
+									<span class="absolute bottom-0 right-0 h-5 w-5 rounded-br-md border-b-2 border-r-2 border-primary/70"></span>
+								</div>
+								<!-- scan line -->
+								<div
+									class="phone-scanline pointer-events-none absolute inset-x-5 z-10 h-px bg-primary shadow-[0_0_18px_2px_var(--primary)]"
+									aria-hidden="true"
+								></div>
+								<!-- the "receipt" in frame -->
+								<div class="mx-auto mt-9 w-32 rotate-[-3deg] rounded-md bg-card p-3 shadow-lg ring-1 ring-border" aria-hidden="true">
+									<div class="flex items-center gap-1 text-[8px] font-semibold text-muted-foreground">
+										<Receipt class="h-2.5 w-2.5 text-primary" /> RECEIPT
+									</div>
+									<div class="mt-2 space-y-1.5">
+										<div class="h-1.5 w-3/4 rounded bg-muted"></div>
+										<div class="h-1.5 w-full rounded bg-muted"></div>
+										<div class="h-1.5 w-2/3 rounded bg-muted"></div>
+										<div class="h-1.5 w-5/6 rounded bg-muted"></div>
+										<div class="mt-2 h-2 w-1/2 rounded bg-primary/30"></div>
+									</div>
+								</div>
+								<!-- shutter -->
+								<div class="mt-auto flex items-center justify-center pb-5">
+									<span class="phone-shutter flex h-11 w-11 items-center justify-center rounded-full bg-primary text-primary-foreground ring-4 ring-primary/20">
+										<Camera class="h-5 w-5" />
+									</span>
+								</div>
+							</div>
+						</div>
+
+						<!-- STAGE 2: extracted draft (fields fly in with confidence) -->
+						<div class="phone-stage phone-stage-draft absolute inset-x-3 top-[72px] bottom-3 rounded-2xl border border-border bg-background p-3">
+							<div class="mb-2 flex items-center justify-between">
+								<span class="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Draft · Expense</span>
+								<span class="inline-flex items-center gap-1 rounded-full bg-success/10 px-1.5 py-0.5 text-[9px] font-medium text-success">
+									<Sparkles class="h-2.5 w-2.5" /> Extracted
+								</span>
+							</div>
+							<dl class="space-y-2.5">
+								{#each phoneReceiptFields as f, i}
+									<div class="phone-field flex items-center justify-between gap-2" style={`--phone-field-i:${i}`}>
+										<dt class="text-[11px] text-muted-foreground">{f.label}</dt>
+										<dd class="flex items-center gap-2">
+											<span class="text-xs font-medium tabular-nums">{f.value}</span>
+											<span
+												class="h-1.5 w-8 overflow-hidden rounded-full bg-muted"
+												title={`${Math.round(f.conf * 100)}% confidence`}
+												aria-hidden="true"
+											>
+												<span
+													class="block h-full rounded-full"
+													style={`width:${f.conf * 100}%; background:${f.conf > 0.95 ? 'var(--success)' : 'var(--warning)'}`}
+												></span>
+											</span>
+										</dd>
+									</div>
+								{/each}
+							</dl>
+							<div class="phone-confirm mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary py-2 text-xs font-semibold text-primary-foreground">
+								<Check class="h-3.5 w-3.5" /> Confirm draft
+							</div>
+							<!-- STAGE 3: success toast -->
+							<div class="phone-toast absolute inset-x-3 bottom-3 flex items-center gap-2 rounded-xl border border-success/30 bg-[color-mix(in_oklab,var(--success)_10%,var(--card))] px-3 py-2.5 shadow-lg">
+								<span class="flex h-6 w-6 items-center justify-center rounded-full bg-success/20 text-success">
+									<FileCheck2 class="h-3.5 w-3.5" />
+								</span>
+								<span class="text-[11px] font-medium text-foreground">Expense saved to Maple St.</span>
+							</div>
+						</div>
+					</div>
+
+					<!-- notch -->
+					<div class="pointer-events-none absolute left-1/2 top-2.5 h-4 w-20 -translate-x-1/2 rounded-full bg-card ring-1 ring-inset ring-border" aria-hidden="true"></div>
+				</div>
+
+				<!-- Voice teaser mini-mock — clearly forthcoming -->
+				<div
+					class="animate-float absolute -bottom-2 -left-3 w-52 rounded-2xl border border-chart-4/30 bg-card/95 p-3 shadow-xl backdrop-blur sm:-left-8"
+					style="animation-delay: -2s"
+					data-testid="mobile-voice-teaser"
+				>
+					<div class="flex items-center gap-2">
+						<span class="flex h-7 w-7 items-center justify-center rounded-full bg-chart-4/15 text-chart-4">
+							<Mic class="h-3.5 w-3.5" />
+						</span>
+						<span class="text-[10px] font-semibold uppercase tracking-wide text-chart-4">Voice · Coming soon</span>
+					</div>
+					<p class="mt-2 rounded-lg bg-secondary/60 px-2.5 py-1.5 text-[11px] italic leading-snug text-foreground">
+						“Log a $40 repair on Maple St.”
+					</p>
+					<div class="mt-1.5 flex items-center gap-1 pl-1 text-[10px] text-muted-foreground">
+						<ChevronRight class="h-3 w-3 text-chart-4" /> Expense drafted &amp; ready
+					</div>
 				</div>
 			</div>
 		</div>
