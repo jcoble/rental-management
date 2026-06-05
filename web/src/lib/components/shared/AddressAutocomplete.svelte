@@ -131,6 +131,7 @@
 	async function pick(s: Suggestion) {
 		// Fill the street line immediately from the suggestion's primary text.
 		value = s.primary || value;
+		const pickedPrimary = value;
 		onchange?.(value);
 		closeDropdown();
 
@@ -145,10 +146,15 @@
 					state: string;
 					zip: string;
 				};
-				if (addr.line1) {
+				// Canonicalize the street line from the details response ONLY if the user hasn't
+				// started editing it since picking (e.g. appending a unit #). Otherwise their
+				// in-progress typing would be clobbered by this async response.
+				if (addr.line1 && value === pickedPrimary) {
 					value = addr.line1;
 					onchange?.(value);
 				}
+				// onresolved fills the OTHER fields (city/state/zip). The parent must NOT use it to
+				// overwrite the street line — that's owned by this input so manual edits stick.
 				onresolved?.(addr);
 			}
 		} catch {

@@ -382,7 +382,6 @@
 		bind:value={propertyForm.addressLine1}
 		placeholder="Address"
 		onresolved={(a) => {
-			propertyForm.addressLine1 = a.line1;
 			if (a.city) propertyForm.city = a.city;
 			if (a.state) propertyForm.state = a.state;
 			if (a.zip) propertyForm.postalCode = a.zip;
@@ -545,6 +544,7 @@
 				loading={unitsQuery.isLoading}
 				emptyMessage="No units on this property yet."
 				getRowKey={(u) => u.id}
+				onRowClick={(u) => openEditUnit(u)}
 				pageSize={20}
 				data-testid="property-units-grid"
 			>
