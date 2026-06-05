@@ -32,6 +32,17 @@ export interface ColumnDef<T> {
 	cell?: Snippet<[T]>;
 	/** CSS width e.g. `"8rem"` — applied as inline style on the `<th>/<td>`. */
 	width?: string;
+	/**
+	 * CSS min-width e.g. `"8rem"` — applied as inline style on the `<th>/<td>`. Keeps a column
+	 * readable when the grid is dense: once the sum of min-widths exceeds the container the desktop
+	 * table scrolls horizontally instead of squishing columns.
+	 */
+	minWidth?: string;
+	/**
+	 * CSS max-width e.g. `"20rem"` — applied as inline style on the `<th>/<td>`. The cell content
+	 * truncates with an ellipsis at this width so a long free-text column can't blow out the table.
+	 */
+	maxWidth?: string;
 	/** Extra class(es) appended to both the `<th>` and `<td>`. */
 	class?: string;
 	/** Role in the mobile card layout. First column defaults to `title`, rest to `meta`. */

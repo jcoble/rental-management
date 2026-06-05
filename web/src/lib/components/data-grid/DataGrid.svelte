@@ -172,6 +172,24 @@
 		right: 'text-right'
 	};
 
+	// ── Column sizing ───────────────────────────────────────────────────────────────
+	// Builds the inline `style` for a column's <th>/<td> from width/minWidth/maxWidth.
+	// A baseline min-width is applied to every column (unless it sets its own width/minWidth)
+	// so a dense table grows past its container — the wrapper's overflow-x-auto then kicks in
+	// (horizontal scroll) instead of squishing every column to nothing. A sparse table whose
+	// columns fit stays w-full and fills the container, so there's no lonely scrollbar.
+	// max-width caps a long free-text column so it truncates instead of blowing out the layout.
+	const DEFAULT_MIN_WIDTH = '7rem';
+	function colStyle(col: ColumnDef<T>): string {
+		const parts: string[] = [];
+		if (col.width) parts.push(`width:${col.width}`);
+		// An explicit fixed `width` already pins the column; only add a min-width otherwise.
+		if (col.minWidth) parts.push(`min-width:${col.minWidth}`);
+		else if (!col.width) parts.push(`min-width:${DEFAULT_MIN_WIDTH}`);
+		if (col.maxWidth) parts.push(`max-width:${col.maxWidth}`);
+		return parts.join(';');
+	}
+
 	// ── Sort comparator ───────────────────────────────────────────────────────────
 	function compareValues(a: unknown, b: unknown, format?: ColumnDef<T>['format']): number {
 		if (a == null && b == null) return 0;
@@ -294,9 +312,9 @@
 		</div>
 	{/if}
 
-	<!-- ── Desktop table (hidden on mobile) ───────────────────────────────────── -->
+	<!-- ── Desktop table (hidden on mobile + tablet) ──────────────────────────── -->
 	<div
-		class="hidden rounded-lg border border-border sm:block"
+		class="hidden overflow-x-auto rounded-lg border border-border lg:block"
 		data-testid="datagrid-desktop"
 		aria-busy={loading}
 	>
@@ -323,7 +341,7 @@
 									col.sortable && 'cursor-pointer hover:text-foreground',
 									col.class
 								)}
-								style={col.width ? `width:${col.width}` : undefined}
+								style={colStyle(col)}
 								onclick={col.sortable ? () => toggleSort(col) : undefined}
 								aria-sort={col.sortable
 									? sortKey === col.key
@@ -393,9 +411,18 @@
 											tabular && 'font-mono tabular-nums',
 											col.class
 										)}
-										style={col.width ? `width:${col.width}` : undefined}
+										style={colStyle(col)}
 									>
-										{#if col.cell}
+										{#if col.maxWidth}
+											<!-- Inner block so max-width + ellipsis truncate reliably in an auto-layout table cell. -->
+											<div class="truncate">
+												{#if col.cell}
+													{@render col.cell(item)}
+												{:else}
+													{formatValue(getValue(item, col), col.format)}
+												{/if}
+											</div>
+										{:else if col.cell}
 											{@render col.cell(item)}
 										{:else}
 											{formatValue(getValue(item, col), col.format)}
@@ -445,8 +472,8 @@
 		{/if}
 	</div>
 
-	<!-- ── Mobile card list (visible only on < sm) ─────────────────────────────── -->
-	<div class="space-y-3 sm:hidden" data-testid="datagrid-mobile">
+	<!-- ── Mobile/tablet card list (visible below lg) ──────────────────────────── -->
+	<div class="space-y-3 lg:hidden" data-testid="datagrid-mobile">
 		{#if loading && pagedData.length === 0}
 			<div class="flex flex-col items-center gap-2 rounded-lg border border-border p-8 text-muted-foreground" data-testid="datagrid-mobile-loading">
 				<Loader2 class="h-6 w-6 animate-spin" />
