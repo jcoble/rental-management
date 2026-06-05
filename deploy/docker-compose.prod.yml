@@ -144,6 +144,9 @@ services:
       - Assistant__Provider=${ASSISTANT_PROVIDER:-openai}
       - Assistant__ModelId=${ASSISTANT_MODEL_ID:-gpt-4o}
       - Assistant__ApiKey=${ASSISTANT_API_KEY:-}
+      # ── Google Places (New) address autocomplete. Server-side only; the web app
+      #    calls /api/v1/places/*. Leave unset to keep address fields manual-entry. ──
+      - GooglePlaces__ApiKey=${GOOGLE_PLACES_API_KEY:-}
       # ── Stripe (online rent payments / autopay) ────────────────────────────
       - Stripe__SecretKey=${STRIPE_SECRET_KEY:-}
       - Stripe__PublishableKey=${STRIPE_PUBLISHABLE_KEY:-}
@@ -283,10 +286,8 @@ services:
       - API_URL=http://api:8080
       # Web needs the public client id at runtime to show the Google button + build the consent URL.
       - PUBLIC_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
-      # Server-side Google Places (New) key for address autocomplete. The browser hits the
-      # same-origin /places/* endpoints; only the web container holds the key (never shipped to
-      # the client). Leave unset to keep address fields as plain manual-entry inputs (self-gates).
-      - GOOGLE_PLACES_API_KEY=${GOOGLE_PLACES_API_KEY:-}
+      # NOTE: Google Places address autocomplete is served by the API (GooglePlaces__ApiKey on the
+      # api service); the web app calls /api/v1/places/*. No Places key is needed on the web tier.
     depends_on:
       - api
     networks:
