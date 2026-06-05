@@ -277,6 +277,8 @@ services:
       - ORIGIN=https://${DOMAIN}
       # Server-side (SSR/load/auth) reaches the API container internally on the docker network.
       - API_URL=http://api:8080
+      # Web needs the public client id at runtime to show the Google button + build the consent URL.
+      - PUBLIC_GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
     depends_on:
       - api
     networks:
