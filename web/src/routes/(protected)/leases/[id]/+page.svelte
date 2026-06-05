@@ -21,6 +21,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -468,14 +469,14 @@
 		{ value: 'ledger', label: 'Ledger' },
 	];
 
-	// Subtle tint for the hero rent figure / status-keyed accent bar.
-	const heroAccent = $derived.by(() => {
+	// Context tone for the hero wash — status-keyed (see HeroCard for the recipe).
+	const heroTone = $derived.by<HeroTone>(() => {
 		switch (lease?.status) {
-			case 'Active': return 'from-success/10';
+			case 'Active': return 'success';
 			case 'Expired':
-			case 'Terminated': return 'from-destructive/10';
-			case 'NoticeGiven': return 'from-warning/10';
-			default: return 'from-primary/10';
+			case 'Terminated': return 'destructive';
+			case 'NoticeGiven': return 'warning';
+			default: return 'primary';
 		}
 	});
 </script>
@@ -613,48 +614,44 @@
 			<!-- ───────────────────────── OVERVIEW ───────────────────────── -->
 			<Tabs.Content value="overview" class="space-y-6">
 				<!-- Hero: the few things that matter most + a state-aware primary CTA -->
-				<Card.Root class="overflow-hidden" data-testid="lease-hero">
-					<div class="bg-gradient-to-br {heroAccent} to-transparent">
-						<Card.Content class="flex flex-wrap items-end justify-between gap-6 p-6">
-							<div class="min-w-0">
-								<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Monthly Rent</p>
-								<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="lease-hero-rent">
-									{formatCurrency(lease.monthlyRent)}
-								</p>
-								<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-									<StatusBadge status={lease.status} />
-									{#if lease.tenantName}
-										<a href="/tenants/{lease.tenantId}" class="font-medium text-foreground underline-offset-4 hover:underline">{lease.tenantName}</a>
-									{/if}
-									{#if lease.propertyName}
-										<span aria-hidden="true">·</span>
-										<span><a href="/properties/{lease.propertyId}" class="underline-offset-4 hover:underline">{lease.propertyName}</a>{#if lease.unitNumber}, Unit {lease.unitNumber}{/if}</span>
-									{/if}
+				<HeroCard tone={heroTone} testid="lease-hero" contentClass="flex flex-wrap items-end justify-between gap-6">
+						<div class="min-w-0">
+							<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Monthly Rent</p>
+							<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="lease-hero-rent">
+								{formatCurrency(lease.monthlyRent)}
+							</p>
+							<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+								<StatusBadge status={lease.status} />
+								{#if lease.tenantName}
+									<a href="/tenants/{lease.tenantId}" class="font-medium text-foreground underline-offset-4 hover:underline">{lease.tenantName}</a>
+								{/if}
+								{#if lease.propertyName}
+									<span aria-hidden="true">·</span>
+									<span><a href="/properties/{lease.propertyId}" class="underline-offset-4 hover:underline">{lease.propertyName}</a>{#if lease.unitNumber}, Unit {lease.unitNumber}{/if}</span>
+								{/if}
+							</div>
+						</div>
+						<div class="flex flex-col items-stretch gap-2">
+							{#if ledger && Math.abs(ledger.balance) > 0.005}
+								<div class="rounded-lg border border-border bg-background/70 px-4 py-2 text-right">
+									<p class="text-[11px] uppercase tracking-wide text-muted-foreground">Balance</p>
+									<p class="font-mono text-lg font-bold tabular-nums {ledger.balance > 0.005 ? 'text-warning' : 'text-success'}">{formatCurrency(ledger.balance)}</p>
 								</div>
-							</div>
-							<div class="flex flex-col items-stretch gap-2">
-								{#if ledger && Math.abs(ledger.balance) > 0.005}
-									<div class="rounded-lg border border-border bg-background/70 px-4 py-2 text-right">
-										<p class="text-[11px] uppercase tracking-wide text-muted-foreground">Balance</p>
-										<p class="font-mono text-lg font-bold tabular-nums {ledger.balance > 0.005 ? 'text-warning' : 'text-success'}">{formatCurrency(ledger.balance)}</p>
-									</div>
+							{/if}
+							{#if !editing}
+								{#if lease.status === 'Active'}
+									<Button data-testid="lease-hero-cta" size="sm" class="gap-1.5" onclick={() => activeTab = 'ledger'}>
+										<DollarSign class="h-4 w-4" />
+										View ledger
+									</Button>
+								{:else}
+									<Button data-testid="lease-hero-cta" size="sm" class="gap-1.5" onclick={() => statusMutation.mutate('Active')} disabled={statusMutation.isPending}>
+										Set lease active
+									</Button>
 								{/if}
-								{#if !editing}
-									{#if lease.status === 'Active'}
-										<Button data-testid="lease-hero-cta" size="sm" class="gap-1.5" onclick={() => activeTab = 'ledger'}>
-											<DollarSign class="h-4 w-4" />
-											View ledger
-										</Button>
-									{:else}
-										<Button data-testid="lease-hero-cta" size="sm" class="gap-1.5" onclick={() => statusMutation.mutate('Active')} disabled={statusMutation.isPending}>
-											Set lease active
-										</Button>
-									{/if}
-								{/if}
-							</div>
-						</Card.Content>
-					</div>
-				</Card.Root>
+							{/if}
+						</div>
+				</HeroCard>
 
 				<!-- Grouped detail cards. Editing is an explicit, page-level state
 				     (the Edit button) — values are calm, non-clickable rows otherwise. -->
