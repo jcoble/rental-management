@@ -36,6 +36,7 @@ services:
     command:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=rentalcommand-web"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       # Global HTTP → HTTPS redirect.
