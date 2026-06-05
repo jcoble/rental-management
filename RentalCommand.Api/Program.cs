@@ -141,7 +141,11 @@ builder.Services.AddAuthentication(options =>
             ValidateAudience = true,
             ValidAudience = jwtSettings.Audience,
             ValidateLifetime = true,
-            ClockSkew = TimeSpan.Zero
+            // A small skew tolerance (NOT the 5-min default, NOT zero): zero meant a token expiring
+            // even a second early by the server clock was a hard 401 — turning any client/server clock
+            // drift, or a request landing right on the 15-min boundary (e.g. a slow scan upload), into
+            // an intermittent "valid token rejected" logout. 2 min absorbs real-world drift safely.
+            ClockSkew = TimeSpan.FromMinutes(2)
         };
 
         options.Events = new JwtBearerEvents
