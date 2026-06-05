@@ -215,7 +215,9 @@
 	<meta name="robots" content="noindex" />
 </svelte:head>
 
-<div class="min-h-screen bg-background px-4 py-8 sm:py-12" data-testid="apply-page">
+<!-- Own scroll container: html/body are overflow:hidden globally, so this standalone public
+     page must scroll itself (the form is tall on small screens). -->
+<div class="h-dvh overflow-y-auto bg-background px-4 py-8 sm:py-12" data-testid="apply-page">
 	<div class="mx-auto w-full max-w-2xl">
 		{#if contextQuery.isLoading}
 			<!-- Loading -->

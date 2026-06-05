@@ -10,7 +10,9 @@
 	let user = $derived(getCurrentUser());
 </script>
 
-<div class="flex min-h-screen flex-col bg-background text-foreground">
+<!-- Own scroll container: html/body are overflow:hidden globally (the app shell manages its
+     own scroll), so this public docs surface must scroll itself. -->
+<div class="flex h-dvh flex-col overflow-y-auto bg-background text-foreground">
 	<!-- Branded public header -->
 	<header
 		class="sticky top-0 z-40 border-b border-border/60 bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60"
