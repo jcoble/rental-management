@@ -27,6 +27,8 @@ services:
   # ── Reverse proxy / TLS terminator (Let's Encrypt ACME) ─────────────────────
   traefik:
     image: traefik:v3.3
+    environment:
+      - DOCKER_API_VERSION=1.44
     container_name: rentalcommand-traefik
     restart: unless-stopped
     security_opt:
