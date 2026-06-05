@@ -18,7 +18,7 @@
 import { browser } from '$app/environment';
 import { CLIENT_API_BASE_URL } from '$lib/config';
 import { getAuthState, updateToken, clearAuth, isTokenExpired } from '$lib/stores/auth.svelte';
-import { createSingleFlight } from '$lib/utils/single-flight';
+import { createSingleFlightWithReuse } from '$lib/utils/single-flight';
 
 export const API_BASE_URL = CLIENT_API_BASE_URL;
 
@@ -115,7 +115,24 @@ async function performTokenRefresh(): Promise<void> {
 	updateToken(data.accessToken, new Date(data.accessTokenExpiration));
 }
 
-export const refreshToken = createSingleFlight(performTokenRefresh);
+/**
+ * Coalesce a BURST of refreshes (a page mount fans out N API calls; some 401
+ * and each enters the retry path). A pure single-flight only dedupes calls that
+ * overlap in time, so a 401 arriving a few ms after the prior refresh settled
+ * would start a SECOND real refresh and replay the server's single-use refresh
+ * token — tripping reuse-detection and revoking the whole token family. Briefly
+ * re-serving the just-completed refresh collapses the whole burst into ONE
+ * rotation. The window is far shorter than the ~15-min access-token lifetime, so
+ * a genuine later expiry still refreshes normally; failures are never cached, so
+ * a failed refresh surfaces immediately. The httpOnly refresh cookie itself is
+ * never read or reused by client JS — only the in-memory access token is shared.
+ */
+const REFRESH_REUSE_WINDOW_MS = 1500;
+
+export const refreshToken = createSingleFlightWithReuse(
+	performTokenRefresh,
+	REFRESH_REUSE_WINDOW_MS
+);
 
 function buildErrorFromBody(response: Response, errorData: unknown): ApiError {
 	const body = (errorData ?? {}) as Record<string, unknown>;
