@@ -2,15 +2,16 @@
 	import { createQuery } from '@tanstack/svelte-query';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { accounting } from '$lib/api/endpoints/accounting';
-	import { ai } from '$lib/api/endpoints/ai';
+	import { ai, type BriefingBullet } from '$lib/api/endpoints/ai';
 	import { messages } from '$lib/api/endpoints/messages';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import { properties } from '$lib/api/endpoints/properties';
 	import type { Dashboard } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, Sparkles, MessageSquare, HandCoins, Receipt, PiggyBank, Rocket, ArrowRight } from '@lucide/svelte';
+	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, Sparkles, MessageSquare, HandCoins, Receipt, PiggyBank, Rocket, ArrowRight, ChevronRight, CircleCheckBig, ListChecks } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
+	import AIBadge from '$lib/components/shared/AIBadge.svelte';
 
 	const dashboardQuery = createQuery(() => ({
 		queryKey: ['dashboard', getCurrentPortfolioId()],
@@ -51,6 +52,40 @@
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
 	}
+
+	// Resolve a briefing action item to the record it's about, so a to-do deep-links
+	// straight to the lease/payment/work-order. Keep in sync with the server's
+	// EntityType strings in DailyBriefingService (WorkOrder/Payment/Lease/Appointment/Inspection).
+	function bulletHref(bullet: BriefingBullet): string | null {
+		if (!bullet.entityType || bullet.entityId == null) return null;
+		switch (bullet.entityType) {
+			case 'WorkOrder':
+				return `/maintenance/work-orders/${bullet.entityId}`;
+			case 'Payment':
+				return `/accounting/payments/${bullet.entityId}`;
+			case 'Lease':
+				return `/leases/${bullet.entityId}`;
+			case 'Appointment':
+				return `/appointments/${bullet.entityId}`;
+			case 'Inspection':
+				return `/maintenance/inspections/${bullet.entityId}`;
+			default:
+				return null;
+		}
+	}
+
+	// Severity → tints for the action item's left rail and pill. Critical reads as
+	// "drop everything", warning as "soon", info as "heads up".
+	const severityStyles = {
+		critical: { rail: 'bg-destructive', pill: 'border-destructive/40 bg-destructive/10 text-destructive' },
+		warning: { rail: 'bg-warning', pill: 'border-warning/40 bg-warning/10 text-warning' },
+		info: { rail: 'bg-primary/60', pill: 'border-border bg-muted text-muted-foreground' },
+	} as const;
+	function severityStyle(severity: string) {
+		return severityStyles[severity as keyof typeof severityStyles] ?? severityStyles.info;
+	}
+
+	const ACTION_ITEM_LIMIT = 6;
 </script>
 
 <svelte:head>
@@ -63,6 +98,20 @@
 		<div class="mb-6">
 			<div class="h-7 w-48 animate-pulse rounded bg-muted"></div>
 			<div class="mt-2 h-4 w-64 animate-pulse rounded bg-muted"></div>
+		</div>
+		<!-- Briefing hero skeleton (mirrors the real hero so the AI moat never looks broken) -->
+		<div class="mb-6 rounded-xl border border-border bg-card p-5">
+			<div class="h-5 w-44 animate-pulse rounded bg-muted"></div>
+			<div class="mt-4 grid gap-5 lg:grid-cols-5">
+				<div class="space-y-2 lg:col-span-3">
+					<div class="h-24 w-full animate-pulse rounded-lg bg-muted"></div>
+				</div>
+				<div class="space-y-2 lg:col-span-2">
+					{#each [0, 1, 2] as _}
+						<div class="h-12 w-full animate-pulse rounded-lg bg-muted"></div>
+					{/each}
+				</div>
+			</div>
 		</div>
 		<div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 			{#each [0, 1, 2, 3] as _}
@@ -161,6 +210,154 @@
 			</Card.Root>
 		{/if}
 
+		<!-- Today's Briefing — the AI moat, promoted to the top, full width. Two distinct halves:
+		     the AI voice (what the computer is saying) and the action list (what to do today). -->
+		<Card.Root
+			class="relative mb-6 gap-0 overflow-hidden border-[color-mix(in_oklab,#a855f7_22%,var(--border))] py-0"
+			data-testid="dashboard-todays-briefing"
+		>
+			<!-- Ambient AI glow so the hero reads as "intelligent", not just another card -->
+			<div class="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-purple-500/10 blur-3xl"></div>
+			<div class="pointer-events-none absolute -left-24 -bottom-24 h-64 w-64 rounded-full bg-blue-500/10 blur-3xl"></div>
+
+			<Card.Header class="relative px-5 pt-5 pb-3">
+				<Card.Title class="flex items-center gap-2 text-lg font-semibold">
+					<span class="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-purple-500/25 to-blue-500/25 ring-1 ring-purple-500/30">
+						<Sparkles class="h-4 w-4 text-purple-300" />
+					</span>
+					Today's Briefing
+					<AIBadge />
+				</Card.Title>
+			</Card.Header>
+			<Card.Content class="relative px-5 pb-5 pt-0">
+				{#if briefingQuery.isLoading}
+					<div class="grid gap-5 lg:grid-cols-5">
+						<div class="lg:col-span-3">
+							<div class="h-28 w-full animate-pulse rounded-xl bg-muted"></div>
+						</div>
+						<div class="space-y-2 lg:col-span-2">
+							{#each [0, 1, 2] as _}
+								<div class="h-12 w-full animate-pulse rounded-lg bg-muted"></div>
+							{/each}
+						</div>
+					</div>
+				{:else}
+					{@const briefing = briefingQuery.isError ? undefined : briefingQuery.data}
+					{@const bullets = briefing?.bullets ?? []}
+					{@const shown = bullets.slice(0, ACTION_ITEM_LIMIT)}
+					{@const overflow = bullets.length - shown.length}
+					<div class="grid gap-5 lg:grid-cols-5">
+						<!-- LEFT: the AI voice. Gradient-tinted, ringed, clear type — obviously the computer talking. -->
+						<div class="lg:col-span-3">
+							{#if briefing?.summary}
+								<div
+									class="flex h-full flex-col gap-3 rounded-xl bg-gradient-to-br from-purple-500/12 to-blue-500/10 p-4 ring-1 ring-purple-500/25"
+									data-testid="dashboard-briefing-narrative"
+								>
+									<div class="flex items-center gap-2">
+										<span class="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-purple-500/30 to-blue-500/30 ring-1 ring-purple-500/30">
+											<Sparkles class="h-3.5 w-3.5 text-purple-200" />
+										</span>
+										<span class="text-xs font-semibold uppercase tracking-wide text-purple-200/90">The assistant says</span>
+									</div>
+									<p class="text-[15px] leading-relaxed text-foreground">{briefing.summary}</p>
+								</div>
+							{:else if briefingQuery.isError}
+								<div class="flex h-full items-center rounded-xl bg-muted/40 p-4 text-sm text-muted-foreground" data-testid="dashboard-briefing-narrative">
+									Your daily briefing is unavailable right now.
+								</div>
+							{:else}
+								<div
+									class="flex h-full flex-col gap-2 rounded-xl bg-gradient-to-br from-purple-500/12 to-blue-500/10 p-4 ring-1 ring-purple-500/25"
+									data-testid="dashboard-briefing-narrative"
+								>
+									<div class="flex items-center gap-2">
+										<span class="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-purple-500/30 to-blue-500/30 ring-1 ring-purple-500/30">
+											<Sparkles class="h-3.5 w-3.5 text-purple-200" />
+										</span>
+										<span class="text-xs font-semibold uppercase tracking-wide text-purple-200/90">The assistant says</span>
+									</div>
+									<p class="text-[15px] leading-relaxed text-foreground">
+										{#if bullets.length > 0}
+											You've got {bullets.length} thing{bullets.length === 1 ? '' : 's'} to look at today — they're listed to the right, most urgent first.
+										{:else}
+											Nothing urgent on your plate today. Everything's running smoothly across your portfolio.
+										{/if}
+									</p>
+								</div>
+							{/if}
+						</div>
+
+						<!-- RIGHT: the action list. Severity-ranked, color-coded, deep-linking. -->
+						<div class="lg:col-span-2" data-testid="dashboard-briefing-actions">
+							<div class="mb-2 flex items-center gap-2">
+								{#if bullets.length > 0}
+									<ListChecks class="h-4 w-4 text-muted-foreground" />
+									<h2 class="text-sm font-semibold text-foreground">
+										{bullets.length} thing{bullets.length === 1 ? '' : 's'} need{bullets.length === 1 ? 's' : ''} attention
+									</h2>
+								{:else if briefingQuery.isError}
+									<AlertTriangle class="h-4 w-4 text-muted-foreground" />
+									<h2 class="text-sm font-semibold text-foreground">Action items unavailable</h2>
+								{:else}
+									<CircleCheckBig class="h-4 w-4 text-success" />
+									<h2 class="text-sm font-semibold text-foreground">You're all caught up</h2>
+								{/if}
+							</div>
+							{#if bullets.length === 0}
+								<p class="text-sm text-muted-foreground">
+									{briefingQuery.isError ? "We couldn't load today's action items." : 'No priority items for today.'}
+								</p>
+							{:else}
+								<div class="space-y-2">
+									{#each shown as bullet}
+										{@const sev = severityStyle(bullet.severity)}
+										{@const href = bulletHref(bullet)}
+										{#if href}
+											<a
+												{href}
+												class="group relative flex items-start gap-3 overflow-hidden rounded-lg border border-border bg-background py-2 pl-4 pr-3 transition-colors hover:border-border/80 hover:bg-muted/40"
+												data-testid="dashboard-briefing-action-item"
+											>
+												<span class="absolute inset-y-0 left-0 w-1 {sev.rail}"></span>
+												<div class="min-w-0 flex-1">
+													<div class="flex items-center justify-between gap-2">
+														<p class="truncate text-sm font-medium text-foreground">{bullet.title}</p>
+														<span class="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium capitalize {sev.pill}">{bullet.severity}</span>
+													</div>
+													<p class="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{bullet.detail}</p>
+												</div>
+												<ChevronRight class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5 group-hover:text-muted-foreground" />
+											</a>
+										{:else}
+											<div
+												class="relative flex items-start gap-3 overflow-hidden rounded-lg border border-border bg-background py-2 pl-4 pr-3"
+												data-testid="dashboard-briefing-action-item"
+											>
+												<span class="absolute inset-y-0 left-0 w-1 {sev.rail}"></span>
+												<div class="min-w-0 flex-1">
+													<div class="flex items-center justify-between gap-2">
+														<p class="truncate text-sm font-medium text-foreground">{bullet.title}</p>
+														<span class="shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium capitalize {sev.pill}">{bullet.severity}</span>
+													</div>
+													<p class="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{bullet.detail}</p>
+												</div>
+											</div>
+										{/if}
+									{/each}
+									{#if overflow > 0}
+										<p class="pt-0.5 text-xs text-muted-foreground" data-testid="dashboard-briefing-overflow">
+											+{overflow} more item{overflow === 1 ? '' : 's'}
+										</p>
+									{/if}
+								</div>
+							{/if}
+						</div>
+					</div>
+				{/if}
+			</Card.Content>
+		</Card.Root>
+
 		<!-- Plain-English money snapshot: collected / spent / kept, each with a sentence -->
 		<Card.Root class="mb-6 gap-0 py-0" data-testid="dashboard-money-snapshot">
 			<Card.Header class="px-5 pt-5 pb-2">
@@ -252,80 +449,44 @@
 			</Card.Root>
 		</div>
 
-		<div class="mb-6 grid gap-4 lg:grid-cols-2">
-			<Card.Root class="gap-0 py-0" data-testid="dashboard-todays-briefing">
-				<Card.Header class="px-4 pt-4 pb-3">
-					<Card.Title class="flex items-center gap-2 text-base font-semibold">
-						<Sparkles class="h-4 w-4 text-primary" />
-						Today's Briefing
-					</Card.Title>
-				</Card.Header>
-				<Card.Content class="px-4 pb-4 pt-0">
-					{#if briefingQuery.isLoading}
-						<div class="space-y-2">
-							<div class="h-4 w-3/4 animate-pulse rounded bg-muted"></div>
-							<div class="h-14 w-full animate-pulse rounded bg-muted"></div>
-						</div>
-					{:else if briefingQuery.isError}
-						<p class="text-sm text-muted-foreground">Briefing is unavailable.</p>
-					{:else}
-						{@const briefing = briefingQuery.data}
-						{#if briefing?.summary}
-							<p class="mb-3 text-sm text-muted-foreground">{briefing.summary}</p>
+		<!-- Secondary row: Latest Messages collapses entirely when empty so it never eats prime
+		     space; Latest Maintenance then expands to fill the row. -->
+		{@const hasMessages = messagesQuery.isLoading || (messagesQuery.data?.length ?? 0) > 0}
+		<div class="mb-6 grid gap-4 {hasMessages ? 'lg:grid-cols-2' : ''}">
+			{#if hasMessages}
+				<Card.Root class="gap-0 py-0" data-testid="dashboard-latest-messages">
+					<Card.Header class="px-4 pt-4 pb-3">
+						<Card.Title class="flex items-center gap-2 text-base font-semibold">
+							<MessageSquare class="h-4 w-4 text-primary" />
+							Latest Messages
+						</Card.Title>
+					</Card.Header>
+					<Card.Content class="px-4 pb-4 pt-0">
+						{#if messagesQuery.isLoading}
+							<div class="space-y-2">
+								{#each [0, 1, 2] as _}
+									<div class="h-14 w-full animate-pulse rounded bg-muted"></div>
+								{/each}
+							</div>
+						{:else}
+							<div class="space-y-2">
+								{#each (messagesQuery.data ?? []).slice(0, 5) as thread}
+									<a href="/messages?conversation={thread.id}" class="block rounded border border-border bg-background px-3 py-2 transition-colors hover:bg-muted/40">
+										<div class="flex items-center justify-between gap-3">
+											<p class="truncate text-sm font-medium">{thread.subject}</p>
+											<span class="shrink-0 font-mono text-[11px] text-muted-foreground">{new Date(thread.lastMessageAt).toLocaleDateString()}</span>
+										</div>
+										<p class="mt-0.5 truncate text-xs text-muted-foreground">{thread.tenantName}{thread.propertyName ? ` · ${thread.propertyName}` : ''}</p>
+										{#if thread.lastMessagePreview}
+											<p class="mt-1 truncate text-xs text-muted-foreground">{thread.lastMessagePreview}</p>
+										{/if}
+									</a>
+								{/each}
+							</div>
 						{/if}
-						<div class="space-y-2">
-							{#each (briefing?.bullets ?? []).slice(0, 5) as bullet}
-								<div class="rounded border border-border bg-background px-3 py-2">
-									<div class="flex items-center justify-between gap-3">
-										<p class="text-sm font-medium">{bullet.title}</p>
-										<span class="rounded-full border px-2 py-0.5 text-[11px] capitalize text-muted-foreground">{bullet.severity}</span>
-									</div>
-									<p class="mt-1 text-xs text-muted-foreground">{bullet.detail}</p>
-								</div>
-							{:else}
-								<p class="text-sm text-muted-foreground">No priority items for today.</p>
-							{/each}
-						</div>
-					{/if}
-				</Card.Content>
-			</Card.Root>
-
-			<Card.Root class="gap-0 py-0" data-testid="dashboard-latest-messages">
-				<Card.Header class="px-4 pt-4 pb-3">
-					<Card.Title class="flex items-center gap-2 text-base font-semibold">
-						<MessageSquare class="h-4 w-4 text-primary" />
-						Latest Messages
-					</Card.Title>
-				</Card.Header>
-				<Card.Content class="px-4 pb-4 pt-0">
-					{#if messagesQuery.isLoading}
-						<div class="space-y-2">
-							{#each [0, 1, 2] as _}
-								<div class="h-14 w-full animate-pulse rounded bg-muted"></div>
-							{/each}
-						</div>
-					{:else if messagesQuery.isError}
-						<p class="text-sm text-muted-foreground">Messages are unavailable.</p>
-					{:else}
-						<div class="space-y-2">
-							{#each (messagesQuery.data ?? []).slice(0, 5) as thread}
-								<a href="/messages?conversation={thread.id}" class="block rounded border border-border bg-background px-3 py-2 transition-colors hover:bg-muted/40">
-									<div class="flex items-center justify-between gap-3">
-										<p class="truncate text-sm font-medium">{thread.subject}</p>
-										<span class="shrink-0 font-mono text-[11px] text-muted-foreground">{new Date(thread.lastMessageAt).toLocaleDateString()}</span>
-									</div>
-									<p class="mt-0.5 truncate text-xs text-muted-foreground">{thread.tenantName}{thread.propertyName ? ` · ${thread.propertyName}` : ''}</p>
-									{#if thread.lastMessagePreview}
-										<p class="mt-1 truncate text-xs text-muted-foreground">{thread.lastMessagePreview}</p>
-									{/if}
-								</a>
-							{:else}
-								<p class="text-sm text-muted-foreground">No recent messages.</p>
-							{/each}
-						</div>
-					{/if}
-				</Card.Content>
-			</Card.Root>
+					</Card.Content>
+				</Card.Root>
+			{/if}
 
 			<Card.Root class="gap-0 py-0" data-testid="dashboard-latest-maintenance">
 				<Card.Header class="px-4 pt-4 pb-3">
