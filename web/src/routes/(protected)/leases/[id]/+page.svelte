@@ -20,6 +20,7 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -526,14 +527,12 @@
 			/>
 			{#if opts.error}<p class="mt-1 text-xs text-destructive" data-testid={`${opts.testid}-error`}>{opts.error}</p>{/if}
 		{:else}
-			<button
-				type="button"
-				class="min-h-10 w-full rounded-md border border-transparent py-2 text-left text-sm font-medium text-foreground transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+			<p
+				class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground"
 				data-testid={`${opts.testid}-value`}
-				onclick={startEditing}
 			>
 				{opts.display === '' ? '-' : opts.display}
-			</button>
+			</p>
 		{/if}
 	</div>
 {/snippet}
@@ -657,79 +656,44 @@
 					</div>
 				</Card.Root>
 
-				<!-- Grouped detail cards. Inline-edit happens within each card's context. -->
+				<!-- Grouped detail cards. Editing is an explicit, page-level state
+				     (the Edit button) — values are calm, non-clickable rows otherwise. -->
 				<div class="grid gap-6 lg:grid-cols-2">
-					<!-- Term -->
-					<Card.Root data-testid="lease-card-term">
-						<Card.Header class="pb-3">
-							<Card.Title class="flex items-center gap-2 text-base">
-								<CalendarRange class="h-4 w-4 text-primary" />
-								Term
-							</Card.Title>
-						</Card.Header>
-						<Card.Content class="grid grid-cols-2 gap-x-6 gap-y-4">
-							{@render dateField({ label: 'Start Date', value: form.startDate, setValue: (v) => (form.startDate = v), display: formatDate(lease.startDate), error: formErrors.startDate, max: form.endDate || undefined, testid: 'lease-detail-start' })}
-							{@render dateField({ label: 'End Date', value: form.endDate, setValue: (v) => (form.endDate = v), display: formatDate(lease.endDate), error: formErrors.endDate, min: form.startDate || undefined, testid: 'lease-detail-end' })}
-							<InlineField label="Rent Due Day" bind:value={form.rentDueDay} display={`Day ${lease.rentDueDay}`} {editing} onedit={startEditing} type="number" error={formErrors.rentDueDay} testid="lease-detail-due-day" />
-							<InlineField label="Status" bind:value={form.status} display={lease.status} {editing} onedit={startEditing} type="select" options={statusOptions} error={formErrors.status} testid="lease-detail-status" />
-							{#if !editing && lease.moveInDate}
-								<div>
-									<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-In</dt>
-									<dd class="mt-0.5 text-sm">{formatDate(lease.moveInDate)}</dd>
-								</div>
-							{/if}
-							{#if !editing && lease.moveOutDate}
-								<div>
-									<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-Out</dt>
-									<dd class="mt-0.5 text-sm">{formatDate(lease.moveOutDate)}</dd>
-								</div>
-							{/if}
-						</Card.Content>
-					</Card.Root>
+					<DetailCard title="Term" icon={CalendarRange} accent="primary" testid="lease-card-term" contentClass="grid grid-cols-2 gap-x-6 gap-y-4">
+						{@render dateField({ label: 'Start Date', value: form.startDate, setValue: (v) => (form.startDate = v), display: formatDate(lease.startDate), error: formErrors.startDate, max: form.endDate || undefined, testid: 'lease-detail-start' })}
+						{@render dateField({ label: 'End Date', value: form.endDate, setValue: (v) => (form.endDate = v), display: formatDate(lease.endDate), error: formErrors.endDate, min: form.startDate || undefined, testid: 'lease-detail-end' })}
+						<InlineField label="Rent Due Day" bind:value={form.rentDueDay} display={`Day ${lease.rentDueDay}`} {editing} type="number" error={formErrors.rentDueDay} testid="lease-detail-due-day" />
+						<InlineField label="Status" bind:value={form.status} display={lease.status} {editing} type="select" options={statusOptions} error={formErrors.status} testid="lease-detail-status" />
+						{#if !editing && lease.moveInDate}
+							<div>
+								<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-In</dt>
+								<dd class="mt-0.5 text-sm">{formatDate(lease.moveInDate)}</dd>
+							</div>
+						{/if}
+						{#if !editing && lease.moveOutDate}
+							<div>
+								<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-Out</dt>
+								<dd class="mt-0.5 text-sm">{formatDate(lease.moveOutDate)}</dd>
+							</div>
+						{/if}
+					</DetailCard>
 
-					<!-- Financials -->
-					<Card.Root data-testid="lease-card-financials">
-						<Card.Header class="pb-3">
-							<Card.Title class="flex items-center gap-2 text-base">
-								<DollarSign class="h-4 w-4 text-success" />
-								Financials
-							</Card.Title>
-						</Card.Header>
-						<Card.Content class="grid grid-cols-2 gap-x-6 gap-y-4">
-							<InlineField label="Monthly Rent" bind:value={form.monthlyRent} display={formatCurrency(lease.monthlyRent)} {editing} onedit={startEditing} type="number" error={formErrors.monthlyRent} testid="lease-detail-rent" />
-							<InlineField label="Security Deposit" bind:value={form.securityDeposit} display={formatCurrency(lease.securityDeposit)} {editing} onedit={startEditing} type="number" error={formErrors.securityDeposit} testid="lease-detail-deposit" />
-							<InlineField label="Late Fee" bind:value={form.lateFeeAmount} display={formatCurrency(lease.lateFeeAmount)} {editing} onedit={startEditing} type="number" error={formErrors.lateFeeAmount} testid="lease-detail-late-fee" />
-							<InlineField label="Lease Number" bind:value={form.leaseNumber} display={lease.leaseNumber} {editing} onedit={startEditing} error={formErrors.leaseNumber} testid="lease-detail-number-field" />
-						</Card.Content>
-					</Card.Root>
+					<DetailCard title="Financials" icon={DollarSign} accent="success" testid="lease-card-financials" contentClass="grid grid-cols-2 gap-x-6 gap-y-4">
+						<InlineField label="Monthly Rent" bind:value={form.monthlyRent} display={formatCurrency(lease.monthlyRent)} {editing} type="number" error={formErrors.monthlyRent} testid="lease-detail-rent" />
+						<InlineField label="Security Deposit" bind:value={form.securityDeposit} display={formatCurrency(lease.securityDeposit)} {editing} type="number" error={formErrors.securityDeposit} testid="lease-detail-deposit" />
+						<InlineField label="Late Fee" bind:value={form.lateFeeAmount} display={formatCurrency(lease.lateFeeAmount)} {editing} type="number" error={formErrors.lateFeeAmount} testid="lease-detail-late-fee" />
+						<InlineField label="Lease Number" bind:value={form.leaseNumber} display={lease.leaseNumber} {editing} error={formErrors.leaseNumber} testid="lease-detail-number-field" />
+					</DetailCard>
 
-					<!-- Parties -->
-					<Card.Root data-testid="lease-card-parties">
-						<Card.Header class="pb-3">
-							<Card.Title class="flex items-center gap-2 text-base">
-								<Users class="h-4 w-4 text-primary" />
-								Parties
-							</Card.Title>
-						</Card.Header>
-						<Card.Content class="grid grid-cols-2 gap-x-6 gap-y-4">
-							<InlineField label="Property" bind:value={form.propertyId} display={lease.propertyName} {editing} onedit={startEditing} type="select" options={propertyOptions} testid="lease-detail-property" />
-							<InlineField label="Unit" bind:value={form.unitId} display={lease.unitNumber ? `Unit ${lease.unitNumber}` : ''} {editing} onedit={startEditing} type="select" options={unitOptions} error={formErrors.unitId} testid="lease-detail-unit" />
-							<InlineField label="Tenant" bind:value={form.tenantId} display={lease.tenantName} {editing} onedit={startEditing} type="select" options={tenantOptions} error={formErrors.tenantId} testid="lease-detail-tenant" class="col-span-2" />
-						</Card.Content>
-					</Card.Root>
+					<DetailCard title="Parties" icon={Users} accent="primary" testid="lease-card-parties" contentClass="grid grid-cols-2 gap-x-6 gap-y-4">
+						<InlineField label="Property" bind:value={form.propertyId} display={lease.propertyName} {editing} type="select" options={propertyOptions} testid="lease-detail-property" />
+						<InlineField label="Unit" bind:value={form.unitId} display={lease.unitNumber ? `Unit ${lease.unitNumber}` : ''} {editing} type="select" options={unitOptions} error={formErrors.unitId} testid="lease-detail-unit" />
+						<InlineField label="Tenant" bind:value={form.tenantId} display={lease.tenantName} {editing} type="select" options={tenantOptions} error={formErrors.tenantId} testid="lease-detail-tenant" class="col-span-2" />
+					</DetailCard>
 
-					<!-- Notes -->
-					<Card.Root data-testid="lease-card-notes">
-						<Card.Header class="pb-3">
-							<Card.Title class="flex items-center gap-2 text-base">
-								<StickyNote class="h-4 w-4 text-muted-foreground" />
-								Notes
-							</Card.Title>
-						</Card.Header>
-						<Card.Content>
-							<InlineField label="Notes" bind:value={form.notes} display={lease.notes} {editing} onedit={startEditing} type="textarea" error={formErrors.notes} testid="lease-detail-notes" />
-						</Card.Content>
-					</Card.Root>
+					<DetailCard title="Notes" icon={StickyNote} accent="muted" testid="lease-card-notes">
+						<InlineField label="Notes" bind:value={form.notes} display={lease.notes} {editing} type="textarea" error={formErrors.notes} testid="lease-detail-notes" />
+					</DetailCard>
 				</div>
 			</Tabs.Content>
 
