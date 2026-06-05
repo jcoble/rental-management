@@ -124,7 +124,112 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         doc.Should().BeNull();
     }
 
-    private Lease SeedLeaseWithGraph()
+    // ---- State-specific clauses (StateLeaseRules) ----
+
+    [Fact]
+    public void StateLeaseRules_Ohio_HasRealStatutoryFigures()
+    {
+        var rules = StateLeaseRules.For("OH");
+
+        rules.GoverningLawLabel.Should().Be("the State of Ohio");
+        rules.StatuteCitation.Should().Contain("5321");
+        rules.DepositReturnText.Should().Contain("thirty (30) days");
+        rules.EntryNoticeText.Should().Contain("twenty-four (24) hours");
+    }
+
+    [Theory]
+    [InlineData("oh")]
+    [InlineData(" OH ")]
+    [InlineData("Oh")]
+    public void StateLeaseRules_For_NormalizesCaseAndWhitespace(string input)
+    {
+        StateLeaseRules.For(input).GoverningLawLabel.Should().Be("the State of Ohio");
+    }
+
+    [Fact]
+    public void StateLeaseRules_UnknownState_FallsBackToGenericButNamesJurisdiction()
+    {
+        var rules = StateLeaseRules.For("ZZ");
+
+        rules.StateCode.Should().Be("ZZ");
+        rules.GoverningLawLabel.Should().Be("the State of ZZ");
+        rules.StatuteCitation.Should().BeNull();
+        rules.DepositReturnText.Should().Contain("applicable law");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(null)]
+    public void StateLeaseRules_BlankState_FallsBackToGenericWithNoCitation(string? input)
+    {
+        var rules = StateLeaseRules.For(input);
+
+        rules.StatuteCitation.Should().BeNull();
+        rules.GoverningLawLabel.Should().Be("the state where the Premises are located");
+    }
+
+    // ---- Rendered PDF: clauses, disclosures, disclaimer ----
+
+    [Fact]
+    public async Task Generate_OhioPre1978_RendersStateClausesLeadDisclosureAndDisclaimer()
+    {
+        var lease = SeedLeaseWithGraph(state: "OH", yearBuilt: 1925);
+        await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
+
+        var text = await ExtractGeneratedPdfTextAsync(lease.Id);
+
+        // Real governing law instead of "State of XX".
+        text.Should().Contain("State of Ohio");
+        text.Should().NotContain("State of XX");
+        // State-specific deposit + entry figures.
+        text.Should().Contain("thirty (30) days");
+        text.Should().Contain("twenty-four (24) hours");
+        // Federal lead-paint disclosure (pre-1978).
+        text.Should().Contain("Lead-Based Paint");
+        text.Should().Contain("Protect Your Family From Lead");
+        // Visible in-body disclaimer.
+        text.Should().Contain("Required Disclosures");
+        text.Should().Contain("NOT legal advice");
+    }
+
+    [Fact]
+    public async Task Generate_Post1978Property_OmitsLeadPaintDisclosure()
+    {
+        var lease = SeedLeaseWithGraph(state: "OH", yearBuilt: 1995);
+        await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
+
+        var text = await ExtractGeneratedPdfTextAsync(lease.Id);
+
+        text.Should().NotContain("Lead-Based Paint");
+        // Disclaimer is always present regardless of year.
+        text.Should().Contain("Required Disclosures");
+    }
+
+    [Fact]
+    public async Task Generate_UnknownYearBuilt_OmitsLeadPaintDisclosure()
+    {
+        var lease = SeedLeaseWithGraph(state: "OH", yearBuilt: null);
+        await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
+
+        var text = await ExtractGeneratedPdfTextAsync(lease.Id);
+
+        text.Should().NotContain("Lead-Based Paint");
+    }
+
+    /// <summary>Reads the stored lease PDF back and extracts its selectable text via PdfPig.</summary>
+    private async Task<string> ExtractGeneratedPdfTextAsync(int leaseId)
+    {
+        var file = await _sut.GetDocumentAsync(PortfolioId, leaseId);
+        file.Should().NotBeNull();
+
+        using var ms = new MemoryStream();
+        await file!.Value.Stream.CopyToAsync(ms);
+        var text = RentalCommand.Api.Scanning.PdfTextExtractor.TryExtractText(ms.ToArray());
+        text.Should().NotBeNull("the generated lease PDF should contain selectable text");
+        return text!;
+    }
+
+    private Lease SeedLeaseWithGraph(string state = "OH", int? yearBuilt = null)
     {
         var property = new Property
         {
@@ -132,8 +237,9 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             Name = "Maple Court",
             AddressLine1 = "10 Maple Ct",
             City = "Columbus",
-            State = "OH",
+            State = state,
             PostalCode = "43215",
+            YearBuilt = yearBuilt,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
