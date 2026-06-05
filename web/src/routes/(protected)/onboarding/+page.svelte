@@ -757,6 +757,12 @@
 										testid="onboarding-property-address"
 										bind:value={propertyForm.addressLine1}
 										placeholder="123 Main St"
+										onresolved={(a) => {
+											propertyForm.addressLine1 = a.line1;
+											if (a.city) propertyForm.city = a.city;
+											if (a.state) propertyForm.state = a.state;
+											if (a.zip) propertyForm.postalCode = a.zip;
+										}}
 									/>
 									{#if propertyErrors.addressLine1}<p class="mt-1 text-xs text-destructive">{propertyErrors.addressLine1}</p>{/if}
 								</div>

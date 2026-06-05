@@ -481,6 +481,10 @@
 				<AddressAutocomplete
 					value={value}
 					onchange={(v) => { setter(v); clearAutoFill(name); }}
+					onresolved={(a) => {
+						setter([a.line1, a.city, [a.state, a.zip].filter(Boolean).join(' ')].filter(Boolean).join(', '));
+						clearAutoFill(name);
+					}}
 					placeholder={label}
 					testid="apply-{name}-input"
 				/>

@@ -454,7 +454,18 @@
 					<InlineField label="Type" bind:value={propertyForm.type} display={property.type} editing={editingProperty} onedit={startEditingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" />
 					<InlineField label="Owner" bind:value={propertyForm.ownerId} display={property.ownerName ?? 'No owner assigned'} editing={editingProperty} onedit={startEditingProperty} type="select" options={ownerOptions} testid="property-detail-owner" />
 					{#snippet addressControl()}
-						<AddressAutocomplete id="property-detail-address-input" testid="property-detail-address-input" bind:value={propertyForm.addressLine1} placeholder="Address" />
+						<AddressAutocomplete
+							id="property-detail-address-input"
+							testid="property-detail-address-input"
+							bind:value={propertyForm.addressLine1}
+							placeholder="Address"
+							onresolved={(a) => {
+								propertyForm.addressLine1 = a.line1;
+								if (a.city) propertyForm.city = a.city;
+								if (a.state) propertyForm.state = a.state;
+								if (a.zip) propertyForm.postalCode = a.zip;
+							}}
+						/>
 					{/snippet}
 					{@render inlineFieldWrap('property-detail-address', 'Address', `${property.addressLine1}${property.addressLine2 ? `, ${property.addressLine2}` : ''}`, propertyFormErrors.addressLine1, addressControl)}
 					<InlineField label="City" bind:value={propertyForm.city} display={property.city} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.city} testid="property-detail-city" />
