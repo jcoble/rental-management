@@ -10,11 +10,14 @@
 import { fail } from '@sveltejs/kit';
 import type { Actions, PageServerLoad } from './$types';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
+import { env } from '$env/dynamic/public';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	// Already logged in — nothing to expose; layout redirect handles the guard.
 	void locals;
-	return {};
+	return {
+		googleEnabled: Boolean(env.PUBLIC_GOOGLE_CLIENT_ID)
+	};
 };
 
 export const actions: Actions = {
