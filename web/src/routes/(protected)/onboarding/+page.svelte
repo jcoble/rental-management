@@ -94,6 +94,24 @@
 		queryFn: () => leases.list(portfolioId, { take: 50 }),
 	}));
 
+	// Onboarding is for LIVE accounts only. A Sandbox account is pre-seeded demo data — the user
+	// should "Go Live" first (which wipes the demo data), so we bounce them to the dashboard.
+	const sandboxQuery = createQuery(() => ({
+		queryKey: ['sandbox-state', portfolioId],
+		enabled: portfolioId > 0,
+		queryFn: () => portfolios.sandboxState(),
+		staleTime: 60_000,
+	}));
+	let redirectedFromSandbox = $state(false);
+	$effect(() => {
+		if (redirectedFromSandbox) return;
+		if (sandboxQuery.data?.isSandbox === true) {
+			redirectedFromSandbox = true;
+			showError('Setup runs on a live account. Go live first to set up your real portfolio.');
+			goto('/');
+		}
+	});
+
 	const hasExistingOwners = $derived((ownersQuery.data?.length ?? 0) > 0);
 	const hasExistingProperties = $derived((propertiesQuery.data?.length ?? 0) > 0);
 	const hasExistingTenants = $derived((tenantsQuery.data?.length ?? 0) > 0);
@@ -106,6 +124,28 @@
 		property: !!createdProperty || hasExistingProperties,
 		tenants: createdTenants.length > 0 || hasExistingTenants,
 		lease: createdLease || hasExistingLeases,
+	});
+
+	// On first load, jump straight to the first step that still needs the user. Existing
+	// portfolios/owners/properties pre-complete earlier steps, so we don't make the user click
+	// "Skip" through them. Runs once, only after the detection queries have settled, so manual
+	// back/next still work afterward.
+	let autoAdvanced = $state(false);
+	const detectionReady = $derived(
+		portfolioQuery.isSuccess &&
+			ownersQuery.isSuccess &&
+			propertiesQuery.isSuccess &&
+			tenantsQuery.isSuccess &&
+			leasesQuery.isSuccess
+	);
+	$effect(() => {
+		if (autoAdvanced || finished || !detectionReady) return;
+		// Don't reposition while we're bouncing a sandbox user to the dashboard.
+		if (sandboxQuery.data?.isSandbox === true) return;
+		autoAdvanced = true;
+		const firstIncomplete = STEPS.findIndex((s) => !stepDone[s.key]);
+		// All steps already satisfied → land on the last step (lease) rather than past the end.
+		stepIndex = firstIncomplete === -1 ? STEPS.length - 1 : firstIncomplete;
 	});
 
 	// ---------------------------------------------------------------------------
