@@ -258,7 +258,9 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1" />
 </svelte:head>
 
-<div class="flex min-h-screen flex-col bg-muted/30 text-foreground" data-testid="sign-page">
+<!-- Own scroll container: html/body are overflow:hidden globally, so this standalone public
+     page must scroll itself. -->
+<div class="flex h-dvh flex-col overflow-y-auto bg-muted/30 text-foreground" data-testid="sign-page">
 	<!-- Branded header -->
 	<header class="border-b border-border/60 bg-background/90 backdrop-blur">
 		<div class="mx-auto flex h-16 max-w-3xl items-center gap-2 px-4 sm:px-6">
