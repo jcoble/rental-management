@@ -78,6 +78,58 @@ public class ExpenseServiceTests : IDisposable
         fromDb.ReceiptData.Should().Contain("Washer hose");
     }
 
+    [Fact]
+    public async Task CreateAsync_FromScanDraft_PersistsTypedColumnsAndLineItems()
+    {
+        var now = DateTime.UtcNow;
+        var request = new CreateExpenseRequest
+        {
+            Category    = ScheduleECategory.Repairs,
+            Description = "ACME Hardware",
+            Status      = ExpenseStatus.Paid,
+            Amount      = 53.49m,
+            Subtotal    = 49.99m,
+            TaxAmount   = 3.50m,
+            IncurredAt  = now,
+            PaidAt      = now,
+            ReceiptData = """{"receiptNumber":"R-42","lineItems":[{"description":"Washer hose","amount":12.99}]}""",
+            // New typed columns promoted from the scan.
+            PaymentMethod = "Visa",
+            CardLast4     = "4242",
+            DocumentKind  = "Receipt",
+            LineItems =
+            [
+                new CreateExpenseLineItem { Description = "Washer hose", Quantity = 2m, UnitPrice = 6.50m, Amount = 12.99m, LineNumber = 1 },
+                new CreateExpenseLineItem { Description = "Pipe tape",   Quantity = 1m, UnitPrice = 3.00m, Amount = 3.00m,  LineNumber = 2 },
+            ],
+        };
+
+        var created = await _sut.CreateAsync(PortfolioId, request);
+
+        created.Should().NotBeNull();
+        created!.PaymentMethod.Should().Be("Visa");
+        created.CardLast4.Should().Be("4242");
+        created.DocumentKind.Should().Be("Receipt");
+        created.ReceiptData.Should().Contain("R-42");
+
+        // The typed columns + child line items are persisted to the DB (not just on the response).
+        var fromDb = await _db.Expenses.AsNoTracking()
+            .Include(e => e.LineItems)
+            .SingleAsync(e => e.Id == created.Id);
+
+        fromDb.PaymentMethod.Should().Be("Visa");
+        fromDb.CardLast4.Should().Be("4242");
+        fromDb.DocumentKind.Should().Be("Receipt");
+
+        fromDb.LineItems.Should().HaveCount(2);
+        var first = fromDb.LineItems.Single(li => li.LineNumber == 1);
+        first.Description.Should().Be("Washer hose");
+        first.Quantity.Should().Be(2m);
+        first.UnitPrice.Should().Be(6.50m);
+        first.Amount.Should().Be(12.99m);
+        fromDb.LineItems.Single(li => li.LineNumber == 2).Description.Should().Be("Pipe tape");
+    }
+
     private Expense SeedExpense()
     {
         var now = DateTime.UtcNow;
@@ -131,6 +183,9 @@ internal sealed class ExpenseServiceTestDbContext : RentalCommandDbContext
         modelBuilder.Entity<OutboxMessage>().Property(e => e.Payload).HasColumnType("TEXT");
         modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
         modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
+        modelBuilder.Entity<Payment>().Property(e => e.ExtractedData).HasColumnType("TEXT");
+        modelBuilder.Entity<Lease>().Property(e => e.ExtractedData).HasColumnType("TEXT");
+        modelBuilder.Entity<WorkOrder>().Property(e => e.ExtractedData).HasColumnType("TEXT");
         modelBuilder.Entity<Lease>().ToTable("Leases");
     }
 }

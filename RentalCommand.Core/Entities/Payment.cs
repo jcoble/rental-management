@@ -20,6 +20,21 @@ public class Payment
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>Name on the check / of the payer; promoted from a scanned rent check.</summary>
+    public string? PayerName { get; set; }
+
+    /// <summary>Check number; promoted from a scanned rent check.</summary>
+    public string? CheckNumber { get; set; }
+
+    /// <summary>Issuing bank name; promoted from a scanned rent check.</summary>
+    public string? BankName { get; set; }
+
+    /// <summary>
+    /// JSON object (stored as jsonb) holding the full scan extraction superset for payments created
+    /// from a scan draft. Null for manually entered or auto-generated payments.
+    /// </summary>
+    public string? ExtractedData { get; set; }
+
     public Portfolio? Portfolio { get; set; }
     public Lease? Lease { get; set; }
 }

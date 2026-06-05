@@ -154,9 +154,25 @@ public class ExpenseService : IExpenseService
             Subtotal = request.Subtotal,
             TaxAmount = request.TaxAmount,
             ReceiptData = request.ReceiptData,
+            PaymentMethod = request.PaymentMethod,
+            CardLast4 = request.CardLast4,
+            DocumentKind = request.DocumentKind,
             CreatedAt = now,
             UpdatedAt = now,
         };
+
+        // Promote scanned receipt line items to queryable child rows (cascade-deleted with the expense).
+        foreach (var li in request.LineItems)
+        {
+            entity.LineItems.Add(new ExpenseLineItem
+            {
+                Description = li.Description ?? string.Empty,
+                Quantity = li.Quantity,
+                UnitPrice = li.UnitPrice,
+                Amount = li.Amount,
+                LineNumber = li.LineNumber,
+            });
+        }
 
         _db.Expenses.Add(entity);
         await _db.SaveChangesAsync(ct);

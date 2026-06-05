@@ -168,6 +168,9 @@ public class CreateWorkOrderRequest
 
     [MaxLength(120)]
     public string? CreatedBy { get; set; }
+
+    /// <summary>Full scan-extraction superset JSON (jsonb); populated when creating from a scan draft.</summary>
+    public string? ExtractedData { get; set; }
 }
 
 public class UpdateWorkOrderRequest
