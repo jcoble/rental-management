@@ -32,9 +32,11 @@ function safeRedirectPath(path: string | null, fallback: string): string {
 
 /** Where to send a user after login when no explicit redirect is requested. */
 function defaultLandingFor(roles: string[]): string {
-	// Owners/tenants live in the portal; staff land on the dashboard.
+	// Owners/tenants live in the portal; staff get the "Explore in Sandbox vs set up my real
+	// portfolio" choice. The choice screen forwards straight to the dashboard when the account is
+	// already Live, so this is a no-op for graduated accounts.
 	if (roles.includes('Owner') || roles.includes('Tenant')) return '/portal';
-	return '/';
+	return '/get-started';
 }
 
 export const load: PageServerLoad = async ({ locals, url }) => {
