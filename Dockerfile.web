@@ -1,8 +1,8 @@
 # RentalCommand Web - SvelteKit frontend (adapter-node)
 FROM node:24-slim AS build
 
-# pnpm 8.7.5 via corepack matches web/.npmrc + web/pnpm-lock.yaml.
-RUN corepack enable && corepack prepare pnpm@8.7.5 --activate
+# pnpm 10.28.2 via corepack matches the pnpm-10 web/.npmrc + web/pnpm-lock.yaml.
+RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 
 WORKDIR /app
 
