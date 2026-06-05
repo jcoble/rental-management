@@ -4,6 +4,8 @@ using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
 
@@ -47,6 +49,8 @@ public sealed class GoogleAuthService : IGoogleAuthService
     private readonly IJwtTokenService _tokenService;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly GoogleAuthOptions _options;
+    private readonly RentalCommandDbContext _db;
+    private readonly DemoDataSeeder _demoSeeder;
     private readonly ILogger<GoogleAuthService> _logger;
 
     private const string TokenEndpoint = "https://oauth2.googleapis.com/token";
@@ -57,12 +61,16 @@ public sealed class GoogleAuthService : IGoogleAuthService
         IJwtTokenService tokenService,
         IHttpClientFactory httpClientFactory,
         IOptions<GoogleAuthOptions> options,
+        RentalCommandDbContext db,
+        DemoDataSeeder demoSeeder,
         ILogger<GoogleAuthService> logger)
     {
         _userManager = userManager;
         _tokenService = tokenService;
         _httpClientFactory = httpClientFactory;
         _options = options.Value;
+        _db = db;
+        _demoSeeder = demoSeeder;
         _logger = logger;
     }
 
@@ -100,6 +108,10 @@ public sealed class GoogleAuthService : IGoogleAuthService
             {
                 return GoogleAuthResult.Fail($"Failed to find or create user for email {email}.");
             }
+
+            // A brand-new Google user (or one created before this fix) has no portfolio. Provision a
+            // sandbox portfolio BEFORE issuing tokens so the JWT carries a portfolioId and the app works.
+            await EnsurePortfolioAsync(user);
 
             // Step 4: Issue our own tokens.
             var roles = await _userManager.GetRolesAsync(user);
@@ -264,5 +276,47 @@ public sealed class GoogleAuthService : IGoogleAuthService
 
         _logger.LogInformation("Created new user {Email} (id {UserId}) via Google sign-in.", email, user.Id);
         return user;
+    }
+
+    /// <summary>
+    /// Ensures the user has a <see cref="Portfolio"/>. Google sign-in (unlike email/password
+    /// registration) did not provision one, leaving the user with no portfolio so the dashboard could
+    /// not load. Mirrors <c>AuthService.ProvisionSandboxPortfolioAsync</c>. No-op when one already exists.
+    /// </summary>
+    private async Task EnsurePortfolioAsync(ApplicationUser user)
+    {
+        if (user.PortfolioId != null) return;
+        try
+        {
+            var now = DateTime.UtcNow;
+            var portfolio = new Portfolio
+            {
+                Name = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Portfolio" : $"{user.DisplayName}'s Portfolio",
+                ManagementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Company" : user.DisplayName!,
+                Status = PortfolioStatus.Active,
+                Currency = "USD",
+                IsSandbox = true,
+                SandboxSeededAtUtc = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            _db.Portfolios.Add(portfolio);
+            await _db.SaveChangesAsync();
+
+            user.PortfolioId = portfolio.Id;
+            await _userManager.UpdateAsync(user);
+
+            await _demoSeeder.SeedPortfolioAsync(portfolio.Id);
+
+            _logger.LogInformation(
+                "Provisioned sandbox portfolio {PortfolioId} for Google user {Email} (id {UserId}).",
+                portfolio.Id, user.Email, user.Id);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Failed to provision/seed sandbox portfolio for Google user {Email} (id {UserId}); login still succeeds.",
+                user.Email, user.Id);
+        }
     }
 }
