@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ArrowLeft, ArrowRight, BookOpen, ChevronRight, Menu, X } from '@lucide/svelte';
+	import { ArrowLeft, ArrowRight, BookOpen, ChevronRight, List } from '@lucide/svelte';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -7,20 +7,36 @@
 	const article = $derived(data.article);
 	const categories = $derived(data.index.categories ?? []);
 
-	// The category bucket this article belongs to, so the section nav shows only
-	// sibling articles — a quiet "in this section" nav, not the whole index.
+	// "On this page" table of contents (h2/h3 anchors), built server-side.
+	const toc = $derived(data.toc ?? []);
+	const showToc = $derived(toc.length >= 2);
+
+	// The category bucket this article belongs to — for the breadcrumb's category link.
 	const currentCategory = $derived(
 		categories.find((c) => c.articles.some((a) => a.slug === article.slug)) ?? null
 	);
-	const sectionArticles = $derived(currentCategory?.articles ?? []);
-	// First article in the category — the breadcrumb's category link target.
 	const categoryHref = $derived(
-		sectionArticles[0] ? `/docs/${sectionArticles[0].slug}` : '/docs'
+		currentCategory?.articles[0] ? `/docs/${currentCategory.articles[0].slug}` : '/docs'
 	);
-	// Only worth a section nav when there's more than the current article.
-	const showSectionNav = $derived(sectionArticles.length > 1);
 
-	let mobileNavOpen = $state(false);
+	// Scroll-spy: highlight the heading currently in view within the "On this page" rail.
+	let activeId = $state('');
+	$effect(() => {
+		const ids = toc.map((t) => t.id); // re-runs when navigating to another article
+		const headings = ids
+			.map((id) => document.getElementById(id))
+			.filter((el): el is HTMLElement => el != null);
+		if (headings.length === 0) return;
+
+		const observer = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) if (entry.isIntersecting) activeId = entry.target.id;
+			},
+			{ rootMargin: '0px 0px -75% 0px', threshold: 0 }
+		);
+		headings.forEach((h) => observer.observe(h));
+		return () => observer.disconnect();
+	});
 </script>
 
 <svelte:head>
@@ -40,51 +56,7 @@
 		<span class="truncate font-medium text-foreground">{article.title}</span>
 	</nav>
 
-	<div class="mt-6 grid gap-8 {showSectionNav ? 'lg:grid-cols-[15rem_1fr]' : ''}">
-		<!-- Quiet section nav: only this category's articles, not the whole index. -->
-		{#if showSectionNav}
-			<aside class="lg:sticky lg:top-24 lg:self-start">
-				<button
-					type="button"
-					class="mb-3 flex w-full items-center justify-between rounded-lg border border-border bg-card px-4 py-2.5 text-sm font-medium lg:hidden"
-					onclick={() => (mobileNavOpen = !mobileNavOpen)}
-					aria-expanded={mobileNavOpen}
-				>
-					<span class="flex items-center gap-2">
-						{#if mobileNavOpen}<X class="h-4 w-4" />{:else}<Menu class="h-4 w-4" />{/if}
-						In this section
-					</span>
-				</button>
-
-				<nav
-					class="{mobileNavOpen ? 'block' : 'hidden'} lg:block"
-					data-testid="docs-section-nav"
-					aria-label="{currentCategory?.category} articles"
-				>
-					<p class="mb-1.5 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground/70">
-						{currentCategory?.category}
-					</p>
-					<ul class="space-y-0.5">
-						{#each sectionArticles as item (item.slug)}
-							{@const active = item.slug === article.slug}
-							<li>
-								<a
-									href="/docs/{item.slug}"
-									aria-current={active ? 'page' : undefined}
-									class="block rounded-md px-2 py-1.5 text-sm transition-colors {active
-										? 'bg-primary/10 font-medium text-primary'
-										: 'text-muted-foreground hover:bg-secondary hover:text-foreground'}"
-									data-testid="docs-section-link-{item.slug}"
-								>
-									{item.title}
-								</a>
-							</li>
-						{/each}
-					</ul>
-				</nav>
-			</aside>
-		{/if}
-
+	<div class="mt-6 grid gap-10 {showToc ? 'lg:grid-cols-[1fr_14rem]' : ''}">
 		<!-- Article -->
 		<article class="min-w-0" data-testid="docs-article" data-doc-slug={article.slug}>
 			<div class="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-primary">
@@ -134,6 +106,28 @@
 				{/if}
 			</nav>
 		</article>
+
+		<!-- On this page: anchors to the article's own headings (right rail, desktop only). -->
+		{#if showToc}
+			<aside class="hidden lg:block">
+				<div class="sticky top-24">
+					<p class="mb-3 flex items-center gap-2 px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground/70">
+						<List class="h-3.5 w-3.5" /> On this page
+					</p>
+					<nav class="space-y-0.5 border-l border-border/60" data-testid="docs-on-this-page" aria-label="On this page">
+						{#each toc as item (item.id)}
+							<a
+								href="#{item.id}"
+								class={`-ml-px block border-l-2 py-1 text-sm transition-colors ${item.level === 3 ? 'pl-6' : 'pl-3'} ${activeId === item.id ? 'border-primary font-medium text-primary' : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground'}`}
+								data-testid="docs-toc-{item.id}"
+							>
+								{item.text}
+							</a>
+						{/each}
+					</nav>
+				</div>
+			</aside>
+		{/if}
 	</div>
 </div>
 
