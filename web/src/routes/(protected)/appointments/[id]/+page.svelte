@@ -12,9 +12,9 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
-	import * as Card from '$lib/components/ui/card';
+	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Pencil, Save, Trash2, X, CalendarCheck, CheckCircle, XCircle, UserX } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, CalendarCheck, CheckCircle, XCircle, UserX, CalendarClock, Users } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 
 	const queryClient = useQueryClient();
@@ -252,40 +252,41 @@
 			</div>
 		</div>
 
-		<!-- Info card -->
-		<Card.Root data-testid="appointment-detail-card">
-			<Card.Header>
-				<Card.Title class="text-base">Details</Card.Title>
-			</Card.Header>
-			<Card.Content>
-				<div class="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-					<InlineField label="Title" bind:value={form.title} display={appt.title} {editing} onedit={startEditing} error={formErrors.title} testid="appointment-detail-title-field" class="sm:col-span-2 lg:col-span-3" />
-					<InlineField label="Type" bind:value={form.type} display={appt.type} {editing} onedit={startEditing} type="select" options={typeOptions} testid="appointment-detail-type-field" />
-					<InlineField label="Status" bind:value={form.status} display={appt.status} {editing} onedit={startEditing} type="select" options={statusOptions} testid="appointment-detail-status-field" />
-					<InlineField label="Start" bind:value={form.scheduledStart} display={fmtDateTime(appt.scheduledStart)} {editing} onedit={startEditing} type="datetime-local" error={formErrors.scheduledStart} testid="appointment-detail-start" />
-					<InlineField label="End" bind:value={form.scheduledEnd} display={appt.scheduledEnd ? fmtDateTime(appt.scheduledEnd) : ''} {editing} onedit={startEditing} type="datetime-local" error={formErrors.scheduledEnd} testid="appointment-detail-end" />
-					<InlineField label="Property" bind:value={form.propertyId} display={appt.propertyName ? `${appt.propertyName}${appt.unitNumber ? ' · Unit ' + appt.unitNumber : ''}` : ''} {editing} onedit={startEditing} type="select" options={propertyOptions} testid="appointment-detail-property" />
-					<InlineField label="Tenant" bind:value={form.tenantId} display={appt.tenantName ?? ''} {editing} onedit={startEditing} type="select" options={tenantOptions} testid="appointment-detail-tenant" />
-					<InlineField label="Prospect" bind:value={form.prospectName} display={appt.prospectName} {editing} onedit={startEditing} testid="appointment-detail-prospect-name" />
-					<InlineField label="Prospect email" bind:value={form.prospectEmail} display={appt.prospectEmail} {editing} onedit={startEditing} type="email" error={formErrors.prospectEmail} testid="appointment-detail-prospect-email" />
-					<InlineField label="Assigned to" bind:value={form.assignedTo} display={appt.assignedTo} {editing} onedit={startEditing} testid="appointment-detail-assigned" />
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Created</dt>
-						<dd class="mt-1 text-sm">{fmtDate(appt.createdAt)}</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Updated</dt>
-						<dd class="mt-1 text-sm">{fmtDate(appt.updatedAt)}</dd>
-					</div>
-					{#if appt.notes}
-						<div class="sm:col-span-2 lg:col-span-3">
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notes</dt>
-							<dd class="mt-1 whitespace-pre-wrap text-sm">{appt.notes}</dd>
-						</div>
-					{/if}
+		<!-- Grouped detail cards -->
+		<div class="grid gap-6 lg:grid-cols-2">
+			<DetailCard title="What & when" icon={CalendarClock} accent="primary" testid="appointment-detail-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<InlineField label="Title" bind:value={form.title} display={appt.title} {editing} error={formErrors.title} testid="appointment-detail-title-field" class="sm:col-span-2" />
+				<InlineField label="Type" bind:value={form.type} display={appt.type} {editing} type="select" options={typeOptions} testid="appointment-detail-type-field" />
+				<InlineField label="Status" bind:value={form.status} display={appt.status} {editing} type="select" options={statusOptions} testid="appointment-detail-status-field" />
+				<InlineField label="Start" bind:value={form.scheduledStart} display={fmtDateTime(appt.scheduledStart)} {editing} type="datetime-local" error={formErrors.scheduledStart} testid="appointment-detail-start" />
+				<InlineField label="End" bind:value={form.scheduledEnd} display={appt.scheduledEnd ? fmtDateTime(appt.scheduledEnd) : ''} {editing} type="datetime-local" error={formErrors.scheduledEnd} testid="appointment-detail-end" />
+			</DetailCard>
+
+			<DetailCard title="Who" icon={Users} accent="muted" testid="appointment-detail-who" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<InlineField label="Property" bind:value={form.propertyId} display={appt.propertyName ? `${appt.propertyName}${appt.unitNumber ? ' · Unit ' + appt.unitNumber : ''}` : ''} {editing} type="select" options={propertyOptions} testid="appointment-detail-property" />
+				<InlineField label="Tenant" bind:value={form.tenantId} display={appt.tenantName ?? ''} {editing} type="select" options={tenantOptions} testid="appointment-detail-tenant" />
+				<InlineField label="Prospect" bind:value={form.prospectName} display={appt.prospectName} {editing} testid="appointment-detail-prospect-name" />
+				<InlineField label="Prospect email" bind:value={form.prospectEmail} display={appt.prospectEmail} {editing} type="email" error={formErrors.prospectEmail} testid="appointment-detail-prospect-email" />
+				<InlineField label="Assigned to" bind:value={form.assignedTo} display={appt.assignedTo} {editing} testid="appointment-detail-assigned" />
+			</DetailCard>
+
+			<DetailCard title="Record" icon={CalendarCheck} accent="muted" testid="appointment-detail-record" class="lg:col-span-2" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<div>
+					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Created</dt>
+					<dd class="mt-1 text-sm">{fmtDate(appt.createdAt)}</dd>
 				</div>
-			</Card.Content>
-		</Card.Root>
+				<div>
+					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Updated</dt>
+					<dd class="mt-1 text-sm">{fmtDate(appt.updatedAt)}</dd>
+				</div>
+				{#if appt.notes}
+					<div class="sm:col-span-2">
+						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notes</dt>
+						<dd class="mt-1 whitespace-pre-wrap text-sm">{appt.notes}</dd>
+					</div>
+				{/if}
+			</DetailCard>
+		</div>
 
 		<!-- Documents section -->
 		<div class="mt-6" data-testid="appointment-detail-documents">
