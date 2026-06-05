@@ -8,10 +8,10 @@ public class AssistantConfig
 {
     public const string SectionName = "Assistant";
 
-    /// <summary>LLM provider discriminator: "openai" (default) or "anthropic".</summary>
+    /// <summary>LLM provider discriminator: "openai" (default), "anthropic", or "gemini".</summary>
     public string Provider { get; set; } = "openai";
 
-    /// <summary>Model identifier (e.g. "gpt-4o").</summary>
+    /// <summary>Model identifier (e.g. "gpt-4o", "claude-3-5-sonnet-latest", "gemini-2.5-flash").</summary>
     public string ModelId { get; set; } = string.Empty;
 
     /// <summary>Provider API key (resolved from secrets/env in non-dev environments).</summary>

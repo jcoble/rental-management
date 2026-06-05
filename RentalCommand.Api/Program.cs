@@ -69,6 +69,14 @@ if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
         c.Timeout = TimeSpan.FromSeconds(90);
     });
 }
+else if (string.Equals(llmProvider, "gemini", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.ILlmProvider, RentalCommand.Api.Scanning.GeminiLlmProvider>(c =>
+    {
+        c.BaseAddress = new Uri("https://generativelanguage.googleapis.com/");
+        c.Timeout = TimeSpan.FromSeconds(90);
+    });
+}
 else // default: openai
 {
     builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.ILlmProvider, RentalCommand.Api.Scanning.OpenAiLlmProvider>(c =>
