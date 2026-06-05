@@ -13,11 +13,12 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import StarRating from '$lib/components/shared/StarRating.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
-	import { History, Pencil, Save, Trash2, X, MessageSquare, Star, Check } from '@lucide/svelte';
+	import { History, Pencil, Save, Trash2, X, MessageSquare, Star, Check, Wrench, Coins } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import WorkOrderTimeline from '$lib/components/shared/WorkOrderTimeline.svelte';
 
@@ -372,49 +373,45 @@
 			</div>
 		{/if}
 
-		<!-- Info Card -->
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Details</Card.Title>
-			</Card.Header>
-			<Card.Content>
-				<div class="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-					<InlineField label="Title" bind:value={form.title} display={wo.title} {editing} onedit={startEditing} error={formErrors.title} testid="work-order-detail-title-field" class="sm:col-span-2 lg:col-span-3" />
-					<InlineField label="Description" bind:value={form.description} display={wo.description} {editing} onedit={startEditing} type="textarea" error={formErrors.description} testid="work-order-detail-description" class="sm:col-span-2 lg:col-span-3" />
-					<InlineField label="Property" bind:value={form.propertyId} display={wo.propertyName} {editing} onedit={startEditing} type="select" options={propertyOptions} error={formErrors.propertyId} testid="work-order-detail-property-field" />
-					<InlineField label="Priority" bind:value={form.priority} display={wo.priority} {editing} onedit={startEditing} type="select" options={priorityOptions} testid="work-order-detail-priority" />
-					<InlineField label="Category" bind:value={form.category} display={wo.category} {editing} onedit={startEditing} error={formErrors.category} testid="work-order-detail-category" />
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Requested</dt>
-						<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-requested">{formatDate(wo.requestedAt)}</dd>
-					</div>
-					{#if wo.scheduledFor}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Scheduled For</dt>
-							<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-scheduled">{formatDate(wo.scheduledFor)}</dd>
-						</div>
-					{/if}
-					{#if wo.completedAt}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Completed</dt>
-							<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-completed">{formatDate(wo.completedAt)}</dd>
-						</div>
-					{/if}
-					{#if wo.estimatedCost != null}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Estimated Cost</dt>
-							<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-estimated-cost">{formatCurrency(wo.estimatedCost)}</dd>
-						</div>
-					{/if}
-					{#if wo.actualCost != null}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Actual Cost</dt>
-							<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-actual-cost">{formatCurrency(wo.actualCost)}</dd>
-						</div>
-					{/if}
+		<!-- Grouped detail cards -->
+		<DetailCard title="Request" icon={Wrench} accent="primary" testid="work-order-detail-card" contentClass="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+			<InlineField label="Title" bind:value={form.title} display={wo.title} {editing} error={formErrors.title} testid="work-order-detail-title-field" class="sm:col-span-2 lg:col-span-3" />
+			<InlineField label="Description" bind:value={form.description} display={wo.description} {editing} type="textarea" error={formErrors.description} testid="work-order-detail-description" class="sm:col-span-2 lg:col-span-3" />
+			<InlineField label="Property" bind:value={form.propertyId} display={wo.propertyName} {editing} type="select" options={propertyOptions} error={formErrors.propertyId} testid="work-order-detail-property-field" />
+			<InlineField label="Priority" bind:value={form.priority} display={wo.priority} {editing} type="select" options={priorityOptions} testid="work-order-detail-priority" />
+			<InlineField label="Category" bind:value={form.category} display={wo.category} {editing} error={formErrors.category} testid="work-order-detail-category" />
+		</DetailCard>
+
+		<DetailCard title="Costs & timing" icon={Coins} accent="muted" testid="work-order-detail-costs" class="mt-6" contentClass="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+			<div>
+				<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Requested</dt>
+				<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-requested">{formatDate(wo.requestedAt)}</dd>
+			</div>
+			{#if wo.scheduledFor}
+				<div>
+					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Scheduled For</dt>
+					<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-scheduled">{formatDate(wo.scheduledFor)}</dd>
 				</div>
-			</Card.Content>
-		</Card.Root>
+			{/if}
+			{#if wo.completedAt}
+				<div>
+					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Completed</dt>
+					<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-completed">{formatDate(wo.completedAt)}</dd>
+				</div>
+			{/if}
+			{#if wo.estimatedCost != null}
+				<div>
+					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Estimated Cost</dt>
+					<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-estimated-cost">{formatCurrency(wo.estimatedCost)}</dd>
+				</div>
+			{/if}
+			{#if wo.actualCost != null}
+				<div>
+					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Actual Cost</dt>
+					<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-actual-cost">{formatCurrency(wo.actualCost)}</dd>
+				</div>
+			{/if}
+		</DetailCard>
 
 		<!-- Status history timeline -->
 		<Card.Root class="mt-6" data-testid="work-order-detail-timeline">

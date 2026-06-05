@@ -14,9 +14,9 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
-	import * as Card from '$lib/components/ui/card';
+	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X } from '@lucide/svelte';
+	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 
 	const queryClient = useQueryClient();
@@ -236,47 +236,45 @@
 			</div>
 		</div>
 
-		<!-- Info card -->
-		<Card.Root class="mb-6" data-testid="tenant-detail-card">
-			<Card.Header>
-				<Card.Title>Tenant Details</Card.Title>
-			</Card.Header>
-			<Card.Content>
-				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-					<InlineField label="First Name" bind:value={form.firstName} display={tenant.firstName} {editing} onedit={startEditing} error={formErrors.firstName} testid="tenant-detail-first-name" />
-					<InlineField label="Last Name" bind:value={form.lastName} display={tenant.lastName} {editing} onedit={startEditing} error={formErrors.lastName} testid="tenant-detail-last-name" />
-					<InlineField label="Email" bind:value={form.email} display={tenant.email} {editing} onedit={startEditing} type="email" error={formErrors.email} testid="tenant-detail-email" />
-					<InlineField label="Phone" bind:value={form.phone} display={tenant.phone} {editing} onedit={startEditing} type="tel" error={formErrors.phone} testid="tenant-detail-phone" />
-					<InlineField label="Emergency Contact" bind:value={form.emergencyContact} display={tenant.emergencyContact} {editing} onedit={startEditing} error={formErrors.emergencyContact} testid="tenant-detail-emergency" />
-					{#if tenant.dateOfBirth}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Date of Birth</dt>
-							<dd class="mt-1 text-sm text-foreground">
-								{new Date(tenant.dateOfBirth).toLocaleDateString()}
-							</dd>
-						</div>
-					{/if}
+		<!-- Grouped detail cards -->
+		<div class="mb-6 grid gap-6 lg:grid-cols-2">
+			<DetailCard title="Contact" icon={Contact} accent="primary" testid="tenant-detail-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<InlineField label="First Name" bind:value={form.firstName} display={tenant.firstName} {editing} error={formErrors.firstName} testid="tenant-detail-first-name" />
+				<InlineField label="Last Name" bind:value={form.lastName} display={tenant.lastName} {editing} error={formErrors.lastName} testid="tenant-detail-last-name" />
+				<InlineField label="Email" bind:value={form.email} display={tenant.email} {editing} type="email" error={formErrors.email} testid="tenant-detail-email" />
+				<InlineField label="Phone" bind:value={form.phone} display={tenant.phone} {editing} type="tel" error={formErrors.phone} testid="tenant-detail-phone" />
+				<InlineField label="Emergency Contact" bind:value={form.emergencyContact} display={tenant.emergencyContact} {editing} error={formErrors.emergencyContact} testid="tenant-detail-emergency" class="sm:col-span-2" />
+			</DetailCard>
+
+			<DetailCard title="Record" icon={FileClock} accent="muted" testid="tenant-detail-record" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				{#if tenant.dateOfBirth}
 					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Active Leases</dt>
-						<dd class="mt-1 text-sm font-semibold tabular-nums text-foreground">
-							{tenant.activeLeaseCount ?? 0}
-						</dd>
-					</div>
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Created</dt>
+						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Date of Birth</dt>
 						<dd class="mt-1 text-sm text-foreground">
-							{new Date(tenant.createdAt).toLocaleDateString()}
+							{new Date(tenant.dateOfBirth).toLocaleDateString()}
 						</dd>
 					</div>
-					{#if tenant.notes}
-						<div class="sm:col-span-2 lg:col-span-3">
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notes</dt>
-							<dd class="mt-1 text-sm text-foreground">{tenant.notes}</dd>
-						</div>
-					{/if}
+				{/if}
+				<div>
+					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Active Leases</dt>
+					<dd class="mt-1 text-sm font-semibold tabular-nums text-foreground">
+						{tenant.activeLeaseCount ?? 0}
+					</dd>
 				</div>
-			</Card.Content>
-		</Card.Root>
+				<div>
+					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Created</dt>
+					<dd class="mt-1 text-sm text-foreground">
+						{new Date(tenant.createdAt).toLocaleDateString()}
+					</dd>
+				</div>
+				{#if tenant.notes}
+					<div class="sm:col-span-2">
+						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notes</dt>
+						<dd class="mt-1 text-sm text-foreground">{tenant.notes}</dd>
+					</div>
+				{/if}
+			</DetailCard>
+		</div>
 
 		<!-- Leases section -->
 		<div data-testid="tenant-detail-leases">

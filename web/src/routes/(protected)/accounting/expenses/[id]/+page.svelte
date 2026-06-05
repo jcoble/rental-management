@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { ArrowLeft, Pencil, Save, Trash2, X } from '@lucide/svelte';
+	import { ArrowLeft, Pencil, Save, Trash2, X, ReceiptText, Tags, FileText } from '@lucide/svelte';
 	import { expenses } from '$lib/api/endpoints/expenses';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { vendors } from '$lib/api/endpoints/vendors';
@@ -10,8 +10,8 @@
 	import { expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
-	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 
 	const queryClient = useQueryClient();
@@ -134,14 +134,12 @@
 			/>
 			{#if opts.error}<p class="mt-1 text-xs text-destructive" data-testid={`${opts.testid}-error`}>{opts.error}</p>{/if}
 		{:else}
-			<button
-				type="button"
-				class="min-h-10 w-full rounded-md border border-transparent py-2 text-left text-sm font-medium text-foreground transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+			<p
+				class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground"
 				data-testid={`${opts.testid}-value`}
-				onclick={startEditing}
 			>
 				{opts.display === '' ? '-' : opts.display}
-			</button>
+			</p>
 		{/if}
 	</div>
 {/snippet}
@@ -171,45 +169,41 @@
 	{:else if !expense}
 		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Expense not found.</div>
 	{:else}
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Expense Details</Card.Title>
-				<Card.Description>Schedule E category, vendor/property references, and receipt metadata.</Card.Description>
-			</Card.Header>
-			<Card.Content>
-				<div class="grid gap-4 md:grid-cols-3">
-					<InlineField label="Description" bind:value={form.description} display={expense.description} {editing} onedit={startEditing} error={formErrors.description} testid="expense-detail-description" class="md:col-span-2" />
-					<InlineField label="Amount" bind:value={form.amount} display={`$${expense.amount}`} {editing} onedit={startEditing} error={formErrors.amount} testid="expense-detail-amount" />
-					{@render dateField({ label: 'Incurred date', value: form.incurredAt, setValue: (v) => (form.incurredAt = v), display: new Date(expense.incurredAt).toLocaleDateString(), error: formErrors.incurredAt, testid: 'expense-detail-incurred' })}
-					{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: expense.dueDate ? new Date(expense.dueDate).toLocaleDateString() : '', testid: 'expense-detail-due-date' })}
-					{@render dateField({ label: 'Paid date', value: form.paidAt, setValue: (v) => (form.paidAt = v), display: expense.paidAt ? new Date(expense.paidAt).toLocaleDateString() : '', testid: 'expense-detail-paid-date' })}
-					<InlineField label="Category" bind:value={form.category} display={expense.category} {editing} onedit={startEditing} type="select" options={categoryOptions} testid="expense-detail-category" />
-					<InlineField label="Status" bind:value={form.status} display={expense.status} {editing} onedit={startEditing} type="select" options={statusOptions} testid="expense-detail-status" />
-					<InlineField label="Property" bind:value={form.propertyId} display={expense.propertyName ?? 'General'} {editing} onedit={startEditing} type="select" options={propertyOptions} testid="expense-detail-property" />
-					<InlineField label="Vendor" bind:value={form.vendorId} display={expense.vendorName ?? 'No vendor'} {editing} onedit={startEditing} type="select" options={vendorOptions} testid="expense-detail-vendor" />
-					<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal} {editing} onedit={startEditing} testid="expense-detail-subtotal" />
-					<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount} {editing} onedit={startEditing} testid="expense-detail-tax" />
-					<div data-testid="expense-detail-billable-field">
-						<label class="mb-1 block text-xs font-medium text-muted-foreground" for="expense-detail-billable-input">Billable to owner</label>
-						{#if editing}
-							<label class="flex h-10 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm">
-								<input id="expense-detail-billable-input" data-testid="expense-detail-billable-input" type="checkbox" bind:checked={form.billableToOwner} />
-								<span>Billable</span>
-							</label>
-						{:else}
-							<button
-								type="button"
-								class="min-h-10 w-full rounded-md border border-transparent py-2 text-left text-sm font-medium transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-								onclick={startEditing}
-							>
-								{expense.billableToOwner ? 'Yes' : 'No'}
-							</button>
-						{/if}
-					</div>
-					<InlineField label="Notes" bind:value={form.notes} display={expense.notes} {editing} onedit={startEditing} type="textarea" testid="expense-detail-notes" class="md:col-span-3" />
-					<InlineField label="Receipt details JSON" bind:value={form.receiptData} display={expense.receiptData} {editing} onedit={startEditing} type="textarea" testid="expense-detail-receipt-data" class="md:col-span-3" />
+		<div class="grid gap-6 lg:grid-cols-2">
+			<DetailCard title="Expense" icon={ReceiptText} accent="primary" testid="expense-card-main" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<InlineField label="Description" bind:value={form.description} display={expense.description} {editing} error={formErrors.description} testid="expense-detail-description" class="sm:col-span-2" />
+				<InlineField label="Amount" bind:value={form.amount} display={`$${expense.amount}`} {editing} error={formErrors.amount} testid="expense-detail-amount" />
+				<InlineField label="Status" bind:value={form.status} display={expense.status} {editing} type="select" options={statusOptions} testid="expense-detail-status" />
+				{@render dateField({ label: 'Incurred date', value: form.incurredAt, setValue: (v) => (form.incurredAt = v), display: new Date(expense.incurredAt).toLocaleDateString(), error: formErrors.incurredAt, testid: 'expense-detail-incurred' })}
+				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: expense.dueDate ? new Date(expense.dueDate).toLocaleDateString() : '', testid: 'expense-detail-due-date' })}
+				{@render dateField({ label: 'Paid date', value: form.paidAt, setValue: (v) => (form.paidAt = v), display: expense.paidAt ? new Date(expense.paidAt).toLocaleDateString() : '', testid: 'expense-detail-paid-date' })}
+			</DetailCard>
+
+			<DetailCard title="Categorization & references" icon={Tags} accent="muted" testid="expense-card-references" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<InlineField label="Category" bind:value={form.category} display={expense.category} {editing} type="select" options={categoryOptions} testid="expense-detail-category" />
+				<InlineField label="Property" bind:value={form.propertyId} display={expense.propertyName ?? 'General'} {editing} type="select" options={propertyOptions} testid="expense-detail-property" />
+				<InlineField label="Vendor" bind:value={form.vendorId} display={expense.vendorName ?? 'No vendor'} {editing} type="select" options={vendorOptions} testid="expense-detail-vendor" />
+				<div data-testid="expense-detail-billable-field">
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="expense-detail-billable-input">Billable to owner</label>
+					{#if editing}
+						<label class="flex h-10 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm">
+							<input id="expense-detail-billable-input" data-testid="expense-detail-billable-input" type="checkbox" bind:checked={form.billableToOwner} />
+							<span>Billable</span>
+						</label>
+					{:else}
+						<p class="min-h-10 rounded-md py-2 text-sm font-medium" data-testid="expense-detail-billable-value">
+							{expense.billableToOwner ? 'Yes' : 'No'}
+						</p>
+					{/if}
 				</div>
-			</Card.Content>
-		</Card.Root>
+			</DetailCard>
+
+			<DetailCard title="Receipt details" icon={FileText} accent="muted" testid="expense-card-receipt" class="lg:col-span-2" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal} {editing} testid="expense-detail-subtotal" />
+				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount} {editing} testid="expense-detail-tax" />
+				<InlineField label="Notes" bind:value={form.notes} display={expense.notes} {editing} type="textarea" testid="expense-detail-notes" class="sm:col-span-2" />
+				<InlineField label="Receipt details JSON" bind:value={form.receiptData} display={expense.receiptData} {editing} type="textarea" testid="expense-detail-receipt-data" class="sm:col-span-2" />
+			</DetailCard>
+		</div>
 	{/if}
 </div>

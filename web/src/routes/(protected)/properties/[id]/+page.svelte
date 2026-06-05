@@ -15,13 +15,14 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { AlertCircle, Building2, Pencil, Plus, Save, Trash2, X } from '@lucide/svelte';
+	import { AlertCircle, Building2, Pencil, Plus, Save, Trash2, X, MapPin, Info } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -350,16 +351,35 @@
 				<p class="mt-1 text-xs text-destructive" data-testid={`${testid}-error`}>{error}</p>
 			{/if}
 		{:else}
-			<button
-				type="button"
-				class="min-h-10 w-full rounded-md border border-transparent py-2 text-left text-sm font-medium text-foreground transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+			<p
+				class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground"
 				data-testid={`${testid}-value`}
-				onclick={startEditingProperty}
 			>
 				{display === '' ? '-' : display}
-			</button>
+			</p>
 		{/if}
 	</div>
+{/snippet}
+
+<!-- Editing controls for the Address card (hoisted to top level so they are not
+     mistaken for slot props when referenced inside <DetailCard>). -->
+{#snippet addressControl()}
+	<AddressAutocomplete
+		id="property-detail-address-input"
+		testid="property-detail-address-input"
+		bind:value={propertyForm.addressLine1}
+		placeholder="Address"
+		onresolved={(a) => {
+			propertyForm.addressLine1 = a.line1;
+			if (a.city) propertyForm.city = a.city;
+			if (a.state) propertyForm.state = a.state;
+			if (a.zip) propertyForm.postalCode = a.zip;
+		}}
+	/>
+{/snippet}
+
+{#snippet stateControl()}
+	<StateSelect id="property-detail-state-input" testid="property-detail-state-input" bind:value={propertyForm.state} placeholder="State" />
 {/snippet}
 
 <svelte:head>
@@ -443,64 +463,50 @@
 			</div>
 		</div>
 
-		<!-- Info card -->
-		<Card.Root class="mb-6" data-testid="property-detail-card">
-			<Card.Header>
-				<Card.Title>Property Details</Card.Title>
-			</Card.Header>
-			<Card.Content>
-				<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-					<InlineField label="Name" bind:value={propertyForm.name} display={property.name} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.name} testid="property-detail-name-field" />
-					<InlineField label="Type" bind:value={propertyForm.type} display={property.type} editing={editingProperty} onedit={startEditingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" />
-					<InlineField label="Owner" bind:value={propertyForm.ownerId} display={property.ownerName ?? 'No owner assigned'} editing={editingProperty} onedit={startEditingProperty} type="select" options={ownerOptions} testid="property-detail-owner" />
-					{#snippet addressControl()}
-						<AddressAutocomplete
-							id="property-detail-address-input"
-							testid="property-detail-address-input"
-							bind:value={propertyForm.addressLine1}
-							placeholder="Address"
-							onresolved={(a) => {
-								propertyForm.addressLine1 = a.line1;
-								if (a.city) propertyForm.city = a.city;
-								if (a.state) propertyForm.state = a.state;
-								if (a.zip) propertyForm.postalCode = a.zip;
-							}}
-						/>
-					{/snippet}
+		<!-- Grouped detail cards -->
+		<div class="mb-6 grid gap-6 lg:grid-cols-2">
+			<DetailCard title="Identity" icon={Building2} accent="primary" testid="property-detail-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<InlineField label="Name" bind:value={propertyForm.name} display={property.name} editing={editingProperty} error={propertyFormErrors.name} testid="property-detail-name-field" />
+				<InlineField label="Type" bind:value={propertyForm.type} display={property.type} editing={editingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" />
+				<InlineField label="Owner" bind:value={propertyForm.ownerId} display={property.ownerName ?? 'No owner assigned'} editing={editingProperty} type="select" options={ownerOptions} testid="property-detail-owner" class="sm:col-span-2" />
+			</DetailCard>
+
+			<DetailCard title="Address" icon={MapPin} accent="muted" testid="property-detail-address-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<div class="sm:col-span-2">
 					{@render inlineFieldWrap('property-detail-address', 'Address', `${property.addressLine1}${property.addressLine2 ? `, ${property.addressLine2}` : ''}`, propertyFormErrors.addressLine1, addressControl)}
-					<InlineField label="City" bind:value={propertyForm.city} display={property.city} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.city} testid="property-detail-city" />
-					{#snippet stateControl()}
-						<StateSelect id="property-detail-state-input" testid="property-detail-state-input" bind:value={propertyForm.state} placeholder="State" />
-					{/snippet}
-					{@render inlineFieldWrap('property-detail-state', 'State', property.state ?? '', propertyFormErrors.state, stateControl)}
-					<InlineField label="ZIP" bind:value={propertyForm.postalCode} display={property.postalCode} editing={editingProperty} onedit={startEditingProperty} error={propertyFormErrors.postalCode} testid="property-detail-zip" />
-					{#if !editingProperty && property.yearBuilt}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Year Built</dt>
-							<dd class="mt-1 text-sm text-foreground">{property.yearBuilt}</dd>
-						</div>
-					{/if}
-					{#if !editingProperty && property.managementFeePercent != null}
-						<div>
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Management Fee</dt>
-							<dd class="mt-1 text-sm text-foreground">{property.managementFeePercent}%</dd>
-						</div>
-					{/if}
-					<div>
-						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Units</dt>
-						<dd class="mt-1 text-sm font-semibold tabular-nums text-foreground">
-							{property.unitCount ?? 0} total · {property.occupiedUnits ?? 0} occupied
-						</dd>
-					</div>
-					{#if !editingProperty && property.notes}
-						<div class="sm:col-span-2 lg:col-span-3">
-							<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notes</dt>
-							<dd class="mt-1 text-sm text-foreground">{property.notes}</dd>
-						</div>
-					{/if}
 				</div>
-			</Card.Content>
-		</Card.Root>
+				<InlineField label="City" bind:value={propertyForm.city} display={property.city} editing={editingProperty} error={propertyFormErrors.city} testid="property-detail-city" />
+				{@render inlineFieldWrap('property-detail-state', 'State', property.state ?? '', propertyFormErrors.state, stateControl)}
+				<InlineField label="ZIP" bind:value={propertyForm.postalCode} display={property.postalCode} editing={editingProperty} error={propertyFormErrors.postalCode} testid="property-detail-zip" />
+			</DetailCard>
+
+			<DetailCard title="Details" icon={Info} accent="muted" testid="property-detail-meta-card" class="lg:col-span-2" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+				{#if !editingProperty && property.yearBuilt}
+					<div>
+						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Year Built</dt>
+						<dd class="mt-1 text-sm text-foreground">{property.yearBuilt}</dd>
+					</div>
+				{/if}
+				{#if !editingProperty && property.managementFeePercent != null}
+					<div>
+						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Management Fee</dt>
+						<dd class="mt-1 text-sm text-foreground">{property.managementFeePercent}%</dd>
+					</div>
+				{/if}
+				<div>
+					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Units</dt>
+					<dd class="mt-1 text-sm font-semibold tabular-nums text-foreground">
+						{property.unitCount ?? 0} total · {property.occupiedUnits ?? 0} occupied
+					</dd>
+				</div>
+				{#if !editingProperty && property.notes}
+					<div class="sm:col-span-2 lg:col-span-3">
+						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Notes</dt>
+						<dd class="mt-1 text-sm text-foreground">{property.notes}</dd>
+					</div>
+				{/if}
+			</DetailCard>
+		</div>
 
 		<!-- Units section -->
 		<div class="mb-6" data-testid="property-detail-units">

@@ -17,7 +17,8 @@
 		error = '',
 		testid,
 		class: className = '',
-		onedit,
+		editTrigger = 'none',
+		oneditrequest,
 	}: {
 		label: string;
 		value?: string;
@@ -29,7 +30,21 @@
 		error?: string;
 		testid: string;
 		class?: string;
-		onedit?: () => void;
+		/**
+		 * How a display-mode value lets the user start editing.
+		 *  - 'none'    (default, SAFE): the value is a calm, non-interactive row. The
+		 *              only way into edit mode is the page's explicit Edit button.
+		 *              A non-technical landlord can't flip the form by a stray click.
+		 *  - 'confirm': the value is clickable, but clicking asks "Edit this record?"
+		 *              via `oneditrequest` (the page opens a ConfirmDialog) — never
+		 *              silently enters edit mode.
+		 * The old behavior (a stray value-click silently flipping the whole form into
+		 * edit mode) is intentionally gone — the primary user is a non-technical
+		 * landlord who must not corrupt data by accident.
+		 */
+		editTrigger?: 'none' | 'confirm';
+		/** Called when the user clicks the value with editTrigger='confirm'. */
+		oneditrequest?: () => void;
 	} = $props();
 
 	const fieldId = $derived(`${testid}-input`);
@@ -76,17 +91,17 @@
 			<p class="mt-1 text-xs text-destructive" data-testid={`${testid}-error`}>{error}</p>
 		{/if}
 	{:else}
-		{#if onedit}
+		{#if editTrigger === 'confirm' && oneditrequest}
 			<button
 				type="button"
 				class="min-h-10 w-full rounded-md border border-transparent py-2 text-left text-sm font-medium text-foreground transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
 				data-testid={`${testid}-value`}
-				onclick={onedit}
+				onclick={oneditrequest}
 			>
 				{displayText}
 			</button>
 		{:else}
-			<p class="min-h-10 rounded-md border border-transparent py-2 text-sm font-medium text-foreground" data-testid={`${testid}-value`}>
+			<p class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground" data-testid={`${testid}-value`}>
 				{displayText}
 			</p>
 		{/if}

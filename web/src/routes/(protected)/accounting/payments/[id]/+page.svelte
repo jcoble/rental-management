@@ -2,15 +2,15 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { ArrowLeft, Pencil, Save, Trash2, X } from '@lucide/svelte';
+	import { ArrowLeft, Pencil, Save, Trash2, X, Receipt, CircleCheck } from '@lucide/svelte';
 	import { payments } from '$lib/api/endpoints/payments';
 	import { leases } from '$lib/api/endpoints/leases';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { paymentSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
-	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 
 	const queryClient = useQueryClient();
@@ -121,14 +121,12 @@
 			/>
 			{#if opts.error}<p class="mt-1 text-xs text-destructive" data-testid={`${opts.testid}-error`}>{opts.error}</p>{/if}
 		{:else}
-			<button
-				type="button"
-				class="min-h-10 w-full rounded-md border border-transparent py-2 text-left text-sm font-medium text-foreground transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+			<p
+				class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground"
 				data-testid={`${opts.testid}-value`}
-				onclick={startEditing}
 			>
 				{opts.display === '' ? '-' : opts.display}
-			</button>
+			</p>
 		{/if}
 	</div>
 {/snippet}
@@ -158,24 +156,21 @@
 	{:else if !payment}
 		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Payment not found.</div>
 	{:else}
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Payment Details</Card.Title>
-				<Card.Description>Lease charge, due date, status, and payment tracking.</Card.Description>
-			</Card.Header>
-			<Card.Content>
-				<div class="grid gap-4 md:grid-cols-3">
-					<InlineField label="Lease" bind:value={form.leaseId} display={payment.leaseNumber} {editing} onedit={startEditing} type="select" options={leaseOptions} error={formErrors.leaseId} testid="payment-detail-lease" />
-					<InlineField label="Amount" bind:value={form.amount} display={`$${payment.amount}`} {editing} onedit={startEditing} error={formErrors.amount} testid="payment-detail-amount" />
-					{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: new Date(payment.dueDate).toLocaleDateString(), error: formErrors.dueDate, testid: 'payment-detail-due-date' })}
-					<InlineField label="Payment type" bind:value={form.paymentType} display={payment.paymentType} {editing} onedit={startEditing} type="select" options={typeOptions} testid="payment-detail-type" />
-					<InlineField label="Status" bind:value={form.status} display={payment.status} {editing} onedit={startEditing} type="select" options={statusOptions} testid="payment-detail-status" />
-					{@render dateField({ label: 'Paid date', value: form.paidDate, setValue: (v) => (form.paidDate = v), display: payment.paidDate ? new Date(payment.paidDate).toLocaleDateString() : '', testid: 'payment-detail-paid-date' })}
-					<InlineField label="Method" bind:value={form.method} display={payment.method} {editing} onedit={startEditing} testid="payment-detail-method" />
-					<InlineField label="Reference" bind:value={form.externalReference} display={payment.externalReference} {editing} onedit={startEditing} testid="payment-detail-reference" />
-					<InlineField label="Notes" bind:value={form.notes} display={payment.notes} {editing} onedit={startEditing} type="textarea" testid="payment-detail-notes" class="md:col-span-3" />
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<div class="grid gap-6 lg:grid-cols-2">
+			<DetailCard title="Charge" icon={Receipt} accent="primary" testid="payment-card-charge" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<InlineField label="Lease" bind:value={form.leaseId} display={payment.leaseNumber} {editing} type="select" options={leaseOptions} error={formErrors.leaseId} testid="payment-detail-lease" class="sm:col-span-2" />
+				<InlineField label="Amount" bind:value={form.amount} display={`$${payment.amount}`} {editing} error={formErrors.amount} testid="payment-detail-amount" />
+				<InlineField label="Payment type" bind:value={form.paymentType} display={payment.paymentType} {editing} type="select" options={typeOptions} testid="payment-detail-type" />
+				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: new Date(payment.dueDate).toLocaleDateString(), error: formErrors.dueDate, testid: 'payment-detail-due-date' })}
+			</DetailCard>
+
+			<DetailCard title="Payment tracking" icon={CircleCheck} accent="success" testid="payment-card-tracking" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<InlineField label="Status" bind:value={form.status} display={payment.status} {editing} type="select" options={statusOptions} testid="payment-detail-status" />
+				{@render dateField({ label: 'Paid date', value: form.paidDate, setValue: (v) => (form.paidDate = v), display: payment.paidDate ? new Date(payment.paidDate).toLocaleDateString() : '', testid: 'payment-detail-paid-date' })}
+				<InlineField label="Method" bind:value={form.method} display={payment.method} {editing} testid="payment-detail-method" />
+				<InlineField label="Reference" bind:value={form.externalReference} display={payment.externalReference} {editing} testid="payment-detail-reference" />
+				<InlineField label="Notes" bind:value={form.notes} display={payment.notes} {editing} type="textarea" testid="payment-detail-notes" class="sm:col-span-2" />
+			</DetailCard>
+		</div>
 	{/if}
 </div>
