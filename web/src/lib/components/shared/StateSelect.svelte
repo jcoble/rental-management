@@ -19,6 +19,7 @@
 <script lang="ts">
 	import * as Combobox from '$lib/components/ui/combobox';
 	import { US_STATES, US_TERRITORIES, type UsState } from '$lib/data/us-states';
+	import { resolveStateCode } from './resolve-state';
 
 	let {
 		value = $bindable(''),
@@ -51,6 +52,30 @@
 	// user types we read it here to filter the list ourselves.
 	let inputValue = $state('');
 
+	// Last text the user actually typed while the dropdown was open. We snapshot it
+	// because on close the wrapper overwrites `inputValue` with the selected item's
+	// label (empty when nothing was picked) BEFORE our onOpenChange handler runs —
+	// so by then the typed text is gone. We resolve from this snapshot instead.
+	let typedWhileOpen = $state('');
+	let isOpen = $state(false);
+	$effect(() => {
+		if (isOpen) typedWhileOpen = inputValue;
+	});
+
+	// Escape means "cancel", not "commit": when the user hits Escape we skip resolving
+	// the typed text on the close that follows, leaving the prior value untouched.
+	let cancelNextClose = false;
+	function handleKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') cancelNextClose = true;
+	}
+
+	// Whether the user explicitly picked an item (click / Enter) during this open
+	// session. If so we must NOT re-resolve the typed text on close, because the
+	// search box can still hold text that resolves to a *different* state than the
+	// one they clicked (e.g. typed "kansas" — which substring-matches Arkansas too —
+	// then clicked Arkansas). The explicit pick always wins.
+	let pickedThisSession = false;
+
 	const filtered = $derived(
 		inputValue.trim() === ''
 			? items
@@ -59,8 +84,40 @@
 
 	function handleValueChange(next: string | undefined) {
 		const code = (next ?? '').toUpperCase();
+		pickedThisSession = true;
 		value = code;
 		onchange?.(code);
+	}
+
+	// On close (Tab / blur / outside-click) the user may have typed a prefix without
+	// explicitly picking an item. Resolve that typed text into a code and commit it —
+	// and never blank an already-set value just because the typed text was unmatched.
+	// Escape is the exception: it cancels, leaving the prior value as-is.
+	function handleOpenChange(open: boolean) {
+		isOpen = open;
+		if (open) {
+			// Fresh open session: nothing picked yet.
+			pickedThisSession = false;
+			return;
+		}
+
+		// Escape cancels, or the user already picked an item explicitly — either way,
+		// don't re-resolve the typed text; just reflect the committed value's label.
+		if (cancelNextClose || pickedThisSession) {
+			cancelNextClose = false;
+			typedWhileOpen = '';
+			inputValue = items.find((i) => i.value === value)?.label ?? '';
+			return;
+		}
+
+		const resolved = resolveStateCode({ typed: typedWhileOpen, items, currentValue: value });
+		if (resolved !== value) {
+			value = resolved;
+			onchange?.(resolved);
+		}
+		// Show the committed value's label in the now-closed input (empty if cleared).
+		inputValue = items.find((i) => i.value === resolved)?.label ?? '';
+		typedWhileOpen = '';
 	}
 </script>
 
@@ -70,9 +127,16 @@
 	bind:value
 	onValueChange={handleValueChange}
 	bind:inputValue
+	onOpenChange={handleOpenChange}
 	{disabled}
 >
-	<Combobox.Input {placeholder} {id} data-testid={testid} aria-label={placeholder} />
+	<Combobox.Input
+		{placeholder}
+		{id}
+		data-testid={testid}
+		aria-label={placeholder}
+		onkeydown={handleKeydown}
+	/>
 	<Combobox.Content>
 		{#each filtered as item (item.value)}
 			<Combobox.Item value={item.value} label={item.label} />
