@@ -26,7 +26,7 @@
 services:
   # ── Reverse proxy / TLS terminator (Let's Encrypt ACME) ─────────────────────
   traefik:
-    image: traefik:v3.3
+    image: traefik:v3
     environment:
       - DOCKER_API_VERSION=1.44
     container_name: rentalcommand-traefik
@@ -274,6 +274,8 @@ services:
       # ORIGIN must match the public scheme+host so SvelteKit accepts POST/form actions
       # and so the Google OAuth redirect URI ({origin}/auth/google/callback) is correct.
       - ORIGIN=https://${DOMAIN}
+      # Server-side (SSR/load/auth) reaches the API container internally on the docker network.
+      - API_URL=http://api:8080
     depends_on:
       - api
     networks:
