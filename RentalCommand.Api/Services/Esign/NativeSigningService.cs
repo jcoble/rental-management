@@ -353,6 +353,7 @@ public sealed class NativeSigningService : INativeSigningService
             PropertyAddress = propertyAddress,
             UnitNumber = lease.Unit?.UnitNumber,
             State = property?.State ?? string.Empty,
+            YearBuilt = property?.YearBuilt,
         };
 
         var signers = sigRequest.Signers

@@ -356,6 +356,7 @@ public class LeaseService : ILeaseService
             PropertyAddress = propertyAddress,
             UnitNumber = lease.Unit?.UnitNumber,
             State = property?.State ?? string.Empty,
+            YearBuilt = property?.YearBuilt,
         };
 
         var pdfBytes = _pdf.Generate(data);
