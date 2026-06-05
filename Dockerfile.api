@@ -36,6 +36,13 @@ RUN apt-get update \
 
 COPY --from=build /app/publish .
 
+# Pre-create the runtime data dirs owned by `app` so a FRESH named volume mounted here inherits app
+# ownership (Docker seeds an empty volume from the image path's owner). Otherwise Docker creates the
+# volume root-owned and the non-root `app` user can't write — uploaded scans fail with
+# UnauthorizedAccessException, which the API would surface as a misleading 401.
+RUN mkdir -p /var/lib/rentalcommand/uploads /var/lib/rentalcommand/dataprotection-keys \
+ && chown -R app:app /var/lib/rentalcommand
+
 # Run as the non-root `app` user baked into the aspnet image.
 USER app
 

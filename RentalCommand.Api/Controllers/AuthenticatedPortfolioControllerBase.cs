@@ -18,12 +18,12 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
     /// <c>portfolioId == 0</c> (which would read across tenants). Use <see cref="TryGetPortfolioId"/>
     /// for code paths that legitimately tolerate an unscoped caller.
     /// </summary>
-    /// <exception cref="UnauthorizedAccessException">The <c>portfolioId</c> claim is absent or invalid.</exception>
+    /// <exception cref="MissingAuthContextException">The <c>portfolioId</c> claim is absent or invalid.</exception>
     protected int GetPortfolioId()
     {
         if (!TryGetPortfolioId(out var id))
         {
-            throw new UnauthorizedAccessException("Missing portfolio context");
+            throw new MissingAuthContextException("Missing portfolio context");
         }
 
         return id;
@@ -51,7 +51,7 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
         var claim = User.FindFirst(ClaimTypes.NameIdentifier);
         if (claim == null || !int.TryParse(claim.Value, out var userId))
         {
-            throw new UnauthorizedAccessException("Invalid user context");
+            throw new MissingAuthContextException("Invalid user context");
         }
 
         return userId;

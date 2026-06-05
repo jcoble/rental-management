@@ -309,8 +309,11 @@ app.UseForwardedHeaders(forwardedHeadersOptions);
 app.UseCors("WebApp");
 
 // Map auth-context failures to a clean 401 instead of a 500. GetPortfolioId()/GetUserId() throw
-// UnauthorizedAccessException when an authenticated request lacks the portfolioId/sub claim they
+// MissingAuthContextException when an authenticated request lacks the portfolioId/sub claim they
 // require (e.g. a token with no portfolio scope) — without this the throw would surface as a 500.
+// NOTE: catch the SPECIFIC type, NOT generic UnauthorizedAccessException — the BCL throws the latter
+// for filesystem permission errors (e.g. an unwritable upload volume), and treating those as 401
+// disguises infra failures as "session expired". Those now propagate to an honest 500.
 // Registered high so it wraps controller execution.
 app.Use(async (context, next) =>
 {
@@ -318,7 +321,7 @@ app.Use(async (context, next) =>
     {
         await next();
     }
-    catch (UnauthorizedAccessException)
+    catch (RentalCommand.Api.Controllers.MissingAuthContextException)
     {
         if (!context.Response.HasStarted)
         {
