@@ -240,6 +240,7 @@
 		name: '',
 		type: 'SingleFamily',
 		addressLine1: '',
+		addressLine2: '',
 		city: '',
 		state: '',
 		postalCode: '',
@@ -765,6 +766,10 @@
 										}}
 									/>
 									{#if propertyErrors.addressLine1}<p class="mt-1 text-xs text-destructive">{propertyErrors.addressLine1}</p>{/if}
+								</div>
+								<div>
+									<label for="ob-prop-address2" class="mb-1 block text-xs font-medium text-muted-foreground">Apt / Suite / Unit # <span class="text-muted-foreground/60">(optional)</span></label>
+									<Input id="ob-prop-address2" data-testid="onboarding-property-address2" bind:value={propertyForm.addressLine2} placeholder="Unit 4B" />
 								</div>
 								<div>
 									<label for="ob-prop-city" class="mb-1 block text-xs font-medium text-muted-foreground">City</label>
