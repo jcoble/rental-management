@@ -291,7 +291,7 @@
 	function submitProperty() {
 		const propResult = parseForm(propertySchema, {
 			...propertyForm,
-			ownerId: createdOwner ? String(createdOwner.id) : '',
+			ownerEntityId: createdOwner ? String(createdOwner.id) : '',
 		});
 		if (propResult.errors) {
 			propertyErrors = propResult.errors;
