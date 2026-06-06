@@ -19,7 +19,9 @@ PKG="com.rentalcommand.rental_command"
 fire() {
   local uri="$1"
   echo "→ $uri"
-  adb shell am start -W -a android.intent.action.VIEW -d "$uri" "$PKG" \
+  # The URI is single-quoted so the *device* shell doesn't split it on the
+  # query-string '&' (which it would otherwise read as a background operator).
+  adb shell am start -W -a android.intent.action.VIEW -d "'$uri'" "$PKG" \
     | grep -E "Status|Error|Warning" || true
   echo
 }
