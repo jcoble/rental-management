@@ -1,4 +1,5 @@
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
 
@@ -7,7 +8,7 @@ namespace RentalCommand.Core.Entities;
 /// Distinct from the legacy <see cref="Owner"/> contact record; referenced
 /// from Property/Tenant/Payment/Expense in later phases.
 /// </summary>
-public class OwnerEntity
+public class OwnerEntity : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }

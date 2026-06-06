@@ -35,7 +35,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<InspectionItem> InspectionItems => Set<InspectionItem>();
     public DbSet<InspectionTemplate> InspectionTemplates => Set<InspectionTemplate>();
     public DbSet<InspectionTemplateItem> InspectionTemplateItems => Set<InspectionTemplateItem>();
-    public DbSet<ActivityLog> ActivityLogs => Set<ActivityLog>();
     public DbSet<UserAccount> UserAccounts => Set<UserAccount>();
     public DbSet<PortalMessage> PortalMessages => Set<PortalMessage>();
     public DbSet<Conversation> Conversations => Set<Conversation>();
@@ -128,6 +127,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => new { e.EntityType, e.EntityId });
             entity.HasIndex(e => e.Timestamp);
+            // Composite index for the paged viewer query (scope by portfolio, newest-first).
+            entity.HasIndex(e => new { e.PortfolioId, e.Timestamp });
             entity.HasOne(e => e.User)
                 .WithMany(u => u.AuditLogs)
                 .HasForeignKey(e => e.UserId)
@@ -1061,22 +1062,6 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasOne(e => e.Template)
                 .WithMany(t => t.Items)
                 .HasForeignKey(e => e.TemplateId)
-                .OnDelete(DeleteBehavior.Cascade);
-        });
-
-        modelBuilder.Entity<ActivityLog>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.EntityType).HasMaxLength(50);
-            entity.Property(e => e.Action).HasMaxLength(100);
-            entity.Property(e => e.Description).HasMaxLength(1000);
-            entity.Property(e => e.Actor).HasMaxLength(120);
-            entity.Property(e => e.Type).HasConversion<int>();
-            entity.HasIndex(e => e.PortfolioId);
-            entity.HasIndex(e => e.Type);
-            entity.HasOne(e => e.Portfolio)
-                .WithMany(p => p.Activities)
-                .HasForeignKey(e => e.PortfolioId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
 

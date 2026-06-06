@@ -119,9 +119,12 @@ if (!builder.Environment.IsDevelopment() && jwtSettings.SecretKey.Contains("CHAN
 }
 
 // --- Database ---
+// The scoped AuditSaveChangesInterceptor is resolved from the same scope as the DbContext (the
+// (sp, options) overload), so it can read the per-request ICurrentActor / IAuditScope.
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-builder.Services.AddDbContext<RentalCommandDbContext>(options =>
-    options.UseNpgsql(connectionString));
+builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
+    options.UseNpgsql(connectionString)
+        .AddInterceptors(sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>()));
 
 builder.Services.AddHttpContextAccessor();
 
