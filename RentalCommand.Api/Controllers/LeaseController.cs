@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -17,12 +19,16 @@ public class LeaseController : AuthenticatedPortfolioControllerBase
     private readonly ILeaseService _service;
     private readonly ILeaseQaService _qa;
     private readonly ILeaseEsignService _esign;
+    private readonly RentalCommandDbContext _db;
+    private readonly IFileStorage _files;
 
-    public LeaseController(ILeaseService service, ILeaseQaService qa, ILeaseEsignService esign)
+    public LeaseController(ILeaseService service, ILeaseQaService qa, ILeaseEsignService esign, RentalCommandDbContext db, IFileStorage files)
     {
         _service = service;
         _qa = qa;
         _esign = esign;
+        _db = db;
+        _files = files;
     }
 
     [HttpGet]
@@ -42,6 +48,14 @@ public class LeaseController : AuthenticatedPortfolioControllerBase
         var item = await _service.GetAsync(GetPortfolioId(), id, ct);
         return item == null ? NotFound(new { error = "Lease not found" }) : Ok(item);
     }
+
+    // GET /api/v1/leases/{id}/scan[?thumb=true] — stream the original scanned lease document.
+    // Distinct from {id}/document (the generated/e-signed lease) and {id}/signed-document.
+    [HttpGet("{id:int}/scan")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public Task<IActionResult> GetScan(int id, [FromQuery] bool thumb = false, CancellationToken ct = default)
+        => ServeEntityScanAsync(_db, _files, "Lease", id, thumb, ct);
 
     /// <summary>
     /// Tenant-facing ledger for a lease: every charge and payment, newest first, each with a

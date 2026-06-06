@@ -2,6 +2,8 @@ using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Payments;
+using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -17,11 +19,15 @@ public class PaymentController : AuthenticatedPortfolioControllerBase
 {
     private readonly IPaymentService _service;
     private readonly IStripePaymentService _stripeService;
+    private readonly RentalCommandDbContext _db;
+    private readonly IFileStorage _files;
 
-    public PaymentController(IPaymentService service, IStripePaymentService stripeService)
+    public PaymentController(IPaymentService service, IStripePaymentService stripeService, RentalCommandDbContext db, IFileStorage files)
     {
         _service = service;
         _stripeService = stripeService;
+        _db = db;
+        _files = files;
     }
 
     [HttpGet]
@@ -41,6 +47,13 @@ public class PaymentController : AuthenticatedPortfolioControllerBase
         var item = await _service.GetAsync(GetPortfolioId(), id, ct);
         return item == null ? NotFound(new { error = "Payment not found" }) : Ok(item);
     }
+
+    // GET /api/v1/payments/{id}/scan[?thumb=true] — stream the original scanned check/document.
+    [HttpGet("{id:int}/scan")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public Task<IActionResult> GetScan(int id, [FromQuery] bool thumb = false, CancellationToken ct = default)
+        => ServeEntityScanAsync(_db, _files, "Payment", id, thumb, ct);
 
     [HttpPost]
     [ProducesResponseType(typeof(PaymentResponse), StatusCodes.Status201Created)]

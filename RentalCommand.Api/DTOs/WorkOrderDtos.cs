@@ -91,6 +91,12 @@ public class WorkOrderDetailResponse : WorkOrderResponse
 {
     public IReadOnlyList<WorkOrderStatusEventResponse> Timeline { get; set; } = [];
 
+    /// <summary>True when a scanned source document is attached to this work order (drives the detail-page viewer).</summary>
+    public bool HasScan { get; set; }
+
+    /// <summary>True when the attached scan is an image (vs a PDF) — lets the UI show a thumbnail.</summary>
+    public bool ScanIsImage { get; set; }
+
     public static WorkOrderDetailResponse FromEntity(WorkOrder e, IEnumerable<WorkOrderStatusEvent> events)
     {
         var detail = new WorkOrderDetailResponse

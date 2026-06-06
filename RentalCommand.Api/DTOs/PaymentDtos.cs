@@ -30,6 +30,12 @@ public class PaymentResponse
     /// <summary>Issuing bank name; from a scanned rent check.</summary>
     public string? BankName { get; set; }
 
+    /// <summary>True when a scanned source document is attached to this payment (drives the detail-page viewer).</summary>
+    public bool HasScan { get; set; }
+
+    /// <summary>True when the attached scan is an image (vs a PDF) — lets the UI show a thumbnail.</summary>
+    public bool ScanIsImage { get; set; }
+
     /// <summary>Stable selector for frontend tests, e.g. <c>payment-1</c>.</summary>
     public string TestId => $"payment-{Id}";
 

@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -17,11 +19,15 @@ public class WorkOrderController : AuthenticatedPortfolioControllerBase
 {
     private readonly IWorkOrderService _service;
     private readonly IVendorDispatchService _dispatch;
+    private readonly RentalCommandDbContext _db;
+    private readonly IFileStorage _files;
 
-    public WorkOrderController(IWorkOrderService service, IVendorDispatchService dispatch)
+    public WorkOrderController(IWorkOrderService service, IVendorDispatchService dispatch, RentalCommandDbContext db, IFileStorage files)
     {
         _service = service;
         _dispatch = dispatch;
+        _db = db;
+        _files = files;
     }
 
     [HttpGet]
@@ -41,6 +47,13 @@ public class WorkOrderController : AuthenticatedPortfolioControllerBase
         var item = await _service.GetAsync(GetPortfolioId(), id, ct);
         return item == null ? NotFound(new { error = "Work order not found" }) : Ok(item);
     }
+
+    // GET /api/v1/work-orders/{id}/scan[?thumb=true] — stream the original scanned estimate/document.
+    [HttpGet("{id:int}/scan")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public Task<IActionResult> GetScan(int id, [FromQuery] bool thumb = false, CancellationToken ct = default)
+        => ServeEntityScanAsync(_db, _files, "WorkOrder", id, thumb, ct);
 
     [HttpPost]
     [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status201Created)]

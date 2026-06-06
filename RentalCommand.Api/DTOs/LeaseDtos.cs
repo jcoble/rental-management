@@ -35,6 +35,12 @@ public class LeaseResponse
     /// <summary>Property name, projected from the <see cref="Lease.Property"/> navigation. Null when not loaded.</summary>
     public string? PropertyName { get; set; }
 
+    /// <summary>True when a scanned source document is attached to this lease (drives the detail-page viewer).</summary>
+    public bool HasScan { get; set; }
+
+    /// <summary>True when the attached scan is an image (vs a PDF) — lets the UI show a thumbnail.</summary>
+    public bool ScanIsImage { get; set; }
+
     /// <summary>Stable selector for frontend tests, e.g. <c>lease-1</c>.</summary>
     public string TestId => $"lease-{Id}";
 

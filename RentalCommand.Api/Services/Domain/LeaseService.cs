@@ -85,7 +85,20 @@ public class LeaseService : ILeaseService
             .Include(l => l.Property)
             .FirstOrDefaultAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
 
-        return entity == null ? null : LeaseResponse.FromEntity(entity, includeNavigations: true);
+        if (entity == null)
+        {
+            return null;
+        }
+
+        var response = LeaseResponse.FromEntity(entity, includeNavigations: true);
+        var scan = await _db.FindLatestEntityFileAsync(portfolioId, "Lease", id, ct);
+        if (scan is not null)
+        {
+            response.HasScan = true;
+            response.ScanIsImage = scan.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return response;
     }
 
     public async Task<LeaseLedgerResponse?> GetLedgerAsync(
