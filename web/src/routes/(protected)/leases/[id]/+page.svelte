@@ -384,8 +384,11 @@
 	}
 
 	function submit() {
+		// Property/unit/tenant are fixed at lease creation (UpdateLeaseRequest has no PropertyId),
+		// so propertyId is excluded from the payload — and must also be omitted from validation, or
+		// the required propertyId in leaseSchema fails on the dropped key and Save silently bails.
 		const { propertyId: _p, ...rest } = form;
-		const result = parseForm(leaseSchema, rest);
+		const result = parseForm(leaseSchema.omit({ propertyId: true }), rest);
 		if (result.errors) {
 			formErrors = result.errors;
 			return;

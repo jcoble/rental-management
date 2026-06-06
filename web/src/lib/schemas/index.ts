@@ -8,17 +8,23 @@
 import { z } from 'zod';
 
 const required = (label: string) => z.string().trim().min(1, `${label} is required`);
+// Optional helpers end in `.optional()` so a MISSING key (`undefined`) is tolerated,
+// not just an explicit null. Without it, any form that validates a subset of its
+// schema (a detail/edit form, or one that drops a field before validating) errors on
+// the absent keys and Save silently bails. A present '' still becomes null.
 const optionalText = z
 	.string()
 	.trim()
 	.transform((v) => (v.length ? v : null))
-	.nullable();
+	.nullable()
+	.optional();
 const optionalEmail = z
 	.string()
 	.trim()
 	.transform((v) => (v.length ? v : null))
 	.nullable()
-	.refine((v) => v === null || z.string().email().safeParse(v).success, 'Enter a valid email');
+	.refine((v) => v === null || z.string().email().safeParse(v).success, 'Enter a valid email')
+	.optional();
 /** Required email field — non-empty and valid format. */
 const requiredEmail = (label: string) =>
 	z
@@ -40,19 +46,22 @@ const optionalNumericString = (label: string) =>
 		.transform((v) => (v.length ? v : null))
 		.nullable()
 		.refine((v) => v === null || !Number.isNaN(Number(v)), `${label} must be a number`)
-		.transform((v) => (v === null ? null : Number(v)));
+		.transform((v) => (v === null ? null : Number(v)))
+		.optional();
 const idString = z
 	.string()
 	.trim()
 	.transform((v) => (v.length ? Number(v) : null))
-	.nullable();
+	.nullable()
+	.optional();
 // Optional money/number: '' -> null, otherwise coerced to a number (rejects non-numeric).
 const optionalNumeric = (label: string) =>
 	z
 		.string()
 		.trim()
 		.transform((v) => (v.length ? Number(v) : null))
-		.refine((v) => v === null || !Number.isNaN(v), `${label} must be a number`);
+		.refine((v) => v === null || !Number.isNaN(v), `${label} must be a number`)
+		.optional();
 /**
  * Required numeric field that must be > 0 (use for money amounts that represent
  * a real charge: monthly rent, payment amount, etc.).
@@ -89,7 +98,8 @@ const optionalNonNegative = (label: string) =>
 		.refine(
 			(v) => v === null || (!Number.isNaN(v) && v >= 0),
 			`${label} must be a non-negative number`
-		);
+		)
+		.optional();
 
 export const propertySchema = z.object({
 	name: required('Name'),
@@ -178,7 +188,7 @@ export const expenseSchema = z.object({
 	paymentMethod: optionalText,
 	cardLast4: optionalText,
 	taxRate: optionalNonNegative('Tax rate').refine(
-		(v) => v === null || v <= 100,
+		(v) => v == null || v <= 100,
 		'Tax rate cannot exceed 100%'
 	),
 	tip: optionalNonNegative('Tip'),
