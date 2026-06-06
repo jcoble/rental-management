@@ -1,6 +1,8 @@
+using RentalCommand.Core.Interfaces;
+
 namespace RentalCommand.Core.Entities;
 
-public class Vendor
+public class Vendor : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }

@@ -33,7 +33,18 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
     ?? throw new InvalidOperationException(
         "Missing connection string 'DefaultConnection'. Set it in appsettings.json or via configuration.");
 
-builder.Services.AddDbContext<RentalCommandDbContext>(options => options.UseNpgsql(connectionString));
+// Unified audit trail: the Engine has no HttpContext, so it attributes audit rows to "system".
+// The scoped interceptor is resolved from the same scope as the DbContext (the (sp, options)
+// overload) and auto-records IAuditable CRUD that workers perform.
+builder.Services.AddScoped<RentalCommand.Core.Interfaces.ICurrentActor,
+    RentalCommand.Data.Auditing.SystemCurrentActor>();
+builder.Services.AddScoped<RentalCommand.Core.Interfaces.IAuditScope,
+    RentalCommand.Data.Auditing.AuditScope>();
+builder.Services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>();
+
+builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
+    options.UseNpgsql(connectionString)
+        .AddInterceptors(sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>()));
 
 // DB-outbox publisher + notification channel (SignalWire/Twilio SMS; SMTP/Zoho or SendGrid email,
 // config-selected; logs when unconfigured).

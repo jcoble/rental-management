@@ -12,7 +12,7 @@ export { notices } from './endpoints/notices';
 export { workOrders } from './endpoints/workOrders';
 export { appointments } from './endpoints/appointments';
 export { inspections } from './endpoints/inspections';
-export { activity } from './endpoints/activity';
+export { audit } from './endpoints/audit';
 export { ai } from './endpoints/ai';
 export { auth } from './endpoints/auth';
 export { portal } from './endpoints/portal';

@@ -49,7 +49,6 @@ public class Portfolio
     public List<RecurringMaintenanceTask> RecurringMaintenanceTasks { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];
     public List<Inspection> Inspections { get; set; } = [];
-    public List<ActivityLog> Activities { get; set; } = [];
     public List<UserAccount> UserAccounts { get; set; } = [];
     public List<PortalMessage> PortalMessages { get; set; } = [];
     public List<RentalApplication> RentalApplications { get; set; } = [];

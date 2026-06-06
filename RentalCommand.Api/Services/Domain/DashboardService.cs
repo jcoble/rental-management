@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Auditing;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 
@@ -9,10 +11,12 @@ namespace RentalCommand.Api.Services.Domain;
 public class DashboardService : IDashboardService
 {
     private readonly RentalCommandDbContext _db;
+    private readonly AuditDescriber _auditDescriber;
 
-    public DashboardService(RentalCommandDbContext db)
+    public DashboardService(RentalCommandDbContext db, AuditDescriber auditDescriber)
     {
         _db = db;
+        _auditDescriber = auditDescriber;
     }
 
     public async Task<DashboardResponse?> GetDashboardAsync(int portfolioId, CancellationToken ct = default)
@@ -218,32 +222,25 @@ public class DashboardService : IDashboardService
 
     private async Task<IReadOnlyList<DashboardActivity>> BuildRecentActivityAsync(int portfolioId, CancellationToken ct)
     {
-        var activities = await _db.ActivityLogs
+        // The dashboard "recent activity" widget now reads the unified audit trail. The humanized
+        // description (via AuditDescriber) is what the user sees; Action carries the operation name.
+        var rows = await _db.AuditLogs
             .AsNoTracking()
             .Where(a => a.PortfolioId == portfolioId)
-            .OrderByDescending(a => a.CreatedAt)
+            .OrderByDescending(a => a.Timestamp)
             .ThenByDescending(a => a.Id)
             .Take(10)
-            .Select(a => new
-            {
-                a.Id,
-                a.Type,
-                a.Action,
-                a.Description,
-                a.Actor,
-                a.CreatedAt,
-            })
             .ToListAsync(ct);
 
-        return activities
+        return rows
             .Select(a => new DashboardActivity
             {
                 Id = a.Id,
-                Type = a.Type.ToString(),
-                Action = a.Action,
-                Description = a.Description,
-                Actor = a.Actor,
-                CreatedAt = a.CreatedAt,
+                Type = a.EntityType,
+                Action = a.Operation.ToString(),
+                Description = _auditDescriber.Describe(a),
+                Actor = a.ActorLabel ?? (a.UserId.HasValue ? $"User #{a.UserId.Value}" : "system"),
+                CreatedAt = a.Timestamp,
             })
             .ToList();
     }

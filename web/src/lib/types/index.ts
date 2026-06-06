@@ -781,18 +781,32 @@ export interface InspectionCompleteResult {
 	createdWorkOrderIds: number[];
 }
 
-export interface ActivityLog {
+/** One row of the unified audit trail returned by `GET /api/v1/audit`. */
+export interface AuditEntry {
 	id: number;
 	portfolioId: number;
+	operation: string;
+	operationName: string;
+	entityType: string;
+	entityId: number;
+	actor: string;
+	description: string;
+	detailHref?: string;
+	timestamp: string;
+	testId?: string;
+}
+
+/**
+ * Shape of the dashboard "recent activity" widget items (the API's `DashboardActivity`).
+ * Distinct from {@link AuditEntry}: the dashboard endpoint pre-humanizes each row.
+ */
+export interface DashboardActivity {
+	id: number;
 	type: string;
-	typeName: string;
-	entityType?: string;
-	entityId?: number;
 	action?: string;
 	description?: string;
 	actor?: string;
 	createdAt: string;
-	testId?: string;
 }
 
 export interface Dashboard {
@@ -846,7 +860,7 @@ export interface Dashboard {
 		propertyId?: number;
 		unitId?: number;
 	}>;
-	recentActivity: ActivityLog[];
+	recentActivity: DashboardActivity[];
 }
 
 export interface AuthUser {

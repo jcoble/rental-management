@@ -70,7 +70,6 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IInspectionService, InspectionService>();
         // Inspection report PDF rendering (QuestPDF). Stateless → singleton.
         services.AddSingleton<IInspectionReportPdfGenerator, InspectionReportPdfGenerator>();
-        services.AddScoped<IActivityService, ActivityService>();
         services.AddScoped<IPortalService, PortalService>();
         services.AddScoped<IConversationService, ConversationService>();
         services.AddScoped<INotificationService, NotificationService>();
@@ -98,6 +97,17 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IScanService, ScanService>();
         services.AddScoped<IAuditTrailService, AuditTrailService>();
         services.AddScoped<IVoiceIntakeService, VoiceIntakeService>();
+
+        // --- unified audit trail (auto-capture + viewer) ---
+        // HTTP-backed actor attribution, per-request de-dupe scope, the humanizer, the query service
+        // behind /api/v1/audit, and the SaveChanges interceptor that auto-records IAuditable CRUD.
+        services.AddScoped<RentalCommand.Core.Interfaces.ICurrentActor,
+            RentalCommand.Api.Services.Auditing.HttpCurrentActor>();
+        services.AddScoped<RentalCommand.Core.Interfaces.IAuditScope,
+            RentalCommand.Data.Auditing.AuditScope>();
+        services.AddSingleton<RentalCommand.Api.Services.Auditing.AuditDescriber>();
+        services.AddScoped<IAuditQueryService, AuditQueryService>();
+        services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>();
 
         // --- AI (phase 3) ---
         services.AddScoped<IDailyBriefingService, DailyBriefingService>();
