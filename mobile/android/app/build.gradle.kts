@@ -40,6 +40,13 @@ kotlin {
     }
 }
 
+dependencies {
+    // Required for the App Actions `app:queryPatterns` attribute used in
+    // res/xml/shortcuts.xml (the Android Shortcuts framework). 1.6.0+ per
+    // https://developer.android.com/develop/devices/assistant/action-schema
+    implementation("androidx.core:core-ktx:1.13.1")
+}
+
 flutter {
     source = "../.."
 }

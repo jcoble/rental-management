@@ -10,6 +10,8 @@ import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/models/models.dart';
 import '../../core/realtime/realtime_providers.dart';
+import '../../core/voice/voice_command.dart';
+import '../../core/voice/voice_command_controller.dart';
 import '../accounting/accounting_models.dart';
 import '../accounting/accounting_repository.dart';
 import '../ai/ai_models.dart';
@@ -96,6 +98,9 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell> {
   int _selectedIndex = 0;
 
+  /// Index of the Scan tab in the landlord [_tabs] (Home · Scan · …).
+  static const _scanTabIndex = 1;
+
   static const _tabs = [
     _TabItem(label: 'Home', icon: Icons.home_outlined, activeIcon: Icons.home),
     _TabItem(
@@ -134,9 +139,59 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   @override
   void initState() {
     super.initState();
-    // Initialise the realtime watcher so it stays alive for the shell lifetime.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) ref.read(realtimeWatcherProvider);
+      if (!mounted) return;
+      // Initialise the realtime watcher so it stays alive for the shell.
+      ref.read(realtimeWatcherProvider);
+      // A voice command may have cold-started the app (Assistant launched us)
+      // before this shell built — pick up anything already waiting in the bus.
+      final pending = ref.read(pendingVoiceCommandProvider);
+      if (pending != null) _handleVoiceCommand(pending);
+    });
+  }
+
+  /// Lands the landlord in the right place for a parsed voice command and shows
+  /// a plain-language confirmation of what was understood. Scheduled post-frame
+  /// so it can navigate / setState safely even when invoked from a build-time
+  /// listener.
+  void _handleVoiceCommand(VoiceCommand command) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      final messenger = ScaffoldMessenger.of(context);
+      void toast(String message) => messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(message)));
+
+      // Voice commands are landlord-facing for now (matches on-device testing).
+      final authState = ref.read(authControllerProvider);
+      final isTenant =
+          authState is AuthStateAuthenticated && authState.user.isTenant;
+      if (isTenant) {
+        toast("Voice commands aren't available for tenant accounts yet.");
+        ref.read(pendingVoiceCommandProvider.notifier).consume();
+        return;
+      }
+
+      final navigator = Navigator.of(context);
+      switch (command.action) {
+        case VoiceAction.scanDocument:
+        case VoiceAction.logExpense:
+          // Voice and tap converge on the capture flow (the flagship intake).
+          navigator.popUntil((route) => route.isFirst);
+          setState(() => _selectedIndex = _scanTabIndex);
+        case VoiceAction.showOverdueRent:
+          navigator.push<void>(
+            MaterialPageRoute<void>(builder: (_) => const PaymentsScreen()),
+          );
+        case VoiceAction.openWorkOrders:
+          navigator.push<void>(
+            MaterialPageRoute<void>(builder: (_) => const WorkOrdersScreen()),
+          );
+      }
+
+      toast(command.understoodSummary);
+      ref.read(pendingVoiceCommandProvider.notifier).consume();
     });
   }
 
@@ -144,6 +199,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   Widget build(BuildContext context) {
     // Keep the watcher alive while the shell is in the tree.
     ref.watch(realtimeWatcherProvider);
+
+    // React to voice commands that arrive while the shell is already running.
+    ref.listen<VoiceCommand?>(pendingVoiceCommandProvider, (_, next) {
+      if (next != null) _handleVoiceCommand(next);
+    });
 
     final authState = ref.watch(authControllerProvider);
     final user = authState is AuthStateAuthenticated ? authState.user : null;

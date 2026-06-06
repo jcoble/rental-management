@@ -5,6 +5,7 @@ import 'core/auth/auth_controller.dart';
 import 'core/realtime/signalr_service.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
+import 'core/voice/voice_command_controller.dart';
 
 void main() {
   // Allow the mkcert self-signed certificate in debug builds so that both the
@@ -38,6 +39,10 @@ class _AppStartupState extends ConsumerState<_AppStartup> {
       if (!_sessionRestored) {
         _sessionRestored = true;
         ref.read(authControllerProvider.notifier).restoreSession();
+        // Start listening for voice/App-Actions deep links. Runs regardless of
+        // auth state; a command that arrives before login simply waits in the
+        // one-slot bus until HomeShell mounts.
+        ref.read(voiceLinkServiceProvider).start();
       }
     });
   }
