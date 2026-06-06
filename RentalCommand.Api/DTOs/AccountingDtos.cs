@@ -174,6 +174,14 @@ public class AccountingTransactionResponse
     public string Kind { get; set; } = string.Empty;
     public int Id { get; set; }
     public DateTime Date { get; set; }
+
+    /// <summary>When the row entered the system (created). Powers the ledger's "Entered" column and the
+    /// default newest-entered-first sort (<c>sort=-createdAt</c>).</summary>
+    public DateTime CreatedAt { get; set; }
+
+    /// <summary>When the row was last edited; equals <see cref="CreatedAt"/> for untouched rows.</summary>
+    public DateTime UpdatedAt { get; set; }
+
     public string Description { get; set; } = string.Empty;
     public string Category { get; set; } = string.Empty;
     public string Status { get; set; } = string.Empty;

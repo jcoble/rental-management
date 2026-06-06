@@ -315,6 +315,10 @@ export interface AccountingTransaction {
 	kind: 'Payment' | 'Expense' | 'Bank';
 	id: number;
 	date: string;
+	/** When the row entered the system (created). Backs the "Entered" column + default sort. */
+	createdAt: string;
+	/** When the row was last edited; equals createdAt for untouched rows. */
+	updatedAt: string;
 	description: string;
 	category: string;
 	status: string;
