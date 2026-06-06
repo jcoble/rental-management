@@ -181,6 +181,14 @@ export interface Payment {
 	updatedAt: string;
 }
 
+export interface ExpenseLineItem {
+	description: string;
+	quantity?: number | null;
+	unitPrice?: number | null;
+	amount?: number | null;
+	lineNumber: number;
+}
+
 export interface Expense {
 	id: number;
 	portfolioId: number;
@@ -206,6 +214,8 @@ export interface Expense {
 	updatedAt: string;
 	hasReceipt?: boolean;
 	receiptIsImage?: boolean;
+	/** Typed line items loaded from ExpenseLineItems child rows (populated on single GET). */
+	lineItems?: ExpenseLineItem[];
 }
 
 // --- Owner statement types ---

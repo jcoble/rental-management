@@ -51,6 +51,12 @@ public class ExpenseResponse
     /// <summary>True when the linked file's content type starts with <c>image/</c>.</summary>
     public bool ReceiptIsImage { get; set; }
 
+    /// <summary>
+    /// Typed line items loaded from the <see cref="Core.Entities.ExpenseLineItem"/> child rows.
+    /// Populated on the single-item GET; empty list on list endpoints (not loaded to avoid N+1).
+    /// </summary>
+    public IReadOnlyList<ExpenseLineItemResponse> LineItems { get; set; } = [];
+
     /// <summary>Stable selector for frontend tests, e.g. <c>expense-1</c>.</summary>
     public string TestId => $"expense-{Id}";
 
@@ -78,6 +84,25 @@ public class ExpenseResponse
         PaymentMethod = e.PaymentMethod,
         CardLast4 = e.CardLast4,
         DocumentKind = e.DocumentKind,
+    };
+}
+
+/// <summary>One typed line item returned on an <see cref="ExpenseResponse"/>.</summary>
+public class ExpenseLineItemResponse
+{
+    public string Description { get; set; } = string.Empty;
+    public decimal? Quantity { get; set; }
+    public decimal? UnitPrice { get; set; }
+    public decimal? Amount { get; set; }
+    public int LineNumber { get; set; }
+
+    public static ExpenseLineItemResponse FromEntity(ExpenseLineItem li) => new()
+    {
+        Description = li.Description,
+        Quantity = li.Quantity,
+        UnitPrice = li.UnitPrice,
+        Amount = li.Amount,
+        LineNumber = li.LineNumber,
     };
 }
 
@@ -193,4 +218,22 @@ public class UpdateExpenseRequest
 
     /// <summary>Full receipt details JSON (jsonb); rebuilt by the edit form from its receipt fields.</summary>
     public string? ReceiptData { get; set; }
+
+    /// <summary>
+    /// When provided (even if empty), REPLACES all existing <see cref="Core.Entities.ExpenseLineItem"/>
+    /// rows for this expense. Pass <c>null</c> to leave existing line items untouched.
+    /// Each item's LineNumber is assigned 1-based in list order.
+    /// </summary>
+    public List<UpdateExpenseLineItem>? LineItems { get; set; }
+}
+
+/// <summary>One line item in an <see cref="UpdateExpenseRequest"/>; replaces existing rows when provided.</summary>
+public class UpdateExpenseLineItem
+{
+    [MaxLength(1000)]
+    public string Description { get; set; } = string.Empty;
+
+    public decimal? Quantity { get; set; }
+    public decimal? UnitPrice { get; set; }
+    public decimal? Amount { get; set; }
 }
