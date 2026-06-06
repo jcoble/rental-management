@@ -32,6 +32,7 @@ import '../portal/tenant_work_order_detail_screen.dart';
 import '../properties/properties_tab.dart';
 import '../scan/scan_tab.dart';
 import '../tenants/tenants_list_screen.dart';
+import '../voice/tell_me_screen.dart';
 import 'more_tab.dart';
 
 // ---------------------------------------------------------------------------
@@ -1138,6 +1139,11 @@ class _HomeTab extends ConsumerWidget {
 
                     // ── Quick actions ─────────────────────────────────────
                     _QuickActions(
+                      onTellMe: () => Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => const TellMeScreen(),
+                        ),
+                      ),
                       onScan: () => onSwitchToTab(_scanTabIndex),
                       onAskAi: onOpenAssistant,
                       onAddExpense: () => onSwitchToTab(_scanTabIndex),
@@ -1536,11 +1542,13 @@ class _EmptyInlineCard extends StatelessWidget {
 
 class _QuickActions extends StatelessWidget {
   const _QuickActions({
+    required this.onTellMe,
     required this.onScan,
     required this.onAskAi,
     required this.onAddExpense,
   });
 
+  final VoidCallback onTellMe;
   final VoidCallback onScan;
   final VoidCallback onAskAi;
   final VoidCallback onAddExpense;
@@ -1549,6 +1557,14 @@ class _QuickActions extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
+        Expanded(
+          child: _QuickActionButton(
+            icon: Icons.mic_none_outlined,
+            label: 'Tell\nme',
+            onTap: onTellMe,
+          ),
+        ),
+        const SizedBox(width: 10),
         Expanded(
           child: _QuickActionButton(
             icon: Icons.document_scanner_outlined,
