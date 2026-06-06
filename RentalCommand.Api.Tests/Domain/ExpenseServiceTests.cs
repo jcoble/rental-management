@@ -51,6 +51,99 @@ public class ExpenseServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task UpdateAsync_WithLineItems_ReplacesAllExistingLineItemRows()
+    {
+        // Arrange — seed an expense with two typed line items.
+        var now = DateTime.UtcNow;
+        var expense = new Expense
+        {
+            PortfolioId = PortfolioId,
+            Category = ScheduleECategory.Repairs,
+            Description = "Seed expense",
+            Status = ExpenseStatus.Paid,
+            Amount = 20.00m,
+            IncurredAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        expense.LineItems.Add(new ExpenseLineItem { Description = "Old item 1", Amount = 10.00m, LineNumber = 1 });
+        expense.LineItems.Add(new ExpenseLineItem { Description = "Old item 2", Amount = 10.00m, LineNumber = 2 });
+        _db.Expenses.Add(expense);
+        await _db.SaveChangesAsync();
+
+        var request = new UpdateExpenseRequest
+        {
+            LineItems =
+            [
+                new UpdateExpenseLineItem { Description = "New item A", Quantity = 2m, UnitPrice = 5.00m, Amount = 10.00m },
+                new UpdateExpenseLineItem { Description = "New item B", Amount = 7.50m },
+                new UpdateExpenseLineItem { Description = "New item C", Amount = 2.50m },
+            ]
+        };
+
+        // Act
+        var updated = await _sut.UpdateAsync(PortfolioId, expense.Id, request);
+
+        // Assert — response carries the new rows.
+        updated.Should().NotBeNull();
+        updated!.LineItems.Should().HaveCount(3);
+        updated.LineItems[0].Description.Should().Be("New item A");
+        updated.LineItems[0].LineNumber.Should().Be(1);
+        updated.LineItems[0].Quantity.Should().Be(2m);
+        updated.LineItems[0].UnitPrice.Should().Be(5.00m);
+        updated.LineItems[0].Amount.Should().Be(10.00m);
+        updated.LineItems[1].Description.Should().Be("New item B");
+        updated.LineItems[1].LineNumber.Should().Be(2);
+        updated.LineItems[2].Description.Should().Be("New item C");
+        updated.LineItems[2].LineNumber.Should().Be(3);
+
+        // DB must have exactly 3 rows — old rows are gone.
+        var dbItems = await _db.ExpenseLineItems.AsNoTracking()
+            .Where(li => li.ExpenseId == expense.Id)
+            .OrderBy(li => li.LineNumber)
+            .ToListAsync();
+
+        dbItems.Should().HaveCount(3);
+        dbItems[0].Description.Should().Be("New item A");
+        dbItems[1].Description.Should().Be("New item B");
+        dbItems[2].Description.Should().Be("New item C");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WithNullLineItems_LeavesExistingLineItemsUntouched()
+    {
+        // Arrange — seed an expense with one typed line item.
+        var now = DateTime.UtcNow;
+        var expense = new Expense
+        {
+            PortfolioId = PortfolioId,
+            Category = ScheduleECategory.Repairs,
+            Description = "Seed expense",
+            Status = ExpenseStatus.Paid,
+            Amount = 10.00m,
+            IncurredAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        expense.LineItems.Add(new ExpenseLineItem { Description = "Existing item", Amount = 10.00m, LineNumber = 1 });
+        _db.Expenses.Add(expense);
+        await _db.SaveChangesAsync();
+
+        // Act — update without providing LineItems (null = no change).
+        var request = new UpdateExpenseRequest { Notes = "Just updating notes" };
+        var updated = await _sut.UpdateAsync(PortfolioId, expense.Id, request);
+
+        // Assert — the existing line item is still present.
+        updated.Should().NotBeNull();
+        updated!.LineItems.Should().HaveCount(1);
+        updated.LineItems[0].Description.Should().Be("Existing item");
+
+        var dbCount = await _db.ExpenseLineItems.AsNoTracking()
+            .CountAsync(li => li.ExpenseId == expense.Id);
+        dbCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task UpdateAsync_AllowsCorrectingReceiptFieldsAfterScanConfirm()
     {
         var expense = SeedExpense();

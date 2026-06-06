@@ -87,12 +87,17 @@ public class ExpenseService : IExpenseService
     {
         var entity = await _db.Expenses
             .AsNoTracking()
+            .Include(e => e.LineItems)
             .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
 
         if (entity == null)
             return null;
 
         var response = ExpenseResponse.FromEntity(entity);
+        response.LineItems = entity.LineItems
+            .OrderBy(li => li.LineNumber)
+            .Select(ExpenseLineItemResponse.FromEntity)
+            .ToList();
 
         var storedFile = await _db.StoredFiles
             .AsNoTracking()
@@ -185,6 +190,7 @@ public class ExpenseService : IExpenseService
     public async Task<ExpenseResponse?> UpdateAsync(int portfolioId, int id, UpdateExpenseRequest request, CancellationToken ct = default)
     {
         var entity = await _db.Expenses
+            .Include(e => e.LineItems)
             .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
         if (entity == null)
         {
@@ -225,11 +231,37 @@ public class ExpenseService : IExpenseService
         if (request.Subtotal.HasValue) entity.Subtotal = request.Subtotal;
         if (request.TaxAmount.HasValue) entity.TaxAmount = request.TaxAmount;
         if (request.ReceiptData != null) entity.ReceiptData = request.ReceiptData;
+
+        // When the caller provides a LineItems list (even empty), REPLACE all existing rows.
+        // A null LineItems means "leave existing rows untouched".
+        if (request.LineItems is not null)
+        {
+            _db.ExpenseLineItems.RemoveRange(entity.LineItems);
+            entity.LineItems.Clear();
+
+            for (int i = 0; i < request.LineItems.Count; i++)
+            {
+                var li = request.LineItems[i];
+                entity.LineItems.Add(new ExpenseLineItem
+                {
+                    Description = li.Description ?? string.Empty,
+                    Quantity = li.Quantity,
+                    UnitPrice = li.UnitPrice,
+                    Amount = li.Amount,
+                    LineNumber = i + 1,
+                });
+            }
+        }
+
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
 
         var response = ExpenseResponse.FromEntity(entity);
+        response.LineItems = entity.LineItems
+            .OrderBy(li => li.LineNumber)
+            .Select(ExpenseLineItemResponse.FromEntity)
+            .ToList();
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }

@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { ArrowLeft, Pencil, Save, Trash2, X, ReceiptText, Tags, FileText, ChevronDown } from '@lucide/svelte';
+	import { ArrowLeft, Pencil, Save, Trash2, X, ReceiptText, Tags, FileText, ChevronDown, Plus } from '@lucide/svelte';
 	import { expenses } from '$lib/api/endpoints/expenses';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { vendors } from '$lib/api/endpoints/vendors';
@@ -13,6 +13,8 @@
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import * as Table from '$lib/components/ui/table';
 
 	const queryClient = useQueryClient();
 	const expenseId = $derived(parseInt($page.params.id ?? '0', 10));
@@ -38,6 +40,47 @@
 		receiptData: ''
 	});
 	let formErrors = $state<Record<string, string>>({});
+
+	// --- Editable line items (mirrors the scan review page pattern) ---
+	// Numeric cells kept as strings; parsed on save. Key is a stable client-side id
+	// so add/remove don't mis-bind the {#each} rows.
+	interface EditableLineItem {
+		key: number;
+		description: string;
+		quantity: string;
+		unitPrice: string;
+		amount: string;
+	}
+	let editedLineItems = $state<EditableLineItem[]>([]);
+	let lineItemKeySeq = 0;
+
+	// Parse a money/number string ("$1,234.50") → number or null.
+	function parseAmount(raw: string | undefined | null): number | null {
+		if (raw == null) return null;
+		const cleaned = String(raw).replace(/[^0-9.\-]/g, '');
+		if (cleaned === '' || cleaned === '-' || cleaned === '.') return null;
+		const n = Number(cleaned);
+		return Number.isFinite(n) ? n : null;
+	}
+
+	function addLineItem() {
+		editedLineItems = [
+			...editedLineItems,
+			{ key: lineItemKeySeq++, description: '', quantity: '', unitPrice: '', amount: '' }
+		];
+	}
+
+	function removeLineItem(key: number) {
+		editedLineItems = editedLineItems.filter((li) => li.key !== key);
+	}
+
+	// Running total of per-row amount inputs — echoed below the table.
+	const editLineItemsTotal = $derived(
+		editedLineItems.reduce((sum, li) => sum + (parseAmount(li.amount) ?? 0), 0)
+	);
+	const editLineItemsHaveAmounts = $derived(
+		editedLineItems.some((li) => parseAmount(li.amount) != null)
+	);
 
 	const expenseQuery = createQuery(() => ({ queryKey: ['expense', expenseId], queryFn: () => expenses.get(expenseId), enabled: expenseId > 0 }));
 	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
@@ -80,21 +123,32 @@
 		}
 	});
 
-	const scanLineItems = $derived(
-		(scan?.lineItems ?? []).filter(
+	// Read-mode line items: prefer typed rows from the API (expense.lineItems),
+	// fall back to receiptData.lineItems for expenses created before typed rows existed.
+	const readLineItems = $derived.by<ScanLineItem[]>(() => {
+		const typed = expense?.lineItems;
+		if (typed && typed.length > 0) {
+			return typed.map((li) => ({
+				description: li.description,
+				quantity: li.quantity,
+				unitPrice: li.unitPrice,
+				amount: li.amount,
+			}));
+		}
+		// Fallback: receipData.lineItems for legacy expenses
+		return (scan?.lineItems ?? []).filter(
 			(li): li is ScanLineItem =>
 				!!li &&
 				typeof li === 'object' &&
 				(!!li.description || li.amount != null || li.quantity != null || li.unitPrice != null)
-		)
+		);
+	});
+
+	const readLineItemsTotal = $derived(
+		readLineItems.reduce((sum, li) => sum + (typeof li.amount === 'number' ? li.amount : 0), 0)
 	);
-	const scanLineItemsTotal = $derived(
-		scanLineItems.reduce((sum, li) => sum + (typeof li.amount === 'number' ? li.amount : 0), 0)
-	);
-	// Only show a footer total when at least one line item carried a numeric amount,
-	// so we never display a misleading "$0.00" when amounts were absent/non-numeric.
-	const scanHasLineItemTotal = $derived(
-		scanLineItems.some((li) => typeof li.amount === 'number' && !Number.isNaN(li.amount))
+	const readHasLineItemTotal = $derived(
+		readLineItems.some((li) => typeof li.amount === 'number' && !Number.isNaN(li.amount))
 	);
 	const scanHasFields = $derived(
 		!!(
@@ -113,6 +167,9 @@
 		typeof n === 'number' && !Number.isNaN(n) ? currencyFmt.format(n) : '';
 	const qty = (n: number | null | undefined) =>
 		typeof n === 'number' && !Number.isNaN(n) ? numberFmt.format(n) : '';
+	function formatMoney(val: number): string {
+		return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+	}
 
 	const statusOptions = $derived(STATUSES.map((value) => ({ value, label: value })));
 	const categoryOptions = $derived(CATEGORIES.map((value) => ({ value, label: value })));
@@ -137,6 +194,16 @@
 			taxAmount: expense.taxAmount != null ? String(expense.taxAmount) : '',
 			receiptData: expense.receiptData ?? ''
 		};
+		// Seed editable line items from typed rows, falling back to receiptData.lineItems.
+		lineItemKeySeq = 0;
+		const source = readLineItems;
+		editedLineItems = source.map((li) => ({
+			key: lineItemKeySeq++,
+			description: li.description ?? '',
+			quantity: li.quantity != null ? String(li.quantity) : '',
+			unitPrice: li.unitPrice != null ? String(li.unitPrice) : '',
+			amount: li.amount != null ? String(li.amount) : '',
+		}));
 		formErrors = {};
 		editing = true;
 	}
@@ -165,7 +232,24 @@
 			return;
 		}
 		formErrors = {};
-		saveMutation.mutate({ portfolioId, ...result.data });
+
+		// Build the line items payload: parse numeric strings, drop fully-empty rows.
+		const lineItems = editedLineItems
+			.map((li) => ({
+				description: li.description.trim(),
+				quantity: parseAmount(li.quantity),
+				unitPrice: parseAmount(li.unitPrice),
+				amount: parseAmount(li.amount),
+			}))
+			.filter(
+				(li) =>
+					li.description !== '' ||
+					li.quantity != null ||
+					li.unitPrice != null ||
+					li.amount != null
+			);
+
+		saveMutation.mutate({ portfolioId, ...result.data, lineItems });
 	}
 
 	const deleteMutation = createMutation(() => ({
@@ -314,47 +398,142 @@
 				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount} {editing} testid="expense-detail-tax" />
 				<InlineField label="Notes" bind:value={form.notes} display={expense.notes} {editing} type="textarea" testid="expense-detail-notes" class="sm:col-span-2" />
 
-				<!-- Scan extraction, surfaced. The scan→draft→confirm flow already saved
-				     line items + card/payment/document-kind/vendor into ReceiptData; we
-				     present them as readable rows instead of burying them in raw JSON.
-				     Each piece only renders when it actually has a value. -->
-				{#if scanLineItems.length > 0}
-					<div class="sm:col-span-2" data-testid="expense-detail-line-items">
-						<p class="mb-1 text-xs font-medium text-muted-foreground">Line items</p>
-						<div class="overflow-hidden rounded-md border border-border bg-background/40">
-							<table class="w-full text-sm">
-								<thead>
-									<tr class="border-b border-border text-xs text-muted-foreground">
-										<th class="px-3 py-2 text-left font-medium">Description</th>
-										<th class="px-3 py-2 text-right font-medium">Qty</th>
-										<th class="px-3 py-2 text-right font-medium">Unit price</th>
-										<th class="px-3 py-2 text-right font-medium">Amount</th>
-									</tr>
-								</thead>
-								<tbody>
-									{#each scanLineItems as li}
-										<tr class="border-b border-border/60 last:border-b-0">
-											<td class="px-3 py-2 text-foreground">{li.description ?? '-'}</td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">{qty(li.quantity) || '-'}</td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">{usd(li.unitPrice) || '-'}</td>
-											<td class="px-3 py-2 text-right font-mono tabular-nums font-medium text-foreground">{usd(li.amount) || '-'}</td>
-										</tr>
-									{/each}
-								</tbody>
-								<tfoot>
-									<tr class="border-t border-border bg-muted/30">
-										<td class="px-3 py-2 text-xs text-muted-foreground" colspan="3">
-											{scanLineItems.length} {scanLineItems.length === 1 ? 'item' : 'items'}
-										</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums font-semibold text-foreground" data-testid="expense-detail-line-items-total">
-											{scanHasLineItemTotal ? usd(scanLineItemsTotal) : ''}
-										</td>
-									</tr>
-								</tfoot>
-							</table>
+				<!-- Line items: read-only table in view mode, editable table with add/remove in edit mode. -->
+				<div class="sm:col-span-2" data-testid="expense-detail-line-items">
+					{#if editing}
+						<!-- Edit mode: editable line items (mirrors scan review page) -->
+						<div class="mb-2 flex items-center justify-between">
+							<p class="text-xs font-medium text-muted-foreground">Line items</p>
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								class="h-7 gap-1 px-2 text-xs"
+								data-testid="expense-detail-line-item-add"
+								onclick={addLineItem}
+							>
+								<Plus class="h-3 w-3" /> Add line item
+							</Button>
 						</div>
-					</div>
-				{/if}
+						{#if editedLineItems.length === 0}
+							<p class="text-sm text-muted-foreground">
+								No line items.
+								<button type="button" class="text-accent underline-offset-2 hover:underline" onclick={addLineItem}>Add one</button>
+								if the receipt itemizes charges.
+							</p>
+						{:else}
+							<div class="overflow-hidden rounded-md border border-border">
+								<Table.Root>
+									<Table.Header>
+										<Table.Row class="bg-muted/40">
+											<Table.Head class="px-3 py-2 text-xs">Description</Table.Head>
+											<Table.Head class="w-16 px-2 py-2 text-right text-xs">Qty</Table.Head>
+											<Table.Head class="w-24 px-2 py-2 text-right text-xs">Unit price</Table.Head>
+											<Table.Head class="w-24 px-2 py-2 text-right text-xs">Amount</Table.Head>
+											<Table.Head class="w-9 px-1 py-2"><span class="sr-only">Remove</span></Table.Head>
+										</Table.Row>
+									</Table.Header>
+									<Table.Body>
+										{#each editedLineItems as item, i (item.key)}
+											<Table.Row class={i % 2 === 1 ? 'bg-muted/20' : ''}>
+												<Table.Cell class="px-2 py-1.5">
+													<Input
+														type="text"
+														placeholder="Description"
+														bind:value={item.description}
+														data-testid="expense-detail-line-item-description-{i}"
+														class="h-8 text-sm"
+													/>
+												</Table.Cell>
+												<Table.Cell class="px-2 py-1.5">
+													<Input
+														type="text"
+														inputmode="decimal"
+														bind:value={item.quantity}
+														data-testid="expense-detail-line-item-quantity-{i}"
+														class="h-8 text-right font-mono text-sm tabular-nums"
+													/>
+												</Table.Cell>
+												<Table.Cell class="px-2 py-1.5">
+													<Input
+														type="text"
+														inputmode="decimal"
+														bind:value={item.unitPrice}
+														data-testid="expense-detail-line-item-unit-price-{i}"
+														class="h-8 text-right font-mono text-sm tabular-nums"
+													/>
+												</Table.Cell>
+												<Table.Cell class="px-2 py-1.5">
+													<Input
+														type="text"
+														inputmode="decimal"
+														bind:value={item.amount}
+														data-testid="expense-detail-line-item-amount-{i}"
+														class="h-8 text-right font-mono text-sm tabular-nums"
+													/>
+												</Table.Cell>
+												<Table.Cell class="px-1 py-1.5 text-center">
+													<button
+														type="button"
+														onclick={() => removeLineItem(item.key)}
+														data-testid="expense-detail-line-item-remove-{i}"
+														class="text-muted-foreground transition-colors hover:text-destructive"
+														aria-label="Remove line item {i + 1}"
+													>✕</button>
+												</Table.Cell>
+											</Table.Row>
+										{/each}
+									</Table.Body>
+								</Table.Root>
+							</div>
+							<!-- Running total echo -->
+							<div class="mt-2 flex items-center justify-between px-1 text-xs">
+								<span class="text-muted-foreground">Line items total</span>
+								<span
+									class="font-mono tabular-nums text-foreground"
+									data-testid="expense-detail-line-items-edit-total"
+								>{editLineItemsHaveAmounts ? `$${formatMoney(editLineItemsTotal)}` : ''}</span>
+							</div>
+						{/if}
+					{:else}
+						<!-- Read mode: read-only table (same as before, sourced from typed rows + fallback) -->
+						{#if readLineItems.length > 0}
+							<p class="mb-1 text-xs font-medium text-muted-foreground">Line items</p>
+							<div class="overflow-hidden rounded-md border border-border bg-background/40">
+								<table class="w-full text-sm">
+									<thead>
+										<tr class="border-b border-border text-xs text-muted-foreground">
+											<th class="px-3 py-2 text-left font-medium">Description</th>
+											<th class="px-3 py-2 text-right font-medium">Qty</th>
+											<th class="px-3 py-2 text-right font-medium">Unit price</th>
+											<th class="px-3 py-2 text-right font-medium">Amount</th>
+										</tr>
+									</thead>
+									<tbody>
+										{#each readLineItems as li}
+											<tr class="border-b border-border/60 last:border-b-0">
+												<td class="px-3 py-2 text-foreground">{li.description ?? '-'}</td>
+												<td class="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">{qty(li.quantity) || '-'}</td>
+												<td class="px-3 py-2 text-right font-mono tabular-nums text-muted-foreground">{usd(li.unitPrice) || '-'}</td>
+												<td class="px-3 py-2 text-right font-mono tabular-nums font-medium text-foreground">{usd(li.amount) || '-'}</td>
+											</tr>
+										{/each}
+									</tbody>
+									<tfoot>
+										<tr class="border-t border-border bg-muted/30">
+											<td class="px-3 py-2 text-xs text-muted-foreground" colspan="3">
+												{readLineItems.length} {readLineItems.length === 1 ? 'item' : 'items'}
+											</td>
+											<td class="px-3 py-2 text-right font-mono tabular-nums font-semibold text-foreground" data-testid="expense-detail-line-items-total">
+												{readHasLineItemTotal ? usd(readLineItemsTotal) : ''}
+											</td>
+										</tr>
+									</tfoot>
+								</table>
+							</div>
+						{/if}
+					{/if}
+				</div>
 
 				{#if scanHasFields}
 					{#if scan?.cardLast4}
