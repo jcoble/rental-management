@@ -43,7 +43,8 @@
 		Bot,
 		BookOpen,
 		HelpCircle,
-		Activity
+		Activity,
+		ShieldAlert
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -176,6 +177,7 @@
 			icon: Shield,
 			items: [
 				{ href: '/audit', label: 'Audit', icon: History, roles: ['Admin', 'Manager'] },
+				{ href: '/admin/audit', label: 'Audit (forensic)', icon: ShieldAlert, roles: ['Admin'] },
 				{ href: '/admin/users', label: 'User Access', icon: Shield, roles: ['Admin'] },
 				{ href: '/admin/engine', label: 'Engine Health', icon: Activity, roles: ['Admin'] },
 				{ href: '/settings', label: 'Settings', icon: Settings, roles: ['Admin', 'Manager'] }
