@@ -186,6 +186,31 @@ export const expenseSchema = z.object({
 	shipping: optionalNonNegative('Shipping'),
 });
 
+/**
+ * The expense DETAIL page edits only a subset of the expense fields — the rest
+ * (vendor contact, payment method, card last 4, tip/discount/shipping/tax-rate,
+ * receipt/work-order refs) live in receiptData and are only set via the scan/create
+ * flow. Validating the detail form against the full {@link expenseSchema} errored on
+ * those absent keys (zod `.nullable()` rejects `undefined`, a missing key), so the
+ * form never validated and Save silently bailed. Pick exactly the keys the detail
+ * form carries; the PATCH-style update API leaves any field not sent untouched.
+ */
+export const expenseDetailSchema = expenseSchema.pick({
+	description: true,
+	amount: true,
+	subtotal: true,
+	taxAmount: true,
+	incurredAt: true,
+	dueDate: true,
+	paidAt: true,
+	category: true,
+	status: true,
+	propertyId: true,
+	vendorId: true,
+	billableToOwner: true,
+	notes: true
+});
+
 export const workOrderSchema = z.object({
 	propertyId: numericString('Property'),
 	title: required('Title'),
