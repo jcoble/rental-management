@@ -42,7 +42,8 @@
 		Contact,
 		Bot,
 		BookOpen,
-		HelpCircle
+		HelpCircle,
+		Activity
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -176,6 +177,7 @@
 			items: [
 				{ href: '/activity', label: 'Activity', icon: History, roles: ['Admin', 'Manager'] },
 				{ href: '/admin/users', label: 'User Access', icon: Shield, roles: ['Admin'] },
+				{ href: '/admin/engine', label: 'Engine Health', icon: Activity, roles: ['Admin'] },
 				{ href: '/settings', label: 'Settings', icon: Settings, roles: ['Admin', 'Manager'] }
 			]
 		}

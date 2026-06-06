@@ -290,6 +290,11 @@ else
         RentalCommand.Api.Services.Screening.DisabledScreeningProvider>();
 }
 
+// Admin Engine Health: reads the Engine's worker-heartbeat table + active LLM config to back
+// the admin /admin/engine page (the Engine has no HTTP port, so the DB is the health contract).
+builder.Services.AddScoped<RentalCommand.Api.Services.Admin.IAdminEngineStatusService,
+    RentalCommand.Api.Services.Admin.AdminEngineStatusService>();
+
 var app = builder.Build();
 
 // Apply migrations + seed the default admin/roles/portfolio so login works on a fresh database.
