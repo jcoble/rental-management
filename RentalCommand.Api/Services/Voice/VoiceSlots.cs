@@ -18,17 +18,16 @@ namespace RentalCommand.Api.Services.Voice;
 /// </summary>
 public static class VoiceSlots
 {
-    /// <summary>
-    /// Value a user can give to say a slot intentionally has no value
-    /// (e.g. an expense not tied to a specific property). It is non-empty, so it
-    /// satisfies the slot like any other answer; the constant documents intent.
-    /// </summary>
-    public const string NoneSentinel = "none";
-
+    // Required slots per record type. Expense v1 requires only a positive
+    // amount — that's the one field the extraction always needs and that the
+    // confirm step rejects when missing. A spoken property is attached when the
+    // model resolves it (see the Expense prompt) but is optional, so the
+    // conversation can complete without one (the receipt isn't always for a
+    // specific unit). Payment/WorkOrder have no slots yet (always complete).
     private static readonly IReadOnlyDictionary<string, string[]> RequiredByType =
         new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
-            ["Expense"] = ["amount", "property_id"],
+            ["Expense"] = ["amount"],
         };
 
     /// <summary>Alternate field names that satisfy a slot (the LLM may emit "total").</summary>
@@ -42,8 +41,6 @@ public static class VoiceSlots
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["amount"] = "How much was it?",
-            ["property_id"] =
-                "Which property is this for? You can also say it isn't for a specific property.",
         };
 
     public static SlotEvaluation Evaluate(

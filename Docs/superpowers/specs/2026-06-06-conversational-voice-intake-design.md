@@ -38,6 +38,15 @@ A first-class **"Tell me"** voice flow:
 loop end-to-end. Payments and work orders are a fast-follow (the server already
 classifies all three).
 
+**Required slot (corrected during live testing): `amount` only.** The expense
+extraction does not structure a property the way the spec first assumed, and the
+confirm step rejects a non-positive amount — so the one required slot is a
+positive `amount`. A spoken property is now added to the expense prompt and
+attached to `Expense.PropertyId` when the model resolves it against the
+portfolio, but it is **optional** (a receipt isn't always for one unit), so the
+conversation never blocks on it. Note: the classifier returns `amount: "0"/"0.0"`
+when no amount was spoken, so the slot requires a value that parses **> 0**.
+
 ## Non-goals (v1)
 
 - Fully hands-free auto-listen (no tap between turns) — v2; needs endpointing/VAD.
