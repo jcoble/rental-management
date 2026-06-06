@@ -4,7 +4,7 @@ namespace RentalCommand.Api.DTOs;
 /// Aggregated portfolio dashboard payload for the SvelteKit web app
 /// (<c>GET /api/v1/portfolios/{id}/dashboard</c>). Read-only KPI rollup; never persisted.
 /// Enum values are emitted as their string names (the web client types them as string unions),
-/// matching the existing <see cref="ActivityResponse.TypeName"/> convention.
+/// matching the app-wide string-enum convention.
 /// </summary>
 public class DashboardResponse
 {

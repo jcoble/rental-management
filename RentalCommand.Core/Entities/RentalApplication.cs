@@ -1,4 +1,5 @@
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
 
@@ -8,7 +9,7 @@ namespace RentalCommand.Core.Entities;
 /// photo of their ID / pay stub, and submits. The landlord reviews and approves/declines in-app;
 /// approving creates a real <see cref="Tenant"/>.
 /// </summary>
-public class RentalApplication
+public class RentalApplication : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
 

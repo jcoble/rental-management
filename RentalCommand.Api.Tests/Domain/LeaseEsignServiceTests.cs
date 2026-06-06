@@ -211,7 +211,7 @@ public sealed class LeaseEsignServiceTests : IDisposable
             provider,
             _storage,
             new NoopDataUpdateService(),
-            new AuditTrailService(_db),
+            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
             new SandboxGuard(_db),
             NullLogger<LeaseEsignService>.Instance);
     }

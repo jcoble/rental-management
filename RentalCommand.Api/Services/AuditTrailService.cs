@@ -13,10 +13,12 @@ namespace RentalCommand.Api.Services;
 public sealed class AuditTrailService : IAuditTrailService
 {
     private readonly RentalCommandDbContext _db;
+    private readonly IAuditScope _scope;
 
-    public AuditTrailService(RentalCommandDbContext db)
+    public AuditTrailService(RentalCommandDbContext db, IAuditScope scope)
     {
         _db = db;
+        _scope = scope;
     }
 
     /// <inheritdoc />
@@ -33,6 +35,14 @@ public sealed class AuditTrailService : IAuditTrailService
         string? ipAddress = null,
         CancellationToken ct = default)
     {
+        // Coordinate with the generic audit interceptor: the first writer to claim this
+        // (entityType, entityId, operation) for the request wins. If the interceptor already
+        // recorded it, skip the duplicate; otherwise this rich explicit row is authoritative.
+        if (!_scope.Claim(entityType, entityId, operation))
+        {
+            return;
+        }
+
         var entry = new AuditLog
         {
             PortfolioId = portfolioId,

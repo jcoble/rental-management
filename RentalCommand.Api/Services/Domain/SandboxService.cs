@@ -162,7 +162,7 @@ public sealed class SandboxService : ISandboxService
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
         await _db.StoredFiles.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
-        await _db.ActivityLogs.IgnoreQueryFilters()
+        await _db.AuditLogs.IgnoreQueryFilters()
             .Where(e => e.PortfolioId == portfolioId).ExecuteDeleteAsync(ct);
     }
 

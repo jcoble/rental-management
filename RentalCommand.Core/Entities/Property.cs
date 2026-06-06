@@ -1,8 +1,9 @@
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Core.Entities;
 
-public class Property
+public class Property : IAuditable, IPortfolioScoped
 {
     public int Id { get; set; }
     public int PortfolioId { get; set; }
