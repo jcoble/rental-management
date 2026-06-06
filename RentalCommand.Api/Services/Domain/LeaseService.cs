@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
@@ -16,6 +17,7 @@ public class LeaseService : ILeaseService
     private readonly IDataUpdateService _dataUpdate;
     private readonly IFileStorage _storage;
     private readonly ILeaseAgreementPdfGenerator _pdf;
+    private readonly IAuditTrailService _audit;
     private readonly ILogger<LeaseService> _logger;
 
     public LeaseService(
@@ -23,14 +25,37 @@ public class LeaseService : ILeaseService
         IDataUpdateService dataUpdate,
         IFileStorage storage,
         ILeaseAgreementPdfGenerator pdf,
+        IAuditTrailService audit,
         ILogger<LeaseService> logger)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _storage = storage;
         _pdf = pdf;
+        _audit = audit;
         _logger = logger;
     }
+
+    // A lease is a legal contract, so high-stakes events (create / edit / terminate) get an explicit
+    // audit row with a GUARANTEED full before→after snapshot + human reason — richer than the generic
+    // interceptor's changed-properties-only capture. The explicit log enriches the generic twin in
+    // place (see AuditTrailService), so it wins regardless of being written after SaveChanges.
+    private static string Snapshot(Lease l) => JsonSerializer.Serialize(new
+    {
+        leaseNumber = l.LeaseNumber,
+        status = l.Status.ToString(),
+        startDate = l.StartDate,
+        endDate = l.EndDate,
+        moveInDate = l.MoveInDate,
+        moveOutDate = l.MoveOutDate,
+        monthlyRent = l.MonthlyRent,
+        securityDeposit = l.SecurityDeposit,
+        lateFeeAmount = l.LateFeeAmount,
+        rentDueDay = l.RentDueDay,
+        tenantId = l.TenantId,
+        propertyId = l.PropertyId,
+        unitId = l.UnitId,
+    });
 
     public async Task<IReadOnlyList<LeaseResponse>> ListAsync(int portfolioId, int? tenantId, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
@@ -276,6 +301,10 @@ public class LeaseService : ILeaseService
         _db.Leases.Add(entity);
         await _db.SaveChangesAsync(ct);
 
+        // The generic Created twin already holds a full snapshot; add the legal change reason to it.
+        await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Created,
+            changeReason: $"Lease {entity.LeaseNumber} created (status {entity.Status})", ct: ct);
+
         var response = LeaseResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
@@ -289,6 +318,13 @@ public class LeaseService : ILeaseService
         {
             return null;
         }
+
+        // Full before-snapshot + the legally-relevant scalars, captured prior to mutation.
+        var before = Snapshot(entity);
+        var prevStatus = entity.Status;
+        var prevRent = entity.MonthlyRent;
+        var prevEnd = entity.EndDate;
+        var prevDeposit = entity.SecurityDeposit;
 
         if (request.LeaseNumber != null) entity.LeaseNumber = request.LeaseNumber;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
@@ -305,6 +341,18 @@ public class LeaseService : ILeaseService
 
         await _db.SaveChangesAsync(ct);
 
+        // Record the full before→after snapshot, summarizing the high-stakes field changes in the reason.
+        var changes = new List<string>();
+        if (entity.Status != prevStatus) changes.Add($"status {prevStatus}→{entity.Status}");
+        if (entity.MonthlyRent != prevRent) changes.Add($"rent {prevRent:0.##}→{entity.MonthlyRent:0.##}");
+        if (entity.EndDate != prevEnd) changes.Add($"end date {prevEnd:yyyy-MM-dd}→{entity.EndDate:yyyy-MM-dd}");
+        if (entity.SecurityDeposit != prevDeposit) changes.Add($"deposit {prevDeposit:0.##}→{entity.SecurityDeposit:0.##}");
+        var reason = changes.Count > 0
+            ? $"Lease {entity.LeaseNumber}: {string.Join("; ", changes)}"
+            : $"Lease {entity.LeaseNumber} details updated";
+        await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
+            oldValues: before, newValues: Snapshot(entity), changeReason: reason, ct: ct);
+
         var response = LeaseResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
@@ -319,8 +367,15 @@ public class LeaseService : ILeaseService
             return false;
         }
 
+        // Capture the full pre-termination snapshot before the soft-delete (the generic twin would
+        // otherwise record only the DeletedAt change).
+        var before = Snapshot(entity);
+
         entity.DeletedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+
+        await _audit.LogAsync(portfolioId, EntityType, id, AuditLogOperation.Deleted,
+            oldValues: before, changeReason: $"Lease {entity.LeaseNumber} terminated", ct: ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;

@@ -6,9 +6,16 @@ using RentalCommand.Data;
 namespace RentalCommand.Api.Services;
 
 /// <summary>
-/// Persists append-only <see cref="AuditLog"/> rows. Each call writes one row and
-/// immediately flushes via <c>SaveChangesAsync</c> so audit entries are durable even if
-/// the enclosing unit-of-work is later rolled back.
+/// Persists append-only <see cref="AuditLog"/> rows for the legally-rich semantic events. Each call
+/// flushes via <c>SaveChangesAsync</c> so audit entries are durable even if the enclosing
+/// unit-of-work is later rolled back.
+///
+/// <para>Coordinates with the generic <c>AuditSaveChangesInterceptor</c> through <see cref="IAuditScope"/>
+/// so a change is recorded exactly once and the rich explicit row always wins — <b>regardless of call
+/// order</b>. When a service logs <i>after</i> the entity's save (the common case), the interceptor has
+/// already written a generic twin; this enriches that row in place with the full snapshot / change
+/// reason instead of being silently suppressed. When a service logs <i>before</i> the save, it inserts
+/// the rich row and the later generic twin defers.</para>
 /// </summary>
 public sealed class AuditTrailService : IAuditTrailService
 {
@@ -35,30 +42,46 @@ public sealed class AuditTrailService : IAuditTrailService
         string? ipAddress = null,
         CancellationToken ct = default)
     {
-        // Coordinate with the generic audit interceptor: the first writer to claim this
-        // (entityType, entityId, operation) for the request wins. If the interceptor already
-        // recorded it, skip the duplicate; otherwise this rich explicit row is authoritative.
-        if (!_scope.Claim(entityType, entityId, operation))
+        var resolution = _scope.ResolveExplicit(entityType, entityId, operation);
+
+        switch (resolution.Decision)
         {
-            return;
+            case AuditWrite.Skip:
+                // A prior explicit log already covered this key this request — avoid a duplicate.
+                return;
+
+            case AuditWrite.Enrich:
+                // The generic interceptor already wrote a twin for this change earlier in the request.
+                // Overwrite it in place with the rich payload. Explicit, non-null values win; anything
+                // the caller leaves null keeps the generic capture (its actor/IP, and the changed-property
+                // diff when only a ChangeReason is supplied).
+                var existing = resolution.ExistingRow!;
+                if (oldValues is not null) existing.OldValues = oldValues;
+                if (newValues is not null) existing.NewValues = newValues;
+                if (changeReason is not null) existing.ChangeReason = changeReason;
+                if (userId.HasValue) existing.UserId = userId;
+                if (actorLabel is not null) existing.ActorLabel = actorLabel;
+                if (ipAddress is not null) existing.IpAddress = ipAddress;
+                await _db.SaveChangesAsync(ct);
+                return;
+
+            default: // AuditWrite.Insert
+                _db.AuditLogs.Add(new AuditLog
+                {
+                    PortfolioId = portfolioId,
+                    EntityType = entityType,
+                    EntityId = entityId,
+                    Operation = operation,
+                    UserId = userId,
+                    ActorLabel = actorLabel,
+                    OldValues = oldValues,
+                    NewValues = newValues,
+                    ChangeReason = changeReason,
+                    IpAddress = ipAddress,
+                    Timestamp = DateTime.UtcNow,
+                });
+                await _db.SaveChangesAsync(ct);
+                return;
         }
-
-        var entry = new AuditLog
-        {
-            PortfolioId = portfolioId,
-            EntityType = entityType,
-            EntityId = entityId,
-            Operation = operation,
-            UserId = userId,
-            ActorLabel = actorLabel,
-            OldValues = oldValues,
-            NewValues = newValues,
-            ChangeReason = changeReason,
-            IpAddress = ipAddress,
-            Timestamp = DateTime.UtcNow,
-        };
-
-        _db.AuditLogs.Add(entry);
-        await _db.SaveChangesAsync(ct);
     }
 }

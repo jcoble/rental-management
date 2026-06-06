@@ -56,6 +56,7 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             new NoopDataUpdateService(),
             _storage,
             new LeaseAgreementPdfGenerator(),
+            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
             NullLogger<LeaseService>.Instance);
     }
 
