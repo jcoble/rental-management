@@ -2,7 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { ArrowLeft, Pencil, Save, Trash2, X, Wrench, ClipboardList } from '@lucide/svelte';
+	import { ArrowLeft, Pencil, Save, Trash2, X, Wrench, ClipboardList, FileText } from '@lucide/svelte';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -169,6 +169,45 @@
 				<InlineField label="Status" bind:value={form.status} display={workOrder.status} {editing} type="select" options={statusOptions} testid="work-order-detail-status" />
 				<InlineField label="Property" bind:value={form.propertyId} display={workOrder.propertyName} {editing} type="select" options={propertyOptions} error={formErrors.propertyId} testid="work-order-detail-property" />
 			</DetailCard>
+
+			<!-- Original scanned document this work order was created from (e.g. a vendor estimate),
+			     served through the same-origin /workorder-file proxy. Renders only when one exists. -->
+			{#if workOrder.hasScan}
+				<DetailCard title="Scanned document" icon={FileText} accent="muted" testid="work-order-card-scanned-document" class="lg:col-span-2">
+					<div class="flex flex-col items-start gap-2">
+						<p class="text-xs text-muted-foreground">The original document this work order was created from.</p>
+						{#if workOrder.scanIsImage}
+							<a
+								href="/workorder-file/{workOrder.id}"
+								target="_blank"
+								rel="noopener noreferrer"
+								data-testid="work-order-detail-scanned-document-link"
+								aria-label="View scanned document full size"
+								class="group inline-block"
+							>
+								<img
+									src="/workorder-file/{workOrder.id}?thumb=true"
+									alt="Scanned document preview"
+									class="max-h-80 w-auto rounded-md border border-border object-contain transition group-hover:ring-2 group-hover:ring-primary"
+									loading="lazy"
+								/>
+								<span class="mt-1 block text-xs text-primary underline underline-offset-2 group-hover:text-primary/80">Open full size</span>
+							</a>
+						{:else}
+							<a
+								href="/workorder-file/{workOrder.id}"
+								target="_blank"
+								rel="noopener noreferrer"
+								data-testid="work-order-detail-scanned-document-link"
+								class="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-3 text-sm font-medium text-foreground transition hover:border-primary hover:text-primary"
+							>
+								<FileText class="h-5 w-5 shrink-0" />
+								<span>View scanned document (PDF)</span>
+							</a>
+						{/if}
+					</div>
+				</DetailCard>
+			{/if}
 		</div>
 	{/if}
 </div>

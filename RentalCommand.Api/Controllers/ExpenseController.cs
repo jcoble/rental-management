@@ -1,7 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
-using RentalCommand.Api.Imaging;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -17,12 +15,6 @@ namespace RentalCommand.Api.Controllers;
 [Produces("application/json")]
 public class ExpenseController : AuthenticatedPortfolioControllerBase
 {
-    // Content types we trust to render inline (mirrors ScanController allowlist).
-    private static readonly HashSet<string> InlineSafeContentTypes = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic"
-    };
-
     private readonly IExpenseService _service;
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _files;
@@ -82,71 +74,13 @@ public class ExpenseController : AuthenticatedPortfolioControllerBase
     }
 
     // -------------------------------------------------------------------------
-    // GET /api/v1/expenses/{id}/receipt[?thumb=true]  — stream receipt file
+    // GET /api/v1/expenses/{id}/receipt[?thumb=true] — stream the original scanned receipt.
+    // Delegates to the shared base-controller helper (also used by payments/leases/work-orders).
     // -------------------------------------------------------------------------
 
     [HttpGet("{id:int}/receipt")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetReceipt(int id, [FromQuery] bool thumb = false, CancellationToken ct = default)
-    {
-        var portfolioId = GetPortfolioId();
-
-        var storedFile = await _db.StoredFiles
-            .AsNoTracking()
-            .Where(f =>
-                f.PortfolioId == portfolioId &&
-                f.EntityType == "Expense" &&
-                f.EntityId == id &&
-                f.DeletedAt == null)
-            .OrderByDescending(f => f.UploadedAt)
-            .FirstOrDefaultAsync(ct);
-
-        if (storedFile is null)
-            return NotFound(new { error = "Receipt not found" });
-
-        Stream fileStream;
-        try
-        {
-            fileStream = await _files.DownloadAsync(storedFile.FilePath, ct);
-        }
-        catch
-        {
-            return NotFound(new { error = "File not found on storage" });
-        }
-
-        Response.Headers["X-Content-Type-Options"] = "nosniff";
-
-        // When thumb=true and the file is an image, generate a JPEG thumbnail.
-        if (thumb && storedFile.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-        {
-            byte[] srcBytes;
-            using (var ms = new MemoryStream())
-            {
-                await fileStream.CopyToAsync(ms, ct);
-                srcBytes = ms.ToArray();
-            }
-
-            var thumbBytes = ThumbnailResizer.ResizeToJpeg(srcBytes);
-            if (thumbBytes is not null)
-            {
-                Response.Headers["Cache-Control"] = "private, max-age=86400";
-                Response.Headers["Content-Disposition"] = $"inline; filename=\"receipt-{id}-thumb.jpg\"";
-                return File(thumbBytes, "image/jpeg");
-            }
-
-            // Fall through to serve original if resize failed.
-            fileStream = new MemoryStream(srcBytes);
-        }
-
-        // Serve defensively: inline for known-safe types, octet-stream otherwise.
-        if (InlineSafeContentTypes.Contains(storedFile.ContentType))
-        {
-            Response.Headers["Content-Disposition"] = $"inline; filename=\"receipt-{id}\"";
-            return File(fileStream, storedFile.ContentType);
-        }
-
-        Response.Headers["Content-Disposition"] = $"attachment; filename=\"receipt-{id}\"";
-        return File(fileStream, "application/octet-stream");
-    }
+    public Task<IActionResult> GetReceipt(int id, [FromQuery] bool thumb = false, CancellationToken ct = default)
+        => ServeEntityScanAsync(_db, _files, "Expense", id, thumb, ct);
 }
