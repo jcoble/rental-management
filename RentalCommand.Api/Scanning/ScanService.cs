@@ -1071,7 +1071,9 @@ public sealed class ScanService : IScanService
     /// <summary>
     /// Merges a flat override JSON into the DTO, overwriting any present key.
     /// Accepts both camelCase (web) and snake_case (field names) keys.
-    /// Never throws on null/empty/malformed JSON. Line items are not editable via overrides.
+    /// Never throws on null/empty/malformed JSON. A present "line_items" array replaces the
+    /// extracted line items wholesale (the reviewer can edit/add/remove rows); an absent key
+    /// leaves them untouched.
     /// </summary>
     private void ApplyOverrides(ExtractedReceiptDto dto, string overridesJson)
     {
@@ -1151,6 +1153,16 @@ public sealed class ScanService : IScanService
 
             if (TryGetOverrideString(root, out var bankName, "bankName", "bank_name"))
                 dto.BankName = bankName;
+
+            // ---- Line items ----
+            // The review UI sends the full edited line-items array under "line_items" once the
+            // reviewer touches the table (a real JSON array of {description, quantity, unit_price,
+            // amount}). Presence of the key — even an empty array — means "use exactly these", so a
+            // deleted row stays deleted and a cleared table persists no items; absence leaves the
+            // extracted items untouched (scalar-only edits don't disturb them). Reuses the same
+            // tolerant per-item parser as extraction, so a bad numeric edit can never throw here.
+            if (root.TryGetProperty("line_items", out _))
+                dto.LineItems = ParseLineItems(root, "line_items");
         }
         catch (Exception ex)
         {
