@@ -7,7 +7,7 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { expenseSchema, parseForm } from '$lib/schemas';
+	import { expenseDetailSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
@@ -226,7 +226,7 @@
 	}));
 
 	function saveExpense() {
-		const result = parseForm(expenseSchema, form);
+		const result = parseForm(expenseDetailSchema, form);
 		if (result.errors) {
 			formErrors = result.errors;
 			return;
