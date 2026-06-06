@@ -88,6 +88,133 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         return draft;
     }
 
+    public async Task<ScanDraft> AnswerAsync(
+        int portfolioId,
+        int draftId,
+        byte[] audioBytes,
+        string? contentType,
+        string? providedTranscript,
+        CancellationToken ct = default)
+    {
+        var draft = await _db.ScanDrafts
+            .FirstOrDefaultAsync(d => d.Id == draftId && d.PortfolioId == portfolioId, ct)
+            ?? throw new KeyNotFoundException($"Voice draft {draftId} not found.");
+
+        var answer = string.IsNullOrWhiteSpace(providedTranscript)
+            ? await _transcriber.TranscribeAsync(audioBytes, contentType ?? "application/octet-stream", "voice.webm", ct)
+            : providedTranscript.Trim();
+
+        if (string.IsNullOrWhiteSpace(answer))
+        {
+            throw new ArgumentException("A transcript or non-empty transcribable audio is required.");
+        }
+
+        // Append the answer to the running transcript and re-classify the whole
+        // conversation. The model now sees the full context (e.g. the amount it
+        // was missing), so a single re-classify fills the new slot.
+        var prior = ExtractTranscript(draft.ExtractedFields);
+        var combined = string.IsNullOrWhiteSpace(prior) ? answer : $"{prior} {answer}".Trim();
+
+        var classification = await ClassifyTranscriptAsync(portfolioId, combined, ct);
+        draft.ExtractedFields = MergeFields(draft.ExtractedFields, classification.ExtractedFieldsJson);
+        draft.TargetEntityType = classification.TargetEntityType;
+        draft.ModelId = classification.ModelId;
+        draft.ReviewedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return draft;
+    }
+
+    /// <summary>Reads the accumulated transcript from a draft's extracted-fields JSON.</summary>
+    private static string? ExtractTranscript(string? fieldsJson)
+    {
+        if (string.IsNullOrWhiteSpace(fieldsJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(fieldsJson);
+            if (doc.RootElement.TryGetProperty("transcript", out var t)
+                && t.TryGetProperty("value", out var v)
+                && v.ValueKind == JsonValueKind.String)
+            {
+                return v.GetString();
+            }
+        }
+        catch
+        {
+            // Malformed JSON — treat as no prior transcript.
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Merges a freshly-classified field set over the prior one: a new non-empty
+    /// value wins; a field present before but dropped/blanked by the new pass is
+    /// preserved, so an answered slot is never lost on a later turn.
+    /// </summary>
+    private static string MergeFields(string? priorJson, string newJson)
+    {
+        var merged = ParseFieldMap(priorJson);
+        foreach (var (name, value) in ParseFieldMap(newJson))
+        {
+            if (!string.IsNullOrWhiteSpace(value.Value) || !merged.ContainsKey(name))
+            {
+                merged[name] = value;
+            }
+        }
+
+        var shaped = merged.ToDictionary(
+            kv => kv.Key,
+            kv => (object)new { value = kv.Value.Value, confidence = kv.Value.Confidence });
+        return JsonSerializer.Serialize(shaped, JsonOptions);
+    }
+
+    private static Dictionary<string, FieldValue> ParseFieldMap(string? json)
+    {
+        var map = new Dictionary<string, FieldValue>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(json))
+        {
+            return map;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return map;
+            }
+
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                if (prop.Value.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var value = prop.Value.TryGetProperty("value", out var v)
+                    ? (v.ValueKind == JsonValueKind.String ? v.GetString() ?? string.Empty : v.ToString())
+                    : string.Empty;
+                var confidence = prop.Value.TryGetProperty("confidence", out var c)
+                    && c.ValueKind == JsonValueKind.Number && c.TryGetDecimal(out var dec)
+                    ? dec
+                    : 0m;
+                map[prop.Name] = new FieldValue(value, confidence);
+            }
+        }
+        catch
+        {
+            // Malformed JSON — return whatever parsed.
+        }
+
+        return map;
+    }
+
+    private sealed record FieldValue(string Value, decimal Confidence);
+
     private async Task<VoiceClassification> ClassifyTranscriptAsync(int portfolioId, string transcript, CancellationToken ct)
     {
         var grounding = await BuildGroundingContextAsync(portfolioId, ct);

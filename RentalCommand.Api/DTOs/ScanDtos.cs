@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
+using RentalCommand.Api.Services.Voice;
 using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Api.DTOs;
@@ -13,7 +14,13 @@ public sealed record ScanDraftResponse(
     string FileUrl, IReadOnlyList<ScanFieldDto> Fields,
     string? ModelId, int? TokensUsed, decimal? CostUsd,
     DateTime CreatedAt, DateTime? ReviewedAt, DateTime? ConfirmedAt,
-    string? CreatedEntityType = null, int? CreatedEntityId = null)
+    string? CreatedEntityType = null, int? CreatedEntityId = null,
+    // Conversational-voice ("Tell me") slot state. Populated only via
+    // WithVoiceSlots() for the voice endpoints; left at complete/empty defaults
+    // for scanned documents (which the scan review screen never reads).
+    IReadOnlyList<string>? MissingRequired = null,
+    string? NextPrompt = null,
+    bool Complete = true)
 {
     /// <summary>
     /// Builds a <see cref="ScanDraftResponse"/> from a <see cref="ScanDraft"/> entity,
@@ -35,6 +42,30 @@ public sealed record ScanDraftResponse(
             d.ModelId, d.TokensUsed, d.CostUsd,
             d.CreatedAt, d.ReviewedAt, d.ConfirmedAt,
             createdEntityType, createdEntityId);
+    }
+
+    /// <summary>
+    /// Returns a copy with the conversational-voice slot fields
+    /// (<see cref="MissingRequired"/>, <see cref="NextPrompt"/>,
+    /// <see cref="Complete"/>) computed from this draft's own fields and target
+    /// type via <see cref="VoiceSlots"/>. Used by the "Tell me" voice flow; the
+    /// scan flow leaves them at their complete/empty defaults.
+    /// </summary>
+    public ScanDraftResponse WithVoiceSlots()
+    {
+        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var field in Fields)
+        {
+            values[field.Name] = field.Value;
+        }
+
+        var eval = VoiceSlots.Evaluate(TargetEntityType, values);
+        return this with
+        {
+            MissingRequired = eval.Missing,
+            NextPrompt = eval.NextPrompt,
+            Complete = eval.Complete,
+        };
     }
 
     private static IReadOnlyList<ScanFieldDto> ParseFields(string? json)
