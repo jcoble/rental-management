@@ -231,7 +231,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
               }
             }
             For WorkOrder include property_id when known or strongly matched, optional unit_id, tenant_id, title, description, category, priority, estimated_cost.
-            For Expense/Payment use the same snake_case field names as receipt/payment scan drafts: vendor_name, amount/total, transaction_date, category, notes, payer_name, check_number, lease_id.
+            For Expense/Payment use the same snake_case field names as receipt/payment scan drafts: vendor_name, amount/total, transaction_date, category, notes, payer_name, check_number, lease_id. Also include property_id when the speaker names a property that matches one in Known records (otherwise omit it).
             Known records:
             """ + "\n" + grounding + "\n\nTranscript:\n" + transcript;
 

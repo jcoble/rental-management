@@ -38,21 +38,23 @@ public class VoiceSlotsTests
     }
 
     [Fact]
-    public void NoSpecificProperty_Satisfies_PropertySlot()
+    public void AmountAlone_IsComplete_PropertyOptional()
     {
-        var result = VoiceSlots.Evaluate(
-            "Expense",
-            Fields(("amount", "40"), ("property_id", VoiceSlots.NoneSentinel)));
+        // Property is optional in v1 (the expense pipeline attaches it when the
+        // model resolves a spoken property, but never blocks on it), so a
+        // positive amount alone completes the expense.
+        var result = VoiceSlots.Evaluate("Expense", Fields(("amount", "40")));
 
         result.Complete.Should().BeTrue();
+        result.Missing.Should().BeEmpty();
     }
 
     [Fact]
-    public void MissingBoth_AsksAmountFirst()
+    public void NoFields_AsksAmount()
     {
         var result = VoiceSlots.Evaluate("Expense", Fields());
 
-        result.Missing.Should().BeEquivalentTo(["amount", "property_id"]);
+        result.Missing.Should().ContainSingle().Which.Should().Be("amount");
         result.NextPrompt.Should().Be("How much was it?");
         result.Complete.Should().BeFalse();
     }
