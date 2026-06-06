@@ -20,6 +20,7 @@ dependencies:
   signalr_netcore: ^1.4.4
   record: ^7.0.0
   url_launcher: ^6.3.1
+  app_links: ^7.0.0
 
 dev_dependencies:
   flutter_test:
