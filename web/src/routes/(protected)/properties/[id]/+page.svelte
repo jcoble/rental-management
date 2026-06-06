@@ -69,7 +69,7 @@
 	});
 
 	// ── Inline property edit ──────────────────────────────────────────────────
-	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerId: '' };
+	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '' };
 	let editingProperty = $state(false);
 	let propertyForm = $state({ ...emptyProperty });
 	let propertyFormErrors = $state<Record<string, string>>({});
@@ -92,7 +92,7 @@
 			city: property.city,
 			state: property.state,
 			postalCode: property.postalCode,
-			ownerId: property.ownerId != null ? String(property.ownerId) : '',
+			ownerEntityId: property.ownerEntityId != null ? String(property.ownerEntityId) : '',
 		};
 		propertyFormErrors = {};
 		editingProperty = true;
@@ -494,7 +494,7 @@
 			<DetailCard title="Identity" icon={Building2} accent="primary" testid="property-detail-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Name" bind:value={propertyForm.name} display={property.name} editing={editingProperty} error={propertyFormErrors.name} testid="property-detail-name-field" />
 				<InlineField label="Type" bind:value={propertyForm.type} display={property.type} editing={editingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" />
-				<InlineField label="Owner" bind:value={propertyForm.ownerId} display={property.ownerName ?? 'No owner assigned'} editing={editingProperty} type="select" options={ownerOptions} testid="property-detail-owner" class="sm:col-span-2" />
+				<InlineField label="Owner" bind:value={propertyForm.ownerEntityId} display={property.ownerName ?? 'No owner assigned'} editing={editingProperty} type="select" options={ownerOptions} testid="property-detail-owner" class="sm:col-span-2" />
 			</DetailCard>
 
 			<DetailCard title="Address" icon={MapPin} accent="muted" testid="property-detail-address-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">

@@ -53,7 +53,7 @@
 		});
 	});
 
-	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerId: '' };
+	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '' };
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
 	let form = $state({ ...emptyProperty });
@@ -102,7 +102,7 @@
 			city: p.city,
 			state: p.state,
 			postalCode: p.postalCode,
-			ownerId: p.ownerId != null ? String(p.ownerId) : '',
+			ownerEntityId: p.ownerEntityId != null ? String(p.ownerEntityId) : '',
 		};
 		formErrors = {};
 		showForm = true;
@@ -292,9 +292,9 @@
 					{/each}
 				</Select.Content>
 			</Select.Root>
-			<Select.Root type="single" bind:value={form.ownerId}>
+			<Select.Root type="single" bind:value={form.ownerEntityId}>
 				<Select.Trigger class="w-full" data-testid="property-owner-input">
-					{form.ownerId ? ((ownersQuery.data || []).find(o => String(o.id) === form.ownerId)?.name ?? 'No owner assigned') : 'No owner assigned'}
+					{form.ownerEntityId ? ((ownersQuery.data || []).find(o => String(o.id) === form.ownerEntityId)?.name ?? 'No owner assigned') : 'No owner assigned'}
 				</Select.Trigger>
 				<Select.Content>
 					<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>

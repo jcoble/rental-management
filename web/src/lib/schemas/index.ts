@@ -99,7 +99,9 @@ export const propertySchema = z.object({
 	city: required('City'),
 	state: required('State'),
 	postalCode: required('ZIP'),
-	ownerId: idString,
+	// The property's owner is an OwnerEntity (the API validates ownerEntityId against OwnerEntities;
+	// ownerId is the legacy Owners table). owners.list() returns OwnerEntities, so this is their id.
+	ownerEntityId: idString,
 });
 
 export const unitSchema = z.object({
