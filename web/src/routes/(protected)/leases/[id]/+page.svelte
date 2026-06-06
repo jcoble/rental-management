@@ -691,6 +691,46 @@
 					<DetailCard title="Notes" icon={StickyNote} accent="muted" testid="lease-card-notes">
 						<InlineField label="Notes" bind:value={form.notes} display={lease.notes} {editing} type="textarea" error={formErrors.notes} testid="lease-detail-notes" />
 					</DetailCard>
+
+					<!-- Original scanned document this lease was created from, served through the
+					     same-origin /lease-file proxy (distinct from the generated/e-signed agreement
+					     in the Agreement tab). Renders only when a scanned source file exists. -->
+					{#if lease.hasScan}
+						<DetailCard title="Scanned document" icon={FileText} accent="muted" testid="lease-card-scanned-document" class="lg:col-span-2">
+							<div class="flex flex-col items-start gap-2">
+								<p class="text-xs text-muted-foreground">The original document this lease was created from.</p>
+								{#if lease.scanIsImage}
+									<a
+										href="/lease-file/{lease.id}"
+										target="_blank"
+										rel="noopener noreferrer"
+										data-testid="lease-detail-scanned-document-link"
+										aria-label="View scanned document full size"
+										class="group inline-block"
+									>
+										<img
+											src="/lease-file/{lease.id}?thumb=true"
+											alt="Scanned document preview"
+											class="max-h-80 w-auto rounded-md border border-border object-contain transition group-hover:ring-2 group-hover:ring-primary"
+											loading="lazy"
+										/>
+										<span class="mt-1 block text-xs text-primary underline underline-offset-2 group-hover:text-primary/80">Open full size</span>
+									</a>
+								{:else}
+									<a
+										href="/lease-file/{lease.id}"
+										target="_blank"
+										rel="noopener noreferrer"
+										data-testid="lease-detail-scanned-document-link"
+										class="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-3 text-sm font-medium text-foreground transition hover:border-primary hover:text-primary"
+									>
+										<FileText class="h-5 w-5 shrink-0" />
+										<span>View scanned document (PDF)</span>
+									</a>
+								{/if}
+							</div>
+						</DetailCard>
+					{/if}
 				</div>
 			</Tabs.Content>
 
