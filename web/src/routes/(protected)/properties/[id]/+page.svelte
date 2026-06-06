@@ -13,6 +13,7 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
@@ -571,6 +572,13 @@
 				pageSize={10}
 				data-testid="property-leases-grid"
 			/>
+		</div>
+
+		<!-- Per-record audit history -->
+		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="property-history-section">
+			<h2 class="mb-1 text-base font-semibold">History</h2>
+			<p class="mb-3 text-sm text-muted-foreground">Every recorded change to this property — who, what, and when.</p>
+			<RecordHistory entityType="Property" entityId={id} />
 		</div>
 	{/if}
 </div>
