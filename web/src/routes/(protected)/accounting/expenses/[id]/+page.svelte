@@ -268,6 +268,47 @@
 				</div>
 			</DetailCard>
 
+			<!-- The original scanned document this expense was created from. The scan→draft→confirm
+			     flow re-keys the uploaded StoredFile to this expense, so the API can serve it at
+			     /expenses/{id}/receipt; we reach it through the same-origin /expense-file proxy
+			     (cookie→bearer) so the <img>/link is authenticated. Renders only when a file exists. -->
+			{#if expense.hasReceipt}
+				<DetailCard title="Scanned document" icon={ReceiptText} accent="muted" testid="expense-card-scanned-document" class="lg:col-span-2">
+					<div class="flex flex-col items-start gap-2">
+						<p class="text-xs text-muted-foreground">The original document this expense was created from.</p>
+						{#if expense.receiptIsImage}
+							<a
+								href="/expense-file/{expense.id}"
+								target="_blank"
+								rel="noopener noreferrer"
+								data-testid="expense-detail-scanned-document-link"
+								aria-label="View scanned document full size"
+								class="group inline-block"
+							>
+								<img
+									src="/expense-file/{expense.id}?thumb=true"
+									alt="Scanned document preview"
+									class="max-h-80 w-auto rounded-md border border-border object-contain transition group-hover:ring-2 group-hover:ring-primary"
+									loading="lazy"
+								/>
+								<span class="mt-1 block text-xs text-primary underline underline-offset-2 group-hover:text-primary/80">Open full size</span>
+							</a>
+						{:else}
+							<a
+								href="/expense-file/{expense.id}"
+								target="_blank"
+								rel="noopener noreferrer"
+								data-testid="expense-detail-scanned-document-link"
+								class="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-3 text-sm font-medium text-foreground transition hover:border-primary hover:text-primary"
+							>
+								<FileText class="h-5 w-5 shrink-0" />
+								<span>View scanned document (PDF)</span>
+							</a>
+						{/if}
+					</div>
+				</DetailCard>
+			{/if}
+
 			<DetailCard title="Receipt details" icon={FileText} accent="muted" testid="expense-card-receipt" class="lg:col-span-2" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal} {editing} testid="expense-detail-subtotal" />
 				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount} {editing} testid="expense-detail-tax" />
