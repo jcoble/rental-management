@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auditing;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
@@ -174,13 +175,15 @@ public sealed class AuditTrailTests : IDisposable
     [Fact]
     public async Task PreClaimed_Key_Suppresses_The_Interceptor_Row()
     {
-        // Insert (Created is recorded), then pre-claim the Updated key — as an explicit
-        // AuditTrailService.LogAsync would — so the interceptor's generic Updated row is skipped.
+        // Insert (Created is recorded), then have the explicit path take ownership of the Updated key
+        // BEFORE the entity's save — as an AuditTrailService.LogAsync run pre-save would — so the
+        // interceptor's generic Updated twin is suppressed.
         var expense = NewExpense();
         _db.Expenses.Add(expense);
         await _db.SaveChangesAsync();
 
-        _scope.Claim("Expense", expense.Id, AuditLogOperation.Updated).Should().BeTrue();
+        _scope.ResolveExplicit("Expense", expense.Id, AuditLogOperation.Updated)
+            .Decision.Should().Be(AuditWrite.Insert);
 
         expense.Amount = 500m;
         await _db.SaveChangesAsync();
@@ -191,6 +194,41 @@ public sealed class AuditTrailTests : IDisposable
 
         // The interceptor deferred to the (pre-claimed) explicit log — no generic twin written.
         updatedRows.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Explicit_Log_After_Save_Enriches_The_Generic_Twin()
+    {
+        // The order-independent guarantee: a service that logs AFTER its entity's SaveChanges (the
+        // common pattern) must still win. The interceptor writes a generic twin with only the changed
+        // property; the explicit rich log then enriches THAT row in place — full snapshot + reason —
+        // rather than being suppressed (the pre-fix behavior) or adding a duplicate.
+        var expense = NewExpense();
+        _db.Expenses.Add(expense);
+        await _db.SaveChangesAsync();
+
+        expense.Amount = 250m;
+        await _db.SaveChangesAsync(); // interceptor records a generic Updated twin: { Amount: 100 → 250 }
+
+        var sut = new AuditTrailService(_db, _scope);
+        await sut.LogAsync(
+            PortfolioId, "Expense", expense.Id, AuditLogOperation.Updated,
+            oldValues: """{"Amount":100,"Status":"Pending"}""",
+            newValues: """{"Amount":250,"Status":"Pending"}""",
+            changeReason: "Roof repair re-quoted");
+
+        var updated = await _db.AuditLogs.AsNoTracking()
+            .Where(a => a.EntityId == expense.Id && a.Operation == AuditLogOperation.Updated)
+            .ToListAsync();
+
+        updated.Should().ContainSingle("the explicit log enriches the generic twin, it does not add a second row");
+        updated[0].ChangeReason.Should().Be("Roof repair re-quoted");
+        // The full explicit snapshot replaced the changed-property-only twin (Status was not modified,
+        // so its presence proves enrichment happened).
+        updated[0].NewValues.Should().Contain("Status");
+        // Actor / IP from the generic capture survive (the explicit caller passed null for them).
+        updated[0].ActorLabel.Should().Be("Jane Landlord");
+        updated[0].IpAddress.Should().Be("203.0.113.5");
     }
 
     [Fact]

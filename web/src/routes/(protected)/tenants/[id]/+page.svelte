@@ -18,6 +18,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
+	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -294,6 +295,13 @@
 		<!-- Documents section -->
 		<div class="mt-6" data-testid="tenant-detail-documents">
 			<DocumentsPanel entityType="Tenant" entityId={id} />
+		</div>
+
+		<!-- Per-record audit history -->
+		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="tenant-history-section">
+			<h2 class="mb-1 text-base font-semibold">History</h2>
+			<p class="mb-3 text-sm text-muted-foreground">Every recorded change to this tenant — who, what, and when.</p>
+			<RecordHistory entityType="Tenant" entityId={id} />
 		</div>
 	{/if}
 </div>

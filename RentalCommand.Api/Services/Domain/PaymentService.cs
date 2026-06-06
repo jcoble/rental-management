@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
@@ -14,12 +15,29 @@ public class PaymentService : IPaymentService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly IAuditTrailService _audit;
 
-    public PaymentService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public PaymentService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IAuditTrailService audit)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _audit = audit;
     }
+
+    // Money movement is high-stakes: status changes (reversals / refunds / waivers), collection, and
+    // deletion get an explicit audit row with a full before→after snapshot + human reason. The explicit
+    // log enriches the generic twin in place (see AuditTrailService), so writing it after SaveChanges wins.
+    private static string Snapshot(Payment p) => JsonSerializer.Serialize(new
+    {
+        paymentType = p.PaymentType.ToString(),
+        status = p.Status.ToString(),
+        amount = p.Amount,
+        dueDate = p.DueDate,
+        paidDate = p.PaidDate,
+        method = p.Method,
+        externalReference = p.ExternalReference,
+        leaseId = p.LeaseId,
+    });
 
     public async Task<IReadOnlyList<PaymentResponse>> ListAsync(int portfolioId, int? leaseId, ListQuery query, CancellationToken ct = default)
     {
@@ -126,6 +144,10 @@ public class PaymentService : IPaymentService
             return null;
         }
 
+        var before = Snapshot(entity);
+        var prevStatus = entity.Status;
+        var prevAmount = entity.Amount;
+
         if (request.PaymentType.HasValue) entity.PaymentType = request.PaymentType.Value;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
         if (request.Amount.HasValue) entity.Amount = request.Amount.Value;
@@ -137,6 +159,18 @@ public class PaymentService : IPaymentService
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
+
+        // A status or amount change is the legally-meaningful event (reversal / refund / waiver /
+        // re-statement) — record the original and new state in full.
+        if (entity.Status != prevStatus || entity.Amount != prevAmount)
+        {
+            var changes = new List<string>();
+            if (entity.Status != prevStatus) changes.Add($"status {prevStatus}→{entity.Status}");
+            if (entity.Amount != prevAmount) changes.Add($"amount {prevAmount:0.##}→{entity.Amount:0.##}");
+            await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
+                oldValues: before, newValues: Snapshot(entity),
+                changeReason: $"Payment #{entity.Id}: {string.Join("; ", changes)}", ct: ct);
+        }
 
         var response = PaymentResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
@@ -152,6 +186,8 @@ public class PaymentService : IPaymentService
             return null;
         }
 
+        var before = Snapshot(entity);
+
         entity.Status = PaymentStatus.Paid;
         entity.PaidDate = request.PaidDate?.ToUtc() ?? DateTime.UtcNow;
         if (request.Method != null) entity.Method = request.Method;
@@ -159,6 +195,10 @@ public class PaymentService : IPaymentService
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
+
+        await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
+            oldValues: before, newValues: Snapshot(entity),
+            changeReason: $"Payment #{entity.Id} marked paid (${entity.Amount:0.##})", ct: ct);
 
         var response = PaymentResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
@@ -175,8 +215,13 @@ public class PaymentService : IPaymentService
             return false;
         }
 
+        var before = Snapshot(entity);
+
         _db.Payments.Remove(entity);
         await _db.SaveChangesAsync(ct);
+
+        await _audit.LogAsync(portfolioId, EntityType, id, AuditLogOperation.Deleted,
+            oldValues: before, changeReason: $"Payment #{id} deleted (${entity.Amount:0.##} {entity.PaymentType})", ct: ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;

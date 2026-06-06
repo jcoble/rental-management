@@ -33,7 +33,8 @@ public class PaymentServiceTests : IDisposable
 
         SeedPortfolioAndLease();
 
-        _sut = new PaymentService(_db, new NoopDataUpdateService());
+        _sut = new PaymentService(_db, new NoopDataUpdateService(),
+            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()));
     }
 
     public void Dispose()

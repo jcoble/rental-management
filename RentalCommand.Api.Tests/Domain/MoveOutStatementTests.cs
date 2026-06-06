@@ -38,6 +38,8 @@ public class MoveOutStatementTests : IDisposable
         _ctx.Db,
         _storage,
         new MoveOutStatementPdfGenerator(),
+        Mock.Of<RentalCommand.Core.Interfaces.IAuditTrailService>(),
+        Mock.Of<RentalCommand.Core.Interfaces.ICurrentActor>(),
         Mock.Of<ILogger<SecurityDepositService>>());
 
     [Fact]

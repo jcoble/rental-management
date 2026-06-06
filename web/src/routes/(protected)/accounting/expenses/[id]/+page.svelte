@@ -11,6 +11,7 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -584,6 +585,13 @@
 					</div>
 				</details>
 			</DetailCard>
+		</div>
+
+		<!-- Per-record audit history -->
+		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="expense-history-section">
+			<h2 class="mb-1 text-base font-semibold">History</h2>
+			<p class="mb-3 text-sm text-muted-foreground">Every recorded change to this expense — who, what, and when.</p>
+			<RecordHistory entityType="Expense" entityId={expenseId} />
 		</div>
 	{/if}
 </div>

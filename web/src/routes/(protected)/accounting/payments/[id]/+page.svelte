@@ -10,6 +10,7 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
@@ -254,6 +255,13 @@
 					</div>
 				</DetailCard>
 			{/if}
+		</div>
+
+		<!-- Per-record audit history -->
+		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="payment-history-section">
+			<h2 class="mb-1 text-base font-semibold">History</h2>
+			<p class="mb-3 text-sm text-muted-foreground">Every recorded change to this payment — who, what, and when.</p>
+			<RecordHistory entityType="Payment" entityId={paymentId} />
 		</div>
 	{/if}
 </div>

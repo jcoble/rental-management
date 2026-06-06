@@ -323,7 +323,8 @@ public sealed class NativeEsignTests : IDisposable
     private LeaseEsignService CreateLeaseEsignService(IEsignProvider provider)
     {
         var leaseService = new LeaseService(
-            _db, new NoopDataUpdateService(), _storage, new LeaseAgreementPdfGenerator(), NullLogger<LeaseService>.Instance);
+            _db, new NoopDataUpdateService(), _storage, new LeaseAgreementPdfGenerator(),
+            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()), NullLogger<LeaseService>.Instance);
 
         return new LeaseEsignService(
             _db, leaseService, provider, _storage, new NoopDataUpdateService(),

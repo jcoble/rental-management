@@ -32,6 +32,7 @@
 	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, Building2, DollarSign, Users, StickyNote, CalendarRange } from '@lucide/svelte';
 	import { ApiError } from '$lib/api/client';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
+	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -470,6 +471,7 @@
 		{ value: 'overview', label: 'Overview' },
 		{ value: 'agreement', label: 'Agreement & Signing' },
 		{ value: 'ledger', label: 'Ledger' },
+		{ value: 'history', label: 'History' },
 	];
 
 	// Context tone for the hero wash — status-keyed (see HeroCard for the recipe).
@@ -995,6 +997,18 @@
 		<div data-testid="lease-detail-documents">
 			<DocumentsPanel entityType="Lease" entityId={leaseId} />
 		</div>
+			</Tabs.Content>
+
+			<Tabs.Content value="history" class="space-y-6">
+				<Card.Root data-testid="lease-history-card">
+					<Card.Header>
+						<Card.Title class="text-base">History</Card.Title>
+						<Card.Description>Every recorded change to this lease — who, what, and when.</Card.Description>
+					</Card.Header>
+					<Card.Content>
+						<RecordHistory entityType="Lease" entityId={leaseId} />
+					</Card.Content>
+				</Card.Root>
 			</Tabs.Content>
 		</Tabs.Root>
 	{/if}

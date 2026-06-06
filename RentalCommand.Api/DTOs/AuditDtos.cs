@@ -49,7 +49,7 @@ public class AuditEntryResponse
         Timestamp = e.Timestamp,
     };
 
-    private static string ResolveActor(AuditLog e)
+    internal static string ResolveActor(AuditLog e)
     {
         if (!string.IsNullOrWhiteSpace(e.ActorLabel))
         {
@@ -60,7 +60,7 @@ public class AuditEntryResponse
     }
 
     /// <summary>Maps an entity type + id to its web detail route (null when there is no page).</summary>
-    private static string? BuildDetailHref(string entityType, int entityId) => entityType switch
+    internal static string? BuildDetailHref(string entityType, int entityId) => entityType switch
     {
         "Payment" => $"/accounting/payments/{entityId}",
         "Expense" => $"/accounting/expenses/{entityId}",
@@ -74,5 +74,60 @@ public class AuditEntryResponse
         "Inspection" => $"/inspections/{entityId}",
         "RentalApplication" => $"/applications/{entityId}",
         _ => null,
+    };
+}
+
+/// <summary>
+/// Admin-only forensic projection of one <see cref="AuditLog"/> row. Extends the landlord-facing
+/// <see cref="AuditEntryResponse"/> with the fields it intentionally withholds — the actor's raw IP
+/// address and the unredacted old→new JSON — for compliance / forensic review. Surfaced only via the
+/// Admin-gated <c>GET /api/v1/admin/audit</c>; the data already lives on the row (no migration).
+/// </summary>
+public sealed class AdminAuditEntryResponse
+{
+    public int Id { get; set; }
+    public int PortfolioId { get; set; }
+    public AuditLogOperation Operation { get; set; }
+    public string OperationName { get; set; } = string.Empty;
+    public string EntityType { get; set; } = string.Empty;
+    public int EntityId { get; set; }
+
+    /// <summary>Resolved actor label (same as the landlord-facing view).</summary>
+    public string Actor { get; set; } = string.Empty;
+
+    /// <summary>Raw actor identity for forensics: the user id (null for system/AI actors) and label.</summary>
+    public int? UserId { get; set; }
+    public string? ActorLabel { get; set; }
+
+    public string Description { get; set; } = string.Empty;
+    public string? DetailHref { get; set; }
+    public DateTime Timestamp { get; set; }
+
+    // Forensic fields held back from the landlord-facing DTO.
+    public string? IpAddress { get; set; }
+    public string? OldValues { get; set; }
+    public string? NewValues { get; set; }
+    public string? ChangeReason { get; set; }
+
+    public string TestId => $"admin-audit-{Id}";
+
+    public static AdminAuditEntryResponse FromEntity(AuditLog e, AuditDescriber describer) => new()
+    {
+        Id = e.Id,
+        PortfolioId = e.PortfolioId,
+        Operation = e.Operation,
+        OperationName = e.Operation.ToString(),
+        EntityType = e.EntityType,
+        EntityId = e.EntityId,
+        Actor = AuditEntryResponse.ResolveActor(e),
+        UserId = e.UserId,
+        ActorLabel = e.ActorLabel,
+        Description = describer.Describe(e),
+        DetailHref = AuditEntryResponse.BuildDetailHref(e.EntityType, e.EntityId),
+        Timestamp = e.Timestamp,
+        IpAddress = e.IpAddress,
+        OldValues = e.OldValues,
+        NewValues = e.NewValues,
+        ChangeReason = e.ChangeReason,
     };
 }
