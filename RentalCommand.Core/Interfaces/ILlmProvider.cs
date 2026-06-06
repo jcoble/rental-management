@@ -94,6 +94,21 @@ public class ExtractedFields
 
     /// <summary>Output (completion) tokens consumed by the extraction call.</summary>
     public int OutputTokens { get; set; }
+
+    /// <summary>
+    /// True when the provider's response was cut off by the output-token limit (OpenAI
+    /// finish_reason="length", Anthropic stop_reason="max_tokens", Gemini finishReason="MAX_TOKENS").
+    /// A truncated tool call usually yields no usable fields, so the caller should treat the
+    /// extraction as failed rather than storing the partial/empty skeleton for review.
+    /// </summary>
+    public bool Truncated { get; set; }
+
+    /// <summary>
+    /// Set when the provider could not produce a usable extraction (truncated, unparseable, or no
+    /// model configured). A concise, human-readable reason the caller can surface to the reviewer
+    /// and persist; null on a normal extraction (even one that happens to be empty).
+    /// </summary>
+    public string? FailureReason { get; set; }
 }
 
 /// <summary>A single extracted field value, its confidence, and where it was found in the source.</summary>
