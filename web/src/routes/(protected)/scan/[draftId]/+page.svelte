@@ -74,6 +74,18 @@
 		amount?: number | null;
 	}
 
+	// Editable mirror of a line item. Numeric cells are kept as STRINGS (like every other
+	// editable field on this page) and parsed at confirm time — this matches the scalar-field
+	// flow, gives phones a numeric keypad via inputmode, and keeps a bad keystroke from ever
+	// throwing. `key` is a stable client id so add/remove don't mis-bind the {#each} rows.
+	interface EditableLineItem {
+		key: number;
+		description: string;
+		quantity: string;
+		unit_price: string;
+		amount: string;
+	}
+
 	const queryClient = useQueryClient();
 
 	const draftId = $derived(parseInt($page.params.draftId ?? '0', 10));
@@ -97,6 +109,9 @@
 	const isPayment = $derived(data?.targetEntityType === 'Payment');
 	const isWorkOrder = $derived(data?.targetEntityType === 'WorkOrder');
 	const isLease = $derived(data?.targetEntityType === 'Lease');
+	// Line items are an Expense concept — only the expense confirm path persists them — so the
+	// editable line-items table and its override are scoped to expense drafts.
+	const isExpense = $derived(!isPayment && !isWorkOrder && !isLease);
 
 	// The worker is still reading the document while Pending or Processing.
 	const isProcessing = $derived(data?.status === 'Pending' || data?.status === 'Processing');
@@ -215,6 +230,13 @@
 	// Editable field values (keyed by field name, scalars only)
 	let editedFields = $state<Record<string, string>>({});
 
+	// Editable line items. Seeded once from the extraction (see the data $effect) and then
+	// owned by the user; the bounded poll / cache refresh must not clobber in-progress edits,
+	// hence the one-shot `lineItemsInitialized` guard. `lineItemKeySeq` hands out stable row keys.
+	let editedLineItems = $state<EditableLineItem[]>([]);
+	let lineItemsInitialized = $state(false);
+	let lineItemKeySeq = 0;
+
 	// Parse a money-ish string ("$1,234.50") into a number, or null if unparseable.
 	function parseAmount(raw: string | undefined | null): number | null {
 		if (raw == null) return null;
@@ -228,6 +250,44 @@
 	// (Mirrors the server: Amount = total ?? subtotal.) Drives the $0 confirm guard.
 	const resolvedAmount = $derived.by(() =>
 		parseAmount(editedFields['total']) ?? parseAmount(editedFields['subtotal'])
+	);
+
+	// --- Editable line items: seed/add/remove + a running total echo ---
+
+	function toEditableLineItems(items: LineItem[]): EditableLineItem[] {
+		return items.map((li) => ({
+			key: lineItemKeySeq++,
+			description: li.description ?? '',
+			quantity: li.quantity != null ? String(li.quantity) : '',
+			unit_price: li.unit_price != null ? String(li.unit_price) : '',
+			amount: li.amount != null ? String(li.amount) : ''
+		}));
+	}
+
+	function addLineItem() {
+		editedLineItems = [
+			...editedLineItems,
+			{ key: lineItemKeySeq++, description: '', quantity: '', unit_price: '', amount: '' }
+		];
+	}
+
+	function removeLineItem(key: number) {
+		editedLineItems = editedLineItems.filter((li) => li.key !== key);
+	}
+
+	// Sum of the per-row amounts the user currently sees — echoed under the table so a hand
+	// correction stays honest. Compared to the subtotal (sum of line items should equal it) only
+	// as a soft, non-blocking hint: tax/tip/shipping legitimately separate the subtotal from the
+	// grand total, so we never auto-overwrite or block confirm on a mismatch.
+	const lineItemsTotal = $derived(
+		editedLineItems.reduce((sum, li) => sum + (parseAmount(li.amount) ?? 0), 0)
+	);
+	const subtotalAmount = $derived(parseAmount(editedFields['subtotal']));
+	const lineItemsMismatch = $derived(
+		isExpense &&
+			editedLineItems.length > 0 &&
+			subtotalAmount != null &&
+			Math.abs(lineItemsTotal - subtotalAmount) > 0.01
 	);
 
 	// Block confirming an expense whose amount is blank/0/negative (server rejects amount <= 0).
@@ -258,6 +318,12 @@
 			}
 			if (Object.keys(initial).length > 0) {
 				editedFields = { ...editedFields, ...initial };
+			}
+			// Seed the editable line-items table once extraction has produced fields. The one-shot
+			// guard means later refetches (the bounded poll, cache refresh) never discard edits.
+			if (!lineItemsInitialized && data.fields.length > 0) {
+				editedLineItems = toEditableLineItems(parseLineItems(data.fields));
+				lineItemsInitialized = true;
 			}
 			// Initialize isPaid from document_kind once on first data arrival
 			if (!isPaidInitialized) {
@@ -390,11 +456,6 @@
 		return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 	}
 
-	function formatQty(val: number | null | undefined): string {
-		if (val == null) return '';
-		return String(val);
-	}
-
 	function fieldValue(name: string): string {
 		return data?.fields.find((f) => f.name === name)?.value ?? '';
 	}
@@ -499,7 +560,7 @@
 	}));
 
 	function buildOverridesJson(): string {
-		// Send edited scalar fields only (line_items excluded).
+		// Send edited scalar fields; line items are serialized separately (added below for expenses).
 		// Map legacy snake_case names that the API still expects in camelCase;
 		// all new expanded fields are sent as-is (API accepts snake_case override keys).
 		const keyMap: Record<string, string> = {
@@ -549,6 +610,24 @@
 			if (selectedPropertyId && selectedPropertyId !== NO_PROPERTY) {
 				overrides['propertyId'] = Number(selectedPropertyId);
 			}
+			// Include the (possibly edited) line items so corrections survive into the expense.
+			// Numbers are parsed to clean values (null when blank); fully-empty rows are dropped so a
+			// stray "Add line item" the user never filled doesn't persist a blank row. An empty array
+			// is intentional and meaningful — it tells the server to keep NO line items.
+			overrides[LINE_ITEMS_FIELD] = editedLineItems
+				.map((li) => ({
+					description: li.description.trim(),
+					quantity: parseAmount(li.quantity),
+					unit_price: parseAmount(li.unit_price),
+					amount: parseAmount(li.amount)
+				}))
+				.filter(
+					(li) =>
+						li.description !== '' ||
+						li.quantity != null ||
+						li.unit_price != null ||
+						li.amount != null
+				);
 		}
 		return JSON.stringify(overrides);
 	}
@@ -958,7 +1037,6 @@
 						</div>
 					{:else}
 						{@const groups = buildGroups(data.fields)}
-						{@const lineItems = parseLineItems(data.fields)}
 						<div class="space-y-6">
 							{#each groups as group}
 								<section>
@@ -1009,36 +1087,112 @@
 								</section>
 							{/each}
 
-							<!-- Line items table (read-only) -->
-							<section>
-								<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Line Items</h2>
-								{#if lineItems.length === 0}
-									<p class="text-sm text-muted-foreground">No line items.</p>
-								{:else}
-									<div data-testid="scan-line-items">
-										<Table.Root>
-											<Table.Header>
-												<Table.Row class="bg-muted/40">
-													<Table.Head class="px-3 py-2 text-xs">Description</Table.Head>
-													<Table.Head class="px-3 py-2 text-right text-xs">Qty</Table.Head>
-													<Table.Head class="px-3 py-2 text-right text-xs">Unit Price</Table.Head>
-													<Table.Head class="px-3 py-2 text-right text-xs">Amount</Table.Head>
-												</Table.Row>
-											</Table.Header>
-											<Table.Body>
-												{#each lineItems as item, i}
-													<Table.Row class={i % 2 === 1 ? 'bg-muted/20' : ''}>
-														<Table.Cell class="px-3 py-2">{item.description ?? ''}</Table.Cell>
-														<Table.Cell class="px-3 py-2 text-right font-mono tabular-nums">{formatQty(item.quantity)}</Table.Cell>
-														<Table.Cell class="px-3 py-2 text-right font-mono tabular-nums">{item.unit_price != null ? formatMoney(item.unit_price) : ''}</Table.Cell>
-														<Table.Cell class="px-3 py-2 text-right font-mono tabular-nums">{item.amount != null ? formatMoney(item.amount) : ''}</Table.Cell>
-													</Table.Row>
-												{/each}
-											</Table.Body>
-										</Table.Root>
+							<!-- Line items — editable so the reviewer can fix a wrong description / qty /
+							     price, or add & remove rows, before the expense is created. Scoped to
+							     expense drafts because only the expense confirm path persists line items. -->
+							{#if isExpense}
+								<section data-testid="scan-line-items">
+									<div class="mb-2 flex items-center justify-between">
+										<h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Line Items</h2>
+										<Button
+											type="button"
+											variant="ghost"
+											size="sm"
+											class="h-7 gap-1 px-2 text-xs"
+											data-testid="scan-line-item-add"
+											onclick={addLineItem}
+										>
+											+ Add line item
+										</Button>
 									</div>
-								{/if}
-							</section>
+									{#if editedLineItems.length === 0}
+										<p class="text-sm text-muted-foreground">
+											No line items.
+											<button type="button" class="text-accent underline-offset-2 hover:underline" onclick={addLineItem}>Add one</button>
+											if the receipt itemizes charges.
+										</p>
+									{:else}
+										<div class="overflow-hidden rounded-md border border-border">
+											<Table.Root>
+												<Table.Header>
+													<Table.Row class="bg-muted/40">
+														<Table.Head class="px-3 py-2 text-xs">Description</Table.Head>
+														<Table.Head class="w-16 px-2 py-2 text-right text-xs">Qty</Table.Head>
+														<Table.Head class="w-24 px-2 py-2 text-right text-xs">Unit Price</Table.Head>
+														<Table.Head class="w-24 px-2 py-2 text-right text-xs">Amount</Table.Head>
+														<Table.Head class="w-9 px-1 py-2"><span class="sr-only">Remove</span></Table.Head>
+													</Table.Row>
+												</Table.Header>
+												<Table.Body>
+													{#each editedLineItems as item, i (item.key)}
+														<Table.Row class={i % 2 === 1 ? 'bg-muted/20' : ''}>
+															<Table.Cell class="px-2 py-1.5">
+																<Input
+																	type="text"
+																	placeholder="Description"
+																	bind:value={item.description}
+																	data-testid="scan-line-item-description-{i}"
+																	class="h-8 text-sm"
+																/>
+															</Table.Cell>
+															<Table.Cell class="px-2 py-1.5">
+																<Input
+																	type="text"
+																	inputmode="decimal"
+																	bind:value={item.quantity}
+																	data-testid="scan-line-item-quantity-{i}"
+																	class="h-8 text-right font-mono text-sm tabular-nums"
+																/>
+															</Table.Cell>
+															<Table.Cell class="px-2 py-1.5">
+																<Input
+																	type="text"
+																	inputmode="decimal"
+																	bind:value={item.unit_price}
+																	data-testid="scan-line-item-unit-price-{i}"
+																	class="h-8 text-right font-mono text-sm tabular-nums"
+																/>
+															</Table.Cell>
+															<Table.Cell class="px-2 py-1.5">
+																<Input
+																	type="text"
+																	inputmode="decimal"
+																	bind:value={item.amount}
+																	data-testid="scan-line-item-amount-{i}"
+																	class="h-8 text-right font-mono text-sm tabular-nums"
+																/>
+															</Table.Cell>
+															<Table.Cell class="px-1 py-1.5 text-center">
+																<button
+																	type="button"
+																	onclick={() => removeLineItem(item.key)}
+																	data-testid="scan-line-item-remove-{i}"
+																	class="text-muted-foreground transition-colors hover:text-destructive"
+																	aria-label="Remove line item {i + 1}"
+																>✕</button>
+															</Table.Cell>
+														</Table.Row>
+													{/each}
+												</Table.Body>
+											</Table.Root>
+										</div>
+										<!-- Running total echo + a soft, non-blocking reconcile hint vs the subtotal. -->
+										<div class="mt-2 flex items-center justify-between px-1 text-xs">
+											<span class="text-muted-foreground">Line items total</span>
+											<span
+												class="font-mono tabular-nums {lineItemsMismatch ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}"
+												data-testid="scan-line-items-total"
+											>${formatMoney(lineItemsTotal)}</span>
+										</div>
+										{#if lineItemsMismatch}
+											<p class="mt-1 px-1 text-xs text-amber-600 dark:text-amber-400" data-testid="scan-line-items-mismatch">
+												These rows add up to ${formatMoney(lineItemsTotal)}, but the subtotal is ${formatMoney(subtotalAmount)}.
+												That can be fine (tax, tip, fees) — just double-check before confirming.
+											</p>
+										{/if}
+									{/if}
+								</section>
+							{/if}
 						</div>
 					{/if}
 				</Card.Content>
