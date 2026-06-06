@@ -202,6 +202,61 @@ public class ScanServiceTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
+    // Confirm: edited line items win over the extracted ones (TSK-29).
+    // The review UI now makes the line-items table editable and sends the full
+    // edited array under "line_items"; the persisted Expense must carry the edited
+    // rows (re-numbered 1..n), not the originally extracted ones.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_WithEditedLineItemsOverride_PersistsEditedItems()
+    {
+        // Extraction found two rows; the reviewer corrects them down to a single edited row.
+        const string extractedJson =
+            """{"vendor_name":{"value":"ACME","confidence":0.9},"amount":{"value":"42.50","confidence":0.8},"line_items":{"value":"[{\"description\":\"Washer hose\",\"quantity\":2,\"unit_price\":6.50,\"amount\":13.00},{\"description\":\"Pipe tape\",\"amount\":3.00}]","confidence":0.7}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson);
+        SeedStoredFile(draft.FilePath);
+        _expenses.SetupResponse(new ExpenseResponse { Id = 88, PortfolioId = PortfolioId });
+
+        // The web sends the edited rows as a real JSON array (snake_case item keys).
+        var overrides =
+            """{"line_items":[{"description":"Corrected hose","quantity":3,"unit_price":7.00,"amount":21.00}]}""";
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 4, overridesJson: overrides);
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _expenses.LastRequest.Should().NotBeNull();
+        _expenses.LastRequest!.LineItems.Should().HaveCount(1);
+        var line = _expenses.LastRequest.LineItems[0];
+        line.Description.Should().Be("Corrected hose");
+        line.Quantity.Should().Be(3m);
+        line.UnitPrice.Should().Be(7.00m);
+        line.Amount.Should().Be(21.00m);
+        line.LineNumber.Should().Be(1);
+    }
+
+    // Clearing every row in the editable table sends an empty "line_items" array,
+    // which must remove the extracted rows entirely (not silently keep them).
+    [Fact]
+    public async Task ConfirmAndCreateAsync_WithEmptyLineItemsOverride_PersistsNoItems()
+    {
+        const string extractedJson =
+            """{"vendor_name":{"value":"ACME","confidence":0.9},"amount":{"value":"42.50","confidence":0.8},"line_items":{"value":"[{\"description\":\"Washer hose\",\"quantity\":2,\"unit_price\":6.50,\"amount\":13.00}]","confidence":0.7}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson);
+        SeedStoredFile(draft.FilePath);
+        _expenses.SetupResponse(new ExpenseResponse { Id = 89, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(
+            PortfolioId, draft.Id, userId: 4, overridesJson: """{"line_items":[]}""");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _expenses.LastRequest.Should().NotBeNull();
+        _expenses.LastRequest!.LineItems.Should().BeEmpty();
+    }
+
+    // -------------------------------------------------------------------------
     // Confirm: already confirmed draft returns failure (idempotency guard)
     // -------------------------------------------------------------------------
 
