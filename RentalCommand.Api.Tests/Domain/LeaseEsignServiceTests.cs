@@ -203,6 +203,7 @@ public sealed class LeaseEsignServiceTests : IDisposable
             new NoopDataUpdateService(),
             _storage,
             new LeaseAgreementPdfGenerator(),
+            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
             NullLogger<LeaseService>.Instance);
 
         return new LeaseEsignService(

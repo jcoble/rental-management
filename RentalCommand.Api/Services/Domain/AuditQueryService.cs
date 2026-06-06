@@ -26,6 +26,30 @@ public class AuditQueryService : IAuditQueryService
         ListQuery query,
         CancellationToken ct = default)
     {
+        var rows = await FilteredPage(portfolioId, operation, entityType, entityId, query).ToListAsync(ct);
+        return rows.Select(r => AuditEntryResponse.FromEntity(r, _describer)).ToList();
+    }
+
+    public async Task<IReadOnlyList<AdminAuditEntryResponse>> ListForensicAsync(
+        int portfolioId,
+        AuditLogOperation? operation,
+        string? entityType,
+        int? entityId,
+        ListQuery query,
+        CancellationToken ct = default)
+    {
+        var rows = await FilteredPage(portfolioId, operation, entityType, entityId, query).ToListAsync(ct);
+        return rows.Select(r => AdminAuditEntryResponse.FromEntity(r, _describer)).ToList();
+    }
+
+    /// <summary>
+    /// Portfolio-scoped, filtered, sorted, paged query shared by the landlord-facing and admin-forensic
+    /// projections. The cross-tenant IDOR guard (<c>PortfolioId == portfolioId</c>) is applied here, so
+    /// neither caller can ever read another tenant's trail.
+    /// </summary>
+    private IQueryable<Core.Entities.AuditLog> FilteredPage(
+        int portfolioId, AuditLogOperation? operation, string? entityType, int? entityId, ListQuery query)
+    {
         var q = _db.AuditLogs
             .AsNoTracking()
             .Where(a => a.PortfolioId == portfolioId);
@@ -65,11 +89,8 @@ public class AuditQueryService : IAuditQueryService
             _ => q.OrderByDescending(a => a.Timestamp).ThenByDescending(a => a.Id),
         };
 
-        var rows = await q
+        return q
             .Skip(query.NormalizedSkip)
-            .Take(query.NormalizedTake)
-            .ToListAsync(ct);
-
-        return rows.Select(r => AuditEntryResponse.FromEntity(r, _describer)).ToList();
+            .Take(query.NormalizedTake);
     }
 }

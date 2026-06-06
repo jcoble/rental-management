@@ -36,6 +36,7 @@ public sealed class AuditDescriber
         "Appointment" => "Scheduled an appointment",
         "Inspection" => "Scheduled an inspection",
         "RentalApplication" => "Received a rental application",
+        "SecurityDeposit" => "Held a security deposit",
         _ => $"Added {noun}",
     };
 
@@ -52,6 +53,7 @@ public sealed class AuditDescriber
         "Appointment" => "appointment",
         "Inspection" => "inspection",
         "RentalApplication" => "rental application",
+        "SecurityDeposit" => "security deposit",
         _ => entityType,
     };
 }

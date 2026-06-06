@@ -58,6 +58,7 @@ public class OpeningBalanceServiceTests : IDisposable
             new NoopDataUpdateService(),
             new OpeningInMemoryFileStorage(),
             new LeaseAgreementPdfGenerator(),
+            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<LeaseService>.Instance);
     }
 

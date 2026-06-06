@@ -219,8 +219,10 @@ public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
     }
 
     /// <summary>
-    /// Resolve each pending audit's now-populated PK, claim its key in the scope (skipping any an
-    /// explicit log already owns), and materialize the surviving <see cref="AuditLog"/> rows.
+    /// Resolve each pending audit's now-populated PK and register its row with the scope. The scope
+    /// keeps a reference so a later explicit <c>AuditTrailService.LogAsync</c> can enrich the row in
+    /// place; <see cref="IAuditScope.TryAddGenericRow"/> returns <c>false</c> (and the row is dropped)
+    /// when an explicit rich log already owns the key, so the trail never double-records.
     /// </summary>
     private List<AuditLog> BuildRows(DbContext? context)
     {
@@ -239,13 +241,7 @@ public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
                 continue;
             }
 
-            if (!_scope.Claim(pending.EntityType, entityId, pending.Operation))
-            {
-                // Already recorded by an explicit AuditTrailService.LogAsync for this request — skip.
-                continue;
-            }
-
-            rows.Add(new AuditLog
+            var row = new AuditLog
             {
                 PortfolioId = pending.PortfolioId,
                 EntityType = pending.EntityType,
@@ -257,7 +253,12 @@ public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
                 ActorLabel = _actor.ActorLabel,
                 IpAddress = _actor.IpAddress,
                 Timestamp = now,
-            });
+            };
+
+            if (_scope.TryAddGenericRow(pending.EntityType, entityId, pending.Operation, row))
+            {
+                rows.Add(row);
+            }
         }
 
         return rows;

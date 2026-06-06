@@ -797,6 +797,19 @@ export interface AuditEntry {
 }
 
 /**
+ * Admin-only forensic row from `GET /api/v1/admin/audit`: the {@link AuditEntry} fields plus the IP
+ * address and raw old→new JSON the landlord-facing endpoint intentionally withholds.
+ */
+export interface AdminAuditEntry extends AuditEntry {
+	userId?: number | null;
+	actorLabel?: string | null;
+	ipAddress?: string | null;
+	oldValues?: string | null;
+	newValues?: string | null;
+	changeReason?: string | null;
+}
+
+/**
  * Shape of the dashboard "recent activity" widget items (the API's `DashboardActivity`).
  * Distinct from {@link AuditEntry}: the dashboard endpoint pre-humanizes each row.
  */

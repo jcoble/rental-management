@@ -20,19 +20,34 @@ public class SecurityDepositService : ISecurityDepositService
     private readonly RentalCommandDbContext _db;
     private readonly IFileStorage _storage;
     private readonly IMoveOutStatementPdfGenerator _pdf;
+    private readonly IAuditTrailService _audit;
+    private readonly ICurrentActor _actor;
     private readonly ILogger<SecurityDepositService> _logger;
 
     public SecurityDepositService(
         RentalCommandDbContext db,
         IFileStorage storage,
         IMoveOutStatementPdfGenerator pdf,
+        IAuditTrailService audit,
+        ICurrentActor actor,
         ILogger<SecurityDepositService> logger)
     {
         _db = db;
         _storage = storage;
         _pdf = pdf;
+        _audit = audit;
+        _actor = actor;
         _logger = logger;
     }
+
+    // Deposits are NOT marked IAuditable (no generic twin), so these explicit rows are the sole audit
+    // for legally-sensitive deposit lifecycle events — holding, move-out deductions, and refunds — and
+    // must carry the actor/IP themselves (resolved from ICurrentActor).
+    private Task LogDepositAsync(int portfolioId, int id, AuditLogOperation operation,
+        string? oldValues, string? newValues, string changeReason, CancellationToken ct) =>
+        _audit.LogAsync(portfolioId, DepositEntityType, id, operation,
+            userId: _actor.UserId, actorLabel: _actor.ActorLabel, ipAddress: _actor.IpAddress,
+            oldValues: oldValues, newValues: newValues, changeReason: changeReason, ct: ct);
 
     public async Task<IReadOnlyList<SecurityDepositResponse>> ListAsync(int portfolioId, int? leaseId, CancellationToken ct = default)
     {
@@ -85,6 +100,17 @@ public class SecurityDepositService : ISecurityDepositService
         _db.SecurityDepositHoldings.Add(entity);
         await _db.SaveChangesAsync(ct);
 
+        await LogDepositAsync(portfolioId, entity.Id, AuditLogOperation.Created,
+            oldValues: null,
+            newValues: JsonSerializer.Serialize(new
+            {
+                leaseId = entity.LeaseId,
+                amount = entity.Amount,
+                status = entity.Status.ToString(),
+                heldAt = entity.HeldAt,
+            }),
+            changeReason: $"Security deposit held for lease #{entity.LeaseId} (${entity.Amount:0.##})", ct);
+
         // Reload with navigation for response.
         entity.Lease = lease;
         return SecurityDepositResponse.FromEntity(entity);
@@ -107,12 +133,21 @@ public class SecurityDepositService : ISecurityDepositService
             ? new List<DepositDeduction>()
             : JsonSerializer.Deserialize<List<DepositDeduction>>(entity.DeductionsJson, _jsonOptions) ?? [];
 
+        var deductionsBefore = entity.DeductionsJson;
+        var totalBefore = deductions.Sum(d => d.Amount);
+
         deductions.Add(new DepositDeduction(request.Reason, request.Amount, request.Notes));
 
         entity.DeductionsJson = JsonSerializer.Serialize(deductions);
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
+
+        await LogDepositAsync(portfolioId, entity.Id, AuditLogOperation.Updated,
+            oldValues: JsonSerializer.Serialize(new { deductions = deductionsBefore, totalDeductions = totalBefore }),
+            newValues: JsonSerializer.Serialize(new { deductions = entity.DeductionsJson, totalDeductions = deductions.Sum(d => d.Amount) }),
+            changeReason: $"Deposit deduction added: {request.Reason} (${request.Amount:0.##})", ct);
+
         return SecurityDepositResponse.FromEntity(entity);
     }
 
@@ -145,6 +180,19 @@ public class SecurityDepositService : ISecurityDepositService
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
+
+        await LogDepositAsync(portfolioId, entity.Id, AuditLogOperation.Updated,
+            oldValues: JsonSerializer.Serialize(new { status = SecurityDepositStatus.Held.ToString(), amount = entity.Amount, returnedAmount = (decimal?)null }),
+            newValues: JsonSerializer.Serialize(new
+            {
+                status = entity.Status.ToString(),
+                amount = entity.Amount,
+                returnedAmount = net,
+                totalDeductions,
+                deductions = entity.DeductionsJson,
+            }),
+            changeReason: $"Deposit returned: ${net:0.##} of ${entity.Amount:0.##} (deductions ${totalDeductions:0.##})", ct);
+
         return SecurityDepositResponse.FromEntity(entity);
     }
 
