@@ -116,14 +116,18 @@ guard.
 
 ### 5. Web viewer (`web/`)
 
-Repoint at `/api/v1/audit`; keep the friendly **"Activity"** label (nicer than "Audit log" for
-a landlord), now backed by the real trail.
-- `web/src/lib/api/endpoints/activity.ts` → call `/audit`; new `AuditEntry` type in
-  `web/src/lib/types/index.ts` (replacing the `ActivityLog` interface usage).
-- `web/src/routes/(protected)/activity/+page.svelte` — filters become operation + entityType +
-  search + date range, via the existing responsive `DataGrid`; rows link via `detailHref`.
-- `web/src/lib/components/shared/ActivityFeed.svelte` + the dashboard recent-activity widget →
-  same new endpoint/type. Both come alive.
+Repoint at `/api/v1/audit` and rename the surface to **"Audit"** (user's choice — consistent
+with the `/api/v1/audit` endpoint), now backed by the real trail.
+- `web/src/lib/api/endpoints/activity.ts` → `audit.ts` calling `/audit`; new `AuditEntry` type
+  in `web/src/lib/types/index.ts` (replacing the `ActivityLog` interface usage).
+- **Route rename** `web/src/routes/(protected)/activity/` → `(protected)/audit/`; page heading
+  "Audit"; nav entry relabeled to **Audit** and pointed at `/audit`. Add a redirect from the old
+  `/activity` → `/audit` so existing links/bookmarks don't break.
+- Filters: operation + entityType + search + date range, via the existing responsive
+  `DataGrid`; rows link via `detailHref`.
+- `web/src/lib/components/shared/ActivityFeed.svelte` (reused on the dashboard) → same new
+  endpoint/type, visible header relabeled (e.g. "Recent audit"); the dashboard widget comes
+  alive too. (Component filename may stay or be renamed `AuditFeed.svelte` — cosmetic.)
 
 ### 6. Retire `ActivityLog`
 
