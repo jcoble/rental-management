@@ -354,7 +354,15 @@ public class AccountingService : IAccountingService
             "date" => query.SortDescending
                 ? rows.OrderByDescending(r => r.Date).ThenByDescending(r => r.Id)
                 : rows.OrderBy(r => r.Date).ThenBy(r => r.Id),
-            _ => rows.OrderByDescending(r => r.Date).ThenByDescending(r => r.Id),
+            "createdat" => query.SortDescending
+                ? rows.OrderByDescending(r => r.CreatedAt).ThenByDescending(r => r.Id)
+                : rows.OrderBy(r => r.CreatedAt).ThenBy(r => r.Id),
+            "updatedat" => query.SortDescending
+                ? rows.OrderByDescending(r => r.UpdatedAt).ThenByDescending(r => r.Id)
+                : rows.OrderBy(r => r.UpdatedAt).ThenBy(r => r.Id),
+            // Default: newest-entered first, so a just-scanned item lands at the top of the ledger
+            // even when its transaction date is wrong/old.
+            _ => rows.OrderByDescending(r => r.CreatedAt).ThenByDescending(r => r.Id),
         };
 
         var totalCount = await rows.CountAsync(ct);
@@ -391,6 +399,8 @@ public class AccountingService : IAccountingService
                     Kind = r.Kind,
                     Id = r.Id,
                     Date = r.Date,
+                    CreatedAt = r.CreatedAt,
+                    UpdatedAt = r.UpdatedAt,
                     Description = r.Description,
                     Category = r.Category,
                     Status = r.Status,
@@ -1098,6 +1108,8 @@ public class AccountingService : IAccountingService
                 Kind = KindPayment,
                 Id = p.Id,
                 Date = p.PaidDate ?? p.DueDate,
+                CreatedAt = p.CreatedAt,
+                UpdatedAt = p.UpdatedAt,
                 Description = p.Notes != null && p.Notes != ""
                     ? p.Notes
                     : p.PaymentType.ToString() + " - " + p.Lease!.Tenant!.FirstName + " " + p.Lease!.Tenant!.LastName,
@@ -1120,6 +1132,8 @@ public class AccountingService : IAccountingService
                 Kind = KindExpense,
                 Id = e.Id,
                 Date = e.PaidAt ?? e.IncurredAt,
+                CreatedAt = e.CreatedAt,
+                UpdatedAt = e.UpdatedAt,
                 Description = e.Description,
                 Category = e.Category.ToString(),
                 Status = e.Status.ToString(),
@@ -1140,6 +1154,8 @@ public class AccountingService : IAccountingService
                 Kind = KindBank,
                 Id = t.Id,
                 Date = t.PostedAt,
+                CreatedAt = t.CreatedAt,
+                UpdatedAt = t.UpdatedAt,
                 Description = t.Description,
                 Category = t.Category ?? (t.Amount >= 0 ? "Deposit" : "Withdrawal"),
                 Status = t.MatchStatus,
@@ -1160,6 +1176,15 @@ public class AccountingService : IAccountingService
         public string Kind { get; set; } = string.Empty;
         public int Id { get; set; }
         public DateTime Date { get; set; }
+
+        /// <summary>When the row entered the system (Payment/Expense/Bank CreatedAt). Drives the
+        /// "Entered" ledger column and the default newest-entered-first sort, so a freshly-scanned
+        /// item lands at the top regardless of its (possibly wrong/old) transaction date.</summary>
+        public DateTime CreatedAt { get; set; }
+
+        /// <summary>When the row was last edited (CreatedAt for a never-touched row).</summary>
+        public DateTime UpdatedAt { get; set; }
+
         public string Description { get; set; } = string.Empty;
         public string Category { get; set; } = string.Empty;
         public string Status { get; set; } = string.Empty;
