@@ -74,4 +74,32 @@ public class VoiceSlotsTests
 
         result.Missing.Should().Contain("amount");
     }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("0.0")]
+    [InlineData("0.00")]
+    [InlineData("$0")]
+    public void ZeroAmount_CountsAsMissing(string zero)
+    {
+        // The LLM emits "0"/"0.0" when the speaker never said an amount; that must
+        // still trigger the "How much was it?" question.
+        var result = VoiceSlots.Evaluate("Expense", Fields(("amount", zero), ("property_id", "5")));
+
+        result.Missing.Should().ContainSingle().Which.Should().Be("amount");
+        result.NextPrompt.Should().Be("How much was it?");
+        result.Complete.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("40")]
+    [InlineData("40.00")]
+    [InlineData("$1,200.50")]
+    public void PositiveAmount_SatisfiesSlot(string amount)
+    {
+        var result = VoiceSlots.Evaluate("Expense", Fields(("amount", amount), ("property_id", "5")));
+
+        result.Missing.Should().NotContain("amount");
+        result.Complete.Should().BeTrue();
+    }
 }

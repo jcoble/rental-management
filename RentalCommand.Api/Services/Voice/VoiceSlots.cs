@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace RentalCommand.Api.Services.Voice;
 
 /// <summary>
@@ -68,14 +70,32 @@ public static class VoiceSlots
     private static bool IsSatisfied(string slot, IReadOnlyDictionary<string, string> values)
     {
         var names = Aliases.TryGetValue(slot, out var alts) ? alts : [slot];
+        var isAmount = string.Equals(slot, "amount", StringComparison.OrdinalIgnoreCase);
+
         foreach (var name in names)
         {
-            if (values.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value))
+            if (!values.TryGetValue(name, out var value) || string.IsNullOrWhiteSpace(value))
+            {
+                continue;
+            }
+
+            // Amount slots need a *positive* number: the LLM emits "0"/"0.0" when
+            // the speaker never said an amount, so a non-positive value must still
+            // count as missing (and the confirm step rejects it anyway). Other
+            // slots are satisfied by any non-empty value.
+            if (!isAmount || IsPositiveAmount(value))
             {
                 return true;
             }
         }
         return false;
+    }
+
+    private static bool IsPositiveAmount(string raw)
+    {
+        var cleaned = new string(raw.Where(c => char.IsDigit(c) || c is '.' or '-').ToArray());
+        return decimal.TryParse(cleaned, NumberStyles.Any, CultureInfo.InvariantCulture, out var value)
+            && value > 0m;
     }
 
     private static string PromptFor(string slot) =>
