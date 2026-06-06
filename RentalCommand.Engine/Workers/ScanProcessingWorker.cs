@@ -18,7 +18,7 @@ public sealed record ExtractionSchema(
 /// to "Reviewing", and notifies the web via IDataUpdateService so the review page refreshes.
 /// On failure the draft is marked "Failed" so the UI can offer manual entry.
 /// </summary>
-public sealed class ScanProcessingWorker : EngineWorkerBase
+public class ScanProcessingWorker : EngineWorkerBase
 {
     private const int BatchSize = 10;
 
@@ -109,17 +109,30 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
 
                 var schema = ChooseExtractionSchema(draft.TargetEntityType);
 
-                var extracted = await llm.ExtractAsync(
-                    bytes, contentType,
-                    schema.Instructions,
-                    schema.Fields,
-                    groundingContext, ct);
+                var extracted = await ExtractWithRetryAsync(
+                    llm, bytes, contentType, schema, groundingContext, draft.Id, logger, ct);
+
+                // Guard against the silent-empty-draft bug: a failed/empty/truncated/unparseable
+                // extraction must surface as a terminal "Failed" (with a reason) so the reviewer
+                // knows to re-scan or enter manually — it must NEVER be stored as a "Reviewing"
+                // draft whose every field is blank with 0 confidence.
+                var failureReason = GetExtractionFailureReason(extracted, schema.Fields);
+                if (failureReason is not null)
+                {
+                    logger.LogWarning(
+                        "Scan extraction produced no usable result for draft {DraftId} " +
+                        "(model {ModelId}): {Reason}; marking Failed",
+                        draft.Id, extracted.ModelId, failureReason);
+                    await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id, logger, failureReason);
+                    continue;
+                }
 
                 // Persist {name:{value,confidence}} JSON + provenance.
                 var fieldJson = JsonSerializer.Serialize(extracted.Fields.ToDictionary(
                     kv => kv.Key,
                     kv => new { value = kv.Value.Value, confidence = kv.Value.Confidence }));
                 draft.ExtractedFields = fieldJson;
+                draft.FailureReason = null;
                 draft.ModelId = extracted.ModelId;
                 draft.TokensUsed = extracted.TokensUsed;
                 draft.CostUsd = EstimateCost(extracted.ModelId, extracted.InputTokens, extracted.OutputTokens);
@@ -155,6 +168,12 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                 draft.ReviewedAt = DateTime.UtcNow;
                 await db.SaveChangesAsync(ct);
 
+                logger.LogInformation(
+                    "Scan extraction succeeded for draft {DraftId} (model {ModelId}): " +
+                    "{FieldCount} field(s) with a value → {Target}, Reviewing",
+                    draft.Id, extracted.ModelId,
+                    CountNonEmptyDataFields(extracted, schema.Fields), draft.TargetEntityType);
+
                 await dataUpdate.BroadcastEntityUpdateAsync(
                     draft.PortfolioId, "ScanDraft", draft.Id,
                     new { draft.Id, draft.Status, draft.TargetEntityType }, ct);
@@ -172,7 +191,8 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                 {
                     logger.LogWarning(
                         "Scan extraction interrupted (cancellation) for draft {DraftId}; marking Failed", draft.Id);
-                    await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id, logger);
+                    await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id, logger,
+                        "extraction interrupted (timeout or shutdown)");
                 }
                 break;
             }
@@ -182,7 +202,8 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                 // Use a fresh, non-cancelled save: if the failure rode in on an already-cancelled
                 // token (e.g. a timeout surfaced as a DB/HTTP cancellation), reusing it here would
                 // throw again and leave the draft stuck in 'Processing'.
-                await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id, logger);
+                await MarkFailedAsync(scoped, dataUpdate, draft.PortfolioId, draft.Id, logger,
+                    "extraction failed (provider or processing error)");
             }
         }
         return processed;
@@ -255,8 +276,13 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
         IDataUpdateService dataUpdate,
         int portfolioId,
         int draftId,
-        ILogger logger)
+        ILogger logger,
+        string? failureReason = null)
     {
+        // Keep the stored reason within the column's bound (no silent truncation surprises).
+        var reason = failureReason is { Length: > 0 }
+            ? (failureReason.Length > 500 ? failureReason[..500] : failureReason)
+            : null;
         try
         {
             using var failScope = scoped.GetRequiredService<IServiceScopeFactory>().CreateScope();
@@ -265,17 +291,107 @@ public sealed class ScanProcessingWorker : EngineWorkerBase
                 .Where(d => d.Id == draftId && d.Status == "Processing")
                 .ExecuteUpdateAsync(s => s
                     .SetProperty(d => d.Status, "Failed")
+                    .SetProperty(d => d.FailureReason, reason)
                     .SetProperty(d => d.ReviewedAt, DateTime.UtcNow), CancellationToken.None);
 
             await dataUpdate.BroadcastEntityUpdateAsync(
                 portfolioId, "ScanDraft", draftId,
-                new { Id = draftId, Status = "Failed" }, CancellationToken.None);
+                new { Id = draftId, Status = "Failed", FailureReason = reason }, CancellationToken.None);
         }
         catch (Exception ex)
         {
             // Last-resort: never let the failure-handling itself throw out of the cycle. The
             // startup crash-recovery (Processing → Pending) is the backstop if this never lands.
             logger.LogError(ex, "Failed to mark draft {DraftId} as Failed", draftId);
+        }
+    }
+
+    // Field names that classify the document but carry no extracted *data*: a model that read
+    // nothing still picks a document_kind, so an extraction whose only non-empty field is the
+    // classifier is effectively empty and must not be stored as a ready-to-review draft.
+    private static readonly HashSet<string> ClassifierOnlyFields =
+        new(StringComparer.OrdinalIgnoreCase) { "document_kind" };
+
+    /// <summary>
+    /// Returns a concise reason this extraction must be treated as a failure, or <c>null</c> when it
+    /// carries at least one real extracted value and should proceed to "Reviewing". Surfaces, in
+    /// order: an explicit provider failure (truncation / unparseable / no model), then the
+    /// "empty skeleton" case (every data field blank/whitespace — the silent-empty-draft bug).
+    /// Pure and deterministic so it is unit-testable without the database or a live provider.
+    /// </summary>
+    public static string? GetExtractionFailureReason(
+        ExtractedFields extracted, IReadOnlyList<ExtractionFieldSpec> fields)
+    {
+        if (extracted is null)
+            return "extraction returned no result";
+
+        // A provider that flagged a hard failure (truncated, unparseable, unavailable) wins even if
+        // a stray field slipped through, because the result can't be trusted as complete.
+        if (!string.IsNullOrWhiteSpace(extracted.FailureReason))
+            return extracted.FailureReason;
+
+        if (CountNonEmptyDataFields(extracted, fields) == 0)
+            return "no fields could be extracted from the document";
+
+        return null;
+    }
+
+    /// <summary>
+    /// Counts how many real <em>data</em> fields came back with a non-whitespace value, ignoring
+    /// the classifier-only fields (e.g. document_kind) that a model fills even when it read nothing.
+    /// </summary>
+    private static int CountNonEmptyDataFields(
+        ExtractedFields extracted, IReadOnlyList<ExtractionFieldSpec> fields)
+    {
+        if (extracted?.Fields is not { Count: > 0 }) return 0;
+
+        // Restrict to the schema we asked for so an unexpected extra key can't mask an empty result.
+        var dataFieldNames = fields
+            .Select(f => f.Name)
+            .Where(n => !ClassifierOnlyFields.Contains(n));
+
+        var count = 0;
+        foreach (var name in dataFieldNames)
+        {
+            if (extracted.Fields.TryGetValue(name, out var fe)
+                && !string.IsNullOrWhiteSpace(fe?.Value))
+            {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /// <summary>
+    /// Runs the extraction with a single bounded retry on a <em>transient</em> provider error
+    /// (network blip / HTTP 429 / 5xx surfaced as an <see cref="HttpRequestException"/>). A genuine
+    /// empty/unparseable result is NOT retried here — it returns and the caller fails the draft with
+    /// a reason. Honours the cycle token (a real cancellation/timeout propagates as before).
+    /// </summary>
+    private static async Task<ExtractedFields> ExtractWithRetryAsync(
+        ILlmProvider llm,
+        byte[] bytes,
+        string contentType,
+        ExtractionSchema schema,
+        string? groundingContext,
+        int draftId,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await llm.ExtractAsync(
+                bytes, contentType, schema.Instructions, schema.Fields, groundingContext, ct);
+        }
+        catch (HttpRequestException ex) when (!ct.IsCancellationRequested)
+        {
+            // One short backoff then a single retry; a second failure propagates to the catch in
+            // ExecuteCycleAsync, which marks the draft Failed (never silently Reviewing).
+            logger.LogWarning(ex,
+                "Transient extraction error for draft {DraftId}; retrying once", draftId);
+            await Task.Delay(TimeSpan.FromMilliseconds(750), ct);
+            return await llm.ExtractAsync(
+                bytes, contentType, schema.Instructions, schema.Fields, groundingContext, ct);
         }
     }
 

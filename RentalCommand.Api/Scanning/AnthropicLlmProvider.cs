@@ -68,6 +68,7 @@ public sealed class AnthropicLlmProvider : ILlmProvider
             {
                 ModelId = "noop",
                 TokensUsed = 0,
+                FailureReason = "AI extraction unavailable (no API key configured)",
                 Fields = fields.ToDictionary(
                     f => f.Name,
                     _ => new FieldExtraction { Value = string.Empty, Confidence = 0m })
@@ -407,6 +408,15 @@ public sealed class AnthropicLlmProvider : ILlmProvider
             OutputTokens = outputTokens,
             TokensUsed   = inputTokens + outputTokens
         };
+
+        // A response cut off by max_tokens (stop_reason="max_tokens") leaves the tool_use input
+        // incomplete; flag it so the worker fails the draft instead of storing blanks.
+        if (root.TryGetProperty("stop_reason", out var sr)
+            && LlmResponseParsing.IsTruncatedFinishReason(sr.GetString()))
+        {
+            result.Truncated = true;
+            result.FailureReason = "response truncated (hit max output tokens)";
+        }
 
         // Find the tool_use content block and read its "input" object.
         JsonElement input = default;

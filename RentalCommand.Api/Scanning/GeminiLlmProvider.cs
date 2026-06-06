@@ -74,6 +74,7 @@ public sealed class GeminiLlmProvider : ILlmProvider
             {
                 ModelId = "noop",
                 TokensUsed = 0,
+                FailureReason = "AI extraction unavailable (no API key configured)",
                 Fields = fields.ToDictionary(
                     f => f.Name,
                     _ => new FieldExtraction { Value = string.Empty, Confidence = 0m })
@@ -279,6 +280,18 @@ public sealed class GeminiLlmProvider : ILlmProvider
             OutputTokens = outputTokens,
             TokensUsed = inputTokens + outputTokens
         };
+
+        // A response cut off by maxOutputTokens (candidate finishReason="MAX_TOKENS") leaves the
+        // functionCall args incomplete; flag it so the worker fails the draft instead of storing blanks.
+        if (root.TryGetProperty("candidates", out var cands)
+            && cands.ValueKind == JsonValueKind.Array
+            && cands.GetArrayLength() > 0
+            && cands[0].TryGetProperty("finishReason", out var fr)
+            && LlmResponseParsing.IsTruncatedFinishReason(fr.GetString()))
+        {
+            result.Truncated = true;
+            result.FailureReason = "response truncated (hit max output tokens)";
+        }
 
         // Find the record_extraction functionCall.args object among the candidate's parts.
         JsonElement args = default;

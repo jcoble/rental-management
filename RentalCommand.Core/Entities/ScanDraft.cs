@@ -32,6 +32,14 @@ public class ScanDraft
     public string? ModelId { get; set; }
     public int? TokensUsed { get; set; }
     public decimal? CostUsd { get; set; }
+
+    /// <summary>
+    /// Concise, human-readable reason a draft ended in <c>Status == "Failed"</c> (e.g. the LLM
+    /// returned no usable fields, the response was truncated, or extraction is unavailable). Null
+    /// for drafts that have not failed. Surfaced on the review screen so the user knows why a scan
+    /// could not be auto-extracted and can re-scan or enter the record manually.
+    /// </summary>
+    public string? FailureReason { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? ReviewedAt { get; set; }
     public string? ReviewedBy { get; set; }
