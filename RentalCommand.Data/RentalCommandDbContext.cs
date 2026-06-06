@@ -171,6 +171,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.TargetEntityType).IsRequired().HasMaxLength(120);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
             entity.Property(e => e.ModelId).HasMaxLength(120);
+            entity.Property(e => e.FailureReason).HasMaxLength(500);
             entity.Property(e => e.ReviewedBy).HasMaxLength(200);
             entity.Property(e => e.CostUsd).HasPrecision(18, 4);
             entity.Property(e => e.ExtractedFields).HasColumnType("jsonb");

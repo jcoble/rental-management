@@ -73,6 +73,7 @@ public sealed class OpenAiLlmProvider : ILlmProvider
             {
                 ModelId = "noop",
                 TokensUsed = 0,
+                FailureReason = "AI extraction unavailable (no API key configured)",
                 Fields = fields.ToDictionary(
                     f => f.Name,
                     _ => new FieldExtraction { Value = string.Empty, Confidence = 0m })
@@ -392,6 +393,15 @@ public sealed class OpenAiLlmProvider : ILlmProvider
             && choices.ValueKind == JsonValueKind.Array
             && choices.GetArrayLength() > 0)
         {
+            // A response cut off by max_completion_tokens (finish_reason="length") leaves the tool
+            // call's JSON incomplete; flag it so the worker fails the draft instead of storing blanks.
+            if (choices[0].TryGetProperty("finish_reason", out var fr)
+                && LlmResponseParsing.IsTruncatedFinishReason(fr.GetString()))
+            {
+                result.Truncated = true;
+                result.FailureReason = "response truncated (hit max output tokens)";
+            }
+
             var msg = choices[0].GetProperty("message");
             if (msg.TryGetProperty("tool_calls", out var toolCalls)
                 && toolCalls.ValueKind == JsonValueKind.Array
@@ -402,12 +412,24 @@ public sealed class OpenAiLlmProvider : ILlmProvider
                     .GetProperty("arguments")
                     .GetString();
 
+                // Some models wrap the arguments JSON in a ```json fence; recover the inner JSON.
+                argsJson = LlmResponseParsing.StripCodeFences(argsJson);
+
                 if (!string.IsNullOrEmpty(argsJson))
                 {
-                    // arguments is a JSON string — parse it and clone so it outlives the using block.
-                    using var argsDoc = JsonDocument.Parse(argsJson);
-                    input = argsDoc.RootElement.Clone();
-                    found = true;
+                    try
+                    {
+                        // arguments is a JSON string — parse it and clone so it outlives the using block.
+                        using var argsDoc = JsonDocument.Parse(argsJson);
+                        input = argsDoc.RootElement.Clone();
+                        found = true;
+                    }
+                    catch (JsonException)
+                    {
+                        // Unparseable tool arguments (e.g. truncated mid-JSON). Leave found=false so
+                        // every field comes back empty; record why so the worker can fail the draft.
+                        result.FailureReason ??= "tool-call arguments were not valid JSON";
+                    }
                 }
             }
         }
