@@ -81,7 +81,15 @@ public class WorkOrderService : IWorkOrderService
             .ThenBy(e => e.Id)
             .ToListAsync(ct);
 
-        return WorkOrderDetailResponse.FromEntity(entity, events);
+        var response = WorkOrderDetailResponse.FromEntity(entity, events);
+        var scan = await _db.FindLatestEntityFileAsync(portfolioId, "WorkOrder", id, ct);
+        if (scan is not null)
+        {
+            response.HasScan = true;
+            response.ScanIsImage = scan.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return response;
     }
 
     public async Task<WorkOrderResponse?> CreateAsync(int portfolioId, CreateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default)

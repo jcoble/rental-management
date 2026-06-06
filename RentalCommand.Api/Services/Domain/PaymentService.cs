@@ -64,7 +64,20 @@ public class PaymentService : IPaymentService
             .AsNoTracking()
             .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
 
-        return entity == null ? null : PaymentResponse.FromEntity(entity);
+        if (entity == null)
+        {
+            return null;
+        }
+
+        var response = PaymentResponse.FromEntity(entity);
+        var scan = await _db.FindLatestEntityFileAsync(portfolioId, "Payment", id, ct);
+        if (scan is not null)
+        {
+            response.HasScan = true;
+            response.ScanIsImage = scan.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return response;
     }
 
     public async Task<PaymentResponse?> CreateAsync(int portfolioId, CreatePaymentRequest request, CancellationToken ct = default)

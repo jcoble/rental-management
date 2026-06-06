@@ -155,6 +155,8 @@ export interface Lease {
 	tenantName?: string;
 	propertyName?: string;
 	unitNumber?: string;
+	hasScan?: boolean;
+	scanIsImage?: boolean;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -173,6 +175,8 @@ export interface Payment {
 	notes?: string;
 	tenantName?: string;
 	leaseNumber?: string;
+	hasScan?: boolean;
+	scanIsImage?: boolean;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -651,6 +655,8 @@ export interface WorkOrder {
 	unitNumber?: string;
 	tenantName?: string;
 	vendorName?: string;
+	hasScan?: boolean;
+	scanIsImage?: boolean;
 }
 
 /** One status-change event in a work order's history (oldest→newest). */

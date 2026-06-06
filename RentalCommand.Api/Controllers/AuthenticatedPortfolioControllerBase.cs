@@ -1,6 +1,10 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Imaging;
+using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -69,5 +73,74 @@ public abstract class AuthenticatedPortfolioControllerBase : ControllerBase
     {
         var claim = User.FindFirst("tenantId");
         return claim != null && int.TryParse(claim.Value, out var tenantId) ? tenantId : null;
+    }
+
+    // Content types we trust to render inline; anything else downloads as octet-stream so an uploaded
+    // html/svg can't execute on the app origin. Shared by every scanned-document endpoint.
+    private static readonly HashSet<string> InlineSafeContentTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "application/pdf", "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic"
+    };
+
+    /// <summary>
+    /// Serves the original scanned document a record was created from: the latest <c>StoredFile</c>
+    /// re-keyed to (<paramref name="entityType"/>, <paramref name="entityId"/>) by
+    /// <c>ScanService.FinalizeDraft</c>. When <paramref name="thumb"/> is set and the file is an image,
+    /// returns a resized JPEG preview. Inline for known-safe types, attachment otherwise. The lookup is
+    /// portfolio-scoped (from the JWT claim), so it can't reach another tenant's file (IDOR-safe).
+    /// </summary>
+    protected async Task<IActionResult> ServeEntityScanAsync(
+        RentalCommandDbContext db, IFileStorage files, string entityType, int entityId, bool thumb, CancellationToken ct)
+    {
+        var storedFile = await db.FindLatestEntityFileAsync(GetPortfolioId(), entityType, entityId, ct);
+        if (storedFile is null)
+        {
+            return NotFound(new { error = "Document not found" });
+        }
+
+        Stream fileStream;
+        try
+        {
+            fileStream = await files.DownloadAsync(storedFile.FilePath, ct);
+        }
+        catch
+        {
+            return NotFound(new { error = "File not found on storage" });
+        }
+
+        Response.Headers["X-Content-Type-Options"] = "nosniff";
+        var slug = entityType.ToLowerInvariant();
+
+        // thumb=true on an image → return a small JPEG preview rather than the full original.
+        if (thumb && storedFile.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        {
+            byte[] srcBytes;
+            using (var ms = new MemoryStream())
+            {
+                await fileStream.CopyToAsync(ms, ct);
+                srcBytes = ms.ToArray();
+            }
+
+            var thumbBytes = ThumbnailResizer.ResizeToJpeg(srcBytes);
+            if (thumbBytes is not null)
+            {
+                Response.Headers["Cache-Control"] = "private, max-age=86400";
+                Response.Headers["Content-Disposition"] = $"inline; filename=\"{slug}-{entityId}-thumb.jpg\"";
+                return File(thumbBytes, "image/jpeg");
+            }
+
+            // Resize failed — fall through and serve the original bytes.
+            fileStream = new MemoryStream(srcBytes);
+        }
+
+        // Serve defensively: inline for known-safe types, octet-stream otherwise.
+        if (InlineSafeContentTypes.Contains(storedFile.ContentType))
+        {
+            Response.Headers["Content-Disposition"] = $"inline; filename=\"{slug}-{entityId}\"";
+            return File(fileStream, storedFile.ContentType);
+        }
+
+        Response.Headers["Content-Disposition"] = $"attachment; filename=\"{slug}-{entityId}\"";
+        return File(fileStream, "application/octet-stream");
     }
 }
