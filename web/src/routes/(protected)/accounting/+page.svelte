@@ -63,7 +63,9 @@
 	let transactionFromFilter = $state('');
 	let transactionToFilter = $state('');
 	let transactionPage = $state(1);
-	let transactionSort = $state('-date');
+	// Default newest-entered-first: a just-scanned item lands at the top of the ledger even when its
+	// transaction date is wrong/old. The "Date" (transaction date) column stays sortable too.
+	let transactionSort = $state('-createdAt');
 	let transactionDeleteTarget = $state<AccountingTransaction | null>(null);
 	const debouncedTransactionSearch = debounced(() => transactionSearch, 300);
 	const selectedPropertyFilter = $derived(transactionPropertyFilter ? Number(transactionPropertyFilter) : undefined);
@@ -338,6 +340,27 @@
 		if (!value) return '';
 		return new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 	}
+	// Calendar day for the "Entered" column — rendered in UTC to match the grid's date columns so a
+	// UTC timestamp shows the same day for every viewer instead of drifting a day back.
+	function enteredDate(value: string | null | undefined) {
+		if (!value) return '–';
+		const d = new Date(value);
+		return isNaN(d.getTime()) ? '–' : d.toLocaleDateString(undefined, { timeZone: 'UTC' });
+	}
+	// Full local timestamp for the "Entered" tooltip.
+	function fullStamp(value: string | null | undefined) {
+		if (!value) return '';
+		const d = new Date(value);
+		return isNaN(d.getTime()) ? '' : d.toLocaleString();
+	}
+	// True when a row was edited meaningfully after creation (>1 min apart), so the "Entered" cell can
+	// hint that it's been touched and surface the updated time.
+	function wasEdited(created: string | null | undefined, updated: string | null | undefined) {
+		if (!created || !updated) return false;
+		const c = new Date(created).getTime();
+		const u = new Date(updated).getTime();
+		return !isNaN(c) && !isNaN(u) && u - c > 60_000;
+	}
 
 	// One-tap confirm of a suggested bank match for a ledger row. Optimistic: the row's
 	// suggestedBankMatch is consumed and `reconciled` flips to true so the chip becomes the green
@@ -401,6 +424,17 @@
 			format: 'date',
 			sortable: true,
 			mobileRole: 'meta',
+		},
+		{
+			// "Entered" = when the row was scanned/created. Default sort so freshly-scanned items
+			// land at the top even when their transaction Date is wrong/old. Tooltip reveals the
+			// edited time when it differs from created.
+			key: 'createdAt',
+			title: 'Entered',
+			format: 'date',
+			sortable: true,
+			mobileRole: 'meta',
+			cell: transactionEnteredCell,
 		},
 		{
 			key: 'kind',
@@ -469,6 +503,20 @@
 		},
 	];
 </script>
+
+{#snippet transactionEnteredCell(t: AccountingTransaction)}
+	{@const edited = wasEdited(t.createdAt, t.updatedAt)}
+	<span
+		class="inline-flex items-center gap-1"
+		title={`Entered ${fullStamp(t.createdAt)}${edited ? ` · Edited ${fullStamp(t.updatedAt)}` : ''}`}
+		data-testid="transaction-entered-{t.kind.toLowerCase()}-{t.id}"
+	>
+		{enteredDate(t.createdAt)}
+		{#if edited}
+			<span class="text-[10px] font-normal uppercase tracking-wide text-muted-foreground">· edited</span>
+		{/if}
+	</span>
+{/snippet}
 
 {#snippet transactionKindCell(t: AccountingTransaction)}
 	<span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {t.kind === 'Payment' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500' : t.kind === 'Bank' ? 'border-sky-500/40 bg-sky-500/10 text-sky-500' : 'border-amber-500/40 bg-amber-500/10 text-amber-500'}">
@@ -862,7 +910,7 @@
 			serverSide
 			onPageChange={(page) => (transactionPage = page)}
 			sort={transactionSort}
-			onSortChange={(sort) => { transactionSort = sort ?? '-date'; transactionPage = 1; }}
+			onSortChange={(sort) => { transactionSort = sort ?? '-createdAt'; transactionPage = 1; }}
 		>
 			{#snippet toolbar()}
 				<div class="grid w-full gap-2 lg:grid-cols-[minmax(14rem,1fr)_9rem_10rem_11rem_12rem_9rem_9rem]">
