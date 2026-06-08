@@ -94,7 +94,7 @@
 		{#if editTrigger === 'confirm' && oneditrequest}
 			<button
 				type="button"
-				class="m3-readonly-field m3-state-layer flex w-full flex-col justify-center px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+				class="m3-readonly-field m3-state-layer flex w-full flex-col justify-center text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
 				data-testid={`${testid}-value`}
 				onclick={oneditrequest}
 			>
@@ -102,7 +102,7 @@
 				<span class="m3-readonly-field__value mt-1">{displayText}</span>
 			</button>
 		{:else}
-			<div class="m3-readonly-field flex flex-col justify-center px-3 py-2" data-testid={`${testid}-value`}>
+			<div class="m3-readonly-field flex flex-col justify-center" data-testid={`${testid}-value`}>
 				<span class="m3-readonly-field__label">{label}</span>
 				<span class="m3-readonly-field__value mt-1">{displayText}</span>
 			</div>

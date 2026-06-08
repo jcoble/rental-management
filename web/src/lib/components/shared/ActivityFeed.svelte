@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page } from '$app/stores';
 	import type { AuditEntry } from '$lib/types';
 	import { formatRelative } from '$lib/utils/date';
 	import { Plus, Pencil, Trash2, CheckCircle, XCircle, Zap } from '@lucide/svelte';
@@ -35,12 +36,22 @@
 				return 'text-muted-foreground';
 		}
 	}
+
+	function isCurrentPageHref(href: string): boolean {
+		try {
+			const target = new URL(href, $page.url);
+			return target.pathname === $page.url.pathname && target.search === $page.url.search;
+		} catch {
+			return false;
+		}
+	}
 </script>
 
 <div class="space-y-1">
 	{#each activities as item (item.id)}
 		{@const Icon = getIcon(item.operationName)}
-		{#if item.detailHref}
+		{@const isSelfLink = item.detailHref ? isCurrentPageHref(item.detailHref) : false}
+		{#if item.detailHref && !isSelfLink}
 			<a
 				href={item.detailHref}
 				class="flex items-start gap-3 rounded-md px-2 py-1.5 transition-colors {compact ? '' : 'hover:bg-secondary'} group"
@@ -54,7 +65,7 @@
 				</div>
 			</a>
 		{:else}
-			<div class="flex items-start gap-3 rounded-md px-2 py-1.5 {compact ? '' : 'hover:bg-secondary'}">
+			<div class="flex items-start gap-3 rounded-md px-2 py-1.5">
 				<div class="mt-0.5 {getIconColor(item.operationName)}">
 					<Icon class="h-3.5 w-3.5" />
 				</div>
