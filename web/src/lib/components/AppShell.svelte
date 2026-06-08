@@ -66,6 +66,7 @@
 	import NavigationLoader from '$lib/components/NavigationLoader.svelte';
 	import AssistantBubble from '$lib/components/assistant/AssistantBubble.svelte';
 	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
+	import M3TooltipLayer from '$lib/components/shared/M3TooltipLayer.svelte';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 
@@ -335,6 +336,7 @@
 </script>
 
 <NavigationLoader />
+<M3TooltipLayer data-testid="shell-m3-tooltip" />
 
 {#snippet countBadge(count: number)}
 	{#if count > 0}
@@ -350,7 +352,7 @@
 <div class="flex h-full w-full overflow-hidden bg-background">
 	<!-- Sidebar -->
 	<aside
-		class="fixed left-0 top-0 z-40 flex h-full flex-col border-r border-sidebar-border bg-sidebar transition-all duration-200
+		class="fixed left-0 top-0 z-40 flex h-full flex-col border-r border-sidebar-border bg-sidebar/95 shadow-[inset_-1px_0_0_rgb(255_255_255_/_0.025)] backdrop-blur transition-all duration-[var(--m3-motion-duration-medium-2)] ease-[var(--m3-motion-easing-emphasized-decelerate)]
 			{isMobile
 			? (isSidebarOpen ? 'translate-x-0 w-60' : '-translate-x-full w-60')
 			: (sidebarCollapsed ? 'w-14' : 'w-60')}"
@@ -363,7 +365,7 @@
 				</a>
 			{:else}
 				<a href="/" class="flex items-center gap-2">
-					<span class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-inset ring-primary/20">
+					<span class="flex h-7 w-7 items-center justify-center rounded-[var(--m3-shape-large)] bg-primary/15 text-primary ring-1 ring-inset ring-primary/25">
 						<Building class="h-4 w-4" />
 					</span>
 					<span class="truncate font-semibold tracking-tight text-foreground">Rental Command</span>
@@ -386,12 +388,13 @@
 					<a
 						href={item.href}
 						onclick={handleNavClick}
-						class="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors
+						class="m3-state-layer flex items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
 							{active
-							? 'bg-primary/10 font-medium text-primary'
+							? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
 							: 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'}
 							{sidebarCollapsed && !isMobile ? 'justify-center' : ''}"
-						title={sidebarCollapsed && !isMobile ? item.label : undefined}
+						aria-label={sidebarCollapsed && !isMobile ? item.label : undefined}
+						data-m3-tooltip={sidebarCollapsed && !isMobile ? item.label : undefined}
 						data-testid="nav-{item.href.replace('/', '').replace('/', '-') || 'dashboard'}"
 					>
 						<item.icon class="h-4 w-4 shrink-0 {active ? 'text-primary' : ''}" />
@@ -408,11 +411,12 @@
 						<a
 							href={item.href}
 							onclick={handleNavClick}
-							class="flex items-center justify-center rounded-md px-3 py-1.5 text-sm transition-colors
+							class="m3-state-layer flex items-center justify-center rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
 								{active
-								? 'bg-primary/10 text-primary'
+								? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
 								: 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'}"
-							title={item.label}
+							aria-label={item.label}
+							data-m3-tooltip={item.label}
 							data-testid="nav-{item.href.replace('/', '').replace('/', '-') || 'dashboard'}"
 						>
 							<item.icon class="h-4 w-4 shrink-0" />
@@ -427,7 +431,7 @@
 						<button
 							type="button"
 							onclick={() => toggleGroup(group.id)}
-							class="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70 transition-colors hover:text-sidebar-foreground"
+							class="m3-state-layer flex w-full items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70 transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
 							aria-expanded={open}
 							data-testid="nav-group-{group.id}"
 						>
@@ -446,9 +450,9 @@
 									<a
 										href={item.href}
 										onclick={handleNavClick}
-										class="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors
+										class="m3-state-layer flex items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
 											{active
-											? 'bg-primary/10 font-medium text-primary'
+											? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
 											: 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'}"
 										data-testid="nav-{item.href.replace('/', '').replace('/', '-') || 'dashboard'}"
 									>
@@ -557,7 +561,7 @@
 				<button
 					onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
 					data-testid="sidebar-toggle"
-					class="mt-1 flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground {sidebarCollapsed ? 'justify-center' : ''}"
+					class="m3-state-layer mt-1 flex w-full items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground {sidebarCollapsed ? 'justify-center' : ''}"
 				>
 					{#if sidebarCollapsed}
 						<PanelLeftOpen class="h-4 w-4 shrink-0" />
@@ -572,7 +576,7 @@
 
 	<!-- Main content -->
 	<div
-		class="flex h-full min-w-0 flex-1 flex-col transition-all duration-200 {isMobile
+		class="flex h-full min-w-0 flex-1 flex-col transition-all duration-[var(--m3-motion-duration-medium-2)] ease-[var(--m3-motion-easing-emphasized-decelerate)] {isMobile
 			? 'ml-0'
 			: sidebarCollapsed
 				? 'ml-14'
@@ -585,7 +589,7 @@
 
 		<!-- App header bar: quick actions + live badges (TODO #2). Always visible. -->
 		<header
-			class="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border bg-background/95 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/60 sm:px-4"
+			class="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border bg-background/88 px-3 shadow-[inset_0_-1px_0_rgb(255_255_255_/_0.025)] backdrop-blur supports-[backdrop-filter]:bg-background/70 sm:px-4"
 		>
 			{#if isMobile}
 				<Button
@@ -615,9 +619,9 @@
 					<!-- Scan -->
 					<a
 						href="/scan"
-						class="relative flex items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+						class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 						aria-label="Scan a document"
-						title="Scan a document"
+						data-m3-tooltip="Scan a document"
 						data-testid="header-scan"
 					>
 						<ScanLine class="h-5 w-5" />
@@ -626,9 +630,9 @@
 					<!-- Messages -->
 					<a
 						href="/messages"
-						class="relative flex items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+						class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 						aria-label="Messages{unreadMessages > 0 ? ` (${unreadMessages} unread)` : ''}"
-						title="Messages"
+						data-m3-tooltip="Messages"
 						data-testid="header-messages"
 					>
 						<MessageSquare class="h-5 w-5" />
@@ -638,9 +642,9 @@
 					<!-- Appointments -->
 					<a
 						href="/appointments"
-						class="relative flex items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+						class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 						aria-label="Appointments{upcomingAppts > 0 ? ` (${upcomingAppts} upcoming)` : ''}"
-						title="Upcoming appointments"
+						data-m3-tooltip="Upcoming appointments"
 						data-testid="header-appointments"
 					>
 						<Calendar class="h-5 w-5" />
@@ -651,9 +655,9 @@
 				<!-- Help & Docs -->
 				<a
 					href="/docs"
-					class="relative flex items-center justify-center rounded-md p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+					class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
 					aria-label="Help and documentation"
-					title="Help & Docs"
+					data-m3-tooltip="Help & Docs"
 					data-testid="header-help"
 				>
 					<HelpCircle class="h-5 w-5" />
@@ -667,7 +671,11 @@
 		<!-- Page content frame. Routes own their internal 100% scroll area. -->
 		<main class="flex min-h-0 flex-1 justify-center overflow-hidden">
 			<div class="h-full w-full max-w-[1600px]">
-				{@render children()}
+				{#key $page.url.pathname}
+					<div class="m3-route-transition" data-testid="route-transition-frame">
+						{@render children()}
+					</div>
+				{/key}
 			</div>
 		</main>
 		<AssistantBubble />
