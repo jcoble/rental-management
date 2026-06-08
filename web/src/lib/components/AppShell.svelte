@@ -67,6 +67,7 @@
 	import AssistantBubble from '$lib/components/assistant/AssistantBubble.svelte';
 	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
 	import M3TooltipLayer from '$lib/components/shared/M3TooltipLayer.svelte';
+	import ThemeModeToggle from '$lib/components/shared/ThemeModeToggle.svelte';
 
 	let { children }: { children: import('svelte').Snippet } = $props();
 
@@ -662,6 +663,9 @@
 				>
 					<HelpCircle class="h-5 w-5" />
 				</a>
+
+				<!-- Theme -->
+				<ThemeModeToggle data-testid="header-theme-toggle" />
 
 				<!-- Notifications -->
 				<NotificationBell data-testid="notification-bell-header" placement="down" />
