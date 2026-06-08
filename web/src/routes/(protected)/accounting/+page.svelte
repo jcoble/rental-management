@@ -657,7 +657,7 @@
 
 	<!-- Compact KPI strip — always visible across tabs so the headline numbers are one glance away. -->
 	<div class="mb-5 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
-		<Card.Root class="gap-0 border-success/30 bg-success/5 py-0" data-testid="accounting-collected">
+		<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0" data-testid="accounting-collected">
 			<Card.Content class="p-4">
 				<p class="text-xs font-medium text-muted-foreground">Collected</p>
 				{#if accountingSummaryQuery.isLoading}
@@ -667,7 +667,7 @@
 				{/if}
 			</Card.Content>
 		</Card.Root>
-		<Card.Root class="gap-0 py-0" data-testid="accounting-outstanding">
+		<Card.Root class="m3-tonal-card m3-tonal-card--sky gap-0 py-0" data-testid="accounting-outstanding">
 			<Card.Content class="p-4">
 				<p class="text-xs font-medium text-muted-foreground">Outstanding</p>
 				{#if accountingSummaryQuery.isLoading}
@@ -677,7 +677,7 @@
 				{/if}
 			</Card.Content>
 		</Card.Root>
-		<Card.Root class="gap-0 border-destructive/30 bg-destructive/5 py-0" data-testid="accounting-overdue">
+		<Card.Root class="m3-tonal-card m3-tonal-card--rose gap-0 py-0" data-testid="accounting-overdue">
 			<Card.Content class="p-4">
 				<p class="text-xs font-medium text-muted-foreground">Overdue</p>
 				{#if accountingSummaryQuery.isLoading}
@@ -687,7 +687,7 @@
 				{/if}
 			</Card.Content>
 		</Card.Root>
-		<Card.Root class="gap-0 py-0" data-testid="accounting-expenses">
+		<Card.Root class="m3-tonal-card m3-tonal-card--amber gap-0 py-0" data-testid="accounting-expenses">
 			<Card.Content class="p-4">
 				<p class="text-xs font-medium text-muted-foreground">Expenses</p>
 				{#if accountingSummaryQuery.isLoading}
@@ -738,28 +738,28 @@
 		</div>
 
 		<div class="grid gap-4 lg:grid-cols-4">
-			<Card.Root class="gap-0 py-0">
+			<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Net cash flow</p>
 					<p class="font-mono text-2xl font-bold tabular-nums {(reports?.netCashFlow || 0) < 0 ? 'text-destructive' : (reports?.netCashFlow || 0) > 0 ? 'text-success' : ''}">{money(reports?.netCashFlow || 0)}</p>
 					<p class="mt-1 text-xs text-muted-foreground"><span class="text-success">{money(reports?.totalIncome || 0)}</span> income / <span class="text-amber-500">{money(reports?.totalExpenses || 0)}</span> expenses</p>
 				</Card.Content>
 			</Card.Root>
-			<Card.Root class="gap-0 py-0">
+			<Card.Root class="m3-tonal-card m3-tonal-card--violet gap-0 py-0">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Ledger rows</p>
 					<p class="text-2xl font-bold font-mono tabular-nums">{reports?.ledger.length ?? 0}</p>
 					<p class="mt-1 text-xs text-muted-foreground">Recent payments and expenses</p>
 				</Card.Content>
 			</Card.Root>
-			<Card.Root class="gap-0 py-0">
+			<Card.Root class="m3-tonal-card m3-tonal-card--sky gap-0 py-0">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Properties</p>
 					<p class="text-2xl font-bold font-mono tabular-nums">{reports?.properties.length ?? 0}</p>
 					<p class="mt-1 text-xs text-muted-foreground">Property-level P&amp;L</p>
 				</Card.Content>
 			</Card.Root>
-			<Card.Root class="gap-0 py-0">
+			<Card.Root class="m3-tonal-card m3-tonal-card--amber gap-0 py-0">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">1099 review</p>
 					<p class="font-mono text-2xl font-bold tabular-nums {vendorReviewCount > 0 ? 'text-warning' : ''}">{vendorReviewCount}</p>
@@ -969,7 +969,7 @@
 
 		<!-- ───────────────────────── OVERVIEW ───────────────────────── -->
 		<Tabs.Content value="overview">
-			<Card.Root class="gap-0 py-0" data-testid="accounting-money-snapshot">
+			<Card.Root class="m3-expressive-card m3-expressive-card--info gap-0 py-0" data-testid="accounting-money-snapshot">
 				<Card.Header class="px-5 pb-2 pt-5">
 					<div class="flex items-center gap-1.5">
 						<Card.Title class="text-base">Money Snapshot</Card.Title>

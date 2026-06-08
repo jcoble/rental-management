@@ -520,8 +520,8 @@
 	max?: string;
 })}
 	<div data-testid={`${opts.testid}-field`}>
-		<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${opts.testid}-input`}>{opts.label}</label>
 		{#if editing}
+			<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${opts.testid}-input`}>{opts.label}</label>
 			<DatePicker
 				id={`${opts.testid}-input`}
 				testid={`${opts.testid}-input`}
@@ -533,12 +533,10 @@
 			/>
 			{#if opts.error}<p class="mt-1 text-xs text-destructive" data-testid={`${opts.testid}-error`}>{opts.error}</p>{/if}
 		{:else}
-			<p
-				class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground"
-				data-testid={`${opts.testid}-value`}
-			>
-				{opts.display === '' ? '-' : opts.display}
-			</p>
+			<div class="m3-readonly-field flex flex-col justify-center" data-testid={`${opts.testid}-value`}>
+				<span class="m3-readonly-field__label">{opts.label}</span>
+				<span class="m3-readonly-field__value mt-1">{opts.display === '' ? '-' : opts.display}</span>
+			</div>
 		{/if}
 	</div>
 {/snippet}
