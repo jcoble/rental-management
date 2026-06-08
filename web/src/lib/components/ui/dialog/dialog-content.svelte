@@ -27,7 +27,7 @@
 		bind:ref
 		data-slot="dialog-content"
 		class={cn(
-			"m3-dialog-content fixed top-[50%] left-[50%] z-50 grid max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-5 overflow-y-auto border p-6 sm:max-w-2xl lg:max-w-4xl",
+			"m3-dialog-content fixed left-1/2 top-1/2 z-50 grid max-h-[calc(100dvh-2rem)] w-full max-w-[calc(100%-2rem)] gap-5 overflow-y-auto border p-6 sm:max-w-2xl lg:max-w-4xl",
 			className
 		)}
 		{...restProps}

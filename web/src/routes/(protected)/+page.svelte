@@ -183,7 +183,7 @@
 	{:else if dashboardQuery.data}
 		{@const data = dashboardQuery.data as Dashboard}
 		<Card.Root
-			class="m3-dashboard-hero m3-surface-pattern m3-motion-enter relative mb-6 overflow-hidden border-primary/30 p-0"
+			class="m3-dashboard-hero m3-surface-pattern m3-surface-pattern--portfolio m3-motion-enter relative mb-6 overflow-hidden border-primary/30 p-0"
 			style="--m3-motion-index: 0"
 			data-testid="dashboard-hero"
 		>
@@ -260,7 +260,7 @@
 		<!-- Today's Briefing — the AI moat, promoted to the top, full width. Two distinct halves:
 		     the AI voice (what the computer is saying) and the action list (what to do today). -->
 		<Card.Root
-			class="m3-surface-pattern m3-motion-enter relative mb-6 gap-0 overflow-hidden border-primary/30 py-0"
+			class="m3-surface-pattern m3-surface-pattern--briefing m3-motion-enter relative mb-6 gap-0 overflow-hidden border-primary/30 py-0"
 			style="--m3-motion-index: 1"
 			data-testid="dashboard-todays-briefing"
 		>
@@ -403,7 +403,7 @@
 		</Card.Root>
 
 		<!-- Plain-English money snapshot: collected / spent / kept, each with a sentence -->
-		<Card.Root class="m3-motion-enter mb-6 gap-0 py-0" style="--m3-motion-index: 2" data-testid="dashboard-money-snapshot">
+		<Card.Root class="m3-expressive-card m3-expressive-card--success m3-expressive-card--bars m3-motion-enter mb-6 gap-0 py-0" style="--m3-motion-index: 2" data-testid="dashboard-money-snapshot">
 			<Card.Header class="px-5 pt-5 pb-2">
 				<Card.Title class="flex items-center gap-2 text-base font-semibold">
 					<Wallet class="h-4 w-4 text-primary" />
@@ -429,21 +429,21 @@
 				{:else}
 					{@const snap = snapshotQuery.data}
 					<div class="grid gap-4 sm:grid-cols-3">
-						<div class="rounded-lg border border-border bg-background p-4" data-testid="dashboard-money-collected">
+						<div class="m3-tonal-card m3-tonal-card--mint rounded-lg border p-4" data-testid="dashboard-money-collected">
 							<div class="flex items-center gap-2 text-sm font-medium text-success">
 								<HandCoins class="h-4 w-4" /> Collected
 							</div>
 							<p class="mt-1 font-mono tabular-nums text-3xl font-bold text-foreground" data-testid="dashboard-money-collected-amount">{money(snap.collected)}</p>
 							<p class="mt-1.5 text-sm leading-snug text-muted-foreground">{snap.explanations.collected}</p>
 						</div>
-						<div class="rounded-lg border border-border bg-background p-4" data-testid="dashboard-money-spent">
+						<div class="m3-tonal-card m3-tonal-card--amber rounded-lg border p-4" data-testid="dashboard-money-spent">
 							<div class="flex items-center gap-2 text-sm font-medium text-warning">
 								<Receipt class="h-4 w-4" /> Spent
 							</div>
 							<p class="mt-1 font-mono tabular-nums text-3xl font-bold text-foreground" data-testid="dashboard-money-spent-amount">{money(snap.spent)}</p>
 							<p class="mt-1.5 text-sm leading-snug text-muted-foreground">{snap.explanations.spent}</p>
 						</div>
-						<div class="rounded-lg border border-border bg-background p-4" data-testid="dashboard-money-net">
+						<div class="m3-tonal-card m3-tonal-card--sky rounded-lg border p-4" data-testid="dashboard-money-net">
 							<div class="flex items-center gap-2 text-sm font-medium {snap.net < 0 ? 'text-destructive' : 'text-success'}">
 								<PiggyBank class="h-4 w-4" /> Kept
 							</div>
@@ -463,28 +463,28 @@
 		</Card.Root>
 
 		<div class="m3-motion-enter mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4" style="--m3-motion-index: 3">
-			<Card.Root class="gap-0 py-0">
+			<Card.Root class="m3-tonal-card m3-tonal-card--sky gap-0 py-0">
 				<Card.Content class="p-4">
 					<div class="flex items-center gap-2 text-muted-foreground"><Building class="h-4 w-4" /> Occupancy</div>
 					<p class="mt-2 font-mono tabular-nums text-2xl font-bold">{data.occupancy.occupancyRate}%</p>
 					<p class="text-xs text-muted-foreground">{data.occupancy.occupiedUnits}/{data.occupancy.totalUnits} occupied</p>
 				</Card.Content>
 			</Card.Root>
-			<Card.Root class="gap-0 py-0">
+			<Card.Root class="m3-tonal-card m3-tonal-card--amber gap-0 py-0">
 				<Card.Content class="p-4">
 					<div class="flex items-center gap-2 text-warning"><AlertTriangle class="h-4 w-4" /> Overdue</div>
 					<p class="mt-2 font-mono tabular-nums text-2xl font-bold">{money(data.accounting.overdueAmount)}</p>
 					<p class="text-xs text-muted-foreground">Receivables past due</p>
 				</Card.Content>
 			</Card.Root>
-			<Card.Root class="gap-0 py-0">
+			<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0">
 				<Card.Content class="p-4">
 					<div class="flex items-center gap-2 text-success"><Wallet class="h-4 w-4" /> Net This Month</div>
 					<p class="mt-2 font-mono tabular-nums text-2xl font-bold">{money(data.accounting.netThisMonth)}</p>
 					<p class="text-xs text-muted-foreground">Paid - expenses</p>
 				</Card.Content>
 			</Card.Root>
-			<Card.Root class="gap-0 py-0">
+			<Card.Root class="m3-tonal-card m3-tonal-card--rose gap-0 py-0">
 				<Card.Content class="p-4">
 					<div class="flex items-center gap-2 text-destructive"><Wrench class="h-4 w-4" /> Open Work Orders</div>
 					<p class="mt-2 font-mono tabular-nums text-2xl font-bold">{data.maintenance.openCount}</p>
@@ -498,7 +498,7 @@
 		{@const hasMessages = messagesQuery.isLoading || (messagesQuery.data?.length ?? 0) > 0}
 		<div class="m3-motion-enter mb-6 grid gap-4 {hasMessages ? 'lg:grid-cols-2' : ''}" style="--m3-motion-index: 4">
 			{#if hasMessages}
-				<Card.Root class="gap-0 py-0" data-testid="dashboard-latest-messages">
+				<Card.Root class="m3-tonal-card m3-tonal-card--violet gap-0 py-0" data-testid="dashboard-latest-messages">
 					<Card.Header class="px-4 pt-4 pb-3">
 						<Card.Title class="flex items-center gap-2 text-base font-semibold">
 							<MessageSquare class="h-4 w-4 text-primary" />
@@ -532,7 +532,7 @@
 				</Card.Root>
 			{/if}
 
-			<Card.Root class="gap-0 py-0" data-testid="dashboard-latest-maintenance">
+			<Card.Root class="m3-tonal-card m3-tonal-card--coral gap-0 py-0" data-testid="dashboard-latest-maintenance">
 				<Card.Header class="px-4 pt-4 pb-3">
 					<Card.Title class="flex items-center gap-2 text-base font-semibold">
 						<Wrench class="h-4 w-4 text-primary" />
@@ -569,7 +569,7 @@
 
 		<div class="m3-motion-enter grid gap-6 lg:grid-cols-3" style="--m3-motion-index: 5">
 			<div class="space-y-6 lg:col-span-2">
-				<Card.Root class="gap-0 py-0">
+				<Card.Root class="m3-tonal-card m3-tonal-card--amber gap-0 py-0">
 					<Card.Header class="px-4 pt-4 pb-3">
 						<Card.Title class="text-base font-semibold">Leases Expiring in 60 Days</Card.Title>
 					</Card.Header>
@@ -594,7 +594,7 @@
 					</Card.Content>
 				</Card.Root>
 
-				<Card.Root class="gap-0 py-0">
+				<Card.Root class="m3-tonal-card m3-tonal-card--sky gap-0 py-0">
 					<Card.Header class="px-4 pt-4 pb-3">
 						<Card.Title class="text-base font-semibold">Recent Activity</Card.Title>
 					</Card.Header>
@@ -612,7 +612,7 @@
 			</div>
 
 			<div class="space-y-6">
-				<Card.Root class="gap-0 py-0">
+				<Card.Root class="m3-tonal-card m3-tonal-card--rose gap-0 py-0">
 					<Card.Header class="px-4 pt-4 pb-2">
 						<Card.Title class="flex items-center gap-2 text-base font-semibold"><CalendarClock class="h-4 w-4 text-primary" />Upcoming Appointments</Card.Title>
 					</Card.Header>
@@ -632,7 +632,7 @@
 					</Card.Content>
 				</Card.Root>
 
-				<Card.Root class="gap-0 py-0">
+				<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0">
 					<Card.Header class="px-4 pt-4 pb-2">
 						<Card.Title class="flex items-center gap-2 text-base font-semibold"><Home class="h-4 w-4 text-primary" />Leasing Mix</Card.Title>
 					</Card.Header>

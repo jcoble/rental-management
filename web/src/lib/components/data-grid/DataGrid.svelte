@@ -305,7 +305,7 @@
 	<!-- Toolbar -->
 	{#if toolbar}
 		<div
-			class="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-3"
+			class="m3-tonal-card m3-tonal-card--violet m3-tonal-card--plain flex flex-wrap items-center gap-3 rounded-lg border p-3"
 			data-testid="datagrid-toolbar"
 		>
 			{@render toolbar()}
@@ -314,7 +314,7 @@
 
 	<!-- ── Desktop table (hidden on mobile + tablet) ──────────────────────────── -->
 	<div
-		class="hidden overflow-x-auto rounded-lg border border-border lg:block"
+		class="m3-data-surface hidden overflow-x-auto rounded-lg border lg:block"
 		data-testid="datagrid-desktop"
 		aria-busy={loading}
 	>
@@ -488,7 +488,7 @@
 				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 				<article
 					class={cn(
-						'rounded-lg border border-border bg-card p-4 shadow-sm transition-colors',
+						'm3-tonal-card m3-tonal-card--violet m3-tonal-card--plain rounded-lg border p-4 transition-colors',
 						onRowClick && 'cursor-pointer hover:border-primary/40 hover:bg-muted/30'
 					)}
 					role={onRowClick ? 'button' : undefined}
@@ -570,7 +570,7 @@
 		<!-- Mobile pagination bar -->
 		{#if showPagination}
 			<div
-				class="flex items-center justify-between rounded-lg border border-border bg-card px-3 py-2.5"
+				class="m3-tonal-card m3-tonal-card--violet m3-tonal-card--plain flex items-center justify-between rounded-lg border px-3 py-2.5"
 				data-testid="datagrid-mobile-pagination"
 			>
 				<button
