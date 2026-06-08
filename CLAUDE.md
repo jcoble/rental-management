@@ -12,6 +12,18 @@ Architecture mirrors the sister project **EdiPlatform** (`/Users/blackcolours/de
 messaging (DB outbox + Engine workers + SignalR — **no RabbitMQ**), SvelteKit web,
 and a planned **Flutter** mobile app over the same API.
 
+## Where work is tracked (Notion Command Center)
+
+This project's tasks, status, and "what's next" live in the user's Notion **Command Center**
+(project: **Rental Command**) — the source of truth, richer than git history, with the *why*
+up front in each task body. `TODO.md` is now archival.
+
+- At the start of substantive work, or whenever the user asks "what's next / where are we /
+  what should I work on", **FIRST list the open tasks** and ground your answer in them:
+  `~/.claude/skills/capture-task/list-tasks.sh "Rental Command"`.
+- New ideas / specs / rapid-fire items → the `capture-task` skill records them automatically.
+- Branch / PR / issue activity syncs to these tasks via `.github/workflows/notion-tasks.yml`.
+
 ## Project layout
 
 | Project | Role |

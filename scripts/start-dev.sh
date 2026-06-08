@@ -186,6 +186,12 @@ echo ""
 # that the Vite proxy forwards to $API_URL. API_URL is the API ROOT — server
 # config appends /api/v1; do NOT set VITE_API_URL (it would push the browser to
 # cross-origin calls and drop the /api/v1 prefix on the server side).
+# Google sign-in (optional): surface the PUBLIC client id to the web FROM .NET user-secrets,
+# so the login button renders + the OAuth redirect works WITHOUT a .env file. The ClientSecret
+# stays server-side in the API's user-secrets; only the (public) client id reaches the browser.
+# (web reads it via $env/dynamic/public at runtime.) Empty if Google isn't configured → button hidden.
+export PUBLIC_GOOGLE_CLIENT_ID="${PUBLIC_GOOGLE_CLIENT_ID:-$(dotnet user-secrets list --project RentalCommand.Api 2>/dev/null | sed -n 's/^Authentication:Google:ClientId = //p')}"
+
 cd web
 API_URL="${API_URL:-$WEB_API_URL}" \
     pnpm dev --host "$WEB_HOST" --port "$WEB_PORT" &
