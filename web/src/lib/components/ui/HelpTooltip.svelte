@@ -19,10 +19,16 @@
 
 <Tooltip.Root>
 	<Tooltip.Trigger
-		class="inline-flex"
+		class="m3-state-layer inline-flex items-center justify-center rounded-[var(--m3-shape-full)] p-0.5 text-muted-foreground hover:text-foreground"
 		aria-label={label ?? text}
-		title={text}
-		onclick={(e: MouseEvent) => { e.preventDefault(); e.stopPropagation(); }}
+		onmousedown={(e: MouseEvent) => {
+			e.preventDefault();
+			e.stopPropagation();
+		}}
+		onclick={(e: MouseEvent) => {
+			e.preventDefault();
+			e.stopPropagation();
+		}}
 	>
 		<HelpCircle class={iconClass} />
 	</Tooltip.Trigger>

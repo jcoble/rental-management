@@ -92,7 +92,7 @@
 		{disabled}
 		class={cn(
 			buttonVariants({ variant: 'outline' }),
-			'h-10 w-full justify-start text-left font-normal',
+			'm3-field-surface h-11 w-full justify-start rounded-[var(--m3-shape-large)] bg-transparent text-left font-normal',
 			!selected && 'text-muted-foreground'
 		)}
 	>

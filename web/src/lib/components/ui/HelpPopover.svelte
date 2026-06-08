@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Popover, PopoverContent, PopoverTrigger } from "$lib/components/ui/popover";
+	import * as Tooltip from "$lib/components/ui/tooltip";
 	import { HelpCircle } from "@lucide/svelte";
 
 	type Props = {
@@ -21,27 +21,34 @@
 		side = "bottom",
 		iconClass = "h-3.5 w-3.5 text-muted-foreground",
 	}: Props = $props();
+
+	function stopClickOpen(event: MouseEvent) {
+		event.preventDefault();
+		event.stopPropagation();
+	}
 </script>
 
-<Popover>
-	<PopoverTrigger
-		class="inline-flex items-center justify-center rounded-full p-0.5 hover:bg-muted/50 transition-colors"
+<Tooltip.Root delayDuration={250}>
+	<Tooltip.Trigger
+		class="m3-state-layer inline-flex items-center justify-center rounded-[var(--m3-shape-full)] p-0.5 text-muted-foreground hover:text-foreground"
 		aria-label="Help for {title}"
+		onmousedown={stopClickOpen}
+		onclick={stopClickOpen}
 	>
 		<HelpCircle class={iconClass} />
-	</PopoverTrigger>
-	<PopoverContent {side} class="w-72 p-3">
+	</Tooltip.Trigger>
+	<Tooltip.Content {side} variant="rich" class="w-72">
 		<div class="space-y-1.5">
-			<p class="text-sm font-medium">{title}</p>
-			<p class="text-xs text-muted-foreground leading-relaxed">{summary}</p>
+			<p class="text-sm font-semibold">{title}</p>
+			<p class="text-xs leading-relaxed opacity-85">{summary}</p>
 			{#if detail}
-				<p class="text-xs text-muted-foreground/80 leading-relaxed">{detail}</p>
+				<p class="text-xs leading-relaxed opacity-75">{detail}</p>
 			{/if}
 			{#if learnMoreUrl}
-				<a href={learnMoreUrl} class="inline-block text-xs text-primary hover:underline mt-1">
-					{learnMoreLabel} →
+				<a href={learnMoreUrl} class="mt-1 inline-block text-xs font-semibold underline-offset-4 hover:underline">
+					{learnMoreLabel}
 				</a>
 			{/if}
 		</div>
-	</PopoverContent>
-</Popover>
+	</Tooltip.Content>
+</Tooltip.Root>
