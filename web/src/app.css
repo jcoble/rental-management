@@ -4,9 +4,12 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* Rental Command M3 Expressive theme - dark mode is the default */
+/* Rental Command M3 Expressive theme. Light mode is the default app mode;
+   the root dark tokens remain first so SSR paints safely before ModeWatcher
+   applies the persisted light/dark class. */
 :root {
   --radius: 1rem;
+  --m3-color-scheme: dark;
 
   /* M3 tonal surface roles, customized for the rental app's quiet dark shell. */
   --m3c-surface: #151218;
@@ -143,8 +146,9 @@
   --m3-elevation-3: 0 1px 3px rgb(0 0 0 / 0.32), 0 4px 8px 3px rgb(0 0 0 / 0.16);
 }
 
-/* Light mode override (optional, but keeping for accessibility) */
+/* Light mode override */
 .light {
+  --m3-color-scheme: light;
   --m3c-surface: #fafafa;
   --m3c-surface-dim: #ded8e0;
   --m3c-surface-bright: #fafafa;
@@ -269,7 +273,7 @@
   body {
     @apply bg-background text-foreground antialiased;
     background: var(--background);
-    color-scheme: dark;
+    color-scheme: var(--m3-color-scheme);
     font-family: var(--m3-font);
     font: var(--m3-type-body-large);
     letter-spacing: 0;
