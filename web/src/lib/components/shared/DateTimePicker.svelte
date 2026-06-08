@@ -94,7 +94,7 @@
 	}
 
 	const timeInputClass =
-		'h-10 rounded-md border border-input bg-transparent px-3 py-2 text-sm text-foreground outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50 [color-scheme:dark]';
+		'm3-field-surface h-11 px-3 py-2 text-sm text-foreground outline-none disabled:cursor-not-allowed disabled:opacity-50 [color-scheme:dark]';
 </script>
 
 <div class="flex items-center gap-2">

@@ -92,7 +92,7 @@
 	<title>Dashboard - Rental Command</title>
 </svelte:head>
 
-<div class="box-border h-full overflow-y-auto p-6 pb-20">
+<div class="m3-page-frame">
 	{#if dashboardQuery.isLoading}
 		<!-- Skeleton loading state -->
 		<div class="mb-6">
@@ -182,17 +182,64 @@
 		<div class="flex h-64 items-center justify-center text-destructive">Failed to load dashboard.</div>
 	{:else if dashboardQuery.data}
 		{@const data = dashboardQuery.data as Dashboard}
-		<div class="mb-6">
-			<h1 class="text-2xl font-bold text-foreground">{data.portfolio.name}</h1>
-			<p class="mt-1 text-sm text-muted-foreground">{data.portfolio.managementCompanyName} · {data.portfolio.timeZone}</p>
-		</div>
+		<Card.Root
+			class="m3-dashboard-hero m3-surface-pattern m3-motion-enter relative mb-6 overflow-hidden border-primary/30 p-0"
+			style="--m3-motion-index: 0"
+			data-testid="dashboard-hero"
+		>
+			<Card.Content class="m3-dashboard-hero__content grid gap-5 p-5 md:grid-cols-[1.35fr_0.9fr] md:p-6">
+				<div class="min-w-0">
+					<div class="mb-4 flex flex-wrap items-center gap-2">
+						<span class="m3-dashboard-chip m3-dashboard-chip--active">Command center</span>
+						<span class="m3-dashboard-chip">
+							<span class="m3-dashboard-chip__dot text-warning"></span>
+							{data.maintenance.openCount} open work orders
+						</span>
+						<span class="m3-dashboard-chip">{data.occupancy.occupancyRate}% occupied</span>
+					</div>
+					<p class="m3-type-label-large text-muted-foreground">{data.portfolio.managementCompanyName}</p>
+					<h1 class="m3-type-display-small mt-2 max-w-2xl text-foreground">{data.portfolio.name}</h1>
+					<p class="m3-type-body-large mt-3 max-w-2xl text-muted-foreground">
+						Track rent, maintenance, leasing, and tenant follow-up from one calm portfolio workspace.
+					</p>
+					<div class="mt-5 flex flex-wrap gap-3">
+						<Button href="/accounting" class="gap-2" data-testid="dashboard-hero-primary-action">
+							Open money
+							<ArrowRight class="h-4 w-4" />
+						</Button>
+						<Button href="/properties" variant="secondary" data-testid="dashboard-hero-secondary-action">View properties</Button>
+					</div>
+				</div>
+				<div class="m3-dashboard-hero-status p-5" data-testid="dashboard-hero-status">
+					<div class="flex items-start justify-between gap-4">
+						<div>
+							<p class="m3-type-title-medium text-foreground">Today</p>
+							<p class="m3-type-body-medium text-muted-foreground">Portfolio pulse</p>
+						</div>
+						<div class="flex h-12 w-12 items-center justify-center rounded-[var(--m3-shape-large)] bg-primary/20 text-primary ring-1 ring-primary/25">
+							<Home class="h-5 w-5" />
+						</div>
+					</div>
+					<div class="mt-5 grid grid-cols-2 gap-3">
+						<div class="m3-dashboard-hero-stat" data-testid="dashboard-hero-overdue">
+							<p class="font-mono text-2xl font-semibold leading-none text-foreground">{money(data.accounting.overdueAmount)}</p>
+							<p class="m3-type-body-small mt-1 text-muted-foreground">overdue</p>
+						</div>
+						<div class="m3-dashboard-hero-stat" data-testid="dashboard-hero-net">
+							<p class="font-mono text-2xl font-semibold leading-none text-foreground">{money(data.accounting.netThisMonth)}</p>
+							<p class="m3-type-body-small mt-1 text-muted-foreground">net this month</p>
+						</div>
+					</div>
+				</div>
+			</Card.Content>
+		</Card.Root>
 
 		{#if isEmptyPortfolio && !isSandbox}
 			<!-- Empty-portfolio entry point into the guided setup wizard (live accounts only) -->
-			<Card.Root class="mb-6 border-primary/40 bg-primary/5" data-testid="dashboard-onboarding-banner">
+			<Card.Root class="m3-motion-enter mb-6 border-primary/40 bg-primary/8" style="--m3-motion-index: 1" data-testid="dashboard-onboarding-banner">
 				<Card.Content class="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
 					<div class="flex items-start gap-3">
-						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--m3-shape-large)] bg-primary/15 text-primary">
 							<Rocket class="h-5 w-5" />
 						</div>
 						<div>
@@ -213,17 +260,14 @@
 		<!-- Today's Briefing — the AI moat, promoted to the top, full width. Two distinct halves:
 		     the AI voice (what the computer is saying) and the action list (what to do today). -->
 		<Card.Root
-			class="relative mb-6 gap-0 overflow-hidden border-[color-mix(in_oklab,#a855f7_22%,var(--border))] py-0"
+			class="m3-surface-pattern m3-motion-enter relative mb-6 gap-0 overflow-hidden border-primary/30 py-0"
+			style="--m3-motion-index: 1"
 			data-testid="dashboard-todays-briefing"
 		>
-			<!-- Ambient AI glow so the hero reads as "intelligent", not just another card -->
-			<div class="pointer-events-none absolute -right-24 -top-24 h-64 w-64 rounded-full bg-purple-500/10 blur-3xl"></div>
-			<div class="pointer-events-none absolute -left-24 -bottom-24 h-64 w-64 rounded-full bg-blue-500/10 blur-3xl"></div>
-
 			<Card.Header class="relative px-5 pt-5 pb-3">
 				<Card.Title class="flex items-center gap-2 text-lg font-semibold">
-					<span class="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-purple-500/25 to-blue-500/25 ring-1 ring-purple-500/30">
-						<Sparkles class="h-4 w-4 text-purple-300" />
+					<span class="flex h-7 w-7 items-center justify-center rounded-[var(--m3-shape-large)] bg-primary/15 ring-1 ring-primary/25">
+						<Sparkles class="h-4 w-4 text-primary" />
 					</span>
 					Today's Briefing
 					<AIBadge />
@@ -251,31 +295,31 @@
 						<div class="lg:col-span-3">
 							{#if briefing?.summary}
 								<div
-									class="flex h-full flex-col gap-3 rounded-xl bg-gradient-to-br from-purple-500/12 to-blue-500/10 p-4 ring-1 ring-purple-500/25"
+									class="flex flex-col gap-3 rounded-[var(--m3-shape-large)] bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] p-4 ring-1 ring-primary/25"
 									data-testid="dashboard-briefing-narrative"
 								>
 									<div class="flex items-center gap-2">
-										<span class="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-purple-500/30 to-blue-500/30 ring-1 ring-purple-500/30">
-											<Sparkles class="h-3.5 w-3.5 text-purple-200" />
+										<span class="flex h-6 w-6 items-center justify-center rounded-full bg-primary/20 ring-1 ring-primary/25">
+											<Sparkles class="h-3.5 w-3.5 text-primary" />
 										</span>
-										<span class="text-xs font-semibold uppercase tracking-wide text-purple-200/90">The assistant says</span>
+										<span class="m3-type-label-medium text-primary">The assistant says</span>
 									</div>
 									<p class="text-[15px] leading-relaxed text-foreground">{briefing.summary}</p>
 								</div>
 							{:else if briefingQuery.isError}
-								<div class="flex h-full items-center rounded-xl bg-muted/40 p-4 text-sm text-muted-foreground" data-testid="dashboard-briefing-narrative">
+								<div class="flex items-center rounded-xl bg-muted/40 p-4 text-sm text-muted-foreground" data-testid="dashboard-briefing-narrative">
 									Your daily briefing is unavailable right now.
 								</div>
 							{:else}
 								<div
-									class="flex h-full flex-col gap-2 rounded-xl bg-gradient-to-br from-purple-500/12 to-blue-500/10 p-4 ring-1 ring-purple-500/25"
+									class="flex flex-col gap-2 rounded-[var(--m3-shape-large)] bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] p-4 ring-1 ring-primary/25"
 									data-testid="dashboard-briefing-narrative"
 								>
 									<div class="flex items-center gap-2">
-										<span class="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-purple-500/30 to-blue-500/30 ring-1 ring-purple-500/30">
-											<Sparkles class="h-3.5 w-3.5 text-purple-200" />
+										<span class="flex h-6 w-6 items-center justify-center rounded-full bg-primary/20 ring-1 ring-primary/25">
+											<Sparkles class="h-3.5 w-3.5 text-primary" />
 										</span>
-										<span class="text-xs font-semibold uppercase tracking-wide text-purple-200/90">The assistant says</span>
+										<span class="m3-type-label-medium text-primary">The assistant says</span>
 									</div>
 									<p class="text-[15px] leading-relaxed text-foreground">
 										{#if bullets.length > 0}
@@ -359,7 +403,7 @@
 		</Card.Root>
 
 		<!-- Plain-English money snapshot: collected / spent / kept, each with a sentence -->
-		<Card.Root class="mb-6 gap-0 py-0" data-testid="dashboard-money-snapshot">
+		<Card.Root class="m3-motion-enter mb-6 gap-0 py-0" style="--m3-motion-index: 2" data-testid="dashboard-money-snapshot">
 			<Card.Header class="px-5 pt-5 pb-2">
 				<Card.Title class="flex items-center gap-2 text-base font-semibold">
 					<Wallet class="h-4 w-4 text-primary" />
@@ -418,7 +462,7 @@
 			</Card.Content>
 		</Card.Root>
 
-		<div class="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+		<div class="m3-motion-enter mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4" style="--m3-motion-index: 3">
 			<Card.Root class="gap-0 py-0">
 				<Card.Content class="p-4">
 					<div class="flex items-center gap-2 text-muted-foreground"><Building class="h-4 w-4" /> Occupancy</div>
@@ -452,7 +496,7 @@
 		<!-- Secondary row: Latest Messages collapses entirely when empty so it never eats prime
 		     space; Latest Maintenance then expands to fill the row. -->
 		{@const hasMessages = messagesQuery.isLoading || (messagesQuery.data?.length ?? 0) > 0}
-		<div class="mb-6 grid gap-4 {hasMessages ? 'lg:grid-cols-2' : ''}">
+		<div class="m3-motion-enter mb-6 grid gap-4 {hasMessages ? 'lg:grid-cols-2' : ''}" style="--m3-motion-index: 4">
 			{#if hasMessages}
 				<Card.Root class="gap-0 py-0" data-testid="dashboard-latest-messages">
 					<Card.Header class="px-4 pt-4 pb-3">
@@ -523,7 +567,7 @@
 			</Card.Root>
 		</div>
 
-		<div class="grid gap-6 lg:grid-cols-3">
+		<div class="m3-motion-enter grid gap-6 lg:grid-cols-3" style="--m3-motion-index: 5">
 			<div class="space-y-6 lg:col-span-2">
 				<Card.Root class="gap-0 py-0">
 					<Card.Header class="px-4 pt-4 pb-3">

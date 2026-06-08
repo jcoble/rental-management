@@ -58,15 +58,16 @@
 	{#if collapsed}
 		<button
 			onclick={() => (open = !open)}
-			class="flex w-full items-center justify-center rounded-md px-3 py-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-			title={currentPortfolio?.name || 'Select portfolio'}
+			class="m3-state-layer flex w-full items-center justify-center rounded-[var(--m3-shape-full)] px-3 py-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+			aria-label={currentPortfolio?.name || 'Select portfolio'}
+			data-m3-tooltip={currentPortfolio?.name || 'Select portfolio'}
 		>
 			<Building2 class="h-4 w-4 shrink-0" />
 		</button>
 	{:else}
 		<button
 			onclick={() => (open = !open)}
-			class="flex w-full items-center gap-2 rounded-md border border-border bg-background px-3 py-1.5 text-sm text-foreground transition-colors hover:border-border"
+			class="m3-field-surface m3-state-layer flex w-full items-center gap-2 px-3 py-1.5 text-sm text-foreground"
 		>
 			<Building2 class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
 			<span class="flex-1 truncate text-left">{currentPortfolio?.name || 'Select portfolio'}</span>
@@ -75,7 +76,7 @@
 	{/if}
 
 	{#if open}
-		<div class="absolute left-2 right-2 top-full z-50 mt-1 rounded-md border border-border bg-card shadow-lg">
+		<div class="absolute left-2 right-2 top-full z-50 mt-1 rounded-[var(--m3-shape-large)] border border-border bg-card shadow-[var(--m3-elevation-2)]">
 			{#if portfoliosQuery.data}
 				<div class="max-h-48 overflow-y-auto py-1">
 					{#each portfoliosQuery.data as portfolio}

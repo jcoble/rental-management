@@ -41,6 +41,7 @@
 	},
 	"dependencies": {
 		"@event-calendar/core": "^5.7.1",
+		"@fontsource-variable/google-sans-flex": "^5.2.3",
 		"@microsoft/signalr": "^10.0.0",
 		"@tanstack/svelte-query": "^6.0.18",
 		"marked": "^17.0.1",
