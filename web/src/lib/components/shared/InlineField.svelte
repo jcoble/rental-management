@@ -50,7 +50,7 @@
 	const fieldId = $derived(`${testid}-input`);
 	const displayText = $derived(display == null || display === '' ? '-' : String(display));
 	const inputClass =
-		'h-10 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30';
+		'm3-field-surface h-11 w-full px-3 py-2 text-sm text-foreground outline-none';
 	// Label shown inside the Select trigger for the currently-bound value.
 	const selectedLabel = $derived(
 		options.find((o) => o.value === value)?.label ?? placeholder ?? 'Select…'
@@ -58,14 +58,14 @@
 </script>
 
 <div class={className} data-testid={`${testid}-field`}>
-	<label class="mb-1 block text-xs font-medium text-muted-foreground" for={fieldId}>{label}</label>
 	{#if editing}
+		<label class="mb-1 block text-xs font-medium text-muted-foreground" for={fieldId}>{label}</label>
 		{#if type === 'select'}
 			<Select.Root type="single" bind:value>
 				<Select.Trigger
 					id={fieldId}
 					data-testid={fieldId}
-					class="h-10 w-full bg-background"
+					class="m3-field-surface h-11 w-full bg-transparent"
 					aria-label={label}
 				>
 					{selectedLabel}
@@ -94,16 +94,18 @@
 		{#if editTrigger === 'confirm' && oneditrequest}
 			<button
 				type="button"
-				class="min-h-10 w-full rounded-md border border-transparent py-2 text-left text-sm font-medium text-foreground transition-colors hover:border-border hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+				class="m3-readonly-field m3-state-layer flex w-full flex-col justify-center px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
 				data-testid={`${testid}-value`}
 				onclick={oneditrequest}
 			>
-				{displayText}
+				<span class="m3-readonly-field__label">{label}</span>
+				<span class="m3-readonly-field__value mt-1">{displayText}</span>
 			</button>
 		{:else}
-			<p class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground" data-testid={`${testid}-value`}>
-				{displayText}
-			</p>
+			<div class="m3-readonly-field flex flex-col justify-center px-3 py-2" data-testid={`${testid}-value`}>
+				<span class="m3-readonly-field__label">{label}</span>
+				<span class="m3-readonly-field__value mt-1">{displayText}</span>
+			</div>
 		{/if}
 	{/if}
 </div>

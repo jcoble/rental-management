@@ -14,6 +14,9 @@ importers:
       '@event-calendar/core':
         specifier: ^5.7.1
         version: 5.7.1
+      '@fontsource-variable/google-sans-flex':
+        specifier: ^5.2.3
+        version: 5.2.3
       '@microsoft/signalr':
         specifier: ^10.0.0
         version: 10.0.0
@@ -269,6 +272,9 @@ packages:
 
   '@floating-ui/utils@0.2.11':
     resolution: {integrity: sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg==}
+
+  '@fontsource-variable/google-sans-flex@5.2.3':
+    resolution: {integrity: sha512-g5z9WANJW56gZTWJvu7mIHOiHJaffkk/dhOKqEiK4Nxnsk8lnGnijvGt4vF4KD2KWzscXBOB9XR2sfvTPSi5hA==}
 
   '@internationalized/date@3.12.2':
     resolution: {integrity: sha512-FY1Y+H64NDs+HAF6omlnWxm3mEpfgaCSWtL5l551ZZfImA+kGjPFgrnJrGjH6lfmLL0g8Z/mBu1R3kufeCp6Jw==}
@@ -1284,6 +1290,8 @@ snapshots:
       '@floating-ui/utils': 0.2.11
 
   '@floating-ui/utils@0.2.11': {}
+
+  '@fontsource-variable/google-sans-flex@5.2.3': {}
 
   '@internationalized/date@3.12.2':
     dependencies:
