@@ -19,6 +19,7 @@
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -221,12 +222,15 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="properties-page">
-	<div class="mb-4 flex items-center justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold">Properties</h1>
-			<p class="text-sm text-muted-foreground">Portfolio, units, and occupancy setup.</p>
-		</div>
-	</div>
+	<PageHeader
+		class="mb-4"
+		band
+		art={2}
+		eyebrow="Portfolio"
+		title="Properties"
+		description="Portfolio, units, and occupancy setup."
+		data-testid="properties-header"
+	/>
 
 	<DataGrid
 		data={list}

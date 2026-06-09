@@ -3,9 +3,11 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/theme/app_recipes.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/models/models.dart';
@@ -103,38 +105,18 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   static const _scanTabIndex = 1;
 
   static const _tabs = [
-    _TabItem(label: 'Home', icon: Icons.home_outlined, activeIcon: Icons.home),
-    _TabItem(
-      label: 'Scan',
-      icon: Icons.document_scanner_outlined,
-      activeIcon: Icons.document_scanner,
-    ),
-    _TabItem(
-      label: 'Properties',
-      icon: Icons.apartment_outlined,
-      activeIcon: Icons.apartment,
-    ),
-    _TabItem(
-      label: 'Messages',
-      icon: Icons.forum_outlined,
-      activeIcon: Icons.forum,
-    ),
-    _TabItem(label: 'More', icon: Icons.more_horiz, activeIcon: Icons.menu),
+    _TabItem(label: 'Home', icon: Symbols.home_rounded),
+    _TabItem(label: 'Scan', icon: Symbols.document_scanner_rounded),
+    _TabItem(label: 'Properties', icon: Symbols.apartment_rounded),
+    _TabItem(label: 'Messages', icon: Symbols.forum_rounded),
+    _TabItem(label: 'More', icon: Symbols.more_horiz_rounded),
   ];
 
   static const _tenantTabs = [
-    _TabItem(label: 'Home', icon: Icons.home_outlined, activeIcon: Icons.home),
-    _TabItem(
-      label: 'Messages',
-      icon: Icons.forum_outlined,
-      activeIcon: Icons.forum,
-    ),
-    _TabItem(
-      label: 'Maintenance',
-      icon: Icons.build_outlined,
-      activeIcon: Icons.build,
-    ),
-    _TabItem(label: 'More', icon: Icons.more_horiz, activeIcon: Icons.menu),
+    _TabItem(label: 'Home', icon: Symbols.home_rounded),
+    _TabItem(label: 'Messages', icon: Symbols.forum_rounded),
+    _TabItem(label: 'Maintenance', icon: Symbols.build_rounded),
+    _TabItem(label: 'More', icon: Symbols.more_horiz_rounded),
   ];
 
   @override
@@ -241,19 +223,57 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                 const MoreTab(),
               ],
       ),
-      bottomNavigationBar: NavigationBar(
+      bottomNavigationBar: _MorphNavBar(
+        tabs: tabs,
         selectedIndex: selectedIndex,
-        onDestinationSelected: (index) =>
-            setState(() => _selectedIndex = index),
-        destinations: tabs
-            .map(
-              (tab) => NavigationDestination(
-                icon: Icon(tab.icon),
-                selectedIcon: Icon(tab.activeIcon ?? tab.icon),
-                label: tab.label,
-              ),
-            )
-            .toList(),
+        onSelected: (index) => setState(() => _selectedIndex = index),
+      ),
+    );
+  }
+}
+
+/// Bottom navigation built from [M3MorphNavItem]s: a flat surface with a top
+/// hairline, where the selected destination morphs its corner shape (pill ↔
+/// rounded-rect) and its Material Symbol's FILL axis 0→1. Replaces the stock
+/// [NavigationBar] so the M3-Expressive morph is visible (§3.2 / §7.5).
+class _MorphNavBar extends StatelessWidget {
+  const _MorphNavBar({
+    required this.tabs,
+    required this.selectedIndex,
+    required this.onSelected,
+  });
+
+  final List<_TabItem> tabs;
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerLow,
+        border: Border(
+          top: BorderSide(color: scheme.outlineVariant.withValues(alpha: 0.4)),
+        ),
+      ),
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 64,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
+              for (var i = 0; i < tabs.length; i++)
+                M3MorphNavItem(
+                  icon: tabs[i].icon,
+                  label: i == selectedIndex ? tabs[i].label : null,
+                  selected: i == selectedIndex,
+                  onTap: () => onSelected(i),
+                ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1115,27 +1135,20 @@ class _HomeTab extends ConsumerWidget {
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [
             SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 24, 20, 0),
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
               sliver: SliverToBoxAdapter(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // ── Greeting ──────────────────────────────────────────
-                    Text(
-                      '$_greeting${_displayName.isNotEmpty ? ", $_displayName" : ""}!',
-                      style: theme.textTheme.headlineSmall?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: cs.onSurface,
-                      ),
+                    // ── Greeting (art band header, §7.7) ──────────────────
+                    M3ArtBand(
+                      pattern: 6,
+                      eyebrow: _formattedDate(),
+                      title:
+                          '$_greeting${_displayName.isNotEmpty ? ", $_displayName" : ""}!',
+                      subtitle: "Here's your command center for today.",
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      _formattedDate(),
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: cs.onSurfaceVariant,
-                      ),
-                    ),
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 24),
 
                     // ── Quick actions ─────────────────────────────────────
                     _QuickActions(
@@ -1559,32 +1572,36 @@ class _QuickActions extends StatelessWidget {
       children: [
         Expanded(
           child: _QuickActionButton(
-            icon: Icons.mic_none_outlined,
+            icon: Symbols.mic_rounded,
             label: 'Tell\nme',
+            family: M3TonalFamily.violet,
             onTap: onTellMe,
           ),
         ),
         const SizedBox(width: 10),
         Expanded(
           child: _QuickActionButton(
-            icon: Icons.document_scanner_outlined,
+            icon: Symbols.document_scanner_rounded,
             label: 'Scan a\ndocument',
+            family: M3TonalFamily.sky,
             onTap: onScan,
           ),
         ),
         const SizedBox(width: 10),
         Expanded(
           child: _QuickActionButton(
-            icon: Icons.auto_awesome_outlined,
+            icon: Symbols.auto_awesome_rounded,
             label: 'Ask\nAI',
+            family: M3TonalFamily.mint,
             onTap: onAskAi,
           ),
         ),
         const SizedBox(width: 10),
         Expanded(
           child: _QuickActionButton(
-            icon: Icons.receipt_long_outlined,
+            icon: Symbols.receipt_long_rounded,
             label: 'Add\nexpense',
+            family: M3TonalFamily.amber,
             onTap: onAddExpense,
           ),
         ),
@@ -1597,42 +1614,36 @@ class _QuickActionButton extends StatelessWidget {
   const _QuickActionButton({
     required this.icon,
     required this.label,
+    required this.family,
     required this.onTap,
   });
 
   final IconData icon;
   final String label;
+  final M3TonalFamily family;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    return Material(
-      color: cs.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(14),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, color: cs.primary, size: 26),
-              const SizedBox(height: 6),
-              Text(
-                label,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: cs.onSurface,
-                  height: 1.25,
-                ),
-              ),
-            ],
+    return M3TonalCard(
+      family: family,
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: cs.onSurface, size: 26, fill: 1),
+          const SizedBox(height: 6),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: cs.onSurface,
+              height: 1.25,
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -2134,9 +2145,11 @@ class _BriefingError extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _TabItem {
-  const _TabItem({required this.label, required this.icon, this.activeIcon});
+  const _TabItem({required this.label, required this.icon});
 
   final String label;
+
+  /// A `Symbols.*_rounded` glyph (Material Symbols Rounded) whose FILL axis is
+  /// animated 0→1 when the tab is active.
   final IconData icon;
-  final IconData? activeIcon;
 }

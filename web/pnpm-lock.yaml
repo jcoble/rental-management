@@ -14,9 +14,15 @@ importers:
       '@event-calendar/core':
         specifier: ^5.7.1
         version: 5.7.1
+      '@fontsource-variable/funnel-display':
+        specifier: ^5.2.8
+        version: 5.2.8
       '@fontsource-variable/google-sans-flex':
         specifier: ^5.2.3
         version: 5.2.3
+      '@fontsource-variable/space-grotesk':
+        specifier: ^5.2.10
+        version: 5.2.10
       '@microsoft/signalr':
         specifier: ^10.0.0
         version: 10.0.0
@@ -36,6 +42,9 @@ importers:
       '@internationalized/date':
         specifier: ^3.12.0
         version: 3.12.2
+      '@ktibow/material-color-utilities-nightly':
+        specifier: ^0.4.1772748028000
+        version: 0.4.1772748028000
       '@lucide/svelte':
         specifier: ^0.561.0
         version: 0.561.0(svelte@5.56.1)
@@ -69,6 +78,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      m3-svelte:
+        specifier: ^7.1.2
+        version: 7.1.2(@ktibow/material-color-utilities-nightly@0.4.1772748028000)(svelte@5.56.1)
       mode-watcher:
         specifier: ^1.1.0
         version: 1.1.0(@sveltejs/kit@2.63.0(@sveltejs/vite-plugin-svelte@6.2.4(svelte@5.56.1)(vite@7.3.5(@types/node@25.9.1)(jiti@2.7.0)(lightningcss@1.32.0)))(svelte@5.56.1)(typescript@5.9.3)(vite@7.3.5(@types/node@25.9.1)(jiti@2.7.0)(lightningcss@1.32.0)))(svelte@5.56.1)
@@ -273,8 +285,17 @@ packages:
   '@floating-ui/utils@0.2.11':
     resolution: {integrity: sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg==}
 
+  '@fontsource-variable/funnel-display@5.2.8':
+    resolution: {integrity: sha512-krvlZmy6EoFdmCKldTHpAzxxt5gFRXebueyDZ7DUIQ37YRAD8SrH0ljwoLOL/ZSCD5jHqKS6EhFPXLuhuJrOGA==}
+
   '@fontsource-variable/google-sans-flex@5.2.3':
     resolution: {integrity: sha512-g5z9WANJW56gZTWJvu7mIHOiHJaffkk/dhOKqEiK4Nxnsk8lnGnijvGt4vF4KD2KWzscXBOB9XR2sfvTPSi5hA==}
+
+  '@fontsource-variable/space-grotesk@5.2.10':
+    resolution: {integrity: sha512-yJQO/o35/hAP3CFnpdFTwQku2yzJOae2HIpBmqkOVoxhhXJaQP3g+b6Jrz7u+eI7A5ZdCIf88uMWpBJdFiGr5w==}
+
+  '@iconify/types@2.0.0':
+    resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
 
   '@internationalized/date@3.12.2':
     resolution: {integrity: sha512-FY1Y+H64NDs+HAF6omlnWxm3mEpfgaCSWtL5l551ZZfImA+kGjPFgrnJrGjH6lfmLL0g8Z/mBu1R3kufeCp6Jw==}
@@ -294,6 +315,12 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@ktibow/iconset-material-symbols@0.0.1764827375':
+    resolution: {integrity: sha512-D5r08cbHpLn+G2G03Zj3nV0afQpS/IV4kD0g7rDHpU4k7tC/CUt6+PbddKISTWz8u+SRPQNaR5cZU0e9IlUoWg==}
+
+  '@ktibow/material-color-utilities-nightly@0.4.1772748028000':
+    resolution: {integrity: sha512-JI6V95I3QZphrD26LcUe1euH+B3lz1zuF9uPaB0jZVDA9e8nfFuEF9GIYVtwqRQB86S2RZLzDf+LcEHJnh8auw==}
 
   '@lucide/svelte@0.561.0':
     resolution: {integrity: sha512-vofKV2UFVrKE6I4ewKJ3dfCXSV6iP6nWVmiM83MLjsU91EeJcEg7LoWUABLp/aOTxj1HQNbJD1f3g3L0JQgH9A==}
@@ -890,6 +917,18 @@ packages:
     resolution: {integrity: sha512-h5bgJWpxJNswbU7qCrV0tIKQCaS3blPDrqKWx+QxzuzL1zGUzij9XCWLrSLsJPu5t+eWA/ycetzYAO5IOMcWAQ==}
     hasBin: true
 
+  m3-svelte@7.1.2:
+    resolution: {integrity: sha512-Em8NPhHcPoiwbeyqa5xGzBl9wvoM0jVtHpj74YvgWgX29lH1QcTy253kXuG8VawurNYuw/AtpVVuRqQ22DWhig==}
+    peerDependencies:
+      '@ktibow/material-color-utilities-nightly': ^0.4.1768930731000
+      svelte: ^5.40.0
+      vite-plugin-functions-mixins: ^0.4.1
+    peerDependenciesMeta:
+      '@ktibow/material-color-utilities-nightly':
+        optional: true
+      vite-plugin-functions-mixins:
+        optional: true
+
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
 
@@ -1291,7 +1330,13 @@ snapshots:
 
   '@floating-ui/utils@0.2.11': {}
 
+  '@fontsource-variable/funnel-display@5.2.8': {}
+
   '@fontsource-variable/google-sans-flex@5.2.3': {}
+
+  '@fontsource-variable/space-grotesk@5.2.10': {}
+
+  '@iconify/types@2.0.0': {}
 
   '@internationalized/date@3.12.2':
     dependencies:
@@ -1315,6 +1360,12 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@ktibow/iconset-material-symbols@0.0.1764827375':
+    dependencies:
+      '@iconify/types': 2.0.0
+
+  '@ktibow/material-color-utilities-nightly@0.4.1772748028000': {}
 
   '@lucide/svelte@0.561.0(svelte@5.56.1)':
     dependencies:
@@ -1785,6 +1836,14 @@ snapshots:
   locate-character@3.0.0: {}
 
   lz-string@1.5.0: {}
+
+  m3-svelte@7.1.2(@ktibow/material-color-utilities-nightly@0.4.1772748028000)(svelte@5.56.1):
+    dependencies:
+      '@iconify/types': 2.0.0
+      '@ktibow/iconset-material-symbols': 0.0.1764827375
+      svelte: 5.56.1
+    optionalDependencies:
+      '@ktibow/material-color-utilities-nightly': 0.4.1772748028000
 
   magic-string@0.30.21:
     dependencies:

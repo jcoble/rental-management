@@ -1,0 +1,131 @@
+/* Generated M3 theme - seed #A36BFF (landing violet), TonalSpot, dark default.
+   Keep generated M3 color roles, with dense app UI overrides noted in gen-m3-theme.mjs.
+   Regenerate: node gen-m3-theme.mjs (do not hand-edit). */
+:root,
+:root.dark,
+:root[data-theme="dark"],
+[data-theme="dark"] {
+  color-scheme: dark;
+  --m3c-surface: #121217;
+  --m3c-surface-dim: #121217;
+  --m3c-surface-bright: #3a3a42;
+  --m3c-surface-container-lowest: #0d0d11;
+  --m3c-surface-container-low: #1a1a20;
+  --m3c-surface-container: #202026;
+  --m3c-surface-container-high: #2a2a31;
+  --m3c-surface-container-highest: #363640;
+  --m3c-on-surface: #f2f0f7;
+  --m3c-on-surface-variant: #cbc7d2;
+  --m3c-outline: #948f9c;
+  --m3c-outline-variant: #494750;
+  --m3c-inverse-surface: #e7e4ed;
+  --m3c-inverse-on-surface: #303038;
+  --m3c-primary: #d4bbfc;
+  --m3c-primary-dim: #d4bbfc;
+  --m3c-on-primary: #3a255b;
+  --m3c-primary-container: #513c73;
+  --m3c-on-primary-container: #ecdcff;
+  --m3c-primary-fixed: #ecdcff;
+  --m3c-primary-fixed-dim: #d4bbfc;
+  --m3c-on-primary-fixed: #240e45;
+  --m3c-on-primary-fixed-variant: #513c73;
+  --m3c-inverse-primary: #69548d;
+  --m3c-secondary: #cec2db;
+  --m3c-secondary-dim: #eadef7;
+  --m3c-on-secondary: #342d40;
+  --m3c-secondary-container: #4b4357;
+  --m3c-on-secondary-container: #eadef7;
+  --m3c-secondary-fixed: #eadef7;
+  --m3c-secondary-fixed-dim: #cec2db;
+  --m3c-on-secondary-fixed: #1f182a;
+  --m3c-on-secondary-fixed-variant: #4b4357;
+  --m3c-tertiary: #8bd8ee;
+  --m3c-tertiary-dim: #72c5dc;
+  --m3c-on-tertiary: #003640;
+  --m3c-tertiary-container: #174f5d;
+  --m3c-on-tertiary-container: #c6f2ff;
+  --m3c-tertiary-fixed: #c6f2ff;
+  --m3c-tertiary-fixed-dim: #8bd8ee;
+  --m3c-on-tertiary-fixed: #001f27;
+  --m3c-on-tertiary-fixed-variant: #174f5d;
+  --m3c-error: #ffb4ab;
+  --m3c-error-dim: #ff554a;
+  --m3c-on-error: #690005;
+  --m3c-error-container: #93000a;
+  --m3c-on-error-container: #ffdad6;
+  --m3c-shadow: #000000;
+  --m3c-scrim: #000000;
+  --m3c-on-on-primary: #bea5e5;
+  --m3c-primary-container-subtle: #432e65;
+  --m3c-on-primary-container-subtle: #cab1f1;
+  --m3c-secondary-container-subtle: #3d3649;
+  --m3c-on-secondary-container-subtle: #c3b8d0;
+  --m3c-tertiary-container-subtle: #113f49;
+  --m3c-on-tertiary-container-subtle: #a8dce9;
+  --m3c-error-container-subtle: #790006;
+  --m3c-on-error-container-subtle: #ffa49a;
+}
+
+:root.light,
+:root[data-theme="light"],
+[data-theme="light"] {
+  color-scheme: light;
+  --m3c-surface: #fdf9ff;
+  --m3c-surface-dim: #e4ddee;
+  --m3c-surface-bright: #fffbff;
+  --m3c-surface-container-lowest: #ffffff;
+  --m3c-surface-container-low: #f7f1fb;
+  --m3c-surface-container: #f1eaf7;
+  --m3c-surface-container-high: #ebe3f2;
+  --m3c-surface-container-highest: #e4dbee;
+  --m3c-on-surface: #18181b;
+  --m3c-on-surface-variant: #52525b;
+  --m3c-outline: #71717a;
+  --m3c-outline-variant: #d4d4d8;
+  --m3c-inverse-surface: #322f35;
+  --m3c-inverse-on-surface: #f5eef7;
+  --m3c-primary: #69548d;
+  --m3c-primary-dim: #5d4880;
+  --m3c-on-primary: #ffffff;
+  --m3c-primary-container: #ecdcff;
+  --m3c-on-primary-container: #513c73;
+  --m3c-primary-fixed: #ecdcff;
+  --m3c-primary-fixed-dim: #d4bbfc;
+  --m3c-on-primary-fixed: #240e45;
+  --m3c-on-primary-fixed-variant: #513c73;
+  --m3c-inverse-primary: #d4bbfc;
+  --m3c-secondary: #635b70;
+  --m3c-secondary-dim: #574f64;
+  --m3c-on-secondary: #ffffff;
+  --m3c-secondary-container: #eadef7;
+  --m3c-on-secondary-container: #4b4357;
+  --m3c-secondary-fixed: #eadef7;
+  --m3c-secondary-fixed-dim: #cec2db;
+  --m3c-on-secondary-fixed: #1f182a;
+  --m3c-on-secondary-fixed-variant: #4b4357;
+  --m3c-tertiary: #006878;
+  --m3c-tertiary-dim: #005b69;
+  --m3c-on-tertiary: #ffffff;
+  --m3c-tertiary-container: #a7eeff;
+  --m3c-on-tertiary-container: #004e5b;
+  --m3c-tertiary-fixed: #a7eeff;
+  --m3c-tertiary-fixed-dim: #82d3e5;
+  --m3c-on-tertiary-fixed: #001f27;
+  --m3c-on-tertiary-fixed-variant: #004e5b;
+  --m3c-error: #ba1a1a;
+  --m3c-error-dim: #a80710;
+  --m3c-on-error: #ffffff;
+  --m3c-error-container: #ffdad6;
+  --m3c-on-error-container: #93000a;
+  --m3c-shadow: #000000;
+  --m3c-scrim: #000000;
+  --m3c-on-on-primary: #6d5891;
+  --m3c-primary-container-subtle: #e5d2ff;
+  --m3c-on-primary-container-subtle: #57427a;
+  --m3c-secondary-container-subtle: #e1d5ef;
+  --m3c-on-secondary-container-subtle: #51495e;
+  --m3c-tertiary-container-subtle: #d5f7ff;
+  --m3c-on-tertiary-container-subtle: #005b69;
+  --m3c-error-container-subtle: #ffcfc9;
+  --m3c-on-error-container-subtle: #9e000b;
+}

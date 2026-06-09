@@ -10,34 +10,41 @@
 :root {
   --radius: 1rem;
   --m3-color-scheme: dark;
+  --app-color-scheme: dark;
 
-  /* M3 tonal surface roles, customized for the rental app's quiet dark shell. */
-  --m3c-surface: #151218;
-  --m3c-surface-dim: #151218;
-  --m3c-surface-bright: #3b383e;
-  --m3c-surface-container-lowest: #0f0d12;
-  --m3c-surface-container-low: #1d1a20;
-  --m3c-surface-container: #211e24;
-  --m3c-surface-container-high: #2c292f;
-  --m3c-surface-container-highest: #37343a;
-  --m3c-on-surface: #e7e0e8;
-  --m3c-on-surface-variant: #cbc4cf;
-  --m3c-outline: #958e99;
-  --m3c-outline-variant: #49454e;
-  --m3c-inverse-surface: #e7e0e8;
-  --m3c-inverse-on-surface: #322f35;
+  /* M3 tonal surface roles — refined dark neutrals (matches the generated
+     m3-theme.css §2.2). True dark surfaces so operational screens don't inherit a
+     rose/lavender wash from the violet seed. The m3-theme import (loaded from the
+     root layout, after this file) defines the same tokens; these are repeated here
+     and under `.dark` to keep the app shell deterministic. */
+  --m3c-surface: #121217;
+  --m3c-surface-dim: #121217;
+  --m3c-surface-bright: #3a3a42;
+  --m3c-surface-container-lowest: #0d0d11;
+  --m3c-surface-container-low: #1a1a20;
+  --m3c-surface-container: #202026;
+  --m3c-surface-container-high: #2a2a31;
+  --m3c-surface-container-highest: #363640;
+  --m3c-on-surface: #f2f0f7;
+  --m3c-on-surface-variant: #cbc7d2;
+  --m3c-outline: #948f9c;
+  --m3c-outline-variant: #494750;
+  --m3c-inverse-surface: #e7e4ed;
+  --m3c-inverse-on-surface: #303038;
   --m3c-primary: #d4bbfc;
-  --m3c-on-primary: #38245d;
+  --m3c-on-primary: #3a255b;
   --m3c-primary-container: #513c73;
   --m3c-on-primary-container: #ecdcff;
   --m3c-secondary: #cec2db;
   --m3c-on-secondary: #342d40;
   --m3c-secondary-container: #4b4357;
   --m3c-on-secondary-container: #eadef7;
-  --m3c-tertiary: #f1b7c4;
-  --m3c-on-tertiary: #4a252f;
-  --m3c-tertiary-container: #643b45;
-  --m3c-on-tertiary-container: #ffd9e0;
+  /* Tertiary = cool teal/cyan (overridden away from the seed's warm default) so
+     warm/coral stays reserved for the error/validation role. */
+  --m3c-tertiary: #8bd8ee;
+  --m3c-on-tertiary: #003640;
+  --m3c-tertiary-container: #174f5d;
+  --m3c-on-tertiary-container: #c6f2ff;
   --m3c-error: #ffb4ab;
   --m3c-on-error: #690005;
   --m3c-error-container: #93000a;
@@ -111,14 +118,22 @@
   --m3c-pattern-d: #ffd166;
   --m3c-pattern-overlay: color-mix(in srgb, var(--m3c-surface-container-high) 88%, transparent);
   --m3c-pattern-scrim: color-mix(in srgb, var(--m3c-surface) 22%, transparent);
-  --m3-readonly-field-bg: var(--m3c-surface-container-high);
+  --m3-readonly-field-bg: color-mix(in srgb, var(--m3c-surface-container-highest) 86%, var(--m3c-primary-container));
+  /* Control (input) surface tokens — dark: flat tinted, no shadow. */
+  --m3-control-bg: color-mix(in srgb, var(--m3c-surface-container-highest) 88%, var(--m3c-surface-container-high));
+  --m3-control-bg-hover: var(--m3c-surface-container-highest);
+  --m3-control-border: color-mix(in srgb, var(--m3c-outline-variant) 84%, transparent);
+  --m3-control-shadow: none;
   --m3-card-border-strength: 0%;
   --m3-card-hover-border-strength: 0%;
   --m3-tonal-border-strength: 30%;
   --m3-tonal-plain-border-strength: 0%;
   --m3-data-border-strength: 0%;
 
-  /* Material 3 shape scale */
+  /* Material 3 shape scale.
+     NOTE: shape, the full M3 type scale, near-zero elevation, and the spring/
+     emphasized motion slots are also owned by m3-base.css (imported from the root
+     layout). The values here are a deterministic fallback for SSR. */
   --m3-shape-none: 0;
   --m3-shape-extra-small: 4px;
   --m3-shape-small: 8px;
@@ -128,14 +143,17 @@
   --m3-shape-extra-large: 28px;
   --m3-shape-full: 9999px;
 
-  /* Material 3 typography roles */
+  /* Material 3 typography roles. Display + Headline use Funnel Display
+     (--m3-font-display); everything else uses the body font. */
   --m3-font: "Google Sans Flex", "Google Sans Flex Variable", Roboto, system-ui, sans-serif;
+  --m3-font-display: "Funnel Display Variable", "Funnel Display", var(--m3-font);
   --m3-font-mono: ui-monospace, "SFMono-Regular", "Roboto Mono", Menlo, Monaco, Consolas, monospace;
-  --m3-type-display-medium: 400 45px / 52px var(--m3-font);
-  --m3-type-display-small: 400 36px / 44px var(--m3-font);
-  --m3-type-headline-large: 400 32px / 40px var(--m3-font);
-  --m3-type-headline-medium: 400 28px / 36px var(--m3-font);
-  --m3-type-headline-small: 400 24px / 32px var(--m3-font);
+  --m3-type-display-large: 400 57px / 64px var(--m3-font-display);
+  --m3-type-display-medium: 400 45px / 52px var(--m3-font-display);
+  --m3-type-display-small: 400 36px / 44px var(--m3-font-display);
+  --m3-type-headline-large: 400 32px / 40px var(--m3-font-display);
+  --m3-type-headline-medium: 400 28px / 36px var(--m3-font-display);
+  --m3-type-headline-small: 400 24px / 32px var(--m3-font-display);
   --m3-type-title-large: 500 22px / 28px var(--m3-font);
   --m3-type-title-medium: 500 16px / 24px var(--m3-font);
   --m3-type-title-small: 500 14px / 20px var(--m3-font);
@@ -166,39 +184,50 @@
   --m3-elevation-3: 0 4px 10px rgb(0 0 0 / 0.22), 0 1px 3px rgb(0 0 0 / 0.16);
 }
 
-/* Light mode override */
+/* Light mode override. ModeWatcher adds `light` to <html>; dark is the default
+   (:root, no class). The generated m3-theme.css (loaded after this file from the
+   root layout) owns the canonical light `--m3c-*` color roles via its higher-
+   specificity `:root.light` selector — those §2.2 values (near-white #fdf9ff page,
+   whiter container tiers, cool-teal tertiary) are the source of truth. The roles
+   below are aligned to match and also provide the tinted families, pattern colors,
+   border-strength knobs, semantic light colors, and light elevation, which
+   m3-theme.css does not define. */
 .light {
   --m3-color-scheme: light;
-  --m3c-surface: #fbf8fc;
-  --m3c-surface-dim: #e4dce7;
-  --m3c-surface-bright: #fffafd;
+  --app-color-scheme: light;
+  /* Light surface ramp: card tier (container-low) is BRIGHTER than the page so
+     white-ish cards pop off a faintly tinted page (Cloud Console feel). */
+  --m3c-surface: #fdf9ff;
+  --m3c-surface-dim: #e4ddee;
+  --m3c-surface-bright: #fffbff;
   --m3c-surface-container-lowest: #ffffff;
-  --m3c-surface-container-low: #fff8fc;
-  --m3c-surface-container: #f6eef8;
-  --m3c-surface-container-high: #efe5f2;
-  --m3c-surface-container-highest: #e8dfea;
+  --m3c-surface-container-low: #f7f1fb;
+  --m3c-surface-container: #f1eaf7;
+  --m3c-surface-container-high: #ebe3f2;
+  --m3c-surface-container-highest: #e4dbee;
   --m3c-on-surface: #18181b;
-  --m3c-on-surface-variant: #71717a;
+  --m3c-on-surface-variant: #52525b;
   --m3c-outline: #71717a;
   --m3c-outline-variant: #d4d4d8;
-  --m3c-inverse-surface: #211e24;
-  --m3c-inverse-on-surface: #f7f7fb;
+  --m3c-inverse-surface: #322f35;
+  --m3c-inverse-on-surface: #f5eef7;
   --m3c-primary: #69548d;
   --m3c-on-primary: #ffffff;
   --m3c-primary-container: #ecdcff;
-  --m3c-on-primary-container: #240e45;
-  --m3c-secondary: #625b71;
+  --m3c-on-primary-container: #513c73;
+  --m3c-secondary: #635b70;
   --m3c-on-secondary: #ffffff;
-  --m3c-secondary-container: #ede0f8;
-  --m3c-on-secondary-container: #18181b;
-  --m3c-tertiary: #006875;
+  --m3c-secondary-container: #eadef7;
+  --m3c-on-secondary-container: #4b4357;
+  /* Tertiary = cool teal (matches the generated cool-teal tertiary). */
+  --m3c-tertiary: #006878;
   --m3c-on-tertiary: #ffffff;
-  --m3c-tertiary-container: #c2f4ff;
-  --m3c-on-tertiary-container: #002025;
-  --m3c-error: #dc2626;
+  --m3c-tertiary-container: #a7eeff;
+  --m3c-on-tertiary-container: #004e5b;
+  --m3c-error: #ba1a1a;
   --m3c-on-error: #ffffff;
-  --m3c-error-container: #fee2e2;
-  --m3c-on-error-container: #450a0a;
+  --m3c-error-container: #ffdad6;
+  --m3c-on-error-container: #93000a;
 
   --app-text-primary: #18181b;
   --app-text-secondary: #52525b;
@@ -265,12 +294,20 @@
   --m3c-pattern-d: #e0a12b;
   --m3c-pattern-overlay: color-mix(in srgb, var(--card) 48%, transparent);
   --m3c-pattern-scrim: color-mix(in srgb, var(--m3c-surface) 16%, transparent);
-  --m3-readonly-field-bg: color-mix(in srgb, var(--m3c-surface-container-lowest) 84%, var(--m3c-surface-container-low));
-  --m3-card-border-strength: 34%;
-  --m3-card-hover-border-strength: 48%;
-  --m3-tonal-border-strength: 82%;
+  --m3-readonly-field-bg: color-mix(in srgb, var(--m3c-surface-container-lowest) 98%, var(--m3c-surface-container-low));
+  /* Control (input) surface tokens — light: white-ish field on a hairline +
+     soft ink shadow. */
+  --m3-control-bg: var(--m3c-surface-container-lowest);
+  --m3-control-bg-hover: color-mix(in srgb, var(--m3c-surface-container-lowest) 92%, var(--m3c-primary-container));
+  --m3-control-border: color-mix(in srgb, var(--m3c-outline) 64%, transparent);
+  --m3-control-shadow: inset 0 0 0 1px color-mix(in srgb, var(--m3c-outline-variant) 100%, transparent),
+    0 1px 3px rgb(24 24 27 / 0.12);
+  /* Visible hairlines in light (depth from borders + tone, not shadow). */
+  --m3-card-border-strength: 46%;
+  --m3-card-hover-border-strength: 64%;
+  --m3-tonal-border-strength: 72%;
   --m3-tonal-plain-border-strength: 44%;
-  --m3-data-border-strength: 64%;
+  --m3-data-border-strength: 56%;
   --m3-elevation-1: 0 1px 2px rgb(24 24 27 / 0.07), 0 1px 3px rgb(24 24 27 / 0.05);
   --m3-elevation-2: 0 3px 8px rgb(24 24 27 / 0.08), 0 1px 3px rgb(24 24 27 / 0.06);
   --m3-elevation-3: 0 8px 18px rgb(24 24 27 / 0.10), 0 2px 5px rgb(24 24 27 / 0.07);
@@ -336,7 +373,8 @@
   body {
     @apply bg-background text-foreground antialiased;
     background: var(--background);
-    color-scheme: var(--m3-color-scheme);
+    color-scheme: var(--app-color-scheme, dark);
+    /* Material 3 Expressive typeface app-wide (falls back gracefully). */
     font-family: var(--m3-font);
     font: var(--m3-type-body-large);
     letter-spacing: 0;
@@ -804,13 +842,36 @@
   }
 
   .m3-field-surface {
-    border: 1px solid var(--m3c-outline-variant);
+    border: 1px solid var(--m3-control-border);
     border-radius: var(--m3-shape-large);
-    background: var(--m3c-surface-container-low);
+    background: var(--m3-control-bg);
+    box-shadow: var(--m3-control-shadow);
     transition:
       background-color var(--m3-motion-duration-short-3) var(--m3-motion-easing-standard),
       border-color var(--m3-motion-duration-short-3) var(--m3-motion-easing-standard),
       box-shadow var(--m3-motion-duration-short-3) var(--m3-motion-easing-standard);
+  }
+
+  /* Shared control surface for native inputs/textareas/selects/comboboxes and the
+     date/number field controls inside the app shell — so every form control reads
+     as one M3 field surface (large radius, control border + shadow tokens). */
+  main.customer-shell-main [data-slot='input'],
+  main.customer-shell-main textarea,
+  main.customer-shell-main select,
+  main.customer-shell-main button[role='combobox'],
+  main.customer-shell-main [data-slot='select-trigger'].m3-select-trigger {
+    border-color: var(--m3-control-border) !important;
+    background: var(--m3-control-bg) !important;
+    box-shadow: var(--m3-control-shadow) !important;
+    border-radius: var(--m3-shape-large) !important;
+  }
+
+  main.customer-shell-main [data-slot='input']:hover,
+  main.customer-shell-main textarea:hover,
+  main.customer-shell-main select:hover,
+  main.customer-shell-main button[role='combobox']:hover,
+  main.customer-shell-main [data-slot='select-trigger'].m3-select-trigger:hover {
+    background: var(--m3-control-bg-hover) !important;
   }
 
   .m3-data-surface {
@@ -907,6 +968,229 @@
 
   .m3-dialog-content[data-state='closed'] {
     animation: m3-dialog-exit var(--m3-motion-duration-short-4) var(--m3-motion-easing-emphasized-accelerate) both;
+  }
+
+  /* ========================================================================
+     Image-based surface art (ported from EdiPlatform). The muted pastel set in
+     static/patterns/bg-NN.webp is rendered as a low-opacity layer behind content
+     with a directional legibility scrim, so text stays readable while the surface
+     gains tasteful depth/color. Token-driven (no hardcoded colors).
+     DARK-FIRST: dark is the default theme (:root, no class), so the base values
+     are the dark haze; the `.light` overrides below restore the brighter pastel.
+     Usage: class="m3-surface-art m3-surface-art--band m3-art-09".
+     ======================================================================== */
+  .m3-surface-art {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    --m3-art-image: none;
+    /* Dark default: a subtle haze, not a bright pastel patch. */
+    --m3-art-opacity: 0.24;
+    --m3-art-size: 148% auto;
+    --m3-art-position: right -8% top -28%;
+    --m3-art-scrim-from: var(--m3c-surface-container);
+  }
+
+  .m3-surface-art::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    background-image: var(--m3-art-image);
+    background-size: var(--m3-art-size);
+    background-position: var(--m3-art-position);
+    background-repeat: no-repeat;
+    opacity: var(--m3-art-opacity);
+    transition:
+      opacity var(--m3-motion-duration-medium-2) var(--m3-motion-easing-standard),
+      transform var(--m3-motion-duration-long-1)
+        var(--m3-motion-easing-expressive, var(--m3-motion-easing-emphasized-decelerate));
+  }
+
+  .m3-surface-art::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    background:
+      linear-gradient(
+        100deg,
+        color-mix(in srgb, var(--m3-art-scrim-from) 88%, transparent) 0%,
+        color-mix(in srgb, var(--m3-art-scrim-from) 42%, transparent) 46%,
+        transparent 84%
+      ),
+      linear-gradient(
+        0deg,
+        color-mix(in srgb, var(--m3-art-scrim-from) 28%, transparent) 0%,
+        transparent 56%
+      );
+  }
+
+  .m3-surface-art > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .m3-surface-art:hover::before {
+    transform: translate3d(-1.5%, 1.5%, 0) scale(1.03);
+  }
+
+  .m3-surface-art--hero {
+    --m3-art-opacity: 0.32;
+    --m3-art-size: 130% auto;
+    --m3-art-position: right -6% top -32%;
+  }
+
+  .m3-surface-art--quiet {
+    --m3-art-opacity: 0.18;
+    --m3-art-size: 150% auto;
+  }
+
+  /* Thin header strips: art biased to the right edge, vertically centered, over a
+     primary-tinted wash so the band reads as color even where the art is faint. */
+  .m3-surface-art--band {
+    --m3-art-opacity: 0.3;
+    --m3-art-size: auto 280%;
+    --m3-art-position: right -2% center;
+    --m3-art-scrim-from: color-mix(in srgb, var(--m3c-surface-container) 86%, var(--m3c-primary-container));
+  }
+
+  /* Light mode: restore the brighter pastel + the lighter scrim source. */
+  :root.light .m3-surface-art,
+  .light .m3-surface-art {
+    --m3-art-opacity: 0.82;
+    --m3-art-scrim-from: var(--m3c-surface-container-low);
+  }
+  :root.light .m3-surface-art--hero,
+  .light .m3-surface-art--hero {
+    --m3-art-opacity: 0.92;
+    --m3-art-size: 130% auto;
+  }
+  :root.light .m3-surface-art--quiet,
+  .light .m3-surface-art--quiet {
+    --m3-art-opacity: 0.62;
+  }
+  :root.light .m3-surface-art--band,
+  .light .m3-surface-art--band {
+    --m3-art-opacity: 0.95;
+    --m3-art-scrim-from: color-mix(in srgb, var(--m3c-surface-container-low) 84%, var(--m3c-primary-container));
+  }
+
+  .m3-art-01 { --m3-art-image: url("/patterns/bg-01.webp"); }
+  .m3-art-02 { --m3-art-image: url("/patterns/bg-02.webp"); }
+  .m3-art-03 { --m3-art-image: url("/patterns/bg-03.webp"); }
+  .m3-art-04 { --m3-art-image: url("/patterns/bg-04.webp"); }
+  .m3-art-05 { --m3-art-image: url("/patterns/bg-05.webp"); }
+  .m3-art-06 { --m3-art-image: url("/patterns/bg-06.webp"); }
+  .m3-art-07 { --m3-art-image: url("/patterns/bg-07.webp"); }
+  .m3-art-08 { --m3-art-image: url("/patterns/bg-08.webp"); }
+  .m3-art-09 { --m3-art-image: url("/patterns/bg-09.webp"); }
+  .m3-art-10 { --m3-art-image: url("/patterns/bg-10.webp"); }
+
+  /* ========================================================================
+     Detail-page surfaces (gradient-tinted header / form card / tab bar).
+     ======================================================================== */
+  .m3-detail-header {
+    border: 0;
+    border-radius: var(--m3-shape-extra-large);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--m3c-surface-container-lowest) 18%, transparent), transparent 72%),
+      color-mix(in srgb, var(--m3c-surface-container-low) 84%, var(--m3c-primary-container));
+    padding: clamp(1rem, 2vw, 1.5rem);
+  }
+
+  .m3-detail-form-card {
+    border-color: color-mix(in srgb, var(--m3c-outline-variant) var(--m3-card-border-strength), transparent) !important;
+    border-radius: var(--m3-shape-extra-large);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--m3c-surface-container-lowest) 12%, transparent), transparent 78%),
+      color-mix(in srgb, var(--m3c-surface-container-low) 76%, var(--m3c-surface-container));
+    box-shadow: none !important;
+  }
+
+  .m3-detail-tabs {
+    display: flex;
+    width: min(100%, 48rem);
+    gap: 4px;
+    overflow-x: auto;
+    border-radius: var(--m3-shape-extra-large);
+    background: var(--m3c-surface-container-low);
+    padding: 6px;
+  }
+
+  .m3-detail-tab {
+    min-height: 42px;
+    min-width: max-content;
+    border: 0;
+    border-radius: var(--m3-shape-extra-large);
+    background: transparent;
+    color: var(--m3c-on-surface-variant);
+    padding: 0 18px;
+    font: var(--m3-type-label-large);
+    letter-spacing: 0;
+    transition:
+      background-color var(--m3-motion-duration-short-3) var(--m3-motion-easing-standard),
+      color var(--m3-motion-duration-short-3) var(--m3-motion-easing-standard),
+      transform var(--m3-motion-duration-medium-1) var(--m3-motion-easing-emphasized-decelerate);
+  }
+
+  .m3-detail-tab:hover {
+    background: color-mix(in srgb, var(--m3c-on-surface) 8%, transparent);
+  }
+
+  .m3-detail-tab.is-active {
+    background: var(--m3c-secondary-container);
+    color: var(--m3c-on-secondary-container);
+    font-weight: 700;
+  }
+
+  /* ========================================================================
+     Sticky-tab full-bleed shell — a detail-page tab bar that pins under the top
+     app bar with no see-through gap. Pure CSS sticky (no JS, no position:fixed)
+     so it returns to flow cleanly on scroll-up. The shell lives inside a 1.5rem
+     page gutter, so it full-bleeds horizontally and pulls up by the top gutter to
+     dock its opaque surface flush under the topbar.
+     ======================================================================== */
+  .m3-tabs-sticky-shell {
+    position: sticky;
+    top: -1.5rem;
+    z-index: 30;
+    display: flex;
+    justify-content: stretch;
+    width: calc(100% + 3rem);
+    margin-inline: -1.5rem;
+    margin-top: -1.5rem;
+    padding: 1.85rem 1.5rem 0.5rem;
+    background: var(--m3c-surface);
+    backdrop-filter: blur(18px) saturate(1.04);
+  }
+
+  .m3-tabs-list--sticky {
+    width: 100%;
+    min-width: max-content;
+    padding: 0.35rem;
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--m3c-surface-container-lowest) 14%, transparent), transparent),
+      color-mix(in srgb, var(--m3c-surface-container-low) 74%, var(--m3c-surface-container-high));
+    backdrop-filter: blur(18px) saturate(1.04);
+  }
+
+  :root.light .m3-tabs-list--sticky,
+  .light .m3-tabs-list--sticky {
+    box-shadow: var(--m3-elevation-1);
+  }
+
+  .m3-tabs-list--sticky .m3-tabs-trigger {
+    min-height: 46px;
+    padding-inline: clamp(0.9rem, 2vw, 2rem);
+  }
+
+  .m3-order-tab-panel[hidden] {
+    display: none !important;
   }
 }
 
