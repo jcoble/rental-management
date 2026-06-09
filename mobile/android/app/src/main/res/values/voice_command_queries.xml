@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Spoken phrase patterns for the App Actions custom intents in res/xml/shortcuts.xml.
+
+  Placeholders use the $parameterName form and must match a <parameter> declared
+  on the capability. Assistant matches the user's words *after* the invocation
+  name ("with Rental Command, …"). Max 2 text parameters per pattern; en-US only.
+-->
+<resources>
+    <string-array name="voice_scan_queries">
+        <item>scan a document</item>
+        <item>scan a receipt</item>
+        <item>scan a bill</item>
+        <item>capture a document</item>
+    </string-array>
+
+    <string-array name="voice_log_expense_queries">
+        <item>log a $amount $category expense for $property</item>
+        <item>log a $category expense for $property</item>
+        <item>add a $amount expense for $property</item>
+        <item>record a $amount $category expense for $property</item>
+    </string-array>
+
+    <string-array name="voice_overdue_rent_queries">
+        <item>show overdue rent</item>
+        <item>show me overdue rent</item>
+        <item>show late rent</item>
+        <item>who is behind on rent</item>
+    </string-array>
+
+    <string-array name="voice_work_orders_queries">
+        <item>open work orders</item>
+        <item>show work orders</item>
+        <item>open a work order for unit $unit</item>
+        <item>what needs fixing</item>
+    </string-array>
+</resources>

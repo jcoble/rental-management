@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Google App Actions capabilities (TSK-26).
+
+  Each <capability> declares a custom intent and the spoken phrases that trigger
+  it (app:queryPatterns). When Google Assistant matches a phrase it builds the
+  <url-template> deep link, substituting any spoken parameters, and fires it as
+  an Android VIEW intent. The app_links plugin delivers that URI to Flutter,
+  where parseVoiceCommand() turns it into a typed command.
+
+  We use *custom* intents (custom.actions.intent.*) rather than built-in intents
+  (BIIs) because rental-management actions ("log a plumbing expense for 123
+  Main") don't map cleanly onto Google's standard BII catalog; custom intents
+  let us define the exact phrasings and parameters.
+
+  Limits (per Google): en-US only, max 2 text parameters per query pattern,
+  inline inventory only. Requires androidx.core:core 1.6.0+ for the app:
+  queryPatterns attribute (pinned in app/build.gradle.kts).
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <!-- "scan a document" / "scan a receipt" -->
+    <capability
+        android:name="custom.actions.intent.SCAN_DOCUMENT"
+        app:queryPatterns="@array/voice_scan_queries">
+        <intent>
+            <url-template android:value="rentalcommand://voice/scan" />
+        </intent>
+    </capability>
+
+    <!-- "log a $40 plumbing expense for 123 Main" -->
+    <capability
+        android:name="custom.actions.intent.LOG_EXPENSE"
+        app:queryPatterns="@array/voice_log_expense_queries">
+        <intent>
+            <url-template
+                android:value="rentalcommand://voice/log-expense{?amount,category,property}" />
+            <parameter
+                android:name="amount"
+                android:key="amount"
+                android:mimeType="https://schema.org/Number" />
+            <parameter
+                android:name="category"
+                android:key="category"
+                android:mimeType="https://schema.org/Text" />
+            <parameter
+                android:name="property"
+                android:key="property"
+                android:mimeType="https://schema.org/Text" />
+        </intent>
+    </capability>
+
+    <!-- "show me overdue rent" / "who is behind on rent" -->
+    <capability
+        android:name="custom.actions.intent.SHOW_OVERDUE_RENT"
+        app:queryPatterns="@array/voice_overdue_rent_queries">
+        <intent>
+            <url-template android:value="rentalcommand://voice/overdue-rent" />
+        </intent>
+    </capability>
+
+    <!-- "open a work order for unit 4" / "what needs fixing" -->
+    <capability
+        android:name="custom.actions.intent.OPEN_WORK_ORDERS"
+        app:queryPatterns="@array/voice_work_orders_queries">
+        <intent>
+            <url-template android:value="rentalcommand://voice/work-orders{?unit}" />
+            <parameter
+                android:name="unit"
+                android:key="unit"
+                android:mimeType="https://schema.org/Text" />
+        </intent>
+    </capability>
+</shortcuts>
