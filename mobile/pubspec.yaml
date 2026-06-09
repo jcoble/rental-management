@@ -21,6 +21,16 @@ dependencies:
   record: ^7.0.0
   url_launcher: ^6.3.1
   flutter_tts: ^4.2.0
+  # Used by voice_command_controller for App-Actions deep links. Was pinned in
+  # pubspec.lock as a direct dependency but missing from pubspec.yaml; declared
+  # here so `flutter pub get` keeps it and the app compiles.
+  app_links: ^7.1.1
+  # Design system (EdiPlatform "M3 Expressive" port):
+  # Funnel Display (display/headline) + Funnel Sans (body) fetched at runtime.
+  google_fonts: ^8.1.0
+  # Material Symbols Rounded — variable icon font with a FILL axis for the
+  # outline→fill morph on active nav items.
+  material_symbols_icons: ^4.2928.1
 
 dev_dependencies:
   flutter_test:
@@ -29,3 +39,6 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # EdiPlatform surface-art patterns for hero/header art overlays (§7.1/§7.7).
+    - assets/patterns/
