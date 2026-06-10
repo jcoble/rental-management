@@ -1,0 +1,51 @@
+/*
+ * Material Symbols Rounded (variable) — SIDEBAR-NAV ICONS ONLY.
+ *
+ * Self-hosted SUBSET. Replaces `@fontsource-variable/material-symbols-rounded/full.css`
+ * (the ~5.06 MB full variable font, every axis). Subsetted with `pyftsubset` down to the
+ * Rental Command AppShell nav-icon ligatures (≈51 KB) while KEEPING the variable axes
+ * (FILL/wght/GRAD/opsz) so the active nav item can still morph its FILL axis 0 -> 1.
+ * (Ported from EdiPlatform's subset approach; re-subsetted for Rental Command's nav glyphs.)
+ *
+ * Family name MUST stay 'Material Symbols Rounded Variable' — that is what the original
+ * fontsource `full.css` registered and what `m3/MaterialSymbol.svelte` resolves against.
+ *
+ * The variable axis ranges are exposed via `font-weight: 100 700` (wght). FILL/GRAD/opsz
+ * are driven per-instance through `font-variation-settings` in MaterialSymbol.svelte; a
+ * static `@font-face` does not need to re-declare those ranges for them to animate, but the
+ * woff2 carries all four axes so any value inside their ranges resolves.
+ *
+ * Subset command (run against the fontsource `full` woff2). To add a nav icon, append its
+ * glyph name to BOTH --text and --glyphs and re-run; verify it is a valid glyph name in the
+ * source font first (this font version lacks `assessment` — `summarize` is used for Reports):
+ *   pyftsubset material-symbols-rounded-latin-full-normal.woff2 \
+ *     --output-file=material-symbols-subset.woff2 \
+ *     --text="space_dashboard bar_chart insights rocket_launch upload_file document_scanner \
+ *             apartment group description assignment campaign build event forum calculate \
+ *             account_balance savings receipt_long summarize contacts auto_awesome menu_book \
+ *             history policy shield monitor_heart settings account_balance_wallet explore \
+ *             work smart_toy home notifications credit_card help" \
+ *     --glyphs="space_dashboard,bar_chart,insights,rocket_launch,upload_file,document_scanner,\
+ *               apartment,group,description,assignment,campaign,build,event,forum,calculate,\
+ *               account_balance,savings,receipt_long,summarize,contacts,auto_awesome,menu_book,\
+ *               history,policy,shield,monitor_heart,settings,account_balance_wallet,explore,\
+ *               work,smart_toy,home,notifications,credit_card,help" \
+ *     --layout-features+=liga,dlig,calt,ccmp,rlig,rclt \
+ *     --no-layout-closure --flavor=woff2 --no-hinting --desubroutinize
+ */
+@font-face {
+	font-family: 'Material Symbols Rounded Variable';
+	font-style: normal;
+	font-display: block;
+	/* wght axis range — the only axis a static @font-face needs to advertise via a
+	   standard descriptor; FILL/GRAD/opsz resolve from the woff2's variable data. */
+	font-weight: 100 700;
+	src: url('/fonts/material-symbols-subset.woff2') format('woff2-variations');
+}
+
+/* Icon-font baseline so the ligature names render as glyphs (and never leak as text). */
+.material-symbol {
+	font-feature-settings:
+		'liga' 1,
+		'rlig' 1;
+}

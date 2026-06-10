@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:material_symbols_icons/symbols.dart';
 
 import '../ai/ai_tab.dart';
 import '../analytics/insights_screen.dart';
@@ -47,8 +48,7 @@ class _MoreMenu extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         children: [
           _MenuTile(
-            icon: Icons.receipt_long_outlined,
-            activeIcon: Icons.receipt_long,
+            icon: Symbols.receipt_long_rounded,
             label: 'Payments',
             subtitle: 'Track rent and fees',
             color: colorScheme.primary,
@@ -62,8 +62,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.build_outlined,
-            activeIcon: Icons.build,
+            icon: Symbols.build_rounded,
             label: 'Maintenance',
             subtitle: 'Work orders and repairs',
             color: colorScheme.tertiary,
@@ -77,8 +76,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.event_repeat_outlined,
-            activeIcon: Icons.event_repeat,
+            icon: Symbols.event_repeat_rounded,
             label: 'Recurring Maintenance',
             subtitle: 'Scheduled tasks that auto-create work orders',
             color: colorScheme.tertiary,
@@ -92,8 +90,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.fact_check_outlined,
-            activeIcon: Icons.fact_check,
+            icon: Symbols.fact_check_rounded,
             label: 'Inspections',
             subtitle: 'Walk units with smart checklists',
             color: colorScheme.tertiary,
@@ -107,8 +104,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.handyman_outlined,
-            activeIcon: Icons.handyman,
+            icon: Symbols.handyman_rounded,
             label: 'Vendors',
             subtitle: 'Text jobs, ratings and scorecards',
             color: colorScheme.tertiary,
@@ -122,8 +118,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.auto_awesome_outlined,
-            activeIcon: Icons.auto_awesome,
+            icon: Symbols.auto_awesome_rounded,
             label: 'Assistant',
             subtitle: 'Daily briefing & questions',
             color: colorScheme.secondary,
@@ -137,8 +132,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.people_outline,
-            activeIcon: Icons.people,
+            icon: Symbols.group_rounded,
             label: 'Tenants',
             subtitle: 'People and contacts',
             color: colorScheme.secondary,
@@ -150,8 +144,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.description_outlined,
-            activeIcon: Icons.description,
+            icon: Symbols.description_rounded,
             label: 'Leases',
             subtitle: 'Agreements and terms',
             color: colorScheme.primary,
@@ -163,8 +156,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.assignment_ind_outlined,
-            activeIcon: Icons.assignment_ind,
+            icon: Symbols.assignment_ind_rounded,
             label: 'Applications',
             subtitle: 'Review and approve applicants',
             color: colorScheme.tertiary,
@@ -177,8 +169,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.mark_email_unread_outlined,
-            activeIcon: Icons.mark_email_unread,
+            icon: Symbols.mark_email_unread_rounded,
             label: 'Notices',
             subtitle: 'Renewal, late rent and move-out drafts',
             color: colorScheme.secondary,
@@ -190,8 +181,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.event_outlined,
-            activeIcon: Icons.event,
+            icon: Symbols.event_rounded,
             label: 'Appointments',
             subtitle: 'Showings and visits',
             color: colorScheme.tertiary,
@@ -203,8 +193,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.insights_outlined,
-            activeIcon: Icons.insights,
+            icon: Symbols.insights_rounded,
             label: 'Insights',
             subtitle: 'Occupancy, collections and trends',
             color: colorScheme.primary,
@@ -216,8 +205,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.shield_outlined,
-            activeIcon: Icons.shield,
+            icon: Symbols.shield_rounded,
             label: 'Security Deposits',
             subtitle: 'Holdings, deductions and returns',
             color: colorScheme.secondary,
@@ -229,8 +217,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.account_balance_outlined,
-            activeIcon: Icons.account_balance,
+            icon: Symbols.account_balance_rounded,
             label: 'Banking',
             subtitle: 'Read-only reconciliation',
             color: colorScheme.primary,
@@ -242,8 +229,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.bar_chart_outlined,
-            activeIcon: Icons.bar_chart,
+            icon: Symbols.bar_chart_rounded,
             label: 'Owner Reports',
             subtitle: 'Annual statements by owner',
             color: colorScheme.tertiary,
@@ -256,8 +242,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.group_outlined,
-            activeIcon: Icons.group,
+            icon: Symbols.groups_rounded,
             label: 'Team',
             subtitle: 'Members, roles and access',
             color: colorScheme.primary,
@@ -269,8 +254,7 @@ class _MoreMenu extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           _MenuTile(
-            icon: Icons.settings_outlined,
-            activeIcon: Icons.settings,
+            icon: Symbols.settings_rounded,
             label: 'Settings',
             subtitle: 'Notifications and reminders',
             color: colorScheme.secondary,
@@ -289,15 +273,15 @@ class _MoreMenu extends StatelessWidget {
 class _MenuTile extends StatelessWidget {
   const _MenuTile({
     required this.icon,
-    required this.activeIcon,
     required this.label,
     required this.subtitle,
     required this.color,
     required this.onTap,
   });
 
+  /// A `Symbols.*_rounded` glyph, rendered filled inside a tinted icon chip
+  /// (the EdiPlatform tonal icon-chip pattern).
   final IconData icon;
-  final IconData activeIcon;
   final String label;
   final String subtitle;
   final Color color;
@@ -311,7 +295,7 @@ class _MenuTile extends StatelessWidget {
     return Card(
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: const BorderRadius.all(Radius.circular(28)),
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Row(
@@ -320,9 +304,9 @@ class _MenuTile extends StatelessWidget {
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
                   color: color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(10),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(icon, color: color, size: 24),
+                child: Icon(icon, color: color, size: 24, fill: 1),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -331,8 +315,7 @@ class _MenuTile extends StatelessWidget {
                   children: [
                     Text(
                       label,
-                      style: theme.textTheme.titleSmall
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                      style: theme.textTheme.titleSmall,
                     ),
                     Text(
                       subtitle,
@@ -343,7 +326,7 @@ class _MenuTile extends StatelessWidget {
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right,
+              Icon(Symbols.chevron_right_rounded,
                   color: colorScheme.onSurfaceVariant),
             ],
           ),
