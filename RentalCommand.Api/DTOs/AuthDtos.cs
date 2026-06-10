@@ -73,13 +73,20 @@ public class ResetPasswordRequest
 
 public class GoogleAuthRequest
 {
-    [Required]
+    /// <summary>Web OAuth flow: the authorization code to exchange server-side (with <see cref="RedirectUri"/>).</summary>
     [MaxLength(4000)]
-    public string Code { get; set; } = string.Empty;
+    public string? Code { get; set; }
 
-    [Required]
+    /// <summary>Web OAuth flow: the redirect URI the <see cref="Code"/> was issued for.</summary>
     [MaxLength(2000)]
-    public string RedirectUri { get; set; } = string.Empty;
+    public string? RedirectUri { get; set; }
+
+    /// <summary>
+    /// Native (mobile) flow: a Google id_token obtained on-device via <c>google_sign_in</c>. When
+    /// present, the server validates it directly and skips the authorization-code exchange.
+    /// </summary>
+    [MaxLength(4000)]
+    public string? IdToken { get; set; }
 }
 
 public class UserDto

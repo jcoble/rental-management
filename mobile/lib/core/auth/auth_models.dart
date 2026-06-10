@@ -79,3 +79,25 @@ class LoginResponse {
     );
   }
 }
+
+/// Result of `POST /auth/register`.
+///
+/// The backend does NOT auto-login on register: it returns 200 with a generic
+/// `{ message }` and (in production) sends an email-confirmation link. There is
+/// no access/refresh token in the response, so the user must confirm their
+/// email on the web and then sign in. We surface the server's [message] so the
+/// register screen can show it verbatim.
+class RegisterResult {
+  const RegisterResult({required this.message});
+
+  final String message;
+
+  factory RegisterResult.fromJson(Map<String, dynamic> json) {
+    final msg = json['message'];
+    return RegisterResult(
+      message: msg is String && msg.isNotEmpty
+          ? msg
+          : 'Registration successful. Please check your email to verify your account.',
+    );
+  }
+}
