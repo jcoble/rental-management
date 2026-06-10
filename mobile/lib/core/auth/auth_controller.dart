@@ -80,6 +80,45 @@ class AuthController extends Notifier<AuthState> {
     }
   }
 
+  /// Registers a new account.
+  ///
+  /// Registration does NOT establish a session (the backend gates on email
+  /// confirmation), so this does not touch [AuthState] — it returns the
+  /// server's [RegisterResult] for the screen to display. Throws [ApiException]
+  /// on failure so the UI can show the error.
+  Future<RegisterResult> register({
+    required String email,
+    required String password,
+    required String displayName,
+  }) {
+    return _repository.register(
+      email: email,
+      password: password,
+      displayName: displayName,
+    );
+  }
+
+  /// Requests a password-reset email. Neutral by design — does not reveal
+  /// whether the account exists. Throws [ApiException] only on transport error.
+  Future<void> forgotPassword(String email) {
+    return _repository.forgotPassword(email);
+  }
+
+  /// Completes sign-in using a Google **id_token** obtained on-device.
+  ///
+  /// Mirrors [login]: hands the token to `/auth/google`, then transitions to
+  /// [AuthStateAuthenticated] so the router redirect drives navigation.
+  Future<void> signInWithGoogle(String idToken) async {
+    state = const AuthStateUnknown(); // show loading
+    try {
+      final response = await _repository.signInWithGoogle(idToken);
+      state = AuthStateAuthenticated(response.user);
+    } on ApiException catch (e) {
+      state = AuthStateUnauthenticated(error: e.message);
+      rethrow;
+    }
+  }
+
   /// Signs out and clears all local auth state.
   Future<void> logout() async {
     await _repository.logout();
@@ -93,5 +132,6 @@ class AuthController extends Notifier<AuthState> {
   }
 }
 
-final authControllerProvider =
-    NotifierProvider<AuthController, AuthState>(AuthController.new);
+final authControllerProvider = NotifierProvider<AuthController, AuthState>(
+  AuthController.new,
+);
