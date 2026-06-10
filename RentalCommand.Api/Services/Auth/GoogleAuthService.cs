@@ -36,6 +36,13 @@ public interface IGoogleAuthService
     /// Returns a failure result when Google sign-in is not configured.
     /// </summary>
     Task<GoogleAuthResult> AuthenticateAsync(string code, string redirectUri, CancellationToken ct = default);
+
+    /// <summary>
+    /// Native (mobile) sign-in: validates a Google <paramref name="idToken"/> obtained on-device
+    /// (e.g. via <c>google_sign_in</c> configured with a <c>serverClientId</c>), then finds/creates
+    /// the user and issues our own JWT pair. Skips the authorization-code exchange the web flow uses.
+    /// </summary>
+    Task<GoogleAuthResult> AuthenticateWithIdTokenAsync(string idToken, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -98,49 +105,9 @@ public sealed class GoogleAuthService : IGoogleAuthService
                 return GoogleAuthResult.Fail("Google id_token validation failed.");
             }
 
-            if (!claims.TryGetValue("email", out var email) || string.IsNullOrWhiteSpace(email))
-            {
-                return GoogleAuthResult.Fail("Google id_token did not contain an email claim.");
-            }
-
-            // Step 3: Find or create the local user.
-            var user = await FindOrCreateUserAsync(email, claims, ct);
-            if (user == null)
-            {
-                return GoogleAuthResult.Fail($"Failed to find or create user for email {email}.");
-            }
-
-            // A brand-new Google user (or one created before this fix) needs a sandbox portfolio, the
-            // Admin role (a self-service owner administers their own portfolio), and a UserAccount staff
-            // row. Done BEFORE issuing tokens so the JWT carries portfolioId + roles. Each step is
-            // idempotent, so this also back-fills users created before these fixes.
-            await EnsureOwnerProvisioningAsync(user);
-
-            // Step 4: Issue our own tokens.
-            var roles = await _userManager.GetRolesAsync(user);
-            var tokens = await _tokenService.GenerateTokensAsync(user, roles);
-
-            user.LastLoginAt = DateTime.UtcNow;
-            await _userManager.UpdateAsync(user);
-
-            var response = new LoginResponse
-            {
-                AccessToken = tokens.AccessToken,
-                AccessTokenExpiration = tokens.AccessTokenExpiration,
-                User = new UserDto
-                {
-                    Id = user.Id,
-                    Email = user.Email ?? string.Empty,
-                    DisplayName = user.DisplayName ?? user.Email ?? string.Empty,
-                    PortfolioId = user.PortfolioId,
-                    OwnerEntityId = user.OwnerEntityId,
-                    TenantId = user.TenantId,
-                    Roles = roles.ToList(),
-                    EmailVerified = user.EmailConfirmed
-                }
-            };
-
-            return GoogleAuthResult.Ok(response, tokens);
+            // Steps 3-4 (find/create the user, provision, issue tokens) are shared with the
+            // native id_token flow below.
+            return await CompleteSignInAsync(claims, ct);
         }
         catch (Exception ex)
         {
@@ -148,6 +115,82 @@ public sealed class GoogleAuthService : IGoogleAuthService
             _logger.LogError(ex, "Unexpected error during Google sign-in exchange.");
             return GoogleAuthResult.Fail("Unexpected error during Google sign-in.");
         }
+    }
+
+    public async Task<GoogleAuthResult> AuthenticateWithIdTokenAsync(string idToken, CancellationToken ct = default)
+    {
+        if (!_options.Enabled)
+        {
+            return GoogleAuthResult.Fail("Google sign-in is not configured.");
+        }
+
+        try
+        {
+            // Native clients (mobile) obtain the id_token on-device, so there is no authorization
+            // code to exchange — validate the id_token directly, then run the shared completion.
+            var claims = await ValidateIdTokenAsync(idToken, ct);
+            if (claims == null)
+            {
+                return GoogleAuthResult.Fail("Google id_token validation failed.");
+            }
+
+            return await CompleteSignInAsync(claims, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Unexpected error during Google id_token sign-in.");
+            return GoogleAuthResult.Fail("Unexpected error during Google sign-in.");
+        }
+    }
+
+    /// <summary>
+    /// Shared completion for both the web authorization-code flow and the native id_token flow:
+    /// validates the email claim, finds/creates the local user, provisions their portfolio + Admin
+    /// role (idempotent), and issues our JWT pair.
+    /// </summary>
+    private async Task<GoogleAuthResult> CompleteSignInAsync(Dictionary<string, string> claims, CancellationToken ct)
+    {
+        if (!claims.TryGetValue("email", out var email) || string.IsNullOrWhiteSpace(email))
+        {
+            return GoogleAuthResult.Fail("Google id_token did not contain an email claim.");
+        }
+
+        var user = await FindOrCreateUserAsync(email, claims, ct);
+        if (user == null)
+        {
+            return GoogleAuthResult.Fail($"Failed to find or create user for email {email}.");
+        }
+
+        // A brand-new Google user (or one created before this fix) needs a sandbox portfolio, the
+        // Admin role (a self-service owner administers their own portfolio), and a UserAccount staff
+        // row. Done BEFORE issuing tokens so the JWT carries portfolioId + roles. Each step is
+        // idempotent, so this also back-fills users created before these fixes.
+        await EnsureOwnerProvisioningAsync(user);
+
+        var roles = await _userManager.GetRolesAsync(user);
+        var tokens = await _tokenService.GenerateTokensAsync(user, roles);
+
+        user.LastLoginAt = DateTime.UtcNow;
+        await _userManager.UpdateAsync(user);
+
+        var response = new LoginResponse
+        {
+            AccessToken = tokens.AccessToken,
+            AccessTokenExpiration = tokens.AccessTokenExpiration,
+            User = new UserDto
+            {
+                Id = user.Id,
+                Email = user.Email ?? string.Empty,
+                DisplayName = user.DisplayName ?? user.Email ?? string.Empty,
+                PortfolioId = user.PortfolioId,
+                OwnerEntityId = user.OwnerEntityId,
+                TenantId = user.TenantId,
+                Roles = roles.ToList(),
+                EmailVerified = user.EmailConfirmed
+            }
+        };
+
+        return GoogleAuthResult.Ok(response, tokens);
     }
 
     private async Task<string?> ExchangeCodeAsync(string code, string redirectUri, CancellationToken ct)

@@ -7,10 +7,7 @@ import 'package:dio/dio.dart';
 ///   - `{ "error": { "message": "..." } }` — nested error object
 ///   - ASP.NET ProblemDetails — `{ "title": "...", "status": 4xx }`
 class ApiException implements Exception {
-  const ApiException({
-    required this.statusCode,
-    required this.message,
-  });
+  const ApiException({required this.statusCode, required this.message});
 
   final int statusCode;
   final String message;
@@ -53,10 +50,13 @@ class ApiException implements Exception {
 
   static String _extractMessage(dynamic body, int statusCode) {
     if (body is Map<String, dynamic>) {
-      // { "error": "string" }
+      // { "error": "string" } — optionally accompanied by a { "details": [..] }
+      // array of field-level messages (e.g. ASP.NET Identity password rules on
+      // /auth/register). Fold the details in so the user sees *why* it failed.
       final errorField = body['error'];
       if (errorField is String && errorField.isNotEmpty) {
-        return errorField;
+        final details = _extractDetails(body['details']);
+        return details == null ? errorField : '$errorField $details';
       }
       // { "error": { "message": "..." } }
       if (errorField is Map<String, dynamic>) {
@@ -73,6 +73,19 @@ class ApiException implements Exception {
     return _fallbackMessage(statusCode);
   }
 
+  /// Joins a `details` array of validation strings into one sentence, or null
+  /// when there's nothing usable.
+  static String? _extractDetails(dynamic details) {
+    if (details is List) {
+      final messages = details
+          .whereType<String>()
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (messages.isNotEmpty) return messages.join(' ');
+    }
+    return null;
+  }
+
   static String _fallbackMessage(int statusCode) {
     switch (statusCode) {
       case 400:
@@ -86,7 +99,9 @@ class ApiException implements Exception {
       case 429:
         return 'Too many requests. Try again shortly.';
       default:
-        if (statusCode >= 500) return 'The server encountered an error. Please try again.';
+        if (statusCode >= 500) {
+          return 'The server encountered an error. Please try again.';
+        }
         return 'Request failed ($statusCode).';
     }
   }

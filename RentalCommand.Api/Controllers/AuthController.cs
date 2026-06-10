@@ -214,9 +214,10 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
-    /// Sign in with Google. Accepts the authorization <c>code</c> from the frontend OAuth flow,
-    /// exchanges it with Google, validates the returned id_token, finds or creates the local user,
-    /// and issues our own JWT pair. Returns 501 when Google credentials are not configured.
+    /// Sign in with Google. Web clients send an authorization <c>code</c> + <c>redirectUri</c> (the
+    /// server exchanges it with Google); native (mobile) clients send a Google <c>idToken</c>
+    /// obtained on-device (the server validates it directly). Either way the local user is
+    /// found/created and issued our own JWT pair. Returns 501 when Google is not configured.
     /// </summary>
     [HttpPost("google")]
     [AllowAnonymous]
@@ -227,7 +228,22 @@ public class AuthController : ControllerBase
             return StatusCode(StatusCodes.Status501NotImplemented, new { error = "Google sign-in is not configured." });
         }
 
-        var result = await _googleAuthService.AuthenticateAsync(request.Code, request.RedirectUri);
+        GoogleAuthResult result;
+        if (!string.IsNullOrEmpty(request.IdToken))
+        {
+            // Native (mobile) flow — id_token obtained on-device.
+            result = await _googleAuthService.AuthenticateWithIdTokenAsync(request.IdToken);
+        }
+        else if (!string.IsNullOrEmpty(request.Code) && !string.IsNullOrEmpty(request.RedirectUri))
+        {
+            // Web flow — exchange the authorization code server-side.
+            result = await _googleAuthService.AuthenticateAsync(request.Code, request.RedirectUri);
+        }
+        else
+        {
+            return BadRequest(new { error = "Provide an idToken (native) or code + redirectUri (web)." });
+        }
+
         if (!result.Success)
         {
             // Log detail is already emitted by GoogleAuthService; only return a safe generic message.

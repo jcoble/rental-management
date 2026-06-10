@@ -21,8 +21,8 @@ import 'token_store.dart';
 /// to manually craft a Cookie header.
 class AuthRepository {
   AuthRepository({required Dio dio, required TokenStore tokenStore})
-      : _dio = dio,
-        _tokenStore = tokenStore;
+    : _dio = dio,
+      _tokenStore = tokenStore;
 
   final Dio _dio;
   final TokenStore _tokenStore;
@@ -62,11 +62,86 @@ class AuthRepository {
     }
   }
 
+  /// Registers a new account.
+  ///
+  /// The API does NOT auto-login: on success it returns 200 with a generic
+  /// `{ message }` and emails a confirmation link. No tokens are issued here,
+  /// so we just relay the server message; the user confirms via email then
+  /// signs in. Throws [ApiException] (with field details folded into the
+  /// message) on 400/401.
+  Future<RegisterResult> register({
+    required String email,
+    required String password,
+    required String displayName,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/auth/register',
+        data: {
+          'email': email,
+          'password': password,
+          'displayName': displayName,
+        },
+      );
+      return RegisterResult.fromJson(response.data ?? const {});
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Signs in with a Google **id_token** obtained on-device via `google_sign_in`.
+  ///
+  /// POSTs `{ idToken }` to `/auth/google`; on success the server returns a
+  /// [LoginResponse] and sets the `rc_refresh_token` cookie exactly like
+  /// `/auth/login`, so this mirrors [login]'s token-extraction + save.
+  Future<LoginResponse> signInWithGoogle(String idToken) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/auth/google',
+        data: {'idToken': idToken},
+      );
+
+      final loginResponse = LoginResponse.fromJson(response.data!);
+
+      final refreshToken = _extractRefreshToken(response);
+      if (refreshToken == null || refreshToken.isEmpty) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Refresh token missing from Google sign-in response.',
+        );
+      }
+
+      await _tokenStore.saveTokens(
+        accessToken: loginResponse.accessToken,
+        refreshToken: refreshToken,
+      );
+
+      return loginResponse;
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Requests a password-reset email via `POST /auth/forgot-password`.
+  ///
+  /// The endpoint is intentionally neutral — it always returns 200 regardless
+  /// of whether the email exists (no account enumeration). Throws
+  /// [ApiException] only on transport/server errors.
+  Future<void> forgotPassword(String email) async {
+    try {
+      await _dio.post<Map<String, dynamic>>(
+        '/auth/forgot-password',
+        data: {'email': email},
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Fetches the current authenticated user via `GET /auth/me`.
   Future<AuthUser> currentUser() async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/auth/me');
+      final response = await _dio.get<Map<String, dynamic>>('/auth/me');
       return AuthUser.fromJson(response.data!);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -164,7 +239,10 @@ class _TimingInterceptor extends Interceptor {
   }
 
   @override
-  void onResponse(Response<dynamic> response, ResponseInterceptorHandler handler) {
+  void onResponse(
+    Response<dynamic> response,
+    ResponseInterceptorHandler handler,
+  ) {
     _log(response.requestOptions, response.statusCode);
     handler.next(response);
   }
@@ -180,7 +258,9 @@ class _TimingInterceptor extends Interceptor {
     if (t0 is int) {
       final ms = DateTime.now().millisecondsSinceEpoch - t0;
       if (ms > 150) {
-        debugPrint('[HTTP ${ms}ms] ${o.method} ${o.path} -> ${status ?? 'ERR'}');
+        debugPrint(
+          '[HTTP ${ms}ms] ${o.method} ${o.path} -> ${status ?? 'ERR'}',
+        );
       }
     }
   }
