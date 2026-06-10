@@ -16,6 +16,7 @@
 	},
 	"devDependencies": {
 		"@internationalized/date": "^3.12.0",
+		"@ktibow/material-color-utilities-nightly": "^0.4.1772748028000",
 		"@lucide/svelte": "^0.561.0",
 		"@playwright/test": "^1",
 		"@sveltejs/adapter-auto": "^7.0.0",
@@ -27,6 +28,7 @@
 		"@vitejs/plugin-basic-ssl": "^2.1.4",
 		"bits-ui": "^2.16.3",
 		"clsx": "^2.1.1",
+		"m3-svelte": "^7.1.2",
 		"mode-watcher": "^1.1.0",
 		"svelte": "^5.56.1",
 		"svelte-check": "^4.3.6",
@@ -41,7 +43,9 @@
 	},
 	"dependencies": {
 		"@event-calendar/core": "^5.7.1",
+		"@fontsource-variable/funnel-display": "^5.2.8",
 		"@fontsource-variable/google-sans-flex": "^5.2.3",
+		"@fontsource-variable/space-grotesk": "^5.2.10",
 		"@microsoft/signalr": "^10.0.0",
 		"@tanstack/svelte-query": "^6.0.18",
 		"marked": "^17.0.1",

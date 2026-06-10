@@ -56,7 +56,9 @@ class _AppStartupState extends ConsumerState<_AppStartup> {
       return MaterialApp(
         theme: AppTheme.light,
         darkTheme: AppTheme.dark,
-        themeMode: ThemeMode.system,
+        // Dark by default, matching the EdiPlatform web app (ModeWatcher
+        // defaultMode="dark"). No in-app toggle exists yet.
+        themeMode: ThemeMode.dark,
         home: const Scaffold(body: Center(child: CircularProgressIndicator())),
       );
     }
@@ -76,7 +78,9 @@ class RentalCommandApp extends ConsumerWidget {
       title: 'Rental Command',
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
-      themeMode: ThemeMode.system,
+      // Dark by default, matching the EdiPlatform web app (ModeWatcher
+      // defaultMode="dark"). No in-app toggle exists yet.
+      themeMode: ThemeMode.dark,
       routerConfig: router,
     );
   }

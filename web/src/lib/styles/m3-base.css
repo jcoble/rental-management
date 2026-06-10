@@ -1,0 +1,476 @@
+/* m3-svelte base tokens (shape, motion, elevation, font) — clean-room from
+   m3-svelte/etc/styles.css with its build-macros (@apply/@function/@mixin) and
+   the linear() spring easings removed, so it parses under Tailwind v4. The
+   compiled m3-svelte components only read these via var(); they don't need the
+   macros. Spring easings are approximated with cubic-bezier (Tailwind v4's
+   parser rejects multi-stop linear()). Colors come from m3-theme.css (--m3c-*). */
+@layer tokens {
+	:root {
+		/* Shapes */
+		--m3-shape-none: 0;
+		--m3-shape-extra-small: 4px;
+		--m3-shape-small: 8px;
+		--m3-shape-medium: 12px;
+		--m3-shape-large: 16px;
+		--m3-shape-large-increased: 20px;
+		--m3-shape-extra-large: 28px;
+		--m3-shape-full: 9999px;
+		--m3-optical-centering-coefficient: 0.11;
+
+		/* Typography (Google Sans Flex if present, else graceful fallback) */
+		--m3-font: "Google Sans Flex", "Google Sans Flex Variable", Roboto, system-ui, sans-serif;
+		--m3-font-mono: "Google Sans Code", ui-monospace, monospace;
+		/* Display font for large titles only (Display + Headline roles). Experiment:
+		   swap to var(--m3-font) to revert, or to Space Grotesk to compare. */
+		--m3-font-display: "Funnel Display Variable", "Funnel Display", var(--m3-font);
+
+		/* Material 3 type scale: 5 roles x 3 sizes. */
+		--m3-type-display-large-size: 57px;
+		--m3-type-display-large-line-height: 64px;
+		--m3-type-display-large-weight: 400;
+		--m3-type-display-large-tracking: 0;
+		--m3-type-display-large: var(--m3-type-display-large-weight) var(--m3-type-display-large-size) / var(--m3-type-display-large-line-height) var(--m3-font-display);
+
+		--m3-type-display-medium-size: 45px;
+		--m3-type-display-medium-line-height: 52px;
+		--m3-type-display-medium-weight: 400;
+		--m3-type-display-medium-tracking: 0;
+		--m3-type-display-medium: var(--m3-type-display-medium-weight) var(--m3-type-display-medium-size) / var(--m3-type-display-medium-line-height) var(--m3-font-display);
+
+		--m3-type-display-small-size: 36px;
+		--m3-type-display-small-line-height: 44px;
+		--m3-type-display-small-weight: 400;
+		--m3-type-display-small-tracking: 0;
+		--m3-type-display-small: var(--m3-type-display-small-weight) var(--m3-type-display-small-size) / var(--m3-type-display-small-line-height) var(--m3-font-display);
+
+		--m3-type-headline-large-size: 32px;
+		--m3-type-headline-large-line-height: 40px;
+		--m3-type-headline-large-weight: 400;
+		--m3-type-headline-large-tracking: 0;
+		--m3-type-headline-large: var(--m3-type-headline-large-weight) var(--m3-type-headline-large-size) / var(--m3-type-headline-large-line-height) var(--m3-font-display);
+
+		--m3-type-headline-medium-size: 28px;
+		--m3-type-headline-medium-line-height: 36px;
+		--m3-type-headline-medium-weight: 400;
+		--m3-type-headline-medium-tracking: 0;
+		--m3-type-headline-medium: var(--m3-type-headline-medium-weight) var(--m3-type-headline-medium-size) / var(--m3-type-headline-medium-line-height) var(--m3-font-display);
+
+		--m3-type-headline-small-size: 24px;
+		--m3-type-headline-small-line-height: 32px;
+		--m3-type-headline-small-weight: 400;
+		--m3-type-headline-small-tracking: 0;
+		--m3-type-headline-small: var(--m3-type-headline-small-weight) var(--m3-type-headline-small-size) / var(--m3-type-headline-small-line-height) var(--m3-font-display);
+
+		--m3-type-title-large-size: 22px;
+		--m3-type-title-large-line-height: 28px;
+		--m3-type-title-large-weight: 500;
+		--m3-type-title-large-tracking: 0;
+		--m3-type-title-large: var(--m3-type-title-large-weight) var(--m3-type-title-large-size) / var(--m3-type-title-large-line-height) var(--m3-font);
+
+		--m3-type-title-medium-size: 16px;
+		--m3-type-title-medium-line-height: 24px;
+		--m3-type-title-medium-weight: 500;
+		--m3-type-title-medium-tracking: 0;
+		--m3-type-title-medium: var(--m3-type-title-medium-weight) var(--m3-type-title-medium-size) / var(--m3-type-title-medium-line-height) var(--m3-font);
+
+		--m3-type-title-small-size: 14px;
+		--m3-type-title-small-line-height: 20px;
+		--m3-type-title-small-weight: 500;
+		--m3-type-title-small-tracking: 0;
+		--m3-type-title-small: var(--m3-type-title-small-weight) var(--m3-type-title-small-size) / var(--m3-type-title-small-line-height) var(--m3-font);
+
+		--m3-type-body-large-size: 16px;
+		--m3-type-body-large-line-height: 24px;
+		--m3-type-body-large-weight: 400;
+		--m3-type-body-large-tracking: 0;
+		--m3-type-body-large: var(--m3-type-body-large-weight) var(--m3-type-body-large-size) / var(--m3-type-body-large-line-height) var(--m3-font);
+
+		--m3-type-body-medium-size: 14px;
+		--m3-type-body-medium-line-height: 20px;
+		--m3-type-body-medium-weight: 400;
+		--m3-type-body-medium-tracking: 0;
+		--m3-type-body-medium: var(--m3-type-body-medium-weight) var(--m3-type-body-medium-size) / var(--m3-type-body-medium-line-height) var(--m3-font);
+
+		--m3-type-body-small-size: 12px;
+		--m3-type-body-small-line-height: 16px;
+		--m3-type-body-small-weight: 400;
+		--m3-type-body-small-tracking: 0;
+		--m3-type-body-small: var(--m3-type-body-small-weight) var(--m3-type-body-small-size) / var(--m3-type-body-small-line-height) var(--m3-font);
+
+		--m3-type-label-large-size: 14px;
+		--m3-type-label-large-line-height: 20px;
+		--m3-type-label-large-weight: 500;
+		--m3-type-label-large-tracking: 0;
+		--m3-type-label-large: var(--m3-type-label-large-weight) var(--m3-type-label-large-size) / var(--m3-type-label-large-line-height) var(--m3-font);
+
+		--m3-type-label-medium-size: 12px;
+		--m3-type-label-medium-line-height: 16px;
+		--m3-type-label-medium-weight: 500;
+		--m3-type-label-medium-tracking: 0;
+		--m3-type-label-medium: var(--m3-type-label-medium-weight) var(--m3-type-label-medium-size) / var(--m3-type-label-medium-line-height) var(--m3-font);
+
+		--m3-type-label-small-size: 11px;
+		--m3-type-label-small-line-height: 16px;
+		--m3-type-label-small-weight: 500;
+		--m3-type-label-small-tracking: 0;
+		--m3-type-label-small: var(--m3-type-label-small-weight) var(--m3-type-label-small-size) / var(--m3-type-label-small-line-height) var(--m3-font);
+
+		/* Elevation — near-zero by design (the M3 reference site barely uses shadow).
+		   Resting surfaces stay flat; only transient overlays (menus at 2, dialogs at
+		   3+) get a soft, low-alpha lift. app.css applies even fainter ink-tinted
+		   shadows in light mode. */
+		--m3-elevation-0: none;
+		--m3-elevation-1: 0px 1px 2px rgb(0 0 0 / 0.10);
+		--m3-elevation-2: 0px 1px 3px rgb(0 0 0 / 0.13);
+		--m3-elevation-3: 0px 4px 12px rgb(0 0 0 / 0.18);
+		--m3-elevation-4: 0px 6px 16px rgb(0 0 0 / 0.20);
+		--m3-elevation-5: 0px 10px 24px rgb(0 0 0 / 0.22);
+
+		/* Motion — M3 spatial/spring approximated with cubic-bezier (slight overshoot) */
+		--m3-timing-function-fast-spatial: cubic-bezier(0.27, 1.06, 0.18, 1);
+		--m3-duration-fast-spatial: 350ms;
+		--m3-easing-fast-spatial: var(--m3-timing-function-fast-spatial) var(--m3-duration-fast-spatial);
+
+		--m3-timing-function-spatial: cubic-bezier(0.27, 1.04, 0.21, 1);
+		--m3-duration-spatial: 450ms;
+		--m3-easing-spatial: var(--m3-timing-function-spatial) var(--m3-duration-spatial);
+
+		--m3-timing-function-slow-spatial: cubic-bezier(0.27, 1.02, 0.24, 1);
+		--m3-duration-slow-spatial: 600ms;
+		--m3-easing-slow-spatial: var(--m3-timing-function-slow-spatial) var(--m3-duration-slow-spatial);
+
+		--m3-timing-function-fast: cubic-bezier(0.2, 0, 0, 1);
+		--m3-duration-fast: 150ms;
+		--m3-easing-fast: var(--m3-timing-function-fast) var(--m3-duration-fast);
+
+		--m3-timing-function: cubic-bezier(0.2, 0, 0, 1);
+		--m3-duration: 233ms;
+		--m3-easing: var(--m3-timing-function) var(--m3-duration);
+
+		--m3-timing-function-slow: cubic-bezier(0.2, 0, 0, 1);
+		--m3-duration-slow: 333ms;
+		--m3-easing-slow: var(--m3-timing-function-slow) var(--m3-duration-slow);
+
+		--m3-timing-function-emphasized: cubic-bezier(0.2, 0, 0, 1);
+		--m3-timing-function-emphasized-accel: cubic-bezier(0.3, 0, 0.8, 0.15);
+		--m3-timing-function-emphasized-decel: cubic-bezier(0.05, 0.7, 0.1, 1);
+		--m3-duration-emphasized: 500ms;
+		--m3-easing-emphasized: var(--m3-timing-function-emphasized) var(--m3-duration-emphasized);
+
+		/* Official Material 3 curve/duration slots for app-authored motion. */
+		--m3-motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+		--m3-motion-easing-standard-decelerate: cubic-bezier(0, 0, 0, 1);
+		--m3-motion-easing-standard-accelerate: cubic-bezier(0.3, 0, 1, 1);
+		--m3-motion-easing-emphasized-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1);
+		--m3-motion-easing-emphasized-accelerate: cubic-bezier(0.3, 0, 0.8, 0.15);
+		--m3-motion-duration-short-1: 50ms;
+		--m3-motion-duration-short-2: 100ms;
+		--m3-motion-duration-short-3: 150ms;
+		--m3-motion-duration-short-4: 200ms;
+		--m3-motion-duration-medium-1: 250ms;
+		--m3-motion-duration-medium-2: 300ms;
+		--m3-motion-duration-medium-3: 350ms;
+		--m3-motion-duration-medium-4: 400ms;
+		--m3-motion-duration-long-1: 450ms;
+		--m3-motion-duration-long-2: 500ms;
+		--m3-motion-duration-long-3: 560ms;
+		--m3-motion-duration-long-4: 640ms;
+		--m3-motion-enter-y: 14px;
+		--m3-motion-stagger-step: 36ms;
+	}
+}
+
+@layer utilities {
+	.m3-motion-enter {
+		animation: m3-motion-enter
+			var(--m3-motion-duration-medium-4, 400ms)
+			var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1))
+			both;
+		animation-delay: calc(var(--m3-motion-index, 0) * var(--m3-motion-stagger-step, 36ms));
+	}
+
+	.m3-motion-enter-quick {
+		animation: m3-motion-enter-quick
+			var(--m3-motion-duration-medium-2, 300ms)
+			var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1))
+			both;
+		animation-delay: calc(var(--m3-motion-index, 0) * 28ms);
+	}
+
+	.m3-motion-state {
+		transition:
+			opacity var(--m3-motion-duration-short-3, 150ms) var(--m3-motion-easing-standard, cubic-bezier(0.2, 0, 0, 1)),
+			transform var(--m3-motion-duration-medium-1, 250ms) var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1)),
+			background-color var(--m3-motion-duration-short-3, 150ms) var(--m3-motion-easing-standard, cubic-bezier(0.2, 0, 0, 1)),
+			border-color var(--m3-motion-duration-short-3, 150ms) var(--m3-motion-easing-standard, cubic-bezier(0.2, 0, 0, 1)),
+			box-shadow var(--m3-motion-duration-short-3, 150ms) var(--m3-motion-easing-standard, cubic-bezier(0.2, 0, 0, 1));
+	}
+
+	.m3-motion-press {
+		will-change: transform;
+		transition:
+			transform var(--m3-motion-duration-medium-2, 300ms) var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1)),
+			background-color var(--m3-motion-duration-short-4, 200ms) var(--m3-motion-easing-standard, cubic-bezier(0.2, 0, 0, 1)),
+			border-color var(--m3-motion-duration-short-4, 200ms) var(--m3-motion-easing-standard, cubic-bezier(0.2, 0, 0, 1)),
+			box-shadow var(--m3-motion-duration-short-4, 200ms) var(--m3-motion-easing-standard, cubic-bezier(0.2, 0, 0, 1));
+	}
+
+	.m3-motion-press:hover {
+		transform: translateY(-1px);
+	}
+
+	.m3-motion-press:active {
+		transform: translateY(0) scale(0.975);
+		transition-duration: var(--m3-motion-duration-short-2, 100ms);
+	}
+
+	.m3-motion-popover-in {
+		transform-origin: var(--m3-motion-origin, 50% 0%);
+		animation: m3-motion-popover-in
+			var(--m3-motion-duration-medium-4, 400ms)
+			var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1))
+			both;
+	}
+
+	.m3-motion-popover-state[data-state='open'] {
+		transform-origin: var(--bits-dropdown-menu-content-transform-origin, var(--bits-select-content-transform-origin, 50% 0%));
+		animation: m3-motion-popover-in
+			var(--m3-motion-duration-medium-4, 400ms)
+			var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1))
+			both;
+	}
+
+	.m3-motion-panel-in {
+		animation: m3-motion-panel-in
+			var(--m3-motion-duration-long-4, 640ms)
+			var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1))
+			both;
+	}
+
+	.m3-motion-tab-content[data-state='active'] {
+		animation: m3-motion-tab-enter
+			var(--m3-motion-duration-long-4, 640ms)
+			var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1))
+			both;
+		transform-origin: 50% 0%;
+	}
+
+	.m3-motion-reveal-list > * {
+		animation: m3-motion-enter-quick
+			var(--m3-motion-duration-medium-3, 350ms)
+			var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1))
+			both;
+	}
+
+	.m3-motion-reveal-list > *:nth-child(1) { animation-delay: 0ms; }
+	.m3-motion-reveal-list > *:nth-child(2) { animation-delay: 28ms; }
+	.m3-motion-reveal-list > *:nth-child(3) { animation-delay: 56ms; }
+	.m3-motion-reveal-list > *:nth-child(4) { animation-delay: 84ms; }
+	.m3-motion-reveal-list > *:nth-child(5) { animation-delay: 112ms; }
+	.m3-motion-reveal-list > *:nth-child(n + 6) { animation-delay: 140ms; }
+
+	.m3-motion-cascade > * {
+		animation: m3-motion-enter-quick
+			var(--m3-motion-duration-medium-3, 350ms)
+			var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1))
+			both;
+		animation-delay: calc(min(var(--m3-motion-index, 0), 10) * 32ms);
+	}
+
+	/* Shape morph (M3 Expressive). A surface's corner shape animates between two
+	   states with the emphasized spring easing, so one shape appears to morph into
+	   another on hover / press / selection. border-radius based (cheap, GPU-friendly)
+	   and disabled under reduced-motion. Override --m3-morph-* to retune. */
+	.m3-shape-morph {
+		border-radius: var(--m3-morph-from, var(--m3-shape-large));
+		transition: border-radius var(--m3-motion-duration-medium-2, 300ms)
+			var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1));
+	}
+	.m3-shape-morph:hover {
+		border-radius: var(--m3-morph-to, var(--m3-shape-extra-large));
+	}
+	.m3-shape-morph:active {
+		border-radius: var(--m3-morph-press, var(--m3-shape-medium));
+		transition-duration: var(--m3-motion-duration-short-3, 150ms);
+	}
+
+	/* Selection morph: pill at rest, rounded-rect when selected/active — the M3
+	   Expressive selected-container look for nav items, segmented buttons, tabs. */
+	.m3-shape-morph-select {
+		border-radius: var(--m3-shape-full);
+		transition: border-radius var(--m3-motion-duration-medium-3, 350ms)
+			var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1));
+	}
+	.m3-shape-morph-select[data-state='active'],
+	.m3-shape-morph-select[data-active='true'],
+	.m3-shape-morph-select[aria-selected='true'],
+	.m3-shape-morph-select.is-active {
+		border-radius: var(--m3-shape-large);
+	}
+
+	/* Continuous organic morph for decorative accents (icon chips, avatars, status
+	   dots). Corner radii drift between two asymmetric squircles. */
+	.m3-shape-morph-blob {
+		animation: m3-shape-morph-blob var(--m3-morph-blob-duration, 9s) ease-in-out infinite;
+	}
+	@keyframes m3-shape-morph-blob {
+		0%,
+		100% {
+			border-radius: 42% 58% 57% 43% / 48% 42% 58% 52%;
+		}
+		50% {
+			border-radius: 58% 42% 43% 57% / 53% 58% 42% 47%;
+		}
+	}
+
+	@keyframes m3-motion-enter {
+		from {
+			opacity: 0;
+			transform: translateY(var(--m3-motion-enter-y, 14px)) scale(0.992);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
+	}
+
+	@keyframes m3-motion-enter-quick {
+		from {
+			opacity: 0;
+			transform: translateY(14px) scale(0.996);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
+	}
+
+	@keyframes m3-motion-progress {
+		from {
+			transform: translateX(-100%);
+		}
+		to {
+			transform: translateX(100%);
+		}
+	}
+
+	@keyframes m3-motion-popover-in {
+		from {
+			opacity: 0;
+			transform: translate3d(0, -10px, 0) scale(0.92);
+		}
+		55% {
+			opacity: 1;
+		}
+		to {
+			opacity: 1;
+			transform: translate3d(0, 0, 0) scale(1);
+		}
+	}
+
+	@keyframes m3-motion-panel-in {
+		from {
+			opacity: 0;
+			transform: translate3d(0, 22px, 0) scale(0.988);
+		}
+		to {
+			opacity: 1;
+			transform: translate3d(0, 0, 0) scale(1);
+		}
+	}
+
+	@keyframes m3-motion-tab-enter {
+		from {
+			opacity: 0;
+			transform: translate3d(0, 24px, 0) scale(0.988);
+		}
+		70% {
+			opacity: 1;
+		}
+		to {
+			opacity: 1;
+			transform: translate3d(0, 0, 0) scale(1);
+		}
+	}
+
+	@keyframes m3-motion-row-in {
+		from {
+			opacity: 0;
+			transform: translate3d(0, 14px, 0);
+		}
+		to {
+			opacity: 1;
+			transform: translate3d(0, 0, 0);
+		}
+	}
+
+	@keyframes m3-dialog-overlay-in {
+		from {
+			opacity: 0;
+		}
+		to {
+			opacity: 1;
+		}
+	}
+
+	@keyframes m3-dialog-overlay-out {
+		from {
+			opacity: 1;
+		}
+		to {
+			opacity: 0;
+		}
+	}
+
+	@keyframes m3-dialog-enter {
+		from {
+			opacity: 0;
+			transform: translate(-50%, calc(-50% + 18px)) scale(0.94);
+		}
+		60% {
+			opacity: 1;
+		}
+		to {
+			opacity: 1;
+			transform: translate(-50%, -50%) scale(1);
+		}
+	}
+
+	@keyframes m3-dialog-exit {
+		from {
+			opacity: 1;
+			transform: translate(-50%, -50%) scale(1);
+		}
+		to {
+			opacity: 0;
+			transform: translate(-50%, calc(-50% + 8px)) scale(0.96);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.m3-motion-enter,
+		.m3-motion-enter-quick,
+		.m3-motion-popover-in,
+		.m3-motion-popover-state[data-state='open'],
+		.m3-motion-panel-in,
+		.m3-motion-tab-content[data-state='active'],
+		.m3-motion-reveal-list > *,
+		.m3-motion-cascade > *,
+		.m3-shape-morph-blob {
+			animation: none;
+		}
+
+		.m3-motion-state,
+		.m3-motion-press,
+		.m3-shape-morph,
+		.m3-shape-morph-select {
+			transition-duration: 1ms;
+			will-change: auto;
+		}
+
+		.m3-motion-press:hover,
+		.m3-motion-press:active {
+			transform: none;
+		}
+	}
+}

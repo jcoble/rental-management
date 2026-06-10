@@ -58,6 +58,7 @@
 	} from '$lib/components/ui/dropdown-menu';
 	import PortfolioSelector from '$lib/components/shared/PortfolioSelector.svelte';
 	import NotificationBell from '$lib/components/notifications/NotificationBell.svelte';
+	import MaterialSymbol from '$lib/components/m3/MaterialSymbol.svelte';
 	import { getCurrentUser, hasAnyRole, clearAuth, getAuthState } from '$lib/stores/auth.svelte';
 	import { isPortalUser, isStaff } from '$lib/types/user';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -186,6 +187,51 @@
 			]
 		}
 	];
+
+	// Material Symbols Rounded glyph per nav href. Drives the active outline→fill
+	// morph (the active item flips --msym-fill 0→1). Keyed by href so the existing
+	// Lucide `icon` fields stay as a fallback for portal nav and elsewhere. Every
+	// glyph here MUST be in the self-hosted subset (src/lib/styles/material-symbols.css).
+	const navGlyphByHref: Record<string, string> = {
+		'/': 'space_dashboard',
+		'/analytics': 'insights',
+		'/onboarding': 'rocket_launch',
+		'/import': 'upload_file',
+		'/scan': 'document_scanner',
+		'/properties': 'apartment',
+		'/tenants': 'group',
+		'/leases': 'description',
+		'/applications': 'assignment',
+		'/notices': 'campaign',
+		'/maintenance': 'build',
+		'/appointments': 'event',
+		'/messages': 'forum',
+		'/accounting': 'calculate',
+		'/reports': 'summarize',
+		'/banking': 'account_balance',
+		'/deposits': 'savings',
+		'/tax': 'receipt_long',
+		'/owners-report': 'summarize',
+		'/owners': 'contacts',
+		'/ai': 'auto_awesome',
+		'/docs': 'menu_book',
+		'/audit': 'history',
+		'/admin/audit': 'policy',
+		'/admin/users': 'shield',
+		'/admin/engine': 'monitor_heart',
+		'/settings': 'settings'
+	};
+	// Material Symbols glyph per staff nav group id (collapsible section headers).
+	const navGlyphByGroup: Record<string, string> = {
+		overview: 'explore',
+		'get-started': 'rocket_launch',
+		portfolio: 'work',
+		operations: 'build',
+		money: 'account_balance_wallet',
+		directory: 'contacts',
+		ai: 'smart_toy',
+		admin: 'shield'
+	};
 
 	let currentUser = $derived(getCurrentUser());
 	let portalUser = $derived(isPortalUser(currentUser) && !isStaff(currentUser));
@@ -409,18 +455,23 @@
 				{#each visibleGroups as group}
 					{#each group.items as item}
 						{@const active = isActive(item.href)}
+						{@const glyph = navGlyphByHref[item.href]}
 						<a
 							href={item.href}
 							onclick={handleNavClick}
-							class="m3-state-layer flex items-center justify-center rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
+							class="m3-nav-link m3-state-layer flex items-center justify-center rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
 								{active
-								? 'bg-sidebar-accent text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
+								? 'is-active bg-sidebar-accent text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
 								: 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'}"
 							aria-label={item.label}
 							data-m3-tooltip={item.label}
 							data-testid="nav-{item.href.replace('/', '').replace('/', '-') || 'dashboard'}"
 						>
-							<item.icon class="h-4 w-4 shrink-0" />
+							{#if glyph}
+								<MaterialSymbol name={glyph} size={20} class="shrink-0 {active ? 'text-primary' : ''}" />
+							{:else}
+								<item.icon class="h-4 w-4 shrink-0" />
+							{/if}
 						</a>
 					{/each}
 				{/each}
@@ -436,7 +487,11 @@
 							aria-expanded={open}
 							data-testid="nav-group-{group.id}"
 						>
-							<group.icon class="h-3.5 w-3.5 shrink-0 opacity-70" />
+							{#if navGlyphByGroup[group.id]}
+								<MaterialSymbol name={navGlyphByGroup[group.id]} size={16} class="shrink-0 opacity-70" />
+							{:else}
+								<group.icon class="h-3.5 w-3.5 shrink-0 opacity-70" />
+							{/if}
 							<span class="flex-1 truncate text-left">{group.label}</span>
 							{#if open}
 								<ChevronDown class="h-3.5 w-3.5 shrink-0 opacity-60" />
@@ -448,16 +503,21 @@
 							<div class="mb-1 ml-2 space-y-0.5 border-l border-sidebar-border pl-2">
 								{#each group.items as item}
 									{@const active = isActive(item.href)}
+									{@const glyph = navGlyphByHref[item.href]}
 									<a
 										href={item.href}
 										onclick={handleNavClick}
-										class="m3-state-layer flex items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
+										class="m3-nav-link m3-state-layer flex items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
 											{active
-											? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
+											? 'is-active bg-sidebar-accent font-medium text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
 											: 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'}"
 										data-testid="nav-{item.href.replace('/', '').replace('/', '-') || 'dashboard'}"
 									>
-										<item.icon class="h-4 w-4 shrink-0 {active ? 'text-primary' : ''}" />
+										{#if glyph}
+											<MaterialSymbol name={glyph} size={20} class="shrink-0 {active ? 'text-primary' : ''}" />
+										{:else}
+											<item.icon class="h-4 w-4 shrink-0 {active ? 'text-primary' : ''}" />
+										{/if}
 										<span class="truncate">{item.label}</span>
 									</a>
 								{/each}
@@ -673,7 +733,7 @@
 		</header>
 
 		<!-- Page content frame. Routes own their internal 100% scroll area. -->
-		<main class="flex min-h-0 flex-1 justify-center overflow-hidden">
+		<main class="customer-shell-main flex min-h-0 flex-1 justify-center overflow-hidden">
 			<div class="h-full w-full max-w-[1600px]">
 				{#key $page.url.pathname}
 					<div class="m3-route-transition" data-testid="route-transition-frame">
@@ -696,3 +756,13 @@
 		data-testid="sidebar-overlay"
 	></button>
 {/if}
+
+<style>
+	/* Active nav item morphs its Material Symbol outline → filled (FILL axis 0 → 1).
+	   MaterialSymbol animates font-variation-settings, so flipping --msym-fill on the
+	   active link drives the transition. Mirrors the m3/NavItem behavior for the
+	   AppShell's inline nav links. */
+	.m3-nav-link.is-active :global(.material-symbol) {
+		--msym-fill: 1;
+	}
+</style>
