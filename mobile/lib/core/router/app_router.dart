@@ -4,11 +4,23 @@ import 'package:go_router/go_router.dart';
 
 import '../auth/auth_controller.dart';
 import '../voice/voice_command.dart';
+import '../../features/auth/forgot_password_screen.dart';
 import '../../features/auth/login_screen.dart';
+import '../../features/auth/register_screen.dart';
 import '../../features/home/home_shell.dart';
 
 const _loginPath = '/login';
+const _registerPath = '/register';
+const _forgotPasswordPath = '/forgot-password';
 const _homePath = '/';
+
+/// Routes an unauthenticated user is allowed to sit on without being bounced
+/// back to `/login`.
+const _publicAuthPaths = <String>{
+  _loginPath,
+  _registerPath,
+  _forgotPasswordPath,
+};
 
 /// True for voice / App Actions deep links (`rentalcommand://voice/...`).
 ///
@@ -28,7 +40,9 @@ bool _isVoiceDeepLink(Uri uri) =>
 /// Authenticated users attempting `/login` are redirected to `/`.
 /// While auth state is [AuthStateUnknown] (startup), a loading splash is shown.
 final appRouterProvider = Provider<GoRouter>((ref) {
-  final authNotifier = ValueNotifier<AuthState>(ref.read(authControllerProvider));
+  final authNotifier = ValueNotifier<AuthState>(
+    ref.read(authControllerProvider),
+  );
 
   ref.listen<AuthState>(authControllerProvider, (_, next) {
     authNotifier.value = next;
@@ -41,7 +55,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
     refreshListenable: authNotifier,
     redirect: (BuildContext context, GoRouterState state) {
       final authState = authNotifier.value;
-      final onLoginPage = state.matchedLocation == _loginPath;
+      final onPublicAuthPage = _publicAuthPaths.contains(state.matchedLocation);
 
       if (authState is AuthStateUnknown) {
         // Still determining auth — show splash; don't redirect yet.
@@ -56,11 +70,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       }
 
       if (authState is AuthStateUnauthenticated) {
-        return onLoginPage ? null : _loginPath;
+        // Allow login / register / forgot-password; bounce everything else.
+        return onPublicAuthPage ? null : _loginPath;
       }
 
-      // Authenticated.
-      return onLoginPage ? _homePath : null;
+      // Authenticated — keep them out of the auth pages.
+      return onPublicAuthPage ? _homePath : null;
     },
     routes: [
       GoRoute(
@@ -68,14 +83,16 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const LoginScreen(),
       ),
       GoRoute(
-        path: _homePath,
-        builder: (context, state) => const HomeShell(),
+        path: _registerPath,
+        builder: (context, state) => const RegisterScreen(),
       ),
+      GoRoute(
+        path: _forgotPasswordPath,
+        builder: (context, state) => const ForgotPasswordScreen(),
+      ),
+      GoRoute(path: _homePath, builder: (context, state) => const HomeShell()),
     ],
-    errorBuilder: (context, state) => Scaffold(
-      body: Center(
-        child: Text('Page not found: ${state.uri}'),
-      ),
-    ),
+    errorBuilder: (context, state) =>
+        Scaffold(body: Center(child: Text('Page not found: ${state.uri}'))),
   );
 });

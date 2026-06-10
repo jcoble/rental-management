@@ -1,8 +1,10 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/auth/auth_controller.dart';
+import '../../core/auth/google_sign_in_service.dart';
 import '../../core/api/api_exception.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -19,7 +21,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   bool _obscurePassword = true;
   bool _isLoading = false;
+  bool _isGoogleLoading = false;
   String? _errorMessage;
+
+  /// True while either sign-in path is in flight — disables all actions.
+  bool get _busy => _isLoading || _isGoogleLoading;
 
   @override
   void dispose() {
@@ -49,6 +55,33 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
       }
+    }
+  }
+
+  Future<void> _signInWithGoogle() async {
+    setState(() {
+      _isGoogleLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final idToken = await ref.read(googleSignInServiceProvider).signIn();
+      // Null means the user cancelled the Google sheet — silent no-op.
+      if (idToken == null) return;
+      await ref.read(authControllerProvider.notifier).signInWithGoogle(idToken);
+      // Router redirect handles navigation on success.
+    } on GoogleSignInUnavailable catch (e) {
+      if (mounted) setState(() => _errorMessage = e.message);
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _errorMessage = e.message);
+    } catch (e) {
+      if (mounted) {
+        setState(
+          () => _errorMessage = 'Google sign-in failed. Please try again.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isGoogleLoading = false);
     }
   }
 
@@ -138,8 +171,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           controller: _passwordController,
                           obscureText: _obscurePassword,
                           textInputAction: TextInputAction.done,
-                          onFieldSubmitted: (_) =>
-                              _isLoading ? null : _submit(),
+                          onFieldSubmitted: (_) => _busy ? null : _submit(),
                           decoration: InputDecoration(
                             labelText: 'Password',
                             prefixIcon: const Icon(Icons.lock_outlined),
@@ -199,7 +231,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         ],
 
                         FilledButton(
-                          onPressed: _isLoading ? null : _submit,
+                          onPressed: _busy ? null : _submit,
                           child: _isLoading
                               ? const SizedBox(
                                   height: 20,
@@ -209,6 +241,41 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                   ),
                                 )
                               : const Text('Sign In'),
+                        ),
+
+                        const SizedBox(height: 20),
+                        _OrDivider(theme: theme),
+                        const SizedBox(height: 20),
+
+                        OutlinedButton.icon(
+                          onPressed: _busy ? null : _signInWithGoogle,
+                          icon: _isGoogleLoading
+                              ? const SizedBox(
+                                  height: 18,
+                                  width: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.g_mobiledata_rounded,
+                                  size: 26,
+                                ),
+                          label: const Text('Sign in with Google'),
+                        ),
+
+                        const SizedBox(height: 20),
+                        TextButton(
+                          onPressed: _busy
+                              ? null
+                              : () => context.go('/register'),
+                          child: const Text('Create an account'),
+                        ),
+                        TextButton(
+                          onPressed: _busy
+                              ? null
+                              : () => context.go('/forgot-password'),
+                          child: const Text('Forgot password?'),
                         ),
 
                         // Dev convenience: fill demo credentials. Shown in debug + profile
@@ -234,6 +301,33 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A horizontal rule with a centered "or" label, themed via [ColorScheme].
+class _OrDivider extends StatelessWidget {
+  const _OrDivider({required this.theme});
+
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = theme.colorScheme.outlineVariant;
+    return Row(
+      children: [
+        Expanded(child: Divider(color: color)),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Text(
+            'or',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+        Expanded(child: Divider(color: color)),
+      ],
     );
   }
 }

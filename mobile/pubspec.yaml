@@ -31,6 +31,7 @@ dependencies:
   # Material Symbols Rounded — variable icon font with a FILL axis for the
   # outline→fill morph on active nav items.
   material_symbols_icons: ^4.2928.1
+  google_sign_in: ^7.2.0
 
 dev_dependencies:
   flutter_test:
