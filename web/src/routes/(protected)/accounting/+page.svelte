@@ -519,7 +519,7 @@
 {/snippet}
 
 {#snippet transactionKindCell(t: AccountingTransaction)}
-	<span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {t.kind === 'Payment' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-500' : t.kind === 'Bank' ? 'border-sky-500/40 bg-sky-500/10 text-sky-500' : 'border-amber-500/40 bg-amber-500/10 text-amber-500'}">
+	<span class="m3-tone-chip inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {t.kind === 'Payment' ? 'm3-tone--success' : t.kind === 'Bank' ? 'm3-tone--info' : 'm3-tone--warning'}">
 		{t.kind}
 	</span>
 {/snippet}
@@ -693,7 +693,7 @@
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
 				{:else}
-					<p class="font-mono text-2xl font-bold tabular-nums text-amber-500">{money(summary?.totalExpenses || 0)}</p>
+					<p class="font-mono text-2xl font-bold tabular-nums text-[var(--warning)]">{money(summary?.totalExpenses || 0)}</p>
 				{/if}
 			</Card.Content>
 		</Card.Root>
@@ -742,7 +742,7 @@
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Net cash flow</p>
 					<p class="font-mono text-2xl font-bold tabular-nums {(reports?.netCashFlow || 0) < 0 ? 'text-destructive' : (reports?.netCashFlow || 0) > 0 ? 'text-success' : ''}">{money(reports?.netCashFlow || 0)}</p>
-					<p class="mt-1 text-xs text-muted-foreground"><span class="text-success">{money(reports?.totalIncome || 0)}</span> income / <span class="text-amber-500">{money(reports?.totalExpenses || 0)}</span> expenses</p>
+					<p class="mt-1 text-xs text-muted-foreground"><span class="text-success">{money(reports?.totalIncome || 0)}</span> income / <span class="text-[var(--warning)]">{money(reports?.totalExpenses || 0)}</span> expenses</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="m3-tonal-card m3-tonal-card--violet gap-0 py-0">

@@ -6,8 +6,10 @@ RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 
 WORKDIR /app
 
-# Install deps first for better layer caching.
-COPY web/package.json web/pnpm-lock.yaml web/.npmrc ./
+# Install deps first for better layer caching. pnpm-workspace.yaml carries the
+# pnpm `overrides` (pnpm 9+ no longer reads package.json#pnpm.overrides) —
+# omitting it makes --frozen-lockfile fail with an overrides mismatch.
+COPY web/package.json web/pnpm-lock.yaml web/.npmrc web/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY web/ ./

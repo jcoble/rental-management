@@ -267,13 +267,13 @@
 											<span>AI review unavailable (no AI key configured). The copy was not checked.</span>
 										</div>
 									{:else if fhResult.compliant}
-										<div class="flex items-start gap-2 rounded-md border border-green-600/40 bg-green-600/10 p-3 text-sm text-green-700 dark:text-green-400" data-testid="fair-housing-compliant">
+										<div class="flex items-start gap-2 rounded-md border bg-[var(--m3c-success-container)] text-[var(--m3c-on-success-container)] border-[color-mix(in_srgb,var(--success)_45%,transparent)] p-3 text-sm" data-testid="fair-housing-compliant">
 											<CheckCircle2 class="mt-0.5 h-4 w-4 shrink-0" />
 											<span>Looks compliant. No fair-housing issues found.</span>
 										</div>
 									{:else}
-										<div class="space-y-2 rounded-md border border-amber-600/40 bg-amber-600/10 p-3 text-sm" data-testid="fair-housing-issues">
-											<p class="flex items-center gap-2 font-medium text-amber-700 dark:text-amber-400">
+										<div class="m3-warning-surface space-y-2 rounded-md p-3 text-sm" data-testid="fair-housing-issues">
+											<p class="flex items-center gap-2 font-medium text-[var(--warning)]">
 												<AlertTriangle class="h-4 w-4 shrink-0" />
 												Possible fair-housing issues
 											</p>
@@ -285,7 +285,7 @@
 												{/each}
 											</ul>
 											{#if fhResult.suggestedRewrite}
-												<div class="border-t border-amber-600/30 pt-2">
+												<div class="border-t border-[color-mix(in_srgb,var(--warning)_30%,transparent)] pt-2">
 													<p class="text-xs text-muted-foreground">Suggested compliant rewrite:</p>
 													<p class="mt-1 whitespace-pre-wrap text-sm text-foreground">{fhResult.suggestedRewrite}</p>
 													<Button size="sm" variant="outline" class="mt-2" onclick={useSuggestedRewrite} data-testid="fair-housing-use-rewrite">

@@ -32,13 +32,18 @@ abstract final class AppTheme {
         ? BorderSide.none
         : BorderSide(color: cardBorderColor);
 
-    // Control (input) surface tokens (§2.7): dark uses a high container tint,
-    // light uses the brightest (whitest) container.
+    // Control (input) surface tokens (§2.7, TSK-162): dark fields are faintly
+    // violet-washed (82% highest container + primary container) so they read as
+    // interactive against plain containers; light uses the whitest container.
     final controlFill = isDark
-        ? scheme.surfaceContainerHigh
+        ? Color.lerp(
+            scheme.primaryContainer,
+            scheme.surfaceContainerHighest,
+            0.82,
+          )!
         : scheme.surfaceContainerLowest;
     final controlBorder = isDark
-        ? scheme.outlineVariant.withValues(alpha: 0.84)
+        ? scheme.outline.withValues(alpha: 0.38)
         : scheme.outline.withValues(alpha: 0.64);
 
     final base = ThemeData(
@@ -69,13 +74,16 @@ abstract final class AppTheme {
         titleTextStyle: textTheme.titleLarge,
       ),
 
-      // ── Bottom nav — flat, tonal selected indicator, large radius, fill morph
+      // ── Bottom nav — flat, tonal selected indicator, large radius, fill morph.
+      // Selected indicator = primary container (violet "platform voice"),
+      // matching the web sidebar's active pill; cyan secondary stays the
+      // chip/tab selection accent.
       navigationBarTheme: NavigationBarThemeData(
         height: 72,
         elevation: 0,
         backgroundColor: scheme.surfaceContainerLow,
         surfaceTintColor: Colors.transparent,
-        indicatorColor: scheme.secondaryContainer,
+        indicatorColor: scheme.primaryContainer,
         indicatorShape: const RoundedRectangleBorder(
           borderRadius: M3Shape.radiusLarge,
         ),
@@ -83,7 +91,7 @@ abstract final class AppTheme {
           final selected = states.contains(WidgetState.selected);
           return IconThemeData(
             color: selected
-                ? scheme.onSecondaryContainer
+                ? scheme.onPrimaryContainer
                 : scheme.onSurfaceVariant,
             size: 24,
           );
@@ -100,14 +108,14 @@ abstract final class AppTheme {
       navigationDrawerTheme: NavigationDrawerThemeData(
         backgroundColor: scheme.surface,
         surfaceTintColor: Colors.transparent,
-        indicatorColor: scheme.secondaryContainer,
+        indicatorColor: scheme.primaryContainer,
         indicatorShape: const RoundedRectangleBorder(
           borderRadius: M3Shape.radiusLarge,
         ),
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           final selected = states.contains(WidgetState.selected);
           return textTheme.labelLarge?.copyWith(
-            color: selected ? scheme.onSurface : scheme.onSurfaceVariant,
+            color: selected ? scheme.onPrimaryContainer : scheme.onSurfaceVariant,
             fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
           );
         }),

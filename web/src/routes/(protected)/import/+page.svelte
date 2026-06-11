@@ -166,13 +166,11 @@
 	const rowStatusMap: Record<string, { label?: string; class: string }> = {
 		Good: {
 			label: 'Looks good',
-			class:
-				'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800'
+			class: 'm3-tone-chip border m3-tone--success'
 		},
 		Problem: {
 			label: 'Needs a fix',
-			class:
-				'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800'
+			class: 'm3-tone-chip border m3-tone--error'
 		}
 	};
 </script>

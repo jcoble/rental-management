@@ -52,9 +52,9 @@
 	);
 
 	const STATUS_MAP = {
-		Submitted: { label: 'Submitted', class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
-		UnderReview: { label: 'Under Review', class: 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800' },
-		Declined: { label: 'Declined', class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' },
+		Submitted: { label: 'Submitted', class: 'm3-tone-chip border m3-tone--info' },
+		UnderReview: { label: 'Under Review', class: 'm3-tone-chip border m3-tone--primary' },
+		Declined: { label: 'Declined', class: 'm3-tone-chip border m3-tone--error' },
 		Withdrawn: { label: 'Withdrawn', class: 'bg-muted text-muted-foreground border-border' },
 	};
 
@@ -120,14 +120,14 @@
 	const canScreen = $derived(application?.consentGiven === true);
 
 	const RECOMMENDATION_MAP = {
-		Accept: { label: 'Accept', class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		Conditional: { label: 'Conditional', class: 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-500 dark:border-yellow-800' },
-		Decline: { label: 'Decline', class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' },
+		Accept: { label: 'Accept', class: 'm3-tone-chip border m3-tone--success' },
+		Conditional: { label: 'Conditional', class: 'm3-tone-chip border m3-tone--warning' },
+		Decline: { label: 'Decline', class: 'm3-tone-chip border m3-tone--error' },
 	};
 	const SCREEN_STATUS_MAP = {
-		Requested: { label: 'Requested', class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
-		Completed: { label: 'Completed', class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		Failed: { label: 'Failed', class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' },
+		Requested: { label: 'Requested', class: 'm3-tone-chip border m3-tone--info' },
+		Completed: { label: 'Completed', class: 'm3-tone-chip border m3-tone--success' },
+		Failed: { label: 'Failed', class: 'm3-tone-chip border m3-tone--error' },
 	};
 
 	const screenMutation = createMutation(() => ({
@@ -273,10 +273,10 @@
 		<!-- Approved → tenant link banner -->
 		{#if tenantLinkId}
 			<div
-				class="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-green-200 bg-green-50 p-4 dark:border-green-800 dark:bg-green-900/20"
+				class="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-[var(--m3c-success-container)] text-[var(--m3c-on-success-container)] border-[color-mix(in_srgb,var(--success)_45%,transparent)] p-4"
 				data-testid="application-tenant-banner"
 			>
-				<div class="flex items-center gap-2 text-sm text-green-800 dark:text-green-300">
+				<div class="flex items-center gap-2 text-sm">
 					<CheckCircle2 class="h-5 w-5" />
 					<span>This applicant was approved and a tenant record was created.</span>
 				</div>
@@ -288,7 +288,7 @@
 
 		<!-- Declined reason -->
 		{#if application.status === 'Declined' && application.decisionReason}
-			<div class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300" data-testid="application-decline-reason">
+			<div class="m3-error-surface mb-6 rounded-lg p-4 text-sm" data-testid="application-decline-reason">
 				<span class="font-medium">Reason declined:</span> {application.decisionReason}
 			</div>
 		{/if}
@@ -340,7 +340,7 @@
 				<Card.Content class="grid grid-cols-2 gap-x-4 gap-y-4 text-sm">
 					<div class="col-span-2 flex items-center gap-2">
 						{#if application.consentGiven}
-							<CheckCircle2 class="h-4 w-4 text-green-600 dark:text-green-400" />
+							<CheckCircle2 class="h-4 w-4 text-[var(--success)]" />
 							<span data-testid="application-consent">
 								Consent given{application.consentAtUtc ? ` on ${fmtDateTime(application.consentAtUtc)}` : ''}
 							</span>
@@ -414,26 +414,26 @@
 								<div class="min-w-0">
 									<p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Criminal records</p>
 									<p
-										class="mt-0.5 flex items-center gap-1.5 text-sm {latestScreening.hasCriminalRecord ? 'text-red-700 dark:text-red-400' : 'text-foreground'}"
+										class="mt-0.5 flex items-center gap-1.5 text-sm {latestScreening.hasCriminalRecord ? 'text-[var(--m3c-error)]' : 'text-foreground'}"
 										data-testid="application-screening-criminal"
 									>
 										{#if latestScreening.hasCriminalRecord}
 											<AlertCircle class="h-4 w-4 shrink-0" /> Records found — review
 										{:else}
-											<CheckCircle2 class="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" /> No criminal records found
+											<CheckCircle2 class="h-4 w-4 shrink-0 text-[var(--success)]" /> No criminal records found
 										{/if}
 									</p>
 								</div>
 								<div class="min-w-0">
 									<p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Eviction records</p>
 									<p
-										class="mt-0.5 flex items-center gap-1.5 text-sm {latestScreening.hasEvictionRecord ? 'text-red-700 dark:text-red-400' : 'text-foreground'}"
+										class="mt-0.5 flex items-center gap-1.5 text-sm {latestScreening.hasEvictionRecord ? 'text-[var(--m3c-error)]' : 'text-foreground'}"
 										data-testid="application-screening-eviction"
 									>
 										{#if latestScreening.hasEvictionRecord}
 											<AlertCircle class="h-4 w-4 shrink-0" /> Records found — review
 										{:else}
-											<CheckCircle2 class="h-4 w-4 shrink-0 text-green-600 dark:text-green-400" /> No eviction records found
+											<CheckCircle2 class="h-4 w-4 shrink-0 text-[var(--success)]" /> No eviction records found
 										{/if}
 									</p>
 								</div>
