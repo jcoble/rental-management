@@ -28,6 +28,12 @@ concurrency:
 env:
   IMAGE_PREFIX: ghcr.io/jcoble/rentalcommand
   DEPLOY_DOMAIN: rc.coblesolutions.com
+  # Per-runner docker config. Both repos' runners on the build box run as the
+  # same user, so the default shared ~/.docker buildx store lets one repo's
+  # setup-buildx post-cleanup stop the OTHER repo's active builder mid-build
+  # (observed twice: "graceful_stop" buildkit deaths). This path lives under
+  # this runner's _work dir, so builders/registry logins never cross repos.
+  DOCKER_CONFIG: ${{ github.workspace }}/../.docker
 
 jobs:
   build-push:
