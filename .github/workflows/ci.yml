@@ -11,8 +11,9 @@ env:
   DOTNET_VERSION: "10.0.x"
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
   DOTNET_NOLOGO: "true"
-  # Connection string the API/Engine/tests use to reach the CI Postgres service.
-  ConnectionStrings__DefaultConnection: "Host=127.0.0.1;Port=5432;Database=rentalcommand_ci;Username=postgres;Password=postgres"
+  # NOTE: the test connection string lives on the "Run tests" step (it needs the
+  # service's ephemeral host port, and the job.services context isn't available
+  # in workflow-level env).
 
 jobs:
   build-and-test:
@@ -26,8 +27,10 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: rentalcommand_ci
+        # Ephemeral host port — a fixed 5432:5432 collides with the OTHER repo's
+        # test service when both run on the shared build box.
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 10s
@@ -65,6 +68,8 @@ jobs:
         run: dotnet build RentalCommand.sln --no-restore --configuration Release
 
       - name: Run tests
+        env:
+          ConnectionStrings__DefaultConnection: "Host=127.0.0.1;Port=${{ job.services.postgres.ports['5432'] }};Database=rentalcommand_ci;Username=postgres;Password=postgres"
         run: >-
           dotnet test RentalCommand.sln
           --no-build
