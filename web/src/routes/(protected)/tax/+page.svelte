@@ -183,7 +183,7 @@
 			{:else}
 				{#if vendorsNeedingW9 > 0}
 					<div
-						class="mb-3 flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-400"
+						class="m3-warning-surface mb-3 flex items-center gap-2 rounded-md px-3 py-2 text-sm"
 						data-testid="vendors-1099-warning"
 					>
 						<AlertTriangle class="h-4 w-4 shrink-0" />
@@ -203,7 +203,7 @@
 						<tbody>
 							{#each vendors1099 as v (v.vendorId)}
 								<tr
-									class="border-b border-border/50 last:border-0 {v.needsW9 ? 'bg-amber-50/60 dark:bg-amber-900/10' : ''}"
+									class="border-b border-border/50 last:border-0 {v.needsW9 ? 'bg-[color-mix(in_srgb,var(--warning)_8%,transparent)]' : ''}"
 									data-testid="vendor-1099-row-{v.vendorId}"
 								>
 									<td class="py-2 pr-4">
@@ -219,14 +219,14 @@
 									<td class="py-2 pr-4">
 										{#if v.w9OnFile}
 											<span
-												class="inline-flex items-center rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400"
+												class="m3-tone-chip m3-tone--success inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium"
 												data-testid="vendor-1099-w9-{v.vendorId}"
 											>
 												On file
 											</span>
 										{:else}
 											<span
-												class="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-400"
+												class="m3-tone-chip m3-tone--warning inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium"
 												data-testid="vendor-1099-w9-{v.vendorId}"
 											>
 												Missing
@@ -276,7 +276,7 @@
 			<Card.Root class="gap-0 py-0" data-testid="tax-total-income">
 				<Card.Content class="p-4">
 					<p class="text-xs text-muted-foreground">Total rental income</p>
-					<p class="text-2xl font-bold text-green-600">{money(report.totalRentalIncome)}</p>
+					<p class="text-2xl font-bold text-[var(--success)]">{money(report.totalRentalIncome)}</p>
 				</Card.Content>
 			</Card.Root>
 			<Card.Root class="gap-0 py-0" data-testid="tax-total-expenses">
@@ -290,7 +290,7 @@
 					<p class="text-xs text-muted-foreground">Net income</p>
 					<p
 						class="text-2xl font-bold {report.netIncome >= 0
-							? 'text-green-600'
+							? 'text-[var(--success)]'
 							: 'text-destructive'}"
 					>
 						{money(report.netIncome)}
@@ -312,7 +312,7 @@
 						<div class="mb-3 grid gap-3 sm:grid-cols-3">
 							<div>
 								<p class="text-xs text-muted-foreground">Rental income</p>
-								<p class="text-lg font-semibold text-green-600">{money(property.rentalIncome)}</p>
+								<p class="text-lg font-semibold text-[var(--success)]">{money(property.rentalIncome)}</p>
 							</div>
 							<div>
 								<p class="text-xs text-muted-foreground">Total expenses</p>
@@ -322,7 +322,7 @@
 								<p class="text-xs text-muted-foreground">Net income</p>
 								<p
 									class="text-lg font-semibold {property.netIncome >= 0
-										? 'text-green-600'
+										? 'text-[var(--success)]'
 										: 'text-destructive'}"
 								>
 									{money(property.netIncome)}

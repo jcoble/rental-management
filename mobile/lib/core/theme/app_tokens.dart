@@ -48,17 +48,18 @@ abstract final class M3Colors {
   static const darkOnPrimaryContainer = Color(0xFFECDCFF);
   static const darkInversePrimary = Color(0xFF69548D);
 
-  // Secondary (muted lavender-grey)
-  static const darkSecondary = Color(0xFFCEC2DB);
-  static const darkOnSecondary = Color(0xFF342D40);
-  static const darkSecondaryContainer = Color(0xFF4B4357);
-  static const darkOnSecondaryContainer = Color(0xFFEADEF7);
+  // Secondary (pinned vivid cyan, #22d3ee seed — TSK-162 accent pin; TonalSpot
+  // collapsed secondary into grey-mauve). Selection/active "pop" accent.
+  static const darkSecondary = Color(0xFF2FD9F4);
+  static const darkOnSecondary = Color(0xFF00363E);
+  static const darkSecondaryContainer = Color(0xFF004E5A);
+  static const darkOnSecondaryContainer = Color(0xFFA2EEFF);
 
-  // Tertiary (cool teal/cyan — overridden away from the seed's warm default)
-  static const darkTertiary = Color(0xFF8BD8EE);
-  static const darkOnTertiary = Color(0xFF003640);
-  static const darkTertiaryContainer = Color(0xFF174F5D);
-  static const darkOnTertiaryContainer = Color(0xFFC6F2FF);
+  // Tertiary (pinned warm amber, #f59e0b seed — maintenance/work-order warmth)
+  static const darkTertiary = Color(0xFFFFB95F);
+  static const darkOnTertiary = Color(0xFF472A00);
+  static const darkTertiaryContainer = Color(0xFF653E00);
+  static const darkOnTertiaryContainer = Color(0xFFFFDDB8);
 
   // Error
   static const darkError = Color(0xFFFFB4AB);
@@ -99,17 +100,17 @@ abstract final class M3Colors {
   static const lightOnPrimaryContainer = Color(0xFF513C73);
   static const lightInversePrimary = Color(0xFFD4BBFC);
 
-  // Secondary
-  static const lightSecondary = Color(0xFF635B70);
+  // Secondary (pinned cyan — light tones)
+  static const lightSecondary = Color(0xFF006877);
   static const lightOnSecondary = Color(0xFFFFFFFF);
-  static const lightSecondaryContainer = Color(0xFFEADEF7);
-  static const lightOnSecondaryContainer = Color(0xFF4B4357);
+  static const lightSecondaryContainer = Color(0xFFA2EEFF);
+  static const lightOnSecondaryContainer = Color(0xFF004E5A);
 
-  // Tertiary (cool teal)
-  static const lightTertiary = Color(0xFF006878);
+  // Tertiary (pinned amber — light tones)
+  static const lightTertiary = Color(0xFF855300);
   static const lightOnTertiary = Color(0xFFFFFFFF);
-  static const lightTertiaryContainer = Color(0xFFA7EEFF);
-  static const lightOnTertiaryContainer = Color(0xFF004E5B);
+  static const lightTertiaryContainer = Color(0xFFFFDDB8);
+  static const lightOnTertiaryContainer = Color(0xFF653E00);
 
   // Error
   static const lightError = Color(0xFFBA1A1A);
@@ -271,6 +272,12 @@ class AppTokens extends ThemeExtension<AppTokens> {
     required this.onInfo,
     required this.accentCyan,
     required this.onAccentCyan,
+    required this.accentTeal,
+    required this.tealContainer,
+    required this.onTealContainer,
+    required this.accentCoral,
+    required this.coralContainer,
+    required this.onCoralContainer,
     required this.successContainer,
     required this.onSuccessContainer,
     required this.warningContainer,
@@ -316,6 +323,17 @@ class AppTokens extends ThemeExtension<AppTokens> {
   final Color onInfo;
   final Color accentCyan;
   final Color onAccentCyan;
+
+  // Teal + coral accent families (TSK-162 app extensions; tones via
+  // TonalPalette — teal seed #2dd4bf, coral seed #ff7a8a). Teal carries
+  // units/inventory hues; coral is the error-adjacent warm family.
+  final Color accentTeal;
+  final Color tealContainer;
+  final Color onTealContainer;
+  final Color accentCoral;
+  final Color coralContainer;
+  final Color onCoralContainer;
+
   final Color successContainer;
   final Color onSuccessContainer;
   final Color warningContainer;
@@ -360,7 +378,8 @@ class AppTokens extends ThemeExtension<AppTokens> {
 
   static AppTokens dark = AppTokens(
     brightness: Brightness.dark,
-    success: const Color(0xFF34D399),
+    // Emerald seed t80 — softer than the old #34D399 neon in dark (TSK-162).
+    success: const Color(0xFF45DFA4),
     onSuccess: const Color(0xFF052E16),
     warning: const Color(0xFFF59E0B),
     onWarning: const Color(0xFF451A03),
@@ -368,6 +387,12 @@ class AppTokens extends ThemeExtension<AppTokens> {
     onInfo: const Color(0xFF07111F),
     accentCyan: const Color(0xFF22D3EE),
     onAccentCyan: const Color(0xFF04222B),
+    accentTeal: const Color(0xFF3CDDC7),
+    tealContainer: const Color(0xFF005047),
+    onTealContainer: const Color(0xFF62FAE3),
+    accentCoral: const Color(0xFFFF8794),
+    coralContainer: const Color(0xFF861E32),
+    onCoralContainer: const Color(0xFFFFDADB),
     successContainer: const Color(0xFF0F4B2F),
     onSuccessContainer: const Color(0xFFC3F4D8),
     warningContainer: const Color(0xFF563900),
@@ -385,17 +410,20 @@ class AppTokens extends ThemeExtension<AppTokens> {
     surfaceRoseHigh: _mix(const Color(0xFFFFB4AB), _darkCard, 0.14),
     surfaceViolet: _mix(const Color(0xFFD4BBFC), _darkCard, 0.08),
     surfaceVioletHigh: _mix(const Color(0xFFD4BBFC), _darkCard, 0.14),
-    surfaceCoral: _mix(const Color(0xFF8BD8EE), _darkCard, 0.08),
-    surfaceCoralHigh: _mix(const Color(0xFF8BD8EE), _darkCard, 0.14),
+    // Coral mixes from the warm coral accent (the old source was the retired
+    // cool-cyan tertiary — coral cards read blue-grey in dark, a frozen bug).
+    surfaceCoral: _mix(const Color(0xFFFF8794), _darkCard, 0.08),
+    surfaceCoralHigh: _mix(const Color(0xFFFF8794), _darkCard, 0.14),
     patternA: const Color(0xFF7668FF),
     patternB: const Color(0xFF2DD4BF),
     patternC: const Color(0xFFF1B7C4),
     patternD: const Color(0xFFFFD166),
     cardBorderStrength: 0.0,
-    tonalBorderStrength: 0.30,
-    artOpacity: 0.24,
-    artHeroOpacity: 0.32,
-    artBandOpacity: 0.30,
+    tonalBorderStrength: 0.42,
+    // Dark art push (TSK-162): visible art, not a rumor.
+    artOpacity: 0.30,
+    artHeroOpacity: 0.50,
+    artBandOpacity: 0.52,
   );
 
   /// LIGHT token set. Tinted families use the §2.5 published pastels.
@@ -409,6 +437,12 @@ class AppTokens extends ThemeExtension<AppTokens> {
     onInfo: Color(0xFFFFFFFF),
     accentCyan: Color(0xFF00A3B8),
     onAccentCyan: Color(0xFF001F24),
+    accentTeal: Color(0xFF006B5F),
+    tealContainer: Color(0xFF62FAE3),
+    onTealContainer: Color(0xFF005047),
+    accentCoral: Color(0xFFA63648),
+    coralContainer: Color(0xFFFFDADB),
+    onCoralContainer: Color(0xFF861E32),
     successContainer: Color(0xFFD6F5DF),
     onSuccessContainer: Color(0xFF063D24),
     warningContainer: Color(0xFFFFDFAA),

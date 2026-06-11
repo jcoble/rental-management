@@ -20,10 +20,10 @@
 		NotificationSeverity,
 		{ border: string; icon: typeof Info; iconColor: string; bg: string }
 	> = {
-		Info: { border: 'border-l-blue-500', icon: Info, iconColor: 'text-blue-400', bg: 'bg-blue-500/5' },
-		Success: { border: 'border-l-green-500', icon: CheckCircle2, iconColor: 'text-green-400', bg: 'bg-green-500/5' },
-		Warning: { border: 'border-l-amber-500', icon: AlertTriangle, iconColor: 'text-amber-400', bg: 'bg-amber-500/5' },
-		Error: { border: 'border-l-red-500', icon: XCircle, iconColor: 'text-red-400', bg: 'bg-red-500/5' }
+		Info: { border: 'border-l-[var(--info)]', icon: Info, iconColor: 'text-[var(--info)]', bg: 'bg-[color-mix(in_srgb,var(--info)_8%,transparent)]' },
+		Success: { border: 'border-l-[var(--success)]', icon: CheckCircle2, iconColor: 'text-[var(--success)]', bg: 'bg-[color-mix(in_srgb,var(--success)_8%,transparent)]' },
+		Warning: { border: 'border-l-[var(--warning)]', icon: AlertTriangle, iconColor: 'text-[var(--warning)]', bg: 'bg-[color-mix(in_srgb,var(--warning)_8%,transparent)]' },
+		Error: { border: 'border-l-[var(--m3c-error)]', icon: XCircle, iconColor: 'text-[var(--m3c-error)]', bg: 'bg-[color-mix(in_srgb,var(--m3c-error)_8%,transparent)]' }
 	};
 
 	const config = $derived(severityConfig[notification.severity] || severityConfig.Info);

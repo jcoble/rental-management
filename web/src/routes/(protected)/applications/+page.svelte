@@ -131,7 +131,7 @@
 </script>
 
 {#snippet statusCell(a: ApplicationResponse)}
-	<StatusBadge status={a.status} map={{ Submitted: { label: 'Submitted', class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' }, UnderReview: { label: 'Under Review', class: 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800' }, Declined: { label: 'Declined', class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' }, Withdrawn: { label: 'Withdrawn', class: 'bg-muted text-muted-foreground border-border' } }} />
+	<StatusBadge status={a.status} map={{ Submitted: { label: 'Submitted', class: 'm3-tone-chip border m3-tone--info' }, UnderReview: { label: 'Under Review', class: 'm3-tone-chip border m3-tone--primary' }, Declined: { label: 'Declined', class: 'm3-tone-chip border m3-tone--error' }, Withdrawn: { label: 'Withdrawn', class: 'bg-muted text-muted-foreground border-border' } }} />
 {/snippet}
 
 <svelte:head>
@@ -204,7 +204,7 @@
 			</div>
 			<Button variant="outline" class="gap-2 shrink-0" onclick={copyLink} data-testid="application-link-copy">
 				{#if copied}
-					<Check class="h-4 w-4 text-green-600" /> Copied
+					<Check class="h-4 w-4 text-[var(--success)]" /> Copied
 				{:else}
 					<Copy class="h-4 w-4" /> Copy
 				{/if}

@@ -104,7 +104,7 @@
 
 	const PRIORITY_COLOR: Record<string, string> = {
 		Emergency: 'bg-destructive',
-		High: 'bg-orange-500',
+		High: 'bg-[var(--warning)]',
 		Normal: 'bg-primary',
 		Low: 'bg-muted-foreground'
 	};
@@ -253,7 +253,7 @@
 								Income
 							</span>
 							<span class="flex items-center gap-1.5">
-								<span class="inline-block h-2.5 w-2.5 rounded-sm bg-orange-400"></span>
+								<span class="inline-block h-2.5 w-2.5 rounded-sm bg-[var(--warning)]"></span>
 								Expenses
 							</span>
 						</div>
@@ -310,7 +310,7 @@
 										width={barW}
 										height={Math.max(bar.expH, 0)}
 										rx="1.5"
-										class="fill-orange-400"
+										class="fill-[var(--warning)]"
 										opacity="0.85"
 									/>
 									<!-- X-axis month label (every other label if many bars) -->
@@ -355,7 +355,7 @@
 								<span class="text-sm text-muted-foreground">Within 60 days</span>
 								<span
 									class="text-sm font-semibold {overview.leasesExpiring60 > 0
-										? 'text-orange-500'
+										? 'text-[var(--warning)]'
 										: 'text-foreground'}"
 									data-testid="leases-expiring-60">{overview.leasesExpiring60}</span
 								>

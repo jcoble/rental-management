@@ -31,8 +31,8 @@
 	const TONE_MAP: Record<string, string> = {
 		muted: 'bg-muted text-muted-foreground',
 		primary: 'bg-primary/10 text-primary',
-		success: 'bg-green-500/10 text-green-500',
-		warning: 'bg-amber-500/10 text-amber-500',
+		success: 'm3-tone-icon m3-tone--success',
+		warning: 'm3-tone-icon m3-tone--warning',
 		destructive: 'bg-destructive/10 text-destructive'
 	};
 	const medallionClass = $derived(TONE_MAP[tone] ?? TONE_MAP.muted);

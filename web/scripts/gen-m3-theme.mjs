@@ -55,19 +55,38 @@ const darkOverrides = new Map([
   ["--m3c-inverse-surface", "#e7e4ed"],
   ["--m3c-inverse-on-surface", "#303038"],
 
-  // Use tertiary as the cool expressive accent. Warm/coral remains reserved for
-  // the error role so neutral app chrome does not drift peach.
-  ["--m3c-tertiary", "#8bd8ee"],
-  ["--m3c-tertiary-dim", "#72c5dc"],
-  ["--m3c-on-tertiary", "#003640"],
-  ["--m3c-tertiary-container", "#174f5d"],
-  ["--m3c-on-tertiary-container", "#c6f2ff"],
-  ["--m3c-tertiary-fixed", "#c6f2ff"],
-  ["--m3c-tertiary-fixed-dim", "#8bd8ee"],
-  ["--m3c-on-tertiary-fixed", "#001f27"],
-  ["--m3c-on-tertiary-fixed-variant", "#174f5d"],
-  ["--m3c-tertiary-container-subtle", "#113f49"],
-  ["--m3c-on-tertiary-container-subtle", "#a8dce9"]
+  // Pinned accent ranges (ported from the EdiPlatform TSK-162 color pass).
+  // TonalSpot from the violet seed collapses secondary into grey-mauve and has
+  // no warm role at all, so the two accent families are pinned to the
+  // design-spec hues instead:
+  //   secondary = vivid cyan (#22d3ee seed) — selection/active "pop" accent.
+  //   tertiary  = warm amber (#f59e0b seed) — maintenance/work-order warmth.
+  // Tones follow the M3 dark mapping (role 80 / dim 75 / on 20 / container 30 /
+  // on-container 90 / fixed 90 / fixed-dim 80 / on-fixed 10 / subtle 25 / on-subtle 85),
+  // computed with this package's TonalPalette. Coral stays reserved for error.
+  ["--m3c-secondary", "#2fd9f4"],
+  ["--m3c-secondary-dim", "#00cbe6"],
+  ["--m3c-on-secondary", "#00363e"],
+  ["--m3c-secondary-container", "#004e5a"],
+  ["--m3c-on-secondary-container", "#a2eeff"],
+  ["--m3c-secondary-fixed", "#a2eeff"],
+  ["--m3c-secondary-fixed-dim", "#2fd9f4"],
+  ["--m3c-on-secondary-fixed", "#001f25"],
+  ["--m3c-on-secondary-fixed-variant", "#004e5a"],
+  ["--m3c-secondary-container-subtle", "#00424c"],
+  ["--m3c-on-secondary-container-subtle", "#5de6ff"],
+
+  ["--m3c-tertiary", "#ffb95f"],
+  ["--m3c-tertiary-dim", "#fea619"],
+  ["--m3c-on-tertiary", "#472a00"],
+  ["--m3c-tertiary-container", "#653e00"],
+  ["--m3c-on-tertiary-container", "#ffddb8"],
+  ["--m3c-tertiary-fixed", "#ffddb8"],
+  ["--m3c-tertiary-fixed-dim", "#ffb95f"],
+  ["--m3c-on-tertiary-fixed", "#2a1700"],
+  ["--m3c-on-tertiary-fixed-variant", "#653e00"],
+  ["--m3c-tertiary-container-subtle", "#563400"],
+  ["--m3c-on-tertiary-container-subtle", "#ffcb8e"]
 ]);
 
 const lightOverrides = new Map([
@@ -89,19 +108,31 @@ const lightOverrides = new Map([
   ["--m3c-outline", "#71717a"],
   ["--m3c-outline-variant", "#d4d4d8"],
 
-  // Keep the same cool expressive tertiary family in light mode so warm/coral
-  // remains reserved for error and validation states.
-  ["--m3c-tertiary", "#006878"],
-  ["--m3c-tertiary-dim", "#005b69"],
+  // Same pinned accent families in light mode (M3 light mapping: role 40 / dim 35 /
+  // on white / container 90 / on-container 30 / fixed-dim 70 / subtle 95 / on-subtle 35).
+  ["--m3c-secondary", "#006877"],
+  ["--m3c-secondary-dim", "#005b68"],
+  ["--m3c-on-secondary", "#ffffff"],
+  ["--m3c-secondary-container", "#a2eeff"],
+  ["--m3c-on-secondary-container", "#004e5a"],
+  ["--m3c-secondary-fixed", "#a2eeff"],
+  ["--m3c-secondary-fixed-dim", "#00bcd5"],
+  ["--m3c-on-secondary-fixed", "#001f25"],
+  ["--m3c-on-secondary-fixed-variant", "#004e5a"],
+  ["--m3c-secondary-container-subtle", "#d4f7ff"],
+  ["--m3c-on-secondary-container-subtle", "#005b68"],
+
+  ["--m3c-tertiary", "#855300"],
+  ["--m3c-tertiary-dim", "#754900"],
   ["--m3c-on-tertiary", "#ffffff"],
-  ["--m3c-tertiary-container", "#a7eeff"],
-  ["--m3c-on-tertiary-container", "#004e5b"],
-  ["--m3c-tertiary-fixed", "#a7eeff"],
-  ["--m3c-tertiary-fixed-dim", "#82d3e5"],
-  ["--m3c-on-tertiary-fixed", "#001f27"],
-  ["--m3c-on-tertiary-fixed-variant", "#004e5b"],
-  ["--m3c-tertiary-container-subtle", "#d5f7ff"],
-  ["--m3c-on-tertiary-container-subtle", "#005b69"]
+  ["--m3c-tertiary-container", "#ffddb8"],
+  ["--m3c-on-tertiary-container", "#653e00"],
+  ["--m3c-tertiary-fixed", "#ffddb8"],
+  ["--m3c-tertiary-fixed-dim", "#ee9800"],
+  ["--m3c-on-tertiary-fixed", "#2a1700"],
+  ["--m3c-on-tertiary-fixed-variant", "#653e00"],
+  ["--m3c-tertiary-container-subtle", "#ffeede"],
+  ["--m3c-on-tertiary-container-subtle", "#754900"]
 ]);
 
 applyOverrides(darkMap, darkOverrides);
@@ -111,8 +142,9 @@ const darkVars = serializeVars(darkMap);
 const lightVars = serializeVars(lightMap);
 const out =
   "/* Generated M3 theme - seed #A36BFF (landing violet), TonalSpot, dark default.\n" +
-  "   Keep generated M3 color roles, with dense app UI overrides noted in gen-m3-theme.mjs.\n" +
-  "   Regenerate: node gen-m3-theme.mjs (do not hand-edit). */\n" +
+  "   Accent pins: secondary=cyan (#22d3ee seed), tertiary=amber (#f59e0b seed) - see gen-m3-theme.mjs.\n" +
+  "   This file is the SINGLE source of truth for --m3c scheme roles (app.css no longer duplicates them).\n" +
+  "   Regenerate: node scripts/gen-m3-theme.mjs (do not hand-edit). */\n" +
   ":root,\n" +
   ":root.dark,\n" +
   ":root[data-theme=\"dark\"],\n" +

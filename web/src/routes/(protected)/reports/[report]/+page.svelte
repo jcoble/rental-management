@@ -549,8 +549,8 @@
 										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber} · {r.leaseNumber}</div></td>
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.buckets.current ? money(r.buckets.current) : '—'}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-amber-500">{r.buckets.days31To60 ? money(r.buckets.days31To60) : '—'}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-amber-600">{r.buckets.days61To90 ? money(r.buckets.days61To90) : '—'}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{r.buckets.days31To60 ? money(r.buckets.days31To60) : '—'}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{r.buckets.days61To90 ? money(r.buckets.days61To90) : '—'}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{r.buckets.over90 ? money(r.buckets.over90) : '—'}</td>
 										<td class="px-3 py-2 text-right font-mono font-semibold tabular-nums {r.total > 0 ? 'text-destructive' : ''}">{money(r.total)}</td>
 									</tr>
@@ -560,8 +560,8 @@
 								<tr>
 									<td class="px-3 py-2" colspan="2">Totals</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(delinquency.totals.current)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-amber-500">{money(delinquency.totals.days31To60)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-amber-600">{money(delinquency.totals.days61To90)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(delinquency.totals.days31To60)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(delinquency.totals.days61To90)}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{money(delinquency.totals.over90)}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums text-destructive">{money(delinquency.totalOutstanding)}</td>
 								</tr>
@@ -582,7 +582,7 @@
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2 font-medium">{m.label}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(m.income)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-amber-500">{money(m.expense)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(m.expense)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(m.net)}">{money(m.net)}</td>
 									</tr>
 								{/each}
@@ -591,7 +591,7 @@
 								<tr>
 									<td class="px-3 py-2">Total</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(cashFlow.totalIncome)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-amber-500">{money(cashFlow.totalExpense)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(cashFlow.totalExpense)}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(cashFlow.totalNet)}">{money(cashFlow.totalNet)}</td>
 								</tr>
 							</tfoot>
@@ -645,7 +645,7 @@
 									<tr class="border-b last:border-0 hover:bg-muted/30">
 										<td class="px-3 py-2 font-medium">{r.propertyName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(r.income)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums text-amber-500">{money(r.expense)}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(r.expense)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(r.net)}">{money(r.net)}</td>
 									</tr>
 								{/each}
@@ -654,7 +654,7 @@
 								<tr>
 									<td class="px-3 py-2">Total</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(propertyPnl.totalIncome)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-amber-500">{money(propertyPnl.totalExpense)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(propertyPnl.totalExpense)}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums {netClass(propertyPnl.totalNet)}">{money(propertyPnl.totalNet)}</td>
 								</tr>
 							</tfoot>
@@ -676,7 +676,7 @@
 										<td class="px-3 py-2 font-medium">{r.propertyName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.totalUnits}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{r.occupiedUnits}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums {r.vacantUnits > 0 ? 'text-amber-500' : ''}">{r.vacantUnits}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums {r.vacantUnits > 0 ? 'text-[var(--warning)]' : ''}">{r.vacantUnits}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{pct(r.occupancyPercent)}</td>
 									</tr>
 								{/each}
@@ -686,7 +686,7 @@
 									<td class="px-3 py-2">Portfolio</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums">{occupancy.totalUnits}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{occupancy.occupiedUnits}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums {occupancy.vacantUnits > 0 ? 'text-amber-500' : ''}">{occupancy.vacantUnits}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums {occupancy.vacantUnits > 0 ? 'text-[var(--warning)]' : ''}">{occupancy.vacantUnits}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums">{pct(occupancy.occupancyPercent)}</td>
 								</tr>
 							</tfoot>
@@ -710,7 +710,7 @@
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(r.monthlyRent)}</td>
 										<td class="px-3 py-2">{formatDate(r.endDate)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums {r.daysUntilExpiry < 0 ? 'text-destructive' : r.daysUntilExpiry <= 30 ? 'text-amber-500' : ''}">{r.daysUntilExpiry}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums {r.daysUntilExpiry < 0 ? 'text-destructive' : r.daysUntilExpiry <= 30 ? 'text-[var(--warning)]' : ''}">{r.daysUntilExpiry}</td>
 										<td class="px-3 py-2">{r.statusName}</td>
 									</tr>
 								{/each}
@@ -742,7 +742,7 @@
 										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber} · {r.leaseNumber}</div></td>
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(r.held)}</td>
-										<td class="px-3 py-2 text-right font-mono tabular-nums {r.deductions > 0 ? 'text-amber-500' : ''}">{r.deductions ? money(r.deductions) : '—'}</td>
+										<td class="px-3 py-2 text-right font-mono tabular-nums {r.deductions > 0 ? 'text-[var(--warning)]' : ''}">{r.deductions ? money(r.deductions) : '—'}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{r.returned ? money(r.returned) : '—'}</td>
 										<td class="px-3 py-2 text-right font-mono font-semibold tabular-nums text-success">{money(r.currentBalance)}</td>
 										<td class="px-3 py-2">{r.statusName}</td>
@@ -753,7 +753,7 @@
 								<tr>
 									<td class="px-3 py-2" colspan="2">Totals</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(deposits.totalHeld)}</td>
-									<td class="px-3 py-2 text-right font-mono tabular-nums text-amber-500">{money(deposits.totalDeductions)}</td>
+									<td class="px-3 py-2 text-right font-mono tabular-nums text-[var(--warning)]">{money(deposits.totalDeductions)}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums">{money(deposits.totalReturned)}</td>
 									<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(deposits.totalCurrentBalance)}</td>
 									<td></td>
@@ -780,7 +780,7 @@
 										<td class="px-3 py-2">{r.w9OnFile ? 'On file' : '—'}</td>
 										<td class="px-3 py-2">
 											{#if r.needsW9}<span class="mr-1 inline-flex rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-xs text-destructive">Needs W-9</span>{/if}
-											{#if r.needs1099Review}<span class="inline-flex rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-600">1099 review</span>{/if}
+											{#if r.needs1099Review}<span class="inline-flex rounded-full border border-[var(--warning)]/40 bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--warning)]">1099 review</span>{/if}
 										</td>
 									</tr>
 								{/each}

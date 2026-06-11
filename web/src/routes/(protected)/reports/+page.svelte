@@ -194,7 +194,7 @@
 				<Card.Root class="border-dashed bg-muted/30" data-testid="custom-report-request">
 					<Card.Content class="p-5">
 						<div class="flex items-start gap-3">
-							<span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-amber-500/10 text-amber-500 ring-1 ring-inset ring-amber-500/20">
+							<span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[color-mix(in_srgb,var(--warning)_10%,transparent)] text-[var(--warning)] ring-1 ring-inset ring-[color-mix(in_srgb,var(--warning)_20%,transparent)]">
 								<Lightbulb class="h-4 w-4" />
 							</span>
 							<div class="flex-1">
@@ -202,7 +202,7 @@
 								<p class="mt-1 text-sm text-muted-foreground">
 									Tell us what you're trying to figure out and we'll look at adding it.
 								</p>
-								<p class="mt-2 text-sm text-amber-600 dark:text-amber-400" data-testid="custom-report-paid-note">
+								<p class="mt-2 text-sm text-[var(--warning)]" data-testid="custom-report-paid-note">
 									Custom reports are a paid add-on — we'll quote it before building anything, so there are no surprises.
 								</p>
 								<div class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">

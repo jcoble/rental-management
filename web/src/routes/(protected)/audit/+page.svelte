@@ -96,20 +96,20 @@
 	function dotColor(entry: AuditEntry): string {
 		switch (entry.entityType?.toLowerCase()) {
 			case 'lease':
-				return 'bg-blue-500';
+				return 'bg-[var(--info)]';
 			case 'payment':
-				return 'bg-green-500';
+				return 'bg-[var(--success)]';
 			case 'expense':
-				return 'bg-orange-500';
+				return 'bg-[var(--warning)]';
 			case 'workorder':
-				return 'bg-yellow-500';
+				return 'bg-[var(--warning)]';
 			case 'tenant':
-				return 'bg-purple-500';
+				return 'bg-[var(--m3c-primary)]';
 			case 'property':
-				return 'bg-slate-500';
+				return 'bg-[var(--m3c-outline)]';
 			case 'appointment':
 			case 'inspection':
-				return 'bg-cyan-500';
+				return 'bg-[var(--accent-cyan)]';
 			default:
 				return 'bg-muted-foreground';
 		}
