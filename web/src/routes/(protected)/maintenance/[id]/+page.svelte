@@ -358,11 +358,11 @@
 		<!-- Dispatched hint: the vendor was texted and will reply DONE to close it -->
 		{#if dispatched || (wo.vendorName && wo.status !== 'Completed' && wo.status !== 'Cancelled')}
 			<div
-				class="mb-6 flex items-start gap-3 rounded-md border border-blue-200 bg-blue-50 p-4 text-sm dark:border-blue-900 dark:bg-blue-950/40"
+				class="mb-6 flex items-start gap-3 rounded-md border bg-[var(--m3c-info-container)] text-[var(--m3c-on-info-container)] border-[color-mix(in_srgb,var(--info)_45%,transparent)] p-4 text-sm"
 				data-testid="work-order-dispatched-hint"
 			>
-				<Check class="mt-0.5 h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
-				<p class="text-blue-900 dark:text-blue-200">
+				<Check class="mt-0.5 h-4 w-4 shrink-0 text-[var(--m3c-on-info-container)]" />
+				<p class="text-[var(--m3c-on-info-container)]">
 					{#if wo.vendorName}
 						<span class="font-medium">{wo.vendorName}</span> has the job.
 					{:else}
@@ -501,7 +501,7 @@
 						<div class="min-w-0">
 							<div class="flex items-center gap-2">
 								<span class="truncate font-medium">{v.name}</span>
-								{#if v.preferred}<StatusBadge status="Preferred" map={{ Preferred: { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' } }} />{/if}
+								{#if v.preferred}<StatusBadge status="Preferred" map={{ Preferred: { class: 'm3-tone-chip border m3-tone--success' } }} />{/if}
 							</div>
 							<p class="truncate text-xs text-muted-foreground">{v.serviceType}{v.phone ? ` · ${v.phone}` : ' · no phone on file'}</p>
 						</div>

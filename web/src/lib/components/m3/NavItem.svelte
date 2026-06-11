@@ -36,12 +36,14 @@
 		'data-testid'?: string;
 	} & HTMLAnchorAttributes = $props();
 
+	// Semantic vars (not literals) so the tones flip with the active mode —
+	// the old dark-tuned hexes (#34d399/#60a5fa/#f59e0b) washed out in light.
 	const toneColor: Record<Tone, string> = {
 		neutral: 'var(--m3c-on-surface-variant)',
 		primary: 'var(--m3c-primary)',
-		success: '#34d399',
-		info: '#60a5fa',
-		warning: '#f59e0b'
+		success: 'var(--success)',
+		info: 'var(--info)',
+		warning: 'var(--warning)'
 	};
 
 	const hasBadge = $derived(badge !== '' && badge !== null && badge !== undefined);
@@ -139,10 +141,16 @@
 		background: var(--m3c-surface-container-high);
 		color: var(--foreground, var(--m3c-on-surface));
 	}
-	.m3-nav-item:hover,
-	.active {
+	.m3-nav-item:hover {
 		background: var(--m3c-surface-container-high);
 		color: var(--foreground, var(--m3c-on-surface));
+	}
+	/* M3 selected indicator: tonal primary-container pill. The previous neutral
+	   grey active state was indistinguishable from hover in dark mode (TSK-162). */
+	.active,
+	.m3-nav-item.active:hover {
+		background: var(--m3c-primary-container);
+		color: var(--m3c-on-primary-container);
 	}
 	/* M3 Expressive selected-container shape morph: the active item's corners
 	   morph from rounded-rect to a pill (animated via the border-radius transition). */
@@ -154,13 +162,15 @@
 			transition-duration: 1ms;
 		}
 	}
-	.surface:hover,
-	.surface.active {
+	.surface:hover {
 		background: var(--m3c-surface-container-highest);
 	}
 	.active .m3-nav-item__icon,
 	.active .m3-nav-item__label {
-		color: var(--m3-nav-tone);
+		color: var(--m3c-on-primary-container);
+	}
+	.active .m3-nav-item__description {
+		color: color-mix(in srgb, var(--m3c-on-primary-container) 78%, transparent);
 	}
 	.collapsed {
 		justify-content: center;

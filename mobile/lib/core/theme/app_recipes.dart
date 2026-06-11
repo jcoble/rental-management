@@ -34,7 +34,9 @@ extension _TonalFamilyColors on M3TonalFamily {
       case M3TonalFamily.violet:
         return (tokens.surfaceViolet, scheme.primary);
       case M3TonalFamily.coral:
-        return (tokens.surfaceCoral, scheme.tertiary);
+        // Coral keeps its own warm family — tertiary is amber after the
+        // TSK-162 accent pin and would duplicate the amber card.
+        return (tokens.surfaceCoral, tokens.accentCoral);
     }
   }
 }
@@ -52,6 +54,7 @@ class M3ArtSurface extends StatelessWidget {
     this.hero = false,
     this.scrimFrom,
     this.height,
+    this.opacityOverride,
   });
 
   /// Pattern index 1..10 → `assets/patterns/bg-NN.webp`.
@@ -61,6 +64,10 @@ class M3ArtSurface extends StatelessWidget {
   final bool hero;
   final Color? scrimFrom;
   final double? height;
+
+  /// Explicit art-opacity override (e.g. the band strip uses
+  /// `tokens.artBandOpacity` instead of the hero/base pair).
+  final double? opacityOverride;
   final Widget child;
 
   String get _asset =>
@@ -70,7 +77,8 @@ class M3ArtSurface extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final tokens = context.tokens;
-    final opacity = hero ? tokens.artHeroOpacity : tokens.artOpacity;
+    final opacity =
+        opacityOverride ?? (hero ? tokens.artHeroOpacity : tokens.artOpacity);
     final scrim = scrimFrom ?? scheme.surfaceContainerLow;
 
     return ClipRRect(
@@ -156,16 +164,21 @@ class M3ArtBand extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    // Primary-tinted wash behind the band art (§7.1 `--band`).
-    final wash = Color.lerp(
-      scheme.surfaceContainerLow,
-      scheme.primaryContainer,
-      0.5,
-    )!;
+    final tokens = context.tokens;
+    // Violet-washed scrim behind the band art (TSK-162 calibration:
+    // dark = 72% container + primary container, light = 84% low + primary).
+    final wash = tokens.isDark
+        ? Color.lerp(scheme.primaryContainer, scheme.surfaceContainer, 0.72)!
+        : Color.lerp(
+            scheme.primaryContainer,
+            scheme.surfaceContainerLow,
+            0.84,
+          )!;
 
     return M3ArtSurface(
       pattern: pattern,
       scrimFrom: wash,
+      opacityOverride: tokens.artBandOpacity,
       padding: const EdgeInsets.fromLTRB(20, 22, 20, 22),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
@@ -274,7 +287,8 @@ class M3MorphNavItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final fg = selected ? scheme.onSecondaryContainer : scheme.onSurfaceVariant;
+    // Violet active pill — matches the web sidebar's primary-container voice.
+    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurfaceVariant;
 
     return InkWell(
       onTap: onTap,
@@ -287,7 +301,7 @@ class M3MorphNavItem extends StatelessWidget {
           vertical: 8,
         ),
         decoration: BoxDecoration(
-          color: selected ? scheme.secondaryContainer : Colors.transparent,
+          color: selected ? scheme.primaryContainer : Colors.transparent,
           // Rest = pill (full); selected = rounded-rect (large). Mirrors the M3
           // Expressive selected-container shape morph.
           borderRadius: BorderRadius.circular(

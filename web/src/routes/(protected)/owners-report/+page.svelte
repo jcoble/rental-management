@@ -130,7 +130,7 @@
 							: ''}"
 					>
 						<p class="font-medium text-foreground">{owner.ownerName}</p>
-						<p class="mt-0.5 font-mono text-sm {owner.netToOwner >= 0 ? 'text-green-600' : 'text-destructive'}">
+						<p class="mt-0.5 font-mono text-sm {owner.netToOwner >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
 							Net: {money(owner.netToOwner)}
 						</p>
 					</button>
@@ -181,7 +181,7 @@
 						<Card.Root class="gap-0 py-0" data-testid="owners-report-total-income">
 							<Card.Content class="p-4">
 								<p class="text-xs text-muted-foreground">Total income</p>
-								<p class="font-mono tabular-nums text-2xl font-bold text-green-600">{money(report.totalIncome)}</p>
+								<p class="font-mono tabular-nums text-2xl font-bold text-[var(--success)]">{money(report.totalIncome)}</p>
 							</Card.Content>
 						</Card.Root>
 						<Card.Root class="gap-0 py-0" data-testid="owners-report-total-expenses">
@@ -199,7 +199,7 @@
 						<Card.Root class="gap-0 py-0" data-testid="owners-report-net">
 							<Card.Content class="p-4">
 								<p class="text-xs text-muted-foreground">Net to owner</p>
-								<p class="font-mono tabular-nums text-2xl font-bold {report.totalNetToOwner >= 0 ? 'text-green-600' : 'text-destructive'}">
+								<p class="font-mono tabular-nums text-2xl font-bold {report.totalNetToOwner >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
 									{money(report.totalNetToOwner)}
 								</p>
 							</Card.Content>
@@ -231,12 +231,12 @@
 													data-testid="owners-report-property-row-{prop.propertyId}"
 												>
 													<td class="px-4 py-3 font-medium text-foreground">{prop.propertyName}</td>
-													<td class="px-4 py-3 text-right font-mono tabular-nums text-green-600">{money(prop.rentalIncome)}</td>
+													<td class="px-4 py-3 text-right font-mono tabular-nums text-[var(--success)]">{money(prop.rentalIncome)}</td>
 													<td class="px-4 py-3 text-right font-mono tabular-nums text-destructive">{money(prop.expenses)}</td>
 													<td class="px-4 py-3 text-right font-mono tabular-nums text-destructive">{money(prop.managementFee)}</td>
 													<td
 														class="px-4 py-3 text-right font-mono tabular-nums font-semibold {prop.netToOwner >= 0
-															? 'text-green-600'
+															? 'text-[var(--success)]'
 															: 'text-destructive'}"
 													>
 														{money(prop.netToOwner)}

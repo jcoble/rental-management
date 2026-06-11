@@ -157,7 +157,7 @@
 				<div class="flex flex-wrap items-center gap-2">
 					<h1 class="text-2xl font-bold" data-testid="vendor-detail-name">{vendor.name}</h1>
 					{#if vendor.preferred}
-						<StatusBadge status="Preferred" map={{ Preferred: { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' } }} />
+						<StatusBadge status="Preferred" map={{ Preferred: { class: 'm3-tone-chip border m3-tone--success' } }} />
 					{/if}
 				</div>
 				<div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">

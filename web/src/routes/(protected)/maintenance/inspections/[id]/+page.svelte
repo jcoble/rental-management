@@ -203,10 +203,10 @@
 	}
 
 	const RESULT_BADGE: Record<string, { class: string }> = {
-		Pass: { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		Fail: { class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' },
+		Pass: { class: 'm3-tone-chip border m3-tone--success' },
+		Fail: { class: 'm3-tone-chip border m3-tone--error' },
 		NotApplicable: { class: 'bg-muted text-muted-foreground border-border' },
-		Pending: { class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
+		Pending: { class: 'm3-tone-chip border m3-tone--info' },
 	};
 </script>
 
@@ -279,11 +279,11 @@
 		<!-- Progress summary -->
 		<div class="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="inspection-progress">
 			<div class="rounded-md border border-border bg-background p-3 text-center">
-				<p class="text-2xl font-bold tabular-nums text-green-700 dark:text-green-400" data-testid="inspection-pass-count">{counts.pass}</p>
+				<p class="text-2xl font-bold tabular-nums text-[var(--success)]" data-testid="inspection-pass-count">{counts.pass}</p>
 				<p class="text-xs uppercase tracking-wide text-muted-foreground">Pass</p>
 			</div>
 			<div class="rounded-md border border-border bg-background p-3 text-center">
-				<p class="text-2xl font-bold tabular-nums text-red-700 dark:text-red-400" data-testid="inspection-fail-count">{counts.fail}</p>
+				<p class="text-2xl font-bold tabular-nums text-[var(--m3c-error)]" data-testid="inspection-fail-count">{counts.fail}</p>
 				<p class="text-xs uppercase tracking-wide text-muted-foreground">Fail</p>
 			</div>
 			<div class="rounded-md border border-border bg-background p-3 text-center">
@@ -291,7 +291,7 @@
 				<p class="text-xs uppercase tracking-wide text-muted-foreground">N/A</p>
 			</div>
 			<div class="rounded-md border border-border bg-background p-3 text-center">
-				<p class="text-2xl font-bold tabular-nums text-blue-700 dark:text-blue-400" data-testid="inspection-pending-count">{counts.pending}</p>
+				<p class="text-2xl font-bold tabular-nums text-[var(--info)]" data-testid="inspection-pending-count">{counts.pending}</p>
 				<p class="text-xs uppercase tracking-wide text-muted-foreground">To do</p>
 			</div>
 		</div>
@@ -299,11 +299,11 @@
 		<!-- Completion summary banner -->
 		{#if isCompleted}
 			<div
-				class="mb-6 flex items-start gap-3 rounded-md border border-green-200 bg-green-50 p-4 text-sm dark:border-green-900 dark:bg-green-950/40"
+				class="mb-6 flex items-start gap-3 rounded-md border bg-[var(--m3c-success-container)] text-[var(--m3c-on-success-container)] border-[color-mix(in_srgb,var(--success)_45%,transparent)] p-4 text-sm"
 				data-testid="inspection-completed-banner"
 			>
-				<Check class="mt-0.5 h-4 w-4 shrink-0 text-green-600 dark:text-green-400" />
-				<div class="text-green-900 dark:text-green-200">
+				<Check class="mt-0.5 h-4 w-4 shrink-0" />
+				<div>
 					<p class="font-medium">This inspection is complete.</p>
 					<p class="mt-0.5">
 						{counts.pass} passed · {counts.fail} failed · {counts.na} N/A. The checklist is now read-only.
@@ -316,7 +316,7 @@
 							{#each createdWorkOrderIds as woId (woId)}
 								<a
 									href="/maintenance/{woId}"
-									class="rounded border border-green-300 bg-white px-2 py-1 text-xs font-medium text-green-800 hover:bg-green-100 dark:border-green-800 dark:bg-green-900/40 dark:text-green-200"
+									class="m3-tone-chip border m3-tone--success rounded px-2 py-1 text-xs font-medium"
 									data-testid="inspection-work-order-link-{woId}"
 								>
 									Work order #{woId}
@@ -355,7 +355,7 @@
 										<Button
 											type="button"
 											variant={item.result === 'Pass' ? 'default' : 'outline'}
-											class="h-12 {item.result === 'Pass' ? 'bg-green-600 hover:bg-green-700 text-white' : ''}"
+											class="h-12 {item.result === 'Pass' ? 'bg-[var(--success)] text-[var(--success-foreground)] hover:bg-[color-mix(in_srgb,var(--success)_88%,black)]' : ''}"
 											disabled={readOnly || savingResultFor === item.id}
 											onclick={() => setResult(item, 'Pass')}
 											data-testid="inspection-item-{item.id}-pass"

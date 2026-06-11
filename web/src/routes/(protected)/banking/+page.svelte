@@ -344,7 +344,7 @@
 		<Card.Root class="gap-0 py-0">
 			<Card.Content class="p-4">
 				<p class="text-xs text-muted-foreground">Unmatched</p>
-				<p class="font-mono text-2xl font-bold text-amber-600">{summary?.unmatchedCount ?? 0}</p>
+				<p class="font-mono text-2xl font-bold text-[var(--warning)]">{summary?.unmatchedCount ?? 0}</p>
 			</Card.Content>
 		</Card.Root>
 		<Card.Root class="gap-0 py-0">
@@ -395,7 +395,7 @@
 										{item.transaction.merchantName || item.transaction.description}
 									</p>
 									<p class="text-xs text-muted-foreground">{date(item.transaction.postedAt)}</p>
-									<p class="mt-1 font-mono text-sm {item.transaction.amount >= 0 ? 'text-green-600' : 'text-destructive'}">
+									<p class="mt-1 font-mono text-sm {item.transaction.amount >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
 										{money(item.transaction.amount)}
 									</p>
 								</div>
@@ -489,13 +489,13 @@
 											<p class="font-medium">{transaction.merchantName || transaction.description}</p>
 											<p class="text-xs text-muted-foreground">{transaction.institutionName} / {transaction.accountName}</p>
 										</td>
-										<td class="whitespace-nowrap px-4 py-3 text-right font-mono {transaction.amount >= 0 ? 'text-green-600' : 'text-destructive'}">
+										<td class="whitespace-nowrap px-4 py-3 text-right font-mono {transaction.amount >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
 											{money(transaction.amount)}
 										</td>
 										<td class="min-w-64 px-4 py-3">
 											{#if transaction.matchStatus === 'Matched'}
 												<div class="flex flex-wrap items-center gap-2">
-													<span class="rounded-full bg-green-500/10 px-2 py-1 text-xs font-medium text-green-600">Matched</span>
+													<span class="m3-tone-chip border m3-tone--success rounded-full px-2 py-1 text-xs font-medium">Matched</span>
 													<Button
 														size="sm"
 														variant="outline"

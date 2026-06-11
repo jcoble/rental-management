@@ -176,9 +176,9 @@
 	}
 
 	const depositStatusMap: Record<string, { label?: string; class: string }> = {
-		Held: { class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
-		PartiallyReturned: { label: 'Partially Returned', class: 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800' },
-		Returned: { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
+		Held: { class: 'm3-tone-chip border m3-tone--info' },
+		PartiallyReturned: { label: 'Partially Returned', class: 'm3-tone-chip border m3-tone--warning' },
+		Returned: { class: 'm3-tone-chip border m3-tone--success' },
 	};
 
 	const depositsList = $derived(depositsQuery.data ?? []);
@@ -274,11 +274,11 @@
 	<!-- Explainer so this page doesn't read like a duplicate of Payments: a deposit is the tenant's
 	     money you're safekeeping, not income you've earned. -->
 	<div
-		class="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50/60 p-3 text-sm dark:border-blue-900/50 dark:bg-blue-950/30"
+		class="mb-4 flex items-start gap-3 rounded-lg border border-[color-mix(in_srgb,var(--info)_38%,transparent)] bg-[color-mix(in_srgb,var(--info)_8%,var(--card))] p-3 text-sm"
 		data-testid="deposits-explainer"
 	>
-		<Info class="mt-0.5 h-4 w-4 shrink-0 text-blue-600 dark:text-blue-400" />
-		<p class="text-blue-900 dark:text-blue-200">
+		<Info class="mt-0.5 h-4 w-4 shrink-0 text-[var(--info)]" />
+		<p class="text-foreground">
 			A security deposit is the tenant's money held in trust until the lease ends — it is
 			<span class="font-medium">not rental income</span>. Rent and other payments live on the
 			<a href="/accounting" class="font-medium underline underline-offset-2">Accounting</a> page; this page only

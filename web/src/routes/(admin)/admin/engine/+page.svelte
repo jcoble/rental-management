@@ -34,27 +34,27 @@
 	// ---- Status styling ----
 
 	const overallStyles: Record<string, { badge: string; icon: typeof CheckCircle; label: string }> = {
-		Healthy: { badge: 'bg-green-100 text-green-800', icon: CheckCircle, label: 'Healthy' },
-		Degraded: { badge: 'bg-amber-100 text-amber-800', icon: AlertTriangle, label: 'Degraded' },
-		Stale: { badge: 'bg-orange-100 text-orange-800', icon: Clock, label: 'Stale' },
-		Down: { badge: 'bg-red-100 text-red-800', icon: XCircle, label: 'Down' }
+		Healthy: { badge: 'm3-tone-chip border m3-tone--success', icon: CheckCircle, label: 'Healthy' },
+		Degraded: { badge: 'm3-tone-chip border m3-tone--warning', icon: AlertTriangle, label: 'Degraded' },
+		Stale: { badge: 'm3-tone-chip border m3-tone--warning', icon: Clock, label: 'Stale' },
+		Down: { badge: 'm3-tone-chip border m3-tone--error', icon: XCircle, label: 'Down' }
 	};
 
 	const healthStateStyles: Record<string, string> = {
-		Healthy: 'bg-green-100 text-green-800',
-		Degraded: 'bg-amber-100 text-amber-800',
-		Stale: 'bg-orange-100 text-orange-800',
-		Down: 'bg-red-100 text-red-800'
+		Healthy: 'm3-tone-chip border m3-tone--success',
+		Degraded: 'm3-tone-chip border m3-tone--warning',
+		Stale: 'm3-tone-chip border m3-tone--warning',
+		Down: 'm3-tone-chip border m3-tone--error'
 	};
 
 	const workerStatusStyles: Record<string, string> = {
-		Running: 'bg-green-100 text-green-800',
-		Stopped: 'bg-gray-100 text-gray-800',
-		Error: 'bg-red-100 text-red-800'
+		Running: 'm3-tone-chip border m3-tone--success',
+		Stopped: 'm3-tone-chip border m3-tone--neutral',
+		Error: 'm3-tone-chip border m3-tone--error'
 	};
 
 	function overallCfg(s: string) {
-		return overallStyles[s] ?? { badge: 'bg-gray-100 text-gray-800', icon: Clock, label: s };
+		return overallStyles[s] ?? { badge: 'm3-tone-chip border m3-tone--neutral', icon: Clock, label: s };
 	}
 
 	// ---- Formatting ----
@@ -205,14 +205,14 @@
 						<p class="text-xs text-muted-foreground">Advisory Lock</p>
 						<div class="flex items-center gap-1">
 							{#if status.instance.advisoryLockHeld}
-								<Shield class="h-4 w-4 text-green-600" />
-								<span class="text-sm font-medium text-green-700">Held</span>
+								<Shield class="h-4 w-4 text-[var(--success)]" />
+								<span class="text-sm font-medium text-[var(--success)]">Held</span>
 							{:else}
-								<ShieldAlert class="h-4 w-4 text-red-600" />
-								<span class="text-sm font-medium text-red-700">Not held</span>
+								<ShieldAlert class="h-4 w-4 text-[var(--m3c-error)]" />
+								<span class="text-sm font-medium text-[var(--m3c-error)]">Not held</span>
 							{/if}
 							{#if status.instance.lockContested}
-								<span class="ml-1 text-xs text-amber-700">(contested at startup)</span>
+								<span class="ml-1 text-xs text-[var(--warning)]">(contested at startup)</span>
 							{/if}
 						</div>
 					</div>
@@ -261,7 +261,7 @@
 						</p>
 						{#if worker.lastErrorMessage}
 							<button
-								class="mt-2 block w-full truncate text-left text-xs text-red-600 hover:underline"
+								class="mt-2 block w-full truncate text-left text-xs text-[var(--m3c-error)] hover:underline"
 								onclick={() => showErrorModal(worker)}
 							>
 								{worker.lastErrorMessage}

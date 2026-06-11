@@ -4,52 +4,76 @@
 
 	/**
 	 * Default semantic color map keyed by status string.
-	 * Values are Tailwind class strings applied on top of `variant="outline"`.
+	 *
+	 * Values compose the app.css tone recipes (`m3-tone-chip` + a `m3-tone--*`
+	 * modifier): the tone var flips with the active mode, so one class string is
+	 * correct in BOTH dark and light. Don't add raw Tailwind palette literals
+	 * (bg-green-100 / dark:text-green-400 ...) here — they're tuned for one mode
+	 * and wash out in the other.
+	 *
+	 * Lifecycle hue mapping (rental analog of the EdiPlatform phase hues):
+	 *   success = money-in / completed states · info = scheduled / in-flight ·
+	 *   warning = partial / needs-attention · error = overdue / blocked ·
+	 *   primary(violet) = review / held-in-trust · neutral = drafts & archive.
 	 */
+	const TONE = {
+		success: 'm3-tone-chip border m3-tone--success',
+		info: 'm3-tone-chip border m3-tone--info',
+		warning: 'm3-tone-chip border m3-tone--warning',
+		error: 'm3-tone-chip border m3-tone--error',
+		primary: 'm3-tone-chip border m3-tone--primary',
+		neutral: 'bg-muted text-muted-foreground border-border'
+	} as const;
+
 	const DEFAULT_MAP: Record<string, { label?: string; class: string }> = {
 		// Positive / active
-		Active:    { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		Paid:      { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		Approved:  { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		Completed: { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		Done:      { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
+		Active: { class: TONE.success },
+		Paid: { class: TONE.success },
+		Approved: { class: TONE.success },
+		Completed: { class: TONE.success },
+		Done: { class: TONE.success },
+		Confirmed: { class: TONE.success },
+		Cleared: { class: TONE.success },
+		Matched: { class: TONE.success },
+		Signed: { class: TONE.success },
+		Resolved: { class: TONE.success },
 		// Informational / in-progress
-		Pending:   { class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
-		Scheduled: { class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
-		InProgress: { label: 'In Progress', class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
-		Review:    { class: 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800' },
+		Pending: { class: TONE.info },
+		Scheduled: { class: TONE.info },
+		InProgress: { label: 'In Progress', class: TONE.info },
+		Open: { class: TONE.info },
+		Reviewing: { class: TONE.info },
+		Returned: { class: TONE.info },
+		New: { class: TONE.info },
+		// Work-order priorities (Low/Normal stay calm on purpose)
+		Low: { class: TONE.neutral },
+		Normal: { class: TONE.neutral },
+		High: { class: TONE.warning },
+		Emergency: { class: TONE.error },
+		// Review / held in trust (deposits) — violet reads as "set aside / not income"
+		Review: { class: TONE.primary },
+		Held: { class: TONE.primary },
 		// Warning / partial
-		Partial:   { class: 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-500 dark:border-yellow-800' },
-		Late:      { class: 'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800' },
-		Waived:    { class: 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-500 dark:border-yellow-800' },
-		OnHold:    { label: 'On Hold', class: 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-500 dark:border-yellow-800' },
-		PendingSignature: { label: 'Pending Signature', class: 'bg-yellow-100 text-yellow-800 border-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-500 dark:border-yellow-800' },
+		Partial: { class: TONE.warning },
+		Late: { class: TONE.warning },
+		Waived: { class: TONE.warning },
+		OnHold: { label: 'On Hold', class: TONE.warning },
+		PendingSignature: { label: 'Pending Signature', class: TONE.warning },
+		Expired: { class: TONE.warning },
 		// Negative / alert
-		Overdue:   { class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' },
-		Cancelled: { class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' },
-		Blocked:   { class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' },
-		Declined:  { class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' },
-		Rejected:  { class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' },
-		Failed:    { class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' },
-		NoShow:    { label: 'No Show', class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800' },
-		// Positive (extra)
-		Confirmed: { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		Cleared:   { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		Matched:   { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		Signed:    { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		Open:      { class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
-		Reviewing: { class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
-		Resolved:  { class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-400 dark:border-green-800' },
-		// Held in trust (deposits) — purple to read as "set aside / not income"
-		Held:      { class: 'bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/30 dark:text-purple-400 dark:border-purple-800' },
-		Returned:  { class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800' },
+		Overdue: { class: TONE.error },
+		Cancelled: { class: TONE.error },
+		Blocked: { class: TONE.error },
+		Declined: { class: TONE.error },
+		Rejected: { class: TONE.error },
+		Failed: { class: TONE.error },
+		NoShow: { label: 'No Show', class: TONE.error },
 		// Neutral
-		Draft:     { class: 'bg-muted text-muted-foreground border-border' },
-		Archived:  { class: 'bg-muted text-muted-foreground border-border' },
-		Inactive:  { class: 'bg-muted text-muted-foreground border-border' },
-		Dismissed: { class: 'bg-muted text-muted-foreground border-border' },
-		Closed:    { class: 'bg-muted text-muted-foreground border-border' },
-		Expired:   { class: 'bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-900/30 dark:text-orange-400 dark:border-orange-800' },
+		Draft: { class: TONE.neutral },
+		Archived: { class: TONE.neutral },
+		Inactive: { class: TONE.neutral },
+		Dismissed: { class: TONE.neutral },
+		Closed: { class: TONE.neutral }
 	};
 
 	let {
@@ -66,9 +90,7 @@
 	const effectiveMap = $derived({ ...DEFAULT_MAP, ...(map ?? {}) });
 	const entry = $derived(effectiveMap[status]);
 	const label = $derived(entry?.label ?? status);
-	const colorClass = $derived(
-		entry?.class ?? 'bg-muted text-muted-foreground border-border'
-	);
+	const colorClass = $derived(entry?.class ?? TONE.neutral);
 </script>
 
 <Badge

@@ -45,18 +45,18 @@
 				role="radio"
 				aria-checked={n === (value ?? 0)}
 				aria-label="{n} {n === 1 ? 'star' : 'stars'}"
-				class="rounded p-0.5 text-muted-foreground transition-colors hover:text-yellow-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				class="rounded p-0.5 text-muted-foreground transition-colors hover:text-[var(--warning)] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 				data-testid="{testid}-star-{n}"
 				onclick={() => setValue(n)}
 			>
-				<Star class={cn(sizeClass, n <= (value ?? 0) ? 'fill-yellow-400 text-yellow-400' : '')} />
+				<Star class={cn(sizeClass, n <= (value ?? 0) ? 'fill-[var(--warning)] text-[var(--warning)]' : '')} />
 			</button>
 		{/each}
 	</div>
 {:else}
 	<span class={cn('inline-flex items-center gap-0.5', className)} data-testid={testid} aria-label="{rounded} of {max} stars">
 		{#each Array(max) as _, i (i)}
-			<Star class={cn(sizeClass, i < rounded ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground/40')} />
+			<Star class={cn(sizeClass, i < rounded ? 'fill-[var(--warning)] text-[var(--warning)]' : 'text-muted-foreground/40')} />
 		{/each}
 	</span>
 {/if}

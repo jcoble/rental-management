@@ -18,19 +18,19 @@
 	const draftStatusMap: Record<string, { label?: string; class: string }> = {
 		Pending: {
 			label: 'Reading…',
-			class: 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800'
+			class: 'm3-tone-chip border m3-tone--warning'
 		},
 		Processing: {
 			label: 'Reading…',
-			class: 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800'
+			class: 'm3-tone-chip border m3-tone--warning'
 		},
 		Reviewing: {
 			label: 'Ready to review',
-			class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800'
+			class: 'm3-tone-chip border m3-tone--info'
 		},
 		Confirmed: {
 			label: 'Lease created',
-			class: 'bg-green-100 text-green-800 border-green-200 dark:bg-green-900/30 dark:text-green-300 dark:border-green-800'
+			class: 'm3-tone-chip border m3-tone--success'
 		},
 		Rejected: {
 			label: 'Skipped',
@@ -38,7 +38,7 @@
 		},
 		Failed: {
 			label: 'Could not read',
-			class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800'
+			class: 'm3-tone-chip border m3-tone--error'
 		}
 	};
 
