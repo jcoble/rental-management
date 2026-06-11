@@ -2,17 +2,17 @@ name: Deploy
 
 # Production deploy for rc.coblesolutions.com.
 #
-# Triggers (never on a plain push to a branch — that only runs CI):
-#   • Push a version tag  ->  git tag v1.2.3 && git push --tags   (deploys that exact commit)
+# Triggers (tags are retired):
+#   • Every push to main (incl. PR merges) deploys that commit.
 #   • Manual              ->  Actions ▸ Deploy ▸ Run workflow      (optionally paste a SHA/ref)
 #
-# Model: build api/engine/web in GitHub Actions, push to GHCR, then the box only PULLS and
-# restarts (it never compiles — see deploy/docker-compose.prod.yml). Migrations self-apply on
-# boot under a shared Postgres advisory lock.
+# Model: build api/engine/web on the self-hosted build box, push to GHCR, then the prod box
+# only PULLS and restarts (it never compiles — see deploy/docker-compose.prod.yml).
+# Migrations self-apply on boot under a shared Postgres advisory lock.
 
 on:
   push:
-    tags: ["v*"]
+    branches: ["main"]
   workflow_dispatch:
     inputs:
       ref:
