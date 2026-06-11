@@ -40,6 +40,11 @@ jobs:
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
+        env:
+          # Self-hosted runner: install into the runner's own tool cache
+          # (user-owned, persists across runs) instead of /usr/share/dotnet,
+          # which the runner user can't write.
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
