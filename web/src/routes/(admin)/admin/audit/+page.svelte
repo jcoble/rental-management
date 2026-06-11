@@ -108,7 +108,7 @@
 	<div class="mb-4 flex items-center justify-between">
 		<div>
 			<h1 class="flex items-center gap-2 text-2xl font-bold">
-				<ShieldAlert class="h-5 w-5 text-amber-500" />
+				<ShieldAlert class="h-5 w-5 text-[var(--warning)]" />
 				Audit — forensic
 			</h1>
 			<p class="text-sm text-muted-foreground">

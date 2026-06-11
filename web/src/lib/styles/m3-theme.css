@@ -1,6 +1,7 @@
 /* Generated M3 theme - seed #A36BFF (landing violet), TonalSpot, dark default.
-   Keep generated M3 color roles, with dense app UI overrides noted in gen-m3-theme.mjs.
-   Regenerate: node gen-m3-theme.mjs (do not hand-edit). */
+   Accent pins: secondary=cyan (#22d3ee seed), tertiary=amber (#f59e0b seed) - see gen-m3-theme.mjs.
+   This file is the SINGLE source of truth for --m3c scheme roles (app.css no longer duplicates them).
+   Regenerate: node scripts/gen-m3-theme.mjs (do not hand-edit). */
 :root,
 :root.dark,
 :root[data-theme="dark"],
@@ -30,24 +31,24 @@
   --m3c-on-primary-fixed: #240e45;
   --m3c-on-primary-fixed-variant: #513c73;
   --m3c-inverse-primary: #69548d;
-  --m3c-secondary: #cec2db;
-  --m3c-secondary-dim: #eadef7;
-  --m3c-on-secondary: #342d40;
-  --m3c-secondary-container: #4b4357;
-  --m3c-on-secondary-container: #eadef7;
-  --m3c-secondary-fixed: #eadef7;
-  --m3c-secondary-fixed-dim: #cec2db;
-  --m3c-on-secondary-fixed: #1f182a;
-  --m3c-on-secondary-fixed-variant: #4b4357;
-  --m3c-tertiary: #8bd8ee;
-  --m3c-tertiary-dim: #72c5dc;
-  --m3c-on-tertiary: #003640;
-  --m3c-tertiary-container: #174f5d;
-  --m3c-on-tertiary-container: #c6f2ff;
-  --m3c-tertiary-fixed: #c6f2ff;
-  --m3c-tertiary-fixed-dim: #8bd8ee;
-  --m3c-on-tertiary-fixed: #001f27;
-  --m3c-on-tertiary-fixed-variant: #174f5d;
+  --m3c-secondary: #2fd9f4;
+  --m3c-secondary-dim: #00cbe6;
+  --m3c-on-secondary: #00363e;
+  --m3c-secondary-container: #004e5a;
+  --m3c-on-secondary-container: #a2eeff;
+  --m3c-secondary-fixed: #a2eeff;
+  --m3c-secondary-fixed-dim: #2fd9f4;
+  --m3c-on-secondary-fixed: #001f25;
+  --m3c-on-secondary-fixed-variant: #004e5a;
+  --m3c-tertiary: #ffb95f;
+  --m3c-tertiary-dim: #fea619;
+  --m3c-on-tertiary: #472a00;
+  --m3c-tertiary-container: #653e00;
+  --m3c-on-tertiary-container: #ffddb8;
+  --m3c-tertiary-fixed: #ffddb8;
+  --m3c-tertiary-fixed-dim: #ffb95f;
+  --m3c-on-tertiary-fixed: #2a1700;
+  --m3c-on-tertiary-fixed-variant: #653e00;
   --m3c-error: #ffb4ab;
   --m3c-error-dim: #ff554a;
   --m3c-on-error: #690005;
@@ -58,10 +59,10 @@
   --m3c-on-on-primary: #bea5e5;
   --m3c-primary-container-subtle: #432e65;
   --m3c-on-primary-container-subtle: #cab1f1;
-  --m3c-secondary-container-subtle: #3d3649;
-  --m3c-on-secondary-container-subtle: #c3b8d0;
-  --m3c-tertiary-container-subtle: #113f49;
-  --m3c-on-tertiary-container-subtle: #a8dce9;
+  --m3c-secondary-container-subtle: #00424c;
+  --m3c-on-secondary-container-subtle: #5de6ff;
+  --m3c-tertiary-container-subtle: #563400;
+  --m3c-on-tertiary-container-subtle: #ffcb8e;
   --m3c-error-container-subtle: #790006;
   --m3c-on-error-container-subtle: #ffa49a;
 }
@@ -94,24 +95,24 @@
   --m3c-on-primary-fixed: #240e45;
   --m3c-on-primary-fixed-variant: #513c73;
   --m3c-inverse-primary: #d4bbfc;
-  --m3c-secondary: #635b70;
-  --m3c-secondary-dim: #574f64;
+  --m3c-secondary: #006877;
+  --m3c-secondary-dim: #005b68;
   --m3c-on-secondary: #ffffff;
-  --m3c-secondary-container: #eadef7;
-  --m3c-on-secondary-container: #4b4357;
-  --m3c-secondary-fixed: #eadef7;
-  --m3c-secondary-fixed-dim: #cec2db;
-  --m3c-on-secondary-fixed: #1f182a;
-  --m3c-on-secondary-fixed-variant: #4b4357;
-  --m3c-tertiary: #006878;
-  --m3c-tertiary-dim: #005b69;
+  --m3c-secondary-container: #a2eeff;
+  --m3c-on-secondary-container: #004e5a;
+  --m3c-secondary-fixed: #a2eeff;
+  --m3c-secondary-fixed-dim: #00bcd5;
+  --m3c-on-secondary-fixed: #001f25;
+  --m3c-on-secondary-fixed-variant: #004e5a;
+  --m3c-tertiary: #855300;
+  --m3c-tertiary-dim: #754900;
   --m3c-on-tertiary: #ffffff;
-  --m3c-tertiary-container: #a7eeff;
-  --m3c-on-tertiary-container: #004e5b;
-  --m3c-tertiary-fixed: #a7eeff;
-  --m3c-tertiary-fixed-dim: #82d3e5;
-  --m3c-on-tertiary-fixed: #001f27;
-  --m3c-on-tertiary-fixed-variant: #004e5b;
+  --m3c-tertiary-container: #ffddb8;
+  --m3c-on-tertiary-container: #653e00;
+  --m3c-tertiary-fixed: #ffddb8;
+  --m3c-tertiary-fixed-dim: #ee9800;
+  --m3c-on-tertiary-fixed: #2a1700;
+  --m3c-on-tertiary-fixed-variant: #653e00;
   --m3c-error: #ba1a1a;
   --m3c-error-dim: #a80710;
   --m3c-on-error: #ffffff;
@@ -122,10 +123,10 @@
   --m3c-on-on-primary: #6d5891;
   --m3c-primary-container-subtle: #e5d2ff;
   --m3c-on-primary-container-subtle: #57427a;
-  --m3c-secondary-container-subtle: #e1d5ef;
-  --m3c-on-secondary-container-subtle: #51495e;
-  --m3c-tertiary-container-subtle: #d5f7ff;
-  --m3c-on-tertiary-container-subtle: #005b69;
+  --m3c-secondary-container-subtle: #d4f7ff;
+  --m3c-on-secondary-container-subtle: #005b68;
+  --m3c-tertiary-container-subtle: #ffeede;
+  --m3c-on-tertiary-container-subtle: #754900;
   --m3c-error-container-subtle: #ffcfc9;
   --m3c-on-error-container-subtle: #9e000b;
 }

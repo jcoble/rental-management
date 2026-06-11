@@ -26,9 +26,9 @@
 
 	function severityBorderClass(severity: BriefingBullet['severity']): string {
 		switch (severity) {
-			case 'critical': return 'border-l-red-500';
-			case 'warning':  return 'border-l-amber-500';
-			default:         return 'border-l-blue-400';
+			case 'critical': return 'border-l-[var(--m3c-error)]';
+			case 'warning':  return 'border-l-[var(--warning)]';
+			default:         return 'border-l-[var(--info)]';
 		}
 	}
 
@@ -39,11 +39,11 @@
 	function severityBadgeClass(severity: BriefingBullet['severity']): string {
 		switch (severity) {
 			case 'critical':
-				return 'border-red-300 bg-red-50 text-red-700 dark:border-red-700 dark:bg-red-900/20 dark:text-red-300';
+				return 'm3-tone-chip border m3-tone--error';
 			case 'warning':
-				return 'border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300';
+				return 'm3-tone-chip border m3-tone--warning';
 			default:
-				return 'border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300';
+				return 'm3-tone-chip border m3-tone--info';
 		}
 	}
 
@@ -135,9 +135,9 @@
 	</div>
 
 	{#if llmUnavailable}
-		<div class="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200" data-testid="ai-unavailable-banner">
+		<div class="m3-warning-surface mb-4 rounded-lg px-4 py-3 text-sm" data-testid="ai-unavailable-banner">
 			<strong>AI is off</strong> — no API key is configured. Set
-			<code class="rounded bg-amber-100 px-1 dark:bg-amber-900/40">Assistant:ApiKey</code>
+			<code class="rounded bg-[color-mix(in_srgb,var(--warning)_18%,transparent)] px-1">Assistant:ApiKey</code>
 			to enable the assistant. The daily briefing bullets below still work without it.
 		</div>
 	{/if}
@@ -197,7 +197,7 @@
 
 					{#if briefing.bullets.length === 0}
 						<div class="flex flex-col items-center justify-center py-10 text-center" data-testid="briefing-empty">
-							<p class="text-sm font-medium text-green-600 dark:text-green-400">All clear — nothing needs attention today.</p>
+							<p class="text-sm font-medium text-[var(--success)]">All clear — nothing needs attention today.</p>
 							<p class="mt-1 text-xs text-muted-foreground">Check back tomorrow for your next briefing.</p>
 						</div>
 					{:else}

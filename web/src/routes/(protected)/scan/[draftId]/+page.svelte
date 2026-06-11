@@ -394,14 +394,14 @@
 		switch (status) {
 			case 'Pending':
 			case 'Processing':
-				return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 border-amber-200 dark:border-amber-800';
+				return 'm3-tone-chip border m3-tone--warning';
 			case 'Reviewing':
-				return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 border-blue-200 dark:border-blue-800';
+				return 'm3-tone-chip border m3-tone--info';
 			case 'Confirmed':
-				return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300 border-green-200 dark:border-green-800';
+				return 'm3-tone-chip border m3-tone--success';
 			case 'Failed':
 			case 'Rejected':
-				return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300 border-red-200 dark:border-red-800';
+				return 'm3-tone-chip border m3-tone--error';
 			default:
 				return '';
 		}
@@ -695,7 +695,7 @@
 		{#if confirmedRecord}
 			<!-- design#11: keep context after confirm instead of dumping to /accounting -->
 			<div
-				class="mb-4 flex flex-col gap-3 rounded-lg border border-green-300 bg-green-50 px-4 py-4 text-sm text-green-900 dark:border-green-700 dark:bg-green-900/20 dark:text-green-200 sm:flex-row sm:items-center sm:justify-between"
+				class="mb-4 flex flex-col gap-3 rounded-lg border bg-[var(--m3c-success-container)] text-[var(--m3c-on-success-container)] border-[color-mix(in_srgb,var(--success)_45%,transparent)] px-4 py-4 text-sm sm:flex-row sm:items-center sm:justify-between"
 				data-testid="scan-confirm-success"
 			>
 				<div class="flex items-center gap-3">
@@ -717,7 +717,7 @@
 			     to the created (editable) record instead of leaving a disabled Confirm button as the
 			     only signpost. The draft stays an immutable, read-only summary below. -->
 			<div
-				class="mb-4 flex flex-col gap-3 rounded-lg border border-green-300 bg-green-50 px-4 py-4 text-sm text-green-900 dark:border-green-700 dark:bg-green-900/20 dark:text-green-200 sm:flex-row sm:items-center sm:justify-between"
+				class="mb-4 flex flex-col gap-3 rounded-lg border bg-[var(--m3c-success-container)] text-[var(--m3c-on-success-container)] border-[color-mix(in_srgb,var(--success)_45%,transparent)] px-4 py-4 text-sm sm:flex-row sm:items-center sm:justify-between"
 				data-testid="scan-already-confirmed"
 			>
 				<div class="flex items-center gap-3">
@@ -738,7 +738,7 @@
 
 		{#if data.status === 'Failed'}
 			<!-- L7: clear "couldn't read this" message; Confirm disabled, Reject available -->
-			<div class="mb-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-700 dark:bg-red-900/20 dark:text-red-300" data-testid="scan-failed-banner">
+			<div class="mb-4 rounded-lg px-4 py-3 text-sm m3-error-surface" data-testid="scan-failed-banner">
 				<strong>We couldn't read this document.</strong> The computer wasn't able to pull out the details automatically.
 				You can <strong>Reject</strong> it to clear it from your list, then try scanning a clearer photo or PDF.
 			</div>
@@ -767,10 +767,10 @@
 		{/if}
 
 		{#if data.modelId === 'noop'}
-			<div class="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200" data-testid="scan-noop-banner">
+			<div class="mb-4 rounded-lg px-4 py-3 text-sm m3-warning-surface" data-testid="scan-noop-banner">
 				<strong>AI extraction is off.</strong> No OpenAI API key is configured, so this document's fields
 				weren't filled in automatically. Enter them manually below, or set
-				<code class="rounded bg-amber-100 px-1 dark:bg-amber-900/40">Assistant:ApiKey</code> and re-scan.
+				<code class="rounded bg-[var(--m3c-warning-container)] px-1">Assistant:ApiKey</code> and re-scan.
 			</div>
 		{/if}
 
@@ -838,7 +838,7 @@
 						<!-- Lease selector — required for Payment drafts -->
 						<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
 							<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-select">
-								Which lease is this payment for? <span class="text-red-500">*</span>
+								Which lease is this payment for? <span class="text-[var(--m3c-error)]">*</span>
 							</label>
 							<Select.Root type="single" bind:value={selectedLeaseId}>
 								<Select.Trigger id="scan-lease-select" data-testid="scan-lease-select" class="w-full">
@@ -863,7 +863,7 @@
 						<div class="mb-5 space-y-3 rounded-md border border-border bg-muted/30 p-3" data-testid="scan-lease-selectors">
 							<div>
 								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-property-select">
-									Which property is this lease for? <span class="text-red-500">*</span>
+									Which property is this lease for? <span class="text-[var(--m3c-error)]">*</span>
 								</label>
 								<Select.Root type="single" bind:value={selectedLeasePropertyId}>
 									<Select.Trigger id="scan-lease-property-select" data-testid="scan-lease-property-select" class="w-full">
@@ -886,7 +886,7 @@
 
 							<div>
 								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-unit-select">
-									Which unit? <span class="text-red-500">*</span>
+									Which unit? <span class="text-[var(--m3c-error)]">*</span>
 								</label>
 								<Select.Root type="single" bind:value={selectedLeaseUnitId} disabled={!selectedLeasePropertyId}>
 									<Select.Trigger id="scan-lease-unit-select" data-testid="scan-lease-unit-select" class="w-full">
@@ -907,7 +907,7 @@
 								{:else if leaseUnitsQuery.isLoading}
 									<p class="mt-1 text-xs text-muted-foreground">Loading units…</p>
 								{:else if (leaseUnitsQuery.data?.length ?? 0) === 0}
-									<p class="mt-1 text-xs text-amber-600 dark:text-amber-400">This property has no units yet. Add a unit before creating the lease.</p>
+									<p class="mt-1 text-xs text-[var(--warning)]">This property has no units yet. Add a unit before creating the lease.</p>
 								{/if}
 							</div>
 
@@ -949,7 +949,7 @@
 												{term.label}
 											</label>
 											{#if field && level !== 'high'}
-												<span class="text-xs {level === 'low' ? 'text-red-500' : 'text-muted-foreground'}">
+												<span class="text-xs {level === 'low' ? 'text-[var(--m3c-error)]' : 'text-muted-foreground'}">
 													{confidenceLabel(field.confidence)}
 												</span>
 											{/if}
@@ -968,7 +968,7 @@
 						<!-- Property selector for Expense/WorkOrder drafts (sends propertyId override) -->
 						<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
 							<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-property-select">
-								Which property is this for? {#if isWorkOrder}<span class="text-red-500">*</span>{:else}<span class="font-normal text-muted-foreground">(optional)</span>{/if}
+								Which property is this for? {#if isWorkOrder}<span class="text-[var(--m3c-error)]">*</span>{:else}<span class="font-normal text-muted-foreground">(optional)</span>{/if}
 							</label>
 							<Select.Root type="single" bind:value={selectedPropertyId}>
 								<Select.Trigger id="scan-property-select" data-testid="scan-property-select" class="w-full">
@@ -989,7 +989,7 @@
 								<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
 							{/if}
 							{#if isWorkOrder && selectedPropertyId === NO_PROPERTY}
-								<p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Select a property to create this work order.</p>
+								<p class="mt-1 text-xs text-[var(--warning)]">Select a property to create this work order.</p>
 							{/if}
 						</div>
 					{/if}
@@ -1053,7 +1053,7 @@
 														{field.name.replace(/_/g, ' ')}
 													</label>
 													{#if level !== 'high'}
-														<span class="text-xs {level === 'low' ? 'text-red-500' : 'text-muted-foreground'}">
+														<span class="text-xs {level === 'low' ? 'text-[var(--m3c-error)]' : 'text-muted-foreground'}">
 															{confidenceLabel(field.confidence)}
 														</span>
 													{/if}
@@ -1180,12 +1180,12 @@
 										<div class="mt-2 flex items-center justify-between px-1 text-xs">
 											<span class="text-muted-foreground">Line items total</span>
 											<span
-												class="font-mono tabular-nums {lineItemsMismatch ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}"
+												class="font-mono tabular-nums {lineItemsMismatch ? 'text-[var(--warning)]' : 'text-foreground'}"
 												data-testid="scan-line-items-total"
 											>${formatMoney(lineItemsTotal)}</span>
 										</div>
 										{#if lineItemsMismatch}
-											<p class="mt-1 px-1 text-xs text-amber-600 dark:text-amber-400" data-testid="scan-line-items-mismatch">
+											<p class="mt-1 px-1 text-xs text-[var(--warning)]" data-testid="scan-line-items-mismatch">
 												These rows add up to ${formatMoney(lineItemsTotal)}, but the subtotal is ${formatMoney(subtotalAmount)}.
 												That can be fine (tax, tip, fees) — just double-check before confirming.
 											</p>
@@ -1253,25 +1253,25 @@
 							</Button>
 						</div>
 						{#if amountInvalid && !isTerminal && !isProcessing}
-							<p class="text-center text-xs text-red-500" data-testid="scan-amount-error">
+							<p class="text-center text-xs text-[var(--m3c-error)]" data-testid="scan-amount-error">
 								Enter an amount greater than $0 (under "total") before confirming.
 							</p>
 						{/if}
 						{#if isPayment && !selectedLeaseId && !isTerminal && !isProcessing}
-							<p class="text-center text-xs text-amber-600 dark:text-amber-400">Select a lease above to enable payment creation.</p>
+							<p class="text-center text-xs text-[var(--warning)]">Select a lease above to enable payment creation.</p>
 						{/if}
 						{#if isWorkOrder && selectedPropertyId === NO_PROPERTY && !isTerminal && !isProcessing}
-							<p class="text-center text-xs text-amber-600 dark:text-amber-400">Select a property above to enable work order creation.</p>
+							<p class="text-center text-xs text-[var(--warning)]">Select a property above to enable work order creation.</p>
 						{/if}
 						{#if leaseSelectionInvalid && !isTerminal && !isProcessing}
-							<p class="text-center text-xs text-amber-600 dark:text-amber-400" data-testid="scan-lease-selection-error">Pick a property and a unit above to create this lease.</p>
+							<p class="text-center text-xs text-[var(--warning)]" data-testid="scan-lease-selection-error">Pick a property and a unit above to create this lease.</p>
 						{/if}
 						{#if data.status === 'Failed' && !isTerminal}
 							<p class="text-center text-xs text-muted-foreground">Couldn't read this document — enter the amount manually, or reject it.</p>
 						{/if}
 						{#if data.status === 'Confirmed' && !confirmedRecord && !alreadyConfirmed}
 							<!-- Confirmed but we don't know which record to link to (no createdEntityId) — note only. -->
-							<p class="text-center text-xs text-green-600 dark:text-green-400">
+							<p class="text-center text-xs text-[var(--success)]">
 								This scan has already been confirmed.
 							</p>
 						{/if}

@@ -181,12 +181,12 @@
 				<p class="mt-1 text-sm text-muted-foreground">Unread from management</p>
 			</a>
 			<div class="rounded-lg border border-border bg-card p-4">
-				<div class="mb-3 flex items-center gap-2 text-amber-500"><AlertTriangle class="h-4 w-4" /><span class="text-sm font-medium">Overdue</span></div>
+				<div class="mb-3 flex items-center gap-2 text-[var(--warning)]"><AlertTriangle class="h-4 w-4" /><span class="text-sm font-medium">Overdue</span></div>
 				<p class="text-3xl font-semibold">{money(balance.overdue ?? 0)}</p>
 				<p class="mt-1 text-sm text-muted-foreground">{overduePayments.length} overdue item{overduePayments.length === 1 ? '' : 's'}</p>
 			</div>
 			<div class="rounded-lg border border-border bg-card p-4">
-				<div class="mb-3 flex items-center gap-2 text-emerald-500"><CreditCard class="h-4 w-4" /><span class="text-sm font-medium">Next Rent</span></div>
+				<div class="mb-3 flex items-center gap-2 text-[var(--success)]"><CreditCard class="h-4 w-4" /><span class="text-sm font-medium">Next Rent</span></div>
 				<p class="text-3xl font-semibold">{nextRentDays === null ? '-' : nextRentDays}</p>
 				<p class="mt-1 text-sm text-muted-foreground">
 					{#if nextPayment}
@@ -197,7 +197,7 @@
 				</p>
 			</div>
 			<a href="/portal/maintenance" class="rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/40">
-				<div class="mb-3 flex items-center gap-2 text-red-500"><Wrench class="h-4 w-4" /><span class="text-sm font-medium">Maintenance</span></div>
+				<div class="mb-3 flex items-center gap-2 text-[var(--m3c-error)]"><Wrench class="h-4 w-4" /><span class="text-sm font-medium">Maintenance</span></div>
 				<p class="text-3xl font-semibold">{openWorkOrders.length}</p>
 				<p class="mt-1 text-sm text-muted-foreground">Open requests</p>
 			</a>

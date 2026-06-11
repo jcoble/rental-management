@@ -1,0 +1,7 @@
+allowBuilds:
+  esbuild: true
+# pnpm settings home (pnpm 9+ reads overrides here; pnpm 11 no longer reads
+# package.json#pnpm.overrides). Dockerfile.web COPYs this file — keep it next
+# to package.json/pnpm-lock.yaml or frozen installs drift between local and CI.
+overrides:
+  svelte-toolbelt: 0.10.6

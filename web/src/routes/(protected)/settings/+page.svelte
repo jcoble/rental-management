@@ -750,7 +750,7 @@
 				updateMutation.mutate();
 			}} disabled={updateMutation.isPending}>Save Settings</Button>
 				{#if saveSucceeded && !updateMutation.isPending}
-					<span class="text-xs text-green-600">Settings saved successfully.</span>
+					<span class="text-xs text-[var(--success)]">Settings saved successfully.</span>
 				{/if}
 			</div>
 		</Card.Content>

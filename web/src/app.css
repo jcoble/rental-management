@@ -12,44 +12,12 @@
   --m3-color-scheme: dark;
   --app-color-scheme: dark;
 
-  /* M3 tonal surface roles — refined dark neutrals (matches the generated
-     m3-theme.css §2.2). True dark surfaces so operational screens don't inherit a
-     rose/lavender wash from the violet seed. The m3-theme import (loaded from the
-     root layout, after this file) defines the same tokens; these are repeated here
-     and under `.dark` to keep the app shell deterministic. */
-  --m3c-surface: #121217;
-  --m3c-surface-dim: #121217;
-  --m3c-surface-bright: #3a3a42;
-  --m3c-surface-container-lowest: #0d0d11;
-  --m3c-surface-container-low: #1a1a20;
-  --m3c-surface-container: #202026;
-  --m3c-surface-container-high: #2a2a31;
-  --m3c-surface-container-highest: #363640;
-  --m3c-on-surface: #f2f0f7;
-  --m3c-on-surface-variant: #cbc7d2;
-  --m3c-outline: #948f9c;
-  --m3c-outline-variant: #494750;
-  --m3c-inverse-surface: #e7e4ed;
-  --m3c-inverse-on-surface: #303038;
-  --m3c-primary: #d4bbfc;
-  --m3c-on-primary: #3a255b;
-  --m3c-primary-container: #513c73;
-  --m3c-on-primary-container: #ecdcff;
-  --m3c-secondary: #cec2db;
-  --m3c-on-secondary: #342d40;
-  --m3c-secondary-container: #4b4357;
-  --m3c-on-secondary-container: #eadef7;
-  /* Tertiary = cool teal/cyan (overridden away from the seed's warm default) so
-     warm/coral stays reserved for the error/validation role. */
-  --m3c-tertiary: #8bd8ee;
-  --m3c-on-tertiary: #003640;
-  --m3c-tertiary-container: #174f5d;
-  --m3c-on-tertiary-container: #c6f2ff;
-  --m3c-error: #ffb4ab;
-  --m3c-on-error: #690005;
-  --m3c-error-container: #93000a;
-  --m3c-on-error-container: #ffdad6;
-
+  /* M3 `--m3c-*` scheme roles (surfaces, primary/secondary/tertiary/error) live
+     ONLY in the generated src/lib/styles/m3-theme.css — single source of truth,
+     loaded from the root layout in the same CSS bundle as this file. This file
+     owns app EXTENSIONS only: shadcn aliases, semantic colors, tinted families,
+     pattern colors, control/border-strength knobs. (The old duplicated role sets
+     here were dead — m3-theme.css always won the cascade — and drifted.) */
   --app-text-primary: #f7f7fb;
   --app-text-secondary: #c6c3cb;
   --app-text-tertiary: #a8a3ae;
@@ -97,7 +65,7 @@
   --sidebar-border: var(--m3c-outline-variant);
   --sidebar-ring: var(--m3c-primary);
 
-  --success: #34d399;
+  --success: #45dfa4; /* emerald seed t80 — softer than the old #34d399 neon in dark */
   --success-foreground: #052e16;
   --warning: #f59e0b;
   --warning-foreground: #451a03;
@@ -119,16 +87,27 @@
   --m3c-pattern-overlay: color-mix(in srgb, var(--m3c-surface-container-high) 88%, transparent);
   --m3c-pattern-scrim: color-mix(in srgb, var(--m3c-surface) 22%, transparent);
   --m3-readonly-field-bg: color-mix(in srgb, var(--m3c-surface-container-highest) 86%, var(--m3c-primary-container));
-  /* Control (input) surface tokens — dark: flat tinted, no shadow. */
-  --m3-control-bg: color-mix(in srgb, var(--m3c-surface-container-highest) 88%, var(--m3c-surface-container-high));
+  /* Control (input) surface tokens — dark: flat, faintly violet-washed so
+     fields read as interactive against plain containers (TSK-162). */
+  --m3-control-bg: color-mix(in srgb, var(--m3c-surface-container-highest) 82%, var(--m3c-primary-container));
   --m3-control-bg-hover: var(--m3c-surface-container-highest);
-  --m3-control-border: color-mix(in srgb, var(--m3c-outline-variant) 84%, transparent);
+  --m3-control-border: color-mix(in srgb, var(--m3c-outline) 38%, transparent);
   --m3-control-shadow: none;
   --m3-card-border-strength: 0%;
   --m3-card-hover-border-strength: 0%;
-  --m3-tonal-border-strength: 30%;
+  --m3-tonal-border-strength: 42%;
   --m3-tonal-plain-border-strength: 0%;
   --m3-data-border-strength: 0%;
+
+  /* Teal + coral accent families (app extensions; tones via TonalPalette —
+     teal seed #2dd4bf, coral seed #ff7a8a). Teal carries units/inventory hues;
+     coral is the error-adjacent warm family (tonal coral card, alerts). */
+  --accent-teal: #3cddc7;
+  --m3c-teal-container: #005047;
+  --m3c-on-teal-container: #62fae3;
+  --accent-coral: #ff8794;
+  --m3c-coral-container: #861e32;
+  --m3c-on-coral-container: #ffdadb;
 
   /* Material 3 shape scale.
      NOTE: shape, the full M3 type scale, near-zero elevation, and the spring/
@@ -185,49 +164,15 @@
 }
 
 /* Light mode override. ModeWatcher adds `light` to <html>; dark is the default
-   (:root, no class). The generated m3-theme.css (loaded after this file from the
-   root layout) owns the canonical light `--m3c-*` color roles via its higher-
-   specificity `:root.light` selector — those §2.2 values (near-white #fdf9ff page,
-   whiter container tiers, cool-teal tertiary) are the source of truth. The roles
-   below are aligned to match and also provide the tinted families, pattern colors,
-   border-strength knobs, semantic light colors, and light elevation, which
-   m3-theme.css does not define. */
+   (:root, no class). The generated m3-theme.css owns the canonical light
+   `--m3c-*` color roles via its `:root.light` selector (near-white #fdf9ff page
+   with a brighter card tier, pinned cyan secondary / amber tertiary) — single
+   source of truth, no role duplicates here. This block provides the tinted
+   families, pattern colors, border-strength knobs, semantic light colors, and
+   light elevation, which m3-theme.css does not define. */
 .light {
   --m3-color-scheme: light;
   --app-color-scheme: light;
-  /* Light surface ramp: card tier (container-low) is BRIGHTER than the page so
-     white-ish cards pop off a faintly tinted page (Cloud Console feel). */
-  --m3c-surface: #fdf9ff;
-  --m3c-surface-dim: #e4ddee;
-  --m3c-surface-bright: #fffbff;
-  --m3c-surface-container-lowest: #ffffff;
-  --m3c-surface-container-low: #f7f1fb;
-  --m3c-surface-container: #f1eaf7;
-  --m3c-surface-container-high: #ebe3f2;
-  --m3c-surface-container-highest: #e4dbee;
-  --m3c-on-surface: #18181b;
-  --m3c-on-surface-variant: #52525b;
-  --m3c-outline: #71717a;
-  --m3c-outline-variant: #d4d4d8;
-  --m3c-inverse-surface: #322f35;
-  --m3c-inverse-on-surface: #f5eef7;
-  --m3c-primary: #69548d;
-  --m3c-on-primary: #ffffff;
-  --m3c-primary-container: #ecdcff;
-  --m3c-on-primary-container: #513c73;
-  --m3c-secondary: #635b70;
-  --m3c-on-secondary: #ffffff;
-  --m3c-secondary-container: #eadef7;
-  --m3c-on-secondary-container: #4b4357;
-  /* Tertiary = cool teal (matches the generated cool-teal tertiary). */
-  --m3c-tertiary: #006878;
-  --m3c-on-tertiary: #ffffff;
-  --m3c-tertiary-container: #a7eeff;
-  --m3c-on-tertiary-container: #004e5b;
-  --m3c-error: #ba1a1a;
-  --m3c-on-error: #ffffff;
-  --m3c-error-container: #ffdad6;
-  --m3c-on-error-container: #93000a;
 
   --app-text-primary: #18181b;
   --app-text-secondary: #52525b;
@@ -288,6 +233,12 @@
   --m3c-surface-violet-high: #d8d1f2;
   --m3c-surface-coral: #ffe5d8;
   --m3c-surface-coral-high: #ffcdb7;
+  --accent-teal: #006b5f;
+  --m3c-teal-container: #62fae3;
+  --m3c-on-teal-container: #005047;
+  --accent-coral: #a63648;
+  --m3c-coral-container: #ffdadb;
+  --m3c-on-coral-container: #861e32;
   --m3c-pattern-a: #7f67be;
   --m3c-pattern-b: #3aa99e;
   --m3c-pattern-c: #d66f93;
@@ -513,7 +464,7 @@
     --m3-pattern-bg: var(--m3c-surface-mint, var(--m3c-surface-container));
     --m3c-pattern-a: var(--m3c-success-container);
     --m3c-pattern-b: var(--accent-cyan);
-    --m3c-pattern-c: var(--m3c-tertiary-container);
+    --m3c-pattern-c: var(--m3c-secondary-container);
     --m3c-pattern-d: var(--m3c-warning-container);
   }
 
@@ -529,7 +480,7 @@
     --m3-pattern-bg: var(--m3c-surface-sky, var(--m3c-surface-container));
     --m3c-pattern-a: var(--accent-cyan);
     --m3c-pattern-b: var(--m3c-primary-container);
-    --m3c-pattern-c: var(--m3c-tertiary-container);
+    --m3c-pattern-c: var(--m3c-secondary-container);
     --m3c-pattern-d: var(--m3c-info-container);
   }
 
@@ -562,7 +513,7 @@
     --m3-pattern-bg: var(--m3c-surface-rose, var(--m3c-surface-container));
     --m3c-pattern-a: var(--m3c-surface-violet-high, var(--m3c-primary-container));
     --m3c-pattern-b: var(--m3c-surface-sky-high, var(--m3c-info-container));
-    --m3c-pattern-c: var(--m3c-surface-rose-high, var(--m3c-tertiary-container));
+    --m3c-pattern-c: var(--m3c-surface-rose-high, var(--m3c-coral-container));
     --m3c-pattern-d: var(--m3c-surface-mint-high, var(--m3c-success-container));
   }
 
@@ -765,7 +716,7 @@
   .m3-expressive-card--warning {
     --m3-expressive-bg: var(--m3c-surface-amber, var(--m3c-surface-container-low));
     --m3-card-accent-a: var(--m3c-warning-container);
-    --m3-card-accent-b: var(--m3c-tertiary-container);
+    --m3-card-accent-b: var(--m3c-secondary-container);
     --m3-card-accent-c: var(--m3c-primary-container);
   }
 
@@ -778,7 +729,7 @@
 
   .m3-expressive-card--rose {
     --m3-expressive-bg: var(--m3c-surface-rose, var(--m3c-surface-container-low));
-    --m3-card-accent-a: var(--m3c-tertiary-container);
+    --m3-card-accent-a: var(--m3c-secondary-container);
     --m3-card-accent-b: var(--m3c-primary-container);
     --m3-card-accent-c: var(--m3c-warning-container);
   }
@@ -807,7 +758,7 @@
     width: min(48%, 12rem);
     border-radius: var(--m3-shape-full);
     background:
-      radial-gradient(circle at 52% 50%, transparent 0 18%, color-mix(in srgb, var(--m3-card-accent-a, var(--m3c-tertiary-container)) 58%, transparent) 19% 26%, transparent 27% 34%, color-mix(in srgb, var(--m3-card-accent-b, var(--m3c-primary-container)) 54%, transparent) 35% 46%, transparent 47%),
+      radial-gradient(circle at 52% 50%, transparent 0 18%, color-mix(in srgb, var(--m3-card-accent-a, var(--m3c-secondary-container)) 58%, transparent) 19% 26%, transparent 27% 34%, color-mix(in srgb, var(--m3-card-accent-b, var(--m3c-primary-container)) 54%, transparent) 35% 46%, transparent 47%),
       radial-gradient(circle at 28% 22%, color-mix(in srgb, var(--m3-card-accent-c, var(--m3c-warning-container)) 50%, transparent) 0 20%, transparent 21%);
   }
 
@@ -984,8 +935,9 @@
     isolation: isolate;
     overflow: hidden;
     --m3-art-image: none;
-    /* Dark default: a subtle haze, not a bright pastel patch. */
-    --m3-art-opacity: 0.24;
+    /* Dark default: visible art, not a rumor (TSK-162 push — 0.24 read as
+       near-invisible on calibrated samples). */
+    --m3-art-opacity: 0.3;
     --m3-art-size: 148% auto;
     --m3-art-position: right -8% top -28%;
     --m3-art-scrim-from: var(--m3c-surface-container);
@@ -1039,10 +991,14 @@
     transform: translate3d(-1.5%, 1.5%, 0) scale(1.03);
   }
 
+  /* Hero/band art uses cover sizing: percentage/auto sizing exposed the image's
+     own bottom/left edges as hard seams at unpredictable viewport widths
+     (TSK-162 round-3 — at some widths the art vanished entirely, at others a
+     straight cut line crossed the band). cover can never expose an edge. */
   .m3-surface-art--hero {
-    --m3-art-opacity: 0.32;
-    --m3-art-size: 130% auto;
-    --m3-art-position: right -6% top -32%;
+    --m3-art-opacity: 0.5;
+    --m3-art-size: cover;
+    --m3-art-position: right center;
   }
 
   .m3-surface-art--quiet {
@@ -1050,13 +1006,30 @@
     --m3-art-size: 150% auto;
   }
 
-  /* Thin header strips: art biased to the right edge, vertically centered, over a
-     primary-tinted wash so the band reads as color even where the art is faint. */
+  /* Thin header strips: art covers the whole strip (no edge can show regardless
+     of image aspect or viewport width), right-biased, over a violet-washed scrim
+     + a touch of saturation so the image reads as color while copy stays on the
+     scrimmed side. */
   .m3-surface-art--band {
-    --m3-art-opacity: 0.3;
-    --m3-art-size: auto 280%;
-    --m3-art-position: right -2% center;
-    --m3-art-scrim-from: color-mix(in srgb, var(--m3c-surface-container) 86%, var(--m3c-primary-container));
+    --m3-art-opacity: 0.52;
+    --m3-art-size: cover;
+    --m3-art-position: right center;
+    --m3-art-scrim-from: color-mix(in srgb, var(--m3c-surface-container) 72%, var(--m3c-primary-container));
+  }
+  /* Vertical bleed: the layer is ~70% taller than the strip, so cover computes
+     against a taller box and the image gains vertical overscan. */
+  .m3-surface-art--band::before {
+    inset: -35% 0;
+    filter: saturate(1.15);
+  }
+
+  /* Feather the art's left edge. The source images end in a hard vertical line
+     that reads as a seam (worst in dark mode and at in-between viewport widths);
+     a left-fade mask blends the image into the band/hero at every width. */
+  .m3-surface-art--band::before,
+  .m3-surface-art--hero::before {
+    -webkit-mask-image: linear-gradient(to right, transparent 4%, rgb(0 0 0 / 0.55) 32%, black 58%);
+    mask-image: linear-gradient(to right, transparent 4%, rgb(0 0 0 / 0.55) 32%, black 58%);
   }
 
   /* Light mode: restore the brighter pastel + the lighter scrim source. */
@@ -1068,7 +1041,6 @@
   :root.light .m3-surface-art--hero,
   .light .m3-surface-art--hero {
     --m3-art-opacity: 0.92;
-    --m3-art-size: 130% auto;
   }
   :root.light .m3-surface-art--quiet,
   .light .m3-surface-art--quiet {
@@ -1078,6 +1050,11 @@
   .light .m3-surface-art--band {
     --m3-art-opacity: 0.95;
     --m3-art-scrim-from: color-mix(in srgb, var(--m3c-surface-container-low) 84%, var(--m3c-primary-container));
+  }
+  /* The saturation boost is a dark-mode treatment only. */
+  :root.light .m3-surface-art--band::before,
+  .light .m3-surface-art--band::before {
+    filter: none;
   }
 
   .m3-art-01 { --m3-art-image: url("/patterns/bg-01.webp"); }
@@ -1191,6 +1168,94 @@
 
   .m3-order-tab-panel[hidden] {
     display: none !important;
+  }
+
+  /* Error surface — readable banner recipe (TSK-162 port). Replaces the ad-hoc
+     translucent `bg-destructive/10 + text-destructive` combo, which stacked into
+     illegible red-on-red in dark mode. The error-container pair guarantees
+     contrast in both modes. */
+  .m3-error-surface {
+    background: var(--m3c-error-container-subtle, var(--m3c-error-container));
+    color: var(--m3c-on-error-container-subtle, var(--m3c-on-error-container));
+    border: 1px solid color-mix(in srgb, var(--m3c-error) 45%, transparent);
+  }
+
+  /* Warning surface — sibling of .m3-error-surface. Amber pair in BOTH modes;
+     literal amber-800-on-amber-50 banners read as red in light mode. */
+  .m3-warning-surface {
+    background: color-mix(in srgb, var(--m3c-warning-container) 58%, var(--m3c-surface-container-low));
+    color: var(--m3c-on-warning-container);
+    border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  }
+
+  /* Tone chips / pills / icons — mode-adaptive semantic status colors. These
+     replace literal Tailwind palette sets (text-green-300, bg-blue-100, ...)
+     which are tuned for one mode and wash out in the other. Compose a shape
+     class with a .m3-tone--<tone> modifier; --tn resolves per mode because the
+     semantic vars themselves flip. */
+  .m3-tone-chip {
+    background: color-mix(in srgb, var(--tn) 12%, transparent);
+    border-color: color-mix(in srgb, var(--tn) 42%, transparent);
+    color: var(--tn);
+  }
+  .m3-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border-radius: var(--m3-shape-full, 999px);
+    border: 1px solid color-mix(in srgb, var(--tn) 42%, transparent);
+    background: color-mix(in srgb, var(--tn) 12%, transparent);
+    color: var(--tn);
+    padding: 2px 10px;
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 1.6;
+    white-space: nowrap;
+  }
+  .m3-tone-icon {
+    display: grid;
+    place-items: center;
+    border-radius: var(--m3-shape-full, 999px);
+    background: color-mix(in srgb, var(--tn) 15%, var(--m3c-surface-container));
+    color: var(--tn);
+  }
+  .m3-tone-line {
+    background: color-mix(in srgb, var(--tn) 38%, transparent);
+  }
+  .m3-tone-text {
+    color: var(--tn);
+  }
+  .m3-tone--success { --tn: var(--success); }
+  .m3-tone--info { --tn: var(--info); }
+  .m3-tone--warning { --tn: var(--warning); }
+  .m3-tone--error { --tn: var(--m3c-error); }
+  .m3-tone--primary { --tn: var(--m3c-primary); }
+  .m3-tone--neutral { --tn: var(--m3c-outline); }
+
+  /* Readonly/display field surface — lighter field on the tinted card,
+     generalized for read-mode inline fields and display values. */
+  .m3-readonly-surface {
+    background: var(--m3-readonly-field-bg, var(--m3c-surface-container-lowest));
+    border: 1px solid color-mix(in srgb, var(--m3c-outline-variant) 60%, transparent);
+    border-radius: var(--m3-shape-medium, 12px);
+    padding: 7px 11px;
+  }
+
+  /* List row — clickable rows inside tonal cards. surface-container-lowest gives
+     light mode real row definition (white rows on the lavender card) and dark a
+     subtle inset; hover gets a violet lift so rows read as clickable. */
+  .m3-list-row {
+    background: var(--m3c-surface-container-lowest);
+    border: 1px solid color-mix(in srgb, var(--m3c-outline-variant) 70%, transparent);
+    transition:
+      background-color var(--m3-motion-duration-short-3, 150ms) var(--m3-motion-easing-standard, ease),
+      border-color var(--m3-motion-duration-short-3, 150ms) var(--m3-motion-easing-standard, ease),
+      transform var(--m3-motion-duration-short-3, 150ms) var(--m3-motion-easing-standard, ease);
+  }
+  .m3-list-row:hover {
+    background: color-mix(in srgb, var(--m3c-primary-container) 14%, var(--m3c-surface-container-lowest));
+    border-color: color-mix(in srgb, var(--m3c-primary) 30%, var(--m3c-outline-variant));
+    transform: translateY(-1px);
   }
 }
 
@@ -1346,7 +1411,7 @@
     --m3-tonal-bg: var(--m3c-surface-rose, color-mix(in srgb, var(--destructive) 7%, var(--card)));
     --m3-tonal-border: color-mix(in srgb, var(--destructive) 38%, var(--m3c-outline-variant));
     --m3-tonal-accent: var(--m3c-surface-rose-high, var(--m3c-error-container));
-    --m3-tonal-art: radial-gradient(circle at 54% 48%, color-mix(in srgb, var(--m3-tonal-accent) 70%, transparent) 0 28%, transparent 29% 37%, color-mix(in srgb, var(--m3c-tertiary-container) 44%, transparent) 38% 50%, transparent 51%), radial-gradient(circle at 20% 24%, color-mix(in srgb, var(--m3c-primary-container) 34%, transparent) 0 20%, transparent 21%);
+    --m3-tonal-art: radial-gradient(circle at 54% 48%, color-mix(in srgb, var(--m3-tonal-accent) 70%, transparent) 0 28%, transparent 29% 37%, color-mix(in srgb, var(--m3c-secondary-container) 44%, transparent) 38% 50%, transparent 51%), radial-gradient(circle at 20% 24%, color-mix(in srgb, var(--m3c-primary-container) 34%, transparent) 0 20%, transparent 21%);
     --m3-tonal-shape: var(--m3-shape-full);
   }
 
@@ -1357,11 +1422,13 @@
     --m3-tonal-art: radial-gradient(ellipse 50% 36% at 62% 34%, color-mix(in srgb, var(--m3-tonal-accent) 72%, transparent) 0 56%, transparent 57%), radial-gradient(ellipse 38% 54% at 28% 78%, color-mix(in srgb, var(--m3c-info-container) 42%, transparent) 0 48%, transparent 49%);
   }
 
+  /* Coral card keeps its own warm-coral family (tertiary is amber after the
+     accent pin; deriving coral from tertiary would duplicate the amber card). */
   .m3-tonal-card--coral {
-    --m3-tonal-bg: var(--m3c-surface-coral, color-mix(in srgb, var(--m3c-tertiary) 8%, var(--card)));
-    --m3-tonal-border: color-mix(in srgb, var(--m3c-tertiary) 32%, var(--m3c-outline-variant));
-    --m3-tonal-accent: var(--m3c-surface-coral-high, var(--m3c-tertiary-container));
-    --m3-tonal-art: radial-gradient(ellipse 54% 40% at 66% 34%, color-mix(in srgb, var(--m3-tonal-accent) 66%, transparent) 0 56%, transparent 57%), radial-gradient(circle at 20% 78%, color-mix(in srgb, var(--m3c-surface-sky-high) 36%, transparent) 0 22%, transparent 23%);
+    --m3-tonal-bg: var(--m3c-surface-coral, color-mix(in srgb, var(--accent-coral) 8%, var(--card)));
+    --m3-tonal-border: color-mix(in srgb, var(--accent-coral) 32%, var(--m3c-outline-variant));
+    --m3-tonal-accent: var(--m3c-surface-coral-high, var(--m3c-coral-container));
+    --m3-tonal-art: radial-gradient(ellipse 54% 40% at 66% 34%, color-mix(in srgb, var(--m3-tonal-accent) 66%, transparent) 0 56%, transparent 57%), radial-gradient(circle at 20% 78%, color-mix(in srgb, var(--m3c-surface-sky-high, var(--m3c-info-container)) 36%, transparent) 0 22%, transparent 23%);
   }
 }
 
@@ -1706,4 +1773,40 @@
   ::-webkit-scrollbar-thumb:hover {
     background: var(--m3c-outline);
   }
+}
+
+/* Page navigation — M3 "fade through" (View Transitions API, wired via
+   onNavigate in the root layout): outgoing page fades quickly, incoming page
+   fades in while drifting up. The default UA cross-fade was imperceptible. */
+@keyframes m3-vt-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes m3-vt-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+::view-transition-old(root) {
+  animation: m3-vt-out 95ms cubic-bezier(0.3, 0, 0.8, 0.15) both;
+}
+::view-transition-new(root) {
+  animation: m3-vt-in 240ms 70ms var(--m3-motion-easing-emphasized-decelerate, cubic-bezier(0.05, 0.7, 0.1, 1)) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}
+
+/* Invalid fields get a red tint, not just the shadcn aria-invalid border.
+   Unlayered on purpose so it beats layered Tailwind utilities. */
+input[aria-invalid='true'],
+textarea[aria-invalid='true'],
+select[aria-invalid='true'],
+[data-slot='select-trigger'][aria-invalid='true'] {
+  background-color: color-mix(in srgb, var(--m3c-error) 9%, var(--m3c-surface-container-lowest));
 }

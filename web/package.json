@@ -51,10 +51,5 @@
 		"marked": "^17.0.1",
 		"svelte-dnd-action": "^0.9.69",
 		"zod": "^4.3.6"
-	},
-	"pnpm": {
-		"overrides": {
-			"svelte-toolbelt": "0.10.6"
-		}
 	}
 }
