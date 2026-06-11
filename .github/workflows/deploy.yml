@@ -32,7 +32,7 @@ env:
 jobs:
   build-push:
     name: Build & push images (GHCR)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
       packages: write
@@ -101,7 +101,7 @@ jobs:
   deploy:
     name: Pull & restart on prod box
     needs: build-push
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     permissions:
       contents: read
       packages: read
