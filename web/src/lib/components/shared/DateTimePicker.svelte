@@ -107,7 +107,6 @@
 			min={minDate}
 			max={maxDate}
 			testid={testid ? `${testid}-date` : undefined}
-			placeholder="Pick a date"
 		/>
 	</div>
 	<input
