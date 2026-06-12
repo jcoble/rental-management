@@ -53,11 +53,10 @@ class AuthUser {
 /// Mirrors `LoginResponse` from `RentalCommand.Api/DTOs/AuthDTOs.cs`.
 ///
 /// The refresh token is NOT in this response body — the API sets it as an
-/// httpOnly cookie (`rc_refresh_token`). The mobile client reads the cookie
-/// from the Set-Cookie response header to persist it in secure storage.
-///
-/// TODO(api): Add a body-based refresh parameter so mobile doesn't need to
-/// replicate cookie behaviour. Track with API team.
+/// httpOnly cookie (`rc_refresh_token`). The mobile client reads the rotated
+/// token from the `Set-Cookie` response header to persist it in secure storage.
+/// (Refresh requests now *send* the token in a JSON body, so only the rotated
+/// token still relies on the Set-Cookie channel.)
 class LoginResponse {
   const LoginResponse({
     required this.accessToken,
