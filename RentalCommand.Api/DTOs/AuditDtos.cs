@@ -5,6 +5,24 @@ using RentalCommand.Core.Enums;
 namespace RentalCommand.Api.DTOs;
 
 /// <summary>
+/// One sanitized, landlord-safe field change inside an <see cref="AuditEntryResponse"/>: a friendly
+/// field name with its formatted old → new values (e.g. <c>Amount</c>, <c>$32,423</c> → <c>$23,423</c>).
+/// Built server-side from the raw old/new JSON by <see cref="AuditDiffBuilder"/>; never carries raw
+/// JSON, IP, or PII. The unredacted JSON stays on the Admin-only forensic DTO.
+/// </summary>
+public sealed class AuditFieldChange
+{
+    /// <summary>Humanized field label, e.g. "Payment method".</summary>
+    public string Field { get; set; } = string.Empty;
+
+    /// <summary>Formatted prior value, or "—" when there was none.</summary>
+    public string OldValue { get; set; } = string.Empty;
+
+    /// <summary>Formatted new value, or "—" when cleared.</summary>
+    public string NewValue { get; set; } = string.Empty;
+}
+
+/// <summary>
 /// MVP wire shape for one <see cref="AuditLog"/> row in the unified audit viewer. The trail is
 /// append-only, so this is a read-only projection. The raw old/new JSON and IP address are
 /// intentionally NOT exposed here — they belong to the deferred admin deep-view.
@@ -35,7 +53,14 @@ public class AuditEntryResponse
     /// <summary>Stable selector for frontend tests, e.g. <c>audit-1</c>.</summary>
     public string TestId => $"audit-{Id}";
 
-    public static AuditEntryResponse FromEntity(AuditLog e, AuditDescriber describer) => new()
+    /// <summary>
+    /// Sanitized field-level diff for an <c>Updated</c> row (friendly name + old→new), so the History
+    /// card can reveal *what* changed in-place. Empty for Created/Deleted (the description suffices)
+    /// and when no diff builder is supplied.
+    /// </summary>
+    public IReadOnlyList<AuditFieldChange> Changes { get; set; } = Array.Empty<AuditFieldChange>();
+
+    public static AuditEntryResponse FromEntity(AuditLog e, AuditDescriber describer, AuditDiffBuilder? diff = null) => new()
     {
         Id = e.Id,
         PortfolioId = e.PortfolioId,
@@ -47,6 +72,7 @@ public class AuditEntryResponse
         Description = describer.Describe(e),
         DetailHref = BuildDetailHref(e.EntityType, e.EntityId),
         Timestamp = e.Timestamp,
+        Changes = diff?.Build(e) ?? Array.Empty<AuditFieldChange>(),
     };
 
     internal static string ResolveActor(AuditLog e)

@@ -106,6 +106,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<RentalCommand.Core.Interfaces.IAuditScope,
             RentalCommand.Data.Auditing.AuditScope>();
         services.AddSingleton<RentalCommand.Api.Services.Auditing.AuditDescriber>();
+        services.AddSingleton<RentalCommand.Api.Services.Auditing.AuditDiffBuilder>();
         services.AddScoped<IAuditQueryService, AuditQueryService>();
         services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>();
 
