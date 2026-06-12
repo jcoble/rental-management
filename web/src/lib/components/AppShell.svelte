@@ -23,9 +23,6 @@
 		ChevronRight,
 		Menu,
 		X,
-		Receipt,
-		Landmark,
-		FileBarChart,
 		History,
 		BarChart3,
 		MessageSquare,
@@ -33,18 +30,12 @@
 		ClipboardList,
 		Home,
 		BellRing,
-		Rocket,
-		FileSpreadsheet,
-		PiggyBank,
-		Compass,
 		Briefcase,
 		Wallet,
 		Contact,
-		Bot,
 		BookOpen,
 		HelpCircle,
-		Activity,
-		ShieldAlert
+		Activity
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -102,91 +93,79 @@
 		items: NavItem[];
 	};
 
-	// Grouped navigation (TODO #1). Each group is collapsible; the active route's
-	// group auto-expands and open/closed state is remembered per group.
+	// Pinned single links above all groups (IA Wave 1 §4.2): the dashboard + the flagship
+	// "Scan / Add" action, one tap away and outside any group.
+	const pinnedNavItems: NavItem[] = [
+		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
+		{ href: '/scan', label: 'Scan / Add', icon: ScanLine, roles: ['Admin', 'Manager', 'Agent'] }
+	];
+
+	// Grouped navigation (IA Wave 1 §4.2): four landlord-noun groups in frequency order —
+	// Money → Rentals → Work → Inbox. Each group is collapsible; the active route's group
+	// auto-expands and open/closed state is remembered per group.
 	const staffNavGroups: NavGroup[] = [
-		{
-			id: 'overview',
-			label: 'Overview',
-			icon: Compass,
-			items: [
-				{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
-				{ href: '/analytics', label: 'Insights', icon: BarChart3, roles: ['Admin', 'Manager'] }
-			]
-		},
-		{
-			id: 'get-started',
-			label: 'Get Started',
-			icon: Rocket,
-			items: [
-				{ href: '/onboarding', label: 'Setup', icon: Rocket, roles: ['Admin', 'Manager'] },
-				{ href: '/import', label: 'Import Data', icon: FileSpreadsheet, roles: ['Admin', 'Manager'] },
-				{ href: '/scan', label: 'Scan', icon: ScanLine, roles: ['Admin', 'Manager', 'Agent'] }
-			]
-		},
-		{
-			id: 'portfolio',
-			label: 'Portfolio',
-			icon: Briefcase,
-			items: [
-				{ href: '/properties', label: 'Properties', icon: Building, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/tenants', label: 'Tenants', icon: Users, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/leases', label: 'Leases', icon: FileText, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/applications', label: 'Applications', icon: ClipboardList, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/notices', label: 'Notices', icon: MessageSquare, roles: ['Admin', 'Manager', 'Agent'] }
-			]
-		},
-		{
-			id: 'operations',
-			label: 'Operations',
-			icon: Wrench,
-			items: [
-				{ href: '/maintenance', label: 'Maintenance', icon: Wrench, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/appointments', label: 'Appointments', icon: Calendar, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/messages', label: 'Messages', icon: MessageSquare, roles: ['Admin', 'Manager', 'Agent'] }
-			]
-		},
 		{
 			id: 'money',
 			label: 'Money',
 			icon: Wallet,
 			items: [
-				{ href: '/accounting', label: 'Accounting', icon: Calculator, roles: ['Admin', 'Manager'] },
-				{ href: '/reports', label: 'Reports', icon: BarChart3, roles: ['Admin', 'Manager'] },
-				{ href: '/banking', label: 'Banking', icon: Landmark, roles: ['Admin', 'Manager'] },
-				{ href: '/deposits', label: 'Deposits', icon: PiggyBank, roles: ['Admin', 'Manager'] },
-				{ href: '/tax', label: 'Tax', icon: Receipt, roles: ['Admin', 'Manager'] },
-				{ href: '/owners-report', label: 'Owner Reports', icon: FileBarChart, roles: ['Admin', 'Manager'] }
+				{ href: '/accounting', label: 'Money', icon: Calculator, roles: ['Admin', 'Manager'] },
+				{ href: '/reports', label: 'Reports', icon: BarChart3, roles: ['Admin', 'Manager'] }
 			]
 		},
 		{
-			id: 'directory',
-			label: 'Directory',
-			icon: Contact,
-			items: [{ href: '/owners', label: 'Owners & Vendors', icon: BadgeDollarSign, roles: ['Admin', 'Manager'] }]
-		},
-		{
-			id: 'ai',
-			label: 'AI & Help',
-			icon: Bot,
+			id: 'rentals',
+			label: 'Rentals',
+			icon: Briefcase,
 			items: [
-				{ href: '/ai', label: 'AI Assistant', icon: Sparkles, roles: ['Admin', 'Manager', 'Agent'] },
-				{ href: '/docs', label: 'Help & Docs', icon: BookOpen }
+				{ href: '/properties', label: 'Properties', icon: Building, roles: ['Admin', 'Manager', 'Agent'] },
+				{ href: '/tenants', label: 'Tenants', icon: Users, roles: ['Admin', 'Manager', 'Agent'] },
+				{ href: '/leases', label: 'Leases', icon: FileText, roles: ['Admin', 'Manager', 'Agent'] },
+				{ href: '/applications', label: 'Applications', icon: ClipboardList, roles: ['Admin', 'Manager', 'Agent'] }
 			]
 		},
 		{
-			id: 'admin',
-			label: 'Administration',
-			icon: Shield,
+			id: 'work',
+			label: 'Work',
+			icon: Wrench,
 			items: [
-				{ href: '/audit', label: 'Audit', icon: History, roles: ['Admin', 'Manager'] },
-				{ href: '/admin/audit', label: 'Audit (forensic)', icon: ShieldAlert, roles: ['Admin'] },
-				{ href: '/admin/users', label: 'User Access', icon: Shield, roles: ['Admin'] },
-				{ href: '/admin/engine', label: 'Engine Health', icon: Activity, roles: ['Admin'] },
-				{ href: '/settings', label: 'Settings', icon: Settings, roles: ['Admin', 'Manager'] }
+				{ href: '/maintenance', label: 'Maintenance', icon: Wrench, roles: ['Admin', 'Manager', 'Agent'] },
+				{ href: '/appointments', label: 'Appointments', icon: Calendar, roles: ['Admin', 'Manager', 'Agent'] },
+				{ href: '/vendors', label: 'Vendors', icon: Contact, roles: ['Admin', 'Manager'] }
+			]
+		},
+		{
+			id: 'inbox',
+			label: 'Inbox',
+			icon: MessageSquare,
+			items: [
+				{ href: '/messages', label: 'Messages', icon: MessageSquare, roles: ['Admin', 'Manager', 'Agent'] },
+				{ href: '/notices', label: 'Tenant notices', icon: BellRing, roles: ['Admin', 'Manager', 'Agent'] }
 			]
 		}
 	];
+
+	// Bottom rail (IA Wave 1 §4.2): Assistant (ambient), Help, and the Settings hub. The
+	// Settings hub's internal section split is Wave 4 — for now the relocated Administration
+	// entries (Team, Owners, Activity history) live under it as sub-links.
+	const bottomRailItems: NavItem[] = [
+		{ href: '/ai', label: 'Assistant', icon: Sparkles, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/docs', label: 'Help', icon: BookOpen }
+	];
+
+	// Settings hub group (relocated from the old "Administration" group). Owners + Team move
+	// here per §4.3; Engine Health/forensic audit are gone (super-admin shell + Advanced toggle).
+	const settingsGroup: NavGroup = {
+		id: 'settings',
+		label: 'Settings',
+		icon: Settings,
+		items: [
+			{ href: '/settings', label: 'Settings', icon: Settings, roles: ['Admin', 'Manager'] },
+			{ href: '/admin/users', label: 'Team', icon: Shield, roles: ['Admin'] },
+			{ href: '/owners', label: 'Owners', icon: BadgeDollarSign, roles: ['Admin', 'Manager'] },
+			{ href: '/audit', label: 'Activity history', icon: History, roles: ['Admin', 'Manager'] }
+		]
+	};
 
 	// Material Symbols Rounded glyph per nav href. Drives the active outline→fill
 	// morph (the active item flips --msym-fill 0→1). Keyed by href so the existing
@@ -194,43 +173,32 @@
 	// glyph here MUST be in the self-hosted subset (src/lib/styles/material-symbols.css).
 	const navGlyphByHref: Record<string, string> = {
 		'/': 'space_dashboard',
-		'/analytics': 'insights',
-		'/onboarding': 'rocket_launch',
-		'/import': 'upload_file',
 		'/scan': 'document_scanner',
+		'/accounting': 'account_balance_wallet',
+		'/reports': 'summarize',
 		'/properties': 'apartment',
 		'/tenants': 'group',
 		'/leases': 'description',
 		'/applications': 'assignment',
-		'/notices': 'campaign',
 		'/maintenance': 'build',
 		'/appointments': 'event',
+		'/vendors': 'contacts',
 		'/messages': 'forum',
-		'/accounting': 'calculate',
-		'/reports': 'summarize',
-		'/banking': 'account_balance',
-		'/deposits': 'savings',
-		'/tax': 'receipt_long',
-		'/owners-report': 'summarize',
-		'/owners': 'contacts',
+		'/notices': 'campaign',
 		'/ai': 'auto_awesome',
 		'/docs': 'menu_book',
-		'/audit': 'history',
-		'/admin/audit': 'policy',
+		'/settings': 'settings',
 		'/admin/users': 'shield',
-		'/admin/engine': 'monitor_heart',
-		'/settings': 'settings'
+		'/owners': 'account_balance',
+		'/audit': 'history'
 	};
 	// Material Symbols glyph per staff nav group id (collapsible section headers).
 	const navGlyphByGroup: Record<string, string> = {
-		overview: 'explore',
-		'get-started': 'rocket_launch',
-		portfolio: 'work',
-		operations: 'build',
 		money: 'account_balance_wallet',
-		directory: 'contacts',
-		ai: 'smart_toy',
-		admin: 'shield'
+		rentals: 'work',
+		work: 'build',
+		inbox: 'forum',
+		settings: 'settings'
 	};
 
 	let currentUser = $derived(getCurrentUser());
@@ -259,9 +227,28 @@
 			.filter((g) => g.items.length > 0)
 	);
 
+	// Pinned single links (Dashboard, Scan / Add) above the groups.
+	let visiblePinned = $derived.by(() => pinnedNavItems.filter(itemVisible));
+
+	// Bottom-rail standalone links (Assistant, Help).
+	let visibleBottomRail = $derived.by(() => bottomRailItems.filter(itemVisible));
+
+	// Settings hub group filtered to the current user's items (empty → hidden).
+	let visibleSettingsGroup = $derived.by(() => {
+		const items = settingsGroup.items.filter(itemVisible);
+		return items.length > 0 ? { ...settingsGroup, items } : null;
+	});
+
 	// Flat list of every visible nav item (both modes) for title resolution.
 	let allItems = $derived.by(() =>
-		portalUser ? portalNavItems : visibleGroups.flatMap((g) => g.items)
+		portalUser
+			? portalNavItems
+			: [
+					...visiblePinned,
+					...visibleGroups.flatMap((g) => g.items),
+					...visibleBottomRail,
+					...(visibleSettingsGroup?.items ?? [])
+				]
 	);
 
 	function isActive(href: string): boolean {
@@ -275,8 +262,20 @@
 	}
 
 	// --- Collapsible group open/closed state (remembered) -----------------------
-	const STORAGE_KEY = 'rc.nav.groups';
+	// Versioned (…v2) because IA Wave 1 changed the group ids (overview/portfolio/operations/
+	// directory/admin → money/rentals/work/inbox/settings); a stale v1 blob would carry dead ids.
+	const STORAGE_KEY = 'rc.nav.groups.v2';
 	let openGroups = $state<Record<string, boolean>>({});
+
+	// One-time cleanup of the pre-Wave-1 key so it doesn't linger in users' storage.
+	$effect(() => {
+		if (!browser) return;
+		try {
+			localStorage.removeItem('rc.nav.groups');
+		} catch {
+			/* ignore */
+		}
+	});
 
 	$effect(() => {
 		if (!browser) return;
@@ -297,7 +296,8 @@
 	$effect(() => {
 		const next = { ...untrack(() => openGroups) };
 		let changed = false;
-		for (const g of visibleGroups) {
+		const groupsForState = visibleSettingsGroup ? [...visibleGroups, visibleSettingsGroup] : visibleGroups;
+		for (const g of groupsForState) {
 			if (next[g.id] === undefined) {
 				next[g.id] = true;
 				changed = true;
@@ -396,6 +396,84 @@
 	{/if}
 {/snippet}
 
+<!-- A single expanded nav link (used for pinned items, group items, and bottom-rail links). -->
+{#snippet navLink(item: NavItem)}
+	{@const active = isActive(item.href)}
+	{@const glyph = navGlyphByHref[item.href]}
+	<a
+		href={item.href}
+		onclick={handleNavClick}
+		class="m3-nav-link m3-state-layer flex items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
+			{active
+			? 'is-active bg-sidebar-accent font-medium text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
+			: 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'}"
+		data-testid="nav-{item.href.replace('/', '').replace('/', '-') || 'dashboard'}"
+	>
+		{#if glyph}
+			<MaterialSymbol name={glyph} size={20} class="shrink-0 {active ? 'text-primary' : ''}" />
+		{:else}
+			<item.icon class="h-4 w-4 shrink-0 {active ? 'text-primary' : ''}" />
+		{/if}
+		<span class="truncate">{item.label}</span>
+	</a>
+{/snippet}
+
+<!-- A single collapsed-rail nav link (icon only, tooltip on hover). -->
+{#snippet navLinkCollapsed(item: NavItem)}
+	{@const active = isActive(item.href)}
+	{@const glyph = navGlyphByHref[item.href]}
+	<a
+		href={item.href}
+		onclick={handleNavClick}
+		class="m3-nav-link m3-state-layer flex items-center justify-center rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
+			{active
+			? 'is-active bg-sidebar-accent text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
+			: 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'}"
+		aria-label={item.label}
+		data-m3-tooltip={item.label}
+		data-testid="nav-{item.href.replace('/', '').replace('/', '-') || 'dashboard'}"
+	>
+		{#if glyph}
+			<MaterialSymbol name={glyph} size={20} class="shrink-0 {active ? 'text-primary' : ''}" />
+		{:else}
+			<item.icon class="h-4 w-4 shrink-0" />
+		{/if}
+	</a>
+{/snippet}
+
+<!-- An expanded collapsible group (header + its items). -->
+{#snippet navGroup(group: NavGroup)}
+	{@const open = openGroups[group.id] ?? true}
+	<div class="mb-0.5">
+		<button
+			type="button"
+			onclick={() => toggleGroup(group.id)}
+			class="m3-state-layer flex w-full items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70 transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
+			aria-expanded={open}
+			data-testid="nav-group-{group.id}"
+		>
+			{#if navGlyphByGroup[group.id]}
+				<MaterialSymbol name={navGlyphByGroup[group.id]} size={16} class="shrink-0 opacity-70" />
+			{:else}
+				<group.icon class="h-3.5 w-3.5 shrink-0 opacity-70" />
+			{/if}
+			<span class="flex-1 truncate text-left">{group.label}</span>
+			{#if open}
+				<ChevronDown class="h-3.5 w-3.5 shrink-0 opacity-60" />
+			{:else}
+				<ChevronRight class="h-3.5 w-3.5 shrink-0 opacity-60" />
+			{/if}
+		</button>
+		{#if open}
+			<div class="mb-1 ml-2 space-y-0.5 border-l border-sidebar-border pl-2">
+				{#each group.items as item}
+					{@render navLink(item)}
+				{/each}
+			</div>
+		{/if}
+	</div>
+{/snippet}
+
 <div class="flex h-full w-full overflow-hidden bg-background">
 	<!-- Sidebar -->
 	<aside
@@ -452,79 +530,39 @@
 				{/each}
 			{:else if sidebarCollapsed && !isMobile}
 				<!-- Collapsed rail: flat icon list, grouping hidden -->
+				{#each visiblePinned as item}
+					{@render navLinkCollapsed(item)}
+				{/each}
 				{#each visibleGroups as group}
 					{#each group.items as item}
-						{@const active = isActive(item.href)}
-						{@const glyph = navGlyphByHref[item.href]}
-						<a
-							href={item.href}
-							onclick={handleNavClick}
-							class="m3-nav-link m3-state-layer flex items-center justify-center rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
-								{active
-								? 'is-active bg-sidebar-accent text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
-								: 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'}"
-							aria-label={item.label}
-							data-m3-tooltip={item.label}
-							data-testid="nav-{item.href.replace('/', '').replace('/', '-') || 'dashboard'}"
-						>
-							{#if glyph}
-								<MaterialSymbol name={glyph} size={20} class="shrink-0 {active ? 'text-primary' : ''}" />
-							{:else}
-								<item.icon class="h-4 w-4 shrink-0" />
-							{/if}
-						</a>
+						{@render navLinkCollapsed(item)}
 					{/each}
 				{/each}
-			{:else}
-				<!-- Expanded: collapsible groups -->
-				{#each visibleGroups as group}
-					{@const open = openGroups[group.id] ?? true}
-					<div class="mb-0.5">
-						<button
-							type="button"
-							onclick={() => toggleGroup(group.id)}
-							class="m3-state-layer flex w-full items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70 transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
-							aria-expanded={open}
-							data-testid="nav-group-{group.id}"
-						>
-							{#if navGlyphByGroup[group.id]}
-								<MaterialSymbol name={navGlyphByGroup[group.id]} size={16} class="shrink-0 opacity-70" />
-							{:else}
-								<group.icon class="h-3.5 w-3.5 shrink-0 opacity-70" />
-							{/if}
-							<span class="flex-1 truncate text-left">{group.label}</span>
-							{#if open}
-								<ChevronDown class="h-3.5 w-3.5 shrink-0 opacity-60" />
-							{:else}
-								<ChevronRight class="h-3.5 w-3.5 shrink-0 opacity-60" />
-							{/if}
-						</button>
-						{#if open}
-							<div class="mb-1 ml-2 space-y-0.5 border-l border-sidebar-border pl-2">
-								{#each group.items as item}
-									{@const active = isActive(item.href)}
-									{@const glyph = navGlyphByHref[item.href]}
-									<a
-										href={item.href}
-										onclick={handleNavClick}
-										class="m3-nav-link m3-state-layer flex items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
-											{active
-											? 'is-active bg-sidebar-accent font-medium text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
-											: 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'}"
-										data-testid="nav-{item.href.replace('/', '').replace('/', '-') || 'dashboard'}"
-									>
-										{#if glyph}
-											<MaterialSymbol name={glyph} size={20} class="shrink-0 {active ? 'text-primary' : ''}" />
-										{:else}
-											<item.icon class="h-4 w-4 shrink-0 {active ? 'text-primary' : ''}" />
-										{/if}
-										<span class="truncate">{item.label}</span>
-									</a>
-								{/each}
-							</div>
-						{/if}
-					</div>
+				<div class="my-2 border-t border-sidebar-border"></div>
+				{#each visibleBottomRail as item}
+					{@render navLinkCollapsed(item)}
 				{/each}
+				{#if visibleSettingsGroup}
+					{#each visibleSettingsGroup.items as item}
+						{@render navLinkCollapsed(item)}
+					{/each}
+				{/if}
+			{:else}
+				<!-- Expanded: pinned links, then collapsible groups, then bottom rail -->
+				{#each visiblePinned as item}
+					{@render navLink(item)}
+				{/each}
+				<div class="my-2"></div>
+				{#each visibleGroups as group}
+					{@render navGroup(group)}
+				{/each}
+				<div class="my-2 border-t border-sidebar-border"></div>
+				{#each visibleBottomRail as item}
+					{@render navLink(item)}
+				{/each}
+				{#if visibleSettingsGroup}
+					{@render navGroup(visibleSettingsGroup)}
+				{/if}
 			{/if}
 		</nav>
 

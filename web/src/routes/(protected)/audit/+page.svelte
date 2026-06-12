@@ -9,7 +9,12 @@
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
-	import { RefreshCw } from '@lucide/svelte';
+	import { RefreshCw, ShieldAlert } from '@lucide/svelte';
+	import { currentUserIsAdmin } from '$lib/stores/auth.svelte';
+
+	// Forensic ("Advanced") view — IP + raw before/after — is an Admin-only deep-link from this
+	// page rather than its own nav item (F6). The /admin/audit route still exists and is guarded.
+	const showAdvanced = $derived(currentUserIsAdmin());
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -123,26 +128,40 @@
 </script>
 
 <svelte:head>
-	<title>Audit - Rental Command</title>
+	<title>Activity history - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="audit-page">
 	<div class="mb-4 flex items-center justify-between">
 		<div>
-			<h1 class="text-2xl font-bold">Audit</h1>
+			<h1 class="text-2xl font-bold">Activity history</h1>
 			<p class="text-sm text-muted-foreground">A record of every change across your portfolio.</p>
 		</div>
-		<Button
-			variant="outline"
-			size="sm"
-			onclick={refresh}
-			disabled={auditQuery.isFetching}
-			data-testid="audit-refresh"
-			aria-label="Refresh audit trail"
-		>
-			<RefreshCw class="h-3.5 w-3.5 {auditQuery.isFetching ? 'animate-spin' : ''}" />
-			Refresh
-		</Button>
+		<div class="flex items-center gap-2">
+			{#if showAdvanced}
+				<Button
+					variant="outline"
+					size="sm"
+					href="/admin/audit"
+					data-testid="audit-advanced"
+					aria-label="Open the advanced forensic view"
+				>
+					<ShieldAlert class="h-3.5 w-3.5" />
+					Advanced
+				</Button>
+			{/if}
+			<Button
+				variant="outline"
+				size="sm"
+				onclick={refresh}
+				disabled={auditQuery.isFetching}
+				data-testid="audit-refresh"
+				aria-label="Refresh activity history"
+			>
+				<RefreshCw class="h-3.5 w-3.5 {auditQuery.isFetching ? 'animate-spin' : ''}" />
+				Refresh
+			</Button>
+		</div>
 	</div>
 
 	<Card.Root class="gap-0 py-0">

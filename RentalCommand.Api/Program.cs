@@ -46,6 +46,8 @@ builder.Services.Configure<FormOptions>(o => o.MultipartBodyLengthLimit = 64_000
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection(JwtSettings.SectionName));
 builder.Services.Configure<ApiKeySettings>(builder.Configuration.GetSection(ApiKeySettings.SectionName));
 builder.Services.Configure<SeedSettings>(builder.Configuration.GetSection(SeedSettings.SectionName));
+builder.Services.Configure<RentalCommand.Core.Configuration.PlatformAdminOptions>(
+    builder.Configuration.GetSection(RentalCommand.Core.Configuration.PlatformAdminOptions.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.AssistantConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.AssistantConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.UploadSettings>(
@@ -195,7 +197,26 @@ builder.Services.AddAuthentication(options =>
     .AddScheme<ApiKeyAuthenticationOptions, ApiKeyAuthenticationHandler>(
         ApiKeyAuthenticationDefaults.AuthenticationScheme, _ => { });
 
-builder.Services.AddAuthorization();
+// Platform super-admin allowlist (F6 / TSK-212): operator endpoints (Engine Health) are gated
+// by a config email list, not a role. Fail closed when the list is empty.
+var platformAdminEmails = (builder.Configuration
+        .GetSection(RentalCommand.Core.Configuration.PlatformAdminOptions.SectionName)
+        .Get<RentalCommand.Core.Configuration.PlatformAdminOptions>()?.Emails
+        ?? System.Array.Empty<string>())
+    .Select(e => e.Trim())
+    .Where(e => !string.IsNullOrEmpty(e))
+    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("PlatformAdmin", policy =>
+        policy.RequireAssertion(ctx =>
+        {
+            var email = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+                ?? ctx.User.FindFirst("email")?.Value;
+            return email is not null && platformAdminEmails.Contains(email);
+        }));
+});
 
 // --- Auth services ---
 builder.Services.AddHttpClient("GoogleAuth");

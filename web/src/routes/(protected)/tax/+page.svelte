@@ -208,7 +208,7 @@
 								>
 									<td class="py-2 pr-4">
 										<a
-											href="/owners/vendors/{v.vendorId}"
+											href="/vendors/{v.vendorId}"
 											class="font-medium text-primary hover:underline"
 											data-testid="vendor-1099-name-{v.vendorId}"
 										>

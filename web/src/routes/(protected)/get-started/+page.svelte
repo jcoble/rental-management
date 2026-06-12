@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
+	import { browser } from '$app/environment';
 	import { FlaskConical, Rocket, TriangleAlert, Loader2, ArrowRight } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -20,20 +21,39 @@
 		staleTime: 60_000
 	}));
 
+	// Persist the "I've answered this" choice so returning sandbox users skip the fork (F8).
+	const CHOICE_KEY = 'rc.getStarted.choice';
+	function hasMadeChoice(): boolean {
+		if (!browser) return false;
+		try {
+			return localStorage.getItem(CHOICE_KEY) === 'explored';
+		} catch {
+			return false;
+		}
+	}
+
 	// Already Live (or we can't tell) → there's no Sandbox choice to make; go to the dashboard.
 	// Failing forward to the dashboard (rather than showing the "wipe demo & set up" path) is the
 	// safe default for a Live account whose state fetch errored — matches the app's fail-open-to-Live.
+	// Also forward if the user already answered the fork once (persisted choice) — F8.
 	let forwarded = $state(false);
 	$effect(() => {
 		if (forwarded) return;
 		const isSandbox = stateQuery.data?.isSandbox === true;
-		if ((stateQuery.data && !isSandbox) || stateQuery.isError) {
+		if ((stateQuery.data && !isSandbox) || stateQuery.isError || (isSandbox && hasMadeChoice())) {
 			forwarded = true;
 			goto('/');
 		}
 	});
 
 	function exploreSandbox() {
+		if (browser) {
+			try {
+				localStorage.setItem(CHOICE_KEY, 'explored');
+			} catch {
+				/* storage may be unavailable */
+			}
+		}
 		goto('/');
 	}
 
