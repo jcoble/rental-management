@@ -1,10 +1,8 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/files/document_opener.dart';
 import '../accounting/accounting_repository.dart';
 import 'owner_reports_repository.dart';
 
@@ -61,8 +59,8 @@ class _OwnerReportsScreenState extends ConsumerState<OwnerReportsScreen> {
     ref.read(ownerSummariesProvider.notifier).load(year: year);
   }
 
-  /// Fetches the year-end packet PDF bytes (authed), saves to a temp file, and
-  /// opens it with the platform viewer via url_launcher (file:// uri).
+  /// Fetches the year-end packet PDF bytes (authed) and hands them to the OS
+  /// viewer via [DocumentOpener] (FileProvider `content://` URI, share fallback).
   Future<void> _openYearEndPacket(int year) async {
     final messenger = ScaffoldMessenger.of(context);
     messenger
@@ -74,19 +72,11 @@ class _OwnerReportsScreenState extends ConsumerState<OwnerReportsScreen> {
       final bytes = await ref
           .read(accountingRepositoryProvider)
           .yearEndPacketBytes(year);
-      final path = '${Directory.systemTemp.path}/year-end-$year.pdf';
-      final file = File(path);
-      await file.writeAsBytes(bytes, flush: true);
-      final ok = await launchUrl(
-        Uri.file(path),
-        mode: LaunchMode.externalApplication,
+      await DocumentOpener.openBytes(
+        bytes: bytes,
+        fileName: 'year-end-$year.pdf',
       );
       messenger.hideCurrentSnackBar();
-      if (!ok) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('No app available to open the PDF.')),
-        );
-      }
     } on ApiException catch (e) {
       messenger
         ..hideCurrentSnackBar()
