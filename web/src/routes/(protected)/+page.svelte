@@ -470,7 +470,7 @@
 					<p class="text-xs text-muted-foreground">{data.occupancy.occupiedUnits}/{data.occupancy.totalUnits} occupied</p>
 				</Card.Content>
 			</Card.Root>
-			<Card.Root class="m3-tonal-card m3-tonal-card--amber gap-0 py-0">
+			<Card.Root class="m3-tonal-card m3-tonal-card--coral gap-0 py-0">
 				<Card.Content class="p-4">
 					<div class="flex items-center gap-2 text-warning"><AlertTriangle class="h-4 w-4" /> Overdue</div>
 					<p class="mt-2 font-mono tabular-nums text-2xl font-bold">{money(data.accounting.overdueAmount)}</p>
@@ -569,7 +569,7 @@
 
 		<div class="m3-motion-enter grid gap-6 lg:grid-cols-3" style="--m3-motion-index: 5">
 			<div class="space-y-6 lg:col-span-2">
-				<Card.Root class="m3-tonal-card m3-tonal-card--amber gap-0 py-0">
+				<Card.Root class="m3-tonal-card m3-tonal-card--coral gap-0 py-0">
 					<Card.Header class="px-4 pt-4 pb-3">
 						<Card.Title class="text-base font-semibold">Leases Expiring in 60 Days</Card.Title>
 					</Card.Header>

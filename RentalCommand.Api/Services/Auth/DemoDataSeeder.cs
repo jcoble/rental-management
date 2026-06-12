@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
@@ -58,7 +59,11 @@ public class DemoDataSeeder
                 OwnerEntityType = OwnerEntityType.LLC,
                 Name = "Maple Ridge Properties LLC",
                 TaxId = "82-3456789",
-                Address = "1200 Commerce Dr, Columbus, OH 43215",
+                AddressLine1 = "1200 Commerce Dr",
+                City = "Columbus",
+                State = "OH",
+                PostalCode = "43215",
+                Address = AddressComposer.Compose("1200 Commerce Dr", null, "Columbus", "OH", "43215"),
                 Phone = "614-555-0100",
                 CreatedAt = now,
                 UpdatedAt = now
@@ -69,7 +74,11 @@ public class DemoDataSeeder
                 OwnerEntityType = OwnerEntityType.Person,
                 Name = "Robert J. Caldwell",
                 TaxId = "XXX-XX-7890",
-                Address = "88 Westview Ct, Gahanna, OH 43230",
+                AddressLine1 = "88 Westview Ct",
+                City = "Gahanna",
+                State = "OH",
+                PostalCode = "43230",
+                Address = AddressComposer.Compose("88 Westview Ct", null, "Gahanna", "OH", "43230"),
                 Phone = "614-555-0101",
                 CreatedAt = now,
                 UpdatedAt = now
