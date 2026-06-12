@@ -13,12 +13,14 @@ import 'token_store.dart';
 /// Endpoints (all under /api/v1/auth):
 ///   POST /login   — body: { email, password }; response: LoginResponse
 ///   GET  /me      — bearer-authenticated; response: UserDto
-///   POST /logout  — clears server-side refresh token (cookie-based)
-///   POST /refresh — cookie-based only (no body option)
+///   POST /logout  — clears server-side refresh token
+///   POST /refresh — body: { refreshToken } (mobile) or cookie (web); the
+///                   refresh itself lives in [AuthInterceptor]
 ///
-/// TODO(api): The refresh endpoint reads the refresh token exclusively from
-/// an httpOnly cookie. Add a request body field so mobile clients don't need
-/// to manually craft a Cookie header.
+/// The refresh endpoint accepts the refresh token in a JSON body, so the mobile
+/// client no longer crafts a Cookie header for it (see [AuthInterceptor]). The
+/// logout call below still sends the cookie header — `/auth/logout` reads only
+/// the cookie; a body field there is a separate, lower-priority follow-up.
 class AuthRepository {
   AuthRepository({required Dio dio, required TokenStore tokenStore})
     : _dio = dio,

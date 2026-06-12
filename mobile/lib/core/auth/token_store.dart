@@ -11,11 +11,10 @@ const _keyRefreshToken = 'rc_refresh_token';
 /// refresh endpoint directly. On the web the refresh token lives in an httpOnly
 /// cookie; on mobile we store it in the OS secure enclave (Keychain / Keystore).
 ///
-/// NOTE: The refresh endpoint (`POST /api/v1/auth/refresh`) reads the refresh
-/// token exclusively from an httpOnly cookie — there is no body-based option.
-/// Mobile must send the refresh token as a cookie header manually.
-/// TODO(api): Add a body-based refresh parameter so mobile doesn't need to
-/// replicate cookie behaviour. Track with API team.
+/// NOTE: The refresh endpoint (`POST /api/v1/auth/refresh`) accepts the refresh
+/// token in a JSON body (`{ refreshToken }`), so mobile sends the stored token
+/// in the body rather than crafting a cookie header. The rotated token comes
+/// back via `Set-Cookie` (the response body still omits it).
 class TokenStore {
   TokenStore(this._storage);
 
