@@ -193,7 +193,12 @@
 					{/each}
 				</div>
 			{/if}
-			<RangeCalendar value={rangeValue} onValueChange={handleValueChange} numberOfMonths={2} />
+			<RangeCalendar
+				value={rangeValue}
+				onValueChange={handleValueChange}
+				numberOfMonths={2}
+				captionLayout="dropdown"
+			/>
 		</div>
 	</Popover.Content>
 </Popover.Root>
