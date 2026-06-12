@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'core/auth/auth_controller.dart';
+import 'core/push/push_service.dart';
 import 'core/realtime/signalr_service.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
@@ -43,6 +44,11 @@ class _AppStartupState extends ConsumerState<_AppStartup> {
         // auth state; a command that arrives before login simply waits in the
         // one-slot bus until HomeShell mounts.
         ref.read(voiceLinkServiceProvider).start();
+        // Initialize push (FCM + local notifications). Fail-soft: with no
+        // Firebase config the app runs normally with push disabled. A tap that
+        // cold-starts the app before auth restore stashes its route in the
+        // pending-push bus, drained once authenticated (see HomeShell).
+        ref.read(pushServiceProvider).init();
       }
     });
   }
