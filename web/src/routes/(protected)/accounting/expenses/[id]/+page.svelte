@@ -319,6 +319,24 @@
 		{/if}
 	</div>
 
+	{#if editing && Object.keys(formErrors).length > 0}
+		<!-- Belt-and-suspenders: if Save fails validation on a field whose inline control is
+		     hidden or unwired, this banner guarantees the user sees *something* — Save can
+		     never silently no-op (TSK-198). -->
+		<div
+			class="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+			data-testid="expense-detail-form-errors"
+			role="alert"
+		>
+			<p class="font-medium">Please fix the highlighted fields before saving:</p>
+			<ul class="mt-1 list-disc pl-5">
+				{#each Object.values(formErrors) as message}
+					<li>{message}</li>
+				{/each}
+			</ul>
+		</div>
+	{/if}
+
 	{#if expenseQuery.isLoading}
 		<div class="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">Loading expense...</div>
 	{:else if !expense}
@@ -327,7 +345,7 @@
 		<div class="grid gap-6 lg:grid-cols-2">
 			<DetailCard title="Expense" icon={ReceiptText} accent="primary" testid="expense-card-main" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Description" bind:value={form.description} display={expense.description} {editing} error={formErrors.description} testid="expense-detail-description" class="sm:col-span-2" />
-				<InlineField label="Amount" bind:value={form.amount} display={`$${expense.amount}`} {editing} error={formErrors.amount} testid="expense-detail-amount" />
+				<InlineField label="Amount" bind:value={form.amount} display={`$${expense.amount}`} {editing} type="number" error={formErrors.amount} testid="expense-detail-amount" />
 				<InlineField label="Status" bind:value={form.status} display={expense.status} {editing} type="select" options={statusOptions} testid="expense-detail-status" />
 				{@render dateField({ label: 'Incurred date', value: form.incurredAt, setValue: (v) => (form.incurredAt = v), display: new Date(expense.incurredAt).toLocaleDateString(), error: formErrors.incurredAt, testid: 'expense-detail-incurred' })}
 				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: expense.dueDate ? new Date(expense.dueDate).toLocaleDateString() : '', testid: 'expense-detail-due-date' })}
@@ -395,8 +413,8 @@
 			{/if}
 
 			<DetailCard title="Receipt details" icon={FileText} accent="muted" testid="expense-card-receipt" class="lg:col-span-2" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-				<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal} {editing} testid="expense-detail-subtotal" />
-				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount} {editing} testid="expense-detail-tax" />
+				<InlineField label="Receipt subtotal" bind:value={form.subtotal} display={expense.subtotal} {editing} type="number" error={formErrors.subtotal} testid="expense-detail-subtotal" />
+				<InlineField label="Receipt tax" bind:value={form.taxAmount} display={expense.taxAmount} {editing} type="number" error={formErrors.taxAmount} testid="expense-detail-tax" />
 				<InlineField label="Notes" bind:value={form.notes} display={expense.notes} {editing} type="textarea" testid="expense-detail-notes" class="sm:col-span-2" />
 
 				<!-- Line items: read-only table in view mode, editable table with add/remove in edit mode. -->

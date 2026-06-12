@@ -32,74 +32,105 @@ const requiredEmail = (label: string) =>
 		.trim()
 		.min(1, `${label} is required`)
 		.email(`${label} must be a valid email address`);
+/**
+ * Numeric inputs are bound to form state as strings, but Svelte 5 coerces
+ * `bind:value` on an `<input type="number">` to an actual `number` (even when the
+ * underlying `$state` was initialised as `''`). By submit time a numeric field can
+ * therefore be a `number`, not the `string` the string-first helpers below expect —
+ * which made Zod throw `expected string, received number` and block the whole form
+ * (TSK-195). Coerce a `number` (and `null`/`undefined`) back to a string here so the
+ * existing string-first chain works regardless of input type. This immunises every
+ * numeric form field at one place; no per-input `type` change required.
+ */
+const coerceNumericInput = <T extends z.ZodType>(schema: T) =>
+	z.preprocess((v) => {
+		if (typeof v === 'number') return Number.isFinite(v) ? String(v) : '';
+		if (v == null) return '';
+		return v;
+	}, schema);
+
 const numericString = (label: string) =>
-	z
-		.string()
-		.trim()
-		.min(1, `${label} is required`)
-		.refine((v) => !Number.isNaN(Number(v)), `${label} must be a number`)
-		.transform((v) => Number(v));
+	coerceNumericInput(
+		z
+			.string()
+			.trim()
+			.min(1, `${label} is required`)
+			.refine((v) => !Number.isNaN(Number(v)), `${label} must be a number`)
+			.transform((v) => Number(v))
+	);
 const optionalNumericString = (label: string) =>
-	z
-		.string()
-		.trim()
-		.transform((v) => (v.length ? v : null))
-		.nullable()
-		.refine((v) => v === null || !Number.isNaN(Number(v)), `${label} must be a number`)
-		.transform((v) => (v === null ? null : Number(v)))
-		.optional();
-const idString = z
-	.string()
-	.trim()
-	.transform((v) => (v.length ? Number(v) : null))
-	.nullable()
-	.optional();
-// Optional money/number: '' -> null, otherwise coerced to a number (rejects non-numeric).
-const optionalNumeric = (label: string) =>
+	coerceNumericInput(
+		z
+			.string()
+			.trim()
+			.transform((v) => (v.length ? v : null))
+			.nullable()
+			.refine((v) => v === null || !Number.isNaN(Number(v)), `${label} must be a number`)
+			.transform((v) => (v === null ? null : Number(v)))
+			.optional()
+	);
+const idString = coerceNumericInput(
 	z
 		.string()
 		.trim()
 		.transform((v) => (v.length ? Number(v) : null))
-		.refine((v) => v === null || !Number.isNaN(v), `${label} must be a number`)
-		.optional();
+		.nullable()
+		.optional()
+);
+// Optional money/number: '' -> null, otherwise coerced to a number (rejects non-numeric).
+const optionalNumeric = (label: string) =>
+	coerceNumericInput(
+		z
+			.string()
+			.trim()
+			.transform((v) => (v.length ? Number(v) : null))
+			.refine((v) => v === null || !Number.isNaN(v), `${label} must be a number`)
+			.optional()
+	);
 /**
  * Required numeric field that must be > 0 (use for money amounts that represent
  * a real charge: monthly rent, payment amount, etc.).
  */
 const positiveNumeric = (label: string) =>
-	z
-		.string()
-		.trim()
-		.min(1, `${label} is required`)
-		.refine((v) => !Number.isNaN(Number(v)), `${label} must be a number`)
-		.transform((v) => Number(v))
-		.refine((v) => v > 0, `${label} must be greater than zero`);
+	coerceNumericInput(
+		z
+			.string()
+			.trim()
+			.min(1, `${label} is required`)
+			.refine((v) => !Number.isNaN(Number(v)), `${label} must be a number`)
+			.transform((v) => Number(v))
+			.refine((v) => v > 0, `${label} must be greater than zero`)
+	);
 /**
  * Required numeric field that must be >= 0 (use for counts/amounts that may
  * legitimately be zero: bedrooms, bathrooms, market rent on a vacant unit, fees).
  */
 const nonNegativeNumeric = (label: string) =>
-	z
-		.string()
-		.trim()
-		.min(1, `${label} is required`)
-		.refine((v) => !Number.isNaN(Number(v)), `${label} must be a number`)
-		.transform((v) => Number(v))
-		.refine((v) => v >= 0, `${label} cannot be negative`);
+	coerceNumericInput(
+		z
+			.string()
+			.trim()
+			.min(1, `${label} is required`)
+			.refine((v) => !Number.isNaN(Number(v)), `${label} must be a number`)
+			.transform((v) => Number(v))
+			.refine((v) => v >= 0, `${label} cannot be negative`)
+	);
 /**
  * Optional numeric field that must be >= 0 when provided.
  * '' → null; non-numeric or negative → validation error.
  */
 const optionalNonNegative = (label: string) =>
-	z
-		.string()
-		.trim()
-		.transform((v) => (v.length ? Number(v) : null))
-		.refine(
-			(v) => v === null || (!Number.isNaN(v) && v >= 0),
-			`${label} must be a non-negative number`
-		)
-		.optional();
+	coerceNumericInput(
+		z
+			.string()
+			.trim()
+			.transform((v) => (v.length ? Number(v) : null))
+			.refine(
+				(v) => v === null || (!Number.isNaN(v) && v >= 0),
+				`${label} must be a non-negative number`
+			)
+			.optional()
+	);
 
 export const propertySchema = z.object({
 	name: required('Name'),
