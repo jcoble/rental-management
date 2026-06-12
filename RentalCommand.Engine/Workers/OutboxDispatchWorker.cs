@@ -61,6 +61,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
     {
         var db = scopedProvider.GetRequiredService<RentalCommandDbContext>();
         var channel = scopedProvider.GetRequiredService<INotificationChannel>();
+        var pushSender = scopedProvider.GetRequiredService<IPushSender>();
         var sandboxGuard = scopedProvider.GetRequiredService<ISandboxGuard>();
         var logger = scopedProvider.GetRequiredService<ILogger<OutboxDispatchWorker>>();
 
@@ -100,7 +101,12 @@ public class OutboxDispatchWorker : EngineWorkerBase
             // SMS/email. Card charges are suppressed elsewhere (StripePaymentService) — those can't
             // be safely redirected. If we can't resolve an owner address, we suppress (fail-closed)
             // rather than risk reaching the original recipient.
-            if (await sandboxGuard.IsSandboxAsync(message.PortfolioId, cancellationToken))
+            //
+            // Push is exempt: a push message targets the PORTFOLIO OWNER's own registered devices
+            // (resolved from DeviceTokens by PortfolioId), never a third party, so there is nothing
+            // to redirect — a sandbox landlord still gets their own push and can exercise the flow.
+            var isPush = string.Equals(message.MessageType?.Trim(), "push", StringComparison.OrdinalIgnoreCase);
+            if (!isPush && await sandboxGuard.IsSandboxAsync(message.PortfolioId, cancellationToken))
             {
                 var ownerContact = await ResolveSandboxRedirectTargetAsync(db, message, cancellationToken);
                 if (ownerContact is null)
@@ -130,7 +136,14 @@ public class OutboxDispatchWorker : EngineWorkerBase
                 // successful external send but BEFORE SentAt is committed, the message is
                 // re-sent next cycle. We minimise that window by committing SentAt in an
                 // isolated, retried SaveChanges immediately after the successful send.
-                await DispatchAsync(channel, message, cancellationToken);
+                if (isPush)
+                {
+                    await DispatchPushAsync(db, pushSender, message, logger, cancellationToken);
+                }
+                else
+                {
+                    await DispatchAsync(channel, message, cancellationToken);
+                }
                 message.SentAt = DateTime.UtcNow;
                 message.FailedAt = null;
                 message.Error = null;
@@ -294,6 +307,74 @@ public class OutboxDispatchWorker : EngineWorkerBase
 
     /// <summary>Resolved sandbox-redirect contact: exactly one of email/phone is set per channel.</summary>
     private sealed record SandboxContact(string? Email, string? Phone);
+
+    /// <summary>
+    /// Fans a single <c>push</c> outbox message out to every device token registered for the
+    /// message's portfolio. The payload carries <c>title</c>/<c>body</c> plus a deep-link data map
+    /// (<c>actionUrl</c>, <c>type</c>, <c>relatedEntityType</c>, <c>relatedEntityId</c>) that the
+    /// mobile client routes on when the user taps the notification. Tokens the provider reports as
+    /// permanently invalid (app uninstalled / token rotated) are pruned. A transient provider error
+    /// on any token propagates so the whole message retries (at-least-once; a duplicate push is
+    /// acceptable). When no provider is configured the sender suppresses (logs) and the message is
+    /// marked sent.
+    /// </summary>
+    private static async Task DispatchPushAsync(
+        RentalCommandDbContext db,
+        IPushSender pushSender,
+        OutboxMessage message,
+        ILogger<OutboxDispatchWorker> logger,
+        CancellationToken ct)
+    {
+        if (message.PortfolioId is not int portfolioId || portfolioId <= 0)
+        {
+            // No portfolio → nothing to target; treat as a no-op (marked sent by the caller).
+            return;
+        }
+
+        using var doc = JsonDocument.Parse(
+            string.IsNullOrWhiteSpace(message.Payload) ? "{}" : message.Payload);
+        var root = doc.RootElement;
+
+        var title = GetString(root, "title") ?? "Rental Command";
+        var body = GetString(root, "body") ?? string.Empty;
+
+        var data = new Dictionary<string, string>();
+        foreach (var key in new[] { "actionUrl", "type", "relatedEntityType", "relatedEntityId" })
+        {
+            var value = GetString(root, key);
+            if (!string.IsNullOrWhiteSpace(value)) data[key] = value;
+        }
+
+        var tokens = await db.DeviceTokens
+            .Where(d => d.PortfolioId == portfolioId)
+            .Select(d => d.Token)
+            .ToListAsync(ct);
+
+        if (tokens.Count == 0)
+        {
+            logger.LogInformation(
+                "[push] OutboxMessage {MessageId} — no registered devices for portfolio {PortfolioId}.",
+                message.Id, portfolioId);
+            return;
+        }
+
+        var invalidTokens = new List<string>();
+        foreach (var token in tokens)
+        {
+            var result = await pushSender.SendAsync(token, title, body, data, ct);
+            if (result.TokenInvalid) invalidTokens.Add(token);
+        }
+
+        if (invalidTokens.Count > 0)
+        {
+            await db.DeviceTokens
+                .Where(d => d.PortfolioId == portfolioId && invalidTokens.Contains(d.Token))
+                .ExecuteDeleteAsync(ct);
+            logger.LogInformation(
+                "[push] Pruned {Count} dead device token(s) for portfolio {PortfolioId}.",
+                invalidTokens.Count, portfolioId);
+        }
+    }
 
     /// <summary>
     /// Routes a single outbox message to the SMS or email transport based on its
