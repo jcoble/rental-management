@@ -14,6 +14,7 @@ public class PaymentServiceTests : IDisposable
 {
     private const int PortfolioId = 1;
     private const int LeaseId = 100;
+    private const int OtherLeaseId = 101;
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
@@ -81,6 +82,34 @@ public class PaymentServiceTests : IDisposable
         fromDb.ExtractedData.Should().Contain("RentCheck");
     }
 
+    [Fact]
+    public async Task UpdateAsync_ReassignsLease_PersistsNewLeaseId()
+    {
+        // Regression for TSK-197: editing a payment used to drop the lease because UpdatePaymentRequest
+        // carried no LeaseId, so the model binder discarded it and UpdateAsync never reassigned it.
+        var now = DateTime.UtcNow;
+        var created = await _sut.CreateAsync(PortfolioId, new CreatePaymentRequest
+        {
+            LeaseId = LeaseId,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1200.00m,
+            DueDate = now,
+        });
+        created.Should().NotBeNull();
+
+        var updated = await _sut.UpdateAsync(PortfolioId, created!.Id, new UpdatePaymentRequest
+        {
+            LeaseId = OtherLeaseId,
+        });
+
+        updated.Should().NotBeNull();
+        updated!.LeaseId.Should().Be(OtherLeaseId);
+
+        var fromDb = await _db.Payments.AsNoTracking().SingleAsync(p => p.Id == created.Id);
+        fromDb.LeaseId.Should().Be(OtherLeaseId);
+    }
+
     private void SeedPortfolioAndLease()
     {
         var now = DateTime.UtcNow;
@@ -137,6 +166,22 @@ public class PaymentServiceTests : IDisposable
             StartDate = now.AddMonths(-1),
             EndDate = now.AddMonths(11),
             MonthlyRent = 1200m,
+            RentDueDay = 1,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Leases.Add(new Lease
+        {
+            Id = OtherLeaseId,
+            PortfolioId = PortfolioId,
+            PropertyId = 10,
+            UnitId = 20,
+            TenantId = 30,
+            LeaseNumber = "L-2",
+            Status = LeaseStatus.Active,
+            StartDate = now.AddMonths(-1),
+            EndDate = now.AddMonths(11),
+            MonthlyRent = 1300m,
             RentDueDay = 1,
             CreatedAt = now,
             UpdatedAt = now,
