@@ -15,6 +15,9 @@ let user = $state<User | null>(null);
 let accessToken = $state<string | null>(null);
 let accessTokenExpiration = $state<Date | null>(null);
 let isLoading = $state(true);
+// Resolved server-side from the PLATFORM_ADMIN_EMAILS allowlist (root +layout.server.ts).
+// There is no super-admin role; this boolean gates the platform-operator shell (F6/TSK-212).
+let platformAdmin = $state(false);
 const isAuthenticated = $derived(!!user && !!accessToken);
 
 /** Optional hook fired when auth is cleared (e.g. to disconnect SignalR). */
@@ -28,11 +31,13 @@ export function setOnAuthCleared(callback: (() => void) | null) {
 export function initAuth(
 	initialUser: User | null,
 	initialToken: string | null,
-	expiration: Date | null
+	expiration: Date | null,
+	initialPlatformAdmin = false
 ) {
 	user = initialUser;
 	accessToken = initialToken;
 	accessTokenExpiration = expiration;
+	platformAdmin = initialPlatformAdmin;
 	isLoading = false;
 }
 
@@ -65,6 +70,7 @@ export function clearAuth() {
 	user = null;
 	accessToken = null;
 	accessTokenExpiration = null;
+	platformAdmin = false;
 	isLoading = false;
 
 	if (browser) {
@@ -137,4 +143,9 @@ export function currentUserIsStaff(): boolean {
 
 export function currentUserIsPortalUser(): boolean {
 	return isPortalUser(user);
+}
+
+/** Platform super-admin (email allowlist), gates the operator shell (Engine Health, etc.). */
+export function currentUserIsPlatformAdmin(): boolean {
+	return platformAdmin;
 }

@@ -61,7 +61,7 @@
 		if (!bullet.entityType || bullet.entityId == null) return null;
 		switch (bullet.entityType) {
 			case 'WorkOrder':
-				return `/maintenance/work-orders/${bullet.entityId}`;
+				return `/maintenance/${bullet.entityId}`;
 			case 'Payment':
 				return `/accounting/payments/${bullet.entityId}`;
 			case 'Lease':
@@ -552,7 +552,7 @@
 					{:else}
 						<div class="space-y-2">
 							{#each (workOrdersQuery.data ?? []).filter((w) => !['Completed', 'Cancelled', 'Archived'].includes(String(w.status))).slice(0, 3) as order}
-								<a href="/maintenance/work-orders/{order.id}" class="block rounded border border-border bg-background px-3 py-2 transition-colors hover:bg-muted/40">
+								<a href="/maintenance/{order.id}" class="block rounded border border-border bg-background px-3 py-2 transition-colors hover:bg-muted/40">
 									<div class="flex items-center justify-between gap-3">
 										<p class="truncate text-sm font-medium">{order.title}</p>
 										<span class="shrink-0 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">{order.priority}</span>

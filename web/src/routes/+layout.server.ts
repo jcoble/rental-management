@@ -6,11 +6,15 @@
  */
 
 import type { LayoutServerLoad } from './$types';
+import { isPlatformAdmin } from '$lib/server/platform-admin';
 
 export const load: LayoutServerLoad = async ({ locals }) => {
 	return {
 		user: locals.user,
 		accessToken: locals.accessToken,
-		accessTokenExpiration: locals.accessTokenExpiration ?? null
+		accessTokenExpiration: locals.accessTokenExpiration ?? null,
+		// Resolved server-side from the PLATFORM_ADMIN_EMAILS allowlist; the client only
+		// ever sees this boolean, never the list (F6 / TSK-212).
+		isPlatformAdmin: isPlatformAdmin(locals.user)
 	};
 };

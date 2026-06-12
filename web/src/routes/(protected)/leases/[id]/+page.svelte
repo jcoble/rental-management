@@ -222,13 +222,36 @@
 	}));
 
 	const statusMutation = createMutation(() => ({
-		mutationFn: (status: string) => leases.update(leaseId, { status }),
+		mutationFn: (payload: Record<string, unknown>) => leases.update(leaseId, payload),
 		onSuccess: () => {
 			showSuccess('Lease status updated.');
+			showSetActiveConfirm = false;
+			showGiveNotice = false;
 			invalidateLease();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	// --- Lifecycle confirms (F11) — Give Notice / Set Active are no longer one-click writes. ---
+	let showSetActiveConfirm = $state(false);
+	let showGiveNotice = $state(false);
+	let moveOutDate = $state('');
+
+	function openGiveNotice() {
+		// Pre-fill with the lease's existing move-out date if one is already recorded.
+		moveOutDate = lease?.moveOutDate ? lease.moveOutDate.slice(0, 10) : '';
+		showGiveNotice = true;
+	}
+	function confirmSetActive() {
+		statusMutation.mutate({ status: 'Active' });
+	}
+	function confirmGiveNotice() {
+		// The full move-out chain (inspection → deposit → make-ready) is Wave 3; here we just
+		// confirm and capture the move-out date on the entity (the field already exists).
+		const payload: Record<string, unknown> = { status: 'NoticeGiven' };
+		if (moveOutDate) payload.moveOutDate = moveOutDate;
+		statusMutation.mutate(payload);
+	}
 
 	const deleteMutation = createMutation(() => ({
 		mutationFn: () => leases.delete(leaseId),
@@ -593,11 +616,11 @@
 					</Button>
 				{:else}
 					{#if lease.status !== 'Active'}
-						<Button data-testid="lease-set-active" variant="outline" size="sm" onclick={() => statusMutation.mutate('Active')} disabled={statusMutation.isPending}>
+						<Button data-testid="lease-set-active" variant="outline" size="sm" onclick={() => (showSetActiveConfirm = true)} disabled={statusMutation.isPending}>
 							Set Active
 						</Button>
 					{:else}
-						<Button data-testid="lease-give-notice" variant="outline" size="sm" onclick={() => statusMutation.mutate('NoticeGiven')} disabled={statusMutation.isPending}>
+						<Button data-testid="lease-give-notice" variant="outline" size="sm" onclick={openGiveNotice} disabled={statusMutation.isPending}>
 							Give Notice
 						</Button>
 					{/if}
@@ -654,7 +677,7 @@
 										View ledger
 									</Button>
 								{:else}
-									<Button data-testid="lease-hero-cta" size="sm" class="gap-1.5" onclick={() => statusMutation.mutate('Active')} disabled={statusMutation.isPending}>
+									<Button data-testid="lease-hero-cta" size="sm" class="gap-1.5" onclick={() => (showSetActiveConfirm = true)} disabled={statusMutation.isPending}>
 										Set lease active
 									</Button>
 								{/if}
@@ -1024,6 +1047,43 @@
 	onconfirm={() => deleteMutation.mutate()}
 	oncancel={() => (showDeleteConfirm = false)}
 />
+
+<!-- Set Active — lifecycle confirm (F11). No longer a one-click write. -->
+<ConfirmDialog
+	open={showSetActiveConfirm}
+	title="Set lease active?"
+	message={lease ? `Mark lease ${lease.leaseNumber} as Active?` : ''}
+	confirmLabel="Set active"
+	busy={statusMutation.isPending}
+	testid="lease-set-active-confirm"
+	onconfirm={confirmSetActive}
+	oncancel={() => (showSetActiveConfirm = false)}
+/>
+
+<!-- Give Notice — confirm + capture a move-out date (F11). Full move-out chain is Wave 3. -->
+<Dialog.Root open={showGiveNotice} onOpenChange={(v) => { if (!v) showGiveNotice = false; }}>
+	<Dialog.Content data-testid="lease-give-notice-dialog" class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>Give notice on this lease?</Dialog.Title>
+			<Dialog.Description>
+				This marks the lease as <strong class="font-semibold text-foreground">Notice given</strong>.
+				Set the expected move-out date so it shows on the lease and feeds the move-out steps later.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-2">
+			<label for="lease-move-out-date" class="block text-xs text-muted-foreground">Move-out date (optional)</label>
+			<DatePicker id="lease-move-out-date" bind:value={moveOutDate} testid="lease-move-out-date" />
+		</div>
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => (showGiveNotice = false)} disabled={statusMutation.isPending} data-testid="lease-give-notice-cancel">
+				Cancel
+			</Button>
+			<Button onclick={confirmGiveNotice} disabled={statusMutation.isPending} data-testid="lease-give-notice-confirm">
+				{statusMutation.isPending ? 'Working…' : 'Give notice'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <!-- Opening balance dialog (set / edit) -->
 <Dialog.Root open={showOpeningDialog} onOpenChange={(v) => { if (!v) closeOpeningDialog(); }}>
