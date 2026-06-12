@@ -32,6 +32,20 @@ dependencies:
   # outline→fill morph on active nav items.
   material_symbols_icons: ^4.2928.1
   google_sign_in: ^7.2.0
+  # Release hygiene (P0-4): share a generated PDF out via the system share sheet
+  # (replaces the broken launchUrl(Uri.file(...)) opens that Android 7+ rejects)
+  # and pick a PDF/file for the Capture FAB.
+  share_plus: ^10.1.4
+  open_filex: ^4.7.0
+  file_picker: ^8.1.7
+  path_provider: ^2.1.5
+  # Push notifications E2E (P0-2): FCM (Android) + APNs (iOS) via firebase_messaging,
+  # surfaced as OS notifications by flutter_local_notifications when the app is
+  # foregrounded. Placeholder-safe: Firebase.initializeApp fails soft when no
+  # google-services.json / GoogleService-Info.plist is present (see push_service).
+  firebase_core: ^3.8.1
+  firebase_messaging: ^15.1.6
+  flutter_local_notifications: ^18.0.1
 
 dev_dependencies:
   flutter_test:
