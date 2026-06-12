@@ -119,47 +119,115 @@
 		managementCompanyName: '',
 		timeZone: 'America/New_York',
 		status: 'Active',
-		settings: '{\n  "rentCollectionDay": 1\n}',
 	});
 
-	// Messaging defaults live under the "messaging" key inside the settings JSON string.
-	// Portal is always the base channel; only Email/SMS are configurable defaults here.
-	const messagingDefaults = $derived.by(() => {
-		try {
-			const parsed = JSON.parse(form.settings || '{}');
-			const m = parsed?.messaging ?? {};
-			return { email: m.email === true, sms: m.sms === true };
-		} catch {
-			// Invalid JSON in the raw field — fall back to off so the toggles still render.
-			return { email: false, sms: false };
-		}
+	// Structured view of the portfolio settings JSON. The raw JSON blob is never shown to the
+	// landlord — known keys are real inputs and anything else is an "advanced" key/value row.
+	//   - rentCollectionDay → number field
+	//   - messaging.{email,sms} → toggles (also read by the messages composer)
+	//   - everything else (one level deep) → labeled "advanced" rows OR preserved untouched
+	// Keys owned by OTHER save flows on this page (notifications.email is written by the separate
+	// "Notification Email" endpoint, which read-modify-writes this same JSON) are kept verbatim in
+	// `preserved` so saving the portfolio form never clobbers them.
+	type CustomRow = { id: number; key: string; value: string };
+	const MANAGED_KEYS = ['rentCollectionDay', 'messaging'];
+	// Top-level keys that other UI sections / endpoints own. Round-tripped untouched, hidden here.
+	const PRESERVED_KEYS = ['notifications'];
+
+	let settingsModel = $state<{
+		rentCollectionDay: number;
+		messaging: { email: boolean; sms: boolean };
+		customRows: CustomRow[];
+		preserved: Record<string, unknown>;
+	}>({
+		rentCollectionDay: 1,
+		messaging: { email: false, sms: false },
+		customRows: [],
+		preserved: {},
 	});
 
-	// Returns true if the raw settings JSON is currently unparseable (toggles are disabled then).
-	const settingsJsonInvalid = $derived.by(() => {
-		try {
-			JSON.parse(form.settings || '{}');
-			return false;
-		} catch {
-			return true;
-		}
-	});
+	let showAdvanced = $state(false);
+	let nextRowId = 0;
 
-	// Re-stringify the settings JSON with the given messaging default flipped, preserving
-	// every other key (e.g. rentCollectionDay) and the existing 2-space formatting.
-	function setMessagingDefault(key: 'email' | 'sms', value: boolean) {
-		let parsed: Record<string, unknown>;
+	// Parse the stored settings JSON into the structured model. Tolerant of malformed JSON
+	// (falls back to defaults) so a landlord is never locked out by a bad legacy value.
+	function loadSettingsModel(settingsJson: string | null | undefined) {
+		let parsed: Record<string, unknown> = {};
 		try {
-			parsed = JSON.parse(form.settings || '{}');
+			const candidate = JSON.parse(settingsJson || '{}');
+			if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+				parsed = candidate as Record<string, unknown>;
+			}
 		} catch {
-			return; // Don't clobber raw JSON the user is mid-edit on.
+			parsed = {};
 		}
-		const messaging = {
-			...(typeof parsed.messaging === 'object' && parsed.messaging !== null ? parsed.messaging : {}),
-			[key]: value,
-		};
-		parsed.messaging = messaging;
-		form.settings = JSON.stringify(parsed, null, 2);
+
+		const rawDay = parsed.rentCollectionDay;
+		const rentCollectionDay =
+			typeof rawDay === 'number' && Number.isFinite(rawDay) ? rawDay : 1;
+
+		const m =
+			parsed.messaging && typeof parsed.messaging === 'object' && !Array.isArray(parsed.messaging)
+				? (parsed.messaging as Record<string, unknown>)
+				: {};
+		const messaging = { email: m.email === true, sms: m.sms === true };
+
+		const preserved: Record<string, unknown> = {};
+		const customRows: CustomRow[] = [];
+		for (const [key, value] of Object.entries(parsed)) {
+			if (MANAGED_KEYS.includes(key)) continue;
+			if (PRESERVED_KEYS.includes(key)) {
+				preserved[key] = value;
+				continue;
+			}
+			// Surface scalar extras as editable advanced rows; keep nested/complex values
+			// untouched in `preserved` so the structured editor never lossily flattens them.
+			if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
+				customRows.push({ id: nextRowId++, key, value: value === null ? '' : String(value) });
+			} else {
+				preserved[key] = value;
+			}
+		}
+		if (customRows.length > 0) showAdvanced = true;
+
+		settingsModel = { rentCollectionDay, messaging, customRows, preserved };
+	}
+
+	// Reassemble the settings JSON from the structured model, preserving untouched keys. Advanced
+	// rows are coerced back to number/boolean/null when they look like one, else kept as strings.
+	function serializeSettings(): string {
+		const out: Record<string, unknown> = { ...settingsModel.preserved };
+		// Number inputs become null when cleared; keep the stored shape as a sane day-of-month.
+		const day = Number(settingsModel.rentCollectionDay);
+		out.rentCollectionDay = Number.isFinite(day) && day >= 1 ? day : 1;
+		out.messaging = { email: settingsModel.messaging.email, sms: settingsModel.messaging.sms };
+		for (const row of settingsModel.customRows) {
+			const key = row.key.trim();
+			if (!key || MANAGED_KEYS.includes(key) || PRESERVED_KEYS.includes(key)) continue;
+			out[key] = coerceValue(row.value);
+		}
+		return JSON.stringify(out, null, 2);
+	}
+
+	function coerceValue(raw: string): unknown {
+		const trimmed = raw.trim();
+		if (trimmed === '') return '';
+		if (trimmed === 'true') return true;
+		if (trimmed === 'false') return false;
+		if (trimmed === 'null') return null;
+		// Only treat as a number when it round-trips exactly (avoids mangling things like phone numbers).
+		const asNum = Number(trimmed);
+		if (Number.isFinite(asNum) && String(asNum) === trimmed) return asNum;
+		return raw;
+	}
+
+	function addCustomRow() {
+		settingsModel.customRows = [...settingsModel.customRows, { id: nextRowId++, key: '', value: '' }];
+		showAdvanced = true;
+	}
+
+	function removeCustomRow(id: number) {
+		settingsModel.customRows = settingsModel.customRows.filter((row) => row.id !== id);
 	}
 
 	$effect(() => {
@@ -170,8 +238,8 @@
 				managementCompanyName: portfolioQuery.data.managementCompanyName || '',
 				timeZone: portfolioQuery.data.timeZone || 'America/New_York',
 				status: portfolioQuery.data.status,
-				settings: portfolioQuery.data.settings || '{\n  "rentCollectionDay": 1\n}',
 			};
+			loadSettingsModel(portfolioQuery.data.settings);
 		}
 	});
 
@@ -182,7 +250,7 @@
 			managementCompanyName: form.managementCompanyName,
 			timeZone: form.timeZone,
 			status: form.status as any,
-			settings: form.settings,
+			settings: serializeSettings(),
 		}),
 		onSuccess: () => {
 			queryClient.invalidateQueries({ queryKey: ['portfolio', portfolioId] });
@@ -696,18 +764,11 @@
 					still turn any channel on or off for each individual message.
 				</p>
 
-				{#if settingsJsonInvalid}
-					<p class="text-xs text-destructive" data-testid="settings-messaging-json-warning">
-						Fix the Settings JSON below to change these toggles.
-					</p>
-				{/if}
-
 				<div class="space-y-3">
-					<label class="flex items-start gap-3" class:opacity-50={settingsJsonInvalid}>
+					<label class="flex items-start gap-3">
 						<Checkbox
-							checked={messagingDefaults.email}
-							disabled={settingsJsonInvalid}
-							onCheckedChange={(v) => setMessagingDefault('email', v === true)}
+							checked={settingsModel.messaging.email}
+							onCheckedChange={(v) => (settingsModel.messaging.email = v === true)}
 							data-testid="settings-messaging-email"
 						/>
 						<span class="text-sm leading-tight">
@@ -716,11 +777,10 @@
 						</span>
 					</label>
 
-					<label class="flex items-start gap-3" class:opacity-50={settingsJsonInvalid}>
+					<label class="flex items-start gap-3">
 						<Checkbox
-							checked={messagingDefaults.sms}
-							disabled={settingsJsonInvalid}
-							onCheckedChange={(v) => setMessagingDefault('sms', v === true)}
+							checked={settingsModel.messaging.sms}
+							onCheckedChange={(v) => (settingsModel.messaging.sms = v === true)}
 							data-testid="settings-messaging-sms"
 						/>
 						<span class="text-sm leading-tight">
@@ -734,12 +794,102 @@
 				</div>
 			</div>
 
-			<!-- Advanced JSON settings -->
-			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4">
-				<p class="text-sm font-semibold">Advanced settings</p>
-				<p class="mb-3 text-xs text-muted-foreground">Raw portfolio settings object. Changes here affect system-level defaults.</p>
-				<label for="settings-json" class="mb-1 block text-xs text-muted-foreground">Settings JSON</label>
-				<textarea id="settings-json" bind:value={form.settings} rows={8} class="w-full rounded border border-border bg-background px-3 py-2 text-sm font-mono"></textarea>
+			<!-- Operational defaults (typed) -->
+			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" data-testid="settings-operational">
+				<p class="text-sm font-semibold">Operational defaults</p>
+				<p class="mb-3 text-xs text-muted-foreground">System-level defaults for this portfolio.</p>
+
+				<div class="grid gap-3 md:grid-cols-2">
+					<div>
+						<label for="settings-rent-collection-day" class="mb-1 block text-xs text-muted-foreground">
+							Rent collection day of month
+						</label>
+						<Input
+							id="settings-rent-collection-day"
+							type="number"
+							min="1"
+							max="31"
+							bind:value={settingsModel.rentCollectionDay}
+							data-testid="settings-rent-collection-day"
+						/>
+						<p class="mt-1 text-xs text-muted-foreground">The day each month rent is considered due (1–31).</p>
+					</div>
+				</div>
+			</div>
+
+			<!-- Advanced add-a-field escape hatch (typed key/value rows; never a raw JSON blob) -->
+			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" data-testid="settings-advanced">
+				<div class="flex items-center justify-between gap-3">
+					<div>
+						<p class="text-sm font-semibold">Advanced</p>
+						<p class="text-xs text-muted-foreground">
+							Extra system settings as name/value pairs. Most landlords never need these.
+						</p>
+					</div>
+					{#if !showAdvanced && settingsModel.customRows.length === 0}
+						<Button
+							variant="outline"
+							size="sm"
+							onclick={() => (showAdvanced = true)}
+							data-testid="settings-advanced-show"
+						>
+							Show advanced
+						</Button>
+					{/if}
+				</div>
+
+				{#if showAdvanced || settingsModel.customRows.length > 0}
+					<div class="mt-3 space-y-2">
+						{#if settingsModel.customRows.length === 0}
+							<p class="text-xs text-muted-foreground" data-testid="settings-advanced-empty">
+								No advanced settings. Add one only if you were told to.
+							</p>
+						{/if}
+
+						{#each settingsModel.customRows as row (row.id)}
+							<div class="flex items-start gap-2" data-testid="settings-advanced-row">
+								<div class="flex-1">
+									<label for={`settings-advanced-key-${row.id}`} class="sr-only">Setting name</label>
+									<Input
+										id={`settings-advanced-key-${row.id}`}
+										bind:value={row.key}
+										placeholder="Setting name"
+										autocomplete="off"
+										data-testid="settings-advanced-key"
+									/>
+								</div>
+								<div class="flex-1">
+									<label for={`settings-advanced-value-${row.id}`} class="sr-only">Value</label>
+									<Input
+										id={`settings-advanced-value-${row.id}`}
+										bind:value={row.value}
+										placeholder="Value"
+										autocomplete="off"
+										data-testid="settings-advanced-value"
+									/>
+								</div>
+								<Button
+									variant="ghost"
+									size="sm"
+									onclick={() => removeCustomRow(row.id)}
+									aria-label="Remove setting"
+									data-testid="settings-advanced-remove"
+								>
+									Remove
+								</Button>
+							</div>
+						{/each}
+
+						<Button
+							variant="outline"
+							size="sm"
+							onclick={addCustomRow}
+							data-testid="settings-advanced-add"
+						>
+							Add field
+						</Button>
+					</div>
+				{/if}
 			</div>
 
 			<div class="mt-4 flex items-center gap-3">
