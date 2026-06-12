@@ -137,6 +137,9 @@ services:
       # Used to build /sign/{token} (e-sign) and password-reset/verify links in emails.
       - App__WebBaseUrl=${APP_WEB_BASE_URL:-https://${DOMAIN}}
       - App__TimeZone=${APP_TIMEZONE:-America/New_York}
+      # Platform super-admin allowlist (Engine Health etc.). Empty = fail closed, nobody.
+      # Single email expected; the API binds an array, so index 0 carries it.
+      - PlatformAdmin__Emails__0=${PLATFORM_ADMIN_EMAILS:-}
       # ── Uploads (scan/document storage) + DataProtection keys (shared w/ engine) ──
       - Upload__BasePath=/var/lib/rentalcommand/uploads
       - DataProtection__KeysPath=/var/lib/rentalcommand/dataprotection-keys
@@ -282,6 +285,8 @@ services:
       # ORIGIN must match the public scheme+host so SvelteKit accepts POST/form actions
       # and so the Google OAuth redirect URI ({origin}/auth/google/callback) is correct.
       - ORIGIN=https://${DOMAIN}
+      # Platform super-admin allowlist (comma-separated, case-insensitive). Empty = nobody.
+      - PLATFORM_ADMIN_EMAILS=${PLATFORM_ADMIN_EMAILS:-}
       # Server-side (SSR/load/auth) reaches the API container internally on the docker network.
       - API_URL=http://api:8080
       # Web needs the public client id at runtime to show the Google button + build the consent URL.
