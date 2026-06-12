@@ -60,10 +60,11 @@ public class DashboardService : IDashboardService
     private async Task<DashboardOccupancy> BuildOccupancyAsync(int portfolioId, CancellationToken ct)
     {
         // Units belong to the portfolio via their property. Soft-deleted units/properties are excluded
-        // by their global query filters. A unit is "occupied" if it has an active (non-deleted) lease
-        // right now (correlated EXISTS against Leases); "reserved" is a non-occupied unit whose own
-        // status is Reserved. All three counts are computed SQL-side in a single grouped aggregate so no
-        // unit rows are pulled into memory.
+        // by their global query filters. "Occupied" is defined as Unit.Status == Occupied — the single
+        // occupancy definition shared by Analytics, the Occupancy report, and the Properties list. (Do
+        // NOT derive occupancy from active leases here: that diverged from the rest of the app.)
+        // "Reserved" is Unit.Status == Reserved; "Vacant" is the remainder (Vacant + Offline). All counts
+        // are computed SQL-side in a single grouped aggregate so no unit rows are pulled into memory.
         var counts = await _db.Units
             .AsNoTracking()
             .Where(u => u.Property!.PortfolioId == portfolioId)
@@ -71,14 +72,8 @@ public class DashboardService : IDashboardService
             .Select(g => new
             {
                 Total = g.Count(),
-                Occupied = g.Count(u => _db.Leases.Any(l =>
-                    l.PortfolioId == portfolioId &&
-                    l.Status == LeaseStatus.Active &&
-                    l.UnitId == u.Id)),
-                Reserved = g.Count(u => u.Status == UnitStatus.Reserved && !_db.Leases.Any(l =>
-                    l.PortfolioId == portfolioId &&
-                    l.Status == LeaseStatus.Active &&
-                    l.UnitId == u.Id)),
+                Occupied = g.Count(u => u.Status == UnitStatus.Occupied),
+                Reserved = g.Count(u => u.Status == UnitStatus.Reserved),
             })
             .FirstOrDefaultAsync(ct);
 
