@@ -11,9 +11,10 @@ include: package:flutter_lints/flutter.yaml
 
 analyzer:
   exclude:
-    # Generated build output. An iOS/macOS build checks out Swift packages
-    # (e.g. flutterfire's test drivers) under build/, which otherwise flood
-    # `flutter analyze` with thousands of issues from third-party sources.
+    # Generated build output (gitignored). An iOS/macOS build checks out Swift
+    # packages (the flutterfire SDK + its test drivers) under build/, which are
+    # not part of this app's sources and otherwise flood `flutter analyze` with
+    # thousands of issues from third-party code.
     - build/**
 
 linter:
