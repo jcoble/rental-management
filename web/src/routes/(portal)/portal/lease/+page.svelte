@@ -5,6 +5,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { formatDateOnly } from '$lib/utils/date';
 
 	const leasesQuery = createQuery(() => ({ queryKey: ['portal-lease-page'], queryFn: () => portal.leases() }));
 
@@ -61,7 +62,7 @@
 			<div class="rounded-lg border border-border bg-card p-4">
 				<p class="font-medium">{lease.leaseNumber}</p>
 				<p class="mt-1 text-sm text-muted-foreground">{lease.propertyName ?? 'Linked property'} {lease.unitNumber ? `Unit ${lease.unitNumber}` : ''}</p>
-				<p class="mt-3 text-sm">Rent {money(lease.monthlyRent)} · Ends {new Date(lease.endDate).toLocaleDateString()}</p>
+				<p class="mt-3 text-sm">Rent {money(lease.monthlyRent)} · Ends {formatDateOnly(lease.endDate)}</p>
 			</div>
 		{:else}
 			<p class="text-sm text-muted-foreground">No lease is linked to this account.</p>

@@ -14,6 +14,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { leaseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatDateOnly } from '$lib/utils/date';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
@@ -462,8 +463,9 @@
 
 	function formatDate(val: string | undefined): string {
 		if (!val) return '—';
-		const d = new Date(val);
-		return isNaN(d.getTime()) ? val : d.toLocaleDateString();
+		// Date-only fields (start/end/move-in/move-out, ledger dates) are stored as
+		// UTC-midnight; format UTC-pinned so they don't slip back a day. See formatDateOnly.
+		return formatDateOnly(val) || val;
 	}
 
 	// Active tab for the detail page.

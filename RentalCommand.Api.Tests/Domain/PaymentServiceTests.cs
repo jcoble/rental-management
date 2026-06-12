@@ -110,6 +110,30 @@ public class PaymentServiceTests : IDisposable
         fromDb.LeaseId.Should().Be(OtherLeaseId);
     }
 
+    [Fact]
+    public async Task GetAsync_ProjectsLeaseNumberAndTenantName_SoViewModeCanShowTheLease()
+    {
+        // Regression for TSK-197 residual: the payment detail page's VIEW mode rendered "—" for the
+        // lease because PaymentResponse carried no LeaseNumber/TenantName — GetAsync never joined the
+        // lease. GetAsync must Include the lease + tenant and project both labels.
+        var now = DateTime.UtcNow;
+        var created = await _sut.CreateAsync(PortfolioId, new CreatePaymentRequest
+        {
+            LeaseId = LeaseId,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1200.00m,
+            DueDate = now,
+        });
+        created.Should().NotBeNull();
+
+        var fetched = await _sut.GetAsync(PortfolioId, created!.Id);
+
+        fetched.Should().NotBeNull();
+        fetched!.LeaseNumber.Should().Be("L-1");
+        fetched.TenantName.Should().Be("Marcus Williams");
+    }
+
     private void SeedPortfolioAndLease()
     {
         var now = DateTime.UtcNow;
