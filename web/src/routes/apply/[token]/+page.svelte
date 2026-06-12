@@ -68,11 +68,19 @@
 	const selectedProperty = $derived(properties.find((p) => p.id === propertyId) ?? null);
 	const availableUnits = $derived(selectedProperty?.units ?? []);
 
-	function propertyOptionLabel(p: PublicApplicationProperty): string {
-		return `${p.name}${p.addressLine1 ? ` — ${p.addressLine1}` : ''}${p.city ? `, ${p.city}` : ''}`;
+	// Secondary line (address) shown beneath the property name inside the dropdown options.
+	function propertyAddressLine(p: PublicApplicationProperty): string {
+		return `${p.addressLine1 ?? ''}${p.city ? `${p.addressLine1 ? ', ' : ''}${p.city}` : ''}`;
 	}
+	// Full "name — address" string, used only as the accessible option label / tooltip,
+	// never crammed into the collapsed trigger (TSK-206).
+	function propertyOptionLabel(p: PublicApplicationProperty): string {
+		const addr = propertyAddressLine(p);
+		return `${p.name}${addr ? ` — ${addr}` : ''}`;
+	}
+	// The collapsed trigger shows the clean property name only (truncates gracefully).
 	const propertySelectLabel = $derived(
-		selectedProperty ? propertyOptionLabel(selectedProperty) : 'No preference'
+		selectedProperty ? selectedProperty.name : 'No preference'
 	);
 	const unitSelectLabel = $derived.by(() => {
 		if (unitValue === NO_PREFERENCE) {
@@ -340,13 +348,20 @@
 									onValueChange={onPropertyChange}
 								>
 									<Select.Trigger class="h-12 w-full text-base" data-testid="apply-property-select">
-										{propertySelectLabel}
+										<span class="block truncate text-left" title={selectedProperty ? propertyOptionLabel(selectedProperty) : undefined}>
+											{propertySelectLabel}
+										</span>
 									</Select.Trigger>
 									<Select.Content>
 										<Select.Item value={NO_PREFERENCE} label="No preference">No preference</Select.Item>
 										{#each properties as p (p.id)}
 											<Select.Item value={String(p.id)} label={propertyOptionLabel(p)}>
-												{propertyOptionLabel(p)}
+												<span class="flex min-w-0 flex-col">
+													<span class="truncate font-medium">{p.name}</span>
+													{#if propertyAddressLine(p)}
+														<span class="truncate text-xs text-muted-foreground">{propertyAddressLine(p)}</span>
+													{/if}
+												</span>
 											</Select.Item>
 										{/each}
 									</Select.Content>
