@@ -781,6 +781,13 @@ export interface InspectionCompleteResult {
 	createdWorkOrderIds: number[];
 }
 
+/** One sanitized field change inside an {@link AuditEntry} (friendly name + formatted old→new). */
+export interface AuditFieldChange {
+	field: string;
+	oldValue: string;
+	newValue: string;
+}
+
 /** One row of the unified audit trail returned by `GET /api/v1/audit`. */
 export interface AuditEntry {
 	id: number;
@@ -794,6 +801,8 @@ export interface AuditEntry {
 	detailHref?: string;
 	timestamp: string;
 	testId?: string;
+	/** Sanitized field-level diff for an Updated row; empty for Created/Deleted. */
+	changes?: AuditFieldChange[];
 }
 
 /**
