@@ -15,7 +15,9 @@ namespace RentalCommand.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/v1/admin/engine-status")]
-[Authorize(Roles = "Admin")]
+// Platform-operator surface — gated by the PlatformAdmin email allowlist (F6 / TSK-212),
+// NOT the landlord Admin role. Ordinary portfolio admins must not see Engine internals.
+[Authorize(Policy = "PlatformAdmin")]
 [Produces("application/json")]
 public class AdminEngineStatusController : ControllerBase
 {

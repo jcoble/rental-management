@@ -138,7 +138,7 @@
 	<div class="mb-4">
 		<PageBreadcrumb
 			crumbs={[
-				{ label: 'Owners & Vendors', href: '/owners' },
+				{ label: 'Vendors', href: '/vendors' },
 				{ label: vendor?.name ?? 'Vendor' },
 			]}
 		/>
