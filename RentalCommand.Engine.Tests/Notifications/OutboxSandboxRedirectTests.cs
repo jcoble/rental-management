@@ -36,6 +36,9 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
         services.AddLogging();
         services.AddScoped<RentalCommandDbContext>(_ => new RentalCommandDbContext(options));
         services.AddScoped<INotificationChannel>(_ => _channel);
+        // The outbox worker now also resolves IPushSender; a no-op suppressor keeps these
+        // email/SMS-focused tests unaffected (no device tokens are seeded here anyway).
+        services.AddSingleton<IPushSender>(new NoOpPushSender());
         services.AddScoped<ISandboxGuard, SandboxGuard>();
         _provider = services.BuildServiceProvider();
 
@@ -131,6 +134,14 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
             : base(sp, NullLogger<OutboxDispatchWorker>.Instance) { }
 
         public Task RunCycleAsync(IServiceProvider scoped) => ExecuteCycleAsync(scoped, CancellationToken.None);
+    }
+
+    private sealed class NoOpPushSender : IPushSender
+    {
+        public Task<PushSendResult> SendAsync(
+            string deviceToken, string title, string body,
+            IReadOnlyDictionary<string, string>? data, CancellationToken ct = default) =>
+            Task.FromResult(PushSendResult.Suppressed);
     }
 
     private sealed class CapturingNotificationChannel : INotificationChannel
