@@ -4,6 +4,7 @@
 	import { ai, type FairHousingReviewResult } from '$lib/api/endpoints/ai';
 	import type { NoticeDraft } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { formatDateOnly } from '$lib/utils/date';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
@@ -162,9 +163,6 @@
 		}
 	}
 
-	function date(value: string) {
-		return new Date(value).toLocaleDateString();
-	}
 </script>
 
 <svelte:head>
@@ -302,7 +300,7 @@
 								<p class="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Subject</p>
 								<p class="mt-0.5 text-base font-semibold leading-snug text-foreground">{draft.subject}</p>
 								<p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-muted-foreground">{draft.body}</p>
-								<p class="mt-3 text-xs text-muted-foreground/70">Triggered {date(draft.triggerDate)}</p>
+								<p class="mt-3 text-xs text-muted-foreground/70">Triggered {formatDateOnly(draft.triggerDate)}</p>
 							</div>
 						{/if}
 

@@ -4,6 +4,7 @@
 	import { notifications } from '$lib/api/endpoints/notifications';
 	import { getCurrentUser } from '$lib/stores/auth.svelte';
 	import { portalActionUrl } from '$lib/utils/portalLinks';
+	import { formatDateOnly, daysFromTodayUtc, isPastDueUtc } from '$lib/utils/date';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -77,17 +78,19 @@
 		workOrders.filter((w) => !['Completed', 'Cancelled', 'Archived'].includes(String(w.status)))
 	);
 	const overduePayments = $derived(
-		payments.filter((p) => {
-			const due = new Date(p.dueDate);
-			return !['Paid', 'Waived', 'Refunded'].includes(String(p.status)) && due < new Date();
-		})
+		payments.filter(
+			(p) =>
+				!['Paid', 'Waived', 'Refunded'].includes(String(p.status)) && isPastDueUtc(p.dueDate)
+		)
 	);
 	const upcomingPayments = $derived(
 		payments
 			.filter((p) => !['Paid', 'Waived', 'Refunded'].includes(String(p.status)))
 			.sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
 	);
-	const nextPayment = $derived(upcomingPayments.find((p) => new Date(p.dueDate) >= new Date()) ?? null);
+	const nextPayment = $derived(
+		upcomingPayments.find((p) => (daysFromTodayUtc(p.dueDate) ?? -1) >= 0) ?? null
+	);
 	const nextRentDays = $derived(nextPayment ? daysUntil(nextPayment.dueDate) : null);
 	const activeLease = $derived(leases.find((l) => l.status === 'Active') ?? leases[0] ?? null);
 
@@ -125,15 +128,13 @@
 
 	function date(value: string | null | undefined) {
 		if (!value) return '-';
-		return new Date(value).toLocaleDateString();
+		// dueDate / endDate are UTC-midnight calendar dates — format in UTC to avoid the off-by-one shift.
+		return formatDateOnly(value);
 	}
 
 	function daysUntil(value: string) {
-		const start = new Date();
-		const end = new Date(value);
-		start.setHours(0, 0, 0, 0);
-		end.setHours(0, 0, 0, 0);
-		return Math.ceil((end.getTime() - start.getTime()) / 86_400_000);
+		// Whole-day count in UTC so a date due "today" reads 0, not -1, in behind-UTC zones.
+		return daysFromTodayUtc(value) ?? 0;
 	}
 </script>
 

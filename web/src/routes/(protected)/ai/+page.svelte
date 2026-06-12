@@ -49,7 +49,13 @@
 
 	function formatBriefingDate(dateStr: string): string {
 		try {
-			return new Date(dateStr).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+			// The briefing date is a UTC-midnight calendar date; pin to UTC so it doesn't shift a day back.
+			return new Date(dateStr).toLocaleDateString('en-US', {
+				weekday: 'long',
+				month: 'long',
+				day: 'numeric',
+				timeZone: 'UTC'
+			});
 		} catch {
 			return dateStr;
 		}

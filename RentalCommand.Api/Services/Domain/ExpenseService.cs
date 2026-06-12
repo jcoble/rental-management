@@ -88,6 +88,8 @@ public class ExpenseService : IExpenseService
         var entity = await _db.Expenses
             .AsNoTracking()
             .Include(e => e.LineItems)
+            .Include(e => e.Property)
+            .Include(e => e.Vendor)
             .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
 
         if (entity == null)

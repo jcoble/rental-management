@@ -312,7 +312,12 @@ public class LeaseService : ILeaseService
 
     public async Task<LeaseResponse?> UpdateAsync(int portfolioId, int id, UpdateLeaseRequest request, CancellationToken ct = default)
     {
+        // Eager-load the label navigations so the PATCH response carries TenantName/PropertyName/UnitNumber
+        // (the grid binds these) instead of flashing "-" until the next list refetch.
         var entity = await _db.Leases
+            .Include(l => l.Tenant)
+            .Include(l => l.Property)
+            .Include(l => l.Unit)
             .FirstOrDefaultAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
         if (entity == null)
         {
@@ -353,7 +358,7 @@ public class LeaseService : ILeaseService
         await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
             oldValues: before, newValues: Snapshot(entity), changeReason: reason, ct: ct);
 
-        var response = LeaseResponse.FromEntity(entity);
+        var response = LeaseResponse.FromEntity(entity, includeNavigations: true);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }

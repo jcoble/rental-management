@@ -22,6 +22,16 @@ public class AppointmentResponse
     public DateTime? ScheduledEnd { get; set; }
     public string? AssignedTo { get; set; }
     public string? Notes { get; set; }
+
+    /// <summary>Name of the linked property, when assigned. Projected from the navigation.</summary>
+    public string? PropertyName { get; set; }
+
+    /// <summary>Unit number of the linked unit, when assigned. Projected from the navigation.</summary>
+    public string? UnitNumber { get; set; }
+
+    /// <summary>Full name of the linked tenant, when assigned. Projected from the navigation.</summary>
+    public string? TenantName { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -47,6 +57,10 @@ public class AppointmentResponse
         Notes = e.Notes,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
+        // Populated only when the caller eager-loads the Property/Unit/Tenant navigations.
+        PropertyName = e.Property?.Name,
+        UnitNumber = e.Unit?.UnitNumber,
+        TenantName = e.Tenant == null ? null : $"{e.Tenant.FirstName} {e.Tenant.LastName}".Trim(),
     };
 }
 
