@@ -24,6 +24,8 @@
 	import { Input } from '$lib/components/ui/input';
 	import Progress from '$lib/components/ui/Progress.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
+	import TimeZoneSelect from '$lib/components/shared/TimeZoneSelect.svelte';
+	import { guessBrowserTimeZone } from '$lib/data/timezones';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import {
@@ -151,7 +153,7 @@
 	// ---------------------------------------------------------------------------
 	// Step 1 — Portfolio
 	// ---------------------------------------------------------------------------
-	let portfolioForm = $state({ name: '', managementCompanyName: '' });
+	let portfolioForm = $state({ name: '', managementCompanyName: '', timeZone: guessBrowserTimeZone() });
 	let portfolioErrors = $state<Record<string, string>>({});
 	let portfolioPrefilled = false;
 
@@ -161,6 +163,7 @@
 			portfolioPrefilled = true;
 			portfolioForm.name = p.name ?? '';
 			portfolioForm.managementCompanyName = p.managementCompanyName ?? '';
+			if (p.timeZone) portfolioForm.timeZone = p.timeZone;
 		}
 	});
 
@@ -182,7 +185,7 @@
 			name: portfolioForm.name,
 			description: '',
 			managementCompanyName: portfolioForm.managementCompanyName,
-			timeZone: current?.timeZone ?? '',
+			timeZone: portfolioForm.timeZone || current?.timeZone || '',
 			status: current?.status ?? 'Active',
 			settings: '',
 		});
@@ -194,6 +197,7 @@
 		savePortfolioMutation.mutate({
 			name: result.data.name,
 			managementCompanyName: result.data.managementCompanyName,
+			timeZone: result.data.timeZone,
 		});
 	}
 
@@ -641,6 +645,19 @@
 										bind:value={portfolioForm.managementCompanyName}
 										placeholder="e.g. Smith Property Management"
 									/>
+								</div>
+								<div>
+									<label for="ob-portfolio-timezone" class="mb-1 block text-xs font-medium text-muted-foreground">
+										Time zone
+									</label>
+									<TimeZoneSelect
+										id="ob-portfolio-timezone"
+										testid="onboarding-portfolio-timezone"
+										bind:value={portfolioForm.timeZone}
+									/>
+									<p class="mt-1 text-xs text-muted-foreground">
+										Used for rent reminders, late-fee timing, and your daily briefing.
+									</p>
 								</div>
 							</div>
 						</div>
