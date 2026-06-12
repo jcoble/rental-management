@@ -190,7 +190,7 @@
 	}));
 
 	const empty = {
-		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', startDate: '', endDate: '',
+		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', startDate: '', endDate: '', moveInDate: '',
 		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1', status: 'Draft', notes: '',
 	};
 	let editing = $state(false);
@@ -368,6 +368,7 @@
 			tenantId: String(lease.tenantId),
 			startDate: lease.startDate?.slice(0, 10) ?? '',
 			endDate: lease.endDate?.slice(0, 10) ?? '',
+			moveInDate: lease.moveInDate?.slice(0, 10) ?? '',
 			monthlyRent: String(lease.monthlyRent),
 			securityDeposit: String(lease.securityDeposit),
 			lateFeeAmount: String(lease.lateFeeAmount),
@@ -662,14 +663,11 @@
 					<DetailCard title="Term" icon={CalendarRange} accent="primary" testid="lease-card-term" contentClass="grid grid-cols-2 gap-x-6 gap-y-4">
 						{@render dateField({ label: 'Start Date', value: form.startDate, setValue: (v) => (form.startDate = v), display: formatDate(lease.startDate), error: formErrors.startDate, max: form.endDate || undefined, testid: 'lease-detail-start' })}
 						{@render dateField({ label: 'End Date', value: form.endDate, setValue: (v) => (form.endDate = v), display: formatDate(lease.endDate), error: formErrors.endDate, min: form.startDate || undefined, testid: 'lease-detail-end' })}
+						<!-- Move-in is distinct from lease start (tenant may take possession on a different day)
+						     and is optional/clearable, so it gets its own editable date field. -->
+						{@render dateField({ label: 'Move-In', value: form.moveInDate, setValue: (v) => (form.moveInDate = v), display: formatDate(lease.moveInDate), error: formErrors.moveInDate, testid: 'lease-detail-move-in' })}
 						<InlineField label="Rent Due Day" bind:value={form.rentDueDay} display={`Day ${lease.rentDueDay}`} {editing} type="number" error={formErrors.rentDueDay} testid="lease-detail-due-day" />
 						<InlineField label="Status" bind:value={form.status} display={lease.status} {editing} type="select" options={statusOptions} error={formErrors.status} testid="lease-detail-status" />
-						{#if !editing && lease.moveInDate}
-							<div>
-								<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-In</dt>
-								<dd class="mt-0.5 text-sm">{formatDate(lease.moveInDate)}</dd>
-							</div>
-						{/if}
 						{#if !editing && lease.moveOutDate}
 							<div>
 								<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-Out</dt>
