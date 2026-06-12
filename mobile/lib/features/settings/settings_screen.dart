@@ -73,7 +73,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 title: 'Notifications',
                 subtitle:
                     'Choose how you get each kind of alert. In-app shows in '
-                    'the app, Email and SMS go to your phone.',
+                    'the app, Email and SMS go to your phone, and Push pops up '
+                    'on your phone even when the app is closed.',
               ),
               const SizedBox(height: 12),
               _ChannelMatrixCard(settings: settings),
@@ -141,6 +142,7 @@ class _ChannelMatrixCard extends ConsumerWidget {
                   _HeaderCell(label: 'In-app', icon: Icons.notifications_none),
                   _HeaderCell(label: 'Email', icon: Icons.mail_outline),
                   _HeaderCell(label: 'SMS', icon: Icons.sms_outlined),
+                  _HeaderCell(label: 'Push', icon: Icons.phone_iphone),
                 ],
               ),
             ),
@@ -170,7 +172,7 @@ class _HeaderCell extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return SizedBox(
-      width: 56,
+      width: 48,
       child: Column(
         children: [
           Icon(icon, size: 18, color: theme.colorScheme.onSurfaceVariant),
@@ -222,6 +224,11 @@ class _MatrixRow extends StatelessWidget {
             semanticLabel: '${pref.label} SMS',
             onChanged: (v) => onChanged(pref.copyWith(enableSms: v)),
           ),
+          _CheckCell(
+            value: pref.enablePush,
+            semanticLabel: '${pref.label} push',
+            onChanged: (v) => onChanged(pref.copyWith(enablePush: v)),
+          ),
         ],
       ),
     );
@@ -242,7 +249,7 @@ class _CheckCell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 56,
+      width: 48,
       child: Semantics(
         label: semanticLabel,
         checked: value,
@@ -250,6 +257,7 @@ class _CheckCell extends StatelessWidget {
           value: value,
           // Big tap target for non-technical phone use.
           materialTapTargetSize: MaterialTapTargetSize.padded,
+          visualDensity: VisualDensity.compact,
           onChanged: (v) => onChanged(v ?? false),
         ),
       ),
