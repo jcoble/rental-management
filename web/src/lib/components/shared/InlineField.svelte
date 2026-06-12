@@ -51,6 +51,29 @@
 	const displayText = $derived(display == null || display === '' ? '-' : String(display));
 	const inputClass =
 		'm3-field-surface h-11 w-full px-3 py-2 text-sm text-foreground outline-none';
+
+	// Numeric fields are rendered as text inputs with a decimal input mode rather than
+	// a native `type="number"`. This keeps the bound `value` a clean string (a native
+	// number input lets Svelte 5 coerce `bind:value` to a `number`, which broke the
+	// string-first Zod helpers — TSK-195) AND lets us reject non-numeric keystrokes up
+	// front so garbage like "sdfds" can't be typed into a money box (TSK-198). Allowed
+	// characters: digits, one decimal point, a leading minus, and editing keys.
+	const isNumeric = $derived(type === 'number');
+	function filterNumeric(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		// Strip anything that isn't a digit, dot or minus, collapse to one dot / leading minus.
+		let cleaned = input.value.replace(/[^0-9.\-]/g, '');
+		const negative = cleaned.startsWith('-');
+		cleaned = cleaned.replace(/-/g, '');
+		const firstDot = cleaned.indexOf('.');
+		if (firstDot !== -1) {
+			cleaned =
+				cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, '');
+		}
+		if (negative) cleaned = '-' + cleaned;
+		if (cleaned !== input.value) input.value = cleaned;
+		value = cleaned;
+	}
 	// Label shown inside the Select trigger for the currently-bound value.
 	const selectedLabel = $derived(
 		options.find((o) => o.value === value)?.label ?? placeholder ?? 'Select…'
@@ -84,6 +107,17 @@
 				class="{inputClass} min-h-28 resize-y"
 				{placeholder}
 			></textarea>
+		{:else if isNumeric}
+			<input
+				id={fieldId}
+				data-testid={fieldId}
+				{value}
+				oninput={filterNumeric}
+				class={inputClass}
+				type="text"
+				inputmode="decimal"
+				{placeholder}
+			/>
 		{:else}
 			<input id={fieldId} data-testid={fieldId} bind:value class={inputClass} {type} {placeholder} />
 		{/if}
