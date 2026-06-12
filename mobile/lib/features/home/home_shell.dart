@@ -14,11 +14,12 @@ import '../../core/models/models.dart';
 import '../../core/realtime/realtime_providers.dart';
 import '../../core/voice/voice_command.dart';
 import '../../core/voice/voice_command_controller.dart';
-import '../accounting/accounting_models.dart';
 import '../accounting/accounting_repository.dart';
 import '../ai/ai_models.dart';
 import '../ai/ai_repository.dart';
 import '../ai/ai_tab.dart';
+import '../capture/capture_fab_sheet.dart';
+import '../appointments/tenant_appointments_screen.dart';
 import '../leases/leases_list_screen.dart';
 import '../maintenance/work_order_detail_screen.dart';
 import '../maintenance/work_orders_repository.dart';
@@ -27,13 +28,15 @@ import '../messages/message_detail_screen.dart';
 import '../messages/message_models.dart';
 import '../messages/messages_list_screen.dart';
 import '../messages/messages_repository.dart';
+import '../money/money_screen.dart';
+import '../money/money_snapshot_card.dart';
+import '../money/overdue_screen.dart';
 import '../payments/payments_screen.dart';
 import '../portal/tenant_account_history_screen.dart';
 import '../portal/tenant_portal_repository.dart';
 import '../portal/tenant_work_order_detail_screen.dart';
-import '../properties/properties_tab.dart';
-import '../scan/scan_tab.dart';
 import '../tenants/tenants_list_screen.dart';
+import '../tenants/tenant_lease_screen.dart';
 import '../voice/tell_me_screen.dart';
 import 'more_tab.dart';
 
@@ -90,7 +93,9 @@ final _fieldQueueProvider = FutureProvider.autoDispose<List<WorkOrder>>((
 
 /// Bottom-navigation app shell.
 ///
-/// Tabs: Home · Scan · Properties · Messages · More
+/// Landlord tabs: Today · Money · [Capture FAB] · Work · Messages
+/// (the center slot is a docked Capture FAB, not a destination).
+/// Tenant tabs: Home · Messages · Maintenance · More
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
@@ -101,15 +106,13 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell> {
   int _selectedIndex = 0;
 
-  /// Index of the Scan tab in the landlord [_tabs] (Home · Scan · …).
-  static const _scanTabIndex = 1;
-
+  /// Landlord destinations, in tab order. The Capture FAB sits visually between
+  /// index 1 (Money) and index 2 (Work) but is not itself a destination.
   static const _tabs = [
-    _TabItem(label: 'Home', icon: Symbols.home_rounded),
-    _TabItem(label: 'Scan', icon: Symbols.document_scanner_rounded),
-    _TabItem(label: 'Properties', icon: Symbols.apartment_rounded),
+    _TabItem(label: 'Today', icon: Symbols.home_rounded),
+    _TabItem(label: 'Money', icon: Symbols.savings_rounded),
+    _TabItem(label: 'Work', icon: Symbols.build_rounded),
     _TabItem(label: 'Messages', icon: Symbols.forum_rounded),
-    _TabItem(label: 'More', icon: Symbols.more_horiz_rounded),
   ];
 
   static const _tenantTabs = [
@@ -118,6 +121,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     _TabItem(label: 'Maintenance', icon: Symbols.build_rounded),
     _TabItem(label: 'More', icon: Symbols.more_horiz_rounded),
   ];
+
+  /// Opens the TSK-138 capture menu (camera / gallery / PDF / voice / type).
+  void _openCapture() => showCaptureFabSheet(context);
 
   @override
   void initState() {
@@ -162,10 +168,10 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         case VoiceAction.logExpense:
           // Voice and tap converge on the capture flow (the flagship intake).
           navigator.popUntil((route) => route.isFirst);
-          setState(() => _selectedIndex = _scanTabIndex);
+          _openCapture();
         case VoiceAction.showOverdueRent:
           navigator.push<void>(
-            MaterialPageRoute<void>(builder: (_) => const PaymentsScreen()),
+            MaterialPageRoute<void>(builder: (_) => const OverdueScreen()),
           );
         case VoiceAction.openWorkOrders:
           navigator.push<void>(
@@ -209,6 +215,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
             : [
                 _HomeTab(
                   user: user,
+                  onOpenCapture: _openCapture,
+                  onOpenOverdue: () => Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) => const OverdueScreen(),
+                    ),
+                  ),
                   onSwitchToTab: (index) =>
                       setState(() => _selectedIndex = index),
                   onOpenAssistant: () {
@@ -217,15 +229,26 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                     );
                   },
                 ),
-                const ScanTab(),
-                const PropertiesTab(),
+                const MoneyScreen(),
+                const WorkOrdersScreen(),
                 const MessagesListScreen(),
-                const MoreTab(),
               ],
       ),
+      floatingActionButton: tenantMode
+          ? null
+          : FloatingActionButton(
+              onPressed: _openCapture,
+              tooltip: 'Capture',
+              elevation: 2,
+              child: const Icon(Symbols.add_a_photo_rounded, fill: 1),
+            ),
+      floatingActionButtonLocation:
+          FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: _MorphNavBar(
         tabs: tabs,
         selectedIndex: selectedIndex,
+        // Landlord nav leaves a gap in the middle for the docked Capture FAB.
+        centerGap: !tenantMode,
         onSelected: (index) => setState(() => _selectedIndex = index),
       ),
     );
@@ -241,15 +264,22 @@ class _MorphNavBar extends StatelessWidget {
     required this.tabs,
     required this.selectedIndex,
     required this.onSelected,
+    this.centerGap = false,
   });
 
   final List<_TabItem> tabs;
   final int selectedIndex;
   final ValueChanged<int> onSelected;
 
+  /// When true, a spacer is inserted in the middle of the row to clear the
+  /// center-docked Capture FAB. Assumes an even number of destinations split
+  /// evenly around the gap (4 tabs → 2 left, FAB, 2 right).
+  final bool centerGap;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final mid = tabs.length ~/ 2;
     return Container(
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLow,
@@ -264,13 +294,15 @@ class _MorphNavBar extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              for (var i = 0; i < tabs.length; i++)
+              for (var i = 0; i < tabs.length; i++) ...[
+                if (centerGap && i == mid) const SizedBox(width: 64),
                 M3MorphNavItem(
                   icon: tabs[i].icon,
                   label: i == selectedIndex ? tabs[i].label : null,
                   selected: i == selectedIndex,
                   onTap: () => onSelected(i),
                 ),
+              ],
             ],
           ),
         ),
@@ -985,14 +1017,24 @@ class _TenantMoreTab extends ConsumerWidget {
           ListTile(
             leading: const Icon(Icons.description_outlined),
             title: const Text('Lease'),
-            subtitle: const Text('Lease details appear on the dashboard.'),
-            onTap: () {},
+            subtitle: const Text('Your terms, rent and ledger.'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => const TenantLeaseScreen(),
+              ),
+            ),
           ),
           ListTile(
             leading: const Icon(Icons.event_outlined),
             title: const Text('Appointments'),
-            subtitle: const Text('Upcoming appointments will appear here.'),
-            onTap: () {},
+            subtitle: const Text('Upcoming showings and visits.'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(
+                builder: (_) => const TenantAppointmentsScreen(),
+              ),
+            ),
           ),
           ListTile(
             leading: const Icon(Icons.logout_outlined),
@@ -1073,6 +1115,8 @@ class _HomeTab extends ConsumerWidget {
     required this.user,
     required this.onSwitchToTab,
     required this.onOpenAssistant,
+    required this.onOpenCapture,
+    required this.onOpenOverdue,
   });
 
   final AuthUser? user;
@@ -1081,8 +1125,14 @@ class _HomeTab extends ConsumerWidget {
   final void Function(int index) onSwitchToTab;
   final VoidCallback onOpenAssistant;
 
-  // Tab indices
-  static const _scanTabIndex = 1;
+  /// Opens the Capture FAB menu (scan/gallery/PDF/voice/type).
+  final VoidCallback onOpenCapture;
+
+  /// Drills into the Money "Who's behind" overdue view.
+  final VoidCallback onOpenOverdue;
+
+  /// Index of the Money tab in the landlord shell (Today · Money · …).
+  static const _moneyTabIndex = 1;
 
   String get _greeting {
     final hour = DateTime.now().hour;
@@ -1112,6 +1162,13 @@ class _HomeTab extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Rental Command'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.grid_view_outlined),
+            tooltip: 'Browse',
+            onPressed: () => Navigator.of(context).push<void>(
+              MaterialPageRoute<void>(builder: (_) => const MoreTab()),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.auto_awesome_outlined),
             tooltip: 'AI Assistant',
@@ -1157,9 +1214,9 @@ class _HomeTab extends ConsumerWidget {
                           builder: (_) => const TellMeScreen(),
                         ),
                       ),
-                      onScan: () => onSwitchToTab(_scanTabIndex),
+                      onScan: onOpenCapture,
                       onAskAi: onOpenAssistant,
-                      onAddExpense: () => onSwitchToTab(_scanTabIndex),
+                      onAddExpense: onOpenCapture,
                     ),
                     const SizedBox(height: 32),
 
@@ -1198,13 +1255,28 @@ class _HomeTab extends ConsumerWidget {
               ),
             ),
 
-            // ── Money snapshot ────────────────────────────────────────────
+            // ── Money snapshot (shared widget; past-due is actionable) ────
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+              sliver: SliverToBoxAdapter(
+                child: MoneySnapshotCard(
+                  snapshotAsync: moneyAsync,
+                  compact: true,
+                  onRetry: () => ref.invalidate(moneySnapshotProvider),
+                  onPastDueTap: onOpenOverdue,
+                ),
+              ),
+            ),
+            // Open the full Money tab from the dashboard headline.
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 32),
               sliver: SliverToBoxAdapter(
-                child: _MoneySnapshotSection(
-                  snapshotAsync: moneyAsync,
-                  onRetry: () => ref.invalidate(moneySnapshotProvider),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () => onSwitchToTab(_moneyTabIndex),
+                    child: const Text('Open Money'),
+                  ),
                 ),
               ),
             ),
@@ -1645,255 +1717,6 @@ class _QuickActionButton extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Money snapshot — plain-English "money in / out / kept" + who's behind
-// ---------------------------------------------------------------------------
-
-class _MoneySnapshotSection extends StatelessWidget {
-  const _MoneySnapshotSection({
-    required this.snapshotAsync,
-    required this.onRetry,
-  });
-
-  final AsyncValue<MoneySnapshot> snapshotAsync;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-
-    return snapshotAsync.when(
-      loading: () => const _LoadingCard(label: 'Loading your money...'),
-      error: (_, _) => Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Icon(Icons.wifi_off_outlined, color: cs.error, size: 22),
-              const SizedBox(width: 12),
-              const Expanded(child: Text("Couldn't load your money.")),
-              TextButton(onPressed: onRetry, child: const Text('Retry')),
-            ],
-          ),
-        ),
-      ),
-      data: (snapshot) {
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.savings_outlined, color: cs.primary, size: 20),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Your money',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const Spacer(),
-                    if (snapshot.periodLabel.isNotEmpty)
-                      Text(
-                        snapshot.periodLabel,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: cs.onSurfaceVariant,
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                _MoneyRow(
-                  icon: Icons.south_west,
-                  iconColor: Colors.green.shade700,
-                  label: 'Collected',
-                  amount: snapshot.collected,
-                  explanation: snapshot.explanations.collected,
-                ),
-                const SizedBox(height: 14),
-                _MoneyRow(
-                  icon: Icons.north_east,
-                  iconColor: cs.error,
-                  label: 'Spent',
-                  amount: snapshot.spent,
-                  explanation: snapshot.explanations.spent,
-                ),
-                const SizedBox(height: 14),
-                _MoneyRow(
-                  icon: Icons.account_balance_wallet_outlined,
-                  iconColor: cs.primary,
-                  label: 'Kept',
-                  amount: snapshot.net,
-                  explanation: snapshot.explanations.net,
-                  emphasize: true,
-                ),
-                if (snapshot.pastDueCount > 0 ||
-                    snapshot.pastDueAmount > 0) ...[
-                  const SizedBox(height: 14),
-                  const Divider(height: 1),
-                  const SizedBox(height: 14),
-                  _PastDueRow(
-                    count: snapshot.pastDueCount,
-                    amount: snapshot.pastDueAmount,
-                    explanation: snapshot.explanations.pastDue,
-                  ),
-                ],
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _MoneyRow extends StatelessWidget {
-  const _MoneyRow({
-    required this.icon,
-    required this.iconColor,
-    required this.label,
-    required this.amount,
-    required this.explanation,
-    this.emphasize = false,
-  });
-
-  final IconData icon;
-  final Color iconColor;
-  final String label;
-  final double amount;
-  final String explanation;
-  final bool emphasize;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 2),
-          child: Icon(icon, size: 18, color: iconColor),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
-                children: [
-                  Expanded(
-                    child: Text(
-                      label,
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: cs.onSurface,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    _money(amount),
-                    style:
-                        (emphasize
-                                ? theme.textTheme.headlineSmall
-                                : theme.textTheme.titleLarge)
-                            ?.copyWith(
-                              fontWeight: FontWeight.w700,
-                              fontFeatures: const [
-                                FontFeature.tabularFigures(),
-                              ],
-                              color: emphasize ? cs.primary : cs.onSurface,
-                            ),
-                  ),
-                ],
-              ),
-              if (explanation.isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Text(
-                  explanation,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: cs.onSurfaceVariant,
-                    height: 1.4,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _PastDueRow extends StatelessWidget {
-  const _PastDueRow({
-    required this.count,
-    required this.amount,
-    required this.explanation,
-  });
-
-  final int count;
-  final double amount;
-  final String explanation;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final tenantWord = count == 1 ? 'tenant' : 'tenants';
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: cs.errorContainer,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Icon(
-            Icons.warning_amber_rounded,
-            size: 16,
-            color: cs.onErrorContainer,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '$count $tenantWord behind, owing ${_money(amount)}',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: cs.onSurface,
-                ),
-              ),
-              if (explanation.isNotEmpty) ...[
-                const SizedBox(height: 2),
-                Text(
-                  explanation,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: cs.onSurfaceVariant,
-                    height: 1.4,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-      ],
     );
   }
 }
