@@ -15,6 +15,7 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
+	import TimeZoneSelect from '$lib/components/shared/TimeZoneSelect.svelte';
 	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
 
 	const queryClient = useQueryClient();
@@ -339,7 +340,7 @@
 				</div>
 				<div>
 					<label for="settings-timezone" class="mb-1 block text-xs text-muted-foreground">Time Zone</label>
-					<Input id="settings-timezone" bind:value={form.timeZone} />
+					<TimeZoneSelect id="settings-timezone" testid="settings-timezone" bind:value={form.timeZone} />
 				</div>
 				<div>
 					<label for="settings-status" class="mb-1 block text-xs text-muted-foreground">Status</label>

@@ -3,13 +3,15 @@
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import type { Portfolio } from '$lib/types';
 	import { XIcon, Check } from '@lucide/svelte';
+	import TimeZoneSelect from '$lib/components/shared/TimeZoneSelect.svelte';
+	import { guessBrowserTimeZone } from '$lib/data/timezones';
 
 	let { onCreated, onClose }: { onCreated: (p: Portfolio) => void; onClose: () => void } = $props();
 
 	let name = $state('');
 	let description = $state('');
 	let managementCompanyName = $state('');
-	let timeZone = $state('America/New_York');
+	let timeZone = $state(guessBrowserTimeZone());
 
 	const createMut = createMutation(() => ({
 		mutationFn: (data: Partial<Portfolio>) => portfolios.create(data),
@@ -68,13 +70,7 @@
 			</div>
 			<div>
 				<label for="new-portfolio-timezone" class="mb-1 block text-xs text-muted-foreground">Time zone</label>
-				<input
-					id="new-portfolio-timezone"
-					type="text"
-					bind:value={timeZone}
-					class="w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm text-foreground focus:border-ring focus:outline-none"
-					placeholder="America/New_York"
-				/>
+				<TimeZoneSelect id="new-portfolio-timezone" testid="new-portfolio-timezone" bind:value={timeZone} />
 			</div>
 			<div>
 				<label for="new-portfolio-desc" class="mb-1 block text-xs text-muted-foreground">Description</label>
