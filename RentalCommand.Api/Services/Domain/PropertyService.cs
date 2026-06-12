@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -45,25 +46,50 @@ public class PropertyService : IPropertyService
             _ => query.SortDescending ? q.OrderByDescending(p => p.CreatedAt) : q.OrderBy(p => p.CreatedAt),
         };
 
-        var items = await q
-            .Include(p => p.Owner)
-            .Include(p => p.OwnerEntity)
+        // Unit / occupied counts are computed in SQL as correlated subqueries (p.Units.Count(...))
+        // so the database does the aggregation — no Units collection is loaded into memory and
+        // counted client-side, and there is no per-row follow-up query (N+1). EF translates each
+        // count to a scalar subquery in the single list SELECT.
+        var rows = await q
+            .Select(p => new ProjectedProperty(
+                p,
+                p.OwnerEntity != null ? p.OwnerEntity.Name : (p.Owner != null ? p.Owner.Name : null),
+                p.Units.Count,
+                p.Units.Count(u => u.Status == UnitStatus.Occupied)))
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return items.Select(PropertyResponse.FromEntity).ToList();
+        return rows.Select(r => ToResponse(r)).ToList();
     }
 
     public async Task<PropertyResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.Properties
+        var row = await _db.Properties
             .AsNoTracking()
-            .Include(p => p.Owner)
-            .Include(p => p.OwnerEntity)
-            .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
+            .Where(p => p.Id == id && p.PortfolioId == portfolioId)
+            .Select(p => new ProjectedProperty(
+                p,
+                p.OwnerEntity != null ? p.OwnerEntity.Name : (p.Owner != null ? p.Owner.Name : null),
+                p.Units.Count,
+                p.Units.Count(u => u.Status == UnitStatus.Occupied)))
+            .FirstOrDefaultAsync(ct);
 
-        return entity == null ? null : PropertyResponse.FromEntity(entity);
+        return row == null ? null : ToResponse(row);
+    }
+
+    /// <summary>
+    /// Property plus its SQL-computed owner name and unit aggregates. Carrying the entity (rather than
+    /// re-listing every scalar in the projection) keeps the read in one SELECT while letting
+    /// <see cref="PropertyResponse.FromEntity"/> own the scalar mapping.
+    /// </summary>
+    private sealed record ProjectedProperty(Property Property, string? OwnerName, int UnitCount, int OccupiedUnits);
+
+    private static PropertyResponse ToResponse(ProjectedProperty row)
+    {
+        var response = PropertyResponse.FromEntity(row.Property, row.UnitCount, row.OccupiedUnits);
+        response.OwnerName = row.OwnerName;
+        return response;
     }
 
     public async Task<PropertyResponse?> CreateAsync(int portfolioId, CreatePropertyRequest request, CancellationToken ct = default)
@@ -105,7 +131,9 @@ public class PropertyService : IPropertyService
         _db.Properties.Add(entity);
         await _db.SaveChangesAsync(ct);
 
+        // A freshly-created property has no units yet, so the aggregates are 0 — no query needed.
         var response = PropertyResponse.FromEntity(entity);
+        response.OwnerName = entity.OwnerEntity?.Name ?? entity.Owner?.Name;
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
@@ -151,7 +179,17 @@ public class PropertyService : IPropertyService
 
         await _db.SaveChangesAsync(ct);
 
-        var response = PropertyResponse.FromEntity(entity);
+        // Re-read the unit aggregates in SQL (single scalar query) so the broadcast row carries the
+        // same counts the list/detail show — the edit doesn't change unit membership, but keeping the
+        // shape consistent avoids the grid flashing 0s on a live update.
+        var counts = await _db.Properties
+            .AsNoTracking()
+            .Where(p => p.Id == id && p.PortfolioId == portfolioId)
+            .Select(p => new { UnitCount = p.Units.Count, Occupied = p.Units.Count(u => u.Status == UnitStatus.Occupied) })
+            .FirstOrDefaultAsync(ct);
+
+        var response = PropertyResponse.FromEntity(entity, counts?.UnitCount ?? 0, counts?.Occupied ?? 0);
+        response.OwnerName = entity.OwnerEntity?.Name ?? entity.Owner?.Name;
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
