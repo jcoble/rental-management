@@ -348,7 +348,7 @@
 			emptyMessage="No owners found."
 			getRowKey={(o) => o.id}
 			getRowTestId={() => 'owner-row'}
-			onRowClick={(o) => openEditOwner(o)}
+			onRowClick={(o) => goto(`/owners/${o.id}`)}
 			data-testid="owners-list"
 		>
 			{#snippet toolbar()}
