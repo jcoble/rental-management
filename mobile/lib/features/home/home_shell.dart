@@ -6,12 +6,17 @@ import 'package:image_picker/image_picker.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:go_router/go_router.dart';
+
 import '../../core/api/api_exception.dart';
 import '../../core/theme/app_recipes.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/models/models.dart';
+import '../../core/push/push_service.dart';
 import '../../core/realtime/realtime_providers.dart';
+import '../notifications/notification_realtime.dart';
+import '../notifications/notifications_repository.dart';
 import '../../core/voice/voice_command.dart';
 import '../../core/voice/voice_command_controller.dart';
 import '../accounting/accounting_repository.dart';
@@ -103,7 +108,8 @@ class HomeShell extends ConsumerStatefulWidget {
   ConsumerState<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends ConsumerState<HomeShell> {
+class _HomeShellState extends ConsumerState<HomeShell>
+    with WidgetsBindingObserver {
   int _selectedIndex = 0;
 
   /// Landlord destinations, in tab order. The Capture FAB sits visually between
@@ -128,14 +134,49 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      // Initialise the realtime watcher so it stays alive for the shell.
+      // Initialise the realtime watchers so they stay alive for the shell.
       ref.read(realtimeWatcherProvider);
+      ref.read(notificationRealtimeWatcherProvider);
       // A voice command may have cold-started the app (Assistant launched us)
       // before this shell built — pick up anything already waiting in the bus.
       final pending = ref.read(pendingVoiceCommandProvider);
       if (pending != null) _handleVoiceCommand(pending);
+      // Likewise drain a notification-tap deep link that cold-started the app
+      // before authentication completed.
+      final pendingLink = ref.read(pendingPushLinkProvider);
+      if (pendingLink != null) _handlePushLink(pendingLink);
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Refresh the unread badge whenever the app comes back to the foreground
+      // (a push may have been read on another device, or arrived while backgrounded).
+      if (ref.read(authControllerProvider) is AuthStateAuthenticated) {
+        ref.read(unreadCountProvider.notifier).refresh();
+      }
+    }
+  }
+
+  /// Navigates to a notification-tap deep link once the shell is mounted and
+  /// the user is authenticated, then clears the one-slot bus.
+  void _handlePushLink(String route) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (ref.read(authControllerProvider) is AuthStateAuthenticated) {
+        context.go(route);
+      }
+      ref.read(pendingPushLinkProvider.notifier).consume();
     });
   }
 
@@ -186,12 +227,18 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    // Keep the watcher alive while the shell is in the tree.
+    // Keep the watchers alive while the shell is in the tree.
     ref.watch(realtimeWatcherProvider);
+    ref.watch(notificationRealtimeWatcherProvider);
 
     // React to voice commands that arrive while the shell is already running.
     ref.listen<VoiceCommand?>(pendingVoiceCommandProvider, (_, next) {
       if (next != null) _handleVoiceCommand(next);
+    });
+
+    // React to notification taps (warm app) that stashed a deep link.
+    ref.listen<String?>(pendingPushLinkProvider, (_, next) {
+      if (next != null) _handlePushLink(next);
     });
 
     final authState = ref.watch(authControllerProvider);
@@ -1162,6 +1209,7 @@ class _HomeTab extends ConsumerWidget {
       appBar: AppBar(
         title: const Text('Rental Command'),
         actions: [
+          const _NotificationBell(),
           IconButton(
             icon: const Icon(Icons.grid_view_outlined),
             tooltip: 'Browse',
@@ -1975,4 +2023,28 @@ class _TabItem {
   /// A `Symbols.*_rounded` glyph (Material Symbols Rounded) whose FILL axis is
   /// animated 0→1 when the tab is active.
   final IconData icon;
+}
+
+/// AppBar notification bell with an unread-count badge. Tapping opens the
+/// inbox at `/notifications`; the badge count comes from [unreadCountProvider]
+/// (refreshed on app resume, SignalR event, and inbox close).
+class _NotificationBell extends ConsumerWidget {
+  const _NotificationBell();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final count = ref.watch(unreadCountProvider).maybeWhen(
+          data: (c) => c,
+          orElse: () => 0,
+        );
+    return IconButton(
+      tooltip: 'Notifications',
+      onPressed: () => context.push('/notifications'),
+      icon: Badge(
+        isLabelVisible: count > 0,
+        label: Text(count > 99 ? '99+' : '$count'),
+        child: const Icon(Icons.notifications_none),
+      ),
+    );
+  }
 }
