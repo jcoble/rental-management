@@ -21,15 +21,21 @@ public class AnalyticsService : IAnalyticsService
         var today = now.Date;
 
         // ── 1. Occupancy ─────────────────────────────────────────────────────────────────────────
-        // Units have no direct PortfolioId; scope via their parent Property.
-        var unitStatuses = await _db.Units
+        // Units have no direct PortfolioId; scope via their parent Property. Total and occupied counts
+        // are computed SQL-side in a single grouped aggregate — no unit rows are loaded.
+        var occupancyCounts = await _db.Units
             .AsNoTracking()
             .Where(u => u.Property!.PortfolioId == portfolioId)
-            .Select(u => u.Status)
-            .ToListAsync(ct);
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Total = g.Count(),
+                Occupied = g.Count(u => u.Status == UnitStatus.Occupied),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        var totalUnits = unitStatuses.Count;
-        var occupiedUnits = unitStatuses.Count(s => s == UnitStatus.Occupied);
+        var totalUnits = occupancyCounts?.Total ?? 0;
+        var occupiedUnits = occupancyCounts?.Occupied ?? 0;
         var occupancyRate = totalUnits > 0
             ? Math.Round(100m * occupiedUnits / totalUnits, 1)
             : 0m;
@@ -38,44 +44,50 @@ public class AnalyticsService : IAnalyticsService
         var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var monthEnd = monthStart.AddMonths(1); // exclusive upper bound
 
-        // Pull only the minimal columns needed for this-month and overdue calculations.
-        var rentPayments = await _db.Payments
+        // This-month rent (scheduled vs collected) and overdue rent are all computed SQL-side over the
+        // rent-payment set as conditional SUM/COUNT aggregates in a single grouped round-trip — no
+        // payment rows are loaded into memory.
+        var rentAgg = await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId && p.PaymentType == PaymentType.Rent)
-            .Select(p => new { p.Status, p.Amount, p.DueDate, p.PaidDate })
-            .ToListAsync(ct);
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                MonthScheduled = g.Sum(p =>
+                    p.DueDate >= monthStart && p.DueDate < monthEnd ? p.Amount : 0m),
+                MonthCollected = g.Sum(p =>
+                    p.Status == PaymentStatus.Paid && p.PaidDate != null
+                    && p.PaidDate >= monthStart && p.PaidDate < monthEnd ? p.Amount : 0m),
+                OverdueAmount = g.Sum(p =>
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Partial)
+                    && p.DueDate.Date < today ? p.Amount : 0m),
+                OverdueCount = g.Count(p =>
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Partial)
+                    && p.DueDate.Date < today),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        var monthRentScheduled = rentPayments
-            .Where(p => p.DueDate >= monthStart && p.DueDate < monthEnd)
-            .Sum(p => p.Amount);
-
-        var monthRentCollected = rentPayments
-            .Where(p => p.Status == PaymentStatus.Paid
-                        && p.PaidDate.HasValue
-                        && p.PaidDate.Value >= monthStart
-                        && p.PaidDate.Value < monthEnd)
-            .Sum(p => p.Amount);
+        var monthRentScheduled = rentAgg?.MonthScheduled ?? 0m;
+        var monthRentCollected = rentAgg?.MonthCollected ?? 0m;
 
         var collectionRate = monthRentScheduled > 0
             ? Math.Round(100m * monthRentCollected / monthRentScheduled, 1)
             : 0m;
 
         // ── 3. Overdue ────────────────────────────────────────────────────────────────────────────
-        var overduePayments = rentPayments
-            .Where(p => p.Status is PaymentStatus.Scheduled or PaymentStatus.Late or PaymentStatus.Partial
-                        && p.DueDate.Date < today)
-            .ToList();
-
         var overdue = new CountAmount(
-            overduePayments.Count,
-            Math.Round(overduePayments.Sum(p => p.Amount), 2));
+            rentAgg?.OverdueCount ?? 0,
+            Math.Round(rentAgg?.OverdueAmount ?? 0m, 2));
 
         // ── 4. 12-month trend ─────────────────────────────────────────────────────────────────────
-        // Fetch paid rent payments and expenses for the 12-month window, then aggregate in memory.
+        // Income (paid rent) and expenses for the 12-month window are each aggregated SQL-side with ONE
+        // grouped-by-(year, month) query (EF translates DateTime.Year/.Month to date_part on Postgres and
+        // strftime on SQLite — provider-agnostic, unlike date_trunc). The 12 fixed month slots are then
+        // filled from the small grouped results, defaulting empty months to zero.
         var trendStart = monthStart.AddMonths(-11); // 12 months back, inclusive
         var trendEnd = monthEnd;                    // current month end (exclusive)
 
-        var paidRentInWindow = await _db.Payments
+        var incomeByMonth = (await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId
                         && p.PaymentType == PaymentType.Rent
@@ -83,47 +95,55 @@ public class AnalyticsService : IAnalyticsService
                         && p.PaidDate.HasValue
                         && p.PaidDate!.Value >= trendStart
                         && p.PaidDate!.Value < trendEnd)
-            .Select(p => new { p.PaidDate, p.Amount })
-            .ToListAsync(ct);
+            .GroupBy(p => new { p.PaidDate!.Value.Year, p.PaidDate!.Value.Month })
+            .Select(g => new { g.Key.Year, g.Key.Month, Total = g.Sum(p => p.Amount) })
+            .ToListAsync(ct))
+            .ToDictionary(x => (x.Year, x.Month), x => x.Total);
 
-        var expensesInWindow = await _db.Expenses
+        var expensesByMonth = (await _db.Expenses
             .AsNoTracking()
             .Where(e => e.PortfolioId == portfolioId
                         && e.IncurredAt >= trendStart
                         && e.IncurredAt < trendEnd)
-            .Select(e => new { e.IncurredAt, e.Amount })
-            .ToListAsync(ct);
+            .GroupBy(e => new { e.IncurredAt.Year, e.IncurredAt.Month })
+            .Select(g => new { g.Key.Year, g.Key.Month, Total = g.Sum(e => e.Amount) })
+            .ToListAsync(ct))
+            .ToDictionary(x => (x.Year, x.Month), x => x.Total);
 
         var trend = new List<MonthlyPoint>(12);
         for (var i = 11; i >= 0; i--)
         {
             var mStart = monthStart.AddMonths(-i);
-            var mEnd = mStart.AddMonths(1);
             var label = mStart.ToString("yyyy-MM");
+            var key = (mStart.Year, mStart.Month);
 
-            var income = Math.Round(
-                paidRentInWindow
-                    .Where(p => p.PaidDate!.Value >= mStart && p.PaidDate!.Value < mEnd)
-                    .Sum(p => p.Amount), 2);
-
-            var expenses = Math.Round(
-                expensesInWindow
-                    .Where(e => e.IncurredAt >= mStart && e.IncurredAt < mEnd)
-                    .Sum(e => e.Amount), 2);
+            var income = Math.Round(incomeByMonth.GetValueOrDefault(key, 0m), 2);
+            var expenses = Math.Round(expensesByMonth.GetValueOrDefault(key, 0m), 2);
 
             trend.Add(new MonthlyPoint(label, income, expenses, Math.Round(income - expenses, 2)));
         }
 
         // ── 5. Lease expiry ───────────────────────────────────────────────────────────────────────
-        var leaseEndDates = await _db.Leases
+        // The 30/60/90-day expiry counts are computed SQL-side as conditional COUNTs in a single grouped
+        // aggregate over active leases — no lease rows are loaded.
+        var day30 = today.AddDays(30);
+        var day60 = today.AddDays(60);
+        var day90 = today.AddDays(90);
+        var expiryCounts = await _db.Leases
             .AsNoTracking()
             .Where(l => l.PortfolioId == portfolioId && l.Status == LeaseStatus.Active)
-            .Select(l => l.EndDate)
-            .ToListAsync(ct);
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                D30 = g.Count(l => l.EndDate.Date >= today && l.EndDate.Date <= day30),
+                D60 = g.Count(l => l.EndDate.Date >= today && l.EndDate.Date <= day60),
+                D90 = g.Count(l => l.EndDate.Date >= today && l.EndDate.Date <= day90),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        var leasesExpiring30 = leaseEndDates.Count(d => d.Date >= today && d.Date <= today.AddDays(30));
-        var leasesExpiring60 = leaseEndDates.Count(d => d.Date >= today && d.Date <= today.AddDays(60));
-        var leasesExpiring90 = leaseEndDates.Count(d => d.Date >= today && d.Date <= today.AddDays(90));
+        var leasesExpiring30 = expiryCounts?.D30 ?? 0;
+        var leasesExpiring60 = expiryCounts?.D60 ?? 0;
+        var leasesExpiring90 = expiryCounts?.D90 ?? 0;
 
         // ── 6. Open work orders by priority ──────────────────────────────────────────────────────
         var openWorkOrderGroups = await _db.WorkOrders

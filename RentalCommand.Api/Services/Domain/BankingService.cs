@@ -46,6 +46,8 @@ public class BankingService : IBankingService
         var unmatchedCount = await _db.BankTransactions
             .CountAsync(t => t.PortfolioId == portfolioId && t.MatchStatus == "Unmatched", ct);
 
+        var suggestedMatchCount = await CountSuggestibleUnmatchedAsync(portfolioId, ct);
+
         var mappedTransactions = await MapTransactionsWithSuggestionsAsync(portfolioId, transactions, ct);
 
         return new BankingSummaryResponse
@@ -53,7 +55,7 @@ public class BankingService : IBankingService
             ConnectionCount = connections.Count,
             TransactionCount = await _db.BankTransactions.CountAsync(t => t.PortfolioId == portfolioId, ct),
             UnmatchedCount = unmatchedCount,
-            SuggestedMatchCount = mappedTransactions.Count(t => t.SuggestedMatch != null && t.MatchStatus == "Unmatched"),
+            SuggestedMatchCount = suggestedMatchCount,
             LastSyncedAt = connections.Select(c => c.LastSyncedAt).Where(d => d.HasValue).Max(),
             Connections = connections.Select(MapConnection).ToList(),
             RecentTransactions = mappedTransactions
@@ -578,6 +580,38 @@ public class BankingService : IBankingService
         return _db.BankTransactions
             .Include(t => t.BankConnection)
             .Where(t => t.PortfolioId == portfolioId);
+    }
+
+    /// <summary>
+    /// Counts how many Unmatched bank lines across the WHOLE portfolio have at least one plausible
+    /// payment/expense match — the "Suggestions" KPI. Computed entirely SQL-side as a single COUNT with
+    /// a correlated EXISTS, so it neither caps at the recent-preview page nor loads/loops rows in memory.
+    /// The EXISTS uses the suggester's hard gates: amount equal within a cent, and the candidate's cash
+    /// date within ±7 days of the posting (the name-similarity refinement in the per-row suggester only
+    /// ever *widens* this window, so this DB count is a tight, slightly-conservative equivalent).
+    /// </summary>
+    private Task<int> CountSuggestibleUnmatchedAsync(int portfolioId, CancellationToken ct)
+    {
+        return _db.BankTransactions
+            .Where(t => t.PortfolioId == portfolioId && t.MatchStatus == "Unmatched")
+            .CountAsync(t =>
+                // Deposits (income) suggest against eligible recorded/expected payments.
+                (t.Amount > 0 && _db.Payments.Any(p =>
+                    p.PortfolioId == portfolioId &&
+                    p.Status != PaymentStatus.Failed &&
+                    p.Status != PaymentStatus.Refunded &&
+                    p.Amount >= t.Amount - 0.01m && p.Amount <= t.Amount + 0.01m &&
+                    (p.PaidDate ?? p.DueDate) >= t.PostedAt.AddDays(-7) &&
+                    (p.PaidDate ?? p.DueDate) <= t.PostedAt.AddDays(7)))
+                ||
+                // Withdrawals (spend) suggest against expenses; expense amounts are stored positive while
+                // the bank withdrawal is negative, so compare against the absolute amount.
+                (t.Amount < 0 && _db.Expenses.Any(e =>
+                    e.PortfolioId == portfolioId &&
+                    e.Amount >= -t.Amount - 0.01m && e.Amount <= -t.Amount + 0.01m &&
+                    (e.PaidAt ?? e.IncurredAt) >= t.PostedAt.AddDays(-7) &&
+                    (e.PaidAt ?? e.IncurredAt) <= t.PostedAt.AddDays(7))),
+                ct);
     }
 
     private Task<PlaidRuntimeSettings> GetRuntimeSettingsAsync(int portfolioId, CancellationToken ct)
