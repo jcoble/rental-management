@@ -169,6 +169,9 @@ export const leaseSchema = z.object({
 	tenantId: numericString('Tenant'),
 	startDate: required('Start date'),
 	endDate: required('End date'),
+	// Move-in date is distinct from lease start and optional (nullable on the entity);
+	// blank clears it and round-trips as null via UpdateLeaseRequest.MoveInDate.
+	moveInDate: optionalText,
 	// monthlyRent: server [Range(0.01, 99999999)] — must be > 0
 	monthlyRent: positiveNumeric('Monthly rent'),
 	// securityDeposit: server [Range(0, 99999999)] — can be 0
