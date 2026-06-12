@@ -909,6 +909,7 @@ export interface SecurityDepositHolding {
 	id: number;
 	leaseId: number;
 	leaseNumber?: string;
+	tenantName?: string;
 	amount: number;
 	status: SecurityDepositStatus;
 	heldAt: string;

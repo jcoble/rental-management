@@ -53,7 +53,7 @@ public class SecurityDepositService : ISecurityDepositService
     {
         var q = _db.SecurityDepositHoldings
             .AsNoTracking()
-            .Include(h => h.Lease)
+            .Include(h => h.Lease)!.ThenInclude(l => l!.Tenant)
             .Where(h => h.PortfolioId == portfolioId);
 
         if (leaseId.HasValue)
@@ -67,7 +67,7 @@ public class SecurityDepositService : ISecurityDepositService
     {
         var entity = await _db.SecurityDepositHoldings
             .AsNoTracking()
-            .Include(h => h.Lease)
+            .Include(h => h.Lease)!.ThenInclude(l => l!.Tenant)
             .FirstOrDefaultAsync(h => h.Id == id && h.PortfolioId == portfolioId, ct);
 
         return entity == null ? null : SecurityDepositResponse.FromEntity(entity);
@@ -75,9 +75,11 @@ public class SecurityDepositService : ISecurityDepositService
 
     public async Task<SecurityDepositResponse?> CreateAsync(int portfolioId, CreateDepositRequest request, CancellationToken ct = default)
     {
-        // Verify the lease belongs to this portfolio.
+        // Verify the lease belongs to this portfolio. Pull the tenant nav too so the create
+        // response carries the tenant name for the grid row (Lease / Tenant column).
         var lease = await _db.Leases
             .AsNoTracking()
+            .Include(l => l.Tenant)
             .FirstOrDefaultAsync(l => l.Id == request.LeaseId && l.PortfolioId == portfolioId, ct);
 
         if (lease == null)
@@ -119,7 +121,7 @@ public class SecurityDepositService : ISecurityDepositService
     public async Task<SecurityDepositResponse?> AddDeductionAsync(int portfolioId, int id, AddDeductionRequest request, CancellationToken ct = default)
     {
         var entity = await _db.SecurityDepositHoldings
-            .Include(h => h.Lease)
+            .Include(h => h.Lease)!.ThenInclude(l => l!.Tenant)
             .FirstOrDefaultAsync(h => h.Id == id && h.PortfolioId == portfolioId, ct);
 
         if (entity == null)
@@ -154,7 +156,7 @@ public class SecurityDepositService : ISecurityDepositService
     public async Task<SecurityDepositResponse?> ReturnAsync(int portfolioId, int id, ReturnDepositRequest request, CancellationToken ct = default)
     {
         var entity = await _db.SecurityDepositHoldings
-            .Include(h => h.Lease)
+            .Include(h => h.Lease)!.ThenInclude(l => l!.Tenant)
             .FirstOrDefaultAsync(h => h.Id == id && h.PortfolioId == portfolioId, ct);
 
         if (entity == null)

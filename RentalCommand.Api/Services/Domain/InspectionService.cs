@@ -39,6 +39,8 @@ public class InspectionService : IInspectionService
     {
         var q = _db.Inspections
             .AsNoTracking()
+            .Include(i => i.Property)
+            .Include(i => i.Unit)
             .Where(i => i.PortfolioId == portfolioId);
 
         if (propertyId.HasValue)
@@ -77,6 +79,8 @@ public class InspectionService : IInspectionService
     {
         var entity = await _db.Inspections
             .AsNoTracking()
+            .Include(i => i.Property)
+            .Include(i => i.Unit)
             .FirstOrDefaultAsync(i => i.Id == id && i.PortfolioId == portfolioId, ct);
         if (entity == null)
         {

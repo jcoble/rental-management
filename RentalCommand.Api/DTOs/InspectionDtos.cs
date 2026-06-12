@@ -21,6 +21,13 @@ public class InspectionResponse
     public int? TemplateId { get; set; }
     public int? ReportStoredFileId { get; set; }
     public string? Inspector { get; set; }
+
+    /// <summary>Name of the linked property. Projected from the navigation.</summary>
+    public string? PropertyName { get; set; }
+
+    /// <summary>Unit number of the linked unit, when assigned. Projected from the navigation.</summary>
+    public string? UnitNumber { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -45,6 +52,9 @@ public class InspectionResponse
         Inspector = e.Inspector,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
+        // Populated only when the caller eager-loads the Property/Unit navigations.
+        PropertyName = e.Property?.Name,
+        UnitNumber = e.Unit?.UnitNumber,
     };
 }
 
@@ -100,6 +110,9 @@ public class InspectionDetailResponse : InspectionResponse
             Inspector = e.Inspector,
             CreatedAt = e.CreatedAt,
             UpdatedAt = e.UpdatedAt,
+            // Populated only when the caller eager-loads the Property/Unit navigations.
+            PropertyName = e.Property?.Name,
+            UnitNumber = e.Unit?.UnitNumber,
             Items = items
                 .OrderBy(i => i.SortOrder)
                 .ThenBy(i => i.Id)

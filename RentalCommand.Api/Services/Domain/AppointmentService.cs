@@ -24,6 +24,9 @@ public class AppointmentService : IAppointmentService
     {
         var q = _db.Appointments
             .AsNoTracking()
+            .Include(a => a.Property)
+            .Include(a => a.Unit)
+            .Include(a => a.Tenant)
             .Where(a => a.PortfolioId == portfolioId);
 
         if (propertyId.HasValue)
@@ -68,6 +71,9 @@ public class AppointmentService : IAppointmentService
     {
         var entity = await _db.Appointments
             .AsNoTracking()
+            .Include(a => a.Property)
+            .Include(a => a.Unit)
+            .Include(a => a.Tenant)
             .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
 
         return entity == null ? null : AppointmentResponse.FromEntity(entity);

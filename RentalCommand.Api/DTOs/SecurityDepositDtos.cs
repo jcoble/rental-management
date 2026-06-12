@@ -14,6 +14,10 @@ public class SecurityDepositResponse
     public int PortfolioId { get; set; }
     public int LeaseId { get; set; }
     public string? LeaseNumber { get; set; }
+
+    /// <summary>Full name of the lease's tenant, when present. Projected from the Lease→Tenant navigation.</summary>
+    public string? TenantName { get; set; }
+
     public decimal Amount { get; set; }
     public string Status { get; set; } = "Held";
     public DateTime HeldAt { get; set; }
@@ -43,6 +47,10 @@ public class SecurityDepositResponse
             PortfolioId = e.PortfolioId,
             LeaseId = e.LeaseId,
             LeaseNumber = e.Lease?.LeaseNumber,
+            // Populated only when the caller eager-loads Lease→Tenant.
+            TenantName = e.Lease?.Tenant == null
+                ? null
+                : $"{e.Lease.Tenant.FirstName} {e.Lease.Tenant.LastName}".Trim(),
             Amount = e.Amount,
             Status = e.Status.ToString(),
             HeldAt = e.HeldAt,

@@ -7,6 +7,7 @@
 	import type { Lease, Tenant } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { tenantSchema, parseForm } from '$lib/schemas';
+	import { formatDateOnly } from '$lib/utils/date';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
@@ -252,7 +253,7 @@
 					<div>
 						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Date of Birth</dt>
 						<dd class="mt-1 text-sm text-foreground">
-							{new Date(tenant.dateOfBirth).toLocaleDateString()}
+							{formatDateOnly(tenant.dateOfBirth)}
 						</dd>
 					</div>
 				{/if}

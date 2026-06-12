@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 
 namespace RentalCommand.Api.DTOs;
 
@@ -15,6 +16,10 @@ public class TenantResponse
     public string? EmergencyContact { get; set; }
     public DateTime? DateOfBirth { get; set; }
     public string? Notes { get; set; }
+
+    /// <summary>Number of this tenant's leases currently in <see cref="LeaseStatus.Active"/>. Computed DB-side.</summary>
+    public int ActiveLeaseCount { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
