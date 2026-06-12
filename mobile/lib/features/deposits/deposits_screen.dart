@@ -1,10 +1,8 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/files/document_opener.dart';
 import '../../core/models/models.dart';
 import 'deposits_repository.dart';
 
@@ -303,8 +301,8 @@ class _DepositDetailSheetState
     );
   }
 
-  /// Fetches the move-out statement PDF bytes (authed), saves to a temp file,
-  /// and opens it with the platform viewer via url_launcher (file:// uri).
+  /// Fetches the move-out statement PDF bytes (authed) and hands them to the OS
+  /// viewer via [DocumentOpener] (FileProvider `content://` URI, share fallback).
   Future<void> _openMoveOutStatement() async {
     final messenger = ScaffoldMessenger.of(context);
     messenger
@@ -316,20 +314,11 @@ class _DepositDetailSheetState
       final bytes = await ref
           .read(depositsRepositoryProvider)
           .moveOutStatementBytes(_deposit.id);
-      final path =
-          '${Directory.systemTemp.path}/deposit-${_deposit.id}-move-out-statement.pdf';
-      final file = File(path);
-      await file.writeAsBytes(bytes, flush: true);
-      final ok = await launchUrl(
-        Uri.file(path),
-        mode: LaunchMode.externalApplication,
+      await DocumentOpener.openBytes(
+        bytes: bytes,
+        fileName: 'deposit-${_deposit.id}-move-out-statement.pdf',
       );
       messenger.hideCurrentSnackBar();
-      if (!ok) {
-        messenger.showSnackBar(
-          const SnackBar(content: Text('No app available to open the PDF.')),
-        );
-      }
     } on ApiException catch (e) {
       messenger
         ..hideCurrentSnackBar()

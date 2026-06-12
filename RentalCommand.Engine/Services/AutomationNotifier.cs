@@ -11,11 +11,14 @@ namespace RentalCommand.Engine.Services;
 /// <summary>
 /// Fans an automation event out across exactly the channels enabled for its
 /// <see cref="NotificationChannelPreference"/>: an in-app <see cref="Notification"/> per staff user
-/// (when In-app is on), an email outbox row (when Email is on and an address is present), and/or an
-/// SMS outbox row (when SMS is on and a phone is present). Email/SMS go through
-/// <see cref="IMessagePublisher"/> so they enlist in the caller's transaction; the in-app rows are
-/// added to the shared <see cref="RentalCommandDbContext"/> for the caller to commit. Broadcasting
-/// the in-app rows is deferred to the caller (after commit) via the returned list.
+/// (when In-app is on), an email outbox row (when Email is on and an address is present), an
+/// SMS outbox row (when SMS is on and a phone is present), and/or a <c>push</c> outbox row (when Push
+/// is on) that the <see cref="Workers.OutboxDispatchWorker"/> fans out to the portfolio's registered
+/// devices. Email/SMS/push go through <see cref="IMessagePublisher"/> so they enlist in the caller's
+/// transaction; the in-app rows are added to the shared <see cref="RentalCommandDbContext"/> for the
+/// caller to commit. Broadcasting the in-app rows is deferred to the caller (after commit) via the
+/// returned list. The push title/body/deep-link are derived from the same <see cref="InAppContent"/>
+/// so existing callers get push for free.
 /// </summary>
 public sealed class AutomationNotifier
 {
@@ -87,6 +90,26 @@ public sealed class AutomationNotifier
                 portfolioId,
                 "sms",
                 new { to = sms.To, message = sms.Message },
+                ct);
+        }
+
+        if (channels.EnablePush)
+        {
+            // One portfolio-scoped push outbox row; the dispatch worker resolves the portfolio's
+            // device tokens and fans the FCM send out (and prunes dead tokens). The data map carries
+            // the deep link (actionUrl) + type so the tapped notification routes to the right screen.
+            await _publisher.PublishAsync(
+                portfolioId,
+                "push",
+                new
+                {
+                    title = inApp.Title,
+                    body = inApp.Message,
+                    actionUrl = inApp.ActionUrl,
+                    type = inApp.Type,
+                    relatedEntityType = inApp.RelatedEntityType,
+                    relatedEntityId = inApp.RelatedEntityId,
+                },
                 ct);
         }
 

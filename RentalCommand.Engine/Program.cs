@@ -52,6 +52,10 @@ builder.Services.AddScoped<IMessagePublisher, OutboxMessagePublisher>();
 // SMTP sender (MailKit) the channel delegates to when Notifications:Email:Transport == "Smtp".
 builder.Services.AddSingleton<ISmtpEmailSender, SmtpEmailSender>();
 builder.Services.AddHttpClient<INotificationChannel, RoutingNotificationChannel>();
+// Push (FCM HTTP v1 via FirebaseAdmin). Singleton: the FirebaseApp is a process-global. Fail-soft
+// when no Push:* credential is configured — the outbox worker still marks push messages sent.
+builder.Services.Configure<PushConfig>(builder.Configuration.GetSection(PushConfig.SectionName));
+builder.Services.AddSingleton<IPushSender, FcmPushSender>();
 // Sandbox guard: the outbox worker uses it to HARD-suppress any send scoped to a sandbox portfolio.
 builder.Services.AddScoped<ISandboxGuard, SandboxGuard>();
 

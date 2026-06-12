@@ -106,9 +106,11 @@ public class AuthController : ControllerBase
 
     [HttpPost("refresh")]
     [AllowAnonymous]
-    public async Task<ActionResult<LoginResponse>> Refresh()
+    public async Task<ActionResult<LoginResponse>> Refresh([FromBody] RefreshRequest? request = null)
     {
-        var refreshToken = Request.Cookies[AuthCookieNames.RefreshToken];
+        // Prefer an explicit body token (mobile clients send it directly, avoiding any
+        // cookie crafting); fall back to the rotated refresh cookie (web clients).
+        var refreshToken = request?.RefreshToken ?? Request.Cookies[AuthCookieNames.RefreshToken];
         if (string.IsNullOrEmpty(refreshToken))
         {
             return Unauthorized(new { error = "Refresh token not found" });

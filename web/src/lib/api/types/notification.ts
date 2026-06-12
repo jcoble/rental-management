@@ -40,6 +40,10 @@ export interface NotificationChannelPreference {
 	enableInApp: boolean;
 	enableEmail: boolean;
 	enableSms: boolean;
+	// Push (mobile FCM/APNs) channel. Surfaced in the mobile app; the web settings UI does not yet
+	// render a Push column (lands in the Settings hub split), but the value is round-tripped here so
+	// a web save never clobbers the landlord's mobile-set push preference.
+	enablePush: boolean;
 }
 
 export interface NotificationSettingsResponse {

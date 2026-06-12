@@ -13,6 +13,9 @@ public sealed class NotificationChannelPreferenceDto
     public bool EnableInApp { get; set; } = true;
     public bool EnableEmail { get; set; } = true;
     public bool EnableSms { get; set; }
+
+    /// <summary>Deliver this event as a push notification to registered mobile devices.</summary>
+    public bool EnablePush { get; set; } = true;
 }
 
 public sealed class NotificationSettingsResponse

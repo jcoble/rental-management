@@ -31,6 +31,18 @@ public class RegisterRequest
     public string DisplayName { get; set; } = string.Empty;
 }
 
+/// <summary>
+/// Optional body for <c>POST /auth/refresh</c>. Non-cookie clients (the Flutter mobile
+/// app) send the stored refresh token here instead of relying on a cookie. Web clients
+/// post no body and continue to rely on the <c>rc_refresh_token</c> cookie, so this is
+/// nullable and the controller falls back to the cookie when it is absent.
+/// </summary>
+public class RefreshRequest
+{
+    [MaxLength(4000)]
+    public string? RefreshToken { get; set; }
+}
+
 public class LoginResponse
 {
     public string AccessToken { get; set; } = string.Empty;

@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_exception.dart';
+import '../push/push_service.dart';
 import 'auth_models.dart';
 import 'auth_repository.dart';
 import 'token_store.dart';
@@ -121,6 +122,14 @@ class AuthController extends Notifier<AuthState> {
 
   /// Signs out and clears all local auth state.
   Future<void> logout() async {
+    // Best-effort device-token removal BEFORE tokens are cleared, so the
+    // DELETE /devices call is still authenticated. Failure must not block
+    // logout.
+    try {
+      await ref.read(pushServiceProvider).unregisterOnLogout();
+    } catch (_) {
+      // ignore — logout proceeds regardless
+    }
     await _repository.logout();
     state = const AuthStateUnauthenticated();
   }
