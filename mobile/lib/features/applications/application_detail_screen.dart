@@ -1,10 +1,8 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/files/document_opener.dart';
 import 'applications_models.dart';
 import 'applications_repository.dart';
 import 'applications_shared.dart';
@@ -191,8 +189,8 @@ class _ApplicationDetailScreenState
     }
   }
 
-  /// Fetches the notice PDF bytes (authed), saves to a temp file, and opens it
-  /// with the platform viewer via url_launcher (file:// uri).
+  /// Fetches the notice PDF bytes (authed) and hands them to the OS viewer via
+  /// [DocumentOpener] (FileProvider `content://` URI, share-sheet fallback).
   Future<void> _viewNotice(int storedFileId) async {
     final messenger = ScaffoldMessenger.of(context);
     messenger
@@ -202,19 +200,10 @@ class _ApplicationDetailScreenState
       final bytes = await ref
           .read(applicationsRepositoryProvider)
           .documentBytes(storedFileId);
-      final path =
-          '${Directory.systemTemp.path}/adverse-action-$storedFileId.pdf';
-      final file = File(path);
-      await file.writeAsBytes(bytes, flush: true);
-      final ok =
-          await launchUrl(Uri.file(path), mode: LaunchMode.externalApplication);
-      if (!ok) {
-        messenger
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(content: Text('No app available to open the PDF.')),
-          );
-      }
+      await DocumentOpener.openBytes(
+        bytes: bytes,
+        fileName: 'adverse-action-$storedFileId.pdf',
+      );
     } on ApiException catch (e) {
       messenger
         ..hideCurrentSnackBar()

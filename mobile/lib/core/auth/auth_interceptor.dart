@@ -9,12 +9,11 @@ import 'token_store.dart';
 ///  2. On 401, refreshes the access token once (single-flight) and retries.
 ///  3. On refresh failure, clears stored tokens and triggers the logout callback.
 ///
-/// The refresh endpoint reads the refresh token from an httpOnly cookie.
-/// Since the mobile client cannot rely on a browser cookie jar, the refresh
-/// token is stored in secure storage and sent as a `Cookie` header.
-///
-/// TODO(api): Add a body-based refresh token parameter so mobile doesn't need
-/// to manually send the cookie header. Track with API team.
+/// The refresh endpoint accepts the refresh token either from the httpOnly
+/// `rc_refresh_token` cookie (web) or from a JSON body `{ refreshToken }`. The
+/// mobile client stores the token in secure storage and sends it in the body,
+/// so it never has to craft a `Cookie` header. The server rotates the token and
+/// returns the new one via `Set-Cookie`, which we read back below.
 class AuthInterceptor extends Interceptor {
   AuthInterceptor({
     required this.tokenStore,
@@ -104,13 +103,12 @@ class AuthInterceptor extends Interceptor {
         return null;
       }
 
-      // Send the refresh token as a Cookie header because the server reads it
-      // from the `rc_refresh_token` httpOnly cookie.
-      // TODO(api): Use a request body field once the API supports it.
+      // Send the stored refresh token in the request body. The API resolves it
+      // from `{ refreshToken }` first, falling back to the cookie for web.
       final response = await dio.post<Map<String, dynamic>>(
         '/auth/refresh',
+        data: {'refreshToken': refreshToken},
         options: Options(
-          headers: {'Cookie': 'rc_refresh_token=$refreshToken'},
           // Don't let this call go through AuthInterceptor again.
           extra: {'skipAuthInterceptor': true},
         ),
