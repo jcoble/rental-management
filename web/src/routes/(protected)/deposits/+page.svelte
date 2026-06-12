@@ -226,7 +226,12 @@
 </script>
 
 {#snippet leaseCell(d: SecurityDepositHolding)}
-	<span data-testid="deposit-lease">{d.leaseNumber ?? `Lease #${d.leaseId}`}</span>
+	<div class="flex flex-col" data-testid="deposit-lease">
+		<span>{d.leaseNumber ?? `Lease #${d.leaseId}`}</span>
+		{#if d.tenantName}
+			<span class="text-xs text-muted-foreground">{d.tenantName}</span>
+		{/if}
+	</div>
 {/snippet}
 
 {#snippet statusCell(d: SecurityDepositHolding)}

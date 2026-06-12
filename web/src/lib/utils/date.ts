@@ -24,6 +24,36 @@ export function formatDateOnly(date: string | Date | null | undefined): string {
 	});
 }
 
+/**
+ * Whole-day signed difference between a *date-only* value and today, counted in **UTC**
+ * calendar days. Positive = in the future, 0 = today, negative = in the past.
+ *
+ * Date-only fields arrive as UTC-midnight timestamps. Doing the math in local time
+ * (`setHours(0,0,0,0)` on a UTC-midnight Date) shifts the day in any behind-UTC zone — the
+ * same off-by-one that bites display formatting. Floor both sides to their UTC day index
+ * (ms since epoch / 86_400_000) so "due today" stays today regardless of the viewer's zone.
+ *
+ * Returns `null` for empty/invalid input.
+ */
+export function daysFromTodayUtc(date: string | Date | null | undefined): number | null {
+	if (!date) return null;
+	const d = new Date(date);
+	if (isNaN(d.getTime())) return null;
+	const MS_PER_DAY = 86_400_000;
+	const targetDay = Math.floor(d.getTime() / MS_PER_DAY);
+	const todayDay = Math.floor(Date.now() / MS_PER_DAY);
+	return targetDay - todayDay;
+}
+
+/**
+ * True when a *date-only* due date is strictly in the past in UTC day terms (i.e. its UTC
+ * calendar day is before today's UTC calendar day). A value due *today* is NOT overdue.
+ */
+export function isPastDueUtc(date: string | Date | null | undefined): boolean {
+	const days = daysFromTodayUtc(date);
+	return days !== null && days < 0;
+}
+
 export function formatDate(date: string | Date | null | undefined): string {
 	if (!date) return '';
 	const d = new Date(date);

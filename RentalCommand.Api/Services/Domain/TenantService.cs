@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -45,21 +46,46 @@ public class TenantService : ITenantService
             _ => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
         };
 
-        var items = await q
+        // Project the active-lease count as a correlated subquery in the SAME page query (EF-translated),
+        // so the count comes back per-row from Postgres — never load-then-count in C#.
+        var rows = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
+            .Select(t => new
+            {
+                Entity = t,
+                ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active),
+            })
             .ToListAsync(ct);
 
-        return items.Select(TenantResponse.FromEntity).ToList();
+        return rows.Select(r =>
+        {
+            var response = TenantResponse.FromEntity(r.Entity);
+            response.ActiveLeaseCount = r.ActiveLeaseCount;
+            return response;
+        }).ToList();
     }
 
     public async Task<TenantResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.Tenants
+        var row = await _db.Tenants
             .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.Id == id && t.PortfolioId == portfolioId, ct);
+            .Where(t => t.Id == id && t.PortfolioId == portfolioId)
+            .Select(t => new
+            {
+                Entity = t,
+                ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        return entity == null ? null : TenantResponse.FromEntity(entity);
+        if (row == null)
+        {
+            return null;
+        }
+
+        var response = TenantResponse.FromEntity(row.Entity);
+        response.ActiveLeaseCount = row.ActiveLeaseCount;
+        return response;
     }
 
     public async Task<TenantResponse> CreateAsync(int portfolioId, CreateTenantRequest request, CancellationToken ct = default)
