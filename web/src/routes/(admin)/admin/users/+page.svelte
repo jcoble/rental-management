@@ -8,7 +8,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { Loader2, Plus } from '@lucide/svelte';
+	import { Loader2, Plus, Copy, Check, TriangleAlert } from '@lucide/svelte';
 
 	const ROLES: UserRole[] = ['Admin', 'Manager', 'Agent', 'Owner', 'Tenant'];
 
@@ -76,6 +76,7 @@
 				// Small delay so the invite dialog closes before the password dialog opens.
 				setTimeout(() => {
 					generatedPasswordInfo = { email: result.email, password: result.generatedPassword! };
+					passwordCopied = false;
 					showPasswordDialog = true;
 				}, 100);
 			}
@@ -92,6 +93,26 @@
 
 	let showPasswordDialog = $state(false);
 	let generatedPasswordInfo = $state<{ email: string; password: string } | null>(null);
+	/** Gates the dismiss button: the modal can't be closed until the password is copied. */
+	let passwordCopied = $state(false);
+
+	/** Copy the one-time password to the clipboard and unlock dismissal. */
+	async function copyGeneratedPassword() {
+		if (!generatedPasswordInfo) return;
+		try {
+			await navigator.clipboard.writeText(generatedPasswordInfo.password);
+			passwordCopied = true;
+			showSuccess('Password copied to clipboard.');
+		} catch {
+			showError('Could not copy automatically — select the password and copy it manually.');
+		}
+	}
+
+	function closePasswordDialog() {
+		showPasswordDialog = false;
+		generatedPasswordInfo = null;
+		passwordCopied = false;
+	}
 
 	// ---- Helpers ----
 
@@ -321,44 +342,82 @@
 <Dialog.Root
 	open={showPasswordDialog}
 	onOpenChange={(v) => {
-		if (!v) {
-			showPasswordDialog = false;
-			generatedPasswordInfo = null;
+		// Refuse to close until the password has been copied — otherwise the
+		// credential is lost for good (it's never shown again).
+		if (!v && passwordCopied) {
+			closePasswordDialog();
 		}
 	}}
 >
-	<Dialog.Content class="max-w-md" data-testid="generated-password-dialog">
+	<Dialog.Content
+		class="max-w-md"
+		data-testid="generated-password-dialog"
+		showCloseButton={passwordCopied}
+		onEscapeKeydown={(e) => { if (!passwordCopied) e.preventDefault(); }}
+		onInteractOutside={(e) => { if (!passwordCopied) e.preventDefault(); }}
+	>
 		<Dialog.Header>
 			<Dialog.Title>Temporary password — save it now</Dialog.Title>
 			<Dialog.Description>
-				This password will <strong>not be shown again</strong>. Copy it and share it with the new
-				member securely.
+				This is the <strong>only</strong> time this password is ever shown. Copy it and share it
+				with the new member securely.
 			</Dialog.Description>
 		</Dialog.Header>
 
+		<!-- Unmissable last-chance warning: this credential cannot be recovered. -->
+		<div
+			class="flex items-start gap-3 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
+			data-testid="generated-password-warning"
+			role="alert"
+		>
+			<TriangleAlert class="mt-0.5 h-5 w-5 shrink-0" />
+			<p>
+				<strong>This is the only time this password will ever be shown.</strong> If you lose it,
+				the new member can't sign in and you'll have to reset it. Copy it now and share it securely.
+			</p>
+		</div>
+
 		{#if generatedPasswordInfo}
-			<div class="rounded-md border border-border bg-muted/40 p-4 space-y-2 text-sm">
+			<div class="rounded-md border border-border bg-muted/40 p-4 space-y-3 text-sm">
 				<div>
 					<span class="text-xs text-muted-foreground">Email</span>
 					<p class="font-medium" data-testid="generated-email">{generatedPasswordInfo.email}</p>
 				</div>
 				<div>
 					<span class="text-xs text-muted-foreground">Temporary password</span>
-					<p
-						class="mt-0.5 rounded bg-background px-2 py-1.5 font-mono text-base tracking-wide border border-border"
-						data-testid="generated-password"
-					>
-						{generatedPasswordInfo.password}
-					</p>
+					<div class="mt-0.5 flex items-center gap-2">
+						<p
+							class="flex-1 rounded bg-background px-2 py-1.5 font-mono text-base tracking-wide border border-border break-all"
+							data-testid="generated-password"
+						>
+							{generatedPasswordInfo.password}
+						</p>
+						<Button
+							variant="outline"
+							size="sm"
+							class="shrink-0"
+							data-testid="generated-password-copy"
+							onclick={copyGeneratedPassword}
+						>
+							{#if passwordCopied}
+								<Check class="h-4 w-4" />
+								Copied
+							{:else}
+								<Copy class="h-4 w-4" />
+								Copy
+							{/if}
+						</Button>
+					</div>
 				</div>
 			</div>
 		{/if}
 
 		<Dialog.Footer>
-			<Button data-testid="generated-password-close" onclick={() => {
-				showPasswordDialog = false;
-				generatedPasswordInfo = null;
-			}}>
+			<Button
+				data-testid="generated-password-close"
+				disabled={!passwordCopied}
+				onclick={closePasswordDialog}
+			>
 				I've copied the password
 			</Button>
 		</Dialog.Footer>
