@@ -150,9 +150,15 @@ public class LeaseService : ILeaseService
             return null;
         }
 
-        var payments = await _db.Payments
+        // The ledger ROWS are needed to render each transaction line, so the per-payment projection is
+        // loaded for display. The TOTALS, however, are computed SQL-side over the whole payment set (see
+        // below) rather than re-summed from these rows — keeping the headline figures a DB aggregate even
+        // if the page ever paginates the rows.
+        var paymentsQuery = _db.Payments
             .AsNoTracking()
-            .Where(p => p.LeaseId == id && p.PortfolioId == portfolioId)
+            .Where(p => p.LeaseId == id && p.PortfolioId == portfolioId);
+
+        var payments = await paymentsQuery
             .Select(p => new
             {
                 p.Id,
@@ -209,14 +215,21 @@ public class LeaseService : ILeaseService
         // Each payment row is a billed charge (rent, fee, deposit). "Charged" is every real charge;
         // "Paid" is what's been collected. Balance (charged − paid) is exactly what's still owed.
         // Waived/Failed/Refunded rows aren't money owed and weren't collected, so they're excluded
-        // from both totals and net to zero in the balance.
-        var totalCharged = payments
-            .Where(p => p.Status is PaymentStatus.Scheduled or PaymentStatus.Partial
+        // from both totals and net to zero in the balance. Both totals are computed SQL-side as a single
+        // grouped-by-status aggregate (SUM per status in the database); only the handful of status rows
+        // come back, and the relevant statuses are summed from that tiny grouped result.
+        var statusTotals = await paymentsQuery
+            .GroupBy(p => p.Status)
+            .Select(g => new { Status = g.Key, Total = g.Sum(p => p.Amount) })
+            .ToListAsync(ct);
+
+        var totalCharged = statusTotals
+            .Where(s => s.Status is PaymentStatus.Scheduled or PaymentStatus.Partial
                 or PaymentStatus.Late or PaymentStatus.Paid)
-            .Sum(p => p.Amount);
-        var totalPaid = payments
-            .Where(p => p.Status == PaymentStatus.Paid)
-            .Sum(p => p.Amount);
+            .Sum(s => s.Total);
+        var totalPaid = statusTotals
+            .Where(s => s.Status == PaymentStatus.Paid)
+            .Sum(s => s.Total);
 
         if (opening != null)
         {

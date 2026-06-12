@@ -356,6 +356,46 @@ public class BankingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetSummaryAsync_SuggestedMatchCount_CountsAllSuggestibleUnmatched_NotJustRecentPreview()
+    {
+        // Regression guard for the SQL-side rewrite of SuggestedMatchCount: it must count EVERY
+        // unmatched line that has a plausible match across the whole portfolio — computed in the
+        // database — not just the count within the 10-row "recent transactions" preview. Seed 12
+        // unmatched deposits, each with its own matching rent payment, so a preview-capped count would
+        // report 10 while the correct portfolio-wide count is 12.
+        var baseDate = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+        for (var i = 0; i < 12; i++)
+        {
+            var amount = 1000m + i; // distinct amounts so each deposit pairs with exactly one payment
+            var date = baseDate.AddDays(i);
+            SeedRentPaymentFor($"Tenant{i}", "Renter", amount, date, $"L-{i:D2}");
+            await _sut.ImportAsync(1, BankImport($"deposit-{i}", date, $"Tenant{i} Renter", amount));
+        }
+
+        var summary = await _sut.GetSummaryAsync(1);
+
+        summary.UnmatchedCount.Should().Be(12);
+        summary.SuggestedMatchCount.Should().Be(12);
+        // The preview is still capped at 10 rows, which is exactly why the count must NOT be derived
+        // from it.
+        summary.RecentTransactions.Count.Should().Be(10);
+    }
+
+    [Fact]
+    public async Task GetSummaryAsync_SuggestedMatchCount_ExcludesUnmatchedLinesWithNoCandidate()
+    {
+        // An unmatched deposit with no payment anywhere near its amount/date has no suggestion and must
+        // not be counted.
+        var date = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
+        await _sut.ImportAsync(1, BankImport("orphan-deposit", date, "Nobody", 4242.42m));
+
+        var summary = await _sut.GetSummaryAsync(1);
+
+        summary.UnmatchedCount.Should().Be(1);
+        summary.SuggestedMatchCount.Should().Be(0);
+    }
+
+    [Fact]
     public async Task GetPlaidSettingsAsync_ReturnsSafeConfigStatus()
     {
         var settings = await _sut.GetPlaidSettingsAsync(1);
