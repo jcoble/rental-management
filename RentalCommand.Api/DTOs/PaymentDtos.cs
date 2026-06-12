@@ -104,6 +104,13 @@ public class CreatePaymentRequest
 
 public class UpdatePaymentRequest
 {
+    /// <summary>
+    /// Reassign the payment to a different lease. Omitted (null) leaves the existing lease untouched;
+    /// when supplied the lease is validated to be in the caller's portfolio before it is applied.
+    /// </summary>
+    [Range(1, int.MaxValue)]
+    public int? LeaseId { get; set; }
+
     public PaymentType? PaymentType { get; set; }
     public PaymentStatus? Status { get; set; }
 
