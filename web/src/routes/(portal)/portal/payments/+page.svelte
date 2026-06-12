@@ -3,6 +3,7 @@
 	import { portal } from '$lib/api/endpoints/portal';
 	import { ApiError } from '$lib/api/client';
 	import { showSuccess, showInfo, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatDateOnly } from '$lib/utils/date';
 	import type { Payment } from '$lib/types';
 	import { Button } from '$lib/components/ui/button';
 	import { CreditCard, Repeat } from '@lucide/svelte';
@@ -105,8 +106,8 @@
 		return Number(value ?? 0).toLocaleString(undefined, { style: 'currency', currency: 'USD' });
 	}
 	function dueDate(value: string) {
-		const d = new Date(value);
-		return isNaN(d.getTime()) ? value : d.toLocaleDateString();
+		// Date-only field stored UTC-midnight; format UTC-pinned (see formatDateOnly).
+		return formatDateOnly(value) || value;
 	}
 
 	// Friendly, read-only "what is this charge" sentence so the tenant never has to guess —

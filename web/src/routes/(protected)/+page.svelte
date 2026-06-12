@@ -12,6 +12,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import AIBadge from '$lib/components/shared/AIBadge.svelte';
+	import { formatDateOnly } from '$lib/utils/date';
 
 	const dashboardQuery = createQuery(() => ({
 		queryKey: ['dashboard', getCurrentPortfolioId()],
@@ -585,7 +586,7 @@
 												<p class="text-sm font-medium">{lease.leaseNumber} · {lease.tenant}</p>
 												<p class="text-xs text-muted-foreground">{lease.property} · Unit {lease.unit}</p>
 											</div>
-											<p class="font-mono tabular-nums text-xs text-warning">Ends {new Date(lease.endDate).toLocaleDateString()}</p>
+											<p class="font-mono tabular-nums text-xs text-warning">Ends {formatDateOnly(lease.endDate)}</p>
 										</div>
 									</div>
 								{/each}
