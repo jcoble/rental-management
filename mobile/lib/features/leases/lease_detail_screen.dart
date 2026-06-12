@@ -1,10 +1,8 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/files/document_opener.dart';
 import '../../core/models/models.dart';
 import 'lease_ledger_view.dart';
 import 'leases_list_screen.dart';
@@ -163,34 +161,21 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
     }
   }
 
-  /// Fetches the generated PDF bytes (authed), writes them to a temp file, and
-  /// hands the file off to the platform viewer via url_launcher.
+  /// Fetches the generated PDF bytes (authed) and hands them to the OS viewer
+  /// via [DocumentOpener] (FileProvider `content://` URI, share-sheet fallback).
   Future<void> _openDocument() async {
     if (_openingDoc) return;
     setState(() {
       _openingDoc = true;
       _docError = null;
     });
-    final messenger = ScaffoldMessenger.of(context);
     try {
       final bytes =
           await ref.read(leasesRepositoryProvider).documentBytes(_lease.id);
-      final path =
-          '${Directory.systemTemp.path}/lease-${_lease.id}-agreement.pdf';
-      final file = File(path);
-      await file.writeAsBytes(bytes, flush: true);
-      final ok = await launchUrl(
-        Uri.file(path),
-        mode: LaunchMode.externalApplication,
+      await DocumentOpener.openBytes(
+        bytes: bytes,
+        fileName: 'lease-${_lease.id}-agreement.pdf',
       );
-      if (!mounted) return;
-      if (!ok) {
-        messenger
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(content: Text('No app available to open the PDF.')),
-          );
-      }
     } on ApiException catch (e) {
       if (mounted) setState(() => _docError = e.message);
     } finally {
@@ -258,35 +243,22 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
     }
   }
 
-  /// Fetches the signed lease PDF bytes (authed), writes them to a temp file,
-  /// and hands the file off to the platform viewer via url_launcher.
+  /// Fetches the signed lease PDF bytes (authed) and hands them to the OS viewer
+  /// via [DocumentOpener] (FileProvider `content://` URI, share-sheet fallback).
   Future<void> _openSignedDocument() async {
     if (_openingSignedDoc) return;
     setState(() {
       _openingSignedDoc = true;
       _signatureError = null;
     });
-    final messenger = ScaffoldMessenger.of(context);
     try {
       final bytes = await ref
           .read(leasesRepositoryProvider)
           .signedDocumentBytes(_lease.id);
-      final path =
-          '${Directory.systemTemp.path}/lease-${_lease.id}-signed.pdf';
-      final file = File(path);
-      await file.writeAsBytes(bytes, flush: true);
-      final ok = await launchUrl(
-        Uri.file(path),
-        mode: LaunchMode.externalApplication,
+      await DocumentOpener.openBytes(
+        bytes: bytes,
+        fileName: 'lease-${_lease.id}-signed.pdf',
       );
-      if (!mounted) return;
-      if (!ok) {
-        messenger
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(content: Text('No app available to open the PDF.')),
-          );
-      }
     } on ApiException catch (e) {
       if (mounted) setState(() => _signatureError = e.message);
     } finally {
