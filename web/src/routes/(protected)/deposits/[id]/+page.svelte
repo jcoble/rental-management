@@ -9,6 +9,7 @@
 	import { documents, fileObjectUrl } from '$lib/api/endpoints/documents';
 	import type { DocumentItem, SecurityDepositHolding } from '$lib/types';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatDateOnly } from '$lib/utils/date';
 	import { depositDeductionSchema, parseForm } from '$lib/schemas';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
@@ -119,8 +120,9 @@
 
 	function formatDate(val: string | undefined): string {
 		if (!val) return '—';
-		const d = new Date(val);
-		return isNaN(d.getTime()) ? val : d.toLocaleDateString();
+		// Date-only fields (held/returned) are stored UTC-midnight; format UTC-pinned
+		// so they don't slip back a day. See formatDateOnly.
+		return formatDateOnly(val) || val;
 	}
 
 	const depositStatusMap: Record<string, { label?: string; class: string }> = {

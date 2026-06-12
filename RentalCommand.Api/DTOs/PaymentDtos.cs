@@ -21,6 +21,12 @@ public class PaymentResponse
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>Human-readable lease number for the payment's lease; populated when the Lease navigation is loaded.</summary>
+    public string? LeaseNumber { get; set; }
+
+    /// <summary>Tenant name on the payment's lease; populated when the Lease/Tenant navigations are loaded.</summary>
+    public string? TenantName { get; set; }
+
     /// <summary>Name on the check / of the payer; from a scanned rent check.</summary>
     public string? PayerName { get; set; }
 
@@ -57,6 +63,12 @@ public class PaymentResponse
         PayerName = e.PayerName,
         CheckNumber = e.CheckNumber,
         BankName = e.BankName,
+        // Lease label for the detail/list view. Only set when the Lease navigation was loaded
+        // (Include'd); left null otherwise so callers that don't join don't pay for it.
+        LeaseNumber = e.Lease?.LeaseNumber,
+        TenantName = e.Lease?.Tenant == null
+            ? null
+            : $"{e.Lease.Tenant.FirstName} {e.Lease.Tenant.LastName}".Trim(),
     };
 }
 
