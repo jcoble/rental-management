@@ -66,38 +66,37 @@ public class AccountingService : IAccountingService
         var totalExpenses = categoryGroups.Sum(g => g.Total) + unmatchedBankWithdrawals;
 
         // Payment collection rollup. "Outstanding" is anything not yet collected/written off; "overdue"
-        // is the subset of that which is past its due date.
+        // is the subset of that which is past its due date. All four figures are computed SQL-side as
+        // conditional SUM/COUNT aggregates in a single grouped round-trip — no payment rows are loaded.
         var now = DateTime.UtcNow;
-        var payments = await _db.Payments
+        var rollupRaw = await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId)
-            .Select(p => new { p.Status, p.Amount, p.DueDate })
-            .ToListAsync(ct);
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Collected = g.Sum(p => p.Status == PaymentStatus.Paid ? p.Amount : 0m),
+                // Owed = Scheduled/Partial/Late (Waived/Failed/Refunded are not money to collect).
+                Outstanding = g.Sum(p =>
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
+                        ? p.Amount : 0m),
+                Overdue = g.Sum(p =>
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
+                    && (p.Status == PaymentStatus.Late || p.DueDate < now)
+                        ? p.Amount : 0m),
+                OverdueCount = g.Count(p =>
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
+                    && (p.Status == PaymentStatus.Late || p.DueDate < now)),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        var rollup = new PaymentRollup();
-        foreach (var p in payments)
+        var rollup = new PaymentRollup
         {
-            if (p.Status == PaymentStatus.Paid)
-            {
-                rollup.Collected += p.Amount;
-                continue;
-            }
-
-            // Waived/Failed/Refunded are not owed money to collect.
-            var owed = p.Status is PaymentStatus.Scheduled or PaymentStatus.Partial or PaymentStatus.Late;
-            if (!owed)
-            {
-                continue;
-            }
-
-            rollup.Outstanding += p.Amount;
-
-            if (p.Status == PaymentStatus.Late || p.DueDate < now)
-            {
-                rollup.Overdue += p.Amount;
-                rollup.OverdueCount++;
-            }
-        }
+            Collected = rollupRaw?.Collected ?? 0m,
+            Outstanding = rollupRaw?.Outstanding ?? 0m,
+            Overdue = rollupRaw?.Overdue ?? 0m,
+            OverdueCount = rollupRaw?.OverdueCount ?? 0,
+        };
 
         var unmatchedBankDeposits = await _db.BankTransactions
             .AsNoTracking()
@@ -127,58 +126,73 @@ public class AccountingService : IAccountingService
 
         // Money in: payments actually collected. Use PaidDate when present (that's when the cash
         // landed), falling back to DueDate. Bank deposits not yet matched to a payment also count as
-        // money in, so the snapshot reflects real cash movement.
-        var paidPayments = await _db.Payments
+        // money in, so the snapshot reflects real cash movement. Both period figures (month-to-date and
+        // trailing 30 days) are computed SQL-side as conditional SUMs in one grouped round-trip per
+        // source — no rows are loaded into memory.
+        var paymentsCollected = await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
-            .Select(p => new { p.Amount, When = p.PaidDate ?? p.DueDate })
-            .ToListAsync(ct);
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Mtd = g.Sum(p => (p.PaidDate ?? p.DueDate) >= monthStart ? p.Amount : 0m),
+                Last30 = g.Sum(p => (p.PaidDate ?? p.DueDate) >= last30Start ? p.Amount : 0m),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        var collectedMtd = paidPayments.Where(p => p.When >= monthStart).Sum(p => p.Amount);
-        var collected30 = paidPayments.Where(p => p.When >= last30Start).Sum(p => p.Amount);
-
-        var unmatchedDeposits = await _db.BankTransactions
+        var depositsCollected = await _db.BankTransactions
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId && t.MatchStatus != "Removed" &&
                         t.Amount > 0 && t.MatchedPaymentId == null)
-            .Select(t => new { t.Amount, t.PostedAt })
-            .ToListAsync(ct);
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Mtd = g.Sum(t => t.PostedAt >= monthStart ? t.Amount : 0m),
+                Last30 = g.Sum(t => t.PostedAt >= last30Start ? t.Amount : 0m),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        collectedMtd += unmatchedDeposits.Where(t => t.PostedAt >= monthStart).Sum(t => t.Amount);
-        collected30 += unmatchedDeposits.Where(t => t.PostedAt >= last30Start).Sum(t => t.Amount);
+        var collectedMtd = (paymentsCollected?.Mtd ?? 0m) + (depositsCollected?.Mtd ?? 0m);
+        var collected30 = (paymentsCollected?.Last30 ?? 0m) + (depositsCollected?.Last30 ?? 0m);
 
         // Money out: expenses (paid date when present, else incurred date) plus unmatched bank
         // withdrawals — same approach as the summary, kept period-scoped.
-        var expenses = await _db.Expenses
+        var expensesSpent = await _db.Expenses
             .AsNoTracking()
             .Where(e => e.PortfolioId == portfolioId)
-            .Select(e => new { e.Amount, When = e.PaidAt ?? e.IncurredAt })
-            .ToListAsync(ct);
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Mtd = g.Sum(e => (e.PaidAt ?? e.IncurredAt) >= monthStart ? e.Amount : 0m),
+                Last30 = g.Sum(e => (e.PaidAt ?? e.IncurredAt) >= last30Start ? e.Amount : 0m),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        var spentMtd = expenses.Where(e => e.When >= monthStart).Sum(e => e.Amount);
-        var spent30 = expenses.Where(e => e.When >= last30Start).Sum(e => e.Amount);
-
-        var unmatchedWithdrawals = await _db.BankTransactions
+        var withdrawalsSpent = await _db.BankTransactions
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId && t.MatchStatus != "Removed" &&
                         t.Amount < 0 && t.MatchedExpenseId == null)
-            .Select(t => new { t.Amount, t.PostedAt })
-            .ToListAsync(ct);
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Mtd = g.Sum(t => t.PostedAt >= monthStart ? -t.Amount : 0m),
+                Last30 = g.Sum(t => t.PostedAt >= last30Start ? -t.Amount : 0m),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        spentMtd += unmatchedWithdrawals.Where(t => t.PostedAt >= monthStart).Sum(t => -t.Amount);
-        spent30 += unmatchedWithdrawals.Where(t => t.PostedAt >= last30Start).Sum(t => -t.Amount);
+        var spentMtd = (expensesSpent?.Mtd ?? 0m) + (withdrawalsSpent?.Mtd ?? 0m);
+        var spent30 = (expensesSpent?.Last30 ?? 0m) + (withdrawalsSpent?.Last30 ?? 0m);
 
-        // Past due: anyone behind right now (not period-bound). Count distinct leases (≈ tenants behind).
-        var pastDue = await _db.Payments
+        // Past due: anyone behind right now (not period-bound). Amount and the distinct-lease count
+        // (≈ tenants behind) are both computed SQL-side (SUM + COUNT(DISTINCT LeaseId)).
+        var pastDueQuery = _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId &&
                         (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late) &&
-                        (p.Status == PaymentStatus.Late || p.DueDate < now))
-            .Select(p => new { p.Amount, p.LeaseId })
-            .ToListAsync(ct);
+                        (p.Status == PaymentStatus.Late || p.DueDate < now));
 
-        var pastDueAmount = pastDue.Sum(p => p.Amount);
-        var pastDueCount = pastDue.Select(p => p.LeaseId).Distinct().Count();
+        var pastDueAmount = await pastDueQuery.SumAsync(p => (decimal?)p.Amount, ct) ?? 0m;
+        var pastDueCount = await pastDueQuery.Select(p => p.LeaseId).Distinct().CountAsync(ct);
 
         var netMtd = collectedMtd - spentMtd;
         var net30 = collected30 - spent30;

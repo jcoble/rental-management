@@ -60,26 +60,31 @@ public class DashboardService : IDashboardService
     private async Task<DashboardOccupancy> BuildOccupancyAsync(int portfolioId, CancellationToken ct)
     {
         // Units belong to the portfolio via their property. Soft-deleted units/properties are excluded
-        // by their global query filters.
-        var units = await _db.Units
+        // by their global query filters. A unit is "occupied" if it has an active (non-deleted) lease
+        // right now (correlated EXISTS against Leases); "reserved" is a non-occupied unit whose own
+        // status is Reserved. All three counts are computed SQL-side in a single grouped aggregate so no
+        // unit rows are pulled into memory.
+        var counts = await _db.Units
             .AsNoTracking()
             .Where(u => u.Property!.PortfolioId == portfolioId)
-            .Select(u => new { u.Id, u.Status })
-            .ToListAsync(ct);
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Total = g.Count(),
+                Occupied = g.Count(u => _db.Leases.Any(l =>
+                    l.PortfolioId == portfolioId &&
+                    l.Status == LeaseStatus.Active &&
+                    l.UnitId == u.Id)),
+                Reserved = g.Count(u => u.Status == UnitStatus.Reserved && !_db.Leases.Any(l =>
+                    l.PortfolioId == portfolioId &&
+                    l.Status == LeaseStatus.Active &&
+                    l.UnitId == u.Id)),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        // A unit is occupied if it has an active (non-deleted) lease right now.
-        var occupiedUnitIds = await _db.Leases
-            .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId && l.Status == LeaseStatus.Active)
-            .Select(l => l.UnitId)
-            .Distinct()
-            .ToListAsync(ct);
-
-        var occupiedSet = occupiedUnitIds.ToHashSet();
-
-        var totalUnits = units.Count;
-        var occupiedUnits = units.Count(u => occupiedSet.Contains(u.Id));
-        var reservedUnits = units.Count(u => !occupiedSet.Contains(u.Id) && u.Status == UnitStatus.Reserved);
+        var totalUnits = counts?.Total ?? 0;
+        var occupiedUnits = counts?.Occupied ?? 0;
+        var reservedUnits = counts?.Reserved ?? 0;
         var vacantUnits = totalUnits - occupiedUnits - reservedUnits;
 
         var occupancyRate = totalUnits == 0
@@ -99,42 +104,39 @@ public class DashboardService : IDashboardService
     private async Task<DashboardAccounting> BuildAccountingAsync(
         int portfolioId, DateTime now, DateTime monthStart, DateTime nextMonthStart, CancellationToken ct)
     {
-        var payments = await _db.Payments
+        // All three money figures are computed SQL-side over the whole payment set as conditional SUMs
+        // (SUM(CASE WHEN <branch> THEN Amount ELSE 0 END)) in a single grouped round-trip — no payment
+        // rows are pulled into memory. The branch predicates are identical to the prior in-memory loop.
+        var money = await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId)
-            .Select(p => new { p.Status, p.PaymentType, p.Amount, p.DueDate, p.PaidDate })
-            .ToListAsync(ct);
-
-        decimal overdue = 0;
-        decimal dueThisMonth = 0;
-        decimal paidThisMonth = 0;
-
-        foreach (var p in payments)
-        {
-            var owed = p.Status is PaymentStatus.Scheduled or PaymentStatus.Partial or PaymentStatus.Late;
-
-            // Overdue: still owed and past its due date (Late is overdue regardless of clock skew).
-            if (owed && (p.Status == PaymentStatus.Late || p.DueDate < now))
+            .GroupBy(_ => 1)
+            .Select(g => new
             {
-                overdue += p.Amount;
-            }
+                // Overdue: still owed (Scheduled/Partial/Late) and past its due date (Late is overdue
+                // regardless of clock skew).
+                Overdue = g.Sum(p =>
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
+                    && (p.Status == PaymentStatus.Late || p.DueDate < now)
+                        ? p.Amount : 0m),
+                // Billed this month (a due date in the current month that we still expect).
+                DueThisMonth = g.Sum(p =>
+                    p.DueDate >= monthStart && p.DueDate < nextMonthStart && p.Status != PaymentStatus.Waived
+                        ? p.Amount : 0m),
+                // Collected rent this month, based on when it was actually paid.
+                PaidThisMonth = g.Sum(p =>
+                    p.Status == PaymentStatus.Paid
+                    && p.PaymentType == PaymentType.Rent
+                    && p.PaidDate != null
+                    && p.PaidDate >= monthStart
+                    && p.PaidDate < nextMonthStart
+                        ? p.Amount : 0m),
+            })
+            .FirstOrDefaultAsync(ct);
 
-            // Billed this month (anything with a due date in the current month that we still expect).
-            if (p.DueDate >= monthStart && p.DueDate < nextMonthStart && p.Status != PaymentStatus.Waived)
-            {
-                dueThisMonth += p.Amount;
-            }
-
-            // Collected rent this month, based on when it was actually paid.
-            if (p.Status == PaymentStatus.Paid
-                && p.PaymentType == PaymentType.Rent
-                && p.PaidDate.HasValue
-                && p.PaidDate.Value >= monthStart
-                && p.PaidDate.Value < nextMonthStart)
-            {
-                paidThisMonth += p.Amount;
-            }
-        }
+        var overdue = money?.Overdue ?? 0m;
+        var dueThisMonth = money?.DueThisMonth ?? 0m;
+        var paidThisMonth = money?.PaidThisMonth ?? 0m;
 
         // Expenses incurred this month (soft-deleted expenses excluded by the global query filter).
         var expensesThisMonth = await _db.Expenses
@@ -156,22 +158,30 @@ public class DashboardService : IDashboardService
 
     private async Task<DashboardMaintenance> BuildMaintenanceAsync(int portfolioId, CancellationToken ct)
     {
-        var workOrders = await _db.WorkOrders
+        // "Open" = any work order that is not Completed/Cancelled/Archived. The three counts (open,
+        // emergency-among-open, in-progress-among-open) are computed SQL-side: the open predicate scopes
+        // the query, then a single grouped aggregate emits the conditional counts. No work-order rows are
+        // pulled into memory.
+        var counts = await _db.WorkOrders
             .AsNoTracking()
-            .Where(w => w.PortfolioId == portfolioId)
-            .Select(w => new { w.Status, w.Priority })
-            .ToListAsync(ct);
-
-        bool IsOpen(WorkOrderStatus s) =>
-            s is not (WorkOrderStatus.Completed or WorkOrderStatus.Cancelled or WorkOrderStatus.Archived);
-
-        var open = workOrders.Where(w => IsOpen(w.Status)).ToList();
+            .Where(w => w.PortfolioId == portfolioId
+                && w.Status != WorkOrderStatus.Completed
+                && w.Status != WorkOrderStatus.Cancelled
+                && w.Status != WorkOrderStatus.Archived)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Open = g.Count(),
+                Emergency = g.Count(w => w.Priority == WorkOrderPriority.Emergency),
+                InProgress = g.Count(w => w.Status == WorkOrderStatus.InProgress),
+            })
+            .FirstOrDefaultAsync(ct);
 
         return new DashboardMaintenance
         {
-            OpenCount = open.Count,
-            EmergencyCount = open.Count(w => w.Priority == WorkOrderPriority.Emergency),
-            InProgressCount = open.Count(w => w.Status == WorkOrderStatus.InProgress),
+            OpenCount = counts?.Open ?? 0,
+            EmergencyCount = counts?.Emergency ?? 0,
+            InProgressCount = counts?.InProgress ?? 0,
         };
     }
 
