@@ -62,11 +62,21 @@
 		{ type: 'DailyBriefing', label: 'Daily briefing', description: 'Your once-a-day summary of what needs attention.' },
 	];
 
-	type ChannelPrefs = { enableInApp: boolean; enableEmail: boolean; enableSms: boolean };
+	// enablePush is round-tripped (not yet shown in this UI) so a web save never clobbers the
+	// landlord's mobile-set push preference. Defaults to true (the server default for new rows).
+	type ChannelPrefs = {
+		enableInApp: boolean;
+		enableEmail: boolean;
+		enableSms: boolean;
+		enablePush: boolean;
+	};
 
 	function emptyChannelPrefs(): Record<NotificationChannelType, ChannelPrefs> {
 		return Object.fromEntries(
-			channelRows.map((row) => [row.type, { enableInApp: false, enableEmail: false, enableSms: false }]),
+			channelRows.map((row) => [
+				row.type,
+				{ enableInApp: false, enableEmail: false, enableSms: false, enablePush: true },
+			]),
 		) as Record<NotificationChannelType, ChannelPrefs>;
 	}
 
@@ -80,6 +90,7 @@
 					enableInApp: pref.enableInApp,
 					enableEmail: pref.enableEmail,
 					enableSms: pref.enableSms,
+					enablePush: pref.enablePush ?? true,
 				};
 			}
 		}
@@ -92,6 +103,7 @@
 			enableInApp: channelPreferences[row.type].enableInApp,
 			enableEmail: channelPreferences[row.type].enableEmail,
 			enableSms: channelPreferences[row.type].enableSms,
+			enablePush: channelPreferences[row.type].enablePush,
 		}));
 	}
 

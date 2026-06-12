@@ -25,6 +25,13 @@ public class NotificationPreference
     /// <summary>Deliver this event by SMS (off by default until a provider is configured).</summary>
     public bool EnableSms { get; set; }
 
+    /// <summary>
+    /// Deliver this event as a push notification to the landlord's registered mobile devices
+    /// (FCM/APNs). On by default for in-app-style events so the phone-first product can interrupt;
+    /// the actual send is a no-op until a push provider credential is configured (fail-soft).
+    /// </summary>
+    public bool EnablePush { get; set; } = true;
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

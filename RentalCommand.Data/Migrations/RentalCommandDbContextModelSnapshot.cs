@@ -1440,6 +1440,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<bool>("EnableInApp")
                         .HasColumnType("boolean");
 
+                    b.Property<bool>("EnablePush")
+                        .HasColumnType("boolean");
+
                     b.Property<bool>("EnableSms")
                         .HasColumnType("boolean");
 

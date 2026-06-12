@@ -1,12 +1,11 @@
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/files/document_opener.dart';
 import 'inspections_list_screen.dart'
     show InspectionStatusChip, fmtInspectionDate;
 import 'inspections_models.dart';
@@ -290,8 +289,8 @@ class _InspectionRunScreenState extends ConsumerState<InspectionRunScreen> {
   }
 }
 
-/// Fetches the PDF report bytes (authed), saves to a temp file, and opens it
-/// with the platform viewer via url_launcher (file:// uri).
+/// Fetches the PDF report bytes (authed) and hands them to the OS viewer via
+/// [DocumentOpener] (FileProvider `content://` URI, share-sheet fallback).
 Future<void> _openReport(
   BuildContext context,
   WidgetRef ref,
@@ -304,19 +303,10 @@ Future<void> _openReport(
   try {
     final bytes =
         await ref.read(inspectionsRepositoryProvider).reportBytes(inspectionId);
-    final path =
-        '${Directory.systemTemp.path}/inspection-$inspectionId-report.pdf';
-    final file = File(path);
-    await file.writeAsBytes(bytes, flush: true);
-    final uri = Uri.file(path);
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!ok) {
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('No app available to open the PDF.')),
-        );
-    }
+    await DocumentOpener.openBytes(
+      bytes: bytes,
+      fileName: 'inspection-$inspectionId-report.pdf',
+    );
   } on ApiException catch (e) {
     messenger
       ..hideCurrentSnackBar()

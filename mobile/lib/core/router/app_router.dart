@@ -8,6 +8,14 @@ import '../../features/auth/forgot_password_screen.dart';
 import '../../features/auth/login_screen.dart';
 import '../../features/auth/register_screen.dart';
 import '../../features/home/home_shell.dart';
+import '../../features/maintenance/work_order_detail_screen.dart';
+import '../../features/maintenance/work_orders_screen.dart';
+import '../../features/messages/message_detail_screen.dart';
+import '../../features/money/expense_detail_screen.dart';
+import '../../features/money/money_screen.dart';
+import '../../features/notifications/notifications_inbox_screen.dart';
+import '../../features/payments/payment_detail_screen.dart';
+import '../../features/scan/scan_review_screen.dart';
 
 const _loginPath = '/login';
 const _registerPath = '/register';
@@ -91,8 +99,62 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const ForgotPasswordScreen(),
       ),
       GoRoute(path: _homePath, builder: (context, state) => const HomeShell()),
+
+      // ── Addressable detail / section routes ───────────────────────────────
+      // These render on top of the shell so push notifications and in-app
+      // deep links (`context.go('/work-orders/142')`) resolve to the right
+      // screen by id. The bottom-nav shell itself stays an IndexedStack.
+      GoRoute(
+        path: '/work',
+        builder: (context, state) => const WorkOrdersScreen(),
+      ),
+      GoRoute(
+        path: '/work-orders/:id',
+        builder: (context, state) => WorkOrderDetailScreen(
+          workOrderId: _idParam(state),
+        ),
+      ),
+      GoRoute(
+        path: '/money',
+        builder: (context, state) => const MoneyScreen(),
+      ),
+      GoRoute(
+        path: '/payments/:id',
+        builder: (context, state) => PaymentDetailScreen(
+          paymentId: _idParam(state),
+        ),
+      ),
+      GoRoute(
+        path: '/expenses/:id',
+        builder: (context, state) => ExpenseDetailScreen(
+          expenseId: _idParam(state),
+        ),
+      ),
+      GoRoute(
+        path: '/scan/:draftId',
+        builder: (context, state) => ScanReviewScreen(
+          draftId: _idParam(state, 'draftId'),
+        ),
+      ),
+      GoRoute(
+        path: '/messages/:id',
+        builder: (context, state) => MessageDetailScreen(
+          conversationId: _idParam(state),
+        ),
+      ),
+      GoRoute(
+        path: '/notifications',
+        builder: (context, state) => const NotificationsInboxScreen(),
+      ),
     ],
     errorBuilder: (context, state) =>
         Scaffold(body: Center(child: Text('Page not found: ${state.uri}'))),
   );
 });
+
+/// Parses an int path parameter (defaults to `id`), falling back to 0 so a
+/// malformed deep link renders the screen's own not-found/error state rather
+/// than throwing during routing.
+int _idParam(GoRouterState state, [String name = 'id']) {
+  return int.tryParse(state.pathParameters[name] ?? '') ?? 0;
+}

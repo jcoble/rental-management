@@ -183,6 +183,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
             row.EnableInApp = dto.EnableInApp;
             row.EnableEmail = dto.EnableEmail;
             row.EnableSms = dto.EnableSms;
+            row.EnablePush = dto.EnablePush;
             row.UpdatedAt = now;
         }
     }
@@ -197,6 +198,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
             EnableInApp = row.EnableInApp,
             EnableEmail = row.EnableEmail,
             EnableSms = row.EnableSms,
+            EnablePush = row.EnablePush,
         };
     }
 
@@ -235,6 +237,7 @@ public sealed class NotificationSettingsService : INotificationSettingsService
                 EnableInApp = pref.EnableInApp,
                 EnableEmail = pref.EnableEmail,
                 EnableSms = pref.EnableSms,
+                EnablePush = pref.EnablePush,
             };
         }).ToList(),
     };
