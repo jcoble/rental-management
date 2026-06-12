@@ -19,7 +19,6 @@ public sealed class LeaseEsignService : ILeaseEsignService
     private readonly IFileStorage _storage;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
-    private readonly ISandboxGuard _sandbox;
     private readonly ILogger<LeaseEsignService> _logger;
 
     public LeaseEsignService(
@@ -29,7 +28,6 @@ public sealed class LeaseEsignService : ILeaseEsignService
         IFileStorage storage,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
-        ISandboxGuard sandbox,
         ILogger<LeaseEsignService> logger)
     {
         _db = db;
@@ -38,7 +36,6 @@ public sealed class LeaseEsignService : ILeaseEsignService
         _storage = storage;
         _dataUpdate = dataUpdate;
         _audit = audit;
-        _sandbox = sandbox;
         _logger = logger;
     }
 
@@ -53,15 +50,10 @@ public sealed class LeaseEsignService : ILeaseEsignService
             return SendForSignatureResult.NotFound();
         }
 
-        // HARD sandbox guard: never email a real signing request to a real person for a demo account.
-        // Short-circuit before touching lease state or the provider (mirrors the not-configured gate).
-        if (await _sandbox.IsSandboxAsync(portfolioId, ct))
-        {
-            _logger.LogInformation(
-                "[suppressed — sandbox] send-for-signature for lease {LeaseId} (portfolio {PortfolioId}) — no e-sign sent.",
-                leaseId, portfolioId);
-            return SendForSignatureResult.NotConfigured();
-        }
+        // Sandbox is intentionally NOT short-circuited here. A demo account must still be able to
+        // exercise the full send → sign → executed-PDF flow; the outbox dispatcher redirects the
+        // signing email to the portfolio owner's own inbox (tagged [Sandbox]) so nothing reaches a
+        // real tenant. Suppressing here would make the feature look broken in Sandbox.
 
         // Gate up front: never touch lease state when the provider is not configured.
         if (!_provider.IsConfigured)

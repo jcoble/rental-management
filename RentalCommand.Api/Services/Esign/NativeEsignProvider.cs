@@ -110,9 +110,10 @@ public sealed class NativeEsignProvider : IEsignProvider
         _db.SignatureRequests.Add(signatureRequest);
         await _db.SaveChangesAsync(ct);
 
-        // Enqueue the signing-link email per signer (suppressed in sandbox by the caller's guard before we
-        // ever get here; the outbox dispatcher additionally no-ops in sandbox). Best-effort: a mail-queue
-        // hiccup must not roll back the created request.
+        // Enqueue the signing-link email per signer. In sandbox the outbox dispatcher redirects the
+        // email to the portfolio owner (tagged [Sandbox]) so nothing reaches a real tenant while the
+        // owner can still exercise the full flow. Best-effort: a mail-queue hiccup must not roll back
+        // the created request.
         foreach (var signer in signatureRequest.Signers)
         {
             await SafeAsync("enqueue signing email", () => EnqueueSigningEmailAsync(signatureRequest, signer, ct));
