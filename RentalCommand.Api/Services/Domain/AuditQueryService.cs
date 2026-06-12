@@ -11,11 +11,13 @@ public class AuditQueryService : IAuditQueryService
 {
     private readonly RentalCommandDbContext _db;
     private readonly AuditDescriber _describer;
+    private readonly AuditDiffBuilder _diff;
 
-    public AuditQueryService(RentalCommandDbContext db, AuditDescriber describer)
+    public AuditQueryService(RentalCommandDbContext db, AuditDescriber describer, AuditDiffBuilder diff)
     {
         _db = db;
         _describer = describer;
+        _diff = diff;
     }
 
     public async Task<IReadOnlyList<AuditEntryResponse>> ListAsync(
@@ -27,7 +29,7 @@ public class AuditQueryService : IAuditQueryService
         CancellationToken ct = default)
     {
         var rows = await FilteredPage(portfolioId, operation, entityType, entityId, query).ToListAsync(ct);
-        return rows.Select(r => AuditEntryResponse.FromEntity(r, _describer)).ToList();
+        return rows.Select(r => AuditEntryResponse.FromEntity(r, _describer, _diff)).ToList();
     }
 
     public async Task<IReadOnlyList<AdminAuditEntryResponse>> ListForensicAsync(

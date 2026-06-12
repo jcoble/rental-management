@@ -249,7 +249,7 @@ public sealed class AuditTrailTests : IDisposable
         _db.Expenses.Add(foreign);
         await _db.SaveChangesAsync();
 
-        var sut = new AuditQueryService(_db, new AuditDescriber());
+        var sut = new AuditQueryService(_db, new AuditDescriber(), new AuditDiffBuilder());
         var page = await sut.ListAsync(PortfolioId, null, null, null, new ListQuery());
 
         page.Should().OnlyContain(e => e.PortfolioId == PortfolioId);
@@ -267,7 +267,7 @@ public sealed class AuditTrailTests : IDisposable
         expense.Amount = 999m;
         await _db.SaveChangesAsync();
 
-        var sut = new AuditQueryService(_db, new AuditDescriber());
+        var sut = new AuditQueryService(_db, new AuditDescriber(), new AuditDiffBuilder());
 
         var created = await sut.ListAsync(PortfolioId, AuditLogOperation.Created, "Expense", null, new ListQuery());
         created.Should().ContainSingle();
