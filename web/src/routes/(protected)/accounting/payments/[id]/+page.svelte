@@ -8,6 +8,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { paymentSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatDateOnly } from '$lib/utils/date';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
@@ -56,6 +57,16 @@
 			default: return 'primary';
 		}
 	});
+
+	// View-mode lease label: mirror the edit-mode option text ("L2024-011 · Tyler Anderson")
+	// so view mode shows the same lease the dropdown does, instead of a bare number or "—".
+	const leaseDisplay = $derived(
+		payment?.leaseNumber
+			? payment.tenantName
+				? `${payment.leaseNumber} · ${payment.tenantName}`
+				: payment.leaseNumber
+			: ''
+	);
 
 	const typeOptions = $derived(PAYMENT_TYPES.map((value) => ({ value, label: value })));
 	const statusOptions = $derived(PAYMENT_STATUSES.map((value) => ({ value, label: value })));
@@ -201,15 +212,15 @@
 
 		<div class="grid gap-6 lg:grid-cols-2">
 			<DetailCard title="Charge" icon={Receipt} accent="primary" testid="payment-card-charge" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-				<InlineField label="Lease" bind:value={form.leaseId} display={payment.leaseNumber} {editing} type="select" options={leaseOptions} error={formErrors.leaseId} testid="payment-detail-lease" class="sm:col-span-2" />
+				<InlineField label="Lease" bind:value={form.leaseId} display={leaseDisplay} {editing} type="select" options={leaseOptions} error={formErrors.leaseId} testid="payment-detail-lease" class="sm:col-span-2" />
 				<InlineField label="Amount" bind:value={form.amount} display={`$${payment.amount}`} {editing} error={formErrors.amount} testid="payment-detail-amount" />
 				<InlineField label="Payment type" bind:value={form.paymentType} display={payment.paymentType} {editing} type="select" options={typeOptions} testid="payment-detail-type" />
-				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: new Date(payment.dueDate).toLocaleDateString(), error: formErrors.dueDate, testid: 'payment-detail-due-date' })}
+				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: formatDateOnly(payment.dueDate), error: formErrors.dueDate, testid: 'payment-detail-due-date' })}
 			</DetailCard>
 
 			<DetailCard title="Payment tracking" icon={CircleCheck} accent="success" testid="payment-card-tracking" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Status" bind:value={form.status} display={payment.status} {editing} type="select" options={statusOptions} testid="payment-detail-status" />
-				{@render dateField({ label: 'Paid date', value: form.paidDate, setValue: (v) => (form.paidDate = v), display: payment.paidDate ? new Date(payment.paidDate).toLocaleDateString() : '', testid: 'payment-detail-paid-date' })}
+				{@render dateField({ label: 'Paid date', value: form.paidDate, setValue: (v) => (form.paidDate = v), display: payment.paidDate ? formatDateOnly(payment.paidDate) : '', testid: 'payment-detail-paid-date' })}
 				<InlineField label="Method" bind:value={form.method} display={payment.method} {editing} testid="payment-detail-method" />
 				<InlineField label="Reference" bind:value={form.externalReference} display={payment.externalReference} {editing} testid="payment-detail-reference" />
 				<InlineField label="Notes" bind:value={form.notes} display={payment.notes} {editing} type="textarea" testid="payment-detail-notes" class="sm:col-span-2" />

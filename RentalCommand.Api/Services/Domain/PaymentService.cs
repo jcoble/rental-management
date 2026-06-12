@@ -43,6 +43,7 @@ public class PaymentService : IPaymentService
     {
         var q = _db.Payments
             .AsNoTracking()
+            .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
             .Where(p => p.PortfolioId == portfolioId);
 
         if (leaseId.HasValue)
@@ -80,6 +81,7 @@ public class PaymentService : IPaymentService
     {
         var entity = await _db.Payments
             .AsNoTracking()
+            .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
             .FirstOrDefaultAsync(p => p.Id == id && p.PortfolioId == portfolioId, ct);
 
         if (entity == null)
