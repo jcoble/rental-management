@@ -48,7 +48,19 @@
 	} = $props();
 
 	const fieldId = $derived(`${testid}-input`);
-	const displayText = $derived(display == null || display === '' ? '-' : String(display));
+	// View-mode text. When an explicit `display` is supplied, use it. Otherwise — for
+	// select fields whose `value` IS present — resolve the human label from `options`
+	// (so an enum/id-backed select never shows "-" in read mode just because the page
+	// didn't pass a separate display string). Falls back to "-" only when there's
+	// genuinely nothing to show.
+	const displayText = $derived.by(() => {
+		if (display != null && display !== '') return String(display);
+		if (type === 'select' && value !== '' && value != null) {
+			const match = options.find((o) => o.value === value);
+			if (match) return match.label;
+		}
+		return '-';
+	});
 	const inputClass =
 		'm3-field-surface h-11 w-full px-3 py-2 text-sm text-foreground outline-none';
 

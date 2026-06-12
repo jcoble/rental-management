@@ -27,6 +27,18 @@ public class WorkOrderResponse
     public string? CreatedBy { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>Property name, projected from the <see cref="WorkOrder.Property"/> navigation. Null when not loaded.</summary>
+    public string? PropertyName { get; set; }
+
+    /// <summary>Unit number, projected from the <see cref="WorkOrder.Unit"/> navigation. Null when none/not loaded.</summary>
+    public string? UnitNumber { get; set; }
+
+    /// <summary>Vendor name, projected from the <see cref="WorkOrder.Vendor"/> navigation. Null when none/not loaded.</summary>
+    public string? VendorName { get; set; }
+
+    /// <summary>Tenant full name, projected from the <see cref="WorkOrder.Tenant"/> navigation. Null when none/not loaded.</summary>
+    public string? TenantName { get; set; }
+
     /// <summary>Stable selector for frontend tests, e.g. <c>work-order-1</c>.</summary>
     public string TestId => $"work-order-{Id}";
 
@@ -51,6 +63,10 @@ public class WorkOrderResponse
         ActualCost = e.ActualCost,
         CreatedBy = e.CreatedBy,
         UpdatedAt = e.UpdatedAt,
+        PropertyName = e.Property?.Name,
+        UnitNumber = e.Unit?.UnitNumber,
+        VendorName = e.Vendor?.Name,
+        TenantName = e.Tenant == null ? null : $"{e.Tenant.FirstName} {e.Tenant.LastName}".Trim(),
     };
 }
 
@@ -120,6 +136,10 @@ public class WorkOrderDetailResponse : WorkOrderResponse
             ActualCost = e.ActualCost,
             CreatedBy = e.CreatedBy,
             UpdatedAt = e.UpdatedAt,
+            PropertyName = e.Property?.Name,
+            UnitNumber = e.Unit?.UnitNumber,
+            VendorName = e.Vendor?.Name,
+            TenantName = e.Tenant == null ? null : $"{e.Tenant.FirstName} {e.Tenant.LastName}".Trim(),
             Timeline = events
                 .OrderBy(ev => ev.CreatedAtUtc)
                 .ThenBy(ev => ev.Id)
@@ -212,6 +232,14 @@ public class UpdateWorkOrderRequest
     /// </summary>
     [MaxLength(2000)]
     public string? StatusNote { get; set; }
+
+    /// <summary>
+    /// When the request was received. Editable on the detail page (Costs &amp; timing). Null = unchanged
+    /// (mirrors the nullable-means-untouched PATCH semantics used for the other fields). Unlike
+    /// <see cref="ScheduledFor"/>/<see cref="CompletedAt"/>, the entity column is non-nullable, so a
+    /// value is required to change it and it can never be cleared back to null.
+    /// </summary>
+    public DateTime? RequestedAt { get; set; }
 
     public DateTime? ScheduledFor { get; set; }
     public DateTime? CompletedAt { get; set; }

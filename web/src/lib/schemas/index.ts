@@ -263,6 +263,22 @@ export const workOrderSchema = z.object({
 	category: required('Category'),
 });
 
+/**
+ * Work-order DETAIL edit form: the core Request fields plus the editable Costs & timing
+ * (requested / scheduled / completed dates + estimated / actual cost). Dates are bound as
+ * `yyyy-MM-dd` strings (DatePicker) and pass straight through — the API pins them to UTC and
+ * treats a null/missing value as "leave unchanged" (the work order detail page never clears a
+ * date back to empty, matching the nullable-means-untouched PATCH semantics). Costs are optional
+ * non-negative money. Mirrors the {@link expenseDetailSchema} pattern.
+ */
+export const workOrderDetailSchema = workOrderSchema.extend({
+	requestedAt: optionalText,
+	scheduledFor: optionalText,
+	completedAt: optionalText,
+	estimatedCost: optionalNonNegative('Estimated cost'),
+	actualCost: optionalNonNegative('Actual cost'),
+});
+
 export const inspectionSchema = z.object({
 	propertyId: numericString('Property'),
 	type: z.string(),

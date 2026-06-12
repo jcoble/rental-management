@@ -56,18 +56,45 @@ public class WorkOrderService : IWorkOrderService
             _ => query.SortDescending ? q.OrderByDescending(w => w.RequestedAt) : q.OrderBy(w => w.RequestedAt),
         };
 
-        var items = await q
+        // Project the display names (property / unit / vendor / tenant) in the same SELECT via LEFT
+        // JOINs — EF translates the optional-navigation member access to a join, so there is no
+        // per-row follow-up query. The full related entities are never materialized; only the name
+        // columns ride along.
+        var rows = await q
+            .Select(w => new WorkOrderListRow(
+                w,
+                w.Property != null ? w.Property.Name : null,
+                w.Unit != null ? w.Unit.UnitNumber : null,
+                w.Vendor != null ? w.Vendor.Name : null,
+                w.Tenant != null ? ((w.Tenant.FirstName + " " + w.Tenant.LastName)).Trim() : null))
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return items.Select(WorkOrderResponse.FromEntity).ToList();
+        return rows.Select(ToListResponse).ToList();
+    }
+
+    private sealed record WorkOrderListRow(
+        WorkOrder WorkOrder, string? PropertyName, string? UnitNumber, string? VendorName, string? TenantName);
+
+    private static WorkOrderResponse ToListResponse(WorkOrderListRow row)
+    {
+        var response = WorkOrderResponse.FromEntity(row.WorkOrder);
+        response.PropertyName = row.PropertyName;
+        response.UnitNumber = row.UnitNumber;
+        response.VendorName = row.VendorName;
+        response.TenantName = row.TenantName;
+        return response;
     }
 
     public async Task<WorkOrderDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
         var entity = await _db.WorkOrders
             .AsNoTracking()
+            .Include(w => w.Property)
+            .Include(w => w.Unit)
+            .Include(w => w.Vendor)
+            .Include(w => w.Tenant)
             .FirstOrDefaultAsync(w => w.Id == id && w.PortfolioId == portfolioId, ct);
         if (entity == null)
         {
@@ -166,8 +193,40 @@ public class WorkOrderService : IWorkOrderService
         await _db.SaveChangesAsync(ct);
 
         var response = WorkOrderResponse.FromEntity(entity);
+        await HydrateDisplayNamesAsync(portfolioId, response, ct);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
+    }
+
+    /// <summary>
+    /// Fill the property / unit / vendor / tenant display names on a response after a write, in a
+    /// single SQL projection keyed by id (LEFT JOINs to the related rows — no full entities loaded).
+    /// Keeps the PATCH/POST result and the SignalR broadcast carrying the same labels the list/detail
+    /// reads project, so the grid never flashes a blank property name on a live update.
+    /// </summary>
+    private async Task HydrateDisplayNamesAsync(int portfolioId, WorkOrderResponse response, CancellationToken ct)
+    {
+        var names = await _db.WorkOrders
+            .AsNoTracking()
+            .Where(w => w.Id == response.Id && w.PortfolioId == portfolioId)
+            .Select(w => new
+            {
+                PropertyName = w.Property != null ? w.Property.Name : null,
+                UnitNumber = w.Unit != null ? w.Unit.UnitNumber : null,
+                VendorName = w.Vendor != null ? w.Vendor.Name : null,
+                TenantName = w.Tenant != null ? ((w.Tenant.FirstName + " " + w.Tenant.LastName)).Trim() : null,
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (names is null)
+        {
+            return;
+        }
+
+        response.PropertyName = names.PropertyName;
+        response.UnitNumber = names.UnitNumber;
+        response.VendorName = names.VendorName;
+        response.TenantName = names.TenantName;
     }
 
     public async Task<WorkOrderResponse?> UpdateAsync(int portfolioId, int id, UpdateWorkOrderRequest request, int? changedByUserId = null, string? changedByLabel = null, CancellationToken ct = default)
@@ -217,6 +276,7 @@ public class WorkOrderService : IWorkOrderService
         var statusChanged = request.Status.HasValue && request.Status.Value != previousStatus;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
 
+        if (request.RequestedAt.HasValue) entity.RequestedAt = request.RequestedAt.Value.ToUtc();
         if (request.ScheduledFor.HasValue) entity.ScheduledFor = request.ScheduledFor.ToUtc();
         if (request.CompletedAt.HasValue) entity.CompletedAt = request.CompletedAt.ToUtc();
         if (request.EstimatedCost.HasValue) entity.EstimatedCost = request.EstimatedCost;
@@ -241,6 +301,7 @@ public class WorkOrderService : IWorkOrderService
         await _db.SaveChangesAsync(ct);
 
         var response = WorkOrderResponse.FromEntity(entity);
+        await HydrateDisplayNamesAsync(portfolioId, response, ct);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
