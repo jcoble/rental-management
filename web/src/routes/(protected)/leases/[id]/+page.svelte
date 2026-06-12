@@ -434,6 +434,9 @@
 			key: 'type',
 			title: 'Type',
 			mobileRole: 'subtitle',
+			// Payment serializes the field as `paymentType` (not `type`); without this accessor the
+			// column rendered blank for every row.
+			accessor: (p) => p.paymentType,
 		},
 		{
 			key: 'amount',

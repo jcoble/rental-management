@@ -7,12 +7,14 @@
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import type { Vendor } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { workOrderSchema, parseForm } from '$lib/schemas';
+	import { workOrderDetailSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatDateOnly } from '$lib/utils/date';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
@@ -20,6 +22,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import { History, Pencil, Save, Trash2, X, MessageSquare, Star, Check, Wrench, Coins } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
+	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import WorkOrderTimeline from '$lib/components/shared/WorkOrderTimeline.svelte';
 
 	const queryClient = useQueryClient();
@@ -58,7 +61,20 @@
 
 	// --- Inline edit ---
 	let editing = $state(false);
-	let form = $state({ propertyId: '', title: '', description: '', priority: 'Normal', category: 'General' });
+	let form = $state({
+		propertyId: '',
+		title: '',
+		description: '',
+		priority: 'Normal',
+		category: 'General',
+		// Costs & timing (editable directly, including on Completed orders — no reopen workflow).
+		// Dates are bound as `yyyy-MM-dd` for the DatePicker; costs as plain numeric strings.
+		requestedAt: '',
+		scheduledFor: '',
+		completedAt: '',
+		estimatedCost: '',
+		actualCost: '',
+	});
 	let formErrors = $state<Record<string, string>>({});
 	let showDeleteConfirm = $state(false);
 
@@ -70,6 +86,13 @@
 			description: wo.description,
 			priority: wo.priority,
 			category: wo.category,
+			// Work-order timing fields are full timestamps; the DatePicker edits the calendar day,
+			// so seed with just the date part. Costs seed as strings ('' when not set).
+			requestedAt: wo.requestedAt?.slice(0, 10) ?? '',
+			scheduledFor: wo.scheduledFor?.slice(0, 10) ?? '',
+			completedAt: wo.completedAt?.slice(0, 10) ?? '',
+			estimatedCost: wo.estimatedCost != null ? String(wo.estimatedCost) : '',
+			actualCost: wo.actualCost != null ? String(wo.actualCost) : '',
 		};
 		formErrors = {};
 		editing = true;
@@ -79,7 +102,7 @@
 		formErrors = {};
 	}
 	function save() {
-		const result = parseForm(workOrderSchema, form);
+		const result = parseForm(workOrderDetailSchema, form);
 		if (result.errors) {
 			formErrors = result.errors;
 			return;
@@ -221,17 +244,43 @@
 		wo ? (STATUS_TRANSITIONS[wo.status] ?? []) : []
 	);
 
-	function formatDate(val: string | undefined | null): string {
-		if (!val) return '—';
-		const d = new Date(val);
-		return isNaN(d.getTime()) ? val : d.toLocaleDateString();
-	}
-
 	function formatCurrency(val: number | undefined | null): string {
 		if (val == null) return '—';
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
 	}
 </script>
+
+<!--
+  Editable date row: DatePicker in edit mode, UTC-pinned date display otherwise. Mirrors the
+  payment detail page's dateField so timing edits feel identical across the app.
+-->
+{#snippet dateField(opts: {
+	label: string;
+	value: string;
+	setValue: (v: string) => void;
+	display: string;
+	testid: string;
+	error?: string;
+})}
+	<div data-testid={`${opts.testid}-field`}>
+		{#if editing}
+			<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${opts.testid}-input`}>{opts.label}</label>
+			<DatePicker
+				id={`${opts.testid}-input`}
+				testid={`${opts.testid}-input`}
+				value={opts.value}
+				onchange={opts.setValue}
+				placeholder={opts.label}
+			/>
+			{#if opts.error}<p class="mt-1 text-xs text-destructive" data-testid={`${opts.testid}-error`}>{opts.error}</p>{/if}
+		{:else}
+			<div class="m3-readonly-field flex flex-col justify-center" data-testid={`${opts.testid}-value`}>
+				<span class="m3-readonly-field__label">{opts.label}</span>
+				<span class="m3-readonly-field__value mt-1 font-mono tabular-nums">{opts.display === '' ? '-' : opts.display}</span>
+			</div>
+		{/if}
+	</div>
+{/snippet}
 
 <svelte:head>
 	<title>{wo?.title ?? 'Work Order'} - Rental Command</title>
@@ -382,34 +431,25 @@
 			<InlineField label="Category" bind:value={form.category} display={wo.category} {editing} error={formErrors.category} testid="work-order-detail-category" />
 		</DetailCard>
 
+		<!--
+		  Costs & timing are editable directly in the page's edit mode (user decision: no reopen
+		  workflow — works on Completed orders too; every change is audited in History below). In
+		  view mode the optional rows stay hidden until set so the card stays calm; edit mode shows
+		  them all so they can be filled in.
+		-->
 		<DetailCard title="Costs & timing" icon={Coins} accent="muted" testid="work-order-detail-costs" class="mt-6" contentClass="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-			<div>
-				<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Requested</dt>
-				<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-requested">{formatDate(wo.requestedAt)}</dd>
-			</div>
-			{#if wo.scheduledFor}
-				<div>
-					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Scheduled For</dt>
-					<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-scheduled">{formatDate(wo.scheduledFor)}</dd>
-				</div>
+			{@render dateField({ label: 'Requested', value: form.requestedAt, setValue: (v) => (form.requestedAt = v), display: formatDateOnly(wo.requestedAt), error: formErrors.requestedAt, testid: 'work-order-detail-requested' })}
+			{#if editing || wo.scheduledFor}
+				{@render dateField({ label: 'Scheduled For', value: form.scheduledFor, setValue: (v) => (form.scheduledFor = v), display: wo.scheduledFor ? formatDateOnly(wo.scheduledFor) : '', error: formErrors.scheduledFor, testid: 'work-order-detail-scheduled' })}
 			{/if}
-			{#if wo.completedAt}
-				<div>
-					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Completed</dt>
-					<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-completed">{formatDate(wo.completedAt)}</dd>
-				</div>
+			{#if editing || wo.completedAt}
+				{@render dateField({ label: 'Completed', value: form.completedAt, setValue: (v) => (form.completedAt = v), display: wo.completedAt ? formatDateOnly(wo.completedAt) : '', error: formErrors.completedAt, testid: 'work-order-detail-completed' })}
 			{/if}
-			{#if wo.estimatedCost != null}
-				<div>
-					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Estimated Cost</dt>
-					<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-estimated-cost">{formatCurrency(wo.estimatedCost)}</dd>
-				</div>
+			{#if editing || wo.estimatedCost != null}
+				<InlineField label="Estimated Cost" type="number" bind:value={form.estimatedCost} display={wo.estimatedCost != null ? formatCurrency(wo.estimatedCost) : ''} {editing} error={formErrors.estimatedCost} testid="work-order-detail-estimated-cost" placeholder="0.00" />
 			{/if}
-			{#if wo.actualCost != null}
-				<div>
-					<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Actual Cost</dt>
-					<dd class="mt-1 font-mono text-sm tabular-nums" data-testid="work-order-detail-actual-cost">{formatCurrency(wo.actualCost)}</dd>
-				</div>
+			{#if editing || wo.actualCost != null}
+				<InlineField label="Actual Cost" type="number" bind:value={form.actualCost} display={wo.actualCost != null ? formatCurrency(wo.actualCost) : ''} {editing} error={formErrors.actualCost} testid="work-order-detail-actual-cost" placeholder="0.00" />
 			{/if}
 		</DetailCard>
 
@@ -429,6 +469,17 @@
 		<!-- Documents section -->
 		<div class="mt-6" data-testid="work-order-detail-documents">
 			<DocumentsPanel entityType="WorkOrder" entityId={id} title="Photos & documents" />
+		</div>
+
+		<!--
+		  Per-record audit history. The status timeline above tracks status moves; this surfaces
+		  every other recorded change (property, costs, timing dates, etc.) — who, what, and when —
+		  so edits made here (incl. on Completed orders) are visible like any other field edit.
+		-->
+		<div class="mt-6 rounded-lg border border-border bg-card p-4" data-testid="work-order-history-section">
+			<h2 class="mb-1 text-base font-semibold">History</h2>
+			<p class="mb-3 text-sm text-muted-foreground">Every recorded change to this work order — who, what, and when.</p>
+			<RecordHistory entityType="WorkOrder" entityId={id} />
 		</div>
 	{/if}
 </div>

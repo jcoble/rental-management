@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 
@@ -13,7 +14,15 @@ public class PropertyResponse
     public int? OwnerEntityId { get; set; }
     public string? OwnerName { get; set; }
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Property type. Serialized as <c>type</c> (not <c>propertyType</c>) to match the single field
+    /// name the web client reads/sends everywhere (grid column, type filter, create/edit forms). The
+    /// mismatch previously left the value <c>undefined</c> client-side — Type showed "-" in list/detail.
+    /// </summary>
+    [JsonPropertyName("type")]
     public PropertyType PropertyType { get; set; }
+
     public PropertyStatus Status { get; set; }
     public string AddressLine1 { get; set; } = string.Empty;
     public string? AddressLine2 { get; set; }
@@ -26,10 +35,16 @@ public class PropertyResponse
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>Total units on the property. Computed in SQL (correlated subquery), never loaded + counted.</summary>
+    public int UnitCount { get; set; }
+
+    /// <summary>Units currently occupied. Computed in SQL (correlated subquery on unit status).</summary>
+    public int OccupiedUnits { get; set; }
+
     /// <summary>Stable selector for frontend tests, e.g. <c>property-1</c>.</summary>
     public string TestId => $"property-{Id}";
 
-    public static PropertyResponse FromEntity(Property e) => new()
+    public static PropertyResponse FromEntity(Property e, int unitCount = 0, int occupiedUnits = 0) => new()
     {
         Id = e.Id,
         PortfolioId = e.PortfolioId,
@@ -49,6 +64,8 @@ public class PropertyResponse
         Notes = e.Notes,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
+        UnitCount = unitCount,
+        OccupiedUnits = occupiedUnits,
     };
 }
 
@@ -64,6 +81,7 @@ public class CreatePropertyRequest
     [MaxLength(200)]
     public string Name { get; set; } = string.Empty;
 
+    [JsonPropertyName("type")]
     public PropertyType PropertyType { get; set; } = PropertyType.MultiFamily;
     public PropertyStatus Status { get; set; } = PropertyStatus.Active;
 
@@ -107,6 +125,7 @@ public class UpdatePropertyRequest
     [MaxLength(200)]
     public string? Name { get; set; }
 
+    [JsonPropertyName("type")]
     public PropertyType? PropertyType { get; set; }
     public PropertyStatus? Status { get; set; }
 
