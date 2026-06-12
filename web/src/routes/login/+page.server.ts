@@ -32,11 +32,11 @@ function safeRedirectPath(path: string | null, fallback: string): string {
 
 /** Where to send a user after login when no explicit redirect is requested. */
 function defaultLandingFor(roles: string[]): string {
-	// Owners/tenants live in the portal; staff get the "Explore in Sandbox vs set up my real
-	// portfolio" choice. The choice screen forwards straight to the dashboard when the account is
-	// already Live, so this is a no-op for graduated accounts.
+	// Owners/tenants live in the portal. Staff land on the dashboard (IA Wave 1, F8): the
+	// "Explore sandbox vs set up real portfolio" fork used to be the forced landing every
+	// session — now it's optional (still reachable, and Go Live lives in the sandbox banner).
 	if (roles.includes('Owner') || roles.includes('Tenant')) return '/portal';
-	return '/get-started';
+	return '/';
 }
 
 export const load: PageServerLoad = async ({ locals, url }) => {
