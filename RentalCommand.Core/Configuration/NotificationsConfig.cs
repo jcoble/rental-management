@@ -82,11 +82,18 @@ public sealed class NotificationChannelPreference
     public bool EnableSms { get; set; }
 
     /// <summary>
+    /// Deliver this event as a push notification to registered mobile devices (FCM/APNs). Defaults
+    /// ON for in-app-style events (the phone-first interrupt channel); the send is a no-op until a
+    /// push credential is configured. OFF for the Daily Briefing (recipient-gated email/SMS only).
+    /// </summary>
+    public bool EnablePush { get; set; } = true;
+
+    /// <summary>
     /// Sensible default when no stored row exists: in-app ON, email ON for tenant-/owner-facing
-    /// events, SMS OFF (until a provider is configured). Resolved here so callers never pre-seed.
+    /// events, SMS OFF (until a provider is configured), push ON. Resolved here so callers never pre-seed.
     /// <para>
     /// The Daily Briefing is the exception: it has no in-app surface and its SMS/email recipient
-    /// lists are themselves the opt-in, so its default leaves both wire channels ON (and in-app OFF)
+    /// lists are themselves the opt-in, so its default leaves both wire channels ON (and in-app/push OFF)
     /// to preserve the existing recipient-gated behaviour.
     /// </para>
     /// </summary>
@@ -97,12 +104,14 @@ public sealed class NotificationChannelPreference
             EnableInApp = false,
             EnableEmail = true,
             EnableSms = true,
+            EnablePush = false,
         },
         _ => new NotificationChannelPreference
         {
             EnableInApp = true,
             EnableEmail = true,
             EnableSms = false,
+            EnablePush = true,
         },
     };
 }
