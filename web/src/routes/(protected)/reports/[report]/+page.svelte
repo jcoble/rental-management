@@ -30,7 +30,7 @@
 	import { properties as propertiesApi } from '$lib/api/endpoints/properties';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { apiErrorMessage } from '$lib/utils/toast';
-	import { formatDate } from '$lib/utils/date';
+	import { formatDate, formatDateOnly } from '$lib/utils/date';
 	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Popover from '$lib/components/ui/popover';
@@ -182,8 +182,8 @@
 		if (!data) return '';
 		if (accepts.has('year')) return `Year ${applied.year ?? currentYear}`;
 		if (accepts.has('days')) return `Next ${applied.days ?? 90} days`;
-		if (data.from && data.to) return `${formatDate(data.from as string)} – ${formatDate(data.to as string)}`;
-		if (data.asOf) return `As of ${formatDate(data.asOf as string)}`;
+		if (data.from && data.to) return `${formatDateOnly(data.from as string)} – ${formatDateOnly(data.to as string)}`;
+		if (data.asOf) return `As of ${formatDateOnly(data.asOf as string)}`;
 		if (data.generatedAt) return `As of ${formatDate(data.generatedAt as string)}`;
 		return '';
 	});
@@ -241,11 +241,11 @@
 
 		if (rentRoll) {
 			headers = ['Property', 'Unit', 'Lease', 'Tenant', 'Monthly Rent', 'Deposit', 'Start', 'End', 'Status'];
-			rows = rentRoll.rows.map((r) => [r.propertyName, r.unitNumber, r.leaseNumber, r.tenantName, r.monthlyRent, r.securityDeposit, formatDate(r.startDate), formatDate(r.endDate), r.statusName]);
+			rows = rentRoll.rows.map((r) => [r.propertyName, r.unitNumber, r.leaseNumber, r.tenantName, r.monthlyRent, r.securityDeposit, formatDateOnly(r.startDate), formatDateOnly(r.endDate), r.statusName]);
 		} else if (rentLedger) {
 			headers = ['Property', 'Unit', 'Lease', 'Tenant', 'Date', 'Type', 'Description', 'Charge', 'Payment', 'Balance'];
 			rows = rentLedger.leases.flatMap((l) =>
-				l.entries.map((e) => [l.propertyName, l.unitNumber, l.leaseNumber, l.tenantName, formatDate(e.date), e.type, e.description, e.charge, e.payment, e.balance])
+				l.entries.map((e) => [l.propertyName, l.unitNumber, l.leaseNumber, l.tenantName, formatDateOnly(e.date), e.type, e.description, e.charge, e.payment, e.balance])
 			);
 		} else if (delinquency) {
 			headers = ['Property', 'Unit', 'Lease', 'Tenant', '0-30', '31-60', '61-90', '90+', 'Total', 'Oldest (days)'];
@@ -255,7 +255,7 @@
 			rows = cashFlow.months.map((m) => [m.label, m.income, m.expense, m.net]);
 		} else if (generalLedger) {
 			headers = ['Date', 'Type', 'Description', 'Category', 'Property', 'Counterparty', 'Amount', 'Running Balance'];
-			rows = generalLedger.entries.map((e) => [formatDate(e.date), e.type, e.description, e.category, e.propertyName ?? '', e.counterparty ?? '', e.amount, e.runningBalance]);
+			rows = generalLedger.entries.map((e) => [formatDateOnly(e.date), e.type, e.description, e.category, e.propertyName ?? '', e.counterparty ?? '', e.amount, e.runningBalance]);
 		} else if (propertyPnl) {
 			headers = ['Property', 'Income', 'Expense', 'Net'];
 			rows = propertyPnl.rows.map((r) => [r.propertyName, r.income, r.expense, r.net]);
@@ -264,10 +264,10 @@
 			rows = occupancy.rows.map((r) => [r.propertyName, r.totalUnits, r.occupiedUnits, r.vacantUnits, r.occupancyPercent]);
 		} else if (leaseExp) {
 			headers = ['Property', 'Unit', 'Lease', 'Tenant', 'Monthly Rent', 'End Date', 'Days Until', 'Status'];
-			rows = leaseExp.rows.map((r) => [r.propertyName, r.unitNumber, r.leaseNumber, r.tenantName, r.monthlyRent, formatDate(r.endDate), r.daysUntilExpiry, r.statusName]);
+			rows = leaseExp.rows.map((r) => [r.propertyName, r.unitNumber, r.leaseNumber, r.tenantName, r.monthlyRent, formatDateOnly(r.endDate), r.daysUntilExpiry, r.statusName]);
 		} else if (deposits) {
 			headers = ['Property', 'Unit', 'Lease', 'Tenant', 'Held', 'Deductions', 'Returned', 'Balance', 'Status', 'Held At'];
-			rows = deposits.rows.map((r) => [r.propertyName, r.unitNumber, r.leaseNumber, r.tenantName, r.held, r.deductions, r.returned, r.currentBalance, r.statusName, formatDate(r.heldAt)]);
+			rows = deposits.rows.map((r) => [r.propertyName, r.unitNumber, r.leaseNumber, r.tenantName, r.held, r.deductions, r.returned, r.currentBalance, r.statusName, formatDateOnly(r.heldAt)]);
 		} else if (vendor1099) {
 			headers = ['Vendor', 'Tax ID', 'Total Paid', '1099 Eligible', 'W-9 On File', 'Needs W-9', 'Needs 1099 Review'];
 			rows = vendor1099.rows.map((r) => [r.vendorName, r.taxId ?? '', r.totalPaid, r.is1099Eligible ? 'Yes' : 'No', r.w9OnFile ? 'Yes' : 'No', r.needsW9 ? 'Yes' : 'No', r.needs1099Review ? 'Yes' : 'No']);
@@ -472,7 +472,7 @@
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(r.monthlyRent)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums">{money(r.securityDeposit)}</td>
-										<td class="px-3 py-2 text-xs text-muted-foreground">{formatDate(r.startDate)} – {formatDate(r.endDate)}</td>
+										<td class="px-3 py-2 text-xs text-muted-foreground">{formatDateOnly(r.startDate)} – {formatDateOnly(r.endDate)}</td>
 										<td class="px-3 py-2">{r.statusName}</td>
 									</tr>
 								{/each}
@@ -505,7 +505,7 @@
 									</tr>
 									{#each l.entries as e, ei (ei)}
 										<tr class="border-b last:border-0 hover:bg-muted/30">
-											<td class="px-3 py-2">{formatDate(e.date)}</td>
+											<td class="px-3 py-2">{formatDateOnly(e.date)}</td>
 											<td class="px-3 py-2">{e.type}</td>
 											<td class="px-3 py-2 text-muted-foreground">{e.description}</td>
 											<td class="px-3 py-2 text-right font-mono tabular-nums">{e.charge ? money(e.charge) : '—'}</td>
@@ -612,7 +612,7 @@
 							<tbody>
 								{#each generalLedger.entries as e (e.type + '-' + e.id)}
 									<tr class="border-b last:border-0 hover:bg-muted/30">
-										<td class="px-3 py-2">{formatDate(e.date)}</td>
+										<td class="px-3 py-2">{formatDateOnly(e.date)}</td>
 										<td class="px-3 py-2">{e.type}</td>
 										<td class="px-3 py-2">{e.description}{#if e.counterparty}<span class="text-muted-foreground"> · {e.counterparty}</span>{/if}</td>
 										<td class="px-3 py-2 text-muted-foreground">{e.category}</td>
@@ -709,7 +709,7 @@
 										<td class="px-3 py-2"><div class="font-medium">{r.propertyName}</div><div class="text-xs text-muted-foreground">Unit {r.unitNumber} · {r.leaseNumber}</div></td>
 										<td class="px-3 py-2">{r.tenantName}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums text-success">{money(r.monthlyRent)}</td>
-										<td class="px-3 py-2">{formatDate(r.endDate)}</td>
+										<td class="px-3 py-2">{formatDateOnly(r.endDate)}</td>
 										<td class="px-3 py-2 text-right font-mono tabular-nums {r.daysUntilExpiry < 0 ? 'text-destructive' : r.daysUntilExpiry <= 30 ? 'text-[var(--warning)]' : ''}">{r.daysUntilExpiry}</td>
 										<td class="px-3 py-2">{r.statusName}</td>
 									</tr>

@@ -45,6 +45,12 @@ public class ExpenseResponse
     /// <summary>Document classification from the scan (e.g. "Receipt", "Bill").</summary>
     public string? DocumentKind { get; set; }
 
+    /// <summary>Name of the linked property, when assigned. Projected from the navigation (single GET).</summary>
+    public string? PropertyName { get; set; }
+
+    /// <summary>Name of the linked vendor, when assigned. Projected from the navigation (single GET).</summary>
+    public string? VendorName { get; set; }
+
     /// <summary>True when a <see cref="Core.Entities.StoredFile"/> is linked to this expense.</summary>
     public bool HasReceipt { get; set; }
 
@@ -84,6 +90,9 @@ public class ExpenseResponse
         PaymentMethod = e.PaymentMethod,
         CardLast4 = e.CardLast4,
         DocumentKind = e.DocumentKind,
+        // Populated only when the caller eager-loads the Property/Vendor navigations (single GET).
+        PropertyName = e.Property?.Name,
+        VendorName = e.Vendor?.Name,
     };
 }
 

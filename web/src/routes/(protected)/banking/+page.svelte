@@ -10,6 +10,7 @@
 		PlaidSettings
 	} from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { formatDateOnly } from '$lib/utils/date';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
@@ -100,6 +101,8 @@
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
 	}
 
+	// Local-time formatter for timestamps (e.g. lastSyncedAt). Date-only fields like postedAt
+	// use formatDateOnly instead, so they don't shift a day back in behind-UTC zones.
 	function date(value: string) {
 		return new Date(value).toLocaleDateString();
 	}
@@ -394,7 +397,7 @@
 									<p class="mt-1 font-medium">
 										{item.transaction.merchantName || item.transaction.description}
 									</p>
-									<p class="text-xs text-muted-foreground">{date(item.transaction.postedAt)}</p>
+									<p class="text-xs text-muted-foreground">{formatDateOnly(item.transaction.postedAt)}</p>
 									<p class="mt-1 font-mono text-sm {item.transaction.amount >= 0 ? 'text-[var(--success)]' : 'text-destructive'}">
 										{money(item.transaction.amount)}
 									</p>
@@ -484,7 +487,7 @@
 							<tbody>
 								{#each transactions as transaction (transaction.id)}
 									<tr class="border-b border-border last:border-0" data-testid="bank-transaction-{transaction.id}">
-										<td class="whitespace-nowrap px-4 py-3">{date(transaction.postedAt)}</td>
+										<td class="whitespace-nowrap px-4 py-3">{formatDateOnly(transaction.postedAt)}</td>
 										<td class="px-4 py-3">
 											<p class="font-medium">{transaction.merchantName || transaction.description}</p>
 											<p class="text-xs text-muted-foreground">{transaction.institutionName} / {transaction.accountName}</p>
