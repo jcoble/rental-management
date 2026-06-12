@@ -7,6 +7,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { ownerSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { parseLegacyAddress, stripComposedSuffix } from '$lib/utils/parse-address';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
@@ -67,17 +68,30 @@
 
 	function startEditing() {
 		if (!owner) return;
+
+		// Back-compat: owners seeded with only the legacy single-line `address` (and no structured
+		// fields) used to seed line 1 with the WHOLE line — then the user filled city/state/zip and
+		// the suffix doubled. Instead, best-effort split the legacy line into line1/city/state/zip.
+		// Only do this when the owner has NO structured address yet (so a real line1 is never clobbered).
+		const hasStructured = !!(owner.addressLine1 || owner.city || owner.state || owner.postalCode);
+		const seeded = hasStructured
+			? {
+					addressLine1: owner.addressLine1 ?? '',
+					city: owner.city ?? '',
+					state: owner.state ?? '',
+					postalCode: owner.postalCode ?? '',
+				}
+			: parseLegacyAddress(owner.address);
+
 		form = {
 			name: owner.name,
 			ownerEntityType: owner.ownerEntityType,
 			taxId: owner.taxId ?? '',
-			// Back-compat: owners seeded with only the legacy single-line `address` (and
-			// no structured fields) seed line 1 with it so nothing is silently dropped.
-			addressLine1: owner.addressLine1 ?? owner.address ?? '',
+			addressLine1: seeded.addressLine1,
 			addressLine2: owner.addressLine2 ?? '',
-			city: owner.city ?? '',
-			state: owner.state ?? '',
-			postalCode: owner.postalCode ?? '',
+			city: seeded.city,
+			state: seeded.state,
+			postalCode: seeded.postalCode,
 			phone: owner.phone ?? '',
 			email: owner.email ?? '',
 		};
@@ -90,6 +104,13 @@
 	}
 
 	function submit() {
+		// Belt-and-suspenders: if the user kept a line1 still carrying the composed ", City, ST ZIP"
+		// tail (e.g. a legacy line we couldn't confidently split, edited by hand) alongside structured
+		// city/state/zip, strip the duplicated suffix so display + stored data don't double it.
+		if (form.city && form.state && form.postalCode) {
+			form.addressLine1 = stripComposedSuffix(form.addressLine1, form.city, form.state, form.postalCode);
+		}
+
 		const result = parseForm(ownerSchema, form);
 		if (result.errors) {
 			formErrors = result.errors;

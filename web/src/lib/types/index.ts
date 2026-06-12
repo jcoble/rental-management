@@ -86,8 +86,9 @@ export interface Property {
 	ownerId?: number;
 	ownerEntityId?: number;
 	name: string;
-	propertyType: PropertyType;
-	type?: PropertyType;
+	// Wire field is `type` (PropertyResponse maps PropertyType → "type"); the grid column,
+	// type filter, and create/edit forms all read/write this single name.
+	type: PropertyType;
 	status: PropertyStatus;
 	addressLine1: string;
 	addressLine2?: string;
