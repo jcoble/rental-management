@@ -17,12 +17,14 @@ class ChannelPreference {
     required this.enableInApp,
     required this.enableEmail,
     required this.enableSms,
+    required this.enablePush,
   });
 
   final String notificationType;
   final bool enableInApp;
   final bool enableEmail;
   final bool enableSms;
+  final bool enablePush;
 
   /// Friendly, non-technical label for the notification type.
   String get label {
@@ -48,12 +50,14 @@ class ChannelPreference {
     bool? enableInApp,
     bool? enableEmail,
     bool? enableSms,
+    bool? enablePush,
   }) {
     return ChannelPreference(
       notificationType: notificationType,
       enableInApp: enableInApp ?? this.enableInApp,
       enableEmail: enableEmail ?? this.enableEmail,
       enableSms: enableSms ?? this.enableSms,
+      enablePush: enablePush ?? this.enablePush,
     );
   }
 
@@ -63,6 +67,7 @@ class ChannelPreference {
       enableInApp: json['enableInApp'] as bool? ?? false,
       enableEmail: json['enableEmail'] as bool? ?? false,
       enableSms: json['enableSms'] as bool? ?? false,
+      enablePush: json['enablePush'] as bool? ?? false,
     );
   }
 
@@ -71,6 +76,7 @@ class ChannelPreference {
         'enableInApp': enableInApp,
         'enableEmail': enableEmail,
         'enableSms': enableSms,
+        'enablePush': enablePush,
       };
 }
 
