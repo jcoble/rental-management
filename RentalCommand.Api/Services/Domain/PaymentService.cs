@@ -147,6 +147,19 @@ public class PaymentService : IPaymentService
         var before = Snapshot(entity);
         var prevStatus = entity.Status;
         var prevAmount = entity.Amount;
+        var prevLeaseId = entity.LeaseId;
+
+        if (request.LeaseId.HasValue && request.LeaseId.Value != entity.LeaseId)
+        {
+            // Reassigning a payment to a different lease moves it onto that lease's ledger — the target
+            // lease must belong to the caller's portfolio (cross-tenant IDOR guard, mirroring CreateAsync).
+            if (!await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
+            {
+                return null;
+            }
+
+            entity.LeaseId = request.LeaseId.Value;
+        }
 
         if (request.PaymentType.HasValue) entity.PaymentType = request.PaymentType.Value;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
@@ -160,13 +173,14 @@ public class PaymentService : IPaymentService
 
         await _db.SaveChangesAsync(ct);
 
-        // A status or amount change is the legally-meaningful event (reversal / refund / waiver /
-        // re-statement) — record the original and new state in full.
-        if (entity.Status != prevStatus || entity.Amount != prevAmount)
+        // A status, amount, or lease change is the legally-meaningful event (reversal / refund / waiver /
+        // re-statement / re-attribution) — record the original and new state in full.
+        if (entity.Status != prevStatus || entity.Amount != prevAmount || entity.LeaseId != prevLeaseId)
         {
             var changes = new List<string>();
             if (entity.Status != prevStatus) changes.Add($"status {prevStatus}→{entity.Status}");
             if (entity.Amount != prevAmount) changes.Add($"amount {prevAmount:0.##}→{entity.Amount:0.##}");
+            if (entity.LeaseId != prevLeaseId) changes.Add($"lease {prevLeaseId}→{entity.LeaseId}");
             await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
                 oldValues: before, newValues: Snapshot(entity),
                 changeReason: $"Payment #{entity.Id}: {string.Join("; ", changes)}", ct: ct);
