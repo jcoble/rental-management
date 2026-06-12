@@ -6,10 +6,17 @@ plugins {
 
 android {
     namespace = "com.rentalcommand.rental_command"
-    compileSdk = flutter.compileSdkVersion
+    // file_picker / flutter_plugin_android_lifecycle (pulled in with the document
+    // + Firebase plugins) require compiling against API 36+. Pin it here rather
+    // than relying on flutter.compileSdkVersion (34) until the Flutter SDK default
+    // catches up.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // flutter_local_notifications relies on java.time APIs that require core
+        // library desugaring to run on the project's minSdk.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -45,6 +52,10 @@ dependencies {
     // res/xml/shortcuts.xml (the Android Shortcuts framework). 1.6.0+ per
     // https://developer.android.com/develop/devices/assistant/action-schema
     implementation("androidx.core:core-ktx:1.13.1")
+
+    // Backports java.time (and other Java 8+) APIs so flutter_local_notifications
+    // works below API 26; paired with isCoreLibraryDesugaringEnabled above.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 flutter {
