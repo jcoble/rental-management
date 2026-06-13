@@ -279,6 +279,42 @@ public sealed class AuditTrailTests : IDisposable
         wrongType.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task Search_Matches_The_Visible_Fields_Including_EntityId_And_Verb()
+    {
+        // Seed three distinct audit rows directly so we control EntityType / EntityId / Operation,
+        // then assert search hits the fields the page actually renders (the reported "76" miss).
+        _db.AuditLogs.AddRange(
+            new AuditLog { PortfolioId = PortfolioId, EntityType = "Expense", EntityId = 76, Operation = AuditLogOperation.Created, ActorLabel = "Jane Landlord", IpAddress = "203.0.113.5", Timestamp = DateTime.UtcNow.AddMinutes(-3) },
+            new AuditLog { PortfolioId = PortfolioId, EntityType = "WorkOrder", EntityId = 11, Operation = AuditLogOperation.Updated, ActorLabel = "Bob Staff", IpAddress = "198.51.100.9", Timestamp = DateTime.UtcNow.AddMinutes(-2) },
+            new AuditLog { PortfolioId = PortfolioId, EntityType = "Payment", EntityId = 7, Operation = AuditLogOperation.Created, ActorLabel = "Jane Landlord", IpAddress = "203.0.113.5", Timestamp = DateTime.UtcNow.AddMinutes(-1) });
+        await _db.SaveChangesAsync();
+
+        var sut = new AuditQueryService(_db, new AuditDescriber(), new AuditDiffBuilder());
+
+        async Task<List<int>> SearchIds(string term)
+        {
+            var page = await sut.ListAsync(PortfolioId, null, null, null, new ListQuery { Search = term });
+            return page.Select(e => e.EntityId).ToList();
+        }
+
+        // Bare numeric "76" — the originally-reported miss — now matches the Expense #76 row by id.
+        (await SearchIds("76")).Should().ContainSingle().Which.Should().Be(76);
+        // Compound entity label exactly as rendered.
+        (await SearchIds("Expense #76")).Should().Equal(76);
+        (await SearchIds("WorkOrder 11")).Should().Equal(11);
+        // Entity type.
+        (await SearchIds("payment")).Should().Equal(7);
+        // Actor label (case-insensitive).
+        (await SearchIds("bob")).Should().Equal(11);
+        // IP address.
+        (await SearchIds("203.0.113")).Should().BeEquivalentTo(new[] { 76, 7 });
+        // Action verb → operation. "updated" narrows to the WorkOrder row.
+        (await SearchIds("updated")).Should().Equal(11);
+        // Friendly verb the describer renders for Created.
+        (await SearchIds("recorded")).Should().BeEquivalentTo(new[] { 76, 7 });
+    }
+
     [Theory]
     [InlineData("Payment", AuditLogOperation.Created, "Recorded a payment")]
     [InlineData("Lease", AuditLogOperation.Updated, "Updated lease")]
