@@ -1,11 +1,14 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+	import { browser } from '$app/environment';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { owners } from '$lib/api/endpoints/owners';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { leases } from '$lib/api/endpoints/leases';
+	import { notifications } from '$lib/api/endpoints/notifications';
 	import type { Owner, Property, Unit, Tenant, OwnerEntityType } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import {
@@ -28,13 +31,16 @@
 	import { guessBrowserTimeZone } from '$lib/data/timezones';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import WizardStepScaffold from '$lib/components/onboarding/WizardStepScaffold.svelte';
+	import LeasePhotoPrefill from '$lib/components/onboarding/LeasePhotoPrefill.svelte';
 	import {
-		Building,
-		UserCircle2,
-		Home,
-		Users,
-		FileText,
-		CheckCircle2,
+		WIZARD_STEPS,
+		CORE_WIZARD_STEPS,
+		wizardStep,
+		type WizardStepKey,
+		type WizardStepMeta,
+	} from '$lib/onboarding/wizard-steps';
+	import {
 		Check,
 		ArrowLeft,
 		ArrowRight,
@@ -43,26 +49,34 @@
 		PartyPopper,
 		Sparkles,
 		FileSpreadsheet,
+		FileText,
+		CheckCircle2,
+		Building,
+		UserCircle2,
+		Home,
+		Users,
+		Bell,
+		MessageSquare,
 	} from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 
 	// ---------------------------------------------------------------------------
-	// Wizard state
+	// Step model. The ordered flow is the core entity steps (portfolio → lease)
+	// followed by the optional provider-setup steps (notifications, texting). The
+	// step metadata (titles, explanations, where-to-find, docs links) lives in the
+	// shared registry so Settings can deep-link into the exact same steps.
 	// ---------------------------------------------------------------------------
-	type StepKey = 'portfolio' | 'owner' | 'property' | 'tenants' | 'lease';
-	const STEPS: { key: StepKey; label: string; icon: typeof Building }[] = [
-		{ key: 'portfolio', label: 'Portfolio', icon: Building },
-		{ key: 'owner', label: 'Owner', icon: UserCircle2 },
-		{ key: 'property', label: 'Property', icon: Home },
-		{ key: 'tenants', label: 'Tenants', icon: Users },
-		{ key: 'lease', label: 'Lease', icon: FileText },
-	];
+	const STEP_ICONS = { Building, UserCircle2, Home, Users, FileText, Bell, MessageSquare } as const;
+	const STEPS = WIZARD_STEPS;
 
 	let stepIndex = $state(0);
 	let finished = $state(false);
-	const currentStep = $derived(STEPS[stepIndex]);
+	const currentStep = $derived<WizardStepMeta>(STEPS[stepIndex]);
+
+	// Where the user came from (e.g. a Settings section). On finishing a step we send them back.
+	let fromParam = $state<string | null>(null);
 
 	// Remember what the wizard created so later steps can reference it.
 	let createdOwner = $state<Owner | null>(null);
@@ -71,6 +85,30 @@
 	let createdTenants = $state<Tenant[]>([]);
 	let createdLease = $state(false);
 	let portfolioSaved = $state(false);
+	let notificationsSaved = $state(false);
+	let textingSaved = $state(false);
+
+	// ---------------------------------------------------------------------------
+	// Resumable progress — persisted per portfolio so a reload resumes in place.
+	// ---------------------------------------------------------------------------
+	const progressKey = $derived(`rc.onboarding.step.${portfolioId}`);
+	function persistStep(key: WizardStepKey) {
+		if (!browser || portfolioId <= 0) return;
+		try {
+			localStorage.setItem(progressKey, key);
+		} catch {
+			/* storage may be unavailable */
+		}
+	}
+	function readPersistedStep(): WizardStepKey | null {
+		if (!browser || portfolioId <= 0) return null;
+		try {
+			const v = localStorage.getItem(progressKey) as WizardStepKey | null;
+			return v && STEPS.some((s) => s.key === v) ? v : null;
+		} catch {
+			return null;
+		}
+	}
 
 	// ---------------------------------------------------------------------------
 	// Existing-data detection (so re-entering is safe and the user can skip ahead)
@@ -95,6 +133,16 @@
 		queryKey: ['leases', portfolioId],
 		queryFn: () => leases.list(portfolioId, { take: 50 }),
 	}));
+	const notificationEmailQuery = createQuery(() => ({
+		queryKey: ['notification-email', portfolioId],
+		enabled: portfolioId > 0,
+		queryFn: () => notifications.getNotificationEmail(),
+	}));
+	const notificationSettingsQuery = createQuery(() => ({
+		queryKey: ['notification-settings'],
+		enabled: portfolioId > 0,
+		queryFn: () => notifications.getSettings(),
+	}));
 
 	// Onboarding is for LIVE accounts only. A Sandbox account is pre-seeded demo data — the user
 	// should "Go Live" first (which wipes the demo data), so we bounce them to the dashboard.
@@ -118,20 +166,27 @@
 	const hasExistingProperties = $derived((propertiesQuery.data?.length ?? 0) > 0);
 	const hasExistingTenants = $derived((tenantsQuery.data?.length ?? 0) > 0);
 	const hasExistingLeases = $derived((leasesQuery.data?.length ?? 0) > 0);
+	const hasNotificationEmail = $derived(!!notificationEmailQuery.data?.email);
+	const hasTexting = $derived(notificationSettingsQuery.data?.signalWireTokenSet === true);
 
-	// A step counts as "done" if the wizard created something for it OR data already exists.
-	const stepDone = $derived<Record<StepKey, boolean>>({
+	// A step counts as "done" if the wizard handled it OR data already exists.
+	const stepDone = $derived<Record<WizardStepKey, boolean>>({
 		portfolio: portfolioSaved || !!portfolioQuery.data?.name,
 		owner: !!createdOwner || hasExistingOwners,
 		property: !!createdProperty || hasExistingProperties,
 		tenants: createdTenants.length > 0 || hasExistingTenants,
 		lease: createdLease || hasExistingLeases,
+		notifications: notificationsSaved || hasNotificationEmail,
+		texting: textingSaved || hasTexting,
 	});
 
-	// On first load, jump straight to the first step that still needs the user. Existing
-	// portfolios/owners/properties pre-complete earlier steps, so we don't make the user click
-	// "Skip" through them. Runs once, only after the detection queries have settled, so manual
-	// back/next still work afterward.
+	// ---------------------------------------------------------------------------
+	// Initial positioning. Priority:
+	//   1. ?step=<key> in the URL (deep-link from Settings / dashboard) — honored verbatim.
+	//   2. otherwise resume the persisted step if it isn't already done.
+	//   3. otherwise jump to the first incomplete CORE step.
+	// Runs once after detection settles so manual back/next work afterward.
+	// ---------------------------------------------------------------------------
 	let autoAdvanced = $state(false);
 	const detectionReady = $derived(
 		portfolioQuery.isSuccess &&
@@ -142,16 +197,35 @@
 	);
 	$effect(() => {
 		if (autoAdvanced || finished || !detectionReady) return;
-		// Don't reposition while we're bouncing a sandbox user to the dashboard.
 		if (sandboxQuery.data?.isSandbox === true) return;
 		autoAdvanced = true;
-		const firstIncomplete = STEPS.findIndex((s) => !stepDone[s.key]);
-		// All steps already satisfied → land on the last step (lease) rather than past the end.
-		stepIndex = firstIncomplete === -1 ? STEPS.length - 1 : firstIncomplete;
+
+		fromParam = page.url.searchParams.get('from');
+		const requested = page.url.searchParams.get('step') as WizardStepKey | null;
+		if (requested && STEPS.some((s) => s.key === requested)) {
+			stepIndex = STEPS.findIndex((s) => s.key === requested);
+			return;
+		}
+
+		const persisted = readPersistedStep();
+		if (persisted && !stepDone[persisted]) {
+			stepIndex = STEPS.findIndex((s) => s.key === persisted);
+			return;
+		}
+
+		const firstIncomplete = CORE_WIZARD_STEPS.findIndex((s) => !stepDone[s.key]);
+		stepIndex = firstIncomplete === -1
+			? STEPS.findIndex((s) => s.key === 'lease')
+			: STEPS.findIndex((s) => s.key === CORE_WIZARD_STEPS[firstIncomplete].key);
+	});
+
+	// Persist whenever the step changes (after the initial positioning has run).
+	$effect(() => {
+		if (autoAdvanced && currentStep) persistStep(currentStep.key);
 	});
 
 	// ---------------------------------------------------------------------------
-	// Step 1 — Portfolio
+	// Step: Portfolio
 	// ---------------------------------------------------------------------------
 	let portfolioForm = $state({ name: '', managementCompanyName: '', timeZone: guessBrowserTimeZone() });
 	let portfolioErrors = $state<Record<string, string>>({});
@@ -202,7 +276,7 @@
 	}
 
 	// ---------------------------------------------------------------------------
-	// Step 2 — Owner
+	// Step: Owner
 	// ---------------------------------------------------------------------------
 	const OWNER_ENTITY_TYPES: OwnerEntityType[] = ['Person', 'LLC', 'Trust'];
 	let ownerForm = $state({ name: '', ownerEntityType: 'Person' as OwnerEntityType, email: '', taxId: '' });
@@ -237,9 +311,13 @@
 	}
 
 	// ---------------------------------------------------------------------------
-	// Step 3 — Property + Units
+	// Step: Property + Units. Split into sub-steps so the user sees 1–2 fields at a
+	// time instead of one dense form: address → details → units.
 	// ---------------------------------------------------------------------------
 	const PROPERTY_TYPES = ['SingleFamily', 'MultiFamily', 'Condo', 'Townhome', 'Commercial', 'MixedUse'];
+	const PROPERTY_SUBSTEPS = ['address', 'details', 'units'] as const;
+	type PropertySubstep = (typeof PROPERTY_SUBSTEPS)[number];
+	let propertySub = $state<PropertySubstep>('address');
 	let propertyForm = $state({
 		name: '',
 		type: 'SingleFamily',
@@ -251,7 +329,6 @@
 	});
 	let propertyErrors = $state<Record<string, string>>({});
 
-	// Inline unit rows. Defaults to one ready-to-fill row.
 	const emptyUnit = () => ({ unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' });
 	let unitRows = $state<ReturnType<typeof emptyUnit>[]>([emptyUnit()]);
 	let unitRowErrors = $state<Record<string, string>[]>([{}]);
@@ -266,11 +343,7 @@
 	}
 
 	const savePropertyMutation = createMutation(() => ({
-		// Creates the property, then each non-empty unit row in sequence.
-		mutationFn: async (vars: {
-			property: Record<string, unknown>;
-			units: Record<string, unknown>[];
-		}) => {
+		mutationFn: async (vars: { property: Record<string, unknown>; units: Record<string, unknown>[] }) => {
 			const property = await properties.create(vars.property);
 			const units: Unit[] = [];
 			for (const u of vars.units) {
@@ -287,10 +360,23 @@
 					: 'Property added.'
 			);
 			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
+			propertySub = 'address';
 			next();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	// Validate just the address fields before advancing the property sub-step.
+	function propertyAddressValid(): boolean {
+		const errs: Record<string, string> = {};
+		if (!propertyForm.name.trim()) errs.name = 'Name is required';
+		if (!propertyForm.addressLine1.trim()) errs.addressLine1 = 'Address is required';
+		if (!propertyForm.city.trim()) errs.city = 'City is required';
+		if (!propertyForm.state.trim()) errs.state = 'State is required';
+		if (!propertyForm.postalCode.trim()) errs.postalCode = 'ZIP is required';
+		propertyErrors = errs;
+		return Object.keys(errs).length === 0;
+	}
 
 	function submitProperty() {
 		const propResult = parseForm(propertySchema, {
@@ -299,11 +385,11 @@
 		});
 		if (propResult.errors) {
 			propertyErrors = propResult.errors;
+			propertySub = 'address';
 			return;
 		}
 		propertyErrors = {};
 
-		// Validate only the rows the user actually filled in (skip fully-blank rows).
 		const errors: Record<string, string>[] = unitRows.map(() => ({}));
 		const validUnits: Record<string, unknown>[] = [];
 		let hasUnitError = false;
@@ -321,14 +407,11 @@
 		unitRowErrors = errors;
 		if (hasUnitError) return;
 
-		savePropertyMutation.mutate({
-			property: { portfolioId, ...propResult.data },
-			units: validUnits,
-		});
+		savePropertyMutation.mutate({ property: { portfolioId, ...propResult.data }, units: validUnits });
 	}
 
 	// ---------------------------------------------------------------------------
-	// Step 4 — Tenants
+	// Step: Tenants
 	// ---------------------------------------------------------------------------
 	const emptyTenant = () => ({ firstName: '', lastName: '', email: '', phone: '' });
 	let tenantRows = $state<ReturnType<typeof emptyTenant>[]>([emptyTenant()]);
@@ -378,7 +461,6 @@
 		tenantRowErrors = errors;
 		if (hasError) return;
 		if (valid.length === 0) {
-			// Nothing to add — treat like a skip so the user isn't stuck.
 			next();
 			return;
 		}
@@ -386,27 +468,28 @@
 	}
 
 	// ---------------------------------------------------------------------------
-	// Step 5 — Lease
+	// Step: Lease (with snap-a-photo pre-fill)
 	// ---------------------------------------------------------------------------
 	const today = new Date();
 	const oneYear = new Date(today);
 	oneYear.setFullYear(oneYear.getFullYear() + 1);
-	const iso = (d: Date) => d.toISOString().slice(0, 10);
+	const isoDate = (d: Date) => d.toISOString().slice(0, 10);
 
 	let leaseForm = $state({
 		tenantId: '',
 		propertyId: '',
 		unitId: '',
-		startDate: iso(today),
-		endDate: iso(oneYear),
+		startDate: isoDate(today),
+		endDate: isoDate(oneYear),
 		monthlyRent: '',
 		securityDeposit: '',
+		lateFeeAmount: '0',
+		leaseNumber: '',
 		rentDueDay: '1',
 	});
 	let leaseErrors = $state<Record<string, string>>({});
 	let leasePrefilled = false;
 
-	// Property/unit/tenant pickers default to what was just created.
 	const leaseProperties = $derived(propertiesQuery.data ?? []);
 	const leaseTenants = $derived(tenantsQuery.data ?? []);
 
@@ -417,7 +500,6 @@
 	}));
 
 	$effect(() => {
-		// Prefill once the relevant queries have data — default to wizard-created items.
 		if (leasePrefilled) return;
 		if (currentStep.key !== 'lease') return;
 		const propId = createdProperty?.id ?? leaseProperties[0]?.id;
@@ -429,7 +511,6 @@
 	});
 
 	$effect(() => {
-		// Once units for the chosen property load, default the unit to the first one.
 		const list = leaseUnitsQuery.data ?? [];
 		if (!leaseForm.unitId && list.length > 0) {
 			const preferred = createdUnits.find((u) => list.some((l) => l.id === u.id)) ?? list[0];
@@ -440,22 +521,42 @@
 		}
 	});
 
+	// Apply photo-extracted (and user-confirmed) lease terms onto the form. Never overwrites a value
+	// the user already typed — the confirmed extraction fills blanks, the user stays in control.
+	function applyLeasePrefill(values: {
+		leaseNumber?: string;
+		startDate?: string;
+		endDate?: string;
+		monthlyRent?: string;
+		securityDeposit?: string;
+		lateFee?: string;
+		rentDueDay?: string;
+	}) {
+		if (values.leaseNumber) leaseForm.leaseNumber = values.leaseNumber;
+		if (values.startDate) leaseForm.startDate = values.startDate;
+		if (values.endDate) leaseForm.endDate = values.endDate;
+		if (values.monthlyRent) leaseForm.monthlyRent = values.monthlyRent;
+		if (values.securityDeposit) leaseForm.securityDeposit = values.securityDeposit;
+		if (values.lateFee) leaseForm.lateFeeAmount = values.lateFee;
+		if (values.rentDueDay) leaseForm.rentDueDay = values.rentDueDay;
+		showSuccess('Filled in from your lease — please double-check the values.');
+	}
+
 	const saveLeaseMutation = createMutation(() => ({
 		mutationFn: (data: Record<string, unknown>) => leases.create(data),
 		onSuccess: () => {
 			createdLease = true;
 			showSuccess('Lease created.');
 			queryClient.invalidateQueries({ queryKey: ['leases', portfolioId] });
-			finished = true;
+			next();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
 	function submitLease() {
-		// Auto-generate a readable lease number from the unit + start date.
 		const unit = (leaseUnitsQuery.data ?? []).find((u) => String(u.id) === leaseForm.unitId);
 		const stamp = leaseForm.startDate.replace(/-/g, '');
-		const leaseNumber = `L-${unit?.unitNumber ?? leaseForm.unitId}-${stamp}`;
+		const leaseNumber = leaseForm.leaseNumber.trim() || `L-${unit?.unitNumber ?? leaseForm.unitId}-${stamp}`;
 		const result = parseForm(leaseSchema, {
 			leaseNumber,
 			propertyId: leaseForm.propertyId,
@@ -465,7 +566,7 @@
 			endDate: leaseForm.endDate,
 			monthlyRent: leaseForm.monthlyRent,
 			securityDeposit: leaseForm.securityDeposit || '0',
-			lateFeeAmount: '0',
+			lateFeeAmount: leaseForm.lateFeeAmount || '0',
 			rentDueDay: leaseForm.rentDueDay,
 			status: 'Active',
 			notes: '',
@@ -479,23 +580,125 @@
 	}
 
 	// ---------------------------------------------------------------------------
+	// Step: Notifications (email alerts) — writes the same endpoint as Settings.
+	// ---------------------------------------------------------------------------
+	let notificationEmail = $state('');
+	let notificationEmailPrefilled = false;
+	$effect(() => {
+		if (notificationEmailQuery.data && !notificationEmailPrefilled) {
+			notificationEmailPrefilled = true;
+			notificationEmail = notificationEmailQuery.data.email ?? '';
+		}
+	});
+	const saveNotificationEmailMutation = createMutation(() => ({
+		mutationFn: () => notifications.setNotificationEmail(notificationEmail.trim() || null),
+		onSuccess: () => {
+			notificationsSaved = true;
+			showSuccess('Alert email saved.');
+			queryClient.invalidateQueries({ queryKey: ['notification-email', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['portfolio', portfolioId] });
+			next();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	// ---------------------------------------------------------------------------
+	// Step: Texting (SignalWire) — writes the same endpoint as Settings. Only the
+	// provider connection fields; keeps every other notification setting intact by
+	// round-tripping the current settings payload.
+	// ---------------------------------------------------------------------------
+	let textingForm = $state({ projectId: '', spaceUrl: '', fromNumber: '' });
+	let textingToken = $state('');
+	let textingPrefilled = false;
+	$effect(() => {
+		const d = notificationSettingsQuery.data;
+		if (d && !textingPrefilled) {
+			textingPrefilled = true;
+			textingForm = {
+				projectId: d.signalWireProjectId ?? '',
+				spaceUrl: d.signalWireSpaceUrl ?? '',
+				fromNumber: d.signalWireFromNumber ?? '',
+			};
+		}
+	});
+	const saveTextingMutation = createMutation(() => ({
+		mutationFn: () => {
+			const d = notificationSettingsQuery.data;
+			if (!d) throw new Error('Settings not loaded yet.');
+			return notifications.setSettings({
+				enableRentCharges: d.enableRentCharges,
+				enableLateFees: d.enableLateFees,
+				enableLeaseExpiryReminders: d.enableLeaseExpiryReminders,
+				notifyTenants: d.notifyTenants,
+				rentChargeLeadDays: d.rentChargeLeadDays,
+				lateFeeGraceDays: d.lateFeeGraceDays,
+				leaseExpiryReminderDays: d.leaseExpiryReminderDays,
+				enableDailyBriefingMessages: d.enableDailyBriefingMessages,
+				dailyBriefingSendHourLocal: d.dailyBriefingSendHourLocal,
+				dailyBriefingIncludeEmpty: d.dailyBriefingIncludeEmpty,
+				dailyBriefingSmsRecipients: d.dailyBriefingSmsRecipients,
+				dailyBriefingEmailRecipients: d.dailyBriefingEmailRecipients,
+				signalWireProjectId: textingForm.projectId.trim() || null,
+				signalWireToken: textingToken.length > 0 ? textingToken : undefined,
+				signalWireSpaceUrl: textingForm.spaceUrl.trim() || null,
+				signalWireFromNumber: textingForm.fromNumber.trim() || null,
+				channelPreferences: d.channelPreferences ?? [],
+			});
+		},
+		onSuccess: () => {
+			textingSaved = true;
+			textingToken = '';
+			showSuccess('Texting connected.');
+			queryClient.invalidateQueries({ queryKey: ['notification-settings'] });
+			next();
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	// ---------------------------------------------------------------------------
 	// Navigation
 	// ---------------------------------------------------------------------------
+	function finishFlow() {
+		finished = true;
+		if (browser && portfolioId > 0) {
+			try {
+				localStorage.removeItem(progressKey);
+			} catch {
+				/* ignore */
+			}
+		}
+	}
+
 	function next() {
+		// Deep-linked from a Settings section → return there once the step is handled.
+		if (fromParam === 'settings' && currentStep.settingsAnchor) {
+			goto(`/settings#${currentStep.settingsAnchor}`);
+			return;
+		}
+		// The last CORE step (lease) is the natural "done" point — show the celebration and offer the
+		// optional provider steps from there rather than forcing the user through them.
+		if (currentStep.key === 'lease') {
+			finishFlow();
+			return;
+		}
 		if (stepIndex < STEPS.length - 1) {
 			stepIndex += 1;
 		} else {
-			finished = true;
+			finishFlow();
 		}
 	}
 	function back() {
+		if (currentStep.key === 'property' && propertySub !== 'address') {
+			propertySub = PROPERTY_SUBSTEPS[PROPERTY_SUBSTEPS.indexOf(propertySub) - 1];
+			return;
+		}
 		if (stepIndex > 0) stepIndex -= 1;
 	}
 	function skip() {
 		next();
 	}
-	function goToStep(i: number) {
-		stepIndex = i;
+	function goToStep(key: WizardStepKey) {
+		stepIndex = STEPS.findIndex((s) => s.key === key);
 	}
 
 	const anyPending = $derived(
@@ -503,7 +706,9 @@
 			saveOwnerMutation.isPending ||
 			savePropertyMutation.isPending ||
 			saveTenantsMutation.isPending ||
-			saveLeaseMutation.isPending
+			saveLeaseMutation.isPending ||
+			saveNotificationEmailMutation.isPending ||
+			saveTextingMutation.isPending
 	);
 
 	// Labels for select triggers.
@@ -518,6 +723,11 @@
 		const t = leaseTenants.find((x) => String(x.id) === leaseForm.tenantId);
 		return t ? t.fullName || `${t.firstName} ${t.lastName}` : 'Select tenant';
 	});
+
+	// Which steps show in the progress rail. The optional provider steps appear after the core ones
+	// but are visually marked as optional.
+	const coreCount = $derived(CORE_WIZARD_STEPS.length);
+	const leaseBlocked = $derived(leaseProperties.length === 0 || leaseTenants.length === 0);
 </script>
 
 <svelte:head>
@@ -527,7 +737,6 @@
 <div class="box-border h-full overflow-y-auto bg-muted/30 p-6 pb-20" data-testid="onboarding-page">
 	<div class="mx-auto max-w-2xl">
 		{#if finished}
-			<!-- All set -->
 			<Card.Root class="mt-10" data-testid="onboarding-complete">
 				<Card.Content class="flex flex-col items-center gap-4 px-8 py-12 text-center">
 					<div class="flex h-16 w-16 items-center justify-center rounded-full bg-success/15 text-success">
@@ -535,9 +744,24 @@
 					</div>
 					<h1 class="text-2xl font-bold">You're all set!</h1>
 					<p class="max-w-md text-sm text-muted-foreground">
-						Your portfolio is ready to go. You can always add more properties, tenants, and
-						leases from the menu on the left. Welcome aboard.
+						Your portfolio is ready to go. You can always add more properties, tenants, and leases
+						from the menu on the left.
 					</p>
+					<!-- Optional add-ons the user can still set up, clearly marked optional. -->
+					<div class="mt-2 flex flex-col items-stretch gap-2 sm:flex-row">
+						{#if !stepDone.notifications}
+							<Button variant="outline" class="gap-2" data-testid="onboarding-setup-notifications" onclick={() => { finished = false; goToStep('notifications'); }}>
+								<Bell class="h-4 w-4" />
+								Set up email alerts
+							</Button>
+						{/if}
+						{#if !stepDone.texting}
+							<Button variant="outline" class="gap-2" data-testid="onboarding-setup-texting" onclick={() => { finished = false; goToStep('texting'); }}>
+								<MessageSquare class="h-4 w-4" />
+								Turn on texting
+							</Button>
+						{/if}
+					</div>
 					<Button class="mt-2 gap-2" data-testid="onboarding-finish-dashboard" onclick={() => goto('/')}>
 						<Sparkles class="h-4 w-4" />
 						Go to my dashboard
@@ -545,7 +769,6 @@
 				</Card.Content>
 			</Card.Root>
 		{:else}
-			<!-- Header + progress -->
 			<div class="mb-6">
 				<h1 class="text-2xl font-bold" data-testid="onboarding-title">Let's set up your portfolio</h1>
 				<p class="mt-1 text-sm text-muted-foreground">
@@ -562,30 +785,25 @@
 				<span class="text-sm text-foreground">
 					Already have your tenants, properties, or units in a spreadsheet?
 				</span>
-				<Button
-					variant="outline"
-					size="sm"
-					class="gap-1.5"
-					href="/import"
-					data-testid="onboarding-import-spreadsheet"
-				>
+				<Button variant="outline" size="sm" class="gap-1.5" href="/import" data-testid="onboarding-import-spreadsheet">
 					<FileSpreadsheet class="h-4 w-4" />
 					Import from a spreadsheet
 				</Button>
 			</div>
 
-			<!-- Step indicator -->
+			<!-- Step indicator (core steps + optional add-ons) -->
 			<div class="mb-4" data-testid="onboarding-steps">
-				<Progress value={stepIndex + 1} max={STEPS.length} class="mb-3" />
-				<div class="flex items-center justify-between">
-					{#each STEPS as step, i}
-						{@const active = i === stepIndex}
+				<Progress value={Math.min(stepIndex + 1, coreCount)} max={coreCount} class="mb-3" />
+				<div class="flex items-center justify-between gap-1">
+					{#each STEPS as step (step.key)}
+						{@const active = step.key === currentStep.key}
 						{@const done = stepDone[step.key]}
+						{@const StepIcon = STEP_ICONS[step.icon]}
 						<button
 							type="button"
 							class="flex flex-1 flex-col items-center gap-1 text-center"
 							data-testid="onboarding-step-tab-{step.key}"
-							onclick={() => goToStep(i)}
+							onclick={() => goToStep(step.key)}
 						>
 							<span
 								class="flex h-8 w-8 items-center justify-center rounded-full border text-xs transition-colors
@@ -598,11 +816,11 @@
 								{#if done && !active}
 									<Check class="h-4 w-4" />
 								{:else}
-									<step.icon class="h-4 w-4" />
+									<StepIcon class="h-4 w-4" />
 								{/if}
 							</span>
 							<span class="text-[11px] {active ? 'font-medium text-foreground' : 'text-muted-foreground'}">
-								{step.label}
+								{step.label}{#if !step.core}<span class="block text-[9px] text-muted-foreground/70">optional</span>{/if}
 							</span>
 						</button>
 					{/each}
@@ -611,68 +829,32 @@
 
 			<Card.Root>
 				<Card.Content class="p-6">
-					<!-- ============ Step 1: Portfolio ============ -->
+					<!-- ============ Portfolio ============ -->
 					{#if currentStep.key === 'portfolio'}
-						<div data-testid="onboarding-step-portfolio">
-							<div class="mb-4 flex items-center gap-2">
-								<Building class="h-5 w-5 text-primary" />
-								<h2 class="text-lg font-semibold">Name your portfolio</h2>
-							</div>
-							<p class="mb-4 text-sm text-muted-foreground">
-								This is the name for your whole rental business. You can change it anytime in
-								Settings.
-							</p>
+						<WizardStepScaffold step={currentStep}>
 							<div class="grid gap-4">
 								<div>
-									<label for="ob-portfolio-name" class="mb-1 block text-xs font-medium text-muted-foreground">
-										Portfolio name
-									</label>
-									<Input
-										id="ob-portfolio-name"
-										data-testid="onboarding-portfolio-name"
-										bind:value={portfolioForm.name}
-										placeholder="e.g. Smith Family Rentals"
-									/>
+									<label for="ob-portfolio-name" class="mb-1 block text-xs font-medium text-muted-foreground">Portfolio name</label>
+									<Input id="ob-portfolio-name" data-testid="onboarding-portfolio-name" bind:value={portfolioForm.name} placeholder="e.g. Smith Family Rentals" />
 									{#if portfolioErrors.name}<p class="mt-1 text-xs text-destructive">{portfolioErrors.name}</p>{/if}
 								</div>
 								<div>
 									<label for="ob-portfolio-company" class="mb-1 block text-xs font-medium text-muted-foreground">
 										Management company <span class="font-normal">(optional)</span>
 									</label>
-									<Input
-										id="ob-portfolio-company"
-										data-testid="onboarding-portfolio-company"
-										bind:value={portfolioForm.managementCompanyName}
-										placeholder="e.g. Smith Property Management"
-									/>
+									<Input id="ob-portfolio-company" data-testid="onboarding-portfolio-company" bind:value={portfolioForm.managementCompanyName} placeholder="e.g. Smith Property Management" />
 								</div>
 								<div>
-									<label for="ob-portfolio-timezone" class="mb-1 block text-xs font-medium text-muted-foreground">
-										Time zone
-									</label>
-									<TimeZoneSelect
-										id="ob-portfolio-timezone"
-										testid="onboarding-portfolio-timezone"
-										bind:value={portfolioForm.timeZone}
-									/>
-									<p class="mt-1 text-xs text-muted-foreground">
-										Used for rent reminders, late-fee timing, and your daily briefing.
-									</p>
+									<label for="ob-portfolio-timezone" class="mb-1 block text-xs font-medium text-muted-foreground">Time zone</label>
+									<TimeZoneSelect id="ob-portfolio-timezone" testid="onboarding-portfolio-timezone" bind:value={portfolioForm.timeZone} />
+									<p class="mt-1 text-xs text-muted-foreground">Used for rent reminders, late-fee timing, and your daily briefing.</p>
 								</div>
 							</div>
-						</div>
+						</WizardStepScaffold>
 
-					<!-- ============ Step 2: Owner ============ -->
+					<!-- ============ Owner ============ -->
 					{:else if currentStep.key === 'owner'}
-						<div data-testid="onboarding-step-owner">
-							<div class="mb-4 flex items-center gap-2">
-								<UserCircle2 class="h-5 w-5 text-primary" />
-								<h2 class="text-lg font-semibold">Who owns the properties?</h2>
-							</div>
-							<p class="mb-4 text-sm text-muted-foreground">
-								Add the owner — this could be you (a person), or an LLC or trust that holds the
-								property. We'll use this for owner reports and tax forms later.
-							</p>
+						<WizardStepScaffold step={currentStep}>
 							{#if hasExistingOwners && !createdOwner}
 								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-owner-existing">
 									You already have {ownersQuery.data?.length} owner{(ownersQuery.data?.length ?? 0) === 1 ? '' : 's'} on file. You can add another or skip ahead.
@@ -681,20 +863,13 @@
 							<div class="grid gap-4 sm:grid-cols-2">
 								<div class="sm:col-span-2">
 									<label for="ob-owner-name" class="mb-1 block text-xs font-medium text-muted-foreground">Owner name</label>
-									<Input
-										id="ob-owner-name"
-										data-testid="onboarding-owner-name"
-										bind:value={ownerForm.name}
-										placeholder="e.g. John Smith or Smith Holdings LLC"
-									/>
+									<Input id="ob-owner-name" data-testid="onboarding-owner-name" bind:value={ownerForm.name} placeholder="e.g. John Smith or Smith Holdings LLC" />
 									{#if ownerErrors.name}<p class="mt-1 text-xs text-destructive">{ownerErrors.name}</p>{/if}
 								</div>
 								<div>
 									<span class="mb-1 block text-xs font-medium text-muted-foreground">Type</span>
 									<Select.Root type="single" bind:value={ownerForm.ownerEntityType}>
-										<Select.Trigger class="w-full" data-testid="onboarding-owner-type">
-											{ownerForm.ownerEntityType}
-										</Select.Trigger>
+										<Select.Trigger class="w-full" data-testid="onboarding-owner-type">{ownerForm.ownerEntityType}</Select.Trigger>
 										<Select.Content>
 											{#each OWNER_ENTITY_TYPES as t}
 												<Select.Item value={t} label={t}>{t}</Select.Item>
@@ -703,169 +878,134 @@
 									</Select.Root>
 								</div>
 								<div>
-									<label for="ob-owner-email" class="mb-1 block text-xs font-medium text-muted-foreground">
-										Email <span class="font-normal">(optional)</span>
-									</label>
-									<Input
-										id="ob-owner-email"
-										data-testid="onboarding-owner-email"
-										bind:value={ownerForm.email}
-										placeholder="owner@example.com"
-									/>
+									<label for="ob-owner-email" class="mb-1 block text-xs font-medium text-muted-foreground">Email <span class="font-normal">(optional)</span></label>
+									<Input id="ob-owner-email" data-testid="onboarding-owner-email" bind:value={ownerForm.email} placeholder="owner@example.com" />
 									{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive">{ownerErrors.email}</p>{/if}
 								</div>
 								<div class="sm:col-span-2">
-									<label for="ob-owner-taxid" class="mb-1 block text-xs font-medium text-muted-foreground">
-										Tax ID / SSN <span class="font-normal">(optional)</span>
-									</label>
-									<Input
-										id="ob-owner-taxid"
-										data-testid="onboarding-owner-taxid"
-										bind:value={ownerForm.taxId}
-										placeholder="For 1099s and tax reports"
-									/>
+									<label for="ob-owner-taxid" class="mb-1 block text-xs font-medium text-muted-foreground">Tax ID / SSN <span class="font-normal">(optional)</span></label>
+									<Input id="ob-owner-taxid" data-testid="onboarding-owner-taxid" bind:value={ownerForm.taxId} placeholder="For 1099s and tax reports" />
 								</div>
 							</div>
-						</div>
+						</WizardStepScaffold>
 
-					<!-- ============ Step 3: Property + Units ============ -->
+					<!-- ============ Property + Units (sub-stepped) ============ -->
 					{:else if currentStep.key === 'property'}
-						<div data-testid="onboarding-step-property">
-							<div class="mb-4 flex items-center gap-2">
-								<Home class="h-5 w-5 text-primary" />
-								<h2 class="text-lg font-semibold">Add a property</h2>
-							</div>
-							<p class="mb-4 text-sm text-muted-foreground">
-								Enter the property's address, then list the rentable units inside it (an apartment,
-								a house counts as one unit, a duplex is two, and so on).
-							</p>
+						<WizardStepScaffold step={currentStep}>
 							{#if hasExistingProperties && !createdProperty}
 								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-property-existing">
 									You already have {propertiesQuery.data?.length} propert{(propertiesQuery.data?.length ?? 0) === 1 ? 'y' : 'ies'}. Add another or skip ahead.
 								</div>
 							{/if}
-							<div class="grid gap-4 sm:grid-cols-2">
-								<div class="sm:col-span-2">
-									<label for="ob-prop-name" class="mb-1 block text-xs font-medium text-muted-foreground">Property name</label>
-									<Input
-										id="ob-prop-name"
-										data-testid="onboarding-property-name"
-										bind:value={propertyForm.name}
-										placeholder="e.g. 123 Main St Duplex"
-									/>
-									{#if propertyErrors.name}<p class="mt-1 text-xs text-destructive">{propertyErrors.name}</p>{/if}
-								</div>
-								<div>
-									<span class="mb-1 block text-xs font-medium text-muted-foreground">Type</span>
-									<Select.Root type="single" bind:value={propertyForm.type}>
-										<Select.Trigger class="w-full" data-testid="onboarding-property-type">
-											{propertyForm.type}
-										</Select.Trigger>
-										<Select.Content>
-											{#each PROPERTY_TYPES as t}
-												<Select.Item value={t} label={t}>{t}</Select.Item>
-											{/each}
-										</Select.Content>
-									</Select.Root>
-								</div>
-								<div>
-									<label for="ob-prop-address" class="mb-1 block text-xs font-medium text-muted-foreground">Street address</label>
-									<AddressAutocomplete
-										id="ob-prop-address"
-										testid="onboarding-property-address"
-										bind:value={propertyForm.addressLine1}
-										placeholder="123 Main St"
-										onresolved={(a) => {
-											if (a.city) propertyForm.city = a.city;
-											if (a.state) propertyForm.state = a.state;
-											if (a.zip) propertyForm.postalCode = a.zip;
-										}}
-									/>
-									{#if propertyErrors.addressLine1}<p class="mt-1 text-xs text-destructive">{propertyErrors.addressLine1}</p>{/if}
-								</div>
-								<div>
-									<label for="ob-prop-address2" class="mb-1 block text-xs font-medium text-muted-foreground">Apt / Suite / Unit # <span class="text-muted-foreground/60">(optional)</span></label>
-									<Input id="ob-prop-address2" data-testid="onboarding-property-address2" bind:value={propertyForm.addressLine2} placeholder="Unit 4B" />
-								</div>
-								<div>
-									<label for="ob-prop-city" class="mb-1 block text-xs font-medium text-muted-foreground">City</label>
-									<Input id="ob-prop-city" data-testid="onboarding-property-city" bind:value={propertyForm.city} placeholder="City" />
-									{#if propertyErrors.city}<p class="mt-1 text-xs text-destructive">{propertyErrors.city}</p>{/if}
-								</div>
-								<div>
-									<label for="ob-prop-state" class="mb-1 block text-xs font-medium text-muted-foreground">State</label>
-									<StateSelect id="ob-prop-state" testid="onboarding-property-state" bind:value={propertyForm.state} placeholder="State" />
-									{#if propertyErrors.state}<p class="mt-1 text-xs text-destructive">{propertyErrors.state}</p>{/if}
-								</div>
-								<div>
-									<label for="ob-prop-zip" class="mb-1 block text-xs font-medium text-muted-foreground">ZIP</label>
-									<Input id="ob-prop-zip" data-testid="onboarding-property-zip" bind:value={propertyForm.postalCode} placeholder="ZIP" />
-									{#if propertyErrors.postalCode}<p class="mt-1 text-xs text-destructive">{propertyErrors.postalCode}</p>{/if}
-								</div>
-							</div>
 
-							<!-- Units -->
-							<div class="mt-6">
-								<h3 class="mb-2 text-sm font-semibold">Units</h3>
-								<div class="space-y-3" data-testid="onboarding-units">
-									{#each unitRows as row, i (i)}
-										<div class="rounded-md border border-border bg-background p-3" data-testid="onboarding-unit-row">
-											<div class="grid gap-2 sm:grid-cols-4">
-												<div>
-													<span class="mb-1 block text-[11px] text-muted-foreground">Unit #</span>
-													<Input data-testid="onboarding-unit-number-{i}" bind:value={row.unitNumber} placeholder="1, A, etc." />
-													{#if unitRowErrors[i]?.unitNumber}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].unitNumber}</p>{/if}
-												</div>
-												<div>
-													<span class="mb-1 block text-[11px] text-muted-foreground">Beds</span>
-													<Input data-testid="onboarding-unit-beds-{i}" bind:value={row.bedrooms} placeholder="2" />
-													{#if unitRowErrors[i]?.bedrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bedrooms}</p>{/if}
-												</div>
-												<div>
-													<span class="mb-1 block text-[11px] text-muted-foreground">Baths</span>
-													<Input data-testid="onboarding-unit-baths-{i}" bind:value={row.bathrooms} placeholder="1" />
-													{#if unitRowErrors[i]?.bathrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bathrooms}</p>{/if}
-												</div>
-												<div>
-													<span class="mb-1 block text-[11px] text-muted-foreground">Market rent</span>
-													<div class="flex items-center gap-1">
-														<Input data-testid="onboarding-unit-rent-{i}" bind:value={row.marketRent} placeholder="1500" />
-														{#if unitRows.length > 1}
-															<button
-																type="button"
-																class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-																aria-label="Remove unit"
-																data-testid="onboarding-unit-remove-{i}"
-																onclick={() => removeUnitRow(i)}
-															>
-																<Trash2 class="h-4 w-4" />
-															</button>
-														{/if}
+							{#if propertySub === 'address'}
+								<div class="grid gap-4" data-testid="onboarding-property-sub-address">
+									<div>
+										<label for="ob-prop-name" class="mb-1 block text-xs font-medium text-muted-foreground">Property name</label>
+										<Input id="ob-prop-name" data-testid="onboarding-property-name" bind:value={propertyForm.name} placeholder="e.g. 123 Main St Duplex" />
+										{#if propertyErrors.name}<p class="mt-1 text-xs text-destructive">{propertyErrors.name}</p>{/if}
+									</div>
+									<div>
+										<label for="ob-prop-address" class="mb-1 block text-xs font-medium text-muted-foreground">Street address</label>
+										<AddressAutocomplete
+											id="ob-prop-address"
+											testid="onboarding-property-address"
+											bind:value={propertyForm.addressLine1}
+											placeholder="123 Main St"
+											onresolved={(a) => {
+												if (a.city) propertyForm.city = a.city;
+												if (a.state) propertyForm.state = a.state;
+												if (a.zip) propertyForm.postalCode = a.zip;
+											}}
+										/>
+										{#if propertyErrors.addressLine1}<p class="mt-1 text-xs text-destructive">{propertyErrors.addressLine1}</p>{/if}
+									</div>
+									<div class="grid gap-3 sm:grid-cols-3">
+										<div>
+											<label for="ob-prop-city" class="mb-1 block text-xs font-medium text-muted-foreground">City</label>
+											<Input id="ob-prop-city" data-testid="onboarding-property-city" bind:value={propertyForm.city} placeholder="City" />
+											{#if propertyErrors.city}<p class="mt-1 text-xs text-destructive">{propertyErrors.city}</p>{/if}
+										</div>
+										<div>
+											<label for="ob-prop-state" class="mb-1 block text-xs font-medium text-muted-foreground">State</label>
+											<StateSelect id="ob-prop-state" testid="onboarding-property-state" bind:value={propertyForm.state} placeholder="State" />
+											{#if propertyErrors.state}<p class="mt-1 text-xs text-destructive">{propertyErrors.state}</p>{/if}
+										</div>
+										<div>
+											<label for="ob-prop-zip" class="mb-1 block text-xs font-medium text-muted-foreground">ZIP</label>
+											<Input id="ob-prop-zip" data-testid="onboarding-property-zip" bind:value={propertyForm.postalCode} placeholder="ZIP" />
+											{#if propertyErrors.postalCode}<p class="mt-1 text-xs text-destructive">{propertyErrors.postalCode}</p>{/if}
+										</div>
+									</div>
+								</div>
+							{:else if propertySub === 'details'}
+								<div class="grid gap-4" data-testid="onboarding-property-sub-details">
+									<div>
+										<span class="mb-1 block text-xs font-medium text-muted-foreground">What kind of property is it?</span>
+										<Select.Root type="single" bind:value={propertyForm.type}>
+											<Select.Trigger class="w-full" data-testid="onboarding-property-type">{propertyForm.type}</Select.Trigger>
+											<Select.Content>
+												{#each PROPERTY_TYPES as t}
+													<Select.Item value={t} label={t}>{t}</Select.Item>
+												{/each}
+											</Select.Content>
+										</Select.Root>
+									</div>
+									<div>
+										<label for="ob-prop-address2" class="mb-1 block text-xs font-medium text-muted-foreground">Apt / Suite / Unit # <span class="text-muted-foreground/60">(optional)</span></label>
+										<Input id="ob-prop-address2" data-testid="onboarding-property-address2" bind:value={propertyForm.addressLine2} placeholder="Unit 4B" />
+									</div>
+								</div>
+							{:else}
+								<div data-testid="onboarding-property-sub-units">
+									<h3 class="mb-1 text-sm font-semibold">Units</h3>
+									<p class="mb-3 text-xs text-muted-foreground">A house is one unit; a duplex is two. Add a row per unit — or leave blank and add them later.</p>
+									<div class="space-y-3" data-testid="onboarding-units">
+										{#each unitRows as row, i (i)}
+											<div class="rounded-md border border-border bg-background p-3" data-testid="onboarding-unit-row">
+												<div class="grid gap-2 sm:grid-cols-4">
+													<div>
+														<span class="mb-1 block text-[11px] text-muted-foreground">Unit #</span>
+														<Input data-testid="onboarding-unit-number-{i}" bind:value={row.unitNumber} placeholder="1, A, etc." />
+														{#if unitRowErrors[i]?.unitNumber}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].unitNumber}</p>{/if}
 													</div>
-													{#if unitRowErrors[i]?.marketRent}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].marketRent}</p>{/if}
+													<div>
+														<span class="mb-1 block text-[11px] text-muted-foreground">Beds</span>
+														<Input data-testid="onboarding-unit-beds-{i}" bind:value={row.bedrooms} placeholder="2" />
+														{#if unitRowErrors[i]?.bedrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bedrooms}</p>{/if}
+													</div>
+													<div>
+														<span class="mb-1 block text-[11px] text-muted-foreground">Baths</span>
+														<Input data-testid="onboarding-unit-baths-{i}" bind:value={row.bathrooms} placeholder="1" />
+														{#if unitRowErrors[i]?.bathrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bathrooms}</p>{/if}
+													</div>
+													<div>
+														<span class="mb-1 block text-[11px] text-muted-foreground">Market rent</span>
+														<div class="flex items-center gap-1">
+															<Input data-testid="onboarding-unit-rent-{i}" bind:value={row.marketRent} placeholder="1500" />
+															{#if unitRows.length > 1}
+																<button type="button" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Remove unit" data-testid="onboarding-unit-remove-{i}" onclick={() => removeUnitRow(i)}>
+																	<Trash2 class="h-4 w-4" />
+																</button>
+															{/if}
+														</div>
+														{#if unitRowErrors[i]?.marketRent}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].marketRent}</p>{/if}
+													</div>
 												</div>
 											</div>
-										</div>
-									{/each}
+										{/each}
+									</div>
+									<Button variant="outline" size="sm" class="mt-2 gap-1" data-testid="onboarding-add-unit" onclick={addUnitRow}>
+										<Plus class="h-4 w-4" />
+										Add another unit
+									</Button>
 								</div>
-								<Button variant="outline" size="sm" class="mt-2 gap-1" data-testid="onboarding-add-unit" onclick={addUnitRow}>
-									<Plus class="h-4 w-4" />
-									Add another unit
-								</Button>
-							</div>
-						</div>
+							{/if}
+						</WizardStepScaffold>
 
-					<!-- ============ Step 4: Tenants ============ -->
+					<!-- ============ Tenants ============ -->
 					{:else if currentStep.key === 'tenants'}
-						<div data-testid="onboarding-step-tenants">
-							<div class="mb-4 flex items-center gap-2">
-								<Users class="h-5 w-5 text-primary" />
-								<h2 class="text-lg font-semibold">Add your tenants</h2>
-							</div>
-							<p class="mb-4 text-sm text-muted-foreground">
-								Add the people renting from you. You can add more than one — leave a row blank to
-								skip it.
-							</p>
+						<WizardStepScaffold step={currentStep}>
 							{#if hasExistingTenants && createdTenants.length === 0}
 								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-tenants-existing">
 									You already have {tenantsQuery.data?.length} tenant{(tenantsQuery.data?.length ?? 0) === 1 ? '' : 's'}. Add more or skip ahead.
@@ -895,13 +1035,7 @@
 												<div class="flex items-center gap-1">
 													<Input data-testid="onboarding-tenant-phone-{i}" bind:value={row.phone} placeholder="(555) 555-5555" />
 													{#if tenantRows.length > 1}
-														<button
-															type="button"
-															class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-															aria-label="Remove tenant"
-															data-testid="onboarding-tenant-remove-{i}"
-															onclick={() => removeTenantRow(i)}
-														>
+														<button type="button" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Remove tenant" data-testid="onboarding-tenant-remove-{i}" onclick={() => removeTenantRow(i)}>
 															<Trash2 class="h-4 w-4" />
 														</button>
 													{/if}
@@ -915,29 +1049,25 @@
 								<Plus class="h-4 w-4" />
 								Add another tenant
 							</Button>
-						</div>
+						</WizardStepScaffold>
 
-					<!-- ============ Step 5: Lease ============ -->
+					<!-- ============ Lease ============ -->
 					{:else if currentStep.key === 'lease'}
-						<div data-testid="onboarding-step-lease">
-							<div class="mb-4 flex items-center gap-2">
-								<FileText class="h-5 w-5 text-primary" />
-								<h2 class="text-lg font-semibold">Create the first lease</h2>
-							</div>
-							<p class="mb-4 text-sm text-muted-foreground">
-								Link a tenant to a unit and set the rent. We've filled in what we can from the
-								steps above — just confirm.
-							</p>
+						<WizardStepScaffold step={currentStep}>
+							{#snippet photoPrefill()}
+								{#if !leaseBlocked}
+									<LeasePhotoPrefill onapply={applyLeasePrefill} />
+								{/if}
+							{/snippet}
+
 							<div class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2.5" data-testid="onboarding-lease-bulk-import">
-								<span class="text-sm text-foreground">
-									Have existing leases on paper? Import them all at once instead.
-								</span>
+								<span class="text-sm text-foreground">Have many leases on paper? Import them all at once instead.</span>
 								<Button variant="outline" size="sm" class="gap-1" href="/scan/batch" data-testid="onboarding-import-leases">
 									<FileText class="h-4 w-4" />
 									Import leases
 								</Button>
 							</div>
-							{#if leaseProperties.length === 0 || leaseTenants.length === 0}
+							{#if leaseBlocked}
 								<div class="rounded-md border border-warning/40 bg-warning/10 px-3 py-3 text-sm text-foreground" data-testid="onboarding-lease-blocked">
 									You'll need at least one property with a unit and one tenant before you can create a
 									lease. You can skip this and add it later from the Leases page.
@@ -950,9 +1080,7 @@
 											<Select.Trigger class="w-full" data-testid="onboarding-lease-tenant">{leaseTenantLabel}</Select.Trigger>
 											<Select.Content>
 												{#each leaseTenants as t}
-													<Select.Item value={String(t.id)} label={t.fullName || `${t.firstName} ${t.lastName}`}>
-														{t.fullName || `${t.firstName} ${t.lastName}`}
-													</Select.Item>
+													<Select.Item value={String(t.id)} label={t.fullName || `${t.firstName} ${t.lastName}`}>{t.fullName || `${t.firstName} ${t.lastName}`}</Select.Item>
 												{/each}
 											</Select.Content>
 										</Select.Root>
@@ -972,9 +1100,7 @@
 									<div>
 										<span class="mb-1 block text-xs font-medium text-muted-foreground">Unit</span>
 										<Select.Root type="single" bind:value={leaseForm.unitId} disabled={!leaseForm.propertyId}>
-											<Select.Trigger class="w-full" data-testid="onboarding-lease-unit" disabled={!leaseForm.propertyId}>
-												{leaseUnitLabel}
-											</Select.Trigger>
+											<Select.Trigger class="w-full" data-testid="onboarding-lease-unit" disabled={!leaseForm.propertyId}>{leaseUnitLabel}</Select.Trigger>
 											<Select.Content>
 												{#each leaseUnitsQuery.data ?? [] as u}
 													<Select.Item value={String(u.id)} label="Unit {u.unitNumber}">Unit {u.unitNumber} ({u.status})</Select.Item>
@@ -1010,26 +1136,60 @@
 									</div>
 								</div>
 							{/if}
-						</div>
+						</WizardStepScaffold>
+
+					<!-- ============ Notifications (email alerts) ============ -->
+					{:else if currentStep.key === 'notifications'}
+						<WizardStepScaffold step={currentStep}>
+							<div>
+								<label for="ob-notif-email" class="mb-1 block text-xs font-medium text-muted-foreground">Alert email <span class="font-normal">(optional)</span></label>
+								<Input id="ob-notif-email" type="email" data-testid="onboarding-notification-email" bind:value={notificationEmail} placeholder="your-email@example.com" />
+								<p class="mt-1 text-xs text-muted-foreground">Leave blank to use your login email.</p>
+							</div>
+						</WizardStepScaffold>
+
+					<!-- ============ Texting (SignalWire) ============ -->
+					{:else if currentStep.key === 'texting'}
+						<WizardStepScaffold step={currentStep}>
+							{#if hasTexting}
+								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-texting-existing">
+									Texting is already connected. You can update the details below or skip.
+								</div>
+							{/if}
+							<div class="grid gap-4 sm:grid-cols-2">
+								<div>
+									<label for="ob-sw-project" class="mb-1 block text-xs font-medium text-muted-foreground">Project ID</label>
+									<Input id="ob-sw-project" autocomplete="off" data-testid="onboarding-texting-project" bind:value={textingForm.projectId} />
+								</div>
+								<div>
+									<label for="ob-sw-space" class="mb-1 block text-xs font-medium text-muted-foreground">Space URL</label>
+									<Input id="ob-sw-space" autocomplete="off" data-testid="onboarding-texting-space" bind:value={textingForm.spaceUrl} placeholder="your-space.signalwire.com" />
+								</div>
+								<div>
+									<label for="ob-sw-from" class="mb-1 block text-xs font-medium text-muted-foreground">From number</label>
+									<Input id="ob-sw-from" autocomplete="off" data-testid="onboarding-texting-from" bind:value={textingForm.fromNumber} placeholder="+13302933081" />
+								</div>
+								<div>
+									<label for="ob-sw-token" class="mb-1 block text-xs font-medium text-muted-foreground">
+										API Token {notificationSettingsQuery.data?.signalWireTokenSet ? '(saved)' : ''}
+									</label>
+									<Input id="ob-sw-token" type="password" autocomplete="new-password" data-testid="onboarding-texting-token" bind:value={textingToken} placeholder={notificationSettingsQuery.data?.signalWireTokenSet ? 'Leave blank to keep saved token' : 'Paste API token'} />
+								</div>
+							</div>
+						</WizardStepScaffold>
 					{/if}
 				</Card.Content>
 			</Card.Root>
 
 			<!-- Footer nav -->
 			<div class="mt-4 flex items-center justify-between gap-2">
-				<Button
-					variant="ghost"
-					class="gap-1"
-					data-testid="onboarding-back"
-					disabled={stepIndex === 0 || anyPending}
-					onclick={back}
-				>
+				<Button variant="ghost" class="gap-1" data-testid="onboarding-back" disabled={(stepIndex === 0 && !(currentStep.key === 'property' && propertySub !== 'address')) || anyPending} onclick={back}>
 					<ArrowLeft class="h-4 w-4" />
 					Back
 				</Button>
 				<div class="flex items-center gap-2">
 					<Button variant="outline" data-testid="onboarding-skip" disabled={anyPending} onclick={skip}>
-						Skip this step
+						{currentStep.core ? 'Skip this step' : 'Skip'}
 					</Button>
 
 					{#if currentStep.key === 'portfolio'}
@@ -1043,18 +1203,28 @@
 							<ArrowRight class="h-4 w-4" />
 						</Button>
 					{:else if currentStep.key === 'property'}
-						<Button class="gap-1" data-testid="onboarding-next" disabled={anyPending} onclick={submitProperty}>
-							{savePropertyMutation.isPending ? 'Saving…' : 'Save & continue'}
-							<ArrowRight class="h-4 w-4" />
-						</Button>
+						{#if propertySub === 'address'}
+							<Button class="gap-1" data-testid="onboarding-property-next-sub" disabled={anyPending} onclick={() => { if (propertyAddressValid()) propertySub = 'details'; }}>
+								Next <ArrowRight class="h-4 w-4" />
+							</Button>
+						{:else if propertySub === 'details'}
+							<Button class="gap-1" data-testid="onboarding-property-next-sub" disabled={anyPending} onclick={() => (propertySub = 'units')}>
+								Next <ArrowRight class="h-4 w-4" />
+							</Button>
+						{:else}
+							<Button class="gap-1" data-testid="onboarding-next" disabled={anyPending} onclick={submitProperty}>
+								{savePropertyMutation.isPending ? 'Saving…' : 'Save & continue'}
+								<ArrowRight class="h-4 w-4" />
+							</Button>
+						{/if}
 					{:else if currentStep.key === 'tenants'}
 						<Button class="gap-1" data-testid="onboarding-next" disabled={anyPending} onclick={submitTenants}>
 							{saveTenantsMutation.isPending ? 'Saving…' : 'Save & continue'}
 							<ArrowRight class="h-4 w-4" />
 						</Button>
 					{:else if currentStep.key === 'lease'}
-						{#if leaseProperties.length === 0 || leaseTenants.length === 0}
-							<Button class="gap-1" data-testid="onboarding-finish" onclick={() => (finished = true)}>
+						{#if leaseBlocked}
+							<Button class="gap-1" data-testid="onboarding-finish" onclick={() => next()}>
 								<CheckCircle2 class="h-4 w-4" />
 								Finish
 							</Button>
@@ -1064,6 +1234,16 @@
 								<CheckCircle2 class="h-4 w-4" />
 							</Button>
 						{/if}
+					{:else if currentStep.key === 'notifications'}
+						<Button class="gap-1" data-testid="onboarding-next" disabled={anyPending} onclick={() => saveNotificationEmailMutation.mutate()}>
+							{saveNotificationEmailMutation.isPending ? 'Saving…' : 'Save & continue'}
+							<ArrowRight class="h-4 w-4" />
+						</Button>
+					{:else if currentStep.key === 'texting'}
+						<Button class="gap-1" data-testid="onboarding-next" disabled={anyPending || notificationSettingsQuery.isLoading} onclick={() => saveTextingMutation.mutate()}>
+							{saveTextingMutation.isPending ? 'Saving…' : 'Save & continue'}
+							<ArrowRight class="h-4 w-4" />
+						</Button>
 					{/if}
 				</div>
 			</div>
