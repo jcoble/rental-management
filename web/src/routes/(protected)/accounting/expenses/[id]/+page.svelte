@@ -251,7 +251,12 @@
 					li.amount != null
 			);
 
-		saveMutation.mutate({ portfolioId, ...result.data, lineItems });
+		// receiptData is edited via the raw-JSON textarea but is intentionally NOT part of
+		// expenseDetailSchema (a string blob, not a validated field). Forward it explicitly so
+		// edits to the raw receipt JSON actually persist; '' → null clears it. It is seeded from
+		// the current value on edit, so an untouched save round-trips it unchanged.
+		const receiptData = form.receiptData.trim() === '' ? null : form.receiptData;
+		saveMutation.mutate({ portfolioId, ...result.data, receiptData, lineItems });
 	}
 
 	const deleteMutation = createMutation(() => ({
