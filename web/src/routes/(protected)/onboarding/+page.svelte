@@ -167,7 +167,10 @@
 	const hasExistingTenants = $derived((tenantsQuery.data?.length ?? 0) > 0);
 	const hasExistingLeases = $derived((leasesQuery.data?.length ?? 0) > 0);
 	const hasNotificationEmail = $derived(!!notificationEmailQuery.data?.email);
-	const hasTexting = $derived(notificationSettingsQuery.data?.signalWireTokenSet === true);
+	const hasTexting = $derived(
+		notificationSettingsQuery.data?.smsCredentialASet === true ||
+			notificationSettingsQuery.data?.smsCredentialBSet === true
+	);
 
 	// A step counts as "done" if the wizard handled it OR data already exists.
 	const stepDone = $derived<Record<WizardStepKey, boolean>>({
@@ -614,10 +617,12 @@
 		const d = notificationSettingsQuery.data;
 		if (d && !textingPrefilled) {
 			textingPrefilled = true;
+			// Credentials are write-only on the wire (only *Set booleans come back),
+			// so the from-number is the only prefillable connection field.
 			textingForm = {
-				projectId: d.signalWireProjectId ?? '',
-				spaceUrl: d.signalWireSpaceUrl ?? '',
-				fromNumber: d.signalWireFromNumber ?? '',
+				projectId: '',
+				spaceUrl: '',
+				fromNumber: d.smsFromNumber ?? '',
 			};
 		}
 	});
@@ -638,10 +643,13 @@
 				dailyBriefingIncludeEmpty: d.dailyBriefingIncludeEmpty,
 				dailyBriefingSmsRecipients: d.dailyBriefingSmsRecipients,
 				dailyBriefingEmailRecipients: d.dailyBriefingEmailRecipients,
-				signalWireProjectId: textingForm.projectId.trim() || null,
-				signalWireToken: textingToken.length > 0 ? textingToken : undefined,
-				signalWireSpaceUrl: textingForm.spaceUrl.trim() || null,
-				signalWireFromNumber: textingForm.fromNumber.trim() || null,
+				// Wizard's texting step is SignalWire-guided; slots per SmsProviderMeta:
+				// A = Project ID, B = API Token, C = Space URL. undefined = keep saved secret.
+				smsProvider: 'SignalWire',
+				smsFromNumber: textingForm.fromNumber.trim() || null,
+				smsCredentialA: textingForm.projectId.trim() || undefined,
+				smsCredentialB: textingToken.length > 0 ? textingToken : undefined,
+				smsCredentialC: textingForm.spaceUrl.trim() || undefined,
 				channelPreferences: d.channelPreferences ?? [],
 			});
 		},
@@ -1171,9 +1179,9 @@
 								</div>
 								<div>
 									<label for="ob-sw-token" class="mb-1 block text-xs font-medium text-muted-foreground">
-										API Token {notificationSettingsQuery.data?.signalWireTokenSet ? '(saved)' : ''}
+										API Token {notificationSettingsQuery.data?.smsCredentialBSet ? '(saved)' : ''}
 									</label>
-									<Input id="ob-sw-token" type="password" autocomplete="new-password" data-testid="onboarding-texting-token" bind:value={textingToken} placeholder={notificationSettingsQuery.data?.signalWireTokenSet ? 'Leave blank to keep saved token' : 'Paste API token'} />
+									<Input id="ob-sw-token" type="password" autocomplete="new-password" data-testid="onboarding-texting-token" bind:value={textingToken} placeholder={notificationSettingsQuery.data?.smsCredentialBSet ? 'Leave blank to keep saved token' : 'Paste API token'} />
 								</div>
 							</div>
 						</WizardStepScaffold>
