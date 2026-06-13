@@ -267,3 +267,51 @@ export const api = {
 	upload: <T>(path: string, formData: FormData) =>
 		fetchApi<T>(path, { method: 'POST', body: formData })
 };
+
+/**
+ * Authenticated download of a non-JSON response (CSV/PDF/etc.). Attaches the bearer token (with the
+ * same proactive-refresh + 401-retry as {@link fetchApi}) but returns the raw {@link Blob} instead of
+ * parsing JSON, so streamed exports flow straight to a file save without being buffered as text.
+ */
+export async function downloadFile(endpoint: string): Promise<Blob> {
+	const headers: Record<string, string> = {};
+
+	if (browser && isTokenExpired(120)) {
+		try {
+			await refreshToken();
+		} catch {
+			// proactive refresh failed; the 401 retry below still covers it
+		}
+	}
+
+	const send = () => {
+		const auth = getAuthState();
+		if (auth.accessToken) {
+			headers['Authorization'] = `Bearer ${auth.accessToken}`;
+		}
+		return fetchWithTimeout(
+			`${API_BASE_URL}${endpoint}`,
+			{ headers, credentials: 'include' },
+			API_FETCH_TIMEOUT_MS
+		);
+	};
+
+	let response = await send();
+
+	if (!response.ok && response.status === 401 && browser) {
+		try {
+			await refreshToken();
+			response = await send();
+		} catch {
+			clearAuth();
+			throw new ApiError(401, 'Session expired. Please sign in again.');
+		}
+	}
+
+	if (!response.ok) {
+		const errorData = await response.json().catch(() => ({}));
+		throw buildErrorFromBody(response, errorData);
+	}
+
+	return response.blob();
+}
