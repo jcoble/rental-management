@@ -15,7 +15,6 @@ import '../../core/auth/auth_models.dart';
 import '../../core/models/models.dart';
 import '../../core/push/push_service.dart';
 import '../../core/realtime/realtime_providers.dart';
-import '../notifications/notification_realtime.dart';
 import '../notifications/notifications_repository.dart';
 import '../../core/voice/voice_command.dart';
 import '../../core/voice/voice_command_controller.dart';
@@ -137,9 +136,10 @@ class _HomeShellState extends ConsumerState<HomeShell>
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      // Initialise the realtime watchers so they stay alive for the shell.
+      // Initialise the realtime watcher so it stays alive for the shell. The
+      // updates hub also carries in-app Notification events (see
+      // realtime_providers' `_invalidateForEntity` 'Notification' case).
       ref.read(realtimeWatcherProvider);
-      ref.read(notificationRealtimeWatcherProvider);
       // A voice command may have cold-started the app (Assistant launched us)
       // before this shell built — pick up anything already waiting in the bus.
       final pending = ref.read(pendingVoiceCommandProvider);
@@ -227,9 +227,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   @override
   Widget build(BuildContext context) {
-    // Keep the watchers alive while the shell is in the tree.
+    // Keep the realtime watcher alive while the shell is in the tree. It also
+    // refreshes the notification badge/inbox on inbound Notification events.
     ref.watch(realtimeWatcherProvider);
-    ref.watch(notificationRealtimeWatcherProvider);
 
     // React to voice commands that arrive while the shell is already running.
     ref.listen<VoiceCommand?>(pendingVoiceCommandProvider, (_, next) {
