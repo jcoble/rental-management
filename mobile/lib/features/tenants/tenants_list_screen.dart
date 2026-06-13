@@ -78,6 +78,7 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
         title: const Text('Tenants'),
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'tenants-fab',
         onPressed: () => _showAddSheet(context),
         tooltip: 'Add tenant',
         child: const Icon(Icons.add),

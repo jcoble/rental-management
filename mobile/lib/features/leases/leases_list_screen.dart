@@ -90,6 +90,7 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
         title: const Text('Leases'),
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'leases-fab',
         onPressed: () => _showAddSheet(context),
         tooltip: 'Create lease',
         child: const Icon(Icons.add),
