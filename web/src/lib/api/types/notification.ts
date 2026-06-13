@@ -59,11 +59,11 @@ export interface NotificationSettingsResponse {
 	dailyBriefingIncludeEmpty: boolean;
 	dailyBriefingSmsRecipients: string[];
 	dailyBriefingEmailRecipients: string[];
-	signalWireProjectId: string | null;
-	signalWireTokenSet: boolean;
-	signalWireToken: string | null;
-	signalWireSpaceUrl: string | null;
-	signalWireFromNumber: string | null;
+	smsProvider: string;
+	smsFromNumber: string | null;
+	smsCredentialASet: boolean;
+	smsCredentialBSet: boolean;
+	smsCredentialCSet: boolean;
 	channelPreferences: NotificationChannelPreference[];
 }
 
@@ -80,9 +80,35 @@ export interface UpdateNotificationSettingsRequest {
 	dailyBriefingIncludeEmpty: boolean;
 	dailyBriefingSmsRecipients: string[];
 	dailyBriefingEmailRecipients: string[];
-	signalWireProjectId: string | null;
-	signalWireToken?: string | null;
-	signalWireSpaceUrl: string | null;
-	signalWireFromNumber: string | null;
+	smsProvider: string;
+	smsFromNumber: string | null;
+	// Write-only secrets: undefined = keep saved value, '' = clear, value = set.
+	smsCredentialA?: string | null;
+	smsCredentialB?: string | null;
+	smsCredentialC?: string | null;
 	channelPreferences: NotificationChannelPreference[];
+}
+
+/** SMS provider option metadata: labels for the three generic credential slots per provider. */
+export interface SmsProviderMeta {
+	key: string;
+	label: string;
+	/** Per-slot config; null = slot unused by this provider. */
+	credentialA: { label: string; placeholder?: string } | null;
+	credentialB: { label: string; placeholder?: string } | null;
+	credentialC: { label: string; placeholder?: string } | null;
+}
+
+export interface TestSmsRequest {
+	smsProvider: string;
+	toPhoneNumber: string;
+	smsFromNumber?: string | null;
+	smsCredentialA?: string | null;
+	smsCredentialB?: string | null;
+	smsCredentialC?: string | null;
+}
+
+export interface TestSmsResponse {
+	success: boolean;
+	message: string;
 }

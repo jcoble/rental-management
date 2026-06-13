@@ -100,4 +100,19 @@ public class NotificationsController : AuthenticatedPortfolioControllerBase
     {
         return Ok(await _settings.UpdateAsync(GetPortfolioId(), request, ct));
     }
+
+    /// <summary>
+    /// Sends a one-off verification SMS for the chosen provider so the landlord can confirm their
+    /// credentials work. Blank credential slots fall back to the portfolio's saved secrets. Always
+    /// returns 200 with a <see cref="TestSmsResponse"/> (success flag + message) — provider/transport
+    /// errors are reported in the body, never as a 500, so the UI can show a friendly result.
+    /// </summary>
+    [HttpPost("settings/test-sms")]
+    [ProducesResponseType(typeof(TestSmsResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<TestSmsResponse>> SendTestSms(
+        [FromBody] TestSmsRequest request,
+        CancellationToken ct)
+    {
+        return Ok(await _settings.SendTestSmsAsync(GetPortfolioId(), request, ct));
+    }
 }

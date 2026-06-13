@@ -395,7 +395,9 @@ public class OutboxDispatchWorker : EngineWorkerBase
                 var to = GetString(root, "to") ?? GetString(root, "toPhoneNumber")
                     ?? throw new InvalidOperationException("SMS outbox message is missing a 'to' phone number.");
                 var body = GetString(root, "message") ?? GetString(root, "body") ?? string.Empty;
-                await channel.SendSmsAsync(to, body, ct);
+                // Pass the portfolio so the dispatcher resolves THAT landlord's BYO SMS provider
+                // (falling back to platform env when they haven't configured one).
+                await channel.SendSmsAsync(to, body, message.PortfolioId, ct);
                 break;
             }
             case "email":
