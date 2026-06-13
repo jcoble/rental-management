@@ -140,8 +140,11 @@
 	}
 
 	function submit() {
-		const { propertyId: _p, ...rest } = form;
-		const result = parseForm(leaseSchema, rest);
+		// Validate AND send the FULL form. leaseSchema requires propertyId and the server's
+		// CreateLeaseRequest has [Required][Range(1,..)] PropertyId. The old code destructured
+		// propertyId OUT before parseForm, so validation always failed on the missing field —
+		// Save silently no-op'd (no request, no surfaced error). Keep propertyId in the payload.
+		const result = parseForm(leaseSchema, form);
 		if (result.errors) {
 			formErrors = result.errors;
 			return;
