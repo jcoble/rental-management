@@ -1,21 +1,19 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Interfaces;
-using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
 
 /// <summary>
-/// Phase 4 <see cref="INotificationChannel"/>: routes SMS through SignalWire/Twilio and email
+/// Phase 4 <see cref="INotificationChannel"/>: routes SMS through the pluggable
+/// <see cref="ISmsDispatcher"/> (per-portfolio BYO provider with platform-env fallback) and email
 /// through a config-selectable transport — SMTP (e.g. Zoho) when <c>Notifications:Email:Transport</c>
-/// is "Smtp" and SMTP creds are present, otherwise the SendGrid HTTP API. Falls back to a suppression
-/// log when nothing is configured so callers never need to guard on provider state.
+/// is "Smtp" and SMTP creds are present, otherwise the SendGrid HTTP API. Both fall back to a
+/// suppression log when nothing is configured so callers never need to guard on provider state.
 /// Register via <c>AddHttpClient&lt;INotificationChannel, RoutingNotificationChannel&gt;()</c>
 /// in Program.cs.
 /// </summary>
@@ -23,122 +21,30 @@ public sealed class RoutingNotificationChannel : INotificationChannel
 {
     private readonly HttpClient _http;
     private readonly NotificationsConfig _cfg;
-    private readonly INotificationSettingsService _settings;
-    private readonly RentalCommandDbContext _db;
+    private readonly ISmsDispatcher _sms;
     private readonly ISmtpEmailSender _smtp;
     private readonly ILogger<RoutingNotificationChannel> _logger;
 
     public RoutingNotificationChannel(
         HttpClient http,
         IOptions<NotificationsConfig> options,
-        INotificationSettingsService settings,
-        RentalCommandDbContext db,
+        ISmsDispatcher sms,
         ISmtpEmailSender smtp,
         ILogger<RoutingNotificationChannel> logger)
     {
         _http = http;
         _cfg  = options.Value;
-        _settings = settings;
-        _db = db;
+        _sms = sms;
         _smtp = smtp;
         _logger = logger;
     }
 
-    // ------------------------------------------------------------------ SMS (Twilio)
+    // ------------------------------------------------------------------ SMS (pluggable provider)
 
-    public async Task SendSmsAsync(string toPhoneNumber, string message, CancellationToken ct = default)
-    {
-        var normalizedTo = NormalizeSmsNumber(toPhoneNumber);
-
-        // SignalWire (Twilio-compatible, cheaper) takes precedence when configured; Twilio is the fallback.
-        // The outbox transport is portfolio-agnostic, so resolve provider creds from the lowest-id
-        // portfolio's settings (the legacy/primary landlord). Falls back to appsettings Twilio below.
-        var sw = new SignalWireOptions();
-        var primaryPortfolioId = await _db.Portfolios
-            .Where(p => p.DeletedAt == null)
-            .OrderBy(p => p.Id)
-            .Select(p => (int?)p.Id)
-            .FirstOrDefaultAsync(ct);
-        if (primaryPortfolioId is int pid)
-        {
-            var runtime = await _settings.GetRuntimeAsync(pid, ct);
-            sw = runtime.SignalWire;
-        }
-
-        if (sw.Enabled)
-        {
-            var space = sw.SpaceUrl!.Trim().TrimEnd('/');
-            if (!space.StartsWith("http", StringComparison.OrdinalIgnoreCase))
-            {
-                space = "https://" + space;
-            }
-            var swUrl = $"{space}/api/laml/2010-04-01/Accounts/{sw.ProjectId}/Messages.json";
-            await PostCompatMessageAsync(swUrl, sw.ProjectId!, sw.Token!, sw.FromNumber!, normalizedTo, message, "SignalWire", ct);
-            return;
-        }
-
-        var twilio = _cfg.Twilio;
-        if (twilio.Enabled)
-        {
-            var url = $"https://api.twilio.com/2010-04-01/Accounts/{twilio.AccountSid}/Messages.json";
-            await PostCompatMessageAsync(url, twilio.AccountSid!, twilio.AuthToken!, twilio.FromNumber!, normalizedTo, message, "Twilio", ct);
-            return;
-        }
-
-        _logger.LogInformation(
-            "[SMS suppressed — no SMS provider configured] to {To}: {Message}",
-            normalizedTo, message);
-    }
-
-    private static string NormalizeSmsNumber(string input)
-    {
-        var trimmed = input.Trim();
-        var digits = new string(trimmed.Where(char.IsDigit).ToArray());
-
-        if (digits.Length == 10)
-        {
-            return "+1" + digits;
-        }
-
-        if (digits.Length == 11 && digits.StartsWith("1", StringComparison.Ordinal))
-        {
-            return "+" + digits;
-        }
-
-        if (trimmed.StartsWith("+", StringComparison.Ordinal) && digits.Length > 0)
-        {
-            return "+" + digits;
-        }
-
-        return trimmed;
-    }
-
-    // Twilio and SignalWire share the same Compatibility (LaML) API shape: HTTP Basic auth plus a
-    // From/To/Body form POST. One helper covers both; only the URL + credentials differ.
-    private async Task PostCompatMessageAsync(
-        string url, string basicUser, string basicPass,
-        string from, string to, string body, string provider, CancellationToken ct)
-    {
-        var credentials = Convert.ToBase64String(Encoding.ASCII.GetBytes($"{basicUser}:{basicPass}"));
-
-        var request = new HttpRequestMessage(HttpMethod.Post, url)
-        {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["From"] = from,
-                ["To"]   = to,
-                ["Body"] = body,
-            })
-        };
-        request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
-
-        var response = await _http.SendAsync(request, ct);
-        await EnsureSuccessAsync(response, provider, ct);
-
-        _logger.LogInformation(
-            "[SMS sent via {Provider}] To={To} Status={Status}",
-            provider, to, (int)response.StatusCode);
-    }
+    // Delegates to the pluggable dispatcher: it resolves the portfolio's own provider (BYO creds)
+    // first, then the platform-env fallback, and fail-soft logs when nothing is configured.
+    public Task SendSmsAsync(string toPhoneNumber, string message, int? portfolioId = null, CancellationToken ct = default) =>
+        _sms.SendAsync(portfolioId, toPhoneNumber, message, ct);
 
     // ------------------------------------------------------------------ Email (SMTP / SendGrid)
 

@@ -34,6 +34,8 @@ public class NotificationsConfig
 
     public TwilioOptions Twilio { get; set; } = new();
     public SignalWireOptions SignalWire { get; set; } = new();
+    public TelnyxOptions Telnyx { get; set; } = new();
+    public VonageOptions Vonage { get; set; } = new();
     public SendGridOptions SendGrid { get; set; } = new();
 
     /// <summary>SMTP email transport (e.g. Zoho). Lets email be sent over an already-DKIM/SPF-authenticated
@@ -139,6 +141,35 @@ public class SignalWireOptions
     public bool Enabled =>
         !string.IsNullOrWhiteSpace(ProjectId) && !string.IsNullOrWhiteSpace(Token)
         && !string.IsNullOrWhiteSpace(SpaceUrl) && !string.IsNullOrWhiteSpace(FromNumber);
+}
+
+/// <summary>
+/// Telnyx SMS via its REST Messaging API (<c>https://api.telnyx.com/v2/messages</c>). Auth is a
+/// bearer API key (slot A); messages POST a JSON body of <c>{from,to,text}</c>. No separate token
+/// or space — only the API key + from-number are required.
+/// </summary>
+public class TelnyxOptions
+{
+    /// <summary>Telnyx API key (bearer). Maps to credential slot A.</summary>
+    public string? ApiKey { get; set; }
+    public string? FromNumber { get; set; }
+    public bool Enabled => !string.IsNullOrWhiteSpace(ApiKey) && !string.IsNullOrWhiteSpace(FromNumber);
+}
+
+/// <summary>
+/// Vonage (formerly Nexmo) SMS via its REST API (<c>https://rest.nexmo.com/sms/json</c>). Auth is an
+/// <c>api_key</c> (slot A) + <c>api_secret</c> (slot B) form-posted alongside <c>from/to/text</c>.
+/// </summary>
+public class VonageOptions
+{
+    /// <summary>Vonage api_key. Maps to credential slot A.</summary>
+    public string? ApiKey { get; set; }
+    /// <summary>Vonage api_secret. Maps to credential slot B.</summary>
+    public string? ApiSecret { get; set; }
+    public string? FromNumber { get; set; }
+    public bool Enabled =>
+        !string.IsNullOrWhiteSpace(ApiKey) && !string.IsNullOrWhiteSpace(ApiSecret)
+        && !string.IsNullOrWhiteSpace(FromNumber);
 }
 
 public class SendGridOptions

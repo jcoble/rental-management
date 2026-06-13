@@ -171,6 +171,11 @@ services:
       - Notifications__Twilio__AccountSid=${TWILIO_ACCOUNT_SID:-}
       - Notifications__Twilio__AuthToken=${TWILIO_AUTH_TOKEN:-}
       - Notifications__Twilio__FromNumber=${TWILIO_FROM_NUMBER:-}
+      - Notifications__Telnyx__ApiKey=${TELNYX_API_KEY:-}
+      - Notifications__Telnyx__FromNumber=${TELNYX_FROM_NUMBER:-}
+      - Notifications__Vonage__ApiKey=${VONAGE_API_KEY:-}
+      - Notifications__Vonage__ApiSecret=${VONAGE_API_SECRET:-}
+      - Notifications__Vonage__FromNumber=${VONAGE_FROM_NUMBER:-}
     volumes:
       - uploads:/var/lib/rentalcommand/uploads
       - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
@@ -245,7 +250,9 @@ services:
       - Notifications__Smtp__Password=${SMTP_PASSWORD:-}
       - Notifications__Smtp__FromEmail=${SMTP_FROM_EMAIL:-}
       - Notifications__Smtp__FromName=${SMTP_FROM_NAME:-Rental Command}
-      # ── SMS (SignalWire preferred; Twilio fallback) ────────────────────────
+      # ── SMS platform-default fallback (per-portfolio BYO providers override this). ────
+      #    Resolution order: SignalWire → Twilio → Telnyx → Vonage. A landlord who configures
+      #    their own provider in Settings bypasses these entirely for their portfolio.
       - Notifications__SignalWire__ProjectId=${SIGNALWIRE_PROJECT_ID:-}
       - Notifications__SignalWire__Token=${SIGNALWIRE_TOKEN:-}
       - Notifications__SignalWire__SpaceUrl=${SIGNALWIRE_SPACE_URL:-}
@@ -253,6 +260,11 @@ services:
       - Notifications__Twilio__AccountSid=${TWILIO_ACCOUNT_SID:-}
       - Notifications__Twilio__AuthToken=${TWILIO_AUTH_TOKEN:-}
       - Notifications__Twilio__FromNumber=${TWILIO_FROM_NUMBER:-}
+      - Notifications__Telnyx__ApiKey=${TELNYX_API_KEY:-}
+      - Notifications__Telnyx__FromNumber=${TELNYX_FROM_NUMBER:-}
+      - Notifications__Vonage__ApiKey=${VONAGE_API_KEY:-}
+      - Notifications__Vonage__ApiSecret=${VONAGE_API_SECRET:-}
+      - Notifications__Vonage__FromNumber=${VONAGE_FROM_NUMBER:-}
       # ── Push (FCM HTTP v1 via FirebaseAdmin). Fail-soft: unset = suppression logs. ──
       # Key file lives on the host at /opt/rental-command/secrets (bind-mounted below, ro).
       - Push__FirebaseProjectId=${PUSH_FIREBASE_PROJECT_ID:-}
