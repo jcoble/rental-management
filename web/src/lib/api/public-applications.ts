@@ -80,7 +80,9 @@ export interface SubmitApplicationBody {
 	monthlyIncome?: number | null;
 	desiredMoveInDate?: string | null;
 	notes?: string | null;
-	idExtractedFields?: Record<string, unknown> | null;
+	// Server binds this to a `string?` (jsonb stored as text). Send the serialized JSON
+	// string, NOT a raw object — an object fails System.Text.Json string binding with a 400.
+	idExtractedFields?: string | null;
 	consentGiven: boolean;
 }
 
