@@ -9,7 +9,8 @@
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
-	import { RefreshCw, ShieldAlert } from '@lucide/svelte';
+	import { RefreshCw, ShieldAlert, Download } from '@lucide/svelte';
+	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 
 	// The (admin) route group already gates this page behind the Admin role server-side. This is the
 	// forensic view: every landlord-facing audit row, plus the IP address + raw old→new JSON withheld
@@ -72,6 +73,27 @@
 		queryClient.invalidateQueries({ queryKey: ['admin-audit', portfolioId] });
 	}
 
+	let exporting = $state(false);
+
+	// Export the CURRENTLY FILTERED set (search + action + entity filters), not just the visible page.
+	async function exportCsv() {
+		if (exporting) return;
+		exporting = true;
+		try {
+			await audit.adminExportCsv(portfolioId, {
+				search: debouncedSearch.value || undefined,
+				operation: operationFilter || undefined,
+				entityType: entityTypeFilter || undefined,
+				sort: '-timestamp',
+			});
+			showSuccess('Audit export downloaded.');
+		} catch (err) {
+			showError(apiErrorMessage(err, 'Export failed.'));
+		} finally {
+			exporting = false;
+		}
+	}
+
 	const entries = $derived(auditQuery.data ?? []);
 
 	function formatAbsolute(iso: string): string {
@@ -116,17 +138,30 @@
 				values.
 			</p>
 		</div>
-		<Button
-			variant="outline"
-			size="sm"
-			onclick={refresh}
-			disabled={auditQuery.isFetching}
-			data-testid="admin-audit-refresh"
-			aria-label="Refresh forensic audit trail"
-		>
-			<RefreshCw class="h-3.5 w-3.5 {auditQuery.isFetching ? 'animate-spin' : ''}" />
-			Refresh
-		</Button>
+		<div class="flex items-center gap-2">
+			<Button
+				variant="outline"
+				size="sm"
+				onclick={exportCsv}
+				disabled={exporting || auditQuery.isLoading}
+				data-testid="admin-audit-export"
+				aria-label="Export the filtered audit trail as CSV"
+			>
+				<Download class="h-3.5 w-3.5 {exporting ? 'animate-pulse' : ''}" />
+				{exporting ? 'Exporting…' : 'Export CSV'}
+			</Button>
+			<Button
+				variant="outline"
+				size="sm"
+				onclick={refresh}
+				disabled={auditQuery.isFetching}
+				data-testid="admin-audit-refresh"
+				aria-label="Refresh forensic audit trail"
+			>
+				<RefreshCw class="h-3.5 w-3.5 {auditQuery.isFetching ? 'animate-spin' : ''}" />
+				Refresh
+			</Button>
+		</div>
 	</div>
 
 	<Card.Root class="gap-0 py-0">
@@ -187,9 +222,19 @@
 											<span>{entry.actor}{entry.userId ? ` (#${entry.userId})` : ''}</span>
 											<span aria-hidden="true">·</span>
 											{#if entry.entityType}
-												<span class="rounded bg-muted px-1 py-0.5 font-mono text-[11px]"
-													>{entityLabel(entry)}</span
-												>
+												{#if entry.detailHref}
+													<a
+														href={entry.detailHref}
+														onclick={(e) => e.stopPropagation()}
+														class="rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-primary hover:underline"
+														data-testid="admin-audit-entity-link-{entry.id}"
+														title="Open record">{entityLabel(entry)}</a
+													>
+												{:else}
+													<span class="rounded bg-muted px-1 py-0.5 font-mono text-[11px]"
+														>{entityLabel(entry)}</span
+													>
+												{/if}
 												<span aria-hidden="true">·</span>
 											{/if}
 											<span class="font-medium text-foreground/60">{entry.operationName}</span>

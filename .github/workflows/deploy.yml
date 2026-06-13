@@ -64,7 +64,12 @@ jobs:
             echo "proceed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          tip=$(git ls-remote -q "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" refs/heads/main | cut -f1)
+          # Token via git's env-based config, NOT in the URL or argv — this is a
+          # shared runner box and process arguments are visible to other jobs.
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          tip=$(git ls-remote -q "https://github.com/${REPO}.git" refs/heads/main | cut -f1)
           if [ -z "$tip" ]; then
             echo "Could not resolve tip of main — proceeding (fail-open keeps deploys working)."
             echo "proceed=true" >> "$GITHUB_OUTPUT"

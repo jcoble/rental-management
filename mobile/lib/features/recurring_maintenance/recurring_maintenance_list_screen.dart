@@ -149,6 +149,7 @@ class _RecurringMaintenanceListScreenState
         ],
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'recurring-maintenance-fab',
         onPressed: () => _openForm(),
         tooltip: 'New recurring task',
         child: const Icon(Icons.add),

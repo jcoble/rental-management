@@ -45,3 +45,17 @@ test('expenseDetailSchema still enforces required fields (empty description/amou
 	assert.ok(result.errors?.description, 'expected a description error');
 	assert.ok(result.errors?.amount, 'expected an amount error');
 });
+
+// Server binds amount with [Range(0.01, 99999999)] — a $0 amount 400s. The client schema
+// must reject 0 inline rather than letting it pass to a raw server 400 (TSK-220).
+test('expenseDetailSchema rejects a $0 amount (matches server Range(0.01, …))', () => {
+	const result = parseForm(expenseDetailSchema, { ...detailForm, amount: '0' });
+	assert.ok(result.errors, 'expected a validation error for a $0 amount');
+	assert.ok(result.errors?.amount, 'expected an amount error for 0');
+});
+
+test('expenseDetailSchema accepts the smallest valid amount (0.01)', () => {
+	const result = parseForm(expenseDetailSchema, { ...detailForm, amount: '0.01' });
+	assert.equal(result.errors, null, `unexpected errors: ${JSON.stringify(result.errors)}`);
+	assert.equal(result.data?.amount, 0.01);
+});

@@ -128,6 +128,7 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
       floatingActionButton: tenantMode
           ? null
           : FloatingActionButton(
+        heroTag: 'messages-fab',
               onPressed: () => _startNewConversation(context),
               tooltip: 'New conversation',
               child: const Icon(Icons.edit_outlined),
