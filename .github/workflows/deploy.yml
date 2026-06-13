@@ -21,6 +21,8 @@ on:
         default: ""
 
 # Never let two prod deploys overlap; queue them instead of cancelling an in-flight one.
+# Queued runs are LATEST-WINS: the `gate` job below skips a queued push-run whose sha is
+# no longer the tip of main by the time it starts — only the newest merge actually deploys.
 concurrency:
   group: deploy-prod
   cancel-in-progress: false
@@ -36,8 +38,47 @@ env:
   DOCKER_CONFIG: ${{ github.workspace }}/../.docker
 
 jobs:
+  # Latest-wins: by the time a queued push-run gets its turn in the deploy-prod
+  # concurrency group, a newer merge may already be queued behind it. Deploying the
+  # stale sha just wastes a full build+deploy cycle on the shared build box before
+  # the newer run repeats it. Skip unless this run's sha is still the tip of main.
+  # workflow_dispatch always proceeds (explicit human intent, may target any ref).
+  gate:
+    name: Skip if superseded by a newer main push
+    runs-on: self-hosted
+    permissions:
+      contents: read
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - name: Check this sha is still the tip of main
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "Manual dispatch — deploying without tip-of-main check."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tip=$(git ls-remote -q "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" refs/heads/main | cut -f1)
+          if [ -z "$tip" ]; then
+            echo "Could not resolve tip of main — proceeding (fail-open keeps deploys working)."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          elif [ "$tip" = "$RUN_SHA" ]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "SUPERSEDED: main is now $tip, this run is $RUN_SHA — skipping; the newer run deploys."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-push:
     name: Build & push images (GHCR)
+    needs: gate
+    if: needs.gate.outputs.proceed == 'true'
     runs-on: self-hosted
     permissions:
       contents: read
