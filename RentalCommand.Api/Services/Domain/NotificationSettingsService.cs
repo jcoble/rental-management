@@ -6,6 +6,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -18,11 +19,16 @@ public sealed class NotificationSettingsService : INotificationSettingsService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
+    private readonly IReadOnlyDictionary<SmsProviderKey, ISmsProvider> _smsProviders;
 
-    public NotificationSettingsService(RentalCommandDbContext db, IDataProtectionProvider dataProtection)
+    public NotificationSettingsService(
+        RentalCommandDbContext db,
+        IDataProtectionProvider dataProtection,
+        IEnumerable<ISmsProvider> smsProviders)
     {
         _db = db;
         _protector = dataProtection.CreateProtector("RentalCommand.NotificationSettings.v1");
+        _smsProviders = smsProviders.ToDictionary(p => p.Key, p => p);
     }
 
     public async Task<NotificationSettingsResponse> GetAdminAsync(int portfolioId, CancellationToken ct = default)
@@ -47,13 +53,15 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         row.EnableDailyBriefingMessages = request.EnableDailyBriefingMessages;
         row.DailyBriefingSendHourLocal = Math.Clamp(request.DailyBriefingSendHourLocal, 0, 23);
         row.DailyBriefingIncludeEmpty = request.DailyBriefingIncludeEmpty;
-        row.SignalWireProjectIdCipherText = ProtectNullable(Normalize(request.SignalWireProjectId));
-        if (request.SignalWireToken is not null)
-        {
-            row.SignalWireTokenCipherText = ProtectNullable(Normalize(request.SignalWireToken));
-        }
-        row.SignalWireSpaceUrlCipherText = ProtectNullable(Normalize(request.SignalWireSpaceUrl));
-        row.SignalWireFromNumberCipherText = ProtectNullable(Normalize(request.SignalWireFromNumber));
+
+        // SMS provider (pluggable, BYO creds). Provider is a plain string-enum name; credential slots
+        // are write-only secrets — null/omitted keeps the saved value, empty string clears it. The
+        // from-number is not a secret. Provider-agnostic: storage never special-cases a vendor.
+        row.SmsProvider = ParseProvider(request.SmsProvider).ToString();
+        row.SmsFromNumberCipherText = ProtectNullable(Normalize(request.SmsFromNumber));
+        row.SmsCredentialACipherText = ApplySecret(row.SmsCredentialACipherText, request.SmsCredentialA);
+        row.SmsCredentialBCipherText = ApplySecret(row.SmsCredentialBCipherText, request.SmsCredentialB);
+        row.SmsCredentialCCipherText = ApplySecret(row.SmsCredentialCCipherText, request.SmsCredentialC);
         row.DailyBriefingSmsRecipientsCipherText = ProtectArray(request.DailyBriefingSmsRecipients);
         row.DailyBriefingEmailRecipientsCipherText = ProtectArray(request.DailyBriefingEmailRecipients);
         row.UpdatedAt = now;
@@ -88,18 +96,91 @@ public sealed class NotificationSettingsService : INotificationSettingsService
                 SmsRecipients = UnprotectArray(row.DailyBriefingSmsRecipientsCipherText),
                 EmailRecipients = UnprotectArray(row.DailyBriefingEmailRecipientsCipherText),
             },
-            SignalWire = new SignalWireOptions
-            {
-                ProjectId = UnprotectNullable(row.SignalWireProjectIdCipherText),
-                Token = UnprotectNullable(row.SignalWireTokenCipherText),
-                SpaceUrl = UnprotectNullable(row.SignalWireSpaceUrlCipherText),
-                FromNumber = UnprotectNullable(row.SignalWireFromNumberCipherText),
-            },
             ChannelPreferences = AllTypes.ToDictionary(
                 t => t,
                 t => ToChannelPreference(t, prefs.GetValueOrDefault(t))),
         };
     }
+
+    public async Task<SmsCredentials?> GetSmsCredentialsAsync(int portfolioId, CancellationToken ct = default)
+    {
+        var row = await GetOrCreateAsync(portfolioId, ct);
+        var provider = ParseProvider(row.SmsProvider);
+
+        // Backward compat: rows saved before this migration may carry only the legacy SignalWire
+        // columns (no SmsProvider set). Treat those as a configured SignalWire provider so existing
+        // installs keep sending without a re-save.
+        if (provider == SmsProviderKey.None &&
+            !string.IsNullOrWhiteSpace(row.SignalWireProjectIdCipherText))
+        {
+            provider = SmsProviderKey.SignalWire;
+            var legacy = new SmsCredentials(
+                provider,
+                UnprotectNullable(row.SignalWireProjectIdCipherText),
+                UnprotectNullable(row.SignalWireTokenCipherText),
+                UnprotectNullable(row.SignalWireSpaceUrlCipherText),
+                UnprotectNullable(row.SignalWireFromNumberCipherText));
+            return legacy.IsComplete ? legacy : null;
+        }
+
+        if (provider == SmsProviderKey.None)
+            return null;
+
+        var creds = new SmsCredentials(
+            provider,
+            UnprotectNullable(row.SmsCredentialACipherText),
+            UnprotectNullable(row.SmsCredentialBCipherText),
+            UnprotectNullable(row.SmsCredentialCCipherText),
+            UnprotectNullable(row.SmsFromNumberCipherText));
+
+        // Incomplete config → null so the dispatcher falls back to platform env (fail-soft, never crash).
+        return creds.IsComplete ? creds : null;
+    }
+
+    private static SmsProviderKey ParseProvider(string? value) =>
+        Enum.TryParse<SmsProviderKey>(value, ignoreCase: true, out var key) ? key : SmsProviderKey.None;
+
+    public async Task<TestSmsResponse> SendTestSmsAsync(int portfolioId, TestSmsRequest request, CancellationToken ct = default)
+    {
+        var to = Normalize(request.ToPhoneNumber);
+        if (string.IsNullOrWhiteSpace(to))
+            return new TestSmsResponse { Success = false, Message = "Enter a phone number to send the test to." };
+
+        var provider = ParseProvider(request.SmsProvider);
+        if (provider == SmsProviderKey.None)
+            return new TestSmsResponse { Success = false, Message = "Choose an SMS provider first." };
+
+        // Use the saved row to fill any blank credential slot, so the landlord can re-test a saved
+        // provider without re-typing secrets. Slots already store ciphertext; decrypt for the blanks.
+        var row = await GetOrCreateAsync(portfolioId, ct);
+        var creds = new SmsCredentials(
+            provider,
+            FirstNonBlank(request.SmsCredentialA, UnprotectNullable(row.SmsCredentialACipherText), UnprotectNullable(row.SignalWireProjectIdCipherText)),
+            FirstNonBlank(request.SmsCredentialB, UnprotectNullable(row.SmsCredentialBCipherText), UnprotectNullable(row.SignalWireTokenCipherText)),
+            FirstNonBlank(request.SmsCredentialC, UnprotectNullable(row.SmsCredentialCCipherText), UnprotectNullable(row.SignalWireSpaceUrlCipherText)),
+            FirstNonBlank(request.SmsFromNumber, UnprotectNullable(row.SmsFromNumberCipherText), UnprotectNullable(row.SignalWireFromNumberCipherText)));
+
+        if (!creds.IsComplete)
+            return new TestSmsResponse { Success = false, Message = $"Missing required credentials for {provider}." };
+
+        if (!_smsProviders.TryGetValue(provider, out var impl))
+            return new TestSmsResponse { Success = false, Message = $"No implementation registered for {provider}." };
+
+        var normalizedTo = Sms.SmsDispatcher.NormalizeSmsNumber(to);
+        try
+        {
+            await impl.SendAsync(creds, normalizedTo, "Rental Command test message — your SMS provider is configured correctly.", ct);
+            return new TestSmsResponse { Success = true, Message = $"Test SMS sent to {normalizedTo} via {provider}." };
+        }
+        catch (Exception ex)
+        {
+            // Fail-soft: surface the provider's error to the UI, never throw out of the endpoint.
+            return new TestSmsResponse { Success = false, Message = $"{provider} rejected the send: {ex.Message}" };
+        }
+    }
+
+    private static string? FirstNonBlank(params string?[] values) =>
+        values.Select(Normalize).FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
 
     // -------------------------------------------------------------------------------------------
     // Per-portfolio settings row
@@ -222,11 +303,13 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         DailyBriefingIncludeEmpty = row.DailyBriefingIncludeEmpty,
         DailyBriefingSmsRecipients = UnprotectArray(row.DailyBriefingSmsRecipientsCipherText),
         DailyBriefingEmailRecipients = UnprotectArray(row.DailyBriefingEmailRecipientsCipherText),
-        SignalWireProjectId = UnprotectNullable(row.SignalWireProjectIdCipherText),
-        SignalWireTokenSet = !string.IsNullOrWhiteSpace(row.SignalWireTokenCipherText),
-        SignalWireToken = null,
-        SignalWireSpaceUrl = UnprotectNullable(row.SignalWireSpaceUrlCipherText),
-        SignalWireFromNumber = UnprotectNullable(row.SignalWireFromNumberCipherText),
+        SmsProvider = EffectiveProvider(row).ToString(),
+        SmsFromNumber = EffectiveFromNumber(row),
+        // Secrets: report only whether each slot is set, never the value. Legacy SignalWire rows map
+        // their old columns onto the generic slots so the UI shows them as configured.
+        SmsCredentialASet = HasSecret(row.SmsCredentialACipherText) || HasSecret(row.SignalWireProjectIdCipherText),
+        SmsCredentialBSet = HasSecret(row.SmsCredentialBCipherText) || HasSecret(row.SignalWireTokenCipherText),
+        SmsCredentialCSet = HasSecret(row.SmsCredentialCCipherText) || HasSecret(row.SignalWireSpaceUrlCipherText),
         // Always emit every known type so the client renders the full matrix; fill gaps with defaults.
         ChannelPreferences = AllTypes.Select(type =>
         {
@@ -244,6 +327,32 @@ public sealed class NotificationSettingsService : INotificationSettingsService
 
     private string? ProtectNullable(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : _protector.Protect(value);
+
+    /// <summary>
+    /// Applies a write-only secret update: <c>null</c> input keeps the saved ciphertext (the UI sends
+    /// null to mean "leave unchanged"); empty/blank clears it; a value re-encrypts it.
+    /// </summary>
+    private string? ApplySecret(string? current, string? incoming)
+    {
+        if (incoming is null)
+            return current;
+        return ProtectNullable(Normalize(incoming));
+    }
+
+    private static bool HasSecret(string? cipherText) => !string.IsNullOrWhiteSpace(cipherText);
+
+    /// <summary>The provider as stored, with a legacy fall-through: a row that only has the old
+    /// SignalWire columns reports as SignalWire so the UI shows it configured.</summary>
+    private static SmsProviderKey EffectiveProvider(NotificationSettings row)
+    {
+        var provider = ParseProvider(row.SmsProvider);
+        if (provider == SmsProviderKey.None && HasSecret(row.SignalWireProjectIdCipherText))
+            return SmsProviderKey.SignalWire;
+        return provider;
+    }
+
+    private string? EffectiveFromNumber(NotificationSettings row) =>
+        UnprotectNullable(row.SmsFromNumberCipherText) ?? UnprotectNullable(row.SignalWireFromNumberCipherText);
 
     private string? UnprotectNullable(string? cipherText)
     {

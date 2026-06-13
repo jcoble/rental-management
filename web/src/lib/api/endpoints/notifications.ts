@@ -5,7 +5,9 @@ import type {
 	NotificationListParams,
 	NotificationSettingsResponse,
 	UpdateNotificationSettingsRequest,
-	UnreadCountResponse
+	UnreadCountResponse,
+	TestSmsRequest,
+	TestSmsResponse
 } from '$lib/api/types/notification';
 
 export const notifications = {
@@ -28,5 +30,7 @@ export const notifications = {
 		api.put<NotificationEmailResponse>('/notifications/email', { email }),
 	getSettings: () => api.get<NotificationSettingsResponse>('/notifications/settings'),
 	setSettings: (settings: UpdateNotificationSettingsRequest) =>
-		api.put<NotificationSettingsResponse>('/notifications/settings', settings)
+		api.put<NotificationSettingsResponse>('/notifications/settings', settings),
+	testSms: (req: TestSmsRequest) =>
+		api.post<TestSmsResponse>('/notifications/settings/test-sms', req)
 };

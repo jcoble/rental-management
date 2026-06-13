@@ -7,8 +7,12 @@ namespace RentalCommand.Core.Interfaces;
 /// </summary>
 public interface INotificationChannel
 {
-    /// <summary>Send an SMS message to a phone number.</summary>
-    Task SendSmsAsync(string toPhoneNumber, string message, CancellationToken ct = default);
+    /// <summary>
+    /// Send an SMS message to a phone number on behalf of <paramref name="portfolioId"/>. The
+    /// portfolio's own configured SMS provider (BYO creds) is used when present, otherwise the
+    /// platform-level fallback. Null portfolio = platform-level send.
+    /// </summary>
+    Task SendSmsAsync(string toPhoneNumber, string message, int? portfolioId = null, CancellationToken ct = default);
 
     /// <summary>Send an email message.</summary>
     Task SendEmailAsync(string toEmail, string subject, string body, CancellationToken ct = default);

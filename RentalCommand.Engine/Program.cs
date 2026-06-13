@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using RentalCommand.Api.Extensions;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
@@ -51,6 +52,9 @@ builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
 builder.Services.AddScoped<IMessagePublisher, OutboxMessagePublisher>();
 // SMTP sender (MailKit) the channel delegates to when Notifications:Email:Transport == "Smtp".
 builder.Services.AddSingleton<ISmtpEmailSender, SmtpEmailSender>();
+// Pluggable SMS providers (BYO per-portfolio; platform-env fallback). Shared registration with the
+// API; the dispatcher resolves the portfolio's chosen provider then dispatches to the matching impl.
+builder.Services.AddSmsProviders();
 builder.Services.AddHttpClient<INotificationChannel, RoutingNotificationChannel>();
 // Push (FCM HTTP v1 via FirebaseAdmin). Singleton: the FirebaseApp is a process-global. Fail-soft
 // when no Push:* credential is configured — the outbox worker still marks push messages sent.

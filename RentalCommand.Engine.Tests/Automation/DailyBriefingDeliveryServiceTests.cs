@@ -5,6 +5,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Engine.Services;
 using RentalCommand.TestCommon;
 
@@ -132,5 +133,11 @@ public class DailyBriefingDeliveryServiceTests : IDisposable
 
         public Task<NotificationsConfig> GetRuntimeAsync(int portfolioId, CancellationToken ct = default) =>
             Task.FromResult(_config);
+
+        public Task<SmsCredentials?> GetSmsCredentialsAsync(int portfolioId, CancellationToken ct = default) =>
+            Task.FromResult<SmsCredentials?>(null);
+
+        public Task<TestSmsResponse> SendTestSmsAsync(int portfolioId, TestSmsRequest request, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 }
