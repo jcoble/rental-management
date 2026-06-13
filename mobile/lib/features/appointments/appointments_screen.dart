@@ -92,6 +92,7 @@ class _AppointmentsScreenState extends ConsumerState<AppointmentsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Appointments')),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'appointments-fab',
         onPressed: () => _showCreateSheet(context),
         tooltip: 'New appointment',
         child: const Icon(Icons.add),

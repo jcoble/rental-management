@@ -284,6 +284,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       floatingActionButton: tenantMode
           ? null
           : FloatingActionButton(
+        heroTag: 'home-capture-fab',
               onPressed: _openCapture,
               tooltip: 'Capture',
               elevation: 2,

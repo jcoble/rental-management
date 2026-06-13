@@ -91,6 +91,7 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
         title: const Text('Payments'),
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'payments-fab',
         onPressed: () => _showCreateSheet(context),
         tooltip: 'Record payment',
         child: const Icon(Icons.add),

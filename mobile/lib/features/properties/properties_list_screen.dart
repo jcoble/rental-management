@@ -60,6 +60,7 @@ class _PropertiesListScreenState
         title: const Text('Properties'),
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'properties-fab',
         onPressed: () => _showAddSheet(context),
         tooltip: 'Add property',
         child: const Icon(Icons.add),
