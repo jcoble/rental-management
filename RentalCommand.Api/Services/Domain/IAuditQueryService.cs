@@ -29,4 +29,18 @@ public interface IAuditQueryService
         int? entityId,
         ListQuery query,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Streams the admin-forensic rows for the same filters (search + operation + entityType +
+    /// entityId) as <see cref="ListForensicAsync"/> but with paging ignored, so the CSV export covers
+    /// the whole currently-filtered set. Rows are yielded as they arrive from Postgres; an unbounded
+    /// result set is never buffered in memory.
+    /// </summary>
+    IAsyncEnumerable<AdminAuditEntryResponse> StreamForensicAsync(
+        int portfolioId,
+        AuditLogOperation? operation,
+        string? entityType,
+        int? entityId,
+        ListQuery query,
+        CancellationToken ct = default);
 }
