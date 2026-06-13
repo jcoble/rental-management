@@ -40,6 +40,7 @@ class _TeamScreenState extends ConsumerState<TeamScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Team')),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'team-fab',
         onPressed: _showInviteDialog,
         tooltip: 'Invite member',
         child: const Icon(Icons.person_add_outlined),

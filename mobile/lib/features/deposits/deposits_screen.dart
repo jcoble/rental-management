@@ -97,6 +97,7 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Security Deposits')),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'deposits-fab',
         onPressed: _showCreateSheet,
         tooltip: 'Add deposit',
         child: const Icon(Icons.add),
