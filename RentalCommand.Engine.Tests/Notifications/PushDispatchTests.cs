@@ -223,7 +223,7 @@ public sealed class PushDispatchTests : IDisposable
         public Task SendEmailAsync(string toEmail, string subject, string body, CancellationToken ct = default) =>
             throw new InvalidOperationException("email channel should not be used by push tests");
 
-        public Task SendSmsAsync(string toPhoneNumber, string message, CancellationToken ct = default) =>
+        public Task SendSmsAsync(string toPhoneNumber, string message, int? portfolioId = null, CancellationToken ct = default) =>
             throw new InvalidOperationException("sms channel should not be used by push tests");
     }
 }

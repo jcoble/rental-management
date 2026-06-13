@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.DataProtection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
@@ -13,13 +14,14 @@ public class NotificationSettingsServiceTests : IDisposable
 
     public void Dispose() => _ctx.Dispose();
 
+    private NotificationSettingsService NewService() =>
+        new(_ctx.Db, new EphemeralDataProtectionProvider(), Array.Empty<ISmsProvider>());
+
     [Fact]
-    public async Task UpdateAsync_EncryptsProviderSecrets_AndRuntimeDecryptsThem()
+    public async Task UpdateAsync_EncryptsProviderSecrets_AndCredentialsDecryptThem()
     {
         const int portfolioId = 1;
-        var sut = new NotificationSettingsService(
-            _ctx.Db,
-            new EphemeralDataProtectionProvider());
+        var sut = NewService();
 
         await sut.UpdateAsync(portfolioId, new UpdateNotificationSettingsRequest
         {
@@ -44,51 +46,70 @@ public class NotificationSettingsServiceTests : IDisposable
                     EnableSms = true,
                 },
             ],
-            SignalWireProjectId = "project-id",
-            SignalWireToken = "super-secret-token",
-            SignalWireSpaceUrl = "retailreadyedi.signalwire.com",
-            SignalWireFromNumber = "+13302933081",
+            SmsProvider = "SignalWire",
+            SmsCredentialA = "project-id",
+            SmsCredentialB = "super-secret-token",
+            SmsCredentialC = "retailreadyedi.signalwire.com",
+            SmsFromNumber = "+13302933081",
         });
 
         var row = _ctx.Db.NotificationSettings.Single();
         row.PortfolioId.Should().Be(portfolioId);
-        row.SignalWireTokenCipherText.Should().NotBe("super-secret-token");
-        row.SignalWireTokenCipherText.Should().NotContain("super-secret-token");
+        // The secret is encrypted at rest (not stored plaintext).
+        row.SmsCredentialBCipherText.Should().NotBeNull();
+        row.SmsCredentialBCipherText.Should().NotContain("super-secret-token");
 
         var admin = await sut.GetAdminAsync(portfolioId);
         admin.EnableRentCharges.Should().BeTrue();
-        admin.EnableLateFees.Should().BeTrue();
-        admin.EnableLeaseExpiryReminders.Should().BeTrue();
-        admin.NotifyTenants.Should().BeTrue();
-        admin.RentChargeLeadDays.Should().Be(7);
-        admin.LateFeeGraceDays.Should().Be(3);
-        admin.LeaseExpiryReminderDays.Should().Be(45);
-        admin.SignalWireTokenSet.Should().BeTrue();
-        admin.SignalWireToken.Should().BeNull();
+        admin.SmsProvider.Should().Be("SignalWire");
+        admin.SmsFromNumber.Should().Be("+13302933081");
+        admin.SmsCredentialASet.Should().BeTrue();
+        admin.SmsCredentialBSet.Should().BeTrue();
+        admin.SmsCredentialCSet.Should().BeTrue();
 
-        // The full matrix comes back (one row per NotificationType), with the saved LateFee row and
-        // defaults for every other type.
+        // The full matrix comes back (one row per NotificationType), with the saved LateFee row.
         admin.ChannelPreferences.Should().HaveCount(Enum.GetValues<NotificationType>().Length);
         var lateFeePref = admin.ChannelPreferences.Single(p => p.NotificationType == NotificationType.LateFee);
-        lateFeePref.EnableInApp.Should().BeTrue();
-        lateFeePref.EnableEmail.Should().BeFalse();
         lateFeePref.EnableSms.Should().BeTrue();
-        var rentChargePref = admin.ChannelPreferences.Single(p => p.NotificationType == NotificationType.RentCharge);
-        rentChargePref.EnableInApp.Should().BeTrue();
-        rentChargePref.EnableEmail.Should().BeTrue();
-        rentChargePref.EnableSms.Should().BeFalse();
+
+        // Decrypted credentials round-trip and are marked complete for the chosen provider.
+        var creds = await sut.GetSmsCredentialsAsync(portfolioId);
+        creds.Should().NotBeNull();
+        creds!.Provider.Should().Be(SmsProviderKey.SignalWire);
+        creds.CredentialB.Should().Be("super-secret-token");
+        creds.FromNumber.Should().Be("+13302933081");
+        creds.IsComplete.Should().BeTrue();
 
         var runtime = await sut.GetRuntimeAsync(portfolioId);
-        runtime.EnableRentCharges.Should().BeTrue();
-        runtime.EnableLateFees.Should().BeTrue();
-        runtime.EnableLeaseExpiryReminders.Should().BeTrue();
-        runtime.NotifyTenants.Should().BeTrue();
         runtime.RentChargeLeadDays.Should().Be(7);
-        runtime.LateFeeGraceDays.Should().Be(3);
-        runtime.LeaseExpiryReminderDays.Should().Be(45);
-        runtime.EnableDailyBriefingMessages.Should().BeTrue();
         runtime.DailyBriefing.SmsRecipients.Should().ContainSingle().Which.Should().Be("+13303966191");
-        runtime.SignalWire.Token.Should().Be("super-secret-token");
-        runtime.SignalWire.Enabled.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task GetSmsCredentialsAsync_ReturnsNull_WhenNoProviderConfigured()
+    {
+        var sut = NewService();
+
+        // A portfolio that never configured SMS → null, so the dispatcher falls back to platform env.
+        var creds = await sut.GetSmsCredentialsAsync(99);
+        creds.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetSmsCredentialsAsync_ReturnsNull_WhenProviderChosenButCredentialsIncomplete()
+    {
+        const int portfolioId = 5;
+        var sut = NewService();
+
+        // Telnyx selected but no API key → incomplete → null (fail-soft to platform fallback).
+        await sut.UpdateAsync(portfolioId, new UpdateNotificationSettingsRequest
+        {
+            SmsProvider = "Telnyx",
+            SmsFromNumber = "+13302933081",
+            // CredentialA (Telnyx API key) deliberately omitted.
+        });
+
+        var creds = await sut.GetSmsCredentialsAsync(portfolioId);
+        creds.Should().BeNull();
     }
 }

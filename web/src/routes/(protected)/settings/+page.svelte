@@ -5,6 +5,7 @@
 	import type {
 		NotificationChannelPreference,
 		NotificationChannelType,
+		SmsProviderMeta,
 	} from '$lib/api/types/notification';
 	import { getAuthState } from '$lib/stores/auth.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -25,7 +26,13 @@
 	let saveSucceeded = $state(false);
 	let formErrors = $state<Record<string, string>>({});
 	let notificationEmail = $state('');
-	let signalWireTokenInput = $state('');
+	// Write-only credential inputs (blank = keep saved secret). Cleared on (re)load.
+	let smsCredentialAInput = $state('');
+	let smsCredentialBInput = $state('');
+	let smsCredentialCInput = $state('');
+	// Test-SMS verification state.
+	let testSmsNumber = $state('');
+	let testSmsResult = $state<{ success: boolean; message: string } | null>(null);
 	let broadcastForm = $state({
 		title: '',
 		message: '',
@@ -44,11 +51,49 @@
 		dailyBriefingIncludeEmpty: false,
 		dailyBriefingSmsRecipientsText: '',
 		dailyBriefingEmailRecipientsText: '',
-		signalWireProjectId: '',
-		signalWireSpaceUrl: '',
-		signalWireFromNumber: '',
-		signalWireTokenSet: false,
+		smsProvider: 'None',
+		smsFromNumber: '',
+		smsCredentialASet: false,
+		smsCredentialBSet: false,
+		smsCredentialCSet: false,
 	});
+
+	// Provider catalogue: drives the <Select> and the labels of the three generic credential slots.
+	// Adding a provider here + a backend ISmsProvider is the whole extension surface — no other UI edits.
+	const smsProviders: SmsProviderMeta[] = [
+		{ key: 'None', label: 'None (use platform default)', credentialA: null, credentialB: null, credentialC: null },
+		{
+			key: 'SignalWire',
+			label: 'SignalWire',
+			credentialA: { label: 'Project ID' },
+			credentialB: { label: 'API Token' },
+			credentialC: { label: 'Space URL', placeholder: 'your-space.signalwire.com' },
+		},
+		{
+			key: 'Twilio',
+			label: 'Twilio',
+			credentialA: { label: 'Account SID' },
+			credentialB: { label: 'Auth Token' },
+			credentialC: null,
+		},
+		{
+			key: 'Telnyx',
+			label: 'Telnyx',
+			credentialA: { label: 'API Key' },
+			credentialB: null,
+			credentialC: null,
+		},
+		{
+			key: 'Vonage',
+			label: 'Vonage',
+			credentialA: { label: 'API Key' },
+			credentialB: { label: 'API Secret' },
+			credentialC: null,
+		},
+	];
+	const selectedProvider = $derived(
+		smsProviders.find((p) => p.key === notificationSettingsForm.smsProvider) ?? smsProviders[0]
+	);
 
 	// Per-notification × per-channel matrix. Ordered list of rows with plain-language
 	// labels for the non-technical landlord. The API always returns one entry per type,
@@ -295,13 +340,17 @@
 				dailyBriefingIncludeEmpty: data.dailyBriefingIncludeEmpty,
 				dailyBriefingSmsRecipientsText: data.dailyBriefingSmsRecipients.join('\n'),
 				dailyBriefingEmailRecipientsText: data.dailyBriefingEmailRecipients.join('\n'),
-				signalWireProjectId: data.signalWireProjectId ?? '',
-				signalWireSpaceUrl: data.signalWireSpaceUrl ?? '',
-				signalWireFromNumber: data.signalWireFromNumber ?? '',
-				signalWireTokenSet: data.signalWireTokenSet,
+				smsProvider: data.smsProvider || 'None',
+				smsFromNumber: data.smsFromNumber ?? '',
+				smsCredentialASet: data.smsCredentialASet,
+				smsCredentialBSet: data.smsCredentialBSet,
+				smsCredentialCSet: data.smsCredentialCSet,
 			};
 			applyChannelPreferences(data.channelPreferences ?? []);
-			signalWireTokenInput = '';
+			smsCredentialAInput = '';
+			smsCredentialBInput = '';
+			smsCredentialCInput = '';
+			testSmsResult = null;
 		}
 	});
 
@@ -338,10 +387,12 @@
 				dailyBriefingIncludeEmpty: notificationSettingsForm.dailyBriefingIncludeEmpty,
 				dailyBriefingSmsRecipients: parseRecipients(notificationSettingsForm.dailyBriefingSmsRecipientsText),
 				dailyBriefingEmailRecipients: parseRecipients(notificationSettingsForm.dailyBriefingEmailRecipientsText),
-				signalWireProjectId: notificationSettingsForm.signalWireProjectId.trim() || null,
-				signalWireToken: signalWireTokenInput.length > 0 ? signalWireTokenInput : undefined,
-				signalWireSpaceUrl: notificationSettingsForm.signalWireSpaceUrl.trim() || null,
-				signalWireFromNumber: notificationSettingsForm.signalWireFromNumber.trim() || null,
+				smsProvider: notificationSettingsForm.smsProvider,
+				smsFromNumber: notificationSettingsForm.smsFromNumber.trim() || null,
+				// Blank input = keep saved secret (send undefined); a value = set it.
+				smsCredentialA: smsCredentialAInput.length > 0 ? smsCredentialAInput : undefined,
+				smsCredentialB: smsCredentialBInput.length > 0 ? smsCredentialBInput : undefined,
+				smsCredentialC: smsCredentialCInput.length > 0 ? smsCredentialCInput : undefined,
 				channelPreferences: channelPreferencesPayload(),
 			}),
 		onSuccess: (result) => {
@@ -358,17 +409,43 @@
 				dailyBriefingIncludeEmpty: result.dailyBriefingIncludeEmpty,
 				dailyBriefingSmsRecipientsText: result.dailyBriefingSmsRecipients.join('\n'),
 				dailyBriefingEmailRecipientsText: result.dailyBriefingEmailRecipients.join('\n'),
-				signalWireProjectId: result.signalWireProjectId ?? '',
-				signalWireSpaceUrl: result.signalWireSpaceUrl ?? '',
-				signalWireFromNumber: result.signalWireFromNumber ?? '',
-				signalWireTokenSet: result.signalWireTokenSet,
+				smsProvider: result.smsProvider || 'None',
+				smsFromNumber: result.smsFromNumber ?? '',
+				smsCredentialASet: result.smsCredentialASet,
+				smsCredentialBSet: result.smsCredentialBSet,
+				smsCredentialCSet: result.smsCredentialCSet,
 			};
 			applyChannelPreferences(result.channelPreferences ?? []);
-			signalWireTokenInput = '';
+			smsCredentialAInput = '';
+			smsCredentialBInput = '';
+			smsCredentialCInput = '';
 			queryClient.invalidateQueries({ queryKey: ['notification-settings'] });
 			showSuccess('Notification delivery settings saved.');
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	// Send a one-off test SMS using the currently-entered provider + credentials (blank slots fall
+	// back to the saved secrets server-side). Fail-soft: the API always returns a success flag.
+	const testSmsMutation = createMutation(() => ({
+		mutationFn: () =>
+			notifications.testSms({
+				smsProvider: notificationSettingsForm.smsProvider,
+				toPhoneNumber: testSmsNumber.trim(),
+				smsFromNumber: notificationSettingsForm.smsFromNumber.trim() || undefined,
+				smsCredentialA: smsCredentialAInput.length > 0 ? smsCredentialAInput : undefined,
+				smsCredentialB: smsCredentialBInput.length > 0 ? smsCredentialBInput : undefined,
+				smsCredentialC: smsCredentialCInput.length > 0 ? smsCredentialCInput : undefined,
+			}),
+		onSuccess: (result) => {
+			testSmsResult = result;
+			if (result.success) showSuccess(result.message);
+			else showError(result.message);
+		},
+		onError: (err) => {
+			testSmsResult = { success: false, message: apiErrorMessage(err) };
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	const broadcastMutation = createMutation(() => ({
@@ -466,7 +543,7 @@
 				<p class="text-sm font-semibold">How you get notified</p>
 				<p class="mb-3 text-xs text-muted-foreground">
 					Pick how you want to hear about each kind of update. In-app shows in the bell at the top.
-					Email goes to your notification email. Text (SMS) needs SignalWire set up below.
+					Email goes to your notification email. Text (SMS) needs an SMS provider set up below.
 				</p>
 
 				<div class="overflow-x-auto">
@@ -526,7 +603,7 @@
 					<div class="md:col-span-2">
 						<p class="text-sm font-semibold">Automation and Delivery</p>
 						<p class="text-xs text-muted-foreground">
-							Automation flags, SignalWire credentials, and briefing recipients are stored in admin settings. Provider secrets are encrypted at rest.
+							Automation flags, your SMS provider credentials, and briefing recipients are stored in admin settings. Provider secrets are encrypted at rest.
 						</p>
 					</div>
 
@@ -610,47 +687,127 @@
 					</div>
 					<div class="hidden md:block"></div>
 
-					<div>
-						<label for="settings-signalwire-project" class="mb-1 block text-xs text-muted-foreground">SignalWire Project ID</label>
-						<Input
-							id="settings-signalwire-project"
-							bind:value={notificationSettingsForm.signalWireProjectId}
-							autocomplete="off"
-							data-testid="settings-signalwire-project"
-						/>
-					</div>
-					<div>
-						<label for="settings-signalwire-space" class="mb-1 block text-xs text-muted-foreground">SignalWire Space URL</label>
-						<Input
-							id="settings-signalwire-space"
-							bind:value={notificationSettingsForm.signalWireSpaceUrl}
-							placeholder="your-space.signalwire.com"
-							autocomplete="off"
-							data-testid="settings-signalwire-space"
-						/>
-					</div>
-					<div>
-						<label for="settings-signalwire-from" class="mb-1 block text-xs text-muted-foreground">SignalWire From Number</label>
-						<Input
-							id="settings-signalwire-from"
-							bind:value={notificationSettingsForm.signalWireFromNumber}
-							placeholder="+13302933081"
-							autocomplete="off"
-							data-testid="settings-signalwire-from"
-						/>
-					</div>
-					<div>
-						<label for="settings-signalwire-token" class="mb-1 block text-xs text-muted-foreground">
-							SignalWire API Token {notificationSettingsForm.signalWireTokenSet ? '(saved)' : ''}
-						</label>
-						<Input
-							id="settings-signalwire-token"
-							type="password"
-							bind:value={signalWireTokenInput}
-							placeholder={notificationSettingsForm.signalWireTokenSet ? 'Leave blank to keep saved token' : 'Paste API token'}
-							autocomplete="new-password"
-							data-testid="settings-signalwire-token"
-						/>
+					<!-- Connected service: Text messaging (SMS) provider. Self-contained so it can be
+					     relocated into the future Settings hub cheaply. Bring-your-own provider + creds. -->
+					<div class="md:col-span-2 mt-2 rounded border border-border bg-background p-4" data-testid="settings-sms-provider-section">
+						<p class="text-sm font-semibold">Text messaging (SMS)</p>
+						<p class="mb-3 text-xs text-muted-foreground">
+							Pick an SMS provider and enter your own account credentials. Texts are sent from your
+							account. Leave on "None" to use the platform default. Secrets are encrypted at rest.
+						</p>
+
+						<div class="grid gap-4 md:grid-cols-2">
+							<div>
+								<label for="settings-sms-provider" class="mb-1 block text-xs text-muted-foreground">Provider</label>
+								<Select.Root type="single" bind:value={notificationSettingsForm.smsProvider}>
+									<Select.Trigger class="w-full" id="settings-sms-provider" data-testid="settings-sms-provider">
+										{selectedProvider.label}
+									</Select.Trigger>
+									<Select.Content>
+										{#each smsProviders as p (p.key)}
+											<Select.Item value={p.key} label={p.label}>{p.label}</Select.Item>
+										{/each}
+									</Select.Content>
+								</Select.Root>
+							</div>
+
+							{#if notificationSettingsForm.smsProvider !== 'None'}
+								<div>
+									<label for="settings-sms-from" class="mb-1 block text-xs text-muted-foreground">From Number</label>
+									<Input
+										id="settings-sms-from"
+										bind:value={notificationSettingsForm.smsFromNumber}
+										placeholder="+13302933081"
+										autocomplete="off"
+										data-testid="settings-sms-from"
+									/>
+								</div>
+
+								{#if selectedProvider.credentialA}
+									<div>
+										<label for="settings-sms-cred-a" class="mb-1 block text-xs text-muted-foreground">
+											{selectedProvider.credentialA.label} {notificationSettingsForm.smsCredentialASet ? '(saved)' : ''}
+										</label>
+										<Input
+											id="settings-sms-cred-a"
+											type="password"
+											bind:value={smsCredentialAInput}
+											placeholder={notificationSettingsForm.smsCredentialASet ? 'Leave blank to keep saved value' : (selectedProvider.credentialA.placeholder ?? '')}
+											autocomplete="new-password"
+											data-testid="settings-sms-cred-a"
+										/>
+									</div>
+								{/if}
+
+								{#if selectedProvider.credentialB}
+									<div>
+										<label for="settings-sms-cred-b" class="mb-1 block text-xs text-muted-foreground">
+											{selectedProvider.credentialB.label} {notificationSettingsForm.smsCredentialBSet ? '(saved)' : ''}
+										</label>
+										<Input
+											id="settings-sms-cred-b"
+											type="password"
+											bind:value={smsCredentialBInput}
+											placeholder={notificationSettingsForm.smsCredentialBSet ? 'Leave blank to keep saved value' : (selectedProvider.credentialB.placeholder ?? '')}
+											autocomplete="new-password"
+											data-testid="settings-sms-cred-b"
+										/>
+									</div>
+								{/if}
+
+								{#if selectedProvider.credentialC}
+									<div>
+										<label for="settings-sms-cred-c" class="mb-1 block text-xs text-muted-foreground">
+											{selectedProvider.credentialC.label} {notificationSettingsForm.smsCredentialCSet ? '(saved)' : ''}
+										</label>
+										<Input
+											id="settings-sms-cred-c"
+											bind:value={smsCredentialCInput}
+											placeholder={notificationSettingsForm.smsCredentialCSet ? 'Leave blank to keep saved value' : (selectedProvider.credentialC.placeholder ?? '')}
+											autocomplete="off"
+											data-testid="settings-sms-cred-c"
+										/>
+									</div>
+								{/if}
+							{/if}
+						</div>
+
+						{#if notificationSettingsForm.smsProvider !== 'None'}
+							<div class="mt-4 border-t border-border pt-3">
+								<p class="mb-2 text-xs text-muted-foreground">
+									Send a test text to confirm it works. Blank credentials above use your saved values.
+								</p>
+								<div class="flex flex-wrap items-end gap-2">
+									<div class="flex-1 min-w-[12rem]">
+										<label for="settings-sms-test-number" class="mb-1 block text-xs text-muted-foreground">Your phone number</label>
+										<Input
+											id="settings-sms-test-number"
+											bind:value={testSmsNumber}
+											placeholder="+13303966191"
+											autocomplete="off"
+											data-testid="settings-sms-test-number"
+										/>
+									</div>
+									<Button
+										type="button"
+										variant="outline"
+										disabled={testSmsMutation.isPending || testSmsNumber.trim().length === 0}
+										onclick={() => testSmsMutation.mutate()}
+										data-testid="settings-sms-test-button"
+									>
+										{testSmsMutation.isPending ? 'Sending…' : 'Send test SMS'}
+									</Button>
+								</div>
+								{#if testSmsResult}
+									<p
+										class="mt-2 text-xs {testSmsResult.success ? 'text-green-600' : 'text-destructive'}"
+										data-testid="settings-sms-test-result"
+									>
+										{testSmsResult.message}
+									</p>
+								{/if}
+							</div>
+						{/if}
 					</div>
 
 					<label class="flex items-start gap-3 md:col-span-2">

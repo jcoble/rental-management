@@ -74,6 +74,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IConversationService, ConversationService>();
         services.AddScoped<INotificationService, NotificationService>();
         services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
+        // Pluggable SMS providers + resolver (BYO per-portfolio, platform-env fallback). Shared with
+        // the Engine outbox path; the API uses it for the synchronous "send test SMS" verify endpoint.
+        services.AddSmsProviders();
         services.AddScoped<INoticeDraftService, NoticeDraftService>();
         services.AddScoped<ISmsInboundRentConfirmationService, SmsInboundRentConfirmationService>();
         services.AddScoped<ISmsInboundVendorDoneService, SmsInboundVendorDoneService>();

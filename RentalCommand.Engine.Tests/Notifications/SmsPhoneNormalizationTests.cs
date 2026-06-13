@@ -1,5 +1,5 @@
 using FluentAssertions;
-using RentalCommand.Engine.Services;
+using RentalCommand.Api.Services.Sms;
 
 namespace RentalCommand.Engine.Tests.Notifications;
 
@@ -11,11 +11,8 @@ public class SmsPhoneNormalizationTests
     [InlineData("+1 (330) 396-6191", "+13303966191")]
     public void NormalizeSmsNumber_ConvertsUsNumbersToE164(string input, string expected)
     {
-        var method = typeof(RoutingNotificationChannel).GetMethod(
-            "NormalizeSmsNumber",
-            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
-
-        method.Should().NotBeNull();
-        method!.Invoke(null, [input]).Should().Be(expected);
+        // Normalization moved from RoutingNotificationChannel into the pluggable SmsDispatcher
+        // (now a public static helper); the behaviour and expectations are unchanged.
+        SmsDispatcher.NormalizeSmsNumber(input).Should().Be(expected);
     }
 }

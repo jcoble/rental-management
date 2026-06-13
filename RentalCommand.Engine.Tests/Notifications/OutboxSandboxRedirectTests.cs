@@ -155,7 +155,7 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
             return Task.CompletedTask;
         }
 
-        public Task SendSmsAsync(string toPhoneNumber, string message, CancellationToken ct = default)
+        public Task SendSmsAsync(string toPhoneNumber, string message, int? portfolioId = null, CancellationToken ct = default)
         {
             SmsMessages.Add((toPhoneNumber, message));
             return Task.CompletedTask;

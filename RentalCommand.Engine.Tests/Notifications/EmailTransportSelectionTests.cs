@@ -122,21 +122,17 @@ public class EmailTransportSelectionTests
                 It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
-        var settings = new Mock<INotificationSettingsService>();
-        // Email path never touches the settings service; return the same config if asked.
-        settings.Setup(s => s.GetRuntimeAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(cfg);
+        // Email path never touches the SMS dispatcher; a no-op mock satisfies the dependency.
+        var sms = new Mock<RentalCommand.Core.Interfaces.ISmsDispatcher>();
 
         // A bare HttpClient: the SendGrid path will attempt a real POST and throw, which is fine —
         // these tests only assert WHICH transport is chosen, not that SendGrid actually delivers.
         var http = new HttpClient();
-        var db = new SqliteTestContext().Db;
 
         var channel = new RoutingNotificationChannel(
             http,
             Options.Create(cfg),
-            settings.Object,
-            db,
+            sms.Object,
             smtp.Object,
             NullLogger<RoutingNotificationChannel>.Instance);
 

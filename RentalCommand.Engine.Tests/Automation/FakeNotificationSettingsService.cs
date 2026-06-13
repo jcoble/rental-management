@@ -1,6 +1,7 @@
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Engine.Tests.Automation;
 
@@ -21,4 +22,10 @@ internal sealed class FakeNotificationSettingsService : INotificationSettingsSer
 
     public Task<NotificationsConfig> GetRuntimeAsync(int portfolioId, CancellationToken ct = default)
         => Task.FromResult(_config);
+
+    public Task<SmsCredentials?> GetSmsCredentialsAsync(int portfolioId, CancellationToken ct = default)
+        => Task.FromResult<SmsCredentials?>(null);
+
+    public Task<TestSmsResponse> SendTestSmsAsync(int portfolioId, TestSmsRequest request, CancellationToken ct = default)
+        => throw new NotSupportedException();
 }
