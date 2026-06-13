@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "844399161956",
+    "project_id": "rental-command",
+    "storage_bucket": "rental-command.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:844399161956:android:77b73c6147c5d86ff96571",
+        "android_client_info": {
+          "package_name": "com.rentalcommand.rental_command"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB3d-2k_8klifLglibl9T5c5Q51xbEyYdU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
