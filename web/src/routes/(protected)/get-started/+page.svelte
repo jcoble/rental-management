@@ -2,14 +2,39 @@
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
-	import { FlaskConical, Rocket, TriangleAlert, Loader2, ArrowRight } from '@lucide/svelte';
+	import {
+		FlaskConical,
+		Rocket,
+		TriangleAlert,
+		Loader2,
+		ArrowRight,
+		ListChecks,
+		Check,
+		Lock,
+		PartyPopper,
+		RotateCcw,
+	} from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import Progress from '$lib/components/ui/Progress.svelte';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import {
+		GETTING_STARTED_TASKS,
+		computeProgress,
+		isTaskDone,
+		taskHref,
+		type GettingStartedTask,
+	} from '$lib/onboarding/getting-started-tasks';
+	import {
+		loadManualDone,
+		saveManualDone,
+		clearManualDone,
+	} from '$lib/onboarding/getting-started-progress.svelte';
+	import { useGettingStarted } from '$lib/onboarding/use-getting-started.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -21,7 +46,9 @@
 		staleTime: 60_000
 	}));
 
-	// Persist the "I've answered this" choice so returning sandbox users skip the fork (F8).
+	// --- First-run Sandbox fork (preserved from the original screen, F8) ----------------------------
+	// A brand-new Sandbox account is offered the explore-vs-go-live choice ONCE. After they choose
+	// (persisted), or on any Live account, this route becomes the durable getting-started checklist.
 	const CHOICE_KEY = 'rc.getStarted.choice';
 	function hasMadeChoice(): boolean {
 		if (!browser) return false;
@@ -31,20 +58,11 @@
 			return false;
 		}
 	}
-
-	// Already Live (or we can't tell) → there's no Sandbox choice to make; go to the dashboard.
-	// Failing forward to the dashboard (rather than showing the "wipe demo & set up" path) is the
-	// safe default for a Live account whose state fetch errored — matches the app's fail-open-to-Live.
-	// Also forward if the user already answered the fork once (persisted choice) — F8.
-	let forwarded = $state(false);
-	$effect(() => {
-		if (forwarded) return;
-		const isSandbox = stateQuery.data?.isSandbox === true;
-		if ((stateQuery.data && !isSandbox) || stateQuery.isError || (isSandbox && hasMadeChoice())) {
-			forwarded = true;
-			goto('/');
-		}
-	});
+	let choiceMade = $state(hasMadeChoice());
+	const isSandbox = $derived(stateQuery.data?.isSandbox === true);
+	// Show the fork only for a Sandbox account that hasn't answered yet. Live (or errored state) and
+	// post-choice Sandbox fall through to the checklist.
+	const showFork = $derived(isSandbox && !choiceMade);
 
 	function exploreSandbox() {
 		if (browser) {
@@ -54,10 +72,56 @@
 				/* storage may be unavailable */
 			}
 		}
-		goto('/');
+		choiceMade = true;
 	}
 
-	// "Set up my real portfolio" = Go Live (irreversible wipe of demo data) → onboarding.
+	// --- Checklist -----------------------------------------------------------------------------------
+	const gs = useGettingStarted();
+	const ready = $derived(gs.ready());
+	const signals = $derived(gs.signals());
+
+	// Manual done/skip overrides, persisted per portfolio. Held in component state so toggles re-render;
+	// reloaded when the portfolio changes.
+	let manualDone = $state<Set<string>>(new Set());
+	let loadedFor = $state<number>(-1);
+	$effect(() => {
+		if (portfolioId > 0 && loadedFor !== portfolioId) {
+			manualDone = loadManualDone(portfolioId);
+			loadedFor = portfolioId;
+		}
+	});
+
+	const progress = $derived(computeProgress(signals, manualDone));
+
+	function done(task: GettingStartedTask): boolean {
+		return isTaskDone(task, signals, manualDone);
+	}
+	// A task whose target needs a Live account but we're in Sandbox: the in-app create flow is disabled
+	// there (Sandbox is read-only demo data), so we lock the deep-link and explain why.
+	function locked(task: GettingStartedTask): boolean {
+		return task.requiresLive === true && isSandbox;
+	}
+
+	function toggleManual(task: GettingStartedTask) {
+		// Only meaningful when the data doesn't already satisfy it (auto-complete always wins).
+		if (task.isComplete(signals)) return;
+		const next = new Set(manualDone);
+		if (next.has(task.key)) next.delete(task.key);
+		else next.add(task.key);
+		manualDone = next;
+		saveManualDone(portfolioId, next);
+	}
+
+	function startOver() {
+		manualDone = new Set();
+		clearManualDone(portfolioId);
+		showSuccess('Checklist reset — anything already set up stays checked.');
+	}
+
+	const coreTasks = $derived(GETTING_STARTED_TASKS.filter((t) => t.core));
+	const optionalTasks = $derived(GETTING_STARTED_TASKS.filter((t) => !t.core));
+
+	// --- Go Live (irreversible wipe of demo data) → onboarding. Unchanged from the original screen. --
 	let dialogOpen = $state(false);
 	let confirmText = $state('');
 	const CONFIRM_PHRASE = 'GO LIVE';
@@ -66,7 +130,6 @@
 	const goLiveMutation = createMutation(() => ({
 		mutationFn: () => portfolios.goLive(),
 		onSuccess: async () => {
-			// Demo data was wiped server-side — every cached query is now stale.
 			await queryClient.invalidateQueries();
 			dialogOpen = false;
 			confirmText = '';
@@ -96,21 +159,15 @@
 	<title>Get started - Rental Command</title>
 </svelte:head>
 
-<div
-	class="box-border flex min-h-full items-center justify-center bg-muted/30 p-6"
-	data-testid="get-started-page"
->
-	{#if stateQuery.data?.isSandbox !== true}
-		<!-- Loading, errored, or Live: show a spinner while the effect forwards to the dashboard. -->
-		<div
-			class="flex items-center gap-2 text-sm text-muted-foreground"
-			data-testid="get-started-loading"
-		>
+<div class="box-border h-full overflow-y-auto bg-muted/30 p-6 pb-20" data-testid="get-started-page">
+	{#if stateQuery.isLoading}
+		<div class="flex h-64 items-center justify-center gap-2 text-sm text-muted-foreground" data-testid="get-started-loading">
 			<Loader2 class="h-4 w-4 animate-spin" />
 			Loading…
 		</div>
-	{:else}
-		<div class="w-full max-w-3xl">
+	{:else if showFork}
+		<!-- First-run Sandbox fork: explore the demo, or wipe it and set up for real. -->
+		<div class="mx-auto w-full max-w-3xl">
 			<div class="mb-6 text-center">
 				<h1 class="text-2xl font-bold" data-testid="get-started-title">How do you want to start?</h1>
 				<p class="mt-1 text-sm text-muted-foreground">
@@ -129,12 +186,7 @@
 							Jump into a demo account already filled with sample properties, tenants, and leases.
 							Nothing sends real emails or texts, or charges any cards — poke around freely.
 						</p>
-						<Button
-							variant="outline"
-							class="gap-1.5"
-							data-testid="get-started-explore-sandbox"
-							onclick={exploreSandbox}
-						>
+						<Button variant="outline" class="gap-1.5" data-testid="get-started-explore-sandbox" onclick={exploreSandbox}>
 							Explore the demo
 							<ArrowRight class="h-4 w-4" />
 						</Button>
@@ -159,8 +211,151 @@
 				</Card.Root>
 			</div>
 		</div>
+	{:else}
+		<!-- The durable getting-started checklist. -->
+		<div class="mx-auto w-full max-w-2xl">
+			<div class="mb-5 flex items-start justify-between gap-3">
+				<div class="flex items-start gap-3">
+					<span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--m3-shape-large)] bg-primary/10 text-primary">
+						<ListChecks class="h-5 w-5" />
+					</span>
+					<div>
+						<h1 class="text-2xl font-bold" data-testid="get-started-checklist-title">Getting started</h1>
+						<p class="mt-1 text-sm text-muted-foreground">
+							Work through these to get up and running. Tap any step and we'll take you to the exact
+							spot and highlight what to do. Steps check themselves off as you go.
+						</p>
+					</div>
+				</div>
+			</div>
+
+			<!-- Progress summary -->
+			<Card.Root class="mb-5" data-testid="get-started-progress">
+				<Card.Content class="p-5">
+					<div class="mb-2 flex items-center justify-between gap-3">
+						<div class="flex items-center gap-2">
+							{#if progress.allDone}
+								<PartyPopper class="h-5 w-5 text-success" />
+								<span class="font-semibold text-foreground" data-testid="get-started-progress-text">You're all set!</span>
+							{:else}
+								<span class="font-semibold text-foreground" data-testid="get-started-progress-text">
+									{progress.doneCount} of {progress.totalCount} done
+								</span>
+							{/if}
+						</div>
+						{#if manualDone.size > 0}
+							<Button variant="ghost" size="sm" class="gap-1.5 text-muted-foreground" onclick={startOver} data-testid="get-started-reset">
+								<RotateCcw class="h-3.5 w-3.5" />
+								Start over
+							</Button>
+						{/if}
+					</div>
+					<Progress value={progress.doneCount} max={progress.totalCount} />
+					{#if !progress.allCoreDone}
+						<p class="mt-2 text-xs text-muted-foreground">
+							The first {progress.coreTotalCount} steps are the essentials. The rest turn on automatic reminders.
+						</p>
+					{/if}
+				</Card.Content>
+			</Card.Root>
+
+			{#if isSandbox}
+				<div class="mb-5 flex flex-col gap-3 rounded-[var(--m3-shape-large)] border border-warning/40 bg-warning/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between" data-testid="get-started-sandbox-note">
+					<p class="text-sm text-foreground">
+						You're in the <strong class="font-semibold">demo (Sandbox)</strong>. Some steps are
+						locked until you switch to a real account — that clears the sample data and starts you
+						clean.
+					</p>
+					<Button class="shrink-0 gap-1.5" size="sm" data-testid="get-started-go-live" onclick={openDialog}>
+						<Rocket class="h-4 w-4" />
+						Set up for real
+					</Button>
+				</div>
+			{/if}
+
+			{#if !ready}
+				<div class="flex items-center gap-2 py-6 text-sm text-muted-foreground" data-testid="get-started-checklist-loading">
+					<Loader2 class="h-4 w-4 animate-spin" />
+					Checking what's already set up…
+				</div>
+			{:else}
+				<!-- Core essentials -->
+				<div class="mb-2 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+					The essentials
+				</div>
+				<div class="mb-6 space-y-2" data-testid="get-started-core-tasks">
+					{#each coreTasks as task (task.key)}
+						{@render taskRow(task)}
+					{/each}
+				</div>
+
+				<!-- Optional add-ons -->
+				<div class="mb-2 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+					Turn on reminders <span class="font-normal normal-case text-muted-foreground/70">(optional)</span>
+				</div>
+				<div class="space-y-2" data-testid="get-started-optional-tasks">
+					{#each optionalTasks as task (task.key)}
+						{@render taskRow(task)}
+					{/each}
+				</div>
+			{/if}
+		</div>
 	{/if}
 </div>
+
+<!-- A single checklist row. Done → green check + struck label; not done → tappable deep-link that
+     spotlights the target, plus a small "mark done" affordance for steps the data can't detect. -->
+{#snippet taskRow(task: GettingStartedTask)}
+	{@const isDone = done(task)}
+	{@const isLocked = locked(task) && !isDone}
+	{@const Icon = task.icon}
+	<div
+		class="flex items-center gap-3 rounded-[var(--m3-shape-large)] border bg-background p-3 transition-colors {isDone ? 'border-success/40 bg-success/5' : 'border-border'}"
+		data-testid="get-started-task-{task.key}"
+		data-task-done={isDone}
+	>
+		<!-- Status check / mark-done toggle -->
+		<button
+			type="button"
+			class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition-colors {isDone ? 'border-success bg-success text-success-foreground' : 'border-border text-transparent hover:border-primary'}"
+			aria-label={isDone ? `${task.label} done` : `Mark "${task.label}" done`}
+			data-testid="get-started-task-check-{task.key}"
+			disabled={task.isComplete(signals)}
+			onclick={() => toggleManual(task)}
+		>
+			<Check class="h-4 w-4" />
+		</button>
+
+		<Icon class="h-4 w-4 shrink-0 {isDone ? 'text-success' : 'text-muted-foreground'}" />
+
+		<div class="min-w-0 flex-1">
+			<p class="truncate text-sm font-medium {isDone ? 'text-muted-foreground line-through' : 'text-foreground'}">
+				{task.label}
+			</p>
+			<p class="truncate text-xs text-muted-foreground">{task.eli5}</p>
+		</div>
+
+		{#if isDone}
+			<span class="shrink-0 text-xs font-medium text-success">Done</span>
+		{:else if isLocked}
+			<span class="flex shrink-0 items-center gap-1 text-xs text-muted-foreground" data-testid="get-started-task-locked-{task.key}">
+				<Lock class="h-3.5 w-3.5" />
+				Live only
+			</span>
+		{:else}
+			<Button
+				href={taskHref(task)}
+				variant="outline"
+				size="sm"
+				class="shrink-0 gap-1.5"
+				data-testid="get-started-task-go-{task.key}"
+			>
+				Show me
+				<ArrowRight class="h-4 w-4" />
+			</Button>
+		{/if}
+	</div>
+{/snippet}
 
 <!-- Go Live confirm (irreversible, type-to-confirm) — mirrors SandboxBanner -->
 <Dialog.Root open={dialogOpen} onOpenChange={(v) => { if (!v) closeDialog(); }}>
