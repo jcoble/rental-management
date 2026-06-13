@@ -253,9 +253,14 @@ services:
       - Notifications__Twilio__AccountSid=${TWILIO_ACCOUNT_SID:-}
       - Notifications__Twilio__AuthToken=${TWILIO_AUTH_TOKEN:-}
       - Notifications__Twilio__FromNumber=${TWILIO_FROM_NUMBER:-}
+      # ── Push (FCM HTTP v1 via FirebaseAdmin). Fail-soft: unset = suppression logs. ──
+      # Key file lives on the host at /opt/rental-command/secrets (bind-mounted below, ro).
+      - Push__FirebaseProjectId=${PUSH_FIREBASE_PROJECT_ID:-}
+      - Push__ServiceAccountJsonPath=${PUSH_SERVICE_ACCOUNT_JSON_PATH:-}
     volumes:
       - uploads:/var/lib/rentalcommand/uploads
       - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
+      - /opt/rental-command/secrets:/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy
