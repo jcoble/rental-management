@@ -199,8 +199,10 @@ export const paymentSchema = z.object({
 
 export const expenseSchema = z.object({
 	description: required('Description'),
-	// amount: server [Range(0, 99999999)] — expenses can legitimately be $0
-	amount: nonNegativeNumeric('Amount'),
+	// amount: server [Range(0.01, 99999999)] (ExpenseDtos.cs Create/UpdateExpenseRequest.Amount)
+	// — must be > 0. Previously used nonNegativeNumeric (allowed 0), which passed client
+	// validation then 400'd at the server; positiveNumeric surfaces the error inline instead.
+	amount: positiveNumeric('Amount'),
 	subtotal: optionalNonNegative('Subtotal'),
 	taxAmount: optionalNonNegative('Tax'),
 	incurredAt: required('Incurred date'),

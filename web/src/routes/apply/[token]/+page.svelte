@@ -203,7 +203,9 @@
 			monthlyIncome: income != null && !isNaN(income) ? income : null,
 			desiredMoveInDate: desiredMoveInDate || null,
 			notes: notes.trim() || null,
-			idExtractedFields,
+			// Serialize to a JSON string: the server binds IdExtractedFields to a `string?`
+			// (jsonb-as-text); sending a raw object 400s on photo-ID-autofilled submissions.
+			idExtractedFields: idExtractedFields ? JSON.stringify(idExtractedFields) : null,
 			consentGiven,
 		};
 		submitMutation.mutate(body);

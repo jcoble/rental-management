@@ -152,7 +152,8 @@
 		// The form holds local wall-clock ISO; convert to UTC before saving (timestamptz).
 		const data = { ...result.data } as Record<string, unknown>;
 		data.scheduledStart = localWallClockToUtcIso(form.scheduledStart);
-		data.scheduledEnd = form.scheduledEnd ? localWallClockToUtcIso(form.scheduledEnd) : '';
+		// Blank end → null (not ''): DateTime? cannot deserialize an empty string (raw 400).
+		data.scheduledEnd = form.scheduledEnd ? localWallClockToUtcIso(form.scheduledEnd) : null;
 		saveMutation.mutate({ id: editingId, data: { portfolioId, ...data } });
 	}
 
