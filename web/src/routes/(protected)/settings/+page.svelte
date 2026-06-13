@@ -18,6 +18,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import TimeZoneSelect from '$lib/components/shared/TimeZoneSelect.svelte';
 	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
+	import WalkMeThrough from '$lib/components/onboarding/WalkMeThrough.svelte';
 
 	const queryClient = useQueryClient();
 	const authState = getAuthState();
@@ -479,8 +480,12 @@
 		<SandboxBanner variant="card" />
 	</div>
 
-	<Card.Root class="max-w-3xl gap-0 py-0">
+	<Card.Root class="max-w-3xl gap-0 py-0" id="settings-portfolio-basics" data-testid="settings-portfolio-basics">
 		<Card.Content class="p-5">
+			<div class="mb-3 flex items-center justify-between gap-2">
+				<p class="text-sm font-semibold">Portfolio basics</p>
+				<WalkMeThrough step="portfolio" />
+			</div>
 			<div class="grid gap-3 md:grid-cols-2">
 				<div class="md:col-span-2">
 					<label for="settings-name" class="mb-1 block text-xs text-muted-foreground">Portfolio Name</label>
@@ -515,8 +520,11 @@
 			</div>
 
 			<!-- Messaging defaults -->
-			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" data-testid="settings-notification-email">
-				<p class="text-sm font-semibold">Notification Email</p>
+			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" id="settings-notification-email" data-testid="settings-notification-email">
+				<div class="mb-1 flex items-center justify-between gap-2">
+					<p class="text-sm font-semibold">Notification Email</p>
+					<WalkMeThrough step="notifications" />
+				</div>
 				<p class="mb-3 text-xs text-muted-foreground">
 					Notification emails will be sent to this address. Leave blank to use your login email.
 				</p>
@@ -598,13 +606,16 @@
 				</p>
 			</div>
 
-			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" data-testid="settings-notification-delivery">
+			<div class="mt-6 rounded-lg border border-border bg-muted/30 p-4" id="settings-notification-delivery" data-testid="settings-notification-delivery">
 				<div class="grid gap-4 md:grid-cols-2">
-					<div class="md:col-span-2">
-						<p class="text-sm font-semibold">Automation and Delivery</p>
-						<p class="text-xs text-muted-foreground">
-							Automation flags, your SMS provider credentials, and briefing recipients are stored in admin settings. Provider secrets are encrypted at rest.
-						</p>
+					<div class="md:col-span-2 flex items-start justify-between gap-2">
+						<div>
+							<p class="text-sm font-semibold">Automation and Delivery</p>
+							<p class="text-xs text-muted-foreground">
+								Automation flags, your SMS provider credentials, and briefing recipients are stored in admin settings. Provider secrets are encrypted at rest.
+							</p>
+						</div>
+						<WalkMeThrough step="texting" label="Set up texting" />
 					</div>
 
 					<label class="flex items-start gap-3 rounded border border-border bg-background p-3">

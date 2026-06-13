@@ -58,7 +58,7 @@
 	}));
 
 	const empty = {
-		propertyId: '', unitId: '', tenantId: '', startDate: '', endDate: '',
+		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', startDate: '', endDate: '',
 		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1', status: 'Draft',
 	};
 	let showForm = $state(false);
@@ -117,6 +117,7 @@
 	function openEdit(l: Lease) {
 		editingId = l.id;
 		form = {
+			leaseNumber: l.leaseNumber ?? '',
 			propertyId: String(l.propertyId),
 			unitId: String(l.unitId),
 			tenantId: String(l.tenantId),
@@ -277,6 +278,10 @@
 			<Dialog.Title>{editingId == null ? 'New Lease' : 'Edit Lease'}</Dialog.Title>
 		</Dialog.Header>
 		<div class="grid gap-3 md:grid-cols-3" data-testid="lease-form">
+			<div class="md:col-span-3">
+				<Input data-testid="lease-number-input" bind:value={form.leaseNumber} placeholder="Lease number" />
+				{#if formErrors.leaseNumber}<p class="mt-1 text-xs text-destructive" data-testid="lease-number-error">{formErrors.leaseNumber}</p>{/if}
+			</div>
 			<Select.Root type="single" bind:value={form.propertyId}>
 				<Select.Trigger class="w-full" data-testid="lease-property-input">
 					{selectedPropertyLabel ? selectedPropertyLabel : 'Select property'}

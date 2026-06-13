@@ -141,6 +141,7 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton(
+        heroTag: 'work-orders-fab',
         onPressed: () => _showCreateSheet(context),
         tooltip: 'New work order',
         child: const Icon(Icons.add),
