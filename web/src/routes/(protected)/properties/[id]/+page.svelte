@@ -551,7 +551,7 @@
 			>
 				{#snippet toolbar()}
 					<div class="flex flex-1"></div>
-					<Button class="gap-2 shrink-0" onclick={openAddUnit} data-testid="unit-add-button">
+					<Button class="gap-2 shrink-0" onclick={openAddUnit} data-testid="unit-add-button" data-coach="add-unit">
 						<Plus class="h-4 w-4" />
 						Add Unit
 					</Button>

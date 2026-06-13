@@ -198,7 +198,7 @@
 			<div class="flex flex-1 items-center gap-2">
 				<SearchInput bind:value={ownerSearch} placeholder="Search owners…" testid="owner-search" />
 			</div>
-			<Button data-testid="owner-create-button" class="gap-2 shrink-0" onclick={openCreateOwner}>
+			<Button data-testid="owner-create-button" data-coach="add-owner" class="gap-2 shrink-0" onclick={openCreateOwner}>
 				<Plus class="h-4 w-4" />
 				Add Owner
 			</Button>

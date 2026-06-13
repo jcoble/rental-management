@@ -205,7 +205,7 @@
 			<div class="flex flex-1 items-center gap-2">
 				<SearchInput bind:value={search} placeholder="Search tenants…" testid="tenant-search" />
 			</div>
-			<Button data-testid="tenant-create-button" class="gap-2 shrink-0" onclick={openCreate}>
+			<Button data-testid="tenant-create-button" data-coach="add-tenant" class="gap-2 shrink-0" onclick={openCreate}>
 				<Plus class="h-4 w-4" />
 				New Tenant
 			</Button>
