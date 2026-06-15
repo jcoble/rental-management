@@ -21,6 +21,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -37,9 +38,15 @@
 		goto(`/properties/${p.id}${forwardUnitCoach ? '?coach=add-unit' : ''}`);
 	}
 
-	let search = $state('');
-	let typeFilter = $state('');
-	let statusFilter = $state('');
+	// Filter/search state persisted in the URL so it survives navigating away and back (and browser
+	// Back/Forward, which remounts and re-seeds from these params).
+	let search = $state(readGridParam(page.url.searchParams, 'q'));
+	let typeFilter = $state(readGridParam(page.url.searchParams, 'type'));
+	let statusFilter = $state(readGridParam(page.url.searchParams, 'status'));
+
+	$effect(() => {
+		syncGridUrl({ q: search, type: typeFilter, status: statusFilter });
+	});
 
 	const propertiesQuery = createQuery(() => ({
 		queryKey: ['properties', portfolioId],
