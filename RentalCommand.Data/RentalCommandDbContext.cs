@@ -1220,11 +1220,17 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Currency).IsRequired().HasMaxLength(10);
             entity.Property(e => e.Provider).IsRequired().HasMaxLength(50);
             entity.Property(e => e.ProviderPaymentIntentId).HasMaxLength(200);
+            entity.Property(e => e.IdempotencyKey).HasMaxLength(200);
             entity.Property(e => e.FailureReason).HasMaxLength(1000);
             // Unique index on ProviderPaymentIntentId — filtered so nulls don't collide.
             entity.HasIndex(e => e.ProviderPaymentIntentId)
                   .IsUnique()
                   .HasFilter("\"ProviderPaymentIntentId\" IS NOT NULL");
+            // Unique index on IdempotencyKey — DB-level backstop so a retry of the same charge can
+            // never persist a second transaction row even if the application-level recovery races.
+            entity.HasIndex(e => e.IdempotencyKey)
+                  .IsUnique()
+                  .HasFilter("\"IdempotencyKey\" IS NOT NULL");
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PaymentId);
             entity.HasOne(e => e.Payment)

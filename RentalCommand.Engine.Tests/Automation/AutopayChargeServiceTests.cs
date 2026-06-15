@@ -104,6 +104,51 @@ public class AutopayChargeServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task IsIdempotent_DoesNotReChargeWhenAttemptWithSameKeyAlreadyExists()
+    {
+        // H-1 regression (real money): a prior hourly cycle charged Stripe and recorded a Pending
+        // transaction carrying this charge's deterministic idempotency key, then the process died
+        // before anything flipped the row. The NEXT cycle must recognise that prior attempt by its
+        // IdempotencyKey and NOT create a second charge — no duplicate tenant debit.
+        var lease = SeedLease(tenantId: 10);
+        var payment = SeedDueRent(lease);
+        SeedEnrollment(lease, tenantId: 10, active: true);
+
+        // Deterministic key the service derives for this exact due charge (payment id + period).
+        var idempotencyKey = $"autopay-{payment.Id}-{payment.PeriodKey}";
+
+        var priorAttempt = new PaymentTransaction
+        {
+            PortfolioId = PortfolioId,
+            PaymentId = payment.Id,
+            Amount = payment.Amount,
+            Provider = "stripe",
+            IdempotencyKey = idempotencyKey,
+            // No ProviderPaymentIntentId: models the crash window where the charge had returned but
+            // the intent id was never persisted. Recovery must key off IdempotencyKey, not the intent.
+            ProviderPaymentIntentId = null,
+            Status = PaymentTransactionStatus.Pending,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.PaymentTransactions.Add(priorAttempt);
+        _ctx.Db.SaveChanges();
+        var priorId = priorAttempt.Id;
+
+        var sut = BuildService(enabled: true);
+
+        var charged = await sut.ChargeDueAsync();
+
+        // No second charge initiated, and Stripe was never called (no network in this harness).
+        charged.Should().Be(0);
+        // Exactly one transaction still exists — the original — proving no duplicate row/charge.
+        var rows = _ctx.Db.PaymentTransactions.Where(t => t.PaymentId == payment.Id).ToList();
+        rows.Should().ContainSingle();
+        rows[0].Id.Should().Be(priorId);
+        rows[0].IdempotencyKey.Should().Be(idempotencyKey);
+    }
+
+    [Fact]
     public async Task SkipsFuturePayments_NotYetDue()
     {
         var lease = SeedLease(tenantId: 10);
