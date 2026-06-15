@@ -46,7 +46,7 @@ class _AiTabState extends ConsumerState<AiTab>
               color: theme.colorScheme.primary,
             ),
             const SizedBox(width: 6),
-            const Text('AI Assistant'),
+            const Text('Assistant'),
           ],
         ),
         bottom: TabBar(
