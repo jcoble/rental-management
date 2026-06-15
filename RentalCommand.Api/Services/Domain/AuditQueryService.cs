@@ -30,7 +30,7 @@ public class AuditQueryService : IAuditQueryService
         CancellationToken ct = default)
     {
         var rows = await FilteredPage(portfolioId, operation, entityType, entityId, query).ToListAsync(ct);
-        var userNames = await ResolveActorNamesAsync(rows, ct);
+        var userNames = await ResolveActorNamesAsync(portfolioId, rows, ct);
         return rows.Select(r => AuditEntryResponse.FromEntity(r, _describer, _diff, userNames)).ToList();
     }
 
@@ -43,7 +43,7 @@ public class AuditQueryService : IAuditQueryService
         CancellationToken ct = default)
     {
         var rows = await FilteredPage(portfolioId, operation, entityType, entityId, query).ToListAsync(ct);
-        var userNames = await ResolveActorNamesAsync(rows, ct);
+        var userNames = await ResolveActorNamesAsync(portfolioId, rows, ct);
         return rows.Select(r => AdminAuditEntryResponse.FromEntity(r, _describer, userNames)).ToList();
     }
 
@@ -54,9 +54,11 @@ public class AuditQueryService : IAuditQueryService
     /// when a user later renames), so the friendly label is resolved at read time — that's what keeps
     /// the History card from showing "User #1". Rows that already carry an <c>ActorLabel</c>, or that
     /// have no user id (system/AI actors), are skipped. Empty when there is nothing to resolve.
+    /// The resolution is scoped to <paramref name="portfolioId"/> as a defensive guard so an actor
+    /// email from another portfolio can never surface through the History card.
     /// </summary>
     private async Task<IReadOnlyDictionary<int, string>> ResolveActorNamesAsync(
-        IReadOnlyList<Core.Entities.AuditLog> rows, CancellationToken ct)
+        int portfolioId, IReadOnlyList<Core.Entities.AuditLog> rows, CancellationToken ct)
     {
         var ids = rows
             .Where(r => string.IsNullOrWhiteSpace(r.ActorLabel) && r.UserId.HasValue)
@@ -71,7 +73,7 @@ public class AuditQueryService : IAuditQueryService
 
         var resolved = await _db.Users
             .AsNoTracking()
-            .Where(u => ids.Contains(u.Id))
+            .Where(u => ids.Contains(u.Id) && u.PortfolioId == portfolioId)
             .Select(u => new { u.Id, u.DisplayName, u.Email })
             .ToListAsync(ct);
 
@@ -112,7 +114,7 @@ public class AuditQueryService : IAuditQueryService
         {
             var resolved = await _db.Users
                 .AsNoTracking()
-                .Where(u => actorUserIds.Contains(u.Id))
+                .Where(u => actorUserIds.Contains(u.Id) && u.PortfolioId == portfolioId)
                 .Select(u => new { u.Id, u.DisplayName, u.Email })
                 .ToListAsync(ct);
             userNames = resolved.ToDictionary(
