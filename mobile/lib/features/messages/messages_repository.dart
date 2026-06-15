@@ -45,7 +45,14 @@ class MessagesRepository {
       final response = await _dio.get<Map<String, dynamic>>(
         tenantMode ? '/portal/conversations/$id' : '/conversations/$id',
       );
-      return Conversation.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Conversation.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -70,7 +77,14 @@ class MessagesRepository {
                 'channels': channels,
               },
       );
-      return Conversation.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Conversation.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -91,7 +105,14 @@ class MessagesRepository {
             ? {'body': body}
             : {'body': body, 'channels': channels},
       );
-      return Conversation.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Conversation.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

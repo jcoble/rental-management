@@ -38,6 +38,9 @@ import '../messages/messages_repository.dart';
 import '../money/money_screen.dart';
 import '../money/money_snapshot_card.dart';
 import '../money/overdue_screen.dart';
+import '../onboarding/getting_started_provider.dart';
+import '../onboarding/getting_started_screen.dart';
+import '../onboarding/getting_started_tasks.dart';
 import '../portal/tenant_account_history_screen.dart';
 import '../portal/tenant_portal_repository.dart';
 import '../portal/tenant_work_order_detail_screen.dart';
@@ -304,7 +307,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
           : FloatingActionButton(
         heroTag: 'home-capture-fab',
               onPressed: _openCapture,
-              tooltip: 'Capture',
+              tooltip: 'Scan / Add',
               elevation: 2,
               child: const Icon(Symbols.add_a_photo_rounded, fill: 1),
             ),
@@ -449,10 +452,38 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
   /// Rent items the tenant can pay online: anything not already settled.
   static const _settledStatuses = {'Paid', 'Waived', 'Refunded', 'Cancelled'};
 
-  Future<void> _open(String url) async {
+  /// Opens [url] in an external browser. Returns true on success; on a malformed
+  /// URL or when no browser/handler is available (or `launchUrl` throws), it
+  /// snackbars a clear message and returns false so a caller never treats a
+  /// silent dead-end as success. Mirrors the vendor/work-order launch pattern.
+  Future<bool> _open(String url) async {
+    final messenger = ScaffoldMessenger.of(context);
+    const failureMessage =
+        "Couldn't open the payment page. Make sure you have a web browser "
+        'installed, then try again.';
     final uri = Uri.tryParse(url);
-    if (uri == null) return;
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (uri == null) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text(failureMessage)));
+      return false;
+    }
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text(failureMessage)));
+      }
+      return ok;
+    } catch (_) {
+      if (mounted) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text(failureMessage)));
+      }
+      return false;
+    }
   }
 
   /// Starts hosted Checkout for one rent item and opens it in the browser.
@@ -493,9 +524,13 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
       final url = await ref
           .read(tenantPortalRepositoryProvider)
           .autopayEnroll(leaseId);
-      if (url.isNotEmpty) await _open(url);
-      // The tenant finishes setup in the browser; refresh status on return.
-      ref.invalidate(tenantAutopayStatusProvider(leaseId));
+      // Only refresh status if the browser actually opened — otherwise the
+      // tenant never reached the hosted setup, so there's nothing new to read
+      // (and _open has already told them the browser couldn't open).
+      if (url.isNotEmpty && await _open(url)) {
+        // The tenant finishes setup in the browser; refresh status on return.
+        ref.invalidate(tenantAutopayStatusProvider(leaseId));
+      }
     } on ApiException catch (e) {
       messenger
         ..hideCurrentSnackBar()
@@ -748,7 +783,7 @@ class _PayItemCard extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    '${payment.type.isEmpty ? 'Rent' : payment.type} · $dueLabel',
+                    '${payment.type.isEmpty ? 'Rent' : paymentTypeLabel(payment.type)} · $dueLabel',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: isLate ? cs.error : cs.onSurfaceVariant,
                     ),
@@ -1285,7 +1320,7 @@ class _HomeTab extends ConsumerWidget {
           ),
           IconButton(
             icon: const Icon(Icons.auto_awesome_outlined),
-            tooltip: 'AI Assistant',
+            tooltip: 'Assistant',
             onPressed: onOpenAssistant,
           ),
           IconButton(
@@ -1333,6 +1368,9 @@ class _HomeTab extends ConsumerWidget {
                       onAddExpense: onOpenCapture,
                     ),
                     const SizedBox(height: 32),
+
+                    // ── Getting started checklist (hides when all done) ───
+                    const _GettingStartedCard(),
 
                     // ── Today section header ──────────────────────────────
                     Text(
@@ -1729,6 +1767,166 @@ class _EmptyInlineCard extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(child: Text(text)),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Getting-started checklist card (M-10)
+// ---------------------------------------------------------------------------
+
+/// Persistent "Getting started" nudge on the landlord dashboard. Shows the
+/// onboarding checklist's progress and opens the full checklist on tap. Mirrors
+/// the web `GettingStartedCard`: it renders NOTHING (zero height) while the
+/// signals are still loading or errored (no layout jank / no flash of an
+/// "all to-do" card) AND once every task is complete, so it never nags a
+/// set-up landlord.
+class _GettingStartedCard extends ConsumerWidget {
+  const _GettingStartedCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final progress = ref.watch(gettingStartedProgressProvider);
+    // Hidden until data settles, and hidden once everything's done.
+    if (progress == null || progress.allDone) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final fraction = progress.totalCount == 0
+        ? 0.0
+        : progress.doneCount / progress.totalCount;
+
+    void openChecklist() => Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => const GettingStartedScreen(),
+          ),
+        );
+
+    // The next not-yet-done task, surfaced inline as a one-tap hint.
+    GettingStartedTask? nextTask;
+    final signals = ref.watch(gettingStartedSignalsProvider).value;
+    if (signals != null) {
+      for (final task in kGettingStartedTasks) {
+        if (!task.isComplete(signals)) {
+          nextTask = task;
+          break;
+        }
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24),
+      child: Card(
+        color: cs.primaryContainer.withValues(alpha: 0.35),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: openChecklist,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: cs.primary.withValues(alpha: 0.14),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(Symbols.checklist_rounded,
+                          color: cs.primary, size: 22, fill: 1),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Getting started',
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'A short checklist to get your rentals set up — '
+                            'each step takes you to the right spot.',
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: cs.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(Symbols.chevron_right_rounded,
+                        color: cs.onSurfaceVariant),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Text(
+                      '${progress.coreDoneCount} of ${progress.coreTotalCount} '
+                      'essentials',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: cs.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (progress.allCoreDone)
+                      Text(
+                        'Core setup complete',
+                        style: theme.textTheme.labelMedium?.copyWith(
+                          color: cs.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: LinearProgressIndicator(
+                    value: fraction,
+                    minHeight: 8,
+                    backgroundColor: cs.surfaceContainerHighest,
+                  ),
+                ),
+                if (nextTask != null) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: cs.surface.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(nextTask.icon,
+                            size: 18, color: cs.primary, fill: 1),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Next: ${nextTask.label}',
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     );

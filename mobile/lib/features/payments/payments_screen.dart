@@ -468,7 +468,7 @@ class _TypeChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return _Chip(
-      label: type,
+      label: paymentTypeLabel(type),
       bg: colorScheme.secondaryContainer,
       fg: colorScheme.onSecondaryContainer,
     );
@@ -822,7 +822,10 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
                       decoration: const InputDecoration(labelText: 'Type'),
                       items: _types
                           .map(
-                            (t) => DropdownMenuItem(value: t, child: Text(t)),
+                            (t) => DropdownMenuItem(
+                              value: t,
+                              child: Text(paymentTypeLabel(t)),
+                            ),
                           )
                           .toList(),
                       onChanged: (v) {

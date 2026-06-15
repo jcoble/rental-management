@@ -48,7 +48,14 @@ class RecurringMaintenanceRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/recurring-maintenance/$id');
-      return RecurringMaintenanceTask.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return RecurringMaintenanceTask.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -62,7 +69,14 @@ class RecurringMaintenanceRepository {
         '/recurring-maintenance',
         data: data,
       );
-      return RecurringMaintenanceTask.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return RecurringMaintenanceTask.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -78,7 +92,14 @@ class RecurringMaintenanceRepository {
         '/recurring-maintenance/$id',
         data: data,
       );
-      return RecurringMaintenanceTask.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return RecurringMaintenanceTask.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -91,7 +112,14 @@ class RecurringMaintenanceRepository {
         '/recurring-maintenance/$id/active',
         data: {'isActive': isActive},
       );
-      return RecurringMaintenanceTask.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return RecurringMaintenanceTask.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

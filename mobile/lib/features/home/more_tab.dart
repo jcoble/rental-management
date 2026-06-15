@@ -12,6 +12,7 @@ import '../leases/leases_list_screen.dart';
 import '../recurring_maintenance/recurring_maintenance_list_screen.dart';
 import '../money/expenses_list_screen.dart';
 import '../notices/notices_screen.dart';
+import '../onboarding/getting_started_screen.dart';
 import '../owner_reports/owner_reports_screen.dart';
 import '../payments/payments_screen.dart';
 import '../properties/properties_tab.dart';
@@ -64,6 +65,12 @@ class _MoreTabState extends State<MoreTab> {
       title: 'Rentals',
       items: [
         _BrowseItem(
+          icon: Symbols.rocket_launch_rounded,
+          label: 'Getting started',
+          subtitle: 'Set-up checklist for your rentals',
+          builder: (_) => const GettingStartedScreen(),
+        ),
+        _BrowseItem(
           icon: Symbols.apartment_rounded,
           label: 'Properties',
           subtitle: 'Buildings, units and details',
@@ -90,7 +97,9 @@ class _MoreTabState extends State<MoreTab> {
       ],
     ),
     _BrowseGroup(
-      title: 'Operations',
+      // "Work" is the frozen cross-surface group name (web nav group "Work";
+      // see Docs/label-glossary.md). Was "Operations" on mobile Browse (aligned).
+      title: 'Work',
       items: [
         _BrowseItem(
           icon: Symbols.event_repeat_rounded,

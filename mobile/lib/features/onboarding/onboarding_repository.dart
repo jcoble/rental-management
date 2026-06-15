@@ -20,7 +20,14 @@ class OnboardingRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/portfolio/sandbox-state');
-      return SandboxState.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return SandboxState.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -34,7 +41,14 @@ class OnboardingRepository {
         '/portfolio/onboarding-choice',
         data: {'mode': mode.wire},
       );
-      return SandboxState.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return SandboxState.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
