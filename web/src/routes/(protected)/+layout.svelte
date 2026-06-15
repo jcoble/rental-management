@@ -9,6 +9,8 @@
 	import { useInvalidateOnSignalR } from '$lib/realtime/invalidate';
 	import { CLIENT_HUB_URL } from '$lib/config';
 	import AppShell from '$lib/components/AppShell.svelte';
+	import CoachOverlay from '$lib/components/onboarding/CoachOverlay.svelte';
+	import CoachTrigger from '$lib/components/onboarding/CoachTrigger.svelte';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
@@ -79,3 +81,8 @@
 </script>
 
 <AppShell>{@render children()}</AppShell>
+
+<!-- Getting-started coachmark layer: a checklist deep-link (?coach=<key>) spotlights the matching
+     data-coach element on whatever page it lands on. Mounted once for the whole authenticated app. -->
+<CoachTrigger />
+<CoachOverlay />
