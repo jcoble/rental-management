@@ -246,7 +246,7 @@
 		<div class="mt-4 flex justify-end gap-2">
 			<Button data-testid="tenant-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
 			<Button data-testid="tenant-form-save" onclick={submit} disabled={saveMutation.isPending}>
-				{saveMutation.isPending ? 'Saving…' : 'Save Tenant'}
+				{saveMutation.isPending ? 'Saving…' : 'Save tenant'}
 			</Button>
 		</div>
 	</Dialog.Content>

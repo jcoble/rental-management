@@ -37,7 +37,7 @@
 >
 	<div class="flex items-center justify-between border-b border-border px-4 py-3">
 		<div>
-			<h2 class="text-sm font-semibold">AI Assistant</h2>
+			<h2 class="text-sm font-semibold">Assistant</h2>
 			<p class="text-xs text-muted-foreground">Ask about properties, tenants, work orders, and accounting.</p>
 		</div>
 		<div class="flex items-center gap-1">

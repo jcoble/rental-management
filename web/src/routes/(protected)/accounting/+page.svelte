@@ -20,6 +20,7 @@
 	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
+	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -724,7 +725,7 @@
 				variant="outline"
 				size="sm"
 				onclick={(ev) => { ev.stopPropagation(); openMarkPaid(t); }}
-			>Mark Paid</Button>
+			>Mark paid</Button>
 		{/if}
 		{#if t.kind !== 'Bank'}
 			<Button
@@ -1144,11 +1145,11 @@
 			<div class="grid grid-cols-2 gap-2">
 				<Select.Root type="single" bind:value={paymentForm.paymentType}>
 					<Select.Trigger class="w-full" data-testid="payment-type-input">
-						{paymentForm.paymentType || 'Select type'}
+						{paymentForm.paymentType ? paymentTypeLabel(paymentForm.paymentType) : 'Select type'}
 					</Select.Trigger>
 					<Select.Content>
 						{#each PAYMENT_TYPES as t}
-							<Select.Item value={t} label={t}>{t}</Select.Item>
+							<Select.Item value={t} label={paymentTypeLabel(t)}>{paymentTypeLabel(t)}</Select.Item>
 						{/each}
 					</Select.Content>
 				</Select.Root>
@@ -1166,7 +1167,7 @@
 		</div>
 		<Dialog.Footer>
 			<Button data-testid="payment-form-cancel" variant="outline" onclick={closePaymentForm}>Cancel</Button>
-			<Button data-testid="payment-form-save" onclick={submitPayment} disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save Payment'}</Button>
+			<Button data-testid="payment-form-save" onclick={submitPayment} disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save payment'}</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
@@ -1419,7 +1420,7 @@
 		</div>
 		<Dialog.Footer>
 			<Button data-testid="expense-form-cancel" variant="outline" onclick={closeExpenseForm}>Cancel</Button>
-			<Button data-testid="expense-form-save" onclick={submitExpense} disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save Expense'}</Button>
+			<Button data-testid="expense-form-save" onclick={submitExpense} disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save expense'}</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
@@ -1436,7 +1437,7 @@
 <ConfirmDialog
 	open={paymentDeleteTarget !== null}
 	title="Delete payment"
-	message={paymentDeleteTarget ? `Delete this ${money(paymentDeleteTarget.amount)} ${paymentDeleteTarget.paymentType} charge?` : ''}
+	message={paymentDeleteTarget ? `Delete this ${money(paymentDeleteTarget.amount)} ${paymentTypeLabel(paymentDeleteTarget.paymentType).toLowerCase()} charge?` : ''}
 	busy={deletePaymentMutation.isPending}
 	testid="payment-delete"
 	onconfirm={() => paymentDeleteTarget && deletePaymentMutation.mutate(paymentDeleteTarget.id)}
