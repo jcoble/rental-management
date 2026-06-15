@@ -5,13 +5,13 @@
 	import { ai, type BriefingBullet } from '$lib/api/endpoints/ai';
 	import { messages } from '$lib/api/endpoints/messages';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
-	import { properties } from '$lib/api/endpoints/properties';
 	import type { Dashboard } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, Sparkles, MessageSquare, HandCoins, Receipt, PiggyBank, Rocket, ArrowRight, ChevronRight, CircleCheckBig, ListChecks } from '@lucide/svelte';
+	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, Sparkles, MessageSquare, HandCoins, Receipt, PiggyBank, ArrowRight, ChevronRight, CircleCheckBig, ListChecks } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import AIBadge from '$lib/components/shared/AIBadge.svelte';
+	import GettingStartedCard from '$lib/components/onboarding/GettingStartedCard.svelte';
 	import { formatDateOnly } from '$lib/utils/date';
 
 	const dashboardQuery = createQuery(() => ({
@@ -34,21 +34,6 @@
 		queryKey: ['dashboard-work-orders', getCurrentPortfolioId()],
 		queryFn: () => workOrders.list(getCurrentPortfolioId(), { take: 10, sort: '-requestedAt' }),
 	}));
-	// Used only to detect an empty portfolio for the setup-wizard entry banner.
-	const propertiesQuery = createQuery(() => ({
-		queryKey: ['dashboard-properties-count', getCurrentPortfolioId()],
-		queryFn: () => properties.list(getCurrentPortfolioId(), { take: 1 }),
-	}));
-	// Empty = the query resolved with zero properties (avoid flashing the banner while loading).
-	const isEmptyPortfolio = $derived(propertiesQuery.isSuccess && (propertiesQuery.data?.length ?? 0) === 0);
-	// The setup banner points at /onboarding, which is live-only. Sandbox is pre-seeded demo data,
-	// so suppress the "finish setup" banner there.
-	const sandboxQuery = createQuery(() => ({
-		queryKey: ['sandbox-state', getCurrentPortfolioId()],
-		queryFn: () => portfolios.sandboxState(),
-		staleTime: 60_000,
-	}));
-	const isSandbox = $derived(sandboxQuery.data?.isSandbox === true);
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
@@ -235,28 +220,10 @@
 			</Card.Content>
 		</Card.Root>
 
-		{#if isEmptyPortfolio && !isSandbox}
-			<!-- Empty-portfolio entry point into the guided setup wizard (live accounts only) -->
-			<Card.Root class="m3-motion-enter mb-6 border-primary/40 bg-primary/8" style="--m3-motion-index: 1" data-testid="dashboard-onboarding-banner">
-				<Card.Content class="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
-					<div class="flex items-start gap-3">
-						<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--m3-shape-large)] bg-primary/15 text-primary">
-							<Rocket class="h-5 w-5" />
-						</div>
-						<div>
-							<p class="font-semibold text-foreground">Finish setting up your portfolio</p>
-							<p class="mt-0.5 text-sm text-muted-foreground">
-								Add your first property, tenants, and lease in a few guided steps — the computer does the typing.
-							</p>
-						</div>
-					</div>
-					<Button href="/onboarding" class="shrink-0 gap-2" data-testid="dashboard-onboarding-cta">
-						Start setup
-						<ArrowRight class="h-4 w-4" />
-					</Button>
-				</Card.Content>
-			</Card.Root>
-		{/if}
+		<!-- Persistent "Getting started" checklist nudge. Self-managing: shows progress + the next steps
+		     (each deep-links and spotlights the exact control) and hides once everything is done. Works
+		     in both Sandbox and Live; supersedes the old empty-only "finish setup" banner. -->
+		<GettingStartedCard />
 
 		<!-- Today's Briefing — the AI moat, promoted to the top, full width. Two distinct halves:
 		     the AI voice (what the computer is saying) and the action list (what to do today). -->

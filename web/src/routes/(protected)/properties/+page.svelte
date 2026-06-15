@@ -232,6 +232,9 @@
 		data-testid="properties-header"
 	/>
 
+	<!-- data-coach anchor: the getting-started "add a unit" step lands here and spotlights the list so
+	     the user opens a property, then adds units on its detail page. -->
+	<div data-coach="open-property-for-units">
 	<DataGrid
 		data={list}
 		{columns}
@@ -268,12 +271,13 @@
 					</Select.Content>
 				</Select.Root>
 			</div>
-			<Button data-testid="property-create-button" class="gap-2 shrink-0" onclick={openCreate}>
+			<Button data-testid="property-create-button" data-coach="add-property" class="gap-2 shrink-0" onclick={openCreate}>
 				<Plus class="h-4 w-4" />
 				New Property
 			</Button>
 		{/snippet}
 	</DataGrid>
+	</div>
 </div>
 
 <Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>

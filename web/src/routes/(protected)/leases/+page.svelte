@@ -264,7 +264,7 @@
 					</Select.Content>
 				</Select.Root>
 			</div>
-			<Button data-testid="lease-create-button" class="shrink-0 gap-2" onclick={openCreate}>
+			<Button data-testid="lease-create-button" data-coach="add-lease" class="shrink-0 gap-2" onclick={openCreate}>
 				<Plus class="h-4 w-4" />
 				New Lease
 			</Button>
