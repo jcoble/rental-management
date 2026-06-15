@@ -23,6 +23,20 @@ Future<Vendor?> showDispatchVendorSheet(
   );
 }
 
+/// Opens a vendor picker (no dispatch/text) and resolves to the chosen [Vendor],
+/// or `null` if dismissed. Used by the work-order "Call a vendor" action so the
+/// caller can dial the selected vendor's number.
+Future<Vendor?> showSelectVendorSheet(BuildContext context) {
+  return showModalBottomSheet<Vendor>(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (_) => const _SelectVendorSheet(),
+  );
+}
+
 class _DispatchVendorSheet extends ConsumerStatefulWidget {
   const _DispatchVendorSheet({required this.workOrderId});
 
@@ -191,6 +205,87 @@ class _DispatchVendorSheetState extends ConsumerState<_DispatchVendorSheet> {
                 ),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Vendor picker that returns the chosen vendor (no dispatch). Tapping a vendor
+/// resolves the sheet immediately so the caller can act on it (e.g. place a call).
+class _SelectVendorSheet extends ConsumerWidget {
+  const _SelectVendorSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
+    final vendorsAsync = ref.watch(vendorsProvider);
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Call a vendor',
+            style: theme.textTheme.titleLarge
+                ?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Pick a vendor to call from your phone.',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: cs.onSurfaceVariant),
+          ),
+          const SizedBox(height: 16),
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * 0.45,
+            ),
+            child: vendorsAsync.when(
+              loading: () => const Padding(
+                padding: EdgeInsets.all(24),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+              error: (e, _) => Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  e is ApiException ? e.message : e.toString(),
+                  style: TextStyle(color: cs.error),
+                ),
+              ),
+              data: (vendors) {
+                if (vendors.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 24),
+                    child: Text(
+                      'No vendors yet. Add a vendor on the web first.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: cs.onSurfaceVariant),
+                    ),
+                  );
+                }
+                return ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: vendors.length,
+                  separatorBuilder: (_, _) => const SizedBox(height: 6),
+                  itemBuilder: (_, i) => _VendorPickTile(
+                    vendor: vendors[i],
+                    selected: false,
+                    onTap: () => Navigator.of(context).pop(vendors[i]),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
           ),
         ],
       ),
