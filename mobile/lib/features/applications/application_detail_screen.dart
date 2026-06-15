@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
+import '../tenants/tenant_detail_screen.dart';
 import 'applications_models.dart';
 import 'applications_repository.dart';
 import 'applications_shared.dart';
@@ -335,17 +336,37 @@ class _DetailBody extends StatelessWidget {
             color: cs.tertiaryContainer,
             child: Padding(
               padding: const EdgeInsets.all(14),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.how_to_reg_outlined,
-                      color: cs.onTertiaryContainer),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Approved — tenant #$createdTenantId created. '
-                      'Find them in Tenants to set up a lease.',
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(color: cs.onTertiaryContainer),
+                  Row(
+                    children: [
+                      Icon(Icons.how_to_reg_outlined,
+                          color: cs.onTertiaryContainer),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Approved — tenant #$createdTenantId created. '
+                          'Open the tenant to set up a lease.',
+                          style: theme.textTheme.bodyMedium
+                              ?.copyWith(color: cs.onTertiaryContainer),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.tonalIcon(
+                      onPressed: () => Navigator.of(context).push<void>(
+                        MaterialPageRoute<void>(
+                          builder: (_) => TenantDetailLoaderScreen(
+                            tenantId: createdTenantId!,
+                          ),
+                        ),
+                      ),
+                      icon: const Icon(Icons.person_outline, size: 18),
+                      label: const Text('View tenant'),
                     ),
                   ),
                 ],

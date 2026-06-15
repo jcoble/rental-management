@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
+import '../leases/lease_detail_screen.dart';
 import 'properties_repository.dart';
 
 String _formatCurrency(double amount) {
@@ -26,6 +27,39 @@ const _monthNames = [
 
 String _formatDate(DateTime d) =>
     '${_monthNames[d.month]} ${d.day}, ${d.year}';
+
+/// Loads a property by id, then shows [PropertyDetailScreen]. Use this when the
+/// caller only has a property id (e.g. a lease, which carries `propertyId` but
+/// not the full model).
+class PropertyDetailLoaderScreen extends ConsumerWidget {
+  const PropertyDetailLoaderScreen({super.key, required this.propertyId});
+
+  final int propertyId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(propertyDetailProvider(propertyId));
+    return async.when(
+      loading: () => const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      ),
+      error: (e, _) => Scaffold(
+        appBar: AppBar(title: const Text('Property')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              e is ApiException ? e.message : e.toString(),
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        ),
+      ),
+      data: (property) => PropertyDetailScreen(property: property),
+    );
+  }
+}
 
 /// Detail screen for a single property.
 ///
@@ -58,6 +92,15 @@ class _PropertyDetailScreenState
       ref.read(unitsProvider(widget.property.id).notifier).refresh(),
       ref.read(propertyLeasesProvider(widget.property.id).notifier).refresh(),
     ]);
+  }
+
+  /// The active lease for [unitId] from the property's leases, or null. Used to
+  /// drill from an occupied unit to its current lease.
+  Lease? _activeLeaseForUnit(List<Lease> leases, int unitId) {
+    for (final l in leases) {
+      if (l.unitId == unitId && l.status.toLowerCase() == 'active') return l;
+    }
+    return null;
   }
 
   void _showAddUnitSheet(BuildContext context) {
@@ -149,11 +192,15 @@ class _PropertyDetailScreenState
                     ),
                   );
                 }
+                // The property's leases (when loaded) let an occupied unit drill
+                // through to its active lease.
+                final leases = leasesAsync.asData?.value ?? const <Lease>[];
                 return Column(
                   children: units
                       .map(
                         (u) => _UnitTile(
                           unit: u,
+                          activeLease: _activeLeaseForUnit(leases, u.id),
                           onEdit: () => _showEditUnitSheet(context, u),
                         ),
                       )
@@ -338,20 +385,35 @@ class _KeyValue extends StatelessWidget {
 // ── Unit tile ─────────────────────────────────────────────────────────────────
 
 class _UnitTile extends StatelessWidget {
-  const _UnitTile({required this.unit, required this.onEdit});
+  const _UnitTile({
+    required this.unit,
+    required this.onEdit,
+    this.activeLease,
+  });
 
   final Unit unit;
   final VoidCallback onEdit;
+
+  /// The unit's active lease, when occupied — enables drill-through to it.
+  final Lease? activeLease;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final isOccupied = unit.status.toLowerCase() == 'occupied';
+    final lease = activeLease;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
+        onTap: lease == null
+            ? null
+            : () => Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (_) => LeaseDetailScreen(lease: lease),
+                  ),
+                ),
         leading: CircleAvatar(
           radius: 20,
           backgroundColor: isOccupied
@@ -371,8 +433,11 @@ class _UnitTile extends StatelessWidget {
               ?.copyWith(fontWeight: FontWeight.w600),
         ),
         subtitle: Text(
-          '${unit.bedrooms} bd / ${unit.bathrooms} ba  ·  '
-          '${_formatCurrency(unit.marketRent)}/mo',
+          lease != null && lease.tenantName != null
+              ? '${unit.bedrooms} bd / ${unit.bathrooms} ba  ·  '
+                  '${lease.tenantName} · tap for lease'
+              : '${unit.bedrooms} bd / ${unit.bathrooms} ba  ·  '
+                  '${_formatCurrency(unit.marketRent)}/mo',
           style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
         ),
         trailing: Row(
@@ -424,38 +489,48 @@ class _LeaseTile extends StatelessWidget {
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    lease.tenantName ?? 'Lease #${lease.leaseNumber}',
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(fontWeight: FontWeight.w600),
+      child: InkWell(
+        onTap: () => Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => LeaseDetailScreen(lease: lease),
+          ),
+        ),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      lease.tenantName ?? 'Lease #${lease.leaseNumber}',
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
                   ),
-                ),
-                Text(
-                  _formatCurrency(lease.monthlyRent),
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: colorScheme.primary,
+                  Text(
+                    _formatCurrency(lease.monthlyRent),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: colorScheme.primary,
+                    ),
                   ),
-                ),
-                const Text('/mo', style: TextStyle(fontSize: 12)),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Unit ${lease.unitNumber ?? lease.unitId}  ·  '
-              '${_formatDate(lease.startDate)} – ${_formatDate(lease.endDate)}',
-              style: TextStyle(
-                  fontSize: 12, color: colorScheme.onSurfaceVariant),
-            ),
-          ],
+                  const Text('/mo', style: TextStyle(fontSize: 12)),
+                  Icon(Icons.chevron_right,
+                      size: 18, color: colorScheme.onSurfaceVariant),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Unit ${lease.unitNumber ?? lease.unitId}  ·  '
+                '${_formatDate(lease.startDate)} – ${_formatDate(lease.endDate)}',
+                style: TextStyle(
+                    fontSize: 12, color: colorScheme.onSurfaceVariant),
+              ),
+            ],
+          ),
         ),
       ),
     );
