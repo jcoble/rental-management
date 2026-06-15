@@ -416,16 +416,16 @@ public class AccountingService : IAccountingService
 
         if (!string.IsNullOrWhiteSpace(query.Status))
         {
-            // Case-insensitive equality DB-side via ILIKE with no wildcards (an exact, collation-
-            // independent match) rather than LOWER(col) = LOWER(@v), so the predicate stays sargable.
-            var status = query.Status.Trim();
-            rows = rows.Where(r => EF.Functions.ILike(r.Status, status));
+            // Case-insensitive equality computed DB-side (LOWER(col) = @lowered) — portable across
+            // Npgsql and the SQLite test provider, and never pulls the UNION into memory to compare.
+            var status = query.Status.Trim().ToLower();
+            rows = rows.Where(r => r.Status.ToLower() == status);
         }
 
         if (!string.IsNullOrWhiteSpace(query.Category))
         {
-            var category = query.Category.Trim();
-            rows = rows.Where(r => EF.Functions.ILike(r.Category, category));
+            var category = query.Category.Trim().ToLower();
+            rows = rows.Where(r => r.Category.ToLower() == category);
         }
 
         if (query.PropertyId.HasValue)
@@ -447,17 +447,18 @@ public class AccountingService : IAccountingService
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
-            // DB-side case-insensitive contains via ILIKE %term% (Npgsql translates to the native
-            // ILIKE operator), matching the search convention used across the other services. This
-            // keeps the filter Postgres-side and lets trigram indexes serve it, instead of the
-            // LOWER(col).Contains(...) shape that forced a sequential scan over the UNION.
-            var like = $"%{query.Search.Trim()}%";
+            // DB-side case-insensitive contains via LOWER(col) LIKE %lowered-term%. This shape
+            // translates on both Npgsql and the SQLite test provider and is served by a
+            // `lower(col) gin_trgm_ops` trigram index on Postgres — unlike the previous
+            // col.ToLower().Contains(...) form, which EF can translate but which forces a
+            // sequential scan over the UNION rather than using an index.
+            var like = $"%{query.Search.Trim().ToLower()}%";
             rows = rows.Where(r =>
-                EF.Functions.ILike(r.Description, like) ||
-                (r.PropertyName != null && EF.Functions.ILike(r.PropertyName, like)) ||
-                (r.Counterparty != null && EF.Functions.ILike(r.Counterparty, like)) ||
-                (r.Reference != null && EF.Functions.ILike(r.Reference, like)) ||
-                (r.Notes != null && EF.Functions.ILike(r.Notes, like)));
+                EF.Functions.Like(r.Description.ToLower(), like) ||
+                (r.PropertyName != null && EF.Functions.Like(r.PropertyName.ToLower(), like)) ||
+                (r.Counterparty != null && EF.Functions.Like(r.Counterparty.ToLower(), like)) ||
+                (r.Reference != null && EF.Functions.Like(r.Reference.ToLower(), like)) ||
+                (r.Notes != null && EF.Functions.Like(r.Notes.ToLower(), like)));
         }
 
         rows = query.SortField switch
