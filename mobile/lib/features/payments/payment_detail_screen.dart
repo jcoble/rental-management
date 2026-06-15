@@ -3,8 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../leases/lease_detail_screen.dart';
+import '../leases/leases_repository.dart';
 import '../money/money_format.dart';
 import 'payments_repository.dart';
+import 'record_payment_sheet.dart';
 
 /// A single payment, fetched fresh by id so push deep-links and ledger taps can
 /// open it without a preloaded model.
@@ -49,21 +52,15 @@ class _PaymentBody extends ConsumerWidget {
 
   Future<void> _markPaid(BuildContext context, WidgetRef ref) async {
     final messenger = ScaffoldMessenger.of(context);
-    try {
-      final today = DateTime.now().toIso8601String().split('T').first;
-      await ref.read(paymentsRepositoryProvider).markPaid(
-            payment.id,
-            paidDate: today,
-          );
-      ref.invalidate(paymentDetailProvider(payment.id));
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(content: Text('Marked paid.')));
-    } on ApiException catch (e) {
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(content: Text(e.message)));
-    }
+    final updated =
+        await showRecordPaymentSheet(context, ref, payment: payment);
+    if (updated == null) return;
+    ref.invalidate(paymentDetailProvider(payment.id));
+    // Keep any lease payments section in sync after an inline record.
+    ref.invalidate(leasePaymentsProvider(payment.leaseId));
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Payment recorded.')));
   }
 
   Future<void> _edit(BuildContext context, WidgetRef ref) async {
@@ -114,6 +111,7 @@ class _PaymentBody extends ConsumerWidget {
           value: payment.leaseNumber != null
               ? 'Lease ${payment.leaseNumber}'
               : 'Lease #${payment.leaseId}',
+          onTap: () => _openLease(context, ref),
         ),
         _DetailRow(label: 'Due', value: dateFmt(payment.dueDate)),
         if (payment.paidDate != null)
@@ -177,19 +175,33 @@ class _PaymentBody extends ConsumerWidget {
     if (lower == 'late' || lower == 'overdue') return cs.onErrorContainer;
     return cs.onSurfaceVariant;
   }
+
+  /// Opens the lease this payment belongs to. We only carry the lease id on a
+  /// payment, so push a screen that fetches the full lease via
+  /// [leaseDetailProvider] and then shows the standard lease detail.
+  void _openLease(BuildContext context, WidgetRef ref) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => LeaseDetailLoaderScreen(leaseId: payment.leaseId),
+      ),
+    );
+  }
 }
 
 class _DetailRow extends StatelessWidget {
-  const _DetailRow({required this.label, required this.value});
+  const _DetailRow({required this.label, required this.value, this.onTap});
 
   final String label;
   final String value;
+
+  /// When set, the row becomes tappable (drill-through) and shows a chevron.
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
-    return Padding(
+    final row = Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -208,12 +220,17 @@ class _DetailRow extends StatelessWidget {
               value,
               style: theme.textTheme.bodyMedium?.copyWith(
                 fontWeight: FontWeight.w600,
+                color: onTap != null ? cs.primary : null,
               ),
             ),
           ),
+          if (onTap != null)
+            Icon(Icons.chevron_right, size: 18, color: cs.onSurfaceVariant),
         ],
       ),
     );
+    if (onTap == null) return row;
+    return InkWell(onTap: onTap, child: row);
   }
 }
 
@@ -257,30 +274,56 @@ class _EditPaymentSheet extends ConsumerStatefulWidget {
 class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _amountCtrl;
+  late final TextEditingController _referenceCtrl;
   late final TextEditingController _notesCtrl;
   late DateTime _dueDate;
   late String _type;
   late String _status;
+  String? _method;
   bool _saving = false;
   String? _error;
 
   static const _types = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
   static const _statuses = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
+  static const _methods = [
+    'Check',
+    'Cash',
+    'Bank transfer',
+    'ACH',
+    'Credit card',
+    'Money order',
+    'Online portal',
+    'Other',
+  ];
+
+  /// Method dropdown options = the standard list plus any existing value not in
+  /// it, so an imported / scanned method still shows.
+  List<String> get _methodOptions {
+    final options = [..._methods];
+    final current = _method;
+    if (current != null && current.isNotEmpty && !options.contains(current)) {
+      options.insert(0, current);
+    }
+    return options;
+  }
 
   @override
   void initState() {
     super.initState();
     final p = widget.payment;
     _amountCtrl = TextEditingController(text: p.amount.toStringAsFixed(2));
+    _referenceCtrl = TextEditingController(text: p.externalReference ?? '');
     _notesCtrl = TextEditingController(text: p.notes ?? '');
     _dueDate = p.dueDate.year > 1 ? p.dueDate : DateTime.now();
     _type = _types.contains(p.type) ? p.type : 'Rent';
     _status = _statuses.contains(p.status) ? p.status : 'Scheduled';
+    _method = (p.method != null && p.method!.isNotEmpty) ? p.method : null;
   }
 
   @override
   void dispose() {
     _amountCtrl.dispose();
+    _referenceCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
   }
@@ -303,6 +346,7 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
       _error = null;
     });
     try {
+      final reference = _referenceCtrl.text.trim();
       await ref.read(paymentsRepositoryProvider).updatePayment(
         widget.payment.id,
         {
@@ -310,6 +354,8 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
           'dueDate': _dueDate.toIso8601String().split('T').first,
           'type': _type,
           'status': _status,
+          if (_method != null) 'method': _method,
+          'externalReference': reference,
           'notes': _notesCtrl.text.trim(),
         },
       );
@@ -410,6 +456,23 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _method,
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Method'),
+                items: _methodOptions
+                    .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+                    .toList(),
+                onChanged: (v) => setState(() => _method = v),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _referenceCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Reference / confirmation #',
+                ),
               ),
               const SizedBox(height: 12),
               TextFormField(

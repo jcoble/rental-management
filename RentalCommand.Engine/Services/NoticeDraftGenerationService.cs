@@ -57,8 +57,9 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
             try
             {
                 // GenerateAsync is idempotent (it skips notice types that already have an open Draft
-                // for the lease), so re-running daily never produces duplicates.
-                var result = await _notices.GenerateAsync(portfolioId, ct);
+                // for the lease), so re-running daily never produces duplicates. The autopilot runs
+                // portfolio-wide (no per-tenant/type scoping).
+                var result = await _notices.GenerateAsync(portfolioId, ct: ct);
                 created += result.CreatedCount;
             }
             catch (Exception ex)

@@ -4,6 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/models/models.dart';
+import '../payments/payment_detail_screen.dart';
+import '../payments/payments_repository.dart';
+import '../payments/record_payment_sheet.dart';
+import '../properties/property_detail_screen.dart';
+import '../tenants/tenant_detail_screen.dart';
 import 'lease_ledger_view.dart';
 import 'leases_list_screen.dart';
 import 'leases_repository.dart';
@@ -26,6 +31,39 @@ String _formatCurrency(double amount) {
     buf.write(s.substring(i, i + 3));
   }
   return buf.toString();
+}
+
+/// Loads a lease by id, then shows [LeaseDetailScreen]. Use this when the caller
+/// only has a lease id (e.g. a payment, which carries `leaseId` but not the full
+/// model). Mirrors the by-id loader pattern used elsewhere in the app.
+class LeaseDetailLoaderScreen extends ConsumerWidget {
+  const LeaseDetailLoaderScreen({super.key, required this.leaseId});
+
+  final int leaseId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(leaseDetailProvider(leaseId));
+    return async.when(
+      loading: () => const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      ),
+      error: (e, _) => Scaffold(
+        appBar: AppBar(title: const Text('Lease')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              e is ApiException ? e.message : e.toString(),
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        ),
+      ),
+      data: (lease) => LeaseDetailScreen(lease: lease),
+    );
+  }
 }
 
 /// Detail screen for a single lease.
@@ -343,6 +381,10 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
                 ),
               ),
             ),
+            const SizedBox(height: 12),
+
+            // ── Payments ───────────────────────────────────────────────────
+            _LeasePaymentsSection(leaseId: _lease.id),
             const SizedBox(height: 12),
 
             // ── Lease agreement (PDF) ──────────────────────────────────────
@@ -787,18 +829,58 @@ class _LeaseHeaderCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        lease.tenantName ?? 'Lease #${lease.leaseNumber}',
-                        style: theme.textTheme.titleLarge
-                            ?.copyWith(fontWeight: FontWeight.w700),
+                      // Tenant — tappable drill-through to the tenant page.
+                      InkWell(
+                        onTap: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => TenantDetailLoaderScreen(
+                              tenantId: lease.tenantId,
+                            ),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                lease.tenantName ??
+                                    'Lease #${lease.leaseNumber}',
+                                style: theme.textTheme.titleLarge?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: colorScheme.primary,
+                                ),
+                              ),
+                            ),
+                            Icon(Icons.chevron_right,
+                                size: 18, color: colorScheme.onSurfaceVariant),
+                          ],
+                        ),
                       ),
                       if (lease.propertyName != null) ...[
                         const SizedBox(height: 2),
-                        Text(
-                          '${lease.propertyName}'
-                          '${lease.unitNumber != null ? ' · Unit ${lease.unitNumber}' : ''}',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                              color: colorScheme.onSurfaceVariant),
+                        // Property/unit — tappable drill-through to the property.
+                        InkWell(
+                          onTap: () => Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (_) => PropertyDetailLoaderScreen(
+                                propertyId: lease.propertyId,
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  '${lease.propertyName}'
+                                  '${lease.unitNumber != null ? ' · Unit ${lease.unitNumber}' : ''}',
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                      color: colorScheme.primary),
+                                ),
+                              ),
+                              Icon(Icons.chevron_right,
+                                  size: 16,
+                                  color: colorScheme.onSurfaceVariant),
+                            ],
+                          ),
                         ),
                       ],
                     ],
@@ -1054,6 +1136,185 @@ class _StatusActions extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+// ── Payments section ──────────────────────────────────────────────────────────
+
+/// Lists this lease's payments (newest first) with drill-through to each payment
+/// and an inline "Record" action on unpaid rows. Backs lease → payments
+/// drill-through (and, via the property unit tile, unit → payments).
+class _LeasePaymentsSection extends ConsumerWidget {
+  const _LeasePaymentsSection({required this.leaseId});
+
+  final int leaseId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final async = ref.watch(leasePaymentsProvider(leaseId));
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Payments',
+              style: theme.textTheme.titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            async.when(
+              loading: () => const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+              error: (e, _) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(
+                  e is ApiException ? e.message : "Couldn't load payments.",
+                  style: TextStyle(color: cs.error, fontSize: 13),
+                ),
+              ),
+              data: (payments) {
+                if (payments.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      'No payments recorded for this lease yet.',
+                      style: TextStyle(color: cs.onSurfaceVariant),
+                    ),
+                  );
+                }
+                return Column(
+                  children: [
+                    for (final p in payments)
+                      _LeasePaymentTile(payment: p, leaseId: leaseId),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LeasePaymentTile extends ConsumerWidget {
+  const _LeasePaymentTile({required this.payment, required this.leaseId});
+
+  final Payment payment;
+  final int leaseId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final isPaid = payment.status.toLowerCase() == 'paid';
+
+    Color statusBg() {
+      final lower = payment.status.toLowerCase();
+      if (lower == 'paid') return cs.primaryContainer;
+      if (lower == 'late' || lower == 'overdue') return cs.errorContainer;
+      return cs.surfaceContainerHighest;
+    }
+
+    Color statusFg() {
+      final lower = payment.status.toLowerCase();
+      if (lower == 'paid') return cs.onPrimaryContainer;
+      if (lower == 'late' || lower == 'overdue') return cs.onErrorContainer;
+      return cs.onSurfaceVariant;
+    }
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      elevation: 0,
+      color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
+      child: InkWell(
+        onTap: () => Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => PaymentDetailScreen(paymentId: payment.id),
+          ),
+        ),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          _formatCurrency(payment.amount),
+                          style: theme.textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: statusBg(),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            payment.status,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: statusFg(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${payment.type.isEmpty ? 'Payment' : payment.type}  ·  '
+                      'Due ${_fmt(payment.dueDate)}',
+                      style: TextStyle(
+                          fontSize: 12, color: cs.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+              if (!isPaid)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: FilledButton.tonal(
+                    onPressed: () async {
+                      final updated = await showRecordPaymentSheet(
+                        context,
+                        ref,
+                        payment: payment,
+                      );
+                      if (updated != null) {
+                        ref.invalidate(leasePaymentsProvider(leaseId));
+                      }
+                    },
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      textStyle: const TextStyle(fontSize: 12),
+                    ),
+                    child: const Text('Record'),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
