@@ -10,6 +10,7 @@ import '../../features/auth/register_screen.dart';
 import '../../features/auth/reset_password_screen.dart';
 import '../../features/home/home_shell.dart';
 import '../../features/onboarding/onboarding_choice_screen.dart';
+import '../../features/onboarding/onboarding_live_setup_screen.dart';
 import '../../features/onboarding/onboarding_seeding_screen.dart';
 import '../../features/maintenance/work_order_detail_screen.dart';
 import '../../features/maintenance/work_orders_screen.dart';
@@ -27,6 +28,7 @@ const _resetPasswordPath = '/reset-password';
 const _homePath = '/';
 const _chooseSetupPath = '/choose-setup';
 const _settingUpPath = '/setting-up';
+const _liveSetupPath = '/live-setup';
 
 /// Routes an unauthenticated user is allowed to sit on without being bounced
 /// back to `/login`.
@@ -143,6 +145,12 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: _settingUpPath,
         builder: (context, state) => const OnboardingSeedingScreen(),
+      ),
+      GoRoute(
+        // Guided first step after the Live choice (I8): "add your first
+        // property". Not a gate path — reached once the gate is cleared.
+        path: _liveSetupPath,
+        builder: (context, state) => const OnboardingLiveSetupScreen(),
       ),
 
       // ── Addressable detail / section routes ───────────────────────────────

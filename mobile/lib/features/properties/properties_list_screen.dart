@@ -6,6 +6,26 @@ import '../../core/api/api_exception.dart';
 import 'properties_repository.dart';
 import 'property_detail_screen.dart';
 
+/// Opens the "New property" bottom sheet and resolves to `true` once a property
+/// was created (the sheet pops `true` on save), or `null`/`false` if dismissed.
+///
+/// Shared by the properties-list FAB and the first-login Live setup screen so
+/// both use the same create flow (no duplicate form). [onSaved] still fires on
+/// save for callers that want to refresh a list in place.
+Future<bool?> showAddPropertySheet(
+  BuildContext context, {
+  VoidCallback? onSaved,
+}) {
+  return showModalBottomSheet<bool>(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (_) => _AddPropertySheet(onSaved: onSaved),
+  );
+}
+
 /// Full-page list of properties with pull-to-refresh and an add-property FAB.
 class PropertiesListScreen extends ConsumerStatefulWidget {
   const PropertiesListScreen({super.key});
@@ -37,15 +57,9 @@ class _PropertiesListScreenState
   }
 
   void _showAddSheet(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => _AddPropertySheet(
-        onSaved: () => ref.read(propertiesProvider.notifier).refresh(),
-      ),
+    showAddPropertySheet(
+      context,
+      onSaved: () => ref.read(propertiesProvider.notifier).refresh(),
     );
   }
 
@@ -303,9 +317,9 @@ class _ErrorBody extends StatelessWidget {
 // ── Add Property Bottom Sheet ─────────────────────────────────────────────────
 
 class _AddPropertySheet extends ConsumerStatefulWidget {
-  const _AddPropertySheet({required this.onSaved});
+  const _AddPropertySheet({this.onSaved});
 
-  final VoidCallback onSaved;
+  final VoidCallback? onSaved;
 
   @override
   ConsumerState<_AddPropertySheet> createState() => _AddPropertySheetState();
@@ -361,8 +375,8 @@ class _AddPropertySheetState extends ConsumerState<_AddPropertySheet> {
         'postalCode': _zipCtrl.text.trim(),
       });
 
-      widget.onSaved();
-      if (mounted) Navigator.of(context).pop();
+      widget.onSaved?.call();
+      if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } finally {
