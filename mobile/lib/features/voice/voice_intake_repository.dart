@@ -70,7 +70,14 @@ class VoiceIntakeRepository {
         path,
         data: formData,
       );
-      return VoiceTurn.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return VoiceTurn.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

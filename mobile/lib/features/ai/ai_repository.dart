@@ -20,7 +20,14 @@ class AiRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/ai/briefing');
-      return BriefingResponse.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return BriefingResponse.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -44,7 +51,14 @@ class AiRepository {
           if (delivery != null) ...delivery.toJson(),
         },
       );
-      return AskResponse.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return AskResponse.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

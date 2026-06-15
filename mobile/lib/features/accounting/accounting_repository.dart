@@ -22,7 +22,14 @@ class AccountingRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/accounting/snapshot');
-      return MoneySnapshot.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return MoneySnapshot.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -34,7 +41,14 @@ class AccountingRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/accounting/past-due');
-      return PastDueResult.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return PastDueResult.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

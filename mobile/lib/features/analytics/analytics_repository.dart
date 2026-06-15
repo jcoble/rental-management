@@ -123,7 +123,14 @@ class AnalyticsRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/analytics/overview');
-      return AnalyticsOverview.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return AnalyticsOverview.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

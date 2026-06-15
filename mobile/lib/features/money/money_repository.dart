@@ -48,7 +48,14 @@ class MoneyRepository {
         '/accounting/transactions',
         queryParameters: params,
       );
-      return AccountingTransactionsPage.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return AccountingTransactionsPage.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -75,7 +82,14 @@ class MoneyRepository {
   Future<Expense> getExpense(int id) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>('/expenses/$id');
-      return Expense.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Expense.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -89,7 +103,14 @@ class MoneyRepository {
         '/expenses/$id',
         data: data,
       );
-      return Expense.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Expense.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
