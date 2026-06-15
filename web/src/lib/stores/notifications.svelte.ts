@@ -1,7 +1,15 @@
+import { browser } from '$app/environment';
 import { notifications } from '$lib/api/endpoints/notifications';
 import { signalRService } from '$lib/realtime/signalr';
 import type { NotificationItem } from '$lib/api/types/notification';
 
+/**
+ * Module-scoped singleton (L-13). Under adapter-node the server shares module scope across all
+ * concurrent requests, so a server-side write would bleed one user's notifications into another's
+ * SSR render. All writes flow from {@link initialize} (network + SignalR, inherently client-only)
+ * or from user interactions; the entry point is hard-guarded to the browser. Reads stay unguarded —
+ * components render the 0/[] defaults during SSR.
+ */
 class NotificationStore {
 	unreadCount = $state(0);
 	recentNotifications = $state<NotificationItem[]>([]);
@@ -11,7 +19,8 @@ class NotificationStore {
 	private unsubscribe: (() => void) | null = null;
 
 	async initialize() {
-		if (this.initialized) return;
+		// Client-only: never seed/subscribe during SSR (shared server module scope → cross-request leak).
+		if (!browser || this.initialized) return;
 		this.initialized = true;
 		await this.refresh();
 
