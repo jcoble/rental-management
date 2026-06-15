@@ -14,8 +14,12 @@
  *    (the list endpoints), so a task auto-checks the moment the underlying record exists — there are
  *    NO per-task / per-row API calls. {@link GettingStartedSignals} is the small bag of those facts.
  *
- * The explanation copy is deliberately shared with the onboarding wizard registry
- * (`wizard-steps.ts`, treated read-only here) so the two stay consistent — see {@link wizardStep}.
+ * Where a task maps to an onboarding-wizard step, its explanation copy is pulled from the shared wizard
+ * registry (`wizard-steps.ts`, treated read-only here) via {@link wizardExplanation} so the checklist and
+ * the wizard speak with one voice. Two tasks have NO matching wizard step — `unit` (units are a sub-step
+ * of the wizard's Property panel) and `automations` (configured in Settings, not the wizard) — so they
+ * carry their own copy here. The `fallback` passed to {@link wizardExplanation} is what shows if a step
+ * key is ever renamed, so the row is never blank.
  *
  * Keep `key` values stable: they are persisted in `localStorage` (manual "mark done"/"skip" overrides)
  * and used in deep-link URLs.
@@ -109,7 +113,10 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 	{
 		key: 'portfolio',
 		label: 'Name your rental business',
-		eli5: 'Give your whole operation a name — it shows on every report and reminder. Just use what you call your rentals.',
+		eli5: wizardExplanation(
+			'portfolio',
+			'Give your whole operation a name — it shows on every report and reminder. Just use what you call your rentals.'
+		),
 		icon: Building,
 		route: '/settings',
 		// Settings is tabbed: the hash must be a TAB KEY so the right tab opens (settings/+page.svelte's
@@ -120,11 +127,14 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		isComplete: (s) => s.portfolioNamed,
 	},
 	{
+		// Auto-completes: onboarding creates a primary "self-owner" from the landlord's own account, so
+		// this is checked off without a manual "add an owner" step. The /owners deep-link is for ADDING
+		// more owners (co-owners, an LLC) once the first one already exists.
 		key: 'owner',
-		label: 'Add who owns the properties',
+		label: 'Confirm who owns the properties',
 		eli5: wizardExplanation(
 			'owner',
-			'The owner is the person or company that legally holds the property — used later on owner reports and tax forms.'
+			'The owner is the person or company that legally holds the property — used later on owner reports and tax forms. We start this off as you; add co-owners or an LLC anytime.'
 		),
 		icon: UserCircle2,
 		route: '/owners',
@@ -136,7 +146,10 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 	{
 		key: 'property',
 		label: 'Add your first property',
-		eli5: 'A property is one building or address. Add it once, then put the rentable units inside it.',
+		eli5: wizardExplanation(
+			'property',
+			'A property is one building or address. Add it once, then put the rentable units inside it.'
+		),
 		icon: Home,
 		route: '/properties',
 		coach: 'add-property',
@@ -145,6 +158,8 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		isComplete: (s) => s.propertyCount > 0,
 	},
 	{
+		// No matching wizard step: units are a sub-step of the wizard's Property panel, so this carries
+		// its own copy rather than pulling from the registry.
 		key: 'unit',
 		label: 'Add a unit to that property',
 		eli5: 'A unit is a single rentable space. A house is one unit; a duplex is two. Open a property to add its units.',
@@ -172,7 +187,10 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 	{
 		key: 'lease',
 		label: 'Create the first lease',
-		eli5: 'A lease ties a tenant to a unit and sets the rent, dates, and deposit. This is what drives rent charges and reminders.',
+		eli5: wizardExplanation(
+			'lease',
+			'A lease ties a tenant to a unit and sets the rent, dates, and deposit. This is what drives rent charges and reminders.'
+		),
 		icon: FileText,
 		route: '/leases',
 		coach: 'add-lease',
@@ -183,7 +201,10 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 	{
 		key: 'notifications',
 		label: 'Set where alerts go',
-		eli5: 'Pick the email where rent reminders and your daily briefing land. Leave it blank to use your login email.',
+		eli5: wizardExplanation(
+			'notifications',
+			'Pick the email where rent reminders and your daily briefing land. Leave it blank to use your login email.'
+		),
 		icon: Bell,
 		route: '/settings',
 		hash: 'notifications',
@@ -192,6 +213,8 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		isComplete: (s) => s.hasNotificationEmail,
 	},
 	{
+		// No matching wizard step: automations are configured in Settings, not the wizard, so this
+		// carries its own copy rather than pulling from the registry.
 		key: 'automations',
 		label: 'Turn on automatic reminders',
 		eli5: 'Let the app charge rent, add late fees, and warn about expiring leases on its own — so you do not have to remember.',

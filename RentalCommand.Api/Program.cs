@@ -332,6 +332,16 @@ using (var scope = app.Services.CreateScope())
         var demoSeeder = scope.ServiceProvider.GetRequiredService<DemoDataSeeder>();
         await demoSeeder.SeedAsync();
     }
+
+    // One-off self-owner backfill — gives pre-feature portfolios with no owners a primary self-owner.
+    // OFF by default and idempotent. It WRITES owner rows, so it must be explicitly enabled per
+    // environment (set Backfill:SelfOwners=true) and is intentionally NOT run unsupervised on prod.
+    if (app.Configuration.GetValue<bool>("Backfill:SelfOwners", false))
+    {
+        var backfill = scope.ServiceProvider
+            .GetRequiredService<RentalCommand.Api.Services.Domain.SelfOwnerBackfillService>();
+        await backfill.RunAsync();
+    }
 }
 
 // Behind Traefik (TLS terminator) the API receives plain HTTP on :8080, so honor X-Forwarded-Proto

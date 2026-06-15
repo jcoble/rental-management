@@ -138,6 +138,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<RentalCommand.Core.Interfaces.ISandboxGuard, RentalCommand.Data.SandboxGuard>();
         services.AddScoped<ISandboxService, SandboxService>();
 
+        // --- self-owner provisioning (the landlord IS the first owner) ---
+        // Used by registration, Google sign-in, and go-live to auto-create the primary owner; the
+        // backfill service is a one-off catch-up for portfolios created before the feature.
+        services.AddScoped<ISelfOwnerProvisioner, SelfOwnerProvisioner>();
+        services.AddScoped<SelfOwnerBackfillService>();
+
         return services;
     }
 }

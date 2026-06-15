@@ -59,6 +59,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
     private readonly GoogleAuthOptions _options;
     private readonly RentalCommandDbContext _db;
     private readonly DemoDataSeeder _demoSeeder;
+    private readonly Domain.ISelfOwnerProvisioner _selfOwnerProvisioner;
     private readonly ILogger<GoogleAuthService> _logger;
 
     private const string TokenEndpoint = "https://oauth2.googleapis.com/token";
@@ -71,6 +72,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
         IOptions<GoogleAuthOptions> options,
         RentalCommandDbContext db,
         DemoDataSeeder demoSeeder,
+        Domain.ISelfOwnerProvisioner selfOwnerProvisioner,
         ILogger<GoogleAuthService> logger)
     {
         _userManager = userManager;
@@ -79,6 +81,7 @@ public sealed class GoogleAuthService : IGoogleAuthService
         _options = options.Value;
         _db = db;
         _demoSeeder = demoSeeder;
+        _selfOwnerProvisioner = selfOwnerProvisioner;
         _logger = logger;
     }
 
@@ -391,6 +394,13 @@ public sealed class GoogleAuthService : IGoogleAuthService
                     UpdatedAt = ts,
                 });
                 await _db.SaveChangesAsync();
+            }
+
+            // 4) Primary self-owner — the landlord IS the first owner. Idempotent, so this also
+            //    back-fills Google users created before this step on their next login.
+            if (user.PortfolioId is int ownerPid)
+            {
+                await _selfOwnerProvisioner.EnsureSelfOwnerAsync(user, ownerPid);
             }
         }
         catch (Exception ex)
