@@ -22,8 +22,10 @@ public class ScheduleEService : IScheduleEService
     {
         // ── Income ──────────────────────────────────────────────────────────────────────────────
         // Qualifying rent payments: PaymentType == Rent, Status == Paid, PaidDate in the target year.
-        // Grouped by PropertyId via Payment → Lease → Property.
-        var incomeRows = await _db.Payments
+        // Grouped by PropertyId via Payment → Lease → Property and summed SQL-side (one row per
+        // property), not by grouping materialized rows. Payments with no lease/property bucket to the
+        // synthetic "Unassigned" id via the COALESCE-equivalent grouping key.
+        var incomeByProperty = (await _db.Payments
             .AsNoTracking()
             .Where(p =>
                 p.PortfolioId == portfolioId &&
@@ -31,40 +33,30 @@ public class ScheduleEService : IScheduleEService
                 p.Status == PaymentStatus.Paid &&
                 p.PaidDate != null &&
                 p.PaidDate.Value.Year == year)
-            .Select(p => new
-            {
-                PropertyId = (int?)p.Lease!.PropertyId,
-                p.Amount,
-            })
-            .ToListAsync(ct);
-
-        // Build income map: propertyId → total
-        var incomeByProperty = incomeRows
-            .GroupBy(r => r.PropertyId ?? UnassignedPropertyId)
-            .ToDictionary(g => g.Key, g => g.Sum(r => r.Amount));
+            .GroupBy(p => p.Lease != null ? p.Lease.PropertyId : UnassignedPropertyId)
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) })
+            .ToListAsync(ct))
+            .ToDictionary(g => g.PropertyId, g => g.Total);
 
         // ── Expenses ─────────────────────────────────────────────────────────────────────────────
-        // Expenses soft-deleted records are excluded by the global query filter on DbContext.
-        var expenseRows = await _db.Expenses
+        // Soft-deleted records are excluded by the global query filter. Grouped on (property, category)
+        // and summed SQL-side; the flat (propertyId, category, total) rows are reshaped into the nested
+        // map in memory, but no SUM runs in memory.
+        var expenseCategoryTotals = await _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
                 e.IncurredAt.Year == year)
-            .Select(e => new
-            {
-                PropertyId = e.PropertyId ?? UnassignedPropertyId,
-                e.Category,
-                e.Amount,
-            })
+            .GroupBy(e => new { PropertyId = e.PropertyId ?? UnassignedPropertyId, e.Category })
+            .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct);
 
-        // Build expense map: propertyId → category → total
-        var expensesByProperty = expenseRows
-            .GroupBy(e => e.PropertyId)
+        // Build expense map: propertyId → category → total (reshape of the pre-aggregated rows)
+        var expensesByProperty = expenseCategoryTotals
+            .GroupBy(r => r.PropertyId)
             .ToDictionary(
                 g => g.Key,
-                g => g.GroupBy(e => e.Category)
-                       .ToDictionary(cg => cg.Key, cg => cg.Sum(e => e.Amount)));
+                g => g.ToDictionary(r => r.Category, r => r.Total));
 
         // ── Property names ────────────────────────────────────────────────────────────────────────
         // Collect all property ids that appear in income or expenses (excluding the synthetic 0).
