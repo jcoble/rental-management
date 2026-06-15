@@ -45,4 +45,18 @@ public interface IApplicationService
 
     /// <summary>Generates or rotates the portfolio's public application token and returns the apply link.</summary>
     Task<ApplicationLinkResult> GenerateLinkAsync(int portfolioId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the portfolio's editable application-form config (normalized; defaults when unset) plus
+    /// the property/unit options the landlord can choose a default from.
+    /// </summary>
+    Task<FormConfigEditorResponse> GetFormConfigAsync(int portfolioId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Validates and saves the landlord's application-form config onto the portfolio. Throws
+    /// <see cref="ApplicationFormConfigValidationException"/> when the config is invalid (e.g. a default
+    /// property/unit not in the portfolio, a dropdown with no choices). Returns the normalized saved config.
+    /// </summary>
+    Task<ApplicationFormConfigDto> SaveFormConfigAsync(
+        int portfolioId, int userId, SaveFormConfigRequest request, CancellationToken ct = default);
 }

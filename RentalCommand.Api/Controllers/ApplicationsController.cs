@@ -157,4 +157,38 @@ public class ApplicationsController : AuthenticatedPortfolioControllerBase
         var result = await _service.GenerateLinkAsync(GetPortfolioId(), ct);
         return Ok(result);
     }
+
+    /// <summary>
+    /// Returns the landlord's editable application-form configuration (normalized; defaults when never
+    /// set) plus the portfolio's property/unit options for choosing defaults.
+    /// </summary>
+    [HttpGet("form-config")]
+    [ProducesResponseType(typeof(FormConfigEditorResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<FormConfigEditorResponse>> GetFormConfig(CancellationToken ct)
+    {
+        var result = await _service.GetFormConfigAsync(GetPortfolioId(), ct);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Validates and saves the landlord's application-form configuration to the portfolio. Returns 400
+    /// with a plain-language reason when the config is invalid (e.g. a default property/unit not in the
+    /// portfolio, or a dropdown question with no choices).
+    /// </summary>
+    [HttpPut("form-config")]
+    [ProducesResponseType(typeof(ApplicationFormConfigDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<ApplicationFormConfigDto>> SaveFormConfig(
+        [FromBody] SaveFormConfigRequest request, CancellationToken ct)
+    {
+        try
+        {
+            var result = await _service.SaveFormConfigAsync(GetPortfolioId(), GetUserId(), request, ct);
+            return Ok(result);
+        }
+        catch (ApplicationFormConfigValidationException ex)
+        {
+            return BadRequest(new { error = ex.Message, errors = ex.Errors });
+        }
+    }
 }

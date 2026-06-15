@@ -40,9 +40,37 @@ export interface PublicApplicationProperty {
 	units: PublicApplicationUnit[];
 }
 
+/** Allowed custom-question input kinds (matches the API contract). */
+export type CustomFieldType = 'text' | 'number' | 'yesno' | 'select';
+
+/** A landlord-authored custom question on the application form. */
+export interface CustomFieldConfig {
+	id: string;
+	label: string;
+	type: CustomFieldType;
+	required: boolean;
+	options: string[];
+}
+
+/** Normalized application-form configuration the public form renders from. Always complete. */
+export interface ApplicationFormConfig {
+	incomeSources: { enabled: boolean };
+	pets: { enabled: boolean; askDeposit: boolean };
+	customFields: CustomFieldConfig[];
+	defaults: {
+		propertyId: number | null;
+		unitId: number | null;
+		desiredMoveInDate: string | null;
+	};
+	/** Default keys ("propertyId" | "unitId" | "desiredMoveInDate") the applicant may NOT change. */
+	locked: string[];
+}
+
 export interface PublicApplicationContext {
 	managementCompanyName: string;
 	properties: PublicApplicationProperty[];
+	/** Tells the form which fields to render. Defaults (income on, pets off) when the landlord set nothing. */
+	formConfig: ApplicationFormConfig;
 }
 
 /** A single scanned field with its extraction confidence (0–1). */
@@ -83,6 +111,12 @@ export interface SubmitApplicationBody {
 	// Server binds this to a `string?` (jsonb stored as text). Send the serialized JSON
 	// string, NOT a raw object — an object fails System.Text.Json string binding with a 400.
 	idExtractedFields?: string | null;
+	// Configurable-form payloads, each a serialized JSON string (same string-binding rule as
+	// idExtractedFields). incomeSourcesJson = JSON array of { employer, monthlyIncome };
+	// petsJson = JSON object { hasPets, pets[] }; customFieldAnswersJson = JSON object keyed by field id.
+	incomeSourcesJson?: string | null;
+	petsJson?: string | null;
+	customFieldAnswersJson?: string | null;
 	consentGiven: boolean;
 }
 
