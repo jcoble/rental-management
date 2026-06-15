@@ -142,14 +142,69 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
+	// --- Mark Paid modal ---
+	// Capture how the money arrived (method / reference) + when, with smart defaults so one click
+	// is still fast: date = today, method = the last method this user picked (remembered in
+	// localStorage). The mark-paid endpoint accepts paidDate / method / externalReference; the
+	// payment record already carries its own amount, so there's no amount field here.
+	const MARK_PAID_METHODS = ['Cash', 'Check', 'ACH', 'Card', 'Zelle', 'Venmo', 'Other'];
+	const LAST_METHOD_KEY = 'rc.payments.lastMethod';
+	function loadLastMethod(): string {
+		if (typeof localStorage === 'undefined') return '';
+		try {
+			return localStorage.getItem(LAST_METHOD_KEY) ?? '';
+		} catch {
+			return '';
+		}
+	}
+	function rememberLastMethod(method: string) {
+		if (!method || typeof localStorage === 'undefined') return;
+		try {
+			localStorage.setItem(LAST_METHOD_KEY, method);
+		} catch {
+			/* storage may be unavailable */
+		}
+	}
+	const emptyMarkPaid = { paidDate: '', method: '', externalReference: '' };
+	let showMarkPaidForm = $state(false);
+	let markPaidTarget = $state<AccountingTransaction | null>(null);
+	let markPaidForm = $state({ ...emptyMarkPaid });
+
+	function todayLocal(): string {
+		const d = new Date();
+		const p = (n: number) => String(n).padStart(2, '0');
+		return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+	}
+
+	function openMarkPaid(t: AccountingTransaction) {
+		markPaidTarget = t;
+		markPaidForm = { paidDate: todayLocal(), method: loadLastMethod(), externalReference: '' };
+		showMarkPaidForm = true;
+	}
+	function closeMarkPaid() {
+		showMarkPaidForm = false;
+		markPaidTarget = null;
+	}
+
 	const markPaidMutation = createMutation(() => ({
-		mutationFn: (id: number) => payments.markPaid(id, {}),
-		onSuccess: () => {
+		mutationFn: ({ id, data }: { id: number; data: Record<string, unknown> }) => payments.markPaid(id, data),
+		onSuccess: (_r, vars) => {
 			showSuccess('Payment marked paid.');
+			rememberLastMethod(String(vars.data.method ?? ''));
+			closeMarkPaid();
 			invalidatePayments();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	function submitMarkPaid() {
+		if (!markPaidTarget) return;
+		const data: Record<string, unknown> = {};
+		if (markPaidForm.paidDate) data.paidDate = markPaidForm.paidDate;
+		if (markPaidForm.method) data.method = markPaidForm.method;
+		if (markPaidForm.externalReference.trim()) data.externalReference = markPaidForm.externalReference.trim();
+		markPaidMutation.mutate({ id: markPaidTarget.id, data });
+	}
 
 	const deletePaymentMutation = createMutation(() => ({
 		mutationFn: (id: number) => payments.delete(id),
@@ -497,8 +552,8 @@
 		{
 			key: 'actions',
 			title: '',
+			isAction: true,
 			mobileRole: 'hidden',
-			width: '8rem',
 			cell: transactionActionsCell,
 		},
 	];
@@ -623,7 +678,7 @@
 				data-testid="payment-mark-paid"
 				variant="outline"
 				size="sm"
-				onclick={(ev) => { ev.stopPropagation(); markPaidMutation.mutate(t.id); }}
+				onclick={(ev) => { ev.stopPropagation(); openMarkPaid(t); }}
 			>Mark Paid</Button>
 		{/if}
 		{#if t.kind !== 'Bank'}
@@ -1067,6 +1122,58 @@
 		<Dialog.Footer>
 			<Button data-testid="payment-form-cancel" variant="outline" onclick={closePaymentForm}>Cancel</Button>
 			<Button data-testid="payment-form-save" onclick={submitPayment} disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save Payment'}</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- Mark Paid: capture how/when the money arrived. Smart defaults (today + last-used method) keep
+	 it one quick confirm; the payment record carries its own amount so there's no amount field. -->
+<Dialog.Root
+	open={showMarkPaidForm}
+	onOpenChange={(v) => { if (!v) closeMarkPaid(); }}
+>
+	<Dialog.Content class="max-w-md" data-testid="mark-paid-dialog">
+		<Dialog.Header>
+			<Dialog.Title>Mark paid</Dialog.Title>
+			{#if markPaidTarget}
+				<Dialog.Description data-testid="mark-paid-summary">
+					{markPaidTarget.description} · {money(markPaidTarget.amount)}
+				</Dialog.Description>
+			{/if}
+		</Dialog.Header>
+		<div class="space-y-3" data-testid="mark-paid-form">
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Date received</span>
+				<DatePicker testid="mark-paid-date-input" bind:value={markPaidForm.paidDate} placeholder="Date received" />
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Method</span>
+				<Select.Root type="single" bind:value={markPaidForm.method}>
+					<Select.Trigger class="w-full" data-testid="mark-paid-method-input">
+						{markPaidForm.method || 'Select method'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="No method">No method</Select.Item>
+						{#each MARK_PAID_METHODS as m}
+							<Select.Item value={m} label={m}>{m}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Reference</span>
+				<Input
+					data-testid="mark-paid-reference-input"
+					bind:value={markPaidForm.externalReference}
+					placeholder="Check #, confirmation #, etc. (optional)"
+				/>
+			</div>
+		</div>
+		<Dialog.Footer>
+			<Button data-testid="mark-paid-cancel" variant="outline" onclick={closeMarkPaid}>Cancel</Button>
+			<Button data-testid="mark-paid-confirm" onclick={submitMarkPaid} disabled={markPaidMutation.isPending}>
+				{markPaidMutation.isPending ? 'Saving…' : 'Mark paid'}
+			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
