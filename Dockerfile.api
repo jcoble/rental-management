@@ -1,9 +1,12 @@
 # RentalCommand.Api - REST API (PostgreSQL-backed)
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
+# .NET base images are mirrored into our own GHCR (ghcr.io/jcoble/rentalcommand-dotnet-*) so the
+# build box never hits Microsoft MCR's anonymous-pull rate limit (429). Refresh with:
+#   crane copy --platform linux/amd64 mcr.microsoft.com/dotnet/<img>:10.0 ghcr.io/jcoble/rentalcommand-dotnet-<img>:10.0
+FROM ghcr.io/jcoble/rentalcommand-dotnet-aspnet:10.0 AS base
 WORKDIR /app
 EXPOSE 8080
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM ghcr.io/jcoble/rentalcommand-dotnet-sdk:10.0 AS build
 WORKDIR /src
 
 # Copy solution and project files first (better layer caching: restore only
