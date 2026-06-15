@@ -43,8 +43,10 @@ class _BrowseGroup {
 }
 
 /// Grouped, searchable "Browse" screen — the replacement for the flat 17-tile
-/// More list. Groups mirror the web IA (Portfolio / Operations / Money / AI /
-/// Admin). Daily destinations (Today, Money tab, Work tab, Capture) live in the
+/// More list. The Rentals group name is frozen across web + mobile (web nav
+/// `AppShell.svelte` calls the same Properties/Tenants/Leases/Applications group
+/// "Rentals"); see `Docs/label-glossary.md` for the canonical cross-surface
+/// terms. Daily destinations (Today, Money tab, Work tab, Capture) live in the
 /// shell; everything else is discoverable here.
 class MoreTab extends StatefulWidget {
   const MoreTab({super.key});
@@ -59,7 +61,7 @@ class _MoreTabState extends State<MoreTab> {
 
   static final _groups = <_BrowseGroup>[
     _BrowseGroup(
-      title: 'Portfolio',
+      title: 'Rentals',
       items: [
         _BrowseItem(
           icon: Symbols.apartment_rounded,
