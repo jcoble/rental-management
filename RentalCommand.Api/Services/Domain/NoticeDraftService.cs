@@ -81,6 +81,23 @@ public class NoticeDraftService : INoticeDraftService
         }
         var leases = await leaseQuery.ToListAsync(ct);
 
+        // Pre-load the existing open ("Draft") notices for this portfolio ONCE as a
+        // (leaseId, noticeType) set, so the per-lease / per-payment idempotency check below is an
+        // in-memory lookup instead of an AnyAsync round-trip per iteration (N+1). The set is scoped
+        // to the requested tenant's leases when a tenant filter is in play.
+        var existingDraftsQuery = _db.NoticeDrafts
+            .AsNoTracking()
+            .Where(d => d.PortfolioId == portfolioId && d.Status == "Draft");
+        if (tenantId.HasValue)
+        {
+            existingDraftsQuery = existingDraftsQuery.Where(d => d.TenantId == tenantId.Value);
+        }
+        var existingDrafts = (await existingDraftsQuery
+                .Select(d => new { d.LeaseId, d.NoticeType })
+                .ToListAsync(ct))
+            .Select(d => (d.LeaseId, d.NoticeType))
+            .ToHashSet();
+
         foreach (var lease in leases)
         {
             if (lease.Tenant == null) continue;
@@ -88,14 +105,14 @@ public class NoticeDraftService : INoticeDraftService
             var daysToEnd = (lease.EndDate.Date - today).Days;
             if (WantsType("RenewalOffer")
                 && (forced || (daysToEnd >= 0 && daysToEnd <= 75))
-                && !await DraftExistsAsync(portfolioId, lease.Id, "RenewalOffer", created, ct))
+                && !DraftExists(existingDrafts, lease.Id, "RenewalOffer", created))
             {
                 created.Add(await BuildRenewalDraftAsync(portfolioId, lease, daysToEnd, now, ct));
             }
 
             if (WantsType("MoveOutReminder")
                 && (forced || (daysToEnd >= 0 && daysToEnd <= 30))
-                && !await DraftExistsAsync(portfolioId, lease.Id, "MoveOutReminder", created, ct))
+                && !DraftExists(existingDrafts, lease.Id, "MoveOutReminder", created))
             {
                 created.Add(await BuildMoveOutDraftAsync(portfolioId, lease, daysToEnd, now, ct));
             }
@@ -126,7 +143,7 @@ public class NoticeDraftService : INoticeDraftService
             {
                 if (payment.Lease?.Tenant == null) continue;
                 var daysLate = (today - payment.DueDate.Date).Days;
-                if (!await DraftExistsAsync(portfolioId, payment.LeaseId, "LateRentNotice", created, ct))
+                if (!DraftExists(existingDrafts, payment.LeaseId, "LateRentNotice", created))
                 {
                     created.Add(await BuildLateDraftAsync(portfolioId, payment, daysLate, now, ct));
                 }
@@ -217,23 +234,24 @@ public class NoticeDraftService : INoticeDraftService
     /// persisted or already queued this batch. Checked BEFORE composing copy so we never spend an
     /// LLM call (or create a duplicate) for a notice the landlord already has waiting.
     /// </summary>
-    private async Task<bool> DraftExistsAsync(
-        int portfolioId, int leaseId, string noticeType, List<NoticeDraft> created, CancellationToken ct)
+    /// <summary>
+    /// Idempotency check for an open notice of a given (lease, type): true if one was already created
+    /// in THIS run (<paramref name="created"/>) or pre-existed in the DB. The persisted set is loaded
+    /// once up front (<c>existingDrafts</c>), so this is an in-memory lookup — no per-iteration query.
+    /// </summary>
+    private static bool DraftExists(
+        HashSet<(int LeaseId, string NoticeType)> existingDrafts,
+        int leaseId, string noticeType, List<NoticeDraft> created)
     {
-        if (created.Any(d =>
-                d.PortfolioId == portfolioId &&
-                d.LeaseId == leaseId &&
-                d.NoticeType == noticeType &&
-                d.Status == "Draft"))
+        if (existingDrafts.Contains((leaseId, noticeType)))
         {
             return true;
         }
 
-        return await _db.NoticeDrafts.AnyAsync(d =>
-            d.PortfolioId == portfolioId &&
+        return created.Any(d =>
             d.LeaseId == leaseId &&
             d.NoticeType == noticeType &&
-            d.Status == "Draft", ct);
+            d.Status == "Draft");
     }
 
     // ===========================================================================================

@@ -74,6 +74,13 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     // Engine resilience — worker heartbeats written by each background worker every poll cycle
     public DbSet<EngineWorkerHeartbeat> EngineWorkerHeartbeats => Set<EngineWorkerHeartbeat>();
 
+    /// <summary>
+    /// Keyless projection over the <c>vw_accounting_transactions</c> view (UNION ALL of Payments,
+    /// Expenses and unmatched BankTransactions). Read-only; filtered/sorted/paged in the database.
+    /// See <see cref="AccountingTransactionView"/>.
+    /// </summary>
+    public DbSet<AccountingTransactionView> AccountingTransactionViews => Set<AccountingTransactionView>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Configures the ASP.NET Identity schema (AspNetUsers/Roles/etc.) with int keys.
@@ -531,6 +538,13 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Error).HasMaxLength(4000);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.SentAt);
+            // Drain hot path (OutboxDispatchWorker): WHERE SentAt IS NULL AND RetryCount < 5
+            // ORDER BY CreatedAt. A partial index over the unsent rows, ordered by CreatedAt, serves
+            // both the filter and the sort without scanning/sorting the (ever-growing) sent rows.
+            // RetryCount is included so the retry-budget predicate is covered too.
+            entity.HasIndex(e => new { e.CreatedAt, e.RetryCount })
+                  .HasDatabaseName("IX_OutboxMessages_Unsent_CreatedAt")
+                  .HasFilter("\"SentAt\" IS NULL");
             // PortfolioId is optional: system/auth emails are not scoped to any portfolio.
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
@@ -727,6 +741,14 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.LeaseId);
             entity.HasIndex(e => e.Status);
+            // LateFee daily sweep (LateFeeService.AssessAsync) scans ALL portfolios:
+            // WHERE PaymentType = Rent AND PeriodKey IS NOT NULL AND Status IN (Scheduled/Late/Partial)
+            // AND DueDate < today. None of the single-column indexes above cover that, so it degraded
+            // to a sequential scan of the unbounded Payments table. This composite, filtered to the
+            // auto-generated rent rows (PeriodKey IS NOT NULL), covers the predicate.
+            entity.HasIndex(e => new { e.PaymentType, e.Status, e.DueDate })
+                  .HasDatabaseName("IX_Payments_LateFeeSweep")
+                  .HasFilter("\"PeriodKey\" IS NOT NULL");
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.Payments)
                 .HasForeignKey(e => e.PortfolioId)
@@ -1275,6 +1297,84 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Metadata).HasColumnType("jsonb");
             entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.WorkerName).IsUnique();
+        });
+
+        // ----------------------------------------------------------------------------------------
+        // Soft-delete consistency across required relationships (audit M-7, root cause of H-4).
+        //
+        // A soft-deletable principal (Portfolio/Lease/Expense/RentalApplication/WorkOrder, each with
+        // a `DeletedAt == null` global filter) was the REQUIRED end of relationships whose dependent
+        // rows had NO matching filter. EF Core flagged every one of these with warning EF10622
+        // ("required entity is filtered out"). More importantly, the dependents stayed visible after
+        // their principal was soft-deleted: a query of `_db.Payments` referencing only the scalar
+        // `LeaseId` FK never triggered the Lease filter, so soft-deleted leases' payments kept
+        // inflating the overdue/collected/past-due KPIs and produced ghost "who's behind" rows (H-4).
+        //
+        // Fix: give each such dependent a query filter that matches its principal's soft-delete state
+        // by walking the required navigation. Because the relationship is required, EF emits an INNER
+        // JOIN to the (already-filtered) principal set on every query of the dependent — so a row
+        // whose principal is soft-deleted simply disappears everywhere, including the scalar-FK
+        // aggregates. This is the single, declarative source of truth the audit asked for; no per-site
+        // service change and no denormalized DeletedAt column on the leaf tables is required.
+        //
+        // Identity / global / infra tables (AspNet*, AuditLog, OutboxMessage, EngineWorkerHeartbeat,
+        // StripeWebhookEvent) are intentionally NOT filtered here — they are not soft-deletable and
+        // several legitimately outlive any single business row.
+        // ----------------------------------------------------------------------------------------
+
+        // Dependents of Lease (Lease has `DeletedAt == null`). Payment is the H-4 root.
+        modelBuilder.Entity<Payment>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
+        modelBuilder.Entity<AutopayEnrollment>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
+        modelBuilder.Entity<NoticeDraft>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
+        modelBuilder.Entity<OpeningBalance>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
+        modelBuilder.Entity<SecurityDepositHolding>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
+        modelBuilder.Entity<SignatureRequest>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
+
+        // Dependents of Portfolio (Portfolio has `DeletedAt == null`).
+        modelBuilder.Entity<Appointment>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<BankConnection>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<BankTransaction>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<Conversation>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<DeviceToken>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<Inspection>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<Notification>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<NotificationPreference>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<Owner>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<PortalMessage>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<QueuedJob>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<ScanBatch>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<ScanDraft>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<UserAccount>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<VendorDispatch>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<VendorRating>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+
+        // Dependents of RentalApplication (RentalApplication has `DeletedAt == null`); nav is `Application`.
+        modelBuilder.Entity<AdverseActionNotice>().HasQueryFilter(e => e.Application!.DeletedAt == null);
+        modelBuilder.Entity<ScreeningResult>().HasQueryFilter(e => e.Application!.DeletedAt == null);
+
+        // Dependent of Expense (Expense has `DeletedAt == null`).
+        modelBuilder.Entity<ExpenseLineItem>().HasQueryFilter(e => e.Expense!.DeletedAt == null);
+
+        // Dependent of WorkOrder (WorkOrder has `DeletedAt == null`).
+        modelBuilder.Entity<WorkOrderStatusEvent>().HasQueryFilter(e => e.WorkOrder!.DeletedAt == null);
+
+        // Transitive (grandchild) dependents: their direct parent is now itself filtered above, so
+        // EF flags the same EF10622 one level down. Chain the filter through to the root soft-deletable
+        // principal's `DeletedAt` so the whole sub-tree disappears when an ancestor is soft-deleted.
+        modelBuilder.Entity<ConversationMessage>().HasQueryFilter(e => e.Conversation!.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<InspectionItem>().HasQueryFilter(e => e.Inspection!.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<PaymentTransaction>().HasQueryFilter(e => e.Payment!.Lease!.DeletedAt == null);
+        modelBuilder.Entity<SignatureAuditEvent>().HasQueryFilter(e => e.SignatureRequest!.Lease!.DeletedAt == null);
+        modelBuilder.Entity<SignatureSigner>().HasQueryFilter(e => e.SignatureRequest!.Lease!.DeletedAt == null);
+
+        // Keyless projection over the vw_accounting_transactions view (created in the
+        // AddAccountingTransactionsView migration). Read-only; the accounting grid filters, sorts and
+        // pages over it as one SQL statement. Soft-delete + RLS are enforced inside the view SQL (see
+        // AccountingTransactionView). No key — EF must never try to track or write these rows.
+        modelBuilder.Entity<AccountingTransactionView>(entity =>
+        {
+            entity.HasNoKey();
+            entity.ToView("vw_accounting_transactions");
         });
     }
 }

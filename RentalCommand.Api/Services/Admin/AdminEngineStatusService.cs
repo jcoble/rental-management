@@ -86,12 +86,14 @@ public class AdminEngineStatusService : IAdminEngineStatusService
         var now = DateTime.UtcNow;
 
         // Only surface heartbeats for workers we know about (filters out renamed/retired rows).
-        var workers = (await _db.EngineWorkerHeartbeats
-                .AsNoTracking()
-                .ToListAsync(ct))
-            .Where(h => WorkerHealthThresholds.IsKnownWorker(h.WorkerName))
+        // Filter + sort DB-side (WHERE WorkerName IN (...) ORDER BY WorkerName) rather than loading
+        // every heartbeat and filtering in memory.
+        var knownWorkerNames = WorkerHealthThresholds.KnownWorkerNames;
+        var workers = await _db.EngineWorkerHeartbeats
+            .AsNoTracking()
+            .Where(h => knownWorkerNames.Contains(h.WorkerName))
             .OrderBy(h => h.WorkerName)
-            .ToList();
+            .ToListAsync(ct);
 
         var workerDtos = workers.Select(w => new WorkerStatusDto(
             w.WorkerName,

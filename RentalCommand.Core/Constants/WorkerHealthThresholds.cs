@@ -59,4 +59,12 @@ public static class WorkerHealthThresholds
 
     public static bool IsKnownWorker(string? workerName) =>
         !string.IsNullOrWhiteSpace(workerName) && Thresholds.ContainsKey(workerName);
+
+    /// <summary>
+    /// The canonical set of known worker names, for pushing the "known worker" filter into a SQL
+    /// <c>WHERE WorkerName IN (...)</c> instead of materializing every heartbeat and filtering in
+    /// memory. Workers persist their heartbeat under exactly these names (see EngineWorkerBase), so a
+    /// case-sensitive IN match is correct.
+    /// </summary>
+    public static readonly IReadOnlyList<string> KnownWorkerNames = Thresholds.Keys.ToList();
 }

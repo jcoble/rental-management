@@ -54,7 +54,8 @@ public class OwnerStatementService : IOwnerStatementService
         var propertyIds = properties.Select(p => p.Id).ToHashSet();
 
         // ── Rental income: Paid Rent payments in year, keyed by PropertyId via Lease ───────────
-        var incomeRows = await _db.Payments
+        // Grouped + summed SQL-side (one row per property), not by grouping materialized rows.
+        var incomeByProperty = (await _db.Payments
             .AsNoTracking()
             .Where(p =>
                 p.PortfolioId == portfolioId &&
@@ -64,27 +65,23 @@ public class OwnerStatementService : IOwnerStatementService
                 p.PaidDate.Value.Year == year &&
                 p.Lease != null &&
                 propertyIds.Contains(p.Lease!.PropertyId))
-            .Select(p => new { p.Lease!.PropertyId, p.Amount })
-            .ToListAsync(ct);
-
-        var incomeByProperty = incomeRows
-            .GroupBy(r => r.PropertyId)
-            .ToDictionary(g => g.Key, g => g.Sum(r => r.Amount));
+            .GroupBy(p => p.Lease!.PropertyId)
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) })
+            .ToListAsync(ct))
+            .ToDictionary(g => g.PropertyId, g => g.Total);
 
         // ── Expenses in year, keyed by PropertyId ────────────────────────────────────────────────
-        var expenseRows = await _db.Expenses
+        var expensesByProperty = (await _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
                 e.PropertyId != null &&
                 propertyIds.Contains(e.PropertyId!.Value) &&
                 e.IncurredAt.Year == year)
-            .Select(e => new { PropertyId = e.PropertyId!.Value, e.Amount })
-            .ToListAsync(ct);
-
-        var expensesByProperty = expenseRows
-            .GroupBy(e => e.PropertyId)
-            .ToDictionary(g => g.Key, g => g.Sum(e => e.Amount));
+            .GroupBy(e => e.PropertyId!.Value)
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) })
+            .ToListAsync(ct))
+            .ToDictionary(g => g.PropertyId, g => g.Total);
 
         // ── Assemble per-property lines ──────────────────────────────────────────────────────────
         var lines = new List<OwnerStatementPropertyLine>(properties.Count);
@@ -154,8 +151,9 @@ public class OwnerStatementService : IOwnerStatementService
 
         var propertyIds = properties.Select(p => p.Id).ToHashSet();
 
-        // Load income and expenses for those properties.
-        var incomeRows = await _db.Payments
+        // Load income and expenses for those properties — grouped + summed SQL-side (one row per
+        // property each), not by grouping the materialized payment/expense rows in memory.
+        var incomeByProperty = (await _db.Payments
             .AsNoTracking()
             .Where(p =>
                 p.PortfolioId == portfolioId &&
@@ -165,26 +163,22 @@ public class OwnerStatementService : IOwnerStatementService
                 p.PaidDate.Value.Year == year &&
                 p.Lease != null &&
                 propertyIds.Contains(p.Lease!.PropertyId))
-            .Select(p => new { p.Lease!.PropertyId, p.Amount })
-            .ToListAsync(ct);
+            .GroupBy(p => p.Lease!.PropertyId)
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) })
+            .ToListAsync(ct))
+            .ToDictionary(g => g.PropertyId, g => g.Total);
 
-        var incomeByProperty = incomeRows
-            .GroupBy(r => r.PropertyId)
-            .ToDictionary(g => g.Key, g => g.Sum(r => r.Amount));
-
-        var expenseRows = await _db.Expenses
+        var expensesByProperty = (await _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
                 e.PropertyId != null &&
                 propertyIds.Contains(e.PropertyId!.Value) &&
                 e.IncurredAt.Year == year)
-            .Select(e => new { PropertyId = e.PropertyId!.Value, e.Amount })
-            .ToListAsync(ct);
-
-        var expensesByProperty = expenseRows
-            .GroupBy(e => e.PropertyId)
-            .ToDictionary(g => g.Key, g => g.Sum(e => e.Amount));
+            .GroupBy(e => e.PropertyId!.Value)
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) })
+            .ToListAsync(ct))
+            .ToDictionary(g => g.PropertyId, g => g.Total);
 
         // Group properties by owner and compute net for each.
         var propsByOwner = properties.GroupBy(p => p.OwnerId!.Value)

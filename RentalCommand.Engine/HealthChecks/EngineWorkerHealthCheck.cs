@@ -32,14 +32,12 @@ public class EngineWorkerHealthCheck : IHealthCheck
             using var scope = _serviceProvider.CreateScope();
             var dbContext = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
 
-            var heartbeats = await dbContext.EngineWorkerHeartbeats.ToListAsync(cancellationToken);
-
-            if (heartbeats.Count == 0)
-                return HealthCheckResult.Unhealthy("No engine worker heartbeats found.");
-
-            var knownWorkerHeartbeats = heartbeats
-                .Where(hb => WorkerHealthThresholds.IsKnownWorker(hb.WorkerName))
-                .ToList();
+            // Filter to known workers DB-side (WHERE WorkerName IN (...)) rather than loading every
+            // heartbeat row and filtering in memory.
+            var knownWorkerNames = WorkerHealthThresholds.KnownWorkerNames;
+            var knownWorkerHeartbeats = await dbContext.EngineWorkerHeartbeats
+                .Where(hb => knownWorkerNames.Contains(hb.WorkerName))
+                .ToListAsync(cancellationToken);
 
             if (knownWorkerHeartbeats.Count == 0)
                 return HealthCheckResult.Unhealthy("No known engine worker heartbeats found.");
