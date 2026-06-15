@@ -124,6 +124,61 @@ public class MoneySnapshotExplanations
 }
 
 /// <summary>
+/// The "Who's behind" list: one row per lease/tenant currently behind on rent, plus the headline
+/// totals. This is the actionable destination behind the dashboard "tenants behind" KPI — the same
+/// past-due definition powers both, so <see cref="TotalCount"/> always equals the KPI count and the
+/// number of <see cref="Items"/>. Computed DB-side in a single grouped query (no rows loaded to count).
+/// </summary>
+public class PastDueResponse
+{
+    /// <summary>One row per behind lease, ordered by who's been waiting longest (oldest due date first).</summary>
+    public IReadOnlyList<PastDueLeaseResponse> Items { get; set; } = [];
+
+    /// <summary>Number of leases/tenants behind — equal to <see cref="Items"/>.Count and the KPI's PastDueCount.</summary>
+    public int TotalCount { get; set; }
+
+    /// <summary>Total amount past due across all behind leases — equal to the KPI's PastDueAmount.</summary>
+    public decimal TotalPastDueAmount { get; set; }
+}
+
+/// <summary>
+/// One lease/tenant that is behind on rent, with everything the landlord needs to act: who they are,
+/// how much they owe, how many payments are past due, how long they've been late, and a deep-link
+/// anchor to the oldest past-due payment.
+/// </summary>
+public class PastDueLeaseResponse
+{
+    public int LeaseId { get; set; }
+
+    /// <summary>Tenant name on the behind lease (e.g. "Maria Tenant"), or null when not set.</summary>
+    public string? TenantName { get; set; }
+
+    /// <summary>Tenant phone, for a one-tap reminder text; null when not on file.</summary>
+    public string? TenantPhone { get; set; }
+
+    /// <summary>Human lease number (e.g. "L-001").</summary>
+    public string? LeaseNumber { get; set; }
+
+    /// <summary>Property name for context in the list.</summary>
+    public string? PropertyName { get; set; }
+
+    /// <summary>Unit number for context in the list.</summary>
+    public string? UnitNumber { get; set; }
+
+    /// <summary>Total amount this lease is behind (sum of its past-due payments).</summary>
+    public decimal PastDueAmount { get; set; }
+
+    /// <summary>How many of this lease's payments are past due.</summary>
+    public int OverduePaymentCount { get; set; }
+
+    /// <summary>Due date of this lease's oldest past-due payment (drives the "N days late" label).</summary>
+    public DateTime OldestDueDate { get; set; }
+
+    /// <summary>Id of this lease's oldest past-due payment, so the row can deep-link into its detail.</summary>
+    public int OldestPaymentId { get; set; }
+}
+
+/// <summary>
 /// Broader accounting workspace data: ledger entries, property-level P&amp;L, Schedule E totals, and
 /// vendor 1099 review status.
 /// </summary>

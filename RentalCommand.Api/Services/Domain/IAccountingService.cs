@@ -18,6 +18,13 @@ public interface IAccountingService
     /// </summary>
     Task<MoneySnapshotResponse> GetSnapshotAsync(int portfolioId, CancellationToken ct = default);
 
+    /// <summary>
+    /// The "Who's behind" list: one row per lease/tenant currently behind on rent, with amount owed,
+    /// overdue-payment count, and a deep-link anchor. Uses the exact same past-due definition as the
+    /// snapshot KPI's PastDueCount/PastDueAmount, so the list length and the KPI count always agree.
+    /// </summary>
+    Task<PastDueResponse> GetPastDueAsync(int portfolioId, CancellationToken ct = default);
+
     Task<AccountingReportsResponse> GetReportsAsync(int portfolioId, CancellationToken ct = default);
     Task<AccountingTransactionsResponse> GetTransactionsAsync(
         int portfolioId,

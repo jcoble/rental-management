@@ -23,7 +23,9 @@ import '../ai/ai_models.dart';
 import '../ai/ai_repository.dart';
 import '../ai/ai_tab.dart';
 import '../capture/capture_fab_sheet.dart';
+import '../appointments/appointments_screen.dart';
 import '../appointments/tenant_appointments_screen.dart';
+import '../inspections/inspections_list_screen.dart';
 import '../leases/leases_list_screen.dart';
 import '../maintenance/work_order_detail_screen.dart';
 import '../maintenance/work_orders_repository.dart';
@@ -35,7 +37,6 @@ import '../messages/messages_repository.dart';
 import '../money/money_screen.dart';
 import '../money/money_snapshot_card.dart';
 import '../money/overdue_screen.dart';
-import '../payments/payments_screen.dart';
 import '../portal/tenant_account_history_screen.dart';
 import '../portal/tenant_portal_repository.dart';
 import '../portal/tenant_work_order_detail_screen.dart';
@@ -1941,6 +1942,13 @@ class _BulletRow extends StatelessWidget {
   /// the others (which need a fully-loaded model) fall back to their list
   /// screen so the landlord still lands in the right place.
   WidgetBuilder? _destinationFor(BriefingBullet bullet) {
+    // An overdue-rent bullet must land on the actionable "Who's behind" view
+    // (Mark paid / Text / edit per tenant), NOT the generic payments list. The
+    // server tags these with category "RentLate".
+    if (bullet.category == 'RentLate') {
+      return (_) => const OverdueScreen();
+    }
+
     final type = bullet.entityType;
     final id = bullet.entityId;
     if (type == null) return null;
@@ -1950,11 +1958,17 @@ class _BulletRow extends StatelessWidget {
         if (id == null) return null;
         return (_) => WorkOrderDetailScreen(workOrderId: id);
       case 'Payment':
-        return (_) => const PaymentsScreen();
+        return (_) => const OverdueScreen();
       case 'Lease':
         return (_) => const LeasesListScreen();
       case 'Tenant':
         return (_) => const TenantsListScreen();
+      // Appointment/Inspection detail screens need a fully-loaded model (or are a
+      // "run" action), so land on their list — still actionable, never a dead end.
+      case 'Appointment':
+        return (_) => const AppointmentsScreen();
+      case 'Inspection':
+        return (_) => const InspectionsListScreen();
       default:
         return null;
     }

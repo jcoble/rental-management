@@ -28,6 +28,18 @@ class AccountingRepository {
     }
   }
 
+  /// Fetches the "Who's behind" list (one row per behind lease/tenant). Shares
+  /// the snapshot's past-due definition, so the count matches the dashboard KPI.
+  Future<PastDueResult> pastDue() async {
+    try {
+      final response =
+          await _dio.get<Map<String, dynamic>>('/accounting/past-due');
+      return PastDueResult.fromJson(response.data!);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Fetches the year-end accountant packet PDF bytes (Schedule E, P&L, cash
   /// flow, rent roll) for [year], authed via the shared Dio interceptor.
   Future<Uint8List> yearEndPacketBytes(int year) async {
@@ -51,4 +63,11 @@ final accountingRepositoryProvider = Provider<AccountingRepository>((ref) {
 /// The landlord home money snapshot. autoDispose so it refreshes on each visit.
 final moneySnapshotProvider = FutureProvider.autoDispose<MoneySnapshot>((ref) {
   return ref.watch(accountingRepositoryProvider).snapshot();
+});
+
+/// The "Who's behind" list (one row per behind lease/tenant). autoDispose so it
+/// refreshes on each visit; shares the snapshot's past-due definition so its
+/// length always equals the dashboard "tenants behind" KPI.
+final pastDueProvider = FutureProvider.autoDispose<PastDueResult>((ref) {
+  return ref.watch(accountingRepositoryProvider).pastDue();
 });
