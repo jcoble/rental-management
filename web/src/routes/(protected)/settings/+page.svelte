@@ -22,8 +22,10 @@
 	import WalkMeThrough from '$lib/components/onboarding/WalkMeThrough.svelte';
 	import {
 		SETTINGS_SECTIONS,
+		settingsSection,
 		wizardDocsHref,
 		wizardStep,
+		type SettingsSectionKey,
 		type SettingsSectionMeta,
 	} from '$lib/onboarding/wizard-steps';
 	import { resolveSettingsTab, isLegacySettingsAnchor } from '$lib/onboarding/settings-anchor-map';
@@ -102,6 +104,16 @@
 	function sectionDocsHref(section: SettingsSectionMeta): string {
 		const step = section.walkThrough ? wizardStep(section.walkThrough) : undefined;
 		return wizardDocsHref(step ?? { docsSlug: section.docsSlug } as any);
+	}
+
+	// Look up a section's metadata BY KEY (not by array position) so each tab's ELI5 intro is bound to
+	// the same key as its <Tabs.Content value=…>. Reordering SETTINGS_SECTIONS can no longer slip the
+	// wrong intro above a tab. Keys are compile-time-checked against SettingsSectionKey; the registry
+	// is exhaustive, so a miss is a developer error — fail loudly rather than render a blank panel.
+	function section(key: SettingsSectionKey): SettingsSectionMeta {
+		const meta = settingsSection(key);
+		if (!meta) throw new Error(`Settings section "${key}" is missing from SETTINGS_SECTIONS`);
+		return meta;
 	}
 
 	let saveSucceeded = $state(false);
@@ -612,7 +624,7 @@
 		<!-- ─────────────────────────── PORTFOLIO ─────────────────────────── -->
 		<Tabs.Content value="portfolio">
 			<div class="space-y-4">
-				{@render sectionIntro(SETTINGS_SECTIONS[0])}
+				{@render sectionIntro(section('portfolio'))}
 
 				<Card.Root class="gap-0 py-0" id="settings-portfolio-basics" data-coach="settings-portfolio" data-testid="settings-portfolio-basics">
 					<Card.Content class="p-5">
@@ -771,7 +783,7 @@
 		<!-- ─────────────────────────── NOTIFICATIONS ─────────────────────────── -->
 		<Tabs.Content value="notifications">
 			<div class="space-y-4">
-				{@render sectionIntro(SETTINGS_SECTIONS[1])}
+				{@render sectionIntro(section('notifications'))}
 
 				<!-- Notification email — its own save endpoint (read-modify-writes the portfolio JSON). -->
 				<Card.Root class="gap-0 py-0" id="settings-notification-email" data-coach="settings-notifications" data-testid="settings-notification-email">
@@ -984,7 +996,7 @@
 		<!-- ─────────────────────────── AUTOMATIONS ─────────────────────────── -->
 		<Tabs.Content value="automations">
 			<div class="space-y-4">
-				{@render sectionIntro(SETTINGS_SECTIONS[2])}
+				{@render sectionIntro(section('automations'))}
 
 				<Card.Root class="gap-0 py-0" id="settings-notification-delivery" data-coach="settings-automations" data-testid="settings-notification-delivery">
 					<Card.Content class="p-5">
@@ -1094,7 +1106,7 @@
 		<!-- ─────────────────────────── MESSAGING ─────────────────────────── -->
 		<Tabs.Content value="messaging">
 			<div class="space-y-4">
-				{@render sectionIntro(SETTINGS_SECTIONS[3])}
+				{@render sectionIntro(section('messaging'))}
 
 				<!-- Default channels for new tenant messages — stored in portfolio settings JSON. -->
 				<Card.Root class="gap-0 py-0" data-testid="settings-messaging">
@@ -1293,7 +1305,7 @@
 		<!-- ─────────────────────────── TEAM ─────────────────────────── -->
 		<Tabs.Content value="team">
 			<div class="space-y-4">
-				{@render sectionIntro(SETTINGS_SECTIONS[4])}
+				{@render sectionIntro(section('team'))}
 				<Card.Root class="gap-0 py-0" data-testid="settings-team-link">
 					<Card.Content class="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
 						<div>
@@ -1319,7 +1331,7 @@
 		<!-- ─────────────────────────── OWNERS ─────────────────────────── -->
 		<Tabs.Content value="owners">
 			<div class="space-y-4">
-				{@render sectionIntro(SETTINGS_SECTIONS[5])}
+				{@render sectionIntro(section('owners'))}
 				<Card.Root class="gap-0 py-0" data-testid="settings-owners-link">
 					<Card.Content class="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
 						<div>
@@ -1337,7 +1349,7 @@
 		<!-- ─────────────────────────── SETUP & IMPORT ─────────────────────────── -->
 		<Tabs.Content value="setup">
 			<div class="space-y-4">
-				{@render sectionIntro(SETTINGS_SECTIONS[6])}
+				{@render sectionIntro(section('setup'))}
 				<Card.Root class="gap-0 py-0" data-testid="settings-setup-link">
 					<Card.Content class="grid gap-3 p-5 sm:grid-cols-2">
 						<div class="rounded-lg border border-border bg-muted/30 p-4">
@@ -1362,7 +1374,7 @@
 		<!-- ─────────────────────────── ACTIVITY HISTORY ─────────────────────────── -->
 		<Tabs.Content value="activity">
 			<div class="space-y-4">
-				{@render sectionIntro(SETTINGS_SECTIONS[7])}
+				{@render sectionIntro(section('activity'))}
 				<Card.Root class="gap-0 py-0" data-testid="settings-activity-link">
 					<Card.Content class="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
 						<div>
