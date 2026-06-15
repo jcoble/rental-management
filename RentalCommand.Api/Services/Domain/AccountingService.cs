@@ -395,7 +395,13 @@ public class AccountingService : IAccountingService
         AccountingTransactionsQuery query,
         CancellationToken ct = default)
     {
-        var rows = BuildTransactionRows(portfolioId);
+        // Source the unified ledger from the vw_accounting_transactions Postgres view (keyless entity)
+        // so the whole filter → sort → page runs as ONE SQL statement against the DB, rather than
+        // materializing Payments/Expenses/BankTransactions and merging in memory. RLS + soft-delete
+        // are enforced inside the view; we still apply the app-layer portfolio scope here.
+        IQueryable<AccountingTransactionView> rows = _db.AccountingTransactionViews
+            .AsNoTracking()
+            .Where(r => r.PortfolioId == portfolioId);
 
         if (!string.IsNullOrWhiteSpace(query.Kind))
         {
@@ -416,16 +422,16 @@ public class AccountingService : IAccountingService
 
         if (!string.IsNullOrWhiteSpace(query.Status))
         {
-            // Case-insensitive equality computed DB-side (LOWER(col) = @lowered) — portable across
-            // Npgsql and the SQLite test provider, and never pulls the UNION into memory to compare.
-            var status = query.Status.Trim().ToLower();
-            rows = rows.Where(r => r.Status.ToLower() == status);
+            // Case-insensitive exact match DB-side via ILIKE (no wildcards). Postgres-native; the
+            // grid always runs against Postgres.
+            var status = query.Status.Trim();
+            rows = rows.Where(r => EF.Functions.ILike(r.Status, status));
         }
 
         if (!string.IsNullOrWhiteSpace(query.Category))
         {
-            var category = query.Category.Trim().ToLower();
-            rows = rows.Where(r => r.Category.ToLower() == category);
+            var category = query.Category.Trim();
+            rows = rows.Where(r => EF.Functions.ILike(r.Category, category));
         }
 
         if (query.PropertyId.HasValue)
@@ -447,18 +453,16 @@ public class AccountingService : IAccountingService
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
-            // DB-side case-insensitive contains via LOWER(col) LIKE %lowered-term%. This shape
-            // translates on both Npgsql and the SQLite test provider and is served by a
-            // `lower(col) gin_trgm_ops` trigram index on Postgres — unlike the previous
-            // col.ToLower().Contains(...) form, which EF can translate but which forces a
-            // sequential scan over the UNION rather than using an index.
-            var like = $"%{query.Search.Trim().ToLower()}%";
+            // DB-side case-insensitive contains via Postgres ILIKE %term% (Npgsql translates to the
+            // native ILIKE operator) over the view's text columns — the same convention the other
+            // domain services use. The grid is Postgres-only, so no provider-portability compromise.
+            var like = $"%{query.Search.Trim()}%";
             rows = rows.Where(r =>
-                EF.Functions.Like(r.Description.ToLower(), like) ||
-                (r.PropertyName != null && EF.Functions.Like(r.PropertyName.ToLower(), like)) ||
-                (r.Counterparty != null && EF.Functions.Like(r.Counterparty.ToLower(), like)) ||
-                (r.Reference != null && EF.Functions.Like(r.Reference.ToLower(), like)) ||
-                (r.Notes != null && EF.Functions.Like(r.Notes.ToLower(), like)));
+                EF.Functions.ILike(r.Description, like) ||
+                (r.PropertyName != null && EF.Functions.ILike(r.PropertyName, like)) ||
+                (r.Counterparty != null && EF.Functions.ILike(r.Counterparty, like)) ||
+                (r.Reference != null && EF.Functions.ILike(r.Reference, like)) ||
+                (r.Notes != null && EF.Functions.ILike(r.Notes, like)));
         }
 
         rows = query.SortField switch
@@ -535,7 +539,7 @@ public class AccountingService : IAccountingService
                     PropertyId = r.PropertyId,
                     PropertyName = r.PropertyName,
                     Counterparty = r.Counterparty,
-                    DetailHref = r.DetailHref,
+                    DetailHref = DetailHrefFor(r.Kind, r.Id),
                 };
 
                 if (r.Kind == KindExpense && filesByExpenseId.TryGetValue(r.Id, out var contentType))
@@ -561,6 +565,14 @@ public class AccountingService : IAccountingService
         };
     }
 
+    /// <summary>The grid row's deep-link, derived from its source kind + id (was a view column).</summary>
+    private static string DetailHrefFor(string kind, int id) => kind switch
+    {
+        KindPayment => $"/accounting/payments/{id}",
+        KindExpense => $"/accounting/expenses/{id}",
+        _ => "/banking",
+    };
+
     /// <summary>
     /// For the Payment/Expense rows on the current page, look up their bank-reconciliation state in a
     /// single pair of queries (no N+1): a CONFIRMED match (a Matched bank line linked to the row) wins
@@ -569,7 +581,7 @@ public class AccountingService : IAccountingService
     /// </summary>
     private async Task<Dictionary<(string Kind, int Id), ReconciliationState>> BuildReconciliationAsync(
         int portfolioId,
-        IReadOnlyList<AccountingTransactionRow> pageRows,
+        IReadOnlyList<AccountingTransactionView> pageRows,
         CancellationToken ct)
     {
         var result = new Dictionary<(string, int), ReconciliationState>();
@@ -1272,102 +1284,4 @@ public class AccountingService : IAccountingService
         return string.IsNullOrWhiteSpace(fullName) ? "Tenant" : fullName;
     }
 
-    private IQueryable<AccountingTransactionRow> BuildTransactionRows(int portfolioId)
-    {
-        var payments = _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId)
-            .Select(p => new AccountingTransactionRow
-            {
-                Kind = KindPayment,
-                Id = p.Id,
-                Date = p.PaidDate ?? p.DueDate,
-                CreatedAt = p.CreatedAt,
-                UpdatedAt = p.UpdatedAt,
-                Description = p.Notes != null && p.Notes != ""
-                    ? p.Notes
-                    : p.PaymentType.ToString() + " - " + p.Lease!.Tenant!.FirstName + " " + p.Lease!.Tenant!.LastName,
-                Category = p.PaymentType.ToString(),
-                Status = p.Status.ToString(),
-                Amount = p.Amount,
-                PropertyId = p.Lease!.PropertyId,
-                PropertyName = p.Lease!.Property!.Name,
-                Counterparty = p.Lease!.Tenant!.FirstName + " " + p.Lease!.Tenant!.LastName,
-                Reference = p.Lease!.LeaseNumber + " " + (p.Method ?? "") + " " + (p.ExternalReference ?? ""),
-                Notes = p.Notes,
-                DetailHref = "/accounting/payments/" + p.Id,
-            });
-
-        var expenses = _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId)
-            .Select(e => new AccountingTransactionRow
-            {
-                Kind = KindExpense,
-                Id = e.Id,
-                Date = e.PaidAt ?? e.IncurredAt,
-                CreatedAt = e.CreatedAt,
-                UpdatedAt = e.UpdatedAt,
-                Description = e.Description,
-                Category = e.Category.ToString(),
-                Status = e.Status.ToString(),
-                Amount = e.Amount,
-                PropertyId = e.PropertyId,
-                PropertyName = e.Property != null ? e.Property.Name : null,
-                Counterparty = e.Vendor != null ? e.Vendor.Name : null,
-                Reference = e.WorkOrder != null ? e.WorkOrder.Title : null,
-                Notes = e.Notes,
-                DetailHref = "/accounting/expenses/" + e.Id,
-            });
-
-        var bankTransactions = _db.BankTransactions
-            .AsNoTracking()
-            .Where(t => t.PortfolioId == portfolioId && t.MatchStatus != "Removed")
-            .Select(t => new AccountingTransactionRow
-            {
-                Kind = KindBank,
-                Id = t.Id,
-                Date = t.PostedAt,
-                CreatedAt = t.CreatedAt,
-                UpdatedAt = t.UpdatedAt,
-                Description = t.Description,
-                Category = t.Category ?? (t.Amount >= 0 ? "Deposit" : "Withdrawal"),
-                Status = t.MatchStatus,
-                Amount = t.Amount,
-                PropertyId = null,
-                PropertyName = null,
-                Counterparty = t.MerchantName ?? t.BankConnection!.InstitutionName,
-                Reference = t.BankConnection!.AccountName + " " + t.ProviderTransactionId,
-                Notes = t.Notes,
-                DetailHref = "/banking",
-            });
-
-        return payments.Concat(expenses).Concat(bankTransactions);
-    }
-
-    private sealed class AccountingTransactionRow
-    {
-        public string Kind { get; set; } = string.Empty;
-        public int Id { get; set; }
-        public DateTime Date { get; set; }
-
-        /// <summary>When the row entered the system (Payment/Expense/Bank CreatedAt). Drives the
-        /// "Entered" ledger column and the default newest-entered-first sort, so a freshly-scanned
-        /// item lands at the top regardless of its (possibly wrong/old) transaction date.</summary>
-        public DateTime CreatedAt { get; set; }
-
-        /// <summary>When the row was last edited (CreatedAt for a never-touched row).</summary>
-        public DateTime UpdatedAt { get; set; }
-
-        public string Description { get; set; } = string.Empty;
-        public string Category { get; set; } = string.Empty;
-        public string Status { get; set; } = string.Empty;
-        public decimal Amount { get; set; }
-        public int? PropertyId { get; set; }
-        public string? PropertyName { get; set; }
-        public string? Counterparty { get; set; }
-        public string? Reference { get; set; }
-        public string? Notes { get; set; }
-        public string DetailHref { get; set; } = string.Empty;
-    }
 }

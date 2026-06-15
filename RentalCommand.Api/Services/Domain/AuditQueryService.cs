@@ -209,12 +209,12 @@ public class AuditQueryService : IAuditQueryService
     /// </summary>
     private static IQueryable<Core.Entities.AuditLog> ApplySearch(IQueryable<Core.Entities.AuditLog> q, string term)
     {
-        // Case-insensitive contains via LOWER(col) LIKE %lowered-term%. This shape translates on both
-        // Npgsql and SQLite, and on Postgres is served by the `gin (lower(col) gin_trgm_ops)` trigram
-        // indexes (AuditSearchTrgmIndexes) — index-driven, never a sequential scan. Only the three
-        // trgm-indexed columns appear here; the unindexable computed-column LIKEs that used to be OR'd
-        // in (and forced a seq scan of the whole predicate) are gone, replaced by id equality below.
-        var like = $"%{term.ToLower()}%";
+        // Case-insensitive contains via Postgres ILIKE %term%, served by the
+        // `gin (lower(col) gin_trgm_ops)` trigram indexes (AuditSearchTrgmIndexes) — index-driven,
+        // never a sequential scan. Only the three trgm-indexed columns appear here; the unindexable
+        // computed-column LIKEs that used to be OR'd in (and forced a seq scan of the whole predicate)
+        // are gone, replaced by id equality below. The audit trail is Postgres-only.
+        var like = $"%{term}%";
 
         // Verb search: "Created", "create", "recorded", "scheduled", etc. should narrow by operation.
         // Match against both the enum name (Created/Updated/Deleted/Approved/Rejected) and the friendly
@@ -228,9 +228,9 @@ public class AuditQueryService : IAuditQueryService
         var parsedId = ExtractFirstInteger(term);
 
         return q.Where(a =>
-            EF.Functions.Like(a.EntityType.ToLower(), like)
-            || (a.ActorLabel != null && EF.Functions.Like(a.ActorLabel.ToLower(), like))
-            || (a.IpAddress != null && EF.Functions.Like(a.IpAddress.ToLower(), like))
+            EF.Functions.ILike(a.EntityType, like)
+            || (a.ActorLabel != null && EF.Functions.ILike(a.ActorLabel, like))
+            || (a.IpAddress != null && EF.Functions.ILike(a.IpAddress, like))
             // Entity / actor id as integer equality (sargable) instead of LIKE on its text form.
             || (parsedId != null && a.EntityId == parsedId.Value)
             || (parsedId != null && a.UserId != null && a.UserId == parsedId.Value)

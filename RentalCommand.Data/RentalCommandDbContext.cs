@@ -74,6 +74,13 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     // Engine resilience — worker heartbeats written by each background worker every poll cycle
     public DbSet<EngineWorkerHeartbeat> EngineWorkerHeartbeats => Set<EngineWorkerHeartbeat>();
 
+    /// <summary>
+    /// Keyless projection over the <c>vw_accounting_transactions</c> view (UNION ALL of Payments,
+    /// Expenses and unmatched BankTransactions). Read-only; filtered/sorted/paged in the database.
+    /// See <see cref="AccountingTransactionView"/>.
+    /// </summary>
+    public DbSet<AccountingTransactionView> AccountingTransactionViews => Set<AccountingTransactionView>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Configures the ASP.NET Identity schema (AspNetUsers/Roles/etc.) with int keys.
@@ -1359,5 +1366,15 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<PaymentTransaction>().HasQueryFilter(e => e.Payment!.Lease!.DeletedAt == null);
         modelBuilder.Entity<SignatureAuditEvent>().HasQueryFilter(e => e.SignatureRequest!.Lease!.DeletedAt == null);
         modelBuilder.Entity<SignatureSigner>().HasQueryFilter(e => e.SignatureRequest!.Lease!.DeletedAt == null);
+
+        // Keyless projection over the vw_accounting_transactions view (created in the
+        // AddAccountingTransactionsView migration). Read-only; the accounting grid filters, sorts and
+        // pages over it as one SQL statement. Soft-delete + RLS are enforced inside the view SQL (see
+        // AccountingTransactionView). No key — EF must never try to track or write these rows.
+        modelBuilder.Entity<AccountingTransactionView>(entity =>
+        {
+            entity.HasNoKey();
+            entity.ToView("vw_accounting_transactions");
+        });
     }
 }
