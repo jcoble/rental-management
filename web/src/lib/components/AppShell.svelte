@@ -50,7 +50,7 @@
 	import PortfolioSelector from '$lib/components/shared/PortfolioSelector.svelte';
 	import NotificationBell from '$lib/components/notifications/NotificationBell.svelte';
 	import MaterialSymbol from '$lib/components/m3/MaterialSymbol.svelte';
-	import { getCurrentUser, hasAnyRole, clearAuth, getAuthState } from '$lib/stores/auth.svelte';
+	import { getCurrentUser, hasAnyRole, clearAuthState, getAuthState } from '$lib/stores/auth.svelte';
 	import { isPortalUser, isStaff } from '$lib/types/user';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { messages as messagesApi } from '$lib/api/endpoints/messages';
@@ -349,8 +349,17 @@
 		if (isMobile) isSidebarOpen = false;
 	}
 
+	// Sign out: tear down the client mirror (which also fires the SignalR-disconnect callback), then
+	// hand off to the server /logout endpoint with a FULL-DOCUMENT navigation. A client-side goto can
+	// race the httpOnly Set-Cookie deletions, leaving a still-valid access-token cookie behind — so the
+	// next visit to /login sees locals.user and auto-resumes the dead session. A top-level navigation
+	// makes the browser apply the /logout cookie-deletion headers and follow its 303 → /login as a fresh
+	// request with no session cookies, so the session is actually dead (no auto-resume).
 	function signOut() {
-		clearAuth();
+		clearAuthState();
+		if (browser) {
+			window.location.href = '/logout';
+		}
 	}
 
 	// --- Header quick-action live counts ---------------------------------------
