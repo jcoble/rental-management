@@ -1,4 +1,12 @@
 import { api } from '../client';
+import type {
+	ApplicationFormConfig,
+	CustomFieldConfig,
+	CustomFieldType,
+	PublicApplicationProperty,
+} from '../public-applications';
+
+export type { ApplicationFormConfig, CustomFieldConfig, CustomFieldType };
 
 /** Application lifecycle status (string enum, matches the API). */
 export type ApplicationStatus =
@@ -23,6 +31,12 @@ export interface ApplicationResponse {
 	monthlyIncome: number | null;
 	desiredMoveInDate: string | null;
 	notes: string | null;
+	/** Raw JSON (array) of all employer/income rows; null when the single-income shape was used. */
+	incomeSourcesJson: string | null;
+	/** Raw JSON (object) of pet answers; null when the pets section was off/unanswered. */
+	petsJson: string | null;
+	/** Raw JSON (object) of custom-question answers keyed by field id; null when none. */
+	customFieldAnswersJson: string | null;
 	consentGiven: boolean;
 	consentAtUtc: string | null;
 	status: ApplicationStatus;
@@ -87,6 +101,34 @@ export interface AdverseActionNoticeResponse {
 	sentAtUtc: string | null;
 }
 
+/** Returned by GET /applications/form-config: the editable config + property/unit options for defaults. */
+export interface FormConfigEditorResponse {
+	config: ApplicationFormConfig;
+	properties: PublicApplicationProperty[];
+}
+
+/** A custom field as the landlord submits it (id optional — the server generates one when missing). */
+export interface CustomFieldInput {
+	id?: string | null;
+	label: string;
+	type: CustomFieldType;
+	required: boolean;
+	options: string[];
+}
+
+/** Body for PUT /applications/form-config. */
+export interface SaveFormConfigRequest {
+	incomeSources: { enabled: boolean };
+	pets: { enabled: boolean; askDeposit: boolean };
+	customFields: CustomFieldInput[];
+	defaults: {
+		propertyId: number | null;
+		unitId: number | null;
+		desiredMoveInDate: string | null;
+	};
+	locked: string[];
+}
+
 function buildQuery(params?: ApplicationListParams): string {
 	const query = new URLSearchParams();
 	if (params?.status) query.set('status', params.status);
@@ -105,6 +147,11 @@ export const applications = {
 		api.post<ApplicationResponse>(`/applications/${id}/decline`, { reason: reason ?? null }),
 	withdraw: (id: number) => api.post<ApplicationResponse>(`/applications/${id}/withdraw`),
 	createLink: () => api.post<ApplicationLinkResult>('/applications/link'),
+	/** The portfolio's editable application-form config + property/unit options for defaults. */
+	getFormConfig: () => api.get<FormConfigEditorResponse>('/applications/form-config'),
+	/** Validate + save the landlord's application-form config. Returns the normalized saved config. */
+	saveFormConfig: (body: SaveFormConfigRequest) =>
+		api.put<ApplicationFormConfig>('/applications/form-config', body),
 	/** Run a (gated) tenant screening. Requires FCRA consent on the application. */
 	screen: (id: number) => api.post<ScreeningResultResponse>(`/applications/${id}/screen`),
 	/** Prior screening results for an application, newest first. */

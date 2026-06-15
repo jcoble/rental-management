@@ -21,6 +21,35 @@ public class Portfolio
     public string? PublicApplicationToken { get; set; }
 
     /// <summary>
+    /// Landlord-authored configuration for the public rental-application form, stored as a JSON object
+    /// (Postgres jsonb). Lets a non-technical landlord tailor the shared apply link without code. The
+    /// whole portfolio is the scope — there is one shared apply link/config per portfolio today.
+    /// <para>
+    /// A null/empty config behaves exactly like the original fixed form (income enabled, pets off, no
+    /// custom questions, no defaults, nothing locked) — the form fails OPEN to today's behavior because
+    /// most portfolios have no config yet. Canonical shape:
+    /// </para>
+    /// <code>
+    /// {
+    ///   "incomeSources": { "enabled": true },                 // repeatable employer/income group
+    ///   "pets":          { "enabled": false, "askDeposit": false },
+    ///   "customFields": [                                      // extra landlord questions, in order
+    ///     { "id": "&lt;slug/guid&gt;", "label": "Do you smoke?", "type": "yesno",  "required": false },
+    ///     { "id": "...",            "label": "Vehicle",       "type": "text",   "required": false },
+    ///     { "id": "...",            "label": "Occupants",     "type": "number", "required": true  },
+    ///     { "id": "...",            "label": "How did you hear about us?", "type": "select",
+    ///       "options": ["Zillow","Friend","Sign"], "required": false }
+    ///   ],
+    ///   "defaults": { "propertyId": 12, "unitId": 34, "desiredMoveInDate": "2026-08-01" },
+    ///   "locked":   ["propertyId","unitId"]                    // defaults the applicant may NOT change
+    /// }
+    /// </code>
+    /// Custom-field <c>type</c> is one of <c>text | number | yesno | select</c>. Answers are stored on
+    /// the submission in <see cref="RentalApplication.CustomFieldAnswersJson"/> keyed by field id.
+    /// </summary>
+    public string? ApplicationFormConfig { get; set; }
+
+    /// <summary>
     /// Account-wide demo/live state. New signups start in Sandbox (<c>true</c>) seeded with demo data
     /// to explore; "Go Live" is a ONE-WAY graduation that wipes the demo data and flips this to <c>false</c>.
     /// While true, all real outbound (email/SMS/Stripe/e-sign) is HARD-suppressed so demo play never

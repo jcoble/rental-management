@@ -381,6 +381,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.ConsentIpAddress).HasMaxLength(64);
             // Provenance of the photo-ID/pay-stub autofill, stored as Postgres jsonb.
             entity.Property(e => e.IdExtractedFields).HasColumnType("jsonb");
+            // Configurable-form answer payloads, stored as Postgres jsonb (mirror the IdExtractedFields approach).
+            entity.Property(e => e.IncomeSourcesJson).HasColumnType("jsonb");
+            entity.Property(e => e.PetsJson).HasColumnType("jsonb");
+            entity.Property(e => e.CustomFieldAnswersJson).HasColumnType("jsonb");
             // Stored as the string enum name to match the app-wide string-enum convention.
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
             entity.HasIndex(e => e.PortfolioId);
@@ -557,6 +561,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Currency).IsRequired().HasMaxLength(8).HasDefaultValue("USD");
             entity.Property(e => e.Description).HasMaxLength(2000);
             entity.Property(e => e.Settings).HasMaxLength(10000);
+            // Landlord-authored application-form config, stored as Postgres jsonb (no length cap on jsonb).
+            entity.Property(e => e.ApplicationFormConfig).HasColumnType("jsonb");
             entity.Property(e => e.PublicApplicationToken).HasMaxLength(64);
             entity.Property(e => e.Status).HasConversion<int>();
             // Account-wide sandbox/live flag. Defaults to false so every existing/seeded portfolio

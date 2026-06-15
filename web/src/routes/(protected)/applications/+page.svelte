@@ -14,7 +14,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
-	import { Link2, Copy, Check } from '@lucide/svelte';
+	import { Link2, Copy, Check, Settings2 } from '@lucide/svelte';
 
 	let search = $state('');
 
@@ -170,6 +170,15 @@
 					</Select.Content>
 				</Select.Root>
 			</div>
+			<Button
+				variant="outline"
+				class="gap-2 shrink-0"
+				onclick={() => goto('/applications/configure')}
+				data-testid="application-configure-button"
+			>
+				<Settings2 class="h-4 w-4" />
+				Configure form
+			</Button>
 			<Button
 				class="gap-2 shrink-0"
 				onclick={() => linkMutation.mutate()}

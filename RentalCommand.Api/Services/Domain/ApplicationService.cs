@@ -39,29 +39,14 @@ public sealed class ApplicationService : IApplicationService
 
         // Offer active properties (and their non-offline units) so the applicant can pick what they're
         // applying for. Soft-deleted rows are excluded by the entities' global query filters.
-        var properties = await _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolio.Id && p.Status != PropertyStatus.Inactive)
-            .OrderBy(p => p.Name)
-            .Select(p => new PublicPropertyOption
-            {
-                Id = p.Id,
-                Name = p.Name,
-                AddressLine1 = p.AddressLine1,
-                City = p.City,
-                State = p.State,
-                Units = p.Units
-                    .Where(u => u.Status != UnitStatus.Offline)
-                    .OrderBy(u => u.UnitNumber)
-                    .Select(u => new PublicUnitOption { Id = u.Id, UnitNumber = u.UnitNumber })
-                    .ToList(),
-            })
-            .ToListAsync(ct);
+        var properties = await LoadPropertyOptionsAsync(portfolio.Id, ct);
 
         return new PublicApplicationFormInfo
         {
             ManagementCompanyName = portfolio.ManagementCompanyName,
             Properties = properties,
+            // Normalize the landlord's stored config (or defaults) so the public form never parses raw JSON.
+            FormConfig = ApplicationFormConfigParser.Normalize(portfolio.ApplicationFormConfig),
         };
     }
 
@@ -74,24 +59,63 @@ public sealed class ApplicationService : IApplicationService
 
         var portfolioId = portfolio.Id;
 
+        // Normalize the landlord's stored config first: it drives both which fields we accept and which
+        // landlord-set defaults are LOCKED (the applicant may not change them). A locked default is
+        // enforced server-side below — UI read-only alone is not a guarantee against a tampered client.
+        var config = ApplicationFormConfigParser.Normalize(portfolio.ApplicationFormConfig);
+        var propertyLocked = config.Locked.Contains("propertyId");
+        var unitLocked = config.Locked.Contains("unitId");
+        var moveInLocked = config.Locked.Contains("desiredMoveInDate");
+
         // IDOR guard: a client-supplied PropertyId/UnitId is honored only when it actually lives in
         // the token's portfolio; otherwise it is dropped (the applicant simply applied without a
         // specific property) rather than letting them reference another portfolio's record.
+        // When the landlord locked the default, we ignore the client value entirely and use the default.
+        var requestedPropertyId = propertyLocked ? config.Defaults.PropertyId : request.PropertyId;
         int? propertyId = null;
-        if (request.PropertyId is > 0 &&
-            await _db.Properties.AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct))
+        if (requestedPropertyId is > 0 &&
+            await _db.Properties.AnyAsync(p => p.Id == requestedPropertyId && p.PortfolioId == portfolioId, ct))
         {
-            propertyId = request.PropertyId;
+            propertyId = requestedPropertyId;
         }
 
+        var requestedUnitId = unitLocked ? config.Defaults.UnitId : request.UnitId;
         int? unitId = null;
-        if (request.UnitId is > 0 &&
-            await _db.Units.AnyAsync(u => u.Id == request.UnitId
+        if (requestedUnitId is > 0 &&
+            await _db.Units.AnyAsync(u => u.Id == requestedUnitId
                 && u.Property != null && u.Property.PortfolioId == portfolioId
                 && (propertyId == null || u.PropertyId == propertyId), ct))
         {
-            unitId = request.UnitId;
+            unitId = requestedUnitId;
         }
+
+        // A locked move-in date comes from the config default (parsed yyyy-MM-dd), not the client.
+        var desiredMoveIn = moveInLocked && config.Defaults.DesiredMoveInDate is { } lockedMoveIn
+                            && DateTime.TryParse(lockedMoveIn, out var lockedMoveInDate)
+            ? DateTime.SpecifyKind(lockedMoveInDate, DateTimeKind.Utc)
+            : request.DesiredMoveInDate.ToUtc();
+
+        // Sanitize the configurable-form payloads against the portfolio's current config. Income/pets
+        // are always re-validated (fail-open to null); custom answers are filtered to the configured ids
+        // so a tampered client can't inject arbitrary keys. The first income row is mirrored into the
+        // single Employer/MonthlyIncome columns so every existing read path keeps working unchanged.
+
+        var employer = request.Employer;
+        var monthlyIncome = request.MonthlyIncome;
+        var incomeSourcesJson = ApplicationFormConfigParser.SanitizeIncomeSources(
+            request.IncomeSourcesJson, out var firstEmployer, out var firstIncome);
+        if (incomeSourcesJson is not null)
+        {
+            // Multi-income shape present → it is the source of truth; mirror its first row.
+            employer = firstEmployer;
+            monthlyIncome = firstIncome;
+        }
+
+        var petsJson = config.Pets.Enabled
+            ? ApplicationFormConfigParser.SanitizePets(request.PetsJson)
+            : null;
+        var customFieldAnswersJson =
+            ApplicationFormConfigParser.SanitizeCustomFieldAnswers(request.CustomFieldAnswersJson, config);
 
         var now = DateTime.UtcNow;
         var entity = new RentalApplication
@@ -115,9 +139,12 @@ public sealed class ApplicationService : IApplicationService
                                  request.CurrentAddressLine1, request.CurrentAddressLine2,
                                  request.CurrentCity, request.CurrentState, request.CurrentPostalCode)
                              ?? request.CurrentAddress,
-            Employer = request.Employer,
-            MonthlyIncome = request.MonthlyIncome,
-            DesiredMoveInDate = request.DesiredMoveInDate.ToUtc(),
+            Employer = employer,
+            MonthlyIncome = monthlyIncome,
+            IncomeSourcesJson = incomeSourcesJson,
+            PetsJson = petsJson,
+            CustomFieldAnswersJson = customFieldAnswersJson,
+            DesiredMoveInDate = desiredMoveIn,
             Notes = request.Notes,
             IdExtractedFields = request.IdExtractedFields,
             ConsentGiven = request.ConsentGiven,
@@ -332,9 +359,87 @@ public sealed class ApplicationService : IApplicationService
         };
     }
 
+    public async Task<FormConfigEditorResponse> GetFormConfigAsync(int portfolioId, CancellationToken ct = default)
+    {
+        var portfolio = await _db.Portfolios
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct)
+            ?? throw new InvalidOperationException("Portfolio not found.");
+
+        return new FormConfigEditorResponse
+        {
+            Config = ApplicationFormConfigParser.Normalize(portfolio.ApplicationFormConfig),
+            Properties = await LoadPropertyOptionsAsync(portfolioId, ct),
+        };
+    }
+
+    public async Task<ApplicationFormConfigDto> SaveFormConfigAsync(
+        int portfolioId, int userId, SaveFormConfigRequest request, CancellationToken ct = default)
+    {
+        var portfolio = await _db.Portfolios
+            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct)
+            ?? throw new InvalidOperationException("Portfolio not found.");
+
+        // IDOR-guard the chosen defaults: only ids that actually live in this portfolio are accepted.
+        var validPropertyIds = (await _db.Properties
+                .Where(p => p.PortfolioId == portfolioId)
+                .Select(p => p.Id)
+                .ToListAsync(ct))
+            .ToHashSet();
+        var validUnitIds = (await _db.Units
+                .Where(u => u.Property != null && u.Property.PortfolioId == portfolioId)
+                .Select(u => u.Id)
+                .ToListAsync(ct))
+            .ToHashSet();
+
+        // Validates and produces canonical JSON (throws ApplicationFormConfigValidationException on bad input).
+        var canonicalJson = ApplicationFormConfigParser.BuildCanonicalJson(request, validPropertyIds, validUnitIds);
+
+        portfolio.ApplicationFormConfig = canonicalJson;
+        portfolio.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        await _audit.LogAsync(
+            portfolioId,
+            "Portfolio",
+            portfolio.Id,
+            AuditLogOperation.Updated,
+            userId: userId,
+            changeReason: "Updated rental application form configuration",
+            ct: ct);
+
+        return ApplicationFormConfigParser.Normalize(canonicalJson);
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Loads the active properties (and their non-offline units) of a portfolio as the public-form
+    /// option shape. Shared by the public form info and the landlord configurator.
+    /// </summary>
+    private async Task<IReadOnlyList<PublicPropertyOption>> LoadPropertyOptionsAsync(int portfolioId, CancellationToken ct)
+    {
+        return await _db.Properties
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId && p.Status != PropertyStatus.Inactive)
+            .OrderBy(p => p.Name)
+            .Select(p => new PublicPropertyOption
+            {
+                Id = p.Id,
+                Name = p.Name,
+                AddressLine1 = p.AddressLine1,
+                City = p.City,
+                State = p.State,
+                Units = p.Units
+                    .Where(u => u.Status != UnitStatus.Offline)
+                    .OrderBy(u => u.UnitNumber)
+                    .Select(u => new PublicUnitOption { Id = u.Id, UnitNumber = u.UnitNumber })
+                    .ToList(),
+            })
+            .ToListAsync(ct);
+    }
 
     /// <summary>
     /// Resolves a portfolio from a public link token. Tokens are matched exactly; an empty/whitespace

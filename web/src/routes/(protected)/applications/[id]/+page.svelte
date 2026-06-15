@@ -34,7 +34,10 @@
 		ScanSearch,
 		Download,
 		User,
+		PawPrint,
+		HelpCircle,
 	} from '@lucide/svelte';
+	import type { CustomFieldConfig } from '$lib/api/public-applications';
 
 	const queryClient = useQueryClient();
 	const id = $derived(Number($page.params.id));
@@ -50,6 +53,55 @@
 	const isOpen = $derived(
 		application?.status === 'Submitted' || application?.status === 'UnderReview'
 	);
+
+	// ── Configurable-form submission data (parsed defensively, like the settings page) ──
+	function safeParse<T>(raw: string | null | undefined): T | null {
+		if (!raw) return null;
+		try {
+			return JSON.parse(raw) as T;
+		} catch {
+			return null;
+		}
+	}
+
+	type IncomeSource = { employer?: string | null; monthlyIncome?: number | null };
+	type PetEntry = { type?: string; name?: string; breed?: string; weight?: string };
+	type PetsData = { hasPets?: boolean; pets?: PetEntry[] };
+
+	const incomeSources = $derived<IncomeSource[]>(
+		safeParse<IncomeSource[]>(application?.incomeSourcesJson) ?? []
+	);
+	const petsData = $derived<PetsData | null>(safeParse<PetsData>(application?.petsJson));
+	const customAnswers = $derived<Record<string, unknown>>(
+		safeParse<Record<string, unknown>>(application?.customFieldAnswersJson) ?? {}
+	);
+	const hasCustomAnswers = $derived(Object.keys(customAnswers).length > 0);
+
+	// Fetch the current form config to label custom answers by id (simplest approach: live config,
+	// joined by field id). Only needed when there are custom answers to show.
+	const formConfigQuery = createQuery(() => ({
+		queryKey: ['application-form-config'],
+		queryFn: () => applications.getFormConfig(),
+		enabled: hasCustomAnswers,
+	}));
+	const customFieldDefs = $derived<CustomFieldConfig[]>(formConfigQuery.data?.config.customFields ?? []);
+
+	// Build display rows for custom answers: prefer the configured label; fall back to the raw id so a
+	// since-deleted question's answer is still visible (never silently dropped).
+	const customRows = $derived.by(() => {
+		const byId = new Map(customFieldDefs.map((f) => [f.id, f]));
+		return Object.entries(customAnswers).map(([id, value]) => {
+			const def = byId.get(id);
+			return { id, label: def?.label ?? id, value: formatAnswer(value) };
+		});
+	});
+
+	function formatAnswer(value: unknown): string {
+		if (value === true) return 'Yes';
+		if (value === false) return 'No';
+		if (value == null) return '—';
+		return String(value);
+	}
 
 	const STATUS_MAP = {
 		Submitted: { label: 'Submitted', class: 'm3-tone-chip border m3-tone--info' },
@@ -314,10 +366,32 @@
 				<Card.Header>
 					<Card.Title class="flex items-center gap-2 text-base"><Briefcase class="h-4 w-4" /> Residence & income</Card.Title>
 				</Card.Header>
-				<Card.Content class="grid grid-cols-2 gap-x-4 gap-y-4 text-sm">
-					<div class="col-span-2">{@render fieldRow('Current address', application.currentAddress || '—')}</div>
-					{@render fieldRow('Employer', application.employer || '—')}
-					{@render fieldRow('Monthly income', fmtMoney(application.monthlyIncome))}
+				<Card.Content class="space-y-4 text-sm">
+					<div>{@render fieldRow('Current address', application.currentAddress || '—')}</div>
+					{#if incomeSources.length > 0}
+						<!-- Multiple income sources from the configurable form. -->
+						<div class="space-y-3" data-testid="application-income-sources">
+							{#each incomeSources as src, i (i)}
+								<div class="rounded-lg border border-border bg-muted/20 p-3">
+									<div class="grid grid-cols-2 gap-x-4 gap-y-2">
+										{@render fieldRow('Employer', src.employer || '—')}
+										{@render fieldRow('Monthly income', fmtMoney(src.monthlyIncome ?? null))}
+									</div>
+								</div>
+							{/each}
+							<p class="text-xs text-muted-foreground" data-testid="application-income-total">
+								Total stated monthly income:
+								<span class="font-medium text-foreground">
+									{fmtMoney(incomeSources.reduce((sum, s) => sum + (s.monthlyIncome ?? 0), 0))}
+								</span>
+							</p>
+						</div>
+					{:else}
+						<div class="grid grid-cols-2 gap-x-4 gap-y-4">
+							{@render fieldRow('Employer', application.employer || '—')}
+							{@render fieldRow('Monthly income', fmtMoney(application.monthlyIncome))}
+						</div>
+					{/if}
 				</Card.Content>
 			</Card.Root>
 
@@ -353,6 +427,49 @@
 					{@render fieldRow('Reviewed', fmtDateTime(application.reviewedAtUtc))}
 				</Card.Content>
 			</Card.Root>
+
+			<!-- Pets (shown when the applicant answered the pets section) -->
+			{#if petsData}
+				<Card.Root data-testid="application-pets-card">
+					<Card.Header>
+						<Card.Title class="flex items-center gap-2 text-base"><PawPrint class="h-4 w-4" /> Pets</Card.Title>
+					</Card.Header>
+					<Card.Content class="text-sm">
+						{#if petsData.hasPets && (petsData.pets?.length ?? 0) > 0}
+							<div class="space-y-3" data-testid="application-pets-list">
+								{#each petsData.pets ?? [] as pet, i (i)}
+									<div class="rounded-lg border border-border bg-muted/20 p-3">
+										<div class="grid grid-cols-2 gap-x-4 gap-y-2">
+											{@render fieldRow('Type', pet.type || '—')}
+											{@render fieldRow('Name', pet.name || '—')}
+											{@render fieldRow('Breed', pet.breed || '—')}
+											{@render fieldRow('Weight', pet.weight ? `${pet.weight} lbs` : '—')}
+										</div>
+									</div>
+								{/each}
+							</div>
+						{:else if petsData.hasPets}
+							<p class="text-muted-foreground" data-testid="application-pets-yes-nodetail">Has pets (no details provided).</p>
+						{:else}
+							<p class="text-muted-foreground" data-testid="application-pets-none">No pets.</p>
+						{/if}
+					</Card.Content>
+				</Card.Root>
+			{/if}
+
+			<!-- Additional questions (the landlord's custom questions + answers) -->
+			{#if hasCustomAnswers}
+				<Card.Root data-testid="application-custom-card">
+					<Card.Header>
+						<Card.Title class="flex items-center gap-2 text-base"><HelpCircle class="h-4 w-4" /> Additional questions</Card.Title>
+					</Card.Header>
+					<Card.Content class="grid grid-cols-1 gap-x-4 gap-y-4 text-sm sm:grid-cols-2">
+						{#each customRows as row (row.id)}
+							{@render fieldRow(row.label, row.value)}
+						{/each}
+					</Card.Content>
+				</Card.Root>
+			{/if}
 
 			<!-- Notes -->
 			{#if application.notes}

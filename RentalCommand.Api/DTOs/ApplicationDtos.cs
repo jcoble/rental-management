@@ -16,6 +16,13 @@ public class PublicApplicationFormInfo
 {
     public string ManagementCompanyName { get; set; } = string.Empty;
     public IReadOnlyList<PublicPropertyOption> Properties { get; set; } = [];
+
+    /// <summary>
+    /// Normalized landlord configuration that tells the public form which fields to render (income
+    /// repeatable?, pets section?, custom questions, pre-filled/locked defaults). Always present — a
+    /// portfolio with no saved config gets the normalized default (income on, pets off, nothing else).
+    /// </summary>
+    public ApplicationFormConfigDto FormConfig { get; set; } = new();
 }
 
 /// <summary>A single property the applicant may choose on the public form.</summary>
@@ -101,6 +108,28 @@ public class SubmitApplicationRequest
     public string? IdExtractedFields { get; set; }
 
     /// <summary>
+    /// Multiple employer/income rows from the configurable form, as a serialized JSON array of
+    /// <c>{ "employer": "...", "monthlyIncome": 1234.56 }</c>. Bound as a string (jsonb-as-text); the
+    /// server sanitizes it and mirrors the first row into <see cref="Employer"/>/<see cref="MonthlyIncome"/>.
+    /// </summary>
+    [MaxLength(20000)]
+    public string? IncomeSourcesJson { get; set; }
+
+    /// <summary>
+    /// Pet answers from the configurable form, as a serialized JSON object
+    /// <c>{ "hasPets": true, "pets": [ { "type":"Dog", ... } ] }</c>. Bound as a string (jsonb-as-text).
+    /// </summary>
+    [MaxLength(20000)]
+    public string? PetsJson { get; set; }
+
+    /// <summary>
+    /// Answers to the landlord's custom questions, as a serialized JSON object keyed by custom-field id.
+    /// Bound as a string (jsonb-as-text); the server drops any key not in the current config.
+    /// </summary>
+    [MaxLength(20000)]
+    public string? CustomFieldAnswersJson { get; set; }
+
+    /// <summary>
     /// FCRA consent: the applicant must agree to a future background/credit screening. Required to
     /// be <c>true</c>; the server records the timestamp and originating IP.
     /// </summary>
@@ -163,6 +192,16 @@ public class ApplicationResponse
     public DateTime? DesiredMoveInDate { get; set; }
     public string? Notes { get; set; }
     public string? IdExtractedFields { get; set; }
+
+    /// <summary>Raw JSON (array) of all employer/income rows; null when the single-income shape was used.</summary>
+    public string? IncomeSourcesJson { get; set; }
+
+    /// <summary>Raw JSON (object) of pet answers; null when the pets section was off/unanswered.</summary>
+    public string? PetsJson { get; set; }
+
+    /// <summary>Raw JSON (object) of custom-question answers keyed by field id; null when none.</summary>
+    public string? CustomFieldAnswersJson { get; set; }
+
     public bool ConsentGiven { get; set; }
     public DateTime? ConsentAtUtc { get; set; }
     public string Status { get; set; } = string.Empty;
@@ -196,6 +235,9 @@ public class ApplicationResponse
         DesiredMoveInDate = e.DesiredMoveInDate,
         Notes = e.Notes,
         IdExtractedFields = e.IdExtractedFields,
+        IncomeSourcesJson = e.IncomeSourcesJson,
+        PetsJson = e.PetsJson,
+        CustomFieldAnswersJson = e.CustomFieldAnswersJson,
         ConsentGiven = e.ConsentGiven,
         ConsentAtUtc = e.ConsentAtUtc,
         Status = e.Status.ToString(),

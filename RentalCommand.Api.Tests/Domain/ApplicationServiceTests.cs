@@ -230,6 +230,111 @@ public class ApplicationServiceTests : IDisposable
         portfolio.PublicApplicationToken.Should().Be(result.Token);
     }
 
+    [Fact]
+    public async Task SaveAndGetFormConfig_RoundTripsAndGeneratesCustomFieldIds()
+    {
+        // A default property/unit must exist in the portfolio to pass the IDOR guard and be lockable.
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Maple Court",
+            AddressLine1 = "10 Maple St",
+            City = "Akron",
+            State = "OH",
+            PostalCode = "44301",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Properties.Add(property);
+        await _db.SaveChangesAsync();
+        var unit = new Unit
+        {
+            PropertyId = property.Id,
+            UnitNumber = "1A",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Units.Add(unit);
+        await _db.SaveChangesAsync();
+
+        var request = new SaveFormConfigRequest
+        {
+            IncomeSources = new IncomeSourcesConfig { Enabled = false },
+            Pets = new PetsConfig { Enabled = true, AskDeposit = true },
+            CustomFields =
+            [
+                new CustomFieldInput { Label = "Do you smoke?", Type = "yesno", Required = true },
+                new CustomFieldInput
+                {
+                    Label = "How did you hear about us?",
+                    Type = "select",
+                    Options = ["Zillow", "Friend"],
+                },
+            ],
+            Defaults = new FormDefaultsConfig
+            {
+                PropertyId = property.Id,
+                UnitId = unit.Id,
+                DesiredMoveInDate = "2026-08-01",
+            },
+            Locked = ["propertyId", "unitId"],
+        };
+
+        var saved = await _sut.SaveFormConfigAsync(PortfolioId, userId: 7, request);
+
+        // Returned (normalized) config reflects the input and has server-generated ids.
+        saved.IncomeSources.Enabled.Should().BeFalse();
+        saved.Pets.Enabled.Should().BeTrue();
+        saved.Pets.AskDeposit.Should().BeTrue();
+        saved.CustomFields.Should().HaveCount(2);
+        saved.CustomFields.Should().OnlyContain(f => !string.IsNullOrWhiteSpace(f.Id));
+        saved.CustomFields[1].Options.Should().BeEquivalentTo(new[] { "Zillow", "Friend" });
+        saved.Defaults.PropertyId.Should().Be(property.Id);
+        saved.Defaults.UnitId.Should().Be(unit.Id);
+        saved.Defaults.DesiredMoveInDate.Should().Be("2026-08-01");
+        saved.Locked.Should().BeEquivalentTo(new[] { "propertyId", "unitId" });
+
+        // The save is audited as a Portfolio update.
+        _audit.Calls.Should().Contain(c => c.entityType == "Portfolio" && c.entityId == PortfolioId
+            && c.operation == AuditLogOperation.Updated);
+
+        // Reading it back yields the same normalized config (persisted to the portfolio's jsonb column).
+        var editor = await _sut.GetFormConfigAsync(PortfolioId);
+        editor.Config.Should().BeEquivalentTo(saved);
+        editor.Properties.Should().Contain(p => p.Id == property.Id);
+    }
+
+    [Fact]
+    public async Task SaveFormConfig_DefaultPropertyFromAnotherPortfolio_IsRejected()
+    {
+        var foreign = new Property
+        {
+            PortfolioId = OtherPortfolioId,
+            Name = "Foreign",
+            AddressLine1 = "1 Foreign St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Properties.Add(foreign);
+        await _db.SaveChangesAsync();
+
+        var request = new SaveFormConfigRequest
+        {
+            Defaults = new FormDefaultsConfig { PropertyId = foreign.Id },
+        };
+
+        // IDOR guard: a default property from another portfolio is rejected with a validation error.
+        var act = async () => await _sut.SaveFormConfigAsync(PortfolioId, userId: 7, request);
+        await act.Should().ThrowAsync<ApplicationFormConfigValidationException>();
+
+        // Nothing was persisted.
+        var portfolio = await _db.Portfolios.SingleAsync(p => p.Id == PortfolioId);
+        portfolio.ApplicationFormConfig.Should().BeNull();
+    }
+
     private sealed class RecordingAuditService : IAuditTrailService
     {
         public List<(int portfolioId, string entityType, int entityId, AuditLogOperation operation)> Calls { get; } = [];
@@ -259,6 +364,10 @@ internal sealed class ApplicationTestDbContext : RentalCommandDbContext
 
         // jsonb is not understood by SQLite — remap those columns to plain text.
         modelBuilder.Entity<RentalApplication>().Property(e => e.IdExtractedFields).HasColumnType("TEXT");
+        modelBuilder.Entity<RentalApplication>().Property(e => e.IncomeSourcesJson).HasColumnType("TEXT");
+        modelBuilder.Entity<RentalApplication>().Property(e => e.PetsJson).HasColumnType("TEXT");
+        modelBuilder.Entity<RentalApplication>().Property(e => e.CustomFieldAnswersJson).HasColumnType("TEXT");
+        modelBuilder.Entity<Portfolio>().Property(e => e.ApplicationFormConfig).HasColumnType("TEXT");
         modelBuilder.Entity<ScreeningResult>().Property(e => e.RawResultJson).HasColumnType("TEXT");
         modelBuilder.Entity<ScanDraft>().Property(e => e.ExtractedFields).HasColumnType("TEXT");
         modelBuilder.Entity<AuditLog>().Property(e => e.OldValues).HasColumnType("TEXT");

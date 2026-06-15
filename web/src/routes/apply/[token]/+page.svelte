@@ -7,10 +7,12 @@
 		submitApplication,
 		PublicApiError,
 		type PublicApplicationProperty,
+		type ApplicationFormConfig,
+		type CustomFieldConfig,
 		type ScanIdResult,
 		type SubmitApplicationBody,
 	} from '$lib/api/public-applications';
-	import { Building, ScanLine, CheckCircle2, Loader2, AlertCircle, Sparkles } from '@lucide/svelte';
+	import { Building, ScanLine, CheckCircle2, Loader2, AlertCircle, Sparkles, Plus, X, PawPrint } from '@lucide/svelte';
 	import * as Select from '$lib/components/ui/select';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
@@ -57,6 +59,60 @@
 	let notes = $state('');
 	let consentGiven = $state(false);
 
+	// ── Landlord configuration (drives which fields render) ──────────────────────
+	// Fail-open default mirrors the server's normalized default: income on, pets off, nothing else.
+	const DEFAULT_CONFIG: ApplicationFormConfig = {
+		incomeSources: { enabled: true },
+		pets: { enabled: false, askDeposit: false },
+		customFields: [],
+		defaults: { propertyId: null, unitId: null, desiredMoveInDate: null },
+		locked: [],
+	};
+	const formConfig = $derived<ApplicationFormConfig>(context?.formConfig ?? DEFAULT_CONFIG);
+	const lockedProperty = $derived(formConfig.locked.includes('propertyId'));
+	const lockedUnit = $derived(formConfig.locked.includes('unitId'));
+	const lockedMoveIn = $derived(formConfig.locked.includes('desiredMoveInDate'));
+	const customFields = $derived<CustomFieldConfig[]>(formConfig.customFields ?? []);
+
+	// ── Repeatable income rows (when incomeSources.enabled) ──────────────────────
+	type IncomeRow = { id: number; employer: string; monthlyIncome: string };
+	let incomeRowSeq = 0;
+	let incomeRows = $state<IncomeRow[]>([{ id: incomeRowSeq++, employer: '', monthlyIncome: '' }]);
+	function addIncomeRow() {
+		incomeRows = [...incomeRows, { id: incomeRowSeq++, employer: '', monthlyIncome: '' }];
+	}
+	function removeIncomeRow(id: number) {
+		if (incomeRows.length <= 1) return; // keep at least one
+		incomeRows = incomeRows.filter((r) => r.id !== id);
+	}
+
+	// ── Pets (when pets.enabled) ─────────────────────────────────────────────────
+	type PetRow = { id: number; type: string; name: string; breed: string; weight: string };
+	let petRowSeq = 0;
+	let hasPets = $state<boolean | null>(null);
+	let petRows = $state<PetRow[]>([{ id: petRowSeq++, type: '', name: '', breed: '', weight: '' }]);
+	function addPetRow() {
+		petRows = [...petRows, { id: petRowSeq++, type: '', name: '', breed: '', weight: '' }];
+	}
+	function removePetRow(id: number) {
+		if (petRows.length <= 1) return;
+		petRows = petRows.filter((r) => r.id !== id);
+	}
+
+	// ── Custom-question answers, keyed by field id ───────────────────────────────
+	let customAnswers = $state<Record<string, string | boolean>>({});
+
+	// Seed defaults (pre-selected property/unit/move-in) from the config exactly once when it arrives.
+	let defaultsApplied = false;
+	$effect(() => {
+		const cfg = context?.formConfig;
+		if (!cfg || defaultsApplied) return;
+		defaultsApplied = true;
+		if (cfg.defaults.propertyId != null) propertyValue = String(cfg.defaults.propertyId);
+		if (cfg.defaults.unitId != null) unitValue = String(cfg.defaults.unitId);
+		if (cfg.defaults.desiredMoveInDate) desiredMoveInDate = cfg.defaults.desiredMoveInDate;
+	});
+
 	// Track which fields the scanner auto-filled so we can flag them.
 	let autoFilled = $state<Record<string, boolean>>({});
 	let idExtractedFields = $state<Record<string, unknown> | null>(null);
@@ -88,6 +144,16 @@
 		}
 		const u = availableUnits.find((x) => String(x.id) === unitValue);
 		return u ? `Unit ${u.unitNumber}` : 'No preference';
+	});
+
+	// Labels for the locked (read-only) placement display. Declared after selectedProperty/availableUnits.
+	const lockedPropertyName = $derived(
+		selectedProperty ? selectedProperty.name : 'Any available property'
+	);
+	const lockedUnitName = $derived.by(() => {
+		if (unitValue === NO_PREFERENCE) return 'Any available unit';
+		const u = availableUnits.find((x) => String(x.id) === unitValue);
+		return u ? `Unit ${u.unitNumber}` : 'Any available unit';
 	});
 
 	function onPropertyChange() {
@@ -174,9 +240,72 @@
 		if (!email.trim()) errors.email = 'Please enter your email.';
 		else if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim())) errors.email = 'Please enter a valid email.';
 		if (!phone.trim()) errors.phone = 'Please enter your phone number.';
+		// Required custom questions must be answered.
+		for (const f of customFields) {
+			if (!f.required) continue;
+			const a = customAnswers[f.id];
+			const answered =
+				f.type === 'yesno' ? a === true || a === false : typeof a === 'string' && a.trim().length > 0;
+			if (!answered) errors[`custom-${f.id}`] = 'This question is required.';
+		}
 		if (!consentGiven) errors.consent = 'Please check the box to agree before submitting.';
 		formErrors = errors;
 		return Object.keys(errors).length === 0;
+	}
+
+	// Build the income-sources JSON (array of { employer, monthlyIncome }) from the repeatable rows.
+	// Returns null when nothing meaningful was entered (server then falls back to single-income).
+	function buildIncomeSourcesJson(): string | null {
+		if (!formConfig.incomeSources.enabled) return null;
+		const rows = incomeRows
+			.map((r) => {
+				const emp = r.employer.trim();
+				const incNum = r.monthlyIncome.trim()
+					? Number(r.monthlyIncome.replace(/[^0-9.]/g, ''))
+					: null;
+				return {
+					employer: emp || null,
+					monthlyIncome: incNum != null && !isNaN(incNum) ? incNum : null,
+				};
+			})
+			.filter((r) => r.employer != null || r.monthlyIncome != null);
+		return rows.length > 0 ? JSON.stringify(rows) : null;
+	}
+
+	// Build the pets JSON ({ hasPets, pets[] }) when the section is on and answered.
+	function buildPetsJson(): string | null {
+		if (!formConfig.pets.enabled || hasPets === null) return null;
+		if (!hasPets) return JSON.stringify({ hasPets: false });
+		const pets = petRows
+			.map((p) => ({
+				type: p.type.trim(),
+				name: p.name.trim(),
+				breed: p.breed.trim(),
+				weight: p.weight.trim(),
+			}))
+			.filter((p) => p.type || p.name || p.breed || p.weight);
+		return JSON.stringify({ hasPets: true, pets });
+	}
+
+	// Build the custom-answers JSON (object keyed by field id), coercing each value by type.
+	function buildCustomAnswersJson(): string | null {
+		if (customFields.length === 0) return null;
+		const out: Record<string, unknown> = {};
+		for (const f of customFields) {
+			const a = customAnswers[f.id];
+			if (f.type === 'yesno') {
+				if (a === true || a === false) out[f.id] = a;
+			} else if (f.type === 'number') {
+				if (typeof a === 'string' && a.trim()) {
+					const n = Number(a);
+					if (!isNaN(n)) out[f.id] = n;
+				}
+			} else {
+				// text / select
+				if (typeof a === 'string' && a.trim()) out[f.id] = a.trim();
+			}
+		}
+		return Object.keys(out).length > 0 ? JSON.stringify(out) : null;
 	}
 
 	function onSubmit(event: SubmitEvent) {
@@ -206,6 +335,10 @@
 			// Serialize to a JSON string: the server binds IdExtractedFields to a `string?`
 			// (jsonb-as-text); sending a raw object 400s on photo-ID-autofilled submissions.
 			idExtractedFields: idExtractedFields ? JSON.stringify(idExtractedFields) : null,
+			// Configurable-form payloads (also serialized JSON strings, same binding rule).
+			incomeSourcesJson: buildIncomeSourcesJson(),
+			petsJson: buildPetsJson(),
+			customFieldAnswersJson: buildCustomAnswersJson(),
 			consentGiven,
 		};
 		submitMutation.mutate(body);
@@ -337,8 +470,58 @@
 			</div>
 
 			<form onsubmit={onSubmit} class="space-y-5" data-testid="apply-form" novalidate>
-				<!-- Property / unit picker -->
-				{#if properties.length > 0}
+				<!-- Property / unit picker. When the landlord locks a default, show it as a read-only
+				     line instead of a control so the applicant can't change it. -->
+				{#if (lockedProperty && propertyId != null) || (lockedUnit && unitId != null)}
+					<div class="rounded-2xl border border-border bg-card p-5" data-testid="apply-locked-placement">
+						<h2 class="mb-1 text-base font-semibold text-foreground">You're applying for</h2>
+						<p class="text-sm text-muted-foreground" data-testid="apply-locked-placement-text">
+							{lockedProperty ? lockedPropertyName : propertySelectLabel}{#if (lockedUnit && unitId != null) || (!lockedUnit && unitValue !== NO_PREFERENCE)} — {lockedUnit ? lockedUnitName : unitSelectLabel}{/if}
+						</p>
+						<!-- If only one of the two is locked, still let them choose the other. -->
+						{#if !lockedProperty || !lockedUnit}
+							<div class="mt-4 grid gap-4 sm:grid-cols-2">
+								{#if !lockedProperty}
+									<div class="block">
+										<span class="mb-1.5 block text-sm font-medium text-foreground">Property</span>
+										<Select.Root type="single" bind:value={propertyValue} onValueChange={onPropertyChange}>
+											<Select.Trigger class="h-12 w-full text-base" data-testid="apply-property-select">
+												<span class="block truncate text-left">{propertySelectLabel}</span>
+											</Select.Trigger>
+											<Select.Content>
+												<Select.Item value={NO_PREFERENCE} label="No preference">No preference</Select.Item>
+												{#each properties as p (p.id)}
+													<Select.Item value={String(p.id)} label={propertyOptionLabel(p)}>
+														<span class="flex min-w-0 flex-col">
+															<span class="truncate font-medium">{p.name}</span>
+															{#if propertyAddressLine(p)}<span class="truncate text-xs text-muted-foreground">{propertyAddressLine(p)}</span>{/if}
+														</span>
+													</Select.Item>
+												{/each}
+											</Select.Content>
+										</Select.Root>
+									</div>
+								{/if}
+								{#if !lockedUnit}
+									<div class="block">
+										<span class="mb-1.5 block text-sm font-medium text-foreground">Unit</span>
+										<Select.Root type="single" bind:value={unitValue} disabled={availableUnits.length === 0}>
+											<Select.Trigger class="h-12 w-full text-base" data-testid="apply-unit-select">{unitSelectLabel}</Select.Trigger>
+											<Select.Content>
+												<Select.Item value={NO_PREFERENCE} label={availableUnits.length === 0 ? 'No specific unit' : 'No preference'}>
+													{availableUnits.length === 0 ? 'No specific unit' : 'No preference'}
+												</Select.Item>
+												{#each availableUnits as u (u.id)}
+													<Select.Item value={String(u.id)} label={`Unit ${u.unitNumber}`}>Unit {u.unitNumber}</Select.Item>
+												{/each}
+											</Select.Content>
+										</Select.Root>
+									</div>
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{:else if properties.length > 0}
 					<div class="rounded-2xl border border-border bg-card p-5">
 						<h2 class="mb-3 text-base font-semibold text-foreground">Where would you like to live?</h2>
 						<div class="grid gap-4 sm:grid-cols-2">
@@ -398,7 +581,16 @@
 						{@render field('Email', 'email', email, (v) => (email = v), { required: true, type: 'email' })}
 						{@render field('Phone', 'phone', phone, (v) => (phone = v), { required: true, type: 'tel' })}
 						{@render field('Date of birth', 'dateOfBirth', dateOfBirth, (v) => (dateOfBirth = v), { type: 'date' })}
-						{@render field('Desired move-in date', 'desiredMoveInDate', desiredMoveInDate, (v) => (desiredMoveInDate = v), { type: 'date' })}
+						{#if lockedMoveIn && desiredMoveInDate}
+							<div class="block">
+								<span class="mb-1.5 block text-sm font-medium text-foreground">Desired move-in date</span>
+								<p class="flex h-12 items-center rounded-xl border border-border bg-muted/40 px-3 text-base text-foreground" data-testid="apply-desiredMoveInDate-locked">
+									{desiredMoveInDate}
+								</p>
+							</div>
+						{:else}
+							{@render field('Desired move-in date', 'desiredMoveInDate', desiredMoveInDate, (v) => (desiredMoveInDate = v), { type: 'date' })}
+						{/if}
 					</div>
 					<div class="mt-4 grid gap-4 sm:grid-cols-2">
 						<label class="block sm:col-span-2">
@@ -431,14 +623,159 @@
 					</div>
 				</div>
 
-				<!-- Employment -->
-				<div class="rounded-2xl border border-border bg-card p-5">
-					<h2 class="mb-4 text-base font-semibold text-foreground">Employment & income</h2>
-					<div class="grid gap-4 sm:grid-cols-2">
-						{@render field('Employer', 'employer', employer, (v) => (employer = v))}
-						{@render field('Monthly income', 'monthlyIncome', monthlyIncome, (v) => (monthlyIncome = v), { type: 'text', inputMode: 'decimal', prefix: '$' })}
-					</div>
+				<!-- Employment & income -->
+				<div class="rounded-2xl border border-border bg-card p-5" data-testid="apply-income-section">
+					<h2 class="mb-1 text-base font-semibold text-foreground">Employment & income</h2>
+					{#if formConfig.incomeSources.enabled}
+						<p class="mb-4 text-sm text-muted-foreground">Add each job or source of income. You can add more than one.</p>
+						<div class="space-y-4">
+							{#each incomeRows as row, i (row.id)}
+								<div class="rounded-xl border border-border/70 bg-background/50 p-4" data-testid="apply-income-row">
+									<div class="mb-2 flex items-center justify-between">
+										<span class="text-sm font-medium text-foreground">Income {i + 1}</span>
+										{#if incomeRows.length > 1}
+											<button
+												type="button"
+												class="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+												onclick={() => removeIncomeRow(row.id)}
+												data-testid="apply-income-remove"
+											>
+												<X class="h-3.5 w-3.5" /> Remove
+											</button>
+										{/if}
+									</div>
+									<div class="grid gap-4 sm:grid-cols-2">
+										<label class="block">
+											<span class="mb-1.5 block text-sm font-medium text-foreground">Employer</span>
+											<input
+												type="text"
+												bind:value={row.employer}
+												class="h-12 w-full rounded-xl border border-input bg-background px-3 text-base text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40"
+												data-testid="apply-income-employer"
+											/>
+										</label>
+										<label class="block">
+											<span class="mb-1.5 block text-sm font-medium text-foreground">Monthly income</span>
+											<div class="relative">
+												<span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-base text-muted-foreground">$</span>
+												<input
+													type="text"
+													inputmode="decimal"
+													bind:value={row.monthlyIncome}
+													class="h-12 w-full rounded-xl border border-input bg-background pl-7 pr-3 text-base text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40"
+													data-testid="apply-income-amount"
+												/>
+											</div>
+										</label>
+									</div>
+								</div>
+							{/each}
+						</div>
+						<button
+							type="button"
+							class="mt-3 inline-flex items-center gap-1.5 rounded-xl border border-input bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+							onclick={addIncomeRow}
+							data-testid="apply-income-add"
+						>
+							<Plus class="h-4 w-4" /> Add another job / income
+						</button>
+					{:else}
+						<div class="mt-3 grid gap-4 sm:grid-cols-2">
+							{@render field('Employer', 'employer', employer, (v) => (employer = v))}
+							{@render field('Monthly income', 'monthlyIncome', monthlyIncome, (v) => (monthlyIncome = v), { type: 'text', inputMode: 'decimal', prefix: '$' })}
+						</div>
+					{/if}
 				</div>
+
+				<!-- Pets (config-gated) -->
+				{#if formConfig.pets.enabled}
+					<div class="rounded-2xl border border-border bg-card p-5" data-testid="apply-pets-section">
+						<h2 class="mb-1 flex items-center gap-2 text-base font-semibold text-foreground">
+							<PawPrint class="h-4 w-4 text-primary" /> Pets
+						</h2>
+						<p class="mb-4 text-sm text-muted-foreground">
+							Do you have any pets?{#if formConfig.pets.askDeposit} A pet deposit may apply.{/if}
+						</p>
+						<div class="flex gap-2" data-testid="apply-pets-haspets">
+							<button
+								type="button"
+								class="h-11 flex-1 rounded-xl border px-4 text-sm font-medium transition-colors {hasPets === true ? 'border-primary bg-primary/10 text-primary' : 'border-input bg-background text-foreground hover:bg-accent'}"
+								onclick={() => (hasPets = true)}
+								data-testid="apply-pets-yes"
+							>
+								Yes
+							</button>
+							<button
+								type="button"
+								class="h-11 flex-1 rounded-xl border px-4 text-sm font-medium transition-colors {hasPets === false ? 'border-primary bg-primary/10 text-primary' : 'border-input bg-background text-foreground hover:bg-accent'}"
+								onclick={() => (hasPets = false)}
+								data-testid="apply-pets-no"
+							>
+								No
+							</button>
+						</div>
+
+						{#if hasPets}
+							<div class="mt-4 space-y-4">
+								{#each petRows as pet, i (pet.id)}
+									<div class="rounded-xl border border-border/70 bg-background/50 p-4" data-testid="apply-pet-row">
+										<div class="mb-2 flex items-center justify-between">
+											<span class="text-sm font-medium text-foreground">Pet {i + 1}</span>
+											{#if petRows.length > 1}
+												<button
+													type="button"
+													class="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+													onclick={() => removePetRow(pet.id)}
+													data-testid="apply-pet-remove"
+												>
+													<X class="h-3.5 w-3.5" /> Remove
+												</button>
+											{/if}
+										</div>
+										<div class="grid gap-4 sm:grid-cols-2">
+											<label class="block">
+												<span class="mb-1.5 block text-sm font-medium text-foreground">Type (e.g. Dog, Cat)</span>
+												<input type="text" bind:value={pet.type} class="h-12 w-full rounded-xl border border-input bg-background px-3 text-base text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40" data-testid="apply-pet-type" />
+											</label>
+											<label class="block">
+												<span class="mb-1.5 block text-sm font-medium text-foreground">Name</span>
+												<input type="text" bind:value={pet.name} class="h-12 w-full rounded-xl border border-input bg-background px-3 text-base text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40" data-testid="apply-pet-name" />
+											</label>
+											<label class="block">
+												<span class="mb-1.5 block text-sm font-medium text-foreground">Breed</span>
+												<input type="text" bind:value={pet.breed} class="h-12 w-full rounded-xl border border-input bg-background px-3 text-base text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40" data-testid="apply-pet-breed" />
+											</label>
+											<label class="block">
+												<span class="mb-1.5 block text-sm font-medium text-foreground">Weight (lbs)</span>
+												<input type="text" inputmode="decimal" bind:value={pet.weight} class="h-12 w-full rounded-xl border border-input bg-background px-3 text-base text-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40" data-testid="apply-pet-weight" />
+											</label>
+										</div>
+									</div>
+								{/each}
+								<button
+									type="button"
+									class="inline-flex items-center gap-1.5 rounded-xl border border-input bg-background px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+									onclick={addPetRow}
+									data-testid="apply-pet-add"
+								>
+									<Plus class="h-4 w-4" /> Add another pet
+								</button>
+							</div>
+						{/if}
+					</div>
+				{/if}
+
+				<!-- Custom questions (config-driven) -->
+				{#if customFields.length > 0}
+					<div class="rounded-2xl border border-border bg-card p-5" data-testid="apply-custom-section">
+						<h2 class="mb-4 text-base font-semibold text-foreground">A few more questions</h2>
+						<div class="space-y-4">
+							{#each customFields as f (f.id)}
+								{@render customField(f)}
+							{/each}
+						</div>
+					</div>
+				{/if}
 
 				<!-- Notes -->
 				<div class="rounded-2xl border border-border bg-card p-5">
@@ -556,4 +893,59 @@
 			<p class="mt-1 text-sm text-destructive" data-testid="apply-{name}-error">{formErrors[name]}</p>
 		{/if}
 	</label>
+{/snippet}
+
+{#snippet customField(f: CustomFieldConfig)}
+	<div class="block" data-testid="apply-custom-field-{f.id}">
+		<span class="mb-1.5 block text-sm font-medium text-foreground">
+			{f.label}{#if f.required}<span class="text-destructive"> *</span>{/if}
+		</span>
+		{#if f.type === 'yesno'}
+			<div class="flex gap-2">
+				<button
+					type="button"
+					class="h-11 flex-1 rounded-xl border px-4 text-sm font-medium transition-colors {customAnswers[f.id] === true ? 'border-primary bg-primary/10 text-primary' : 'border-input bg-background text-foreground hover:bg-accent'}"
+					onclick={() => (customAnswers[f.id] = true)}
+					data-testid="apply-custom-{f.id}-yes"
+				>
+					Yes
+				</button>
+				<button
+					type="button"
+					class="h-11 flex-1 rounded-xl border px-4 text-sm font-medium transition-colors {customAnswers[f.id] === false ? 'border-primary bg-primary/10 text-primary' : 'border-input bg-background text-foreground hover:bg-accent'}"
+					onclick={() => (customAnswers[f.id] = false)}
+					data-testid="apply-custom-{f.id}-no"
+				>
+					No
+				</button>
+			</div>
+		{:else if f.type === 'select'}
+			<Select.Root
+				type="single"
+				value={typeof customAnswers[f.id] === 'string' ? (customAnswers[f.id] as string) : ''}
+				onValueChange={(v) => (customAnswers[f.id] = v)}
+			>
+				<Select.Trigger class="h-12 w-full text-base" data-testid="apply-custom-{f.id}-select">
+					{typeof customAnswers[f.id] === 'string' && customAnswers[f.id] ? customAnswers[f.id] : 'Select…'}
+				</Select.Trigger>
+				<Select.Content>
+					{#each f.options as opt (opt)}
+						<Select.Item value={opt} label={opt}>{opt}</Select.Item>
+					{/each}
+				</Select.Content>
+			</Select.Root>
+		{:else}
+			<input
+				type={f.type === 'number' ? 'number' : 'text'}
+				inputmode={f.type === 'number' ? 'decimal' : undefined}
+				value={typeof customAnswers[f.id] === 'string' ? (customAnswers[f.id] as string) : ''}
+				oninput={(e) => (customAnswers[f.id] = (e.currentTarget as HTMLInputElement).value)}
+				class="h-12 w-full rounded-xl border border-input bg-background px-3 text-base text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40"
+				data-testid="apply-custom-{f.id}-input"
+			/>
+		{/if}
+		{#if formErrors[`custom-${f.id}`]}
+			<p class="mt-1 text-sm text-destructive" data-testid="apply-custom-{f.id}-error">{formErrors[`custom-${f.id}`]}</p>
+		{/if}
+	</div>
 {/snippet}

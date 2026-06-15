@@ -39,8 +39,33 @@ public class RentalApplication : IAuditable, IPortfolioScoped
     public string? CurrentAddress { get; set; }
 
     // --- Employment / income ---
+    // The single Employer/MonthlyIncome columns remain the source of truth for list views, screening,
+    // and the tenant note. When the configurable form collects multiple income sources, the FIRST one
+    // is mirrored into these two columns on submit so every existing read path keeps working unchanged.
     public string? Employer { get; set; }
     public decimal? MonthlyIncome { get; set; }
+
+    /// <summary>
+    /// Multiple employer/income entries from the configurable form, as a JSON array of
+    /// <c>{ "employer": "...", "monthlyIncome": 1234.56 }</c> (Postgres jsonb). When present this is the
+    /// full record of the applicant's income; the first entry is also mirrored into
+    /// <see cref="Employer"/>/<see cref="MonthlyIncome"/>. Null when the form used the single-income shape.
+    /// </summary>
+    public string? IncomeSourcesJson { get; set; }
+
+    /// <summary>
+    /// Pet information from the configurable form, as a JSON object
+    /// <c>{ "hasPets": true, "pets": [ { "type":"Dog", "name":"Rex", "breed":"Lab", "weight":"60" } ] }</c>
+    /// (Postgres jsonb). Null/absent when the pets section is off or unanswered.
+    /// </summary>
+    public string? PetsJson { get; set; }
+
+    /// <summary>
+    /// Answers to the landlord's custom questions, as a JSON object mapping a custom-field <c>id</c> to
+    /// its answer (string for text/select, number for number, boolean for yes/no) (Postgres jsonb).
+    /// Only ids present in the portfolio's config at submit time are kept; unknown keys are dropped.
+    /// </summary>
+    public string? CustomFieldAnswersJson { get; set; }
 
     public DateTime? DesiredMoveInDate { get; set; }
     public string? Notes { get; set; }
