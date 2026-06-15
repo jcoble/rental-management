@@ -138,6 +138,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      // I7: if the first-login gate couldn't be determined at login (the
+      // sandbox-state lookup hiccupped), re-resolve it now that the shell is up,
+      // mirroring the web's per-navigation re-check. No-op once resolved, so a
+      // returning user pays nothing; a genuinely-new account gets gated here
+      // instead of slipping past the Sandbox/Live choice.
+      ref.read(authControllerProvider.notifier).reresolveOnboardingIfUnresolved();
       // Initialise the realtime watcher so it stays alive for the shell. The
       // updates hub also carries in-app Notification events (see
       // realtime_providers' `_invalidateForEntity` 'Notification' case).
