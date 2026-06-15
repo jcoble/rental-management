@@ -6,6 +6,7 @@ import '../../features/appointments/appointments_repository.dart';
 import '../../features/leases/leases_repository.dart';
 import '../../features/maintenance/work_orders_repository.dart';
 import '../../features/messages/messages_repository.dart';
+import '../../features/notifications/notifications_repository.dart';
 import '../../features/payments/payments_repository.dart';
 import '../../features/properties/properties_repository.dart';
 import '../../features/scan/scan_repository.dart';
@@ -107,6 +108,15 @@ void _invalidateForEntity(Ref ref, String entityType) {
       // open-thread family so a message sent from web/portal appears live.
       _refreshIfAlive(ref, conversationsProvider);
       ref.invalidate(conversationProvider);
+
+    case 'Notification':
+      // In-app Notification rows are broadcast over THIS (updates) hub by the
+      // API/Engine (RentChargeService, ConversationService, LateFeeService,
+      // LeaseExpiryReminderService, the SMS-inbound services, ...). Refresh the
+      // unread badge and, if the inbox screen is open, its list — so a new
+      // notification appears live without a manual reload.
+      _refreshIfAlive(ref, unreadCountProvider);
+      _refreshIfAlive(ref, inboxProvider);
 
     default:
       // Unknown entity type — defensive no-op.
