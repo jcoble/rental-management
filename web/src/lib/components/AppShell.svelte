@@ -289,28 +289,35 @@
 		}
 	});
 
-	// Default any group with no stored preference to open, and always force-open
-	// the group that contains the active route. Reads openGroups untracked (it WRITES openGroups, and
-	// should only re-run when the route / visible groups change — not on its own write).
+	// Accordion default: groups start CLOSED; only the group containing the active route auto-opens
+	// (and, to keep the one-open-at-a-time invariant, its siblings are forced closed). No group is
+	// defaulted to open. Reads openGroups untracked (it WRITES openGroups, and should only re-run
+	// when the route / visible groups change — not on its own write).
 	$effect(() => {
-		const next = { ...untrack(() => openGroups) };
+		const current = untrack(() => openGroups);
+		const next = { ...current };
 		let changed = false;
 		const groupsForState = visibleSettingsGroup ? [...visibleGroups, visibleSettingsGroup] : visibleGroups;
-		for (const g of groupsForState) {
-			if (next[g.id] === undefined) {
-				next[g.id] = true;
-				changed = true;
-			}
-			if (groupHasActive(g) && next[g.id] !== true) {
-				next[g.id] = true;
-				changed = true;
+		const activeGroup = groupsForState.find((g) => groupHasActive(g));
+		if (activeGroup) {
+			for (const g of groupsForState) {
+				const shouldOpen = g.id === activeGroup.id;
+				if ((next[g.id] ?? false) !== shouldOpen) {
+					next[g.id] = shouldOpen;
+					changed = true;
+				}
 			}
 		}
 		if (changed) openGroups = next;
 	});
 
+	// Accordion: only one group open at a time. Opening a group closes every other group; clicking
+	// the open group's header just closes it. Persisted so the choice survives reloads.
 	function toggleGroup(id: string) {
-		const next = { ...openGroups, [id]: !openGroups[id] };
+		const willOpen = !openGroups[id];
+		const next: Record<string, boolean> = {};
+		for (const key of Object.keys(openGroups)) next[key] = false;
+		next[id] = willOpen;
 		openGroups = next;
 		if (browser) {
 			try {
@@ -442,7 +449,7 @@
 
 <!-- An expanded collapsible group (header + its items). -->
 {#snippet navGroup(group: NavGroup)}
-	{@const open = openGroups[group.id] ?? true}
+	{@const open = openGroups[group.id] ?? false}
 	<div class="mb-0.5">
 		<button
 			type="button"
