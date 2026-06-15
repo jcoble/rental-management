@@ -29,6 +29,20 @@ public class GenerateNoticeDraftsResponse
     public IReadOnlyList<NoticeDraftResponse> Drafts { get; set; } = [];
 }
 
+/// <summary>
+/// Optional scoping for notice generation. With no fields set, drafts are generated portfolio-wide for
+/// every applicable lease/late payment (the original behaviour). Supplying <see cref="TenantId"/> scopes
+/// generation to that one tenant; supplying <see cref="NoticeType"/> generates only that type and forces
+/// it for renewal/move-out even when outside the usual trigger window (the landlord asked for it).
+/// </summary>
+public class GenerateNoticeDraftsRequest
+{
+    public int? TenantId { get; set; }
+
+    /// <summary>One of <c>RenewalOffer</c>, <c>MoveOutReminder</c>, <c>LateRentNotice</c>; null = all applicable.</summary>
+    public string? NoticeType { get; set; }
+}
+
 public class ApproveNoticeDraftRequest
 {
     public List<string> Channels { get; set; } = ["Portal", "Email", "Sms"];
