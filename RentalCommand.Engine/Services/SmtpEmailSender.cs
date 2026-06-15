@@ -15,14 +15,14 @@ namespace RentalCommand.Engine.Services;
 /// </summary>
 public interface ISmtpEmailSender
 {
-    Task SendAsync(SmtpOptions smtp, string toEmail, string subject, string body, CancellationToken ct = default);
+    Task SendAsync(SmtpOptions smtp, string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default);
 }
 
 /// <inheritdoc />
 public sealed class SmtpEmailSender : ISmtpEmailSender
 {
     public async Task SendAsync(
-        SmtpOptions smtp, string toEmail, string subject, string body, CancellationToken ct = default)
+        SmtpOptions smtp, string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default)
     {
         // Caller (RoutingNotificationChannel) only reaches here when smtp.Enabled, so Host/Username/
         // Password are present. From falls back to the authenticated mailbox when FromEmail is unset.
@@ -34,12 +34,14 @@ public sealed class SmtpEmailSender : ISmtpEmailSender
         message.To.Add(MailboxAddress.Parse(toEmail));
         message.Subject = subject;
 
-        // The outbox carries a single plaintext body (same value SendGrid sends as text/plain). Keep
-        // that as the source of truth and wrap a minimal HTML alternative so clients render either part.
+        // The outbox carries a plaintext body (the source of truth / fallback) plus an optional
+        // pre-composed htmlBody. Use the supplied HTML verbatim when present (e.g. auth emails with a
+        // "Here" hyperlink); otherwise wrap a minimal HTML alternative around the plaintext so clients
+        // still render a clean HTML part.
         var bodyBuilder = new BodyBuilder
         {
             TextBody = body,
-            HtmlBody = BuildHtmlBody(body),
+            HtmlBody = string.IsNullOrWhiteSpace(htmlBody) ? BuildHtmlBody(body) : htmlBody,
         };
         message.Body = bodyBuilder.ToMessageBody();
 

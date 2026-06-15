@@ -49,7 +49,7 @@ public sealed class RoutingNotificationChannel : INotificationChannel
     // ------------------------------------------------------------------ Email (SMTP / SendGrid)
 
     public async Task SendEmailAsync(
-        string toEmail, string subject, string body, CancellationToken ct = default)
+        string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default)
     {
         // Transport selection (config-gated; no creds → no behaviour change vs the original SendGrid-only path):
         //   1. Transport == "Smtp" AND SMTP configured (host+user+pass) → send via SMTP (e.g. Zoho).
@@ -59,13 +59,13 @@ public sealed class RoutingNotificationChannel : INotificationChannel
         var smtp = _cfg.Smtp;
         if (_cfg.Email.UseSmtp && smtp.Enabled)
         {
-            await SendViaSmtpAsync(smtp, toEmail, subject, body, ct);
+            await SendViaSmtpAsync(smtp, toEmail, subject, body, htmlBody, ct);
             return;
         }
 
         if (_cfg.SendGrid.Enabled)
         {
-            await SendViaSendGridAsync(toEmail, subject, body, ct);
+            await SendViaSendGridAsync(toEmail, subject, body, htmlBody, ct);
             return;
         }
 
@@ -78,11 +78,11 @@ public sealed class RoutingNotificationChannel : INotificationChannel
     // consistently with the SendGrid path. The sender throws on failure → propagates so the outbox
     // worker retries (same contract as EnsureSuccessAsync below).
     private async Task SendViaSmtpAsync(
-        SmtpOptions smtp, string toEmail, string subject, string body, CancellationToken ct)
+        SmtpOptions smtp, string toEmail, string subject, string body, string? htmlBody, CancellationToken ct)
     {
         try
         {
-            await _smtp.SendAsync(smtp, toEmail, subject, body, ct);
+            await _smtp.SendAsync(smtp, toEmail, subject, body, htmlBody, ct);
         }
         catch (Exception ex)
         {
@@ -96,11 +96,21 @@ public sealed class RoutingNotificationChannel : INotificationChannel
             toEmail, subject, smtp.Host);
     }
 
-    // SendGrid HTTP API — unchanged behaviour from the original implementation.
+    // SendGrid HTTP API. When an htmlBody is supplied we send BOTH a text/plain and a text/html
+    // part (SendGrid requires text/plain to precede text/html in the content array); otherwise we
+    // send text/plain only — unchanged from the original SendGrid-only behaviour.
     private async Task SendViaSendGridAsync(
-        string toEmail, string subject, string body, CancellationToken ct)
+        string toEmail, string subject, string body, string? htmlBody, CancellationToken ct)
     {
         var sg = _cfg.SendGrid;
+
+        var content = string.IsNullOrWhiteSpace(htmlBody)
+            ? new[] { new { type = "text/plain", value = body } }
+            : new[]
+            {
+                new { type = "text/plain", value = body },
+                new { type = "text/html", value = htmlBody }
+            };
 
         var payload = new
         {
@@ -110,10 +120,7 @@ public sealed class RoutingNotificationChannel : INotificationChannel
             },
             from = new { email = sg.FromEmail, name = sg.FromName },
             subject,
-            content = new[]
-            {
-                new { type = "text/plain", value = body }
-            }
+            content
         };
 
         var json    = JsonSerializer.Serialize(payload);
