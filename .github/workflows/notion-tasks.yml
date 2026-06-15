@@ -46,7 +46,10 @@ concurrency:
 
 jobs:
   sync:
-    runs-on: self-hosted
+    # GitHub-hosted: this is a pure github-script API job (Notion + GitHub REST),
+    # it needs no build tooling. Keeping it off the self-hosted box stops it from
+    # competing with the deploy for the single runner.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/github-script@v7
         env:
