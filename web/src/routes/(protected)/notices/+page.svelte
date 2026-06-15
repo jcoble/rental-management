@@ -166,7 +166,7 @@
 </script>
 
 <svelte:head>
-	<title>Notices - Rental Command</title>
+	<title>Tenant notices - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="notices-page">
@@ -174,7 +174,7 @@
 		<div>
 			<h1 class="flex items-center gap-2 text-2xl font-bold">
 				<FileText class="h-6 w-6 text-primary" />
-				Notices
+				Tenant notices
 			</h1>
 			<p class="mt-1 text-sm text-muted-foreground">
 				Lease lifecycle drafts for renewals, late rent, and move-out reminders. Review, edit, then approve to send.

@@ -396,6 +396,35 @@ export interface MoneySnapshotExplanations {
 	pastDue: string;
 }
 
+/**
+ * The "Who's behind" list from GET /api/v1/accounting/past-due (PastDueResponse). Shares the snapshot's
+ * past-due definition server-side, so `totalCount` always equals the dashboard "tenants behind" KPI.
+ */
+export interface PastDueResponse {
+	items: PastDueLease[];
+	/** Number of leases/tenants behind — equals items.length and the snapshot's pastDueCount. */
+	totalCount: number;
+	/** Total amount past due across all behind leases — equals the snapshot's pastDueAmount. */
+	totalPastDueAmount: number;
+}
+
+/** One behind lease/tenant row (PastDueLeaseResponse). */
+export interface PastDueLease {
+	leaseId: number;
+	tenantName?: string | null;
+	/** Tenant phone, for a one-tap reminder text; null when not on file. */
+	tenantPhone?: string | null;
+	leaseNumber?: string | null;
+	propertyName?: string | null;
+	unitNumber?: string | null;
+	pastDueAmount: number;
+	overduePaymentCount: number;
+	/** Due date of the oldest past-due payment (drives the "N days late" label). */
+	oldestDueDate: string;
+	/** Id of the oldest past-due payment, so the row can deep-link into its detail. */
+	oldestPaymentId: number;
+}
+
 export interface PropertyFinancialSummary {
 	propertyId: number;
 	propertyName: string;

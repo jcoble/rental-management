@@ -163,7 +163,7 @@
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="payment-detail-page">
 	<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
 		<div>
-			<Button variant="ghost" href="/accounting" class="mb-2 -ml-3"><ArrowLeft class="h-4 w-4" />Accounting</Button>
+			<Button variant="ghost" href="/accounting" class="mb-2 -ml-3"><ArrowLeft class="h-4 w-4" />Money</Button>
 			<h1 class="text-2xl font-bold">{payment?.tenantName || payment?.leaseNumber || 'Payment'}</h1>
 			<p class="text-sm text-muted-foreground">{payment ? `${payment.paymentType} · $${payment.amount} · ${payment.status}` : ''}</p>
 		</div>

@@ -5,6 +5,7 @@ import type {
 	MoneySnapshotResponse,
 	OwnerStatementReport,
 	OwnerStatementSummary,
+	PastDueResponse,
 	ScheduleEReport
 } from '$lib/types';
 import { api, refreshToken } from '../client';
@@ -67,6 +68,10 @@ export const accounting = {
 	// GET /api/v1/accounting/snapshot — plain-English money snapshot (collected / spent /
 	// kept) with ready-to-show explanation sentences for the non-technical landlord.
 	snapshot: () => api.get<MoneySnapshotResponse>('/accounting/snapshot'),
+	// GET /api/v1/accounting/past-due — the "Who's behind" list: one row per behind lease/tenant.
+	// Shares the snapshot's past-due definition server-side, so totalCount == snapshot.pastDueCount.
+	// This is the single source both the dashboard KPI and the past-due list read from.
+	pastDue: () => api.get<PastDueResponse>('/accounting/past-due'),
 	reports: () => api.get<AccountingReports>('/accounting/reports'),
 	transactions: (params?: AccountingTransactionParams) => {
 		const { kind, status, category, propertyId, from, to, ...list } = params ?? {};

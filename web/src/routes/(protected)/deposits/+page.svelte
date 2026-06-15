@@ -286,7 +286,7 @@
 		<p class="text-foreground">
 			A security deposit is the tenant's money held in trust until the lease ends — it is
 			<span class="font-medium">not rental income</span>. Rent and other payments live on the
-			<a href="/accounting" class="font-medium underline underline-offset-2">Accounting</a> page; this page only
+			<a href="/accounting" class="font-medium underline underline-offset-2">Money</a> page; this page only
 			tracks what you're safekeeping and what gets deducted or returned.
 		</p>
 	</div>

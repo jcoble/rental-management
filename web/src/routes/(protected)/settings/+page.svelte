@@ -26,6 +26,7 @@
 		wizardStep,
 		type SettingsSectionMeta,
 	} from '$lib/onboarding/wizard-steps';
+	import { resolveSettingsTab, isLegacySettingsAnchor } from '$lib/onboarding/settings-anchor-map';
 	import {
 		ArrowRight,
 		Bell,
@@ -62,10 +63,24 @@
 	const validTabs = SETTINGS_SECTIONS.map((s) => s.key) as string[];
 	let activeTab = $state('portfolio');
 
+	// Open the tab named by the URL hash. The getting-started checklist + onboarding wizard deep-link
+	// with tab-key hashes (e.g. #notifications); the wizard's "back to settings" return and old
+	// bookmarks still use legacy section-anchor IDs. resolveSettingsTab() (the shared contract) maps
+	// both to the owning tab — Settings is the single source of truth for "which tab owns which section".
 	$effect(() => {
 		const hash = page.url.hash.replace('#', '');
-		if (hash && validTabs.includes(hash) && hash !== activeTab) {
-			activeTab = hash;
+		const targetTab = resolveSettingsTab(hash, validTabs);
+		if (targetTab && targetTab !== activeTab) {
+			activeTab = targetTab;
+		}
+		// For a legacy section anchor, scroll the section into view once its (now-active) tab panel has
+		// rendered. Tab-key hashes need no scroll — the tab itself is the destination.
+		if (targetTab && isLegacySettingsAnchor(hash) && typeof document !== 'undefined') {
+			requestAnimationFrame(() =>
+				requestAnimationFrame(() => {
+					document.getElementById(hash)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+				})
+			);
 		}
 	});
 
@@ -599,7 +614,7 @@
 			<div class="space-y-4">
 				{@render sectionIntro(SETTINGS_SECTIONS[0])}
 
-				<Card.Root class="gap-0 py-0" id="settings-portfolio-basics" data-testid="settings-portfolio-basics">
+				<Card.Root class="gap-0 py-0" id="settings-portfolio-basics" data-coach="settings-portfolio" data-testid="settings-portfolio-basics">
 					<Card.Content class="p-5">
 						<p class="mb-3 text-sm font-semibold">Portfolio basics</p>
 						<div class="grid gap-3 md:grid-cols-2">
@@ -759,7 +774,7 @@
 				{@render sectionIntro(SETTINGS_SECTIONS[1])}
 
 				<!-- Notification email — its own save endpoint (read-modify-writes the portfolio JSON). -->
-				<Card.Root class="gap-0 py-0" id="settings-notification-email" data-testid="settings-notification-email">
+				<Card.Root class="gap-0 py-0" id="settings-notification-email" data-coach="settings-notifications" data-testid="settings-notification-email">
 					<Card.Content class="p-5">
 						<p class="text-sm font-semibold">Where alerts go</p>
 						<p class="mb-3 text-xs text-muted-foreground">
@@ -971,7 +986,7 @@
 			<div class="space-y-4">
 				{@render sectionIntro(SETTINGS_SECTIONS[2])}
 
-				<Card.Root class="gap-0 py-0" id="settings-notification-delivery" data-testid="settings-notification-delivery">
+				<Card.Root class="gap-0 py-0" id="settings-notification-delivery" data-coach="settings-automations" data-testid="settings-notification-delivery">
 					<Card.Content class="p-5">
 						<p class="mb-3 text-sm font-semibold">Routine work the app handles for you</p>
 						<div class="grid gap-4 md:grid-cols-2">
@@ -1137,7 +1152,7 @@
 
 				<!-- Connected service: Text messaging (SMS) provider. Bring-your-own provider + creds.
 				     Saved by the delivery-settings endpoint (the same model the matrix uses). -->
-				<Card.Root class="gap-0 py-0" data-testid="settings-sms-provider-section">
+				<Card.Root class="gap-0 py-0" data-coach="settings-messaging" data-testid="settings-sms-provider-section">
 					<Card.Content class="p-5">
 						<div class="mb-1 flex items-center justify-between gap-2">
 							<p class="text-sm font-semibold">Text messaging (SMS)</p>
