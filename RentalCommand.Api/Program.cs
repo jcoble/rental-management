@@ -124,11 +124,19 @@ if (!builder.Environment.IsDevelopment() && jwtSettings.SecretKey.Contains("CHAN
 // The scoped AuditSaveChangesInterceptor is resolved from the same scope as the DbContext (the
 // (sp, options) overload), so it can read the per-request ICurrentActor / IAuditScope.
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
-    options.UseNpgsql(connectionString)
-        .AddInterceptors(sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>()));
 
 builder.Services.AddHttpContextAccessor();
+
+// Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
+// app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so
+// tenant isolation is enforced at the DB layer in addition to the app-layer PortfolioId filters.
+// Registered alongside the audit interceptor on the same DbContext.
+builder.Services.AddSingleton<RentalCommand.Api.Data.RlsConnectionInterceptor>();
+builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
+    options.UseNpgsql(connectionString)
+        .AddInterceptors(
+            sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
+            sp.GetRequiredService<RentalCommand.Api.Data.RlsConnectionInterceptor>()));
 
 // --- ASP.NET Identity (int keys) ---
 builder.Services.AddIdentity<ApplicationUser, IdentityRole<int>>(options =>
