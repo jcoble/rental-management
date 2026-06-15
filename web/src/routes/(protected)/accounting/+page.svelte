@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
+	import { get } from 'svelte/store';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { payments } from '$lib/api/endpoints/payments';
 	import { expenses } from '$lib/api/endpoints/expenses';
@@ -37,13 +40,17 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
-	// Landing on the day-to-day Ledger view; Reports and Overview are secondary.
-	let activeTab = $state('ledger');
 	const accountingTabs = [
 		{ value: 'ledger', label: 'Ledger' },
 		{ value: 'reports', label: 'Reports' },
 		{ value: 'overview', label: 'Overview' },
 	];
+	// Landing on the day-to-day Ledger view; Reports and Overview are secondary. Seeded from the URL so
+	// a deep-linked / Back-navigated tab is restored (the grid-state persistence below keeps it synced).
+	const initialTab = get(page).url.searchParams.get('tab');
+	let activeTab = $state(
+		initialTab && accountingTabs.some((t) => t.value === initialTab) ? initialTab : 'ledger'
+	);
 	const PAGE_SIZE = 20;
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
@@ -55,21 +62,31 @@
 	];
 	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
 
-	let transactionSearch = $state('');
-	let transactionKindFilter = $state('');
-	let transactionStatusFilter = $state('');
-	let transactionCategoryFilter = $state('');
-	let transactionPropertyFilter = $state('');
-	let transactionFromFilter = $state('');
-	let transactionToFilter = $state('');
-	let transactionPage = $state(1);
+	// --- Ledger grid state, persisted in the URL query string -------------------
+	// Filter / sort / search / paging (and the active tab) round-trip through the URL so they survive
+	// navigation away-and-back and browser Back/Forward (EdiPlatform's grid pattern). Seed the initial
+	// values from the current URL on mount, then mirror state -> URL via a replaceState goto.
+	const initialParams = get(page).url.searchParams;
+	const DEFAULT_SORT = '-createdAt';
+
+	let transactionSearch = $state(readGridParam(initialParams, 'q'));
+	let transactionKindFilter = $state(readGridParam(initialParams, 'kind'));
+	let transactionStatusFilter = $state(readGridParam(initialParams, 'status'));
+	let transactionCategoryFilter = $state(readGridParam(initialParams, 'category'));
+	let transactionPropertyFilter = $state(readGridParam(initialParams, 'property'));
+	let transactionFromFilter = $state(readGridParam(initialParams, 'from'));
+	let transactionToFilter = $state(readGridParam(initialParams, 'to'));
+	let transactionPage = $state(readGridParam(initialParams, 'page', 1));
 	// Default newest-entered-first: a just-scanned item lands at the top of the ledger even when its
 	// transaction date is wrong/old. The "Date" (transaction date) column stays sortable too.
-	let transactionSort = $state('-createdAt');
+	let transactionSort = $state(readGridParam(initialParams, 'sort') || DEFAULT_SORT);
 	let transactionDeleteTarget = $state<AccountingTransaction | null>(null);
 	const debouncedTransactionSearch = debounced(() => transactionSearch, 300);
 	const selectedPropertyFilter = $derived(transactionPropertyFilter ? Number(transactionPropertyFilter) : undefined);
 
+	// Reset to page 1 whenever a filter/search changes — but NOT on the initial mount, so a deep-linked
+	// or restored ?page=3 loads as-is instead of being clobbered back to 1.
+	let filterResetPrimed = false;
 	$effect(() => {
 		debouncedTransactionSearch.value;
 		transactionKindFilter;
@@ -78,7 +95,34 @@
 		transactionPropertyFilter;
 		transactionFromFilter;
 		transactionToFilter;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
 		transactionPage = 1;
+	});
+
+	// Mirror the current ledger grid state into the URL query string (state -> URL). syncGridUrl uses a
+	// replaceState goto so each keystroke doesn't stack history, omits empties/defaults to keep the URL
+	// tidy, and no-ops when the URL already matches (so this effect can't loop). Going away and back —
+	// or browser Back/Forward — remounts the page, and the $state seeds above read these params straight
+	// back. TanStack already re-fetches off the state vars, so this is purely the persistence layer.
+	$effect(() => {
+		syncGridUrl(
+			{
+				tab: activeTab,
+				q: transactionSearch,
+				kind: transactionKindFilter,
+				status: transactionStatusFilter,
+				category: transactionCategoryFilter,
+				property: transactionPropertyFilter,
+				from: transactionFromFilter,
+				to: transactionToFilter,
+				page: transactionPage,
+				sort: transactionSort,
+			},
+			{ tab: 'ledger', page: 1, sort: DEFAULT_SORT }
+		);
 	});
 
 	const transactionsQuery = createQuery(() => ({
