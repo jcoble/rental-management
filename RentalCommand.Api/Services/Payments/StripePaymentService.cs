@@ -65,7 +65,13 @@ public class StripePaymentService : IStripePaymentService
             return CreateIntentResult.NotFound();
         }
 
-        var requestOptions = new RequestOptions { ApiKey = _config.SecretKey };
+        var requestOptions = new RequestOptions
+        {
+            ApiKey = _config.SecretKey,
+            // Deterministic per payment + period: a retried/double-submitted create returns the
+            // original PaymentIntent rather than minting a second one for the same rent obligation.
+            IdempotencyKey = BuildPaymentIdempotencyKey("intent", payment),
+        };
         var intentService = new PaymentIntentService();
         var intent = await intentService.CreateAsync(new PaymentIntentCreateOptions
         {
@@ -142,7 +148,13 @@ public class StripePaymentService : IStripePaymentService
             ? $"Rent payment{(payment.PeriodKey != null ? $" — {payment.PeriodKey}" : "")}"
             : $"{payment.PaymentType} payment";
 
-        var requestOptions = new RequestOptions { ApiKey = _config.SecretKey };
+        var requestOptions = new RequestOptions
+        {
+            ApiKey = _config.SecretKey,
+            // Deterministic per payment + period so a retried checkout returns the original session
+            // for the same rent obligation instead of opening (and potentially charging via) a second.
+            IdempotencyKey = BuildPaymentIdempotencyKey("checkout", payment),
+        };
         var sessionService = new SessionService();
         var session = await sessionService.CreateAsync(new SessionCreateOptions
         {
@@ -549,5 +561,20 @@ public class StripePaymentService : IStripePaymentService
 
         return uri.Scheme == Uri.UriSchemeHttps
             && _config.AllowedReturnHosts.Contains(uri.Host, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Deterministic Stripe idempotency key for a user-initiated money-moving create call, scoped by
+    /// the create kind (intent vs checkout), the payment, and its billing period. A retried or
+    /// double-submitted create for the same rent obligation reuses the original Stripe object instead
+    /// of creating a second; Stripe expires idempotency keys after 24h, so a genuinely new attempt for
+    /// the same payment later still proceeds. Falls back to the due date when a payment has no PeriodKey.
+    /// </summary>
+    private static string BuildPaymentIdempotencyKey(string kind, Payment payment)
+    {
+        var period = string.IsNullOrEmpty(payment.PeriodKey)
+            ? payment.DueDate.ToString("yyyyMMdd")
+            : payment.PeriodKey;
+        return $"{kind}-{payment.Id}-{period}";
     }
 }
