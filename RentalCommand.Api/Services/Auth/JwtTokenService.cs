@@ -32,6 +32,13 @@ public interface IJwtTokenService
     /// <summary>Revokes a refresh token (logout). Returns false if the token was unknown.</summary>
     Task<bool> RevokeRefreshTokenAsync(string refreshToken);
 
+    /// <summary>
+    /// Revokes every active refresh token for the user who owns the presented token (sign out
+    /// everywhere). Used by explicit user logout so signing out ends all of that user's sessions, not
+    /// just the presenting device. Returns false if the token was unknown.
+    /// </summary>
+    Task<bool> RevokeRefreshTokenFamilyAsync(string refreshToken);
+
     /// <summary>Validates an access token's signature/issuer/audience and returns its principal, or null.</summary>
     ClaimsPrincipal? ValidateAccessToken(string token);
 }
@@ -358,6 +365,25 @@ public class JwtTokenService : IJwtTokenService
 
         storedToken.IsRevoked = true;
         await _dbContext.SaveChangesAsync();
+        return true;
+    }
+
+    public async Task<bool> RevokeRefreshTokenFamilyAsync(string refreshToken)
+    {
+        var tokenHash = HashToken(refreshToken);
+
+        // Resolve the owning user from the presented token, then revoke every active token for that
+        // user — the same family-revoke path used on theft detection — so an explicit sign-out ends
+        // sessions on all devices, not just the one that presented the cookie.
+        var storedToken = await _dbContext.RefreshTokens
+            .FirstOrDefaultAsync(rt => rt.TokenHash == tokenHash);
+
+        if (storedToken == null)
+        {
+            return false;
+        }
+
+        await RevokeTokenFamilyAsync(storedToken.UserId);
         return true;
     }
 

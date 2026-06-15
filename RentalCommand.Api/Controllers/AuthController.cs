@@ -279,7 +279,10 @@ public class AuthController : ControllerBase
         var refreshToken = Request.Cookies[AuthCookieNames.RefreshToken];
         if (!string.IsNullOrEmpty(refreshToken))
         {
-            await _tokenService.RevokeRefreshTokenAsync(refreshToken);
+            // Explicit user logout ends ALL of the user's sessions (every device), not just the
+            // presenting one — revoke the whole token family. The token-expiry/401 auto-refresh path
+            // stays single-token (it rotates one token, never calls this).
+            await _tokenService.RevokeRefreshTokenFamilyAsync(refreshToken);
         }
 
         ClearRefreshTokenCookies();
