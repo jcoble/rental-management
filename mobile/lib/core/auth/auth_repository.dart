@@ -140,6 +140,57 @@ class AuthRepository {
     }
   }
 
+  /// Re-sends the email-verification message via `POST /auth/resend-verification`.
+  ///
+  /// Anonymous and intentionally neutral — the API always returns 200 regardless
+  /// of whether the email exists or is already verified (no account enumeration).
+  /// Throws [ApiException] only on transport/server errors.
+  Future<void> resendVerification(String email) async {
+    try {
+      await _dio.post<Map<String, dynamic>>(
+        '/auth/resend-verification',
+        data: {'email': email},
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Completes a password reset via `POST /auth/reset-password` using the
+  /// `userId` + `token` from the emailed link. Throws [ApiException] on an
+  /// invalid/expired token or a password-policy failure (message folded in).
+  Future<void> resetPassword({
+    required String userId,
+    required String token,
+    required String newPassword,
+  }) async {
+    try {
+      await _dio.post<Map<String, dynamic>>(
+        '/auth/reset-password',
+        data: {'userId': userId, 'token': token, 'newPassword': newPassword},
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Changes the signed-in user's password via `POST /auth/change-password`
+  /// (Bearer-authenticated). Throws [ApiException] when the current password is
+  /// wrong, the new one fails policy, or the account is external-login only.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    try {
+      await _dio.post<Map<String, dynamic>>(
+        '/auth/change-password',
+        data: {'currentPassword': currentPassword, 'newPassword': newPassword},
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Fetches the current authenticated user via `GET /auth/me`.
   Future<AuthUser> currentUser() async {
     try {

@@ -9,8 +9,9 @@ import '../../core/auth/auth_controller.dart';
 ///
 /// Posts the email to `/auth/forgot-password` (which is intentionally neutral —
 /// it never reveals whether the account exists) and then shows a generic
-/// confirmation pointing the user to the web to finish the reset. Resetting the
-/// password itself is a web-only flow, so we don't collect a new password here.
+/// confirmation. The emailed reset link opens [ResetPasswordScreen] (in-app via
+/// the reset-password deep link, or on the web), so we don't collect a new
+/// password here.
 class ForgotPasswordScreen extends ConsumerStatefulWidget {
   const ForgotPasswordScreen({super.key});
 
@@ -240,7 +241,7 @@ class _ForgotPasswordScreenState extends ConsumerState<ForgotPasswordScreen> {
         const SizedBox(height: 12),
         Text(
           "If an account exists for that email, we've sent a reset link — "
-          'open it on the web to set a new password.',
+          'open it to set a new password.',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: colorScheme.onSurfaceVariant,
           ),
