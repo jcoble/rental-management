@@ -20,6 +20,10 @@ public class OwnerEntityResponse
     public string? Address { get; set; }
     public string? Phone { get; set; }
     public string? Email { get; set; }
+
+    /// <summary>True for the self-owner auto-created from the landlord's own account at onboarding.</summary>
+    public bool IsPrimary { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -41,6 +45,7 @@ public class OwnerEntityResponse
         Address = e.Address,
         Phone = e.Phone,
         Email = e.Email,
+        IsPrimary = e.IsPrimary,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
     };

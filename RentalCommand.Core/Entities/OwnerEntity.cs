@@ -27,6 +27,15 @@ public class OwnerEntity : IAuditable, IPortfolioScoped
     public string? Address { get; set; }
     public string? Phone { get; set; }
     public string? Email { get; set; }   // for emailed owner statements
+
+    /// <summary>
+    /// True for the owner auto-created from the landlord's own account during onboarding (the
+    /// self-owner). Lets the getting-started "owner" task auto-complete without a manual "add an owner"
+    /// step, while additional owners the user adds stay <c>false</c>. At most one primary owner per
+    /// portfolio is expected; it is editable like any other owner (e.g. renamed to an LLC).
+    /// </summary>
+    public bool IsPrimary { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

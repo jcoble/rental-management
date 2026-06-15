@@ -85,6 +85,7 @@ public class AuthService : IAuthService
     private readonly IAuthEmailSender _emailSender;
     private readonly RentalCommandDbContext _db;
     private readonly DemoDataSeeder _demoSeeder;
+    private readonly Domain.ISelfOwnerProvisioner _selfOwnerProvisioner;
     private readonly ILogger<AuthService> _logger;
 
     public AuthService(
@@ -95,6 +96,7 @@ public class AuthService : IAuthService
         IAuthEmailSender emailSender,
         RentalCommandDbContext db,
         DemoDataSeeder demoSeeder,
+        Domain.ISelfOwnerProvisioner selfOwnerProvisioner,
         ILogger<AuthService> logger)
     {
         _userManager = userManager;
@@ -104,6 +106,7 @@ public class AuthService : IAuthService
         _emailSender = emailSender;
         _db = db;
         _demoSeeder = demoSeeder;
+        _selfOwnerProvisioner = selfOwnerProvisioner;
         _logger = logger;
     }
 
@@ -227,6 +230,11 @@ public class AuthService : IAuthService
 
             // Seed demo data into the new sandbox portfolio (idempotent; its own inner transaction).
             await _demoSeeder.SeedPortfolioAsync(portfolio.Id);
+
+            // The landlord IS the first owner: auto-create a primary self-owner from their account and
+            // link it, so onboarding never needs a separate "add an owner" step. Idempotent; survives
+            // alongside the demo owners (the Go-Live wipe recreates it for the real portfolio).
+            await _selfOwnerProvisioner.EnsureSelfOwnerAsync(user, portfolio.Id);
 
             // A self-service owner administers their own portfolio: grant the Admin role + a UserAccount
             // staff row (mirrors the seeded admin). Without a role the nav only shows Dashboard + Help.

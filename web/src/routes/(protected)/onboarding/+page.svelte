@@ -11,6 +11,7 @@
 	import { notifications } from '$lib/api/endpoints/notifications';
 	import type { Owner, Property, Unit, Tenant, OwnerEntityType } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { getCurrentUser } from '$lib/stores/auth.svelte';
 	import {
 		settingsSchema,
 		ownerSchema,
@@ -284,6 +285,21 @@
 	const OWNER_ENTITY_TYPES: OwnerEntityType[] = ['Person', 'LLC', 'Trust'];
 	let ownerForm = $state({ name: '', ownerEntityType: 'Person' as OwnerEntityType, email: '', taxId: '' });
 	let ownerErrors = $state<Record<string, string>>({});
+
+	// TSK-209: the landlord IS the first owner, so confirm-don't-retype — pre-fill name + email from
+	// their account. Editable (they might own through an LLC). Only when they don't already have an owner
+	// on file, and only once, so we never clobber what they're typing. `$state` because the template
+	// reads it (to show the "filled from your account" hint).
+	let ownerPrefilled = $state(false);
+	$effect(() => {
+		if (ownerPrefilled) return;
+		if (hasExistingOwners) return; // a self-owner / existing owner already exists — adding another
+		const me = getCurrentUser();
+		if (!me) return;
+		ownerPrefilled = true;
+		if (!ownerForm.name.trim() && me.displayName?.trim()) ownerForm.name = me.displayName.trim();
+		if (!ownerForm.email.trim() && me.email?.trim()) ownerForm.email = me.email.trim();
+	});
 
 	const saveOwnerMutation = createMutation(() => ({
 		mutationFn: (data: Record<string, unknown>) => owners.create(data),
@@ -866,6 +882,10 @@
 							{#if hasExistingOwners && !createdOwner}
 								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-owner-existing">
 									You already have {ownersQuery.data?.length} owner{(ownersQuery.data?.length ?? 0) === 1 ? '' : 's'} on file. You can add another or skip ahead.
+								</div>
+							{:else if ownerPrefilled}
+								<div class="mb-4 rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-owner-prefilled">
+									We filled this in from your account — just confirm it's right. Own through an LLC or trust? Change the name and type below.
 								</div>
 							{/if}
 							<div class="grid gap-4 sm:grid-cols-2">
