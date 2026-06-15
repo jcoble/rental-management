@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 
@@ -183,16 +184,13 @@ public class AccountingService : IAccountingService
         var spentMtd = (expensesSpent?.Mtd ?? 0m) + (withdrawalsSpent?.Mtd ?? 0m);
         var spent30 = (expensesSpent?.Last30 ?? 0m) + (withdrawalsSpent?.Last30 ?? 0m);
 
-        // Past due: anyone behind right now (not period-bound). Amount and the distinct-lease count
-        // (≈ tenants behind) are both computed SQL-side (SUM + COUNT(DISTINCT LeaseId)).
-        var pastDueQuery = _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                        (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late) &&
-                        (p.Status == PaymentStatus.Late || p.DueDate < now));
-
-        var pastDueAmount = await pastDueQuery.SumAsync(p => (decimal?)p.Amount, ct) ?? 0m;
-        var pastDueCount = await pastDueQuery.Select(p => p.LeaseId).Distinct().CountAsync(ct);
+        // Past due: anyone behind right now (not period-bound). The amount and the distinct-lease count
+        // (= tenants behind) come from the SAME per-lease grouped query that powers the "Who's behind"
+        // list (GetPastDueAsync), so this KPI can never disagree with the destination row count.
+        // Both figures are derived SQL-side; no payment rows are loaded to count.
+        var pastDueGroups = await PastDueByLeaseQuery(portfolioId, now).ToListAsync(ct);
+        var pastDueAmount = pastDueGroups.Sum(g => g.PastDueAmount);
+        var pastDueCount = pastDueGroups.Count;
 
         var netMtd = collectedMtd - spentMtd;
         var net30 = collected30 - spent30;
@@ -213,6 +211,114 @@ public class AccountingService : IAccountingService
             NetLast30Days = net30,
             Explanations = BuildSnapshotExplanations(collectedMtd, spentMtd, netMtd, pastDueAmount, pastDueCount),
         };
+    }
+
+    public async Task<PastDueResponse> GetPastDueAsync(int portfolioId, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+
+        // One grouped round-trip: per behind lease, sum the past-due amount, count its past-due
+        // payments, and find the oldest past-due due date — the single source of truth for "behind".
+        var groups = await PastDueByLeaseQuery(portfolioId, now)
+            .OrderBy(g => g.OldestDueDate)
+            .ToListAsync(ct);
+
+        if (groups.Count == 0)
+        {
+            return new PastDueResponse { Items = [], TotalCount = 0, TotalPastDueAmount = 0m };
+        }
+
+        var leaseIds = groups.Select(g => g.LeaseId).ToList();
+
+        // Second round-trip: the id of each lease's oldest past-due payment (for the row deep-link).
+        var oldestPaymentIds = await PastDuePaymentsQuery(portfolioId, now)
+            .Where(p => leaseIds.Contains(p.LeaseId))
+            .GroupBy(p => p.LeaseId)
+            .Select(g => new
+            {
+                LeaseId = g.Key,
+                // Oldest by due date, then by id for a stable pick when due dates tie.
+                OldestPaymentId = g.OrderBy(p => p.DueDate).ThenBy(p => p.Id).Select(p => p.Id).First(),
+            })
+            .ToDictionaryAsync(x => x.LeaseId, x => x.OldestPaymentId, ct);
+
+        // Third round-trip: lease/tenant/property/unit labels for the rows.
+        var leaseMeta = await _db.Leases
+            .AsNoTracking()
+            .Where(l => l.PortfolioId == portfolioId && leaseIds.Contains(l.Id))
+            .Select(l => new
+            {
+                l.Id,
+                l.LeaseNumber,
+                TenantName = l.Tenant == null ? null : (l.Tenant.FirstName + " " + l.Tenant.LastName),
+                TenantPhone = l.Tenant == null ? null : l.Tenant.Phone,
+                PropertyName = l.Property == null ? null : l.Property.Name,
+                UnitNumber = l.Unit == null ? null : l.Unit.UnitNumber,
+            })
+            .ToDictionaryAsync(x => x.Id, ct);
+
+        var items = groups
+            .Select(g =>
+            {
+                leaseMeta.TryGetValue(g.LeaseId, out var meta);
+                return new PastDueLeaseResponse
+                {
+                    LeaseId = g.LeaseId,
+                    TenantName = string.IsNullOrWhiteSpace(meta?.TenantName) ? null : meta!.TenantName!.Trim(),
+                    TenantPhone = meta?.TenantPhone,
+                    LeaseNumber = meta?.LeaseNumber,
+                    PropertyName = meta?.PropertyName,
+                    UnitNumber = meta?.UnitNumber,
+                    PastDueAmount = g.PastDueAmount,
+                    OverduePaymentCount = g.OverduePaymentCount,
+                    OldestDueDate = g.OldestDueDate,
+                    OldestPaymentId = oldestPaymentIds.GetValueOrDefault(g.LeaseId),
+                };
+            })
+            .ToList();
+
+        return new PastDueResponse
+        {
+            Items = items,
+            TotalCount = items.Count,
+            TotalPastDueAmount = items.Sum(i => i.PastDueAmount),
+        };
+    }
+
+    /// <summary>
+    /// The canonical "is past due" payment predicate, shared by the snapshot KPI, the "Who's behind"
+    /// list, and the per-property overdue rollup so they never diverge: a payment is past due when it
+    /// is still owed (Scheduled/Partial/Late) AND is either explicitly Late or has a DueDate before
+    /// <paramref name="now"/>. Defined once here as the single source of truth.
+    /// </summary>
+    private IQueryable<Payment> PastDuePaymentsQuery(int portfolioId, DateTime now) => _db.Payments
+        .AsNoTracking()
+        .Where(p => p.PortfolioId == portfolioId &&
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late) &&
+                    (p.Status == PaymentStatus.Late || p.DueDate < now));
+
+    /// <summary>
+    /// The past-due payments rolled up per lease (one group = one behind tenant). The distinct-lease
+    /// count of this query is the KPI's "tenants behind", its summed amount is the KPI's past-due
+    /// amount, and its rows are the "Who's behind" list — all from one definition, computed SQL-side.
+    /// </summary>
+    private IQueryable<PastDueLeaseGroup> PastDueByLeaseQuery(int portfolioId, DateTime now) =>
+        PastDuePaymentsQuery(portfolioId, now)
+            .GroupBy(p => p.LeaseId)
+            .Select(g => new PastDueLeaseGroup
+            {
+                LeaseId = g.Key,
+                PastDueAmount = g.Sum(p => p.Amount),
+                OverduePaymentCount = g.Count(),
+                OldestDueDate = g.Min(p => p.DueDate),
+            });
+
+    private sealed class PastDueLeaseGroup
+    {
+        public int LeaseId { get; set; }
+        public decimal PastDueAmount { get; set; }
+        public int OverduePaymentCount { get; set; }
+        public DateTime OldestDueDate { get; set; }
     }
 
     private static MoneySnapshotExplanations BuildSnapshotExplanations(

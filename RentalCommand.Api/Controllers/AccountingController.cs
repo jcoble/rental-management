@@ -53,6 +53,19 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
         return Ok(snapshot);
     }
 
+    /// <summary>
+    /// The "Who's behind" list: one actionable row per lease/tenant currently behind on rent. This is
+    /// the destination behind the dashboard "tenants behind" KPI — both come from the same past-due
+    /// definition, so the returned <c>TotalCount</c> always equals that KPI count.
+    /// </summary>
+    [HttpGet("past-due")]
+    [ProducesResponseType(typeof(PastDueResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PastDueResponse>> PastDue(CancellationToken ct)
+    {
+        var pastDue = await _service.GetPastDueAsync(GetPortfolioId(), ct);
+        return Ok(pastDue);
+    }
+
     /// <summary>Ledger, property P&amp;L, Schedule E, and vendor 1099 review reports.</summary>
     [HttpGet("reports")]
     [ProducesResponseType(typeof(AccountingReportsResponse), StatusCodes.Status200OK)]

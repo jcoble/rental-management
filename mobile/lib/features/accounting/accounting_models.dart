@@ -87,3 +87,82 @@ class MoneySnapshot {
     );
   }
 }
+
+/// The "Who's behind" list from `GET /api/v1/accounting/past-due`: one row per
+/// lease/tenant behind on rent, plus the headline totals. The list shares the
+/// snapshot's past-due definition, so [totalCount] always equals the dashboard
+/// "tenants behind" KPI and the number of [items].
+class PastDueResult {
+  const PastDueResult({
+    required this.items,
+    required this.totalCount,
+    required this.totalPastDueAmount,
+  });
+
+  final List<PastDueLease> items;
+  final int totalCount;
+  final double totalPastDueAmount;
+
+  factory PastDueResult.fromJson(Map<String, dynamic> json) {
+    return PastDueResult(
+      items: (json['items'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(PastDueLease.fromJson)
+          .toList(),
+      totalCount: (json['totalCount'] as num?)?.toInt() ?? 0,
+      totalPastDueAmount:
+          (json['totalPastDueAmount'] as num?)?.toDouble() ?? 0,
+    );
+  }
+}
+
+/// One lease/tenant behind on rent: who they are, how much they owe, how many
+/// payments are past due, how long they've waited, and the oldest past-due
+/// payment id for a deep-link.
+class PastDueLease {
+  const PastDueLease({
+    required this.leaseId,
+    required this.pastDueAmount,
+    required this.overduePaymentCount,
+    required this.oldestDueDate,
+    required this.oldestPaymentId,
+    this.tenantName,
+    this.tenantPhone,
+    this.leaseNumber,
+    this.propertyName,
+    this.unitNumber,
+  });
+
+  final int leaseId;
+  final double pastDueAmount;
+  final int overduePaymentCount;
+  final DateTime oldestDueDate;
+  final int oldestPaymentId;
+  final String? tenantName;
+  final String? tenantPhone;
+  final String? leaseNumber;
+  final String? propertyName;
+  final String? unitNumber;
+
+  /// A friendly label for the row: tenant name, else lease number, else lease id.
+  String get displayName =>
+      tenantName ??
+      (leaseNumber != null ? 'Lease $leaseNumber' : 'Lease #$leaseId');
+
+  factory PastDueLease.fromJson(Map<String, dynamic> json) {
+    return PastDueLease(
+      leaseId: (json['leaseId'] as num?)?.toInt() ?? 0,
+      pastDueAmount: (json['pastDueAmount'] as num?)?.toDouble() ?? 0,
+      overduePaymentCount: (json['overduePaymentCount'] as num?)?.toInt() ?? 0,
+      oldestDueDate:
+          DateTime.tryParse(json['oldestDueDate'] as String? ?? '') ??
+              DateTime(0),
+      oldestPaymentId: (json['oldestPaymentId'] as num?)?.toInt() ?? 0,
+      tenantName: json['tenantName'] as String?,
+      tenantPhone: json['tenantPhone'] as String?,
+      leaseNumber: json['leaseNumber'] as String?,
+      propertyName: json['propertyName'] as String?,
+      unitNumber: json['unitNumber'] as String?,
+    );
+  }
+}
