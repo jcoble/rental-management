@@ -21,6 +21,8 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import AppointmentCalendar from './AppointmentCalendar.svelte';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import {
 		TYPE_LEGEND,
 		utcIsoToLocalWallClock,
@@ -34,12 +36,13 @@
 
 	// ── View toggle: Calendar (default) / List ──────────────────────────────────
 	type AppointmentView = 'calendar' | 'list';
-	let view = $state<AppointmentView>('calendar');
+	// View + search/type/status filters persisted in the URL so they survive navigating away and back.
+	let view = $state<AppointmentView>(page.url.searchParams.get('view') === 'list' ? 'list' : 'calendar');
 
 	const PAGE_SIZE = 20;
-	let search = $state('');
-	let typeFilter = $state('');
-	let statusFilter = $state('');
+	let search = $state(readGridParam(page.url.searchParams, 'q'));
+	let typeFilter = $state(readGridParam(page.url.searchParams, 'type'));
+	let statusFilter = $state(readGridParam(page.url.searchParams, 'status'));
 	let skip = $state(0);
 	const debouncedSearch = debounced(() => search, 300);
 	$effect(() => {
@@ -47,6 +50,9 @@
 		typeFilter;
 		statusFilter;
 		skip = 0;
+	});
+	$effect(() => {
+		syncGridUrl({ view, q: search, type: typeFilter, status: statusFilter }, { view: 'calendar' });
 	});
 
 	// List view is paged/searched server-side; the calendar needs a fuller window

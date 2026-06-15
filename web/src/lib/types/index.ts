@@ -59,7 +59,7 @@ export interface SandboxState {
 	sandboxSeededAtUtc?: string | null;
 	/**
 	 * True when the account has not yet made the first-login Sandbox-vs-Live choice. While true the
-	 * app routes the user to the onboarding choice gate (`/onboarding/choose`) instead of the dashboard.
+	 * app routes the user to the onboarding choice gate (`/choose-setup`) instead of the dashboard.
 	 */
 	onboardingChoicePending?: boolean;
 }

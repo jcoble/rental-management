@@ -16,12 +16,18 @@
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 
-	let vendorSearch = $state('');
+	// Search persisted in the URL so it survives navigating away and back.
+	let vendorSearch = $state(readGridParam(page.url.searchParams, 'q'));
 	const debouncedVendorSearch = debounced(() => vendorSearch, 300);
+	$effect(() => {
+		syncGridUrl({ q: vendorSearch });
+	});
 
 	const vendorsQuery = createQuery(() => ({
 		queryKey: ['vendors', portfolioId, debouncedVendorSearch.value],
