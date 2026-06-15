@@ -3,7 +3,9 @@ import type { Cookies } from '@sveltejs/kit';
 export const AUTH_COOKIE_NAMES = {
 	accessToken: 'rc_access_token',
 	accessTokenExpiration: 'rc_access_token_expiration',
-	refreshToken: 'rc_refresh_token'
+	refreshToken: 'rc_refresh_token',
+	/** Short-lived anti-CSRF state for the Google OAuth2 authorization-code flow. */
+	oauthState: 'rc_oauth_state'
 } as const;
 
 export const LEGACY_AUTH_COOKIE_NAMES = {
