@@ -211,8 +211,7 @@
 		{ href: '/portal/maintenance', label: 'Maintenance', icon: Wrench },
 		{ href: '/portal/payments', label: 'Payments', icon: CreditCard },
 		{ href: '/portal/lease', label: 'Lease', icon: FileText },
-		{ href: '/portal/appointments', label: 'Appointments', icon: Calendar },
-		{ href: '/portal/requests', label: 'Requests', icon: ClipboardList }
+		{ href: '/portal/appointments', label: 'Appointments', icon: Calendar }
 	];
 
 	function itemVisible(item: NavItem): boolean {
