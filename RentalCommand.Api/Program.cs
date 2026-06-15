@@ -124,11 +124,19 @@ if (!builder.Environment.IsDevelopment() && jwtSettings.SecretKey.Contains("CHAN
 // The scoped AuditSaveChangesInterceptor is resolved from the same scope as the DbContext (the
 // (sp, options) overload), so it can read the per-request ICurrentActor / IAuditScope.
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
-    options.UseNpgsql(connectionString)
-        .AddInterceptors(sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>()));
 
 builder.Services.AddHttpContextAccessor();
+
+// Row-Level Security backstop (audit M-1): a connection interceptor sets the per-request
+// app.current_portfolio_id / app.is_admin session GUCs that the tenant_isolation policies read, so
+// tenant isolation is enforced at the DB layer in addition to the app-layer PortfolioId filters.
+// Registered alongside the audit interceptor on the same DbContext.
+builder.Services.AddSingleton<RentalCommand.Api.Data.RlsConnectionInterceptor>();
+builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
+    options.UseNpgsql(connectionString)
+        .AddInterceptors(
+            sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
+            sp.GetRequiredService<RentalCommand.Api.Data.RlsConnectionInterceptor>()));
 
 // --- ASP.NET Identity (int keys) ---
 builder.Services.AddIdentity<ApplicationUser, IdentityRole<int>>(options =>
@@ -346,14 +354,44 @@ using (var scope = app.Services.CreateScope())
 
 // Behind Traefik (TLS terminator) the API receives plain HTTP on :8080, so honor X-Forwarded-Proto
 // / X-Forwarded-For FIRST — otherwise Request.Scheme is "http", any absolute URL the API emits is
-// http:// (browser mixed-content "Not Secure"), and the client IP is the proxy's. The only ingress
-// is Traefik on the internal Docker network, so trust forwarded headers from any proxy.
+// http:// (browser mixed-content "Not Secure"), and the client IP is the proxy's.
+//
+// SECURITY (L-6): we do NOT trust forwarded headers from *any* caller — that lets a peer spoof
+// X-Forwarded-For/Proto, poisoning the client IP used for refresh-token IP logging and the request
+// scheme. The only ingress is Traefik on the internal Docker network, so we trust forwarded headers
+// only from the proxy network(s). Configurable via ForwardedHeaders:KnownNetworks (a list of CIDRs);
+// when unset we default to the RFC 1918 private ranges + loopback, which covers the Docker bridge the
+// API actually sits on while still rejecting forwarded headers from any public source. The API is
+// never published directly (compose keeps :8080 unpublished), so this is fail-safe if the topology
+// changes.
 var forwardedHeadersOptions = new ForwardedHeadersOptions
 {
-    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+    // Traefik adds one hop; allow a little headroom but don't trust an arbitrarily deep chain.
+    ForwardLimit = 2
 };
 forwardedHeadersOptions.KnownIPNetworks.Clear();
 forwardedHeadersOptions.KnownProxies.Clear();
+
+var configuredKnownNetworks = app.Configuration
+    .GetSection("ForwardedHeaders:KnownNetworks")
+    .Get<string[]>();
+var knownNetworkCidrs = configuredKnownNetworks is { Length: > 0 }
+    ? configuredKnownNetworks
+    : new[] { "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128" };
+
+foreach (var cidr in knownNetworkCidrs)
+{
+    if (string.IsNullOrWhiteSpace(cidr)) continue;
+    if (System.Net.IPNetwork.TryParse(cidr.Trim(), out var network))
+    {
+        forwardedHeadersOptions.KnownIPNetworks.Add(network);
+    }
+    else
+    {
+        app.Logger.LogWarning("Ignoring invalid ForwardedHeaders:KnownNetworks entry '{Cidr}'.", cidr);
+    }
+}
 app.UseForwardedHeaders(forwardedHeadersOptions);
 
 app.UseCors("WebApp");
