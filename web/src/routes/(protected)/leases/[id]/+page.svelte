@@ -15,6 +15,7 @@
 	import { leaseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
@@ -458,8 +459,8 @@
 			title: 'Type',
 			mobileRole: 'subtitle',
 			// Payment serializes the field as `paymentType` (not `type`); without this accessor the
-			// column rendered blank for every row.
-			accessor: (p) => p.paymentType,
+			// column rendered blank for every row. Humanize the enum for display (M-13).
+			accessor: (p) => paymentTypeLabel(p.paymentType),
 		},
 		{
 			key: 'amount',

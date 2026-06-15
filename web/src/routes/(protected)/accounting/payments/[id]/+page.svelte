@@ -9,6 +9,7 @@
 	import { paymentSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
@@ -165,7 +166,7 @@
 		<div>
 			<Button variant="ghost" href="/accounting" class="mb-2 -ml-3"><ArrowLeft class="h-4 w-4" />Money</Button>
 			<h1 class="text-2xl font-bold">{payment?.tenantName || payment?.leaseNumber || 'Payment'}</h1>
-			<p class="text-sm text-muted-foreground">{payment ? `${payment.paymentType} · $${payment.amount} · ${payment.status}` : ''}</p>
+			<p class="text-sm text-muted-foreground">{payment ? `${paymentTypeLabel(payment.paymentType)} · $${payment.amount} · ${payment.status}` : ''}</p>
 		</div>
 		{#if payment}
 			<div class="flex gap-2">
@@ -188,7 +189,7 @@
 		<!-- Hero: the amount + how it's being collected, washed by collection status. -->
 		<HeroCard tone={heroTone} testid="payment-hero" contentClass="flex flex-wrap items-end justify-between gap-6" class="mb-6">
 			<div class="min-w-0">
-				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{payment.paymentType} payment</p>
+				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">{paymentTypeLabel(payment.paymentType)} payment</p>
 				<p class="mt-1 font-mono text-4xl font-bold tabular-nums tracking-tight" data-testid="payment-hero-amount">{heroAmount}</p>
 				<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
 					<StatusBadge status={payment.status} />

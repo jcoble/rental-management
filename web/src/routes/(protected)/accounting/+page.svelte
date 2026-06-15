@@ -20,6 +20,7 @@
 	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
+	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -1144,11 +1145,11 @@
 			<div class="grid grid-cols-2 gap-2">
 				<Select.Root type="single" bind:value={paymentForm.paymentType}>
 					<Select.Trigger class="w-full" data-testid="payment-type-input">
-						{paymentForm.paymentType || 'Select type'}
+						{paymentForm.paymentType ? paymentTypeLabel(paymentForm.paymentType) : 'Select type'}
 					</Select.Trigger>
 					<Select.Content>
 						{#each PAYMENT_TYPES as t}
-							<Select.Item value={t} label={t}>{t}</Select.Item>
+							<Select.Item value={t} label={paymentTypeLabel(t)}>{paymentTypeLabel(t)}</Select.Item>
 						{/each}
 					</Select.Content>
 				</Select.Root>
@@ -1436,7 +1437,7 @@
 <ConfirmDialog
 	open={paymentDeleteTarget !== null}
 	title="Delete payment"
-	message={paymentDeleteTarget ? `Delete this ${money(paymentDeleteTarget.amount)} ${paymentDeleteTarget.paymentType} charge?` : ''}
+	message={paymentDeleteTarget ? `Delete this ${money(paymentDeleteTarget.amount)} ${paymentTypeLabel(paymentDeleteTarget.paymentType).toLowerCase()} charge?` : ''}
 	busy={deletePaymentMutation.isPending}
 	testid="payment-delete"
 	onconfirm={() => paymentDeleteTarget && deletePaymentMutation.mutate(paymentDeleteTarget.id)}
