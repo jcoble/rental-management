@@ -31,6 +31,8 @@ public class ScanServiceTests : IDisposable
     private readonly RecordingWorkOrderService _workOrders;
     private readonly RecordingLeaseService _leases;
     private readonly RecordingTenantService _tenants;
+    private readonly RecordingPropertyService _properties;
+    private readonly RecordingUnitService _units;
     private readonly RecordingAuditService _audit;
     private readonly ScanService _sut;
 
@@ -65,6 +67,8 @@ public class ScanServiceTests : IDisposable
         _workOrders   = new RecordingWorkOrderService();
         _leases       = new RecordingLeaseService();
         _tenants      = new RecordingTenantService(_db);
+        _properties   = new RecordingPropertyService(_db);
+        _units        = new RecordingUnitService(_db);
         _audit        = new RecordingAuditService();
 
         _sut = new ScanService(
@@ -75,6 +79,8 @@ public class ScanServiceTests : IDisposable
             _workOrders,
             _leases,
             _tenants,
+            _properties,
+            _units,
             _audit,
             NullLogger<ScanService>.Instance);
     }
@@ -473,6 +479,114 @@ public class ScanServiceTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
+    // Scan-import bootstrap (the load-bearing invariant): scanning a lease into an EMPTY
+    // portfolio creates Property → Unit → Tenant → Lease from the document; a SECOND scan
+    // for the same address links to the existing Property/Unit rather than duplicating them.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LeaseIntoEmptyPortfolio_CreatesPropertyUnitTenantAndLease_ThenDedupesOnRescan()
+    {
+        // No property_id / unit_id — a brand-new landlord with an EMPTY portfolio. The leased premises
+        // (address + unit) and the tenant come straight off the document.
+        const string extractedJson =
+            """
+            {"target_entity_type":{"value":"Lease","confidence":0.95},
+             "tenant_name":{"value":"Dana Brooks","confidence":0.9},
+             "property_name":{"value":"Riverside Flats","confidence":0.7},
+             "property_address":{"value":"742 Evergreen St","confidence":0.9},
+             "property_city":{"value":"Springfield","confidence":0.9},
+             "property_state":{"value":"OH","confidence":0.9},
+             "property_postal_code":{"value":"45503","confidence":0.9},
+             "unit_number":{"value":"3C","confidence":0.85},
+             "unit_bedrooms":{"value":"2","confidence":0.7},
+             "unit_bathrooms":{"value":"1.5","confidence":0.7},
+             "start_date":{"value":"2026-02-01","confidence":0.9},
+             "end_date":{"value":"2027-01-31","confidence":0.9},
+             "monthly_rent":{"value":"1325.00","confidence":0.9}}
+            """;
+
+        var draft1 = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
+        SeedStoredFile(draft1.FilePath);
+        _leases.SetupResponse(new LeaseResponse { Id = 901, PortfolioId = PortfolioId });
+
+        // Sanity: the portfolio really is empty before the scan.
+        (await _db.Properties.CountAsync()).Should().Be(0);
+        (await _db.Units.CountAsync()).Should().Be(0);
+        (await _db.Tenants.CountAsync()).Should().Be(0);
+
+        var result1 = await _sut.ConfirmAndCreateAsync(PortfolioId, draft1.Id, userId: 5, overridesJson: "{}");
+
+        result1.Success.Should().BeTrue("Unexpected: " + result1.Error);
+        result1.EntityType.Should().Be("Lease");
+
+        // A Property, a Unit, and a Tenant were all created from the document.
+        var property = await _db.Properties.SingleAsync();
+        property.AddressLine1.Should().Be("742 Evergreen St");
+        property.City.Should().Be("Springfield");
+        property.State.Should().Be("OH");
+        property.PostalCode.Should().Be("45503");
+        property.Name.Should().Be("Riverside Flats");
+
+        var unit = await _db.Units.SingleAsync();
+        unit.PropertyId.Should().Be(property.Id);
+        unit.UnitNumber.Should().Be("3C");
+        unit.Bedrooms.Should().Be(2m);
+        unit.Bathrooms.Should().Be(1.5m);
+
+        var tenant = await _db.Tenants.SingleAsync();
+        tenant.FirstName.Should().Be("Dana");
+        tenant.LastName.Should().Be("Brooks");
+
+        // The Lease that was created links the freshly-created property, unit, and tenant.
+        var leaseReq1 = _leases.LastRequest!;
+        leaseReq1.PropertyId.Should().Be(property.Id);
+        leaseReq1.UnitId.Should().Be(unit.Id);
+        leaseReq1.TenantId.Should().Be(tenant.Id);
+        leaseReq1.MonthlyRent.Should().Be(1325.00m);
+
+        _properties.CreateCount.Should().Be(1);
+        _units.CreateCount.Should().Be(1);
+
+        // ---- Second scan of the SAME premises (address formatted differently: "St" vs "Street") ----
+        // It must LINK to the existing property + unit, not create duplicates (the dedupe invariant).
+        const string rescanJson =
+            """
+            {"target_entity_type":{"value":"Lease","confidence":0.95},
+             "tenant_name":{"value":"Evan Cole","confidence":0.9},
+             "property_address":{"value":"742 Evergreen Street","confidence":0.9},
+             "property_city":{"value":"Springfield","confidence":0.9},
+             "property_state":{"value":"OH","confidence":0.9},
+             "property_postal_code":{"value":"45503","confidence":0.9},
+             "unit_number":{"value":"3C","confidence":0.85},
+             "start_date":{"value":"2026-03-01","confidence":0.9},
+             "end_date":{"value":"2027-02-28","confidence":0.9},
+             "monthly_rent":{"value":"1350.00","confidence":0.9}}
+            """;
+
+        var draft2 = SeedDraft("Reviewing", rescanJson, targetEntityType: "Lease");
+        SeedStoredFile(draft2.FilePath);
+        _leases.SetupResponse(new LeaseResponse { Id = 902, PortfolioId = PortfolioId });
+
+        var result2 = await _sut.ConfirmAndCreateAsync(PortfolioId, draft2.Id, userId: 5, overridesJson: "{}");
+
+        result2.Success.Should().BeTrue("Unexpected: " + result2.Error);
+
+        // No new Property/Unit — the second lease links the SAME rows the first scan created.
+        (await _db.Properties.CountAsync()).Should().Be(1);
+        (await _db.Units.CountAsync()).Should().Be(1);
+        _properties.CreateCount.Should().Be(1);
+        _units.CreateCount.Should().Be(1);
+
+        var leaseReq2 = _leases.LastRequest!;
+        leaseReq2.PropertyId.Should().Be(property.Id);
+        leaseReq2.UnitId.Should().Be(unit.Id);
+        // A different tenant on the second lease was chained as a new tenant (now two tenants total).
+        (await _db.Tenants.CountAsync()).Should().Be(2);
+        leaseReq2.TenantId.Should().NotBe(tenant.Id);
+    }
+
+    // -------------------------------------------------------------------------
     // Confirm: a scanned rent check becomes a paid Payment (the "scan the check"
     // money flow). MAKE-SURE-DONE-E2E: locks the RentCheck -> Payment confirm path.
     // -------------------------------------------------------------------------
@@ -750,6 +864,113 @@ public class ScanServiceTests : IDisposable
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<TenantResponse?> UpdateAsync(int portfolioId, int id, UpdateTenantRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+    }
+
+    /// <summary>
+    /// Recording property service that actually persists a Property to the shared test DbContext so the
+    /// scan-import bootstrap creates a real, in-portfolio property whose id downstream code (and a second
+    /// scan's dedupe match) can find — mirrors production PropertyService.
+    /// </summary>
+    private sealed class RecordingPropertyService : IPropertyService
+    {
+        private readonly RentalCommandDbContext _db;
+
+        public RecordingPropertyService(RentalCommandDbContext db) => _db = db;
+
+        public int CreateCount { get; private set; }
+        public CreatePropertyRequest? LastRequest { get; private set; }
+
+        public async Task<PropertyResponse?> CreateAsync(int portfolioId, CreatePropertyRequest request, CancellationToken ct = default)
+        {
+            CreateCount++;
+            LastRequest = request;
+            var now = DateTime.UtcNow;
+            var entity = new Property
+            {
+                PortfolioId = portfolioId,
+                Name = request.Name,
+                PropertyType = request.PropertyType,
+                Status = request.Status,
+                AddressLine1 = request.AddressLine1,
+                AddressLine2 = request.AddressLine2,
+                City = request.City,
+                State = request.State,
+                PostalCode = request.PostalCode,
+                Notes = request.Notes,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            _db.Properties.Add(entity);
+            await _db.SaveChangesAsync(ct);
+            return PropertyResponse.FromEntity(entity);
+        }
+
+        public Task<IReadOnlyList<PropertyResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<PropertyResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<PropertyResponse?> UpdateAsync(int portfolioId, int id, UpdatePropertyRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+    }
+
+    /// <summary>
+    /// Recording unit service that actually persists a Unit (scoped to its property) to the shared test
+    /// DbContext so the scan-import bootstrap creates a real unit whose id downstream code (and a second
+    /// scan's dedupe match) can find — mirrors production UnitService.
+    /// </summary>
+    private sealed class RecordingUnitService : IUnitService
+    {
+        private readonly RentalCommandDbContext _db;
+
+        public RecordingUnitService(RentalCommandDbContext db) => _db = db;
+
+        public int CreateCount { get; private set; }
+        public CreateUnitRequest? LastRequest { get; private set; }
+
+        public async Task<UnitResponse?> CreateAsync(int portfolioId, CreateUnitRequest request, CancellationToken ct = default)
+        {
+            // Mirror production scoping: the target property must be in the caller's portfolio.
+            if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
+                return null;
+
+            CreateCount++;
+            LastRequest = request;
+            var now = DateTime.UtcNow;
+            var entity = new Unit
+            {
+                PropertyId = request.PropertyId,
+                UnitNumber = request.UnitNumber,
+                FloorPlan = request.FloorPlan,
+                Bedrooms = request.Bedrooms,
+                Bathrooms = request.Bathrooms,
+                SquareFeet = request.SquareFeet,
+                MarketRent = request.MarketRent,
+                Status = request.Status,
+                Notes = request.Notes,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            _db.Units.Add(entity);
+            await _db.SaveChangesAsync(ct);
+            return UnitResponse.FromEntity(entity);
+        }
+
+        public Task<IReadOnlyList<UnitResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<UnitResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<UnitResponse?> UpdateAsync(int portfolioId, int id, UpdateUnitRequest request, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
