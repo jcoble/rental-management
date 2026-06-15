@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
+import 'payment_detail_screen.dart';
 import 'payments_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -24,8 +25,19 @@ String _fmtCurrency(double amount) {
 
 String _fmtDate(DateTime d) {
   const months = [
-    '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    '',
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
   ];
   return '${months[d.month]} ${d.day}, ${d.year}';
 }
@@ -61,6 +73,23 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
     ]);
   }
 
+  /// Opens the full payment detail screen (I9: the standalone list was a
+  /// dead-end — every other payment row in the app drills in). Refreshes the
+  /// list + summary on return so a mark-paid / edit made on the detail screen is
+  /// reflected here.
+  Future<void> _openDetail(BuildContext context, int paymentId) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PaymentDetailScreen(paymentId: paymentId),
+      ),
+    );
+    if (!mounted) return;
+    await Future.wait([
+      ref.read(paymentsProvider.notifier).refresh(),
+      ref.read(accountingSummaryProvider.notifier).refresh(),
+    ]);
+  }
+
   void _showCreateSheet(BuildContext context) {
     // Pre-load leases for the dropdown.
     ref.read(leasesForPaymentProvider.notifier).load();
@@ -87,9 +116,7 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Payments'),
-      ),
+      appBar: AppBar(title: const Text('Payments')),
       floatingActionButton: FloatingActionButton(
         heroTag: 'payments-fab',
         onPressed: () => _showCreateSheet(context),
@@ -111,11 +138,9 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
                 error: (e, _) => Padding(
                   padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
                   child: _ErrorBanner(
-                    message:
-                        e is ApiException ? e.message : e.toString(),
-                    onRetry: () => ref
-                        .read(accountingSummaryProvider.notifier)
-                        .refresh(),
+                    message: e is ApiException ? e.message : e.toString(),
+                    onRetry: () =>
+                        ref.read(accountingSummaryProvider.notifier).refresh(),
                   ),
                 ),
                 data: (summary) => _SummaryCards(
@@ -134,21 +159,19 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
               error: (e, _) => SliverFillRemaining(
                 child: _ErrorBody(
                   message: e is ApiException ? e.message : e.toString(),
-                  onRetry: () =>
-                      ref.read(paymentsProvider.notifier).refresh(),
+                  onRetry: () => ref.read(paymentsProvider.notifier).refresh(),
                 ),
               ),
               data: (list) {
                 if (list.isEmpty) {
-                  return const SliverFillRemaining(
-                    child: _EmptyBody(),
-                  );
+                  return const SliverFillRemaining(child: _EmptyBody());
                 }
                 return SliverPadding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
                   sliver: SliverList.separated(
                     itemCount: list.length,
-                    separatorBuilder: (context, index) => const SizedBox(height: 8),
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: 8),
                     itemBuilder: (ctx, i) => _PaymentCard(
                       payment: list[i],
                       colorScheme: colorScheme,
@@ -156,6 +179,7 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
                       onMarkPaid: () => ref
                           .read(paymentsProvider.notifier)
                           .markPaid(list[i].id),
+                      onTap: () => _openDetail(ctx, list[i].id),
                     ),
                   ),
                 );
@@ -245,10 +269,7 @@ class _SummaryCards extends StatelessWidget {
                     ],
                     for (final bullet in summary.snapshot.bullets.take(3)) ...[
                       const SizedBox(height: 8),
-                      Text(
-                        '- $bullet',
-                        style: theme.textTheme.bodySmall,
-                      ),
+                      Text('- $bullet', style: theme.textTheme.bodySmall),
                     ],
                   ],
                 ),
@@ -315,92 +336,98 @@ class _PaymentCard extends StatelessWidget {
     required this.colorScheme,
     required this.theme,
     required this.onMarkPaid,
+    required this.onTap,
   });
 
   final Payment payment;
   final ColorScheme colorScheme;
   final ThemeData theme;
   final VoidCallback onMarkPaid;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final isPaid = payment.status.toLowerCase() == 'paid';
 
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Tenant / lease info
-                  Text(
-                    payment.tenantName ??
-                        (payment.leaseNumber != null
-                            ? 'Lease ${payment.leaseNumber}'
-                            : 'Payment #${payment.id}'),
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w600),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  if (payment.leaseNumber != null)
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Tenant / lease info
                     Text(
-                      'Lease ${payment.leaseNumber}',
+                      payment.tenantName ??
+                          (payment.leaseNumber != null
+                              ? 'Lease ${payment.leaseNumber}'
+                              : 'Payment #${payment.id}'),
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    if (payment.leaseNumber != null)
+                      Text(
+                        'Lease ${payment.leaseNumber}',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Text(
+                          _fmtCurrency(payment.amount),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        _StatusChip(
+                          status: payment.status,
+                          colorScheme: colorScheme,
+                        ),
+                        const SizedBox(width: 8),
+                        _TypeChip(type: payment.type, colorScheme: colorScheme),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Due ${_fmtDate(payment.dueDate)}',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: colorScheme.onSurfaceVariant,
                       ),
                     ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Text(
-                        _fmtCurrency(payment.amount),
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      _StatusChip(
-                        status: payment.status,
-                        colorScheme: colorScheme,
-                      ),
-                      const SizedBox(width: 8),
-                      _TypeChip(
-                        type: payment.type,
-                        colorScheme: colorScheme,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Due ${_fmtDate(payment.dueDate)}',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (!isPaid)
-              Padding(
-                padding: const EdgeInsets.only(left: 8),
-                child: FilledButton.tonal(
-                  onPressed: onMarkPaid,
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 6),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    textStyle: const TextStyle(fontSize: 12),
-                  ),
-                  child: const Text('Mark paid'),
+                  ],
                 ),
               ),
-          ],
+              if (!isPaid)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: FilledButton.tonal(
+                    onPressed: onMarkPaid,
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      textStyle: const TextStyle(fontSize: 12),
+                    ),
+                    child: const Text('Mark paid'),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -465,11 +492,7 @@ class _Chip extends StatelessWidget {
       ),
       child: Text(
         label,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          color: fg,
-        ),
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
       ),
     );
   }
@@ -487,14 +510,17 @@ class _EmptyBody extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.receipt_long_outlined,
-              size: 48, color: colorScheme.onSurfaceVariant),
+          Icon(
+            Icons.receipt_long_outlined,
+            size: 48,
+            color: colorScheme.onSurfaceVariant,
+          ),
           const SizedBox(height: 12),
           Text(
             'No payments yet',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
+              color: colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 4),
           Text(
@@ -530,10 +556,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: colorScheme.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
@@ -564,13 +587,12 @@ class _ErrorBanner extends StatelessWidget {
             child: Text(
               message,
               style: TextStyle(
-                  color: colorScheme.onErrorContainer, fontSize: 13),
+                color: colorScheme.onErrorContainer,
+                fontSize: 13,
+              ),
             ),
           ),
-          TextButton(
-            onPressed: onRetry,
-            child: const Text('Retry'),
-          ),
+          TextButton(onPressed: onRetry, child: const Text('Retry')),
         ],
       ),
     );
@@ -608,13 +630,7 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
     'Utility',
     'Other',
   ];
-  static const _statuses = [
-    'Scheduled',
-    'Paid',
-    'Partial',
-    'Late',
-    'Waived',
-  ];
+  static const _statuses = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
 
   @override
   void dispose() {
@@ -667,8 +683,7 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
         'dueDate': _dueDate!.toIso8601String().split('T').first,
         'type': _type,
         'status': _status,
-        if (_notesCtrl.text.trim().isNotEmpty)
-          'notes': _notesCtrl.text.trim(),
+        if (_notesCtrl.text.trim().isNotEmpty) 'notes': _notesCtrl.text.trim(),
       });
 
       widget.onSaved();
@@ -702,8 +717,9 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
                   Expanded(
                     child: Text(
                       'Record Payment',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   IconButton(
@@ -741,8 +757,7 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
                       )
                       .toList(),
                   onChanged: (v) => setState(() => _selectedLeaseId = v),
-                  validator: (v) =>
-                      v == null ? 'Please select a lease' : null,
+                  validator: (v) => v == null ? 'Please select a lease' : null,
                 ),
               ),
               const SizedBox(height: 12),
@@ -751,7 +766,8 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
               TextFormField(
                 controller: _amountCtrl,
                 keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true),
+                  decimal: true,
+                ),
                 textInputAction: TextInputAction.next,
                 decoration: const InputDecoration(
                   labelText: 'Amount',
@@ -776,17 +792,19 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
                 child: InputDecorator(
                   decoration: InputDecoration(
                     labelText: 'Due date',
-                    suffixIcon: const Icon(Icons.calendar_today_outlined,
-                        size: 18),
-                    errorText: (_dueDate == null && _error != null &&
+                    suffixIcon: const Icon(
+                      Icons.calendar_today_outlined,
+                      size: 18,
+                    ),
+                    errorText:
+                        (_dueDate == null &&
+                            _error != null &&
                             _error!.contains('due date'))
                         ? 'Required'
                         : null,
                   ),
                   child: Text(
-                    _dueDate != null
-                        ? _fmtDate(_dueDate!)
-                        : 'Select date',
+                    _dueDate != null ? _fmtDate(_dueDate!) : 'Select date',
                     style: _dueDate != null
                         ? null
                         : TextStyle(color: colorScheme.onSurfaceVariant),
@@ -803,8 +821,9 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
                       initialValue: _type,
                       decoration: const InputDecoration(labelText: 'Type'),
                       items: _types
-                          .map((t) =>
-                              DropdownMenuItem(value: t, child: Text(t)))
+                          .map(
+                            (t) => DropdownMenuItem(value: t, child: Text(t)),
+                          )
                           .toList(),
                       onChanged: (v) {
                         if (v != null) setState(() => _type = v);
@@ -817,8 +836,9 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
                       initialValue: _status,
                       decoration: const InputDecoration(labelText: 'Status'),
                       items: _statuses
-                          .map((s) =>
-                              DropdownMenuItem(value: s, child: Text(s)))
+                          .map(
+                            (s) => DropdownMenuItem(value: s, child: Text(s)),
+                          )
                           .toList(),
                       onChanged: (v) {
                         if (v != null) setState(() => _status = v);
@@ -843,7 +863,9 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
                 const SizedBox(height: 12),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 10),
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                   decoration: BoxDecoration(
                     color: colorScheme.errorContainer,
                     borderRadius: BorderRadius.circular(8),
@@ -851,7 +873,9 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
                   child: Text(
                     _error!,
                     style: TextStyle(
-                        color: colorScheme.onErrorContainer, fontSize: 13),
+                      color: colorScheme.onErrorContainer,
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ],

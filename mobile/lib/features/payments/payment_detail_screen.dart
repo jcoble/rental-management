@@ -285,21 +285,12 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
 
   static const _types = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
   static const _statuses = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
-  static const _methods = [
-    'Check',
-    'Cash',
-    'Bank transfer',
-    'ACH',
-    'Credit card',
-    'Money order',
-    'Online portal',
-    'Other',
-  ];
 
-  /// Method dropdown options = the standard list plus any existing value not in
-  /// it, so an imported / scanned method still shows.
+  /// Method dropdown options = the canonical [kPaymentMethods] list (shared with
+  /// the Record-payment sheet + web, I2) plus any existing value not in it, so an
+  /// imported / scanned / legacy method still shows.
   List<String> get _methodOptions {
-    final options = [..._methods];
+    final options = [...kPaymentMethods];
     final current = _method;
     if (current != null && current.isNotEmpty && !options.contains(current)) {
       options.insert(0, current);
