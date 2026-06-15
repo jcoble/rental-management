@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
 import 'rate_vendor_sheet.dart';
@@ -84,6 +85,39 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
     }
   }
 
+  /// Opens an external app for the given [uri] (tel:/sms:/mailto:); snackbars if nothing handles it.
+  Future<void> _launch(Uri uri, String failureMessage) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(failureMessage)));
+      }
+    } catch (_) {
+      if (!mounted) return;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(failureMessage)));
+    }
+  }
+
+  void _callVendor() {
+    _launch(Uri(scheme: 'tel', path: _vendor.phone!.trim()),
+        'Could not start a call.');
+  }
+
+  void _textVendor() {
+    _launch(Uri(scheme: 'sms', path: _vendor.phone!.trim()),
+        'Could not open messaging.');
+  }
+
+  void _emailVendor() {
+    _launch(Uri(scheme: 'mailto', path: _vendor.email!.trim()),
+        'Could not open email.');
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -152,21 +186,30 @@ class _VendorDetailScreenState extends ConsumerState<VendorDetailScreen> {
                 ),
               ],
             ),
-            if (vendor.phone != null || vendor.email != null) ...[
+            if (vendor.hasPhone || vendor.hasEmail) ...[
               const SizedBox(height: 14),
-              if (vendor.phone != null)
+              // Phone → tap to call; trailing icon texts. Hidden when no phone.
+              if (vendor.hasPhone)
                 _ContactRow(
                   icon: Icons.phone_outlined,
                   value: vendor.phone!,
                   cs: cs,
                   theme: theme,
+                  onTap: _callVendor,
+                  trailing: IconButton(
+                    icon: Icon(Icons.sms_outlined, color: cs.primary),
+                    tooltip: 'Text vendor',
+                    onPressed: _textVendor,
+                  ),
                 ),
-              if (vendor.email != null)
+              // Email → tap to open the mail app. Hidden when no email.
+              if (vendor.hasEmail)
                 _ContactRow(
                   icon: Icons.email_outlined,
                   value: vendor.email!,
                   cs: cs,
                   theme: theme,
+                  onTap: _emailVendor,
                 ),
             ],
 
@@ -398,6 +441,8 @@ class _ContactRow extends StatelessWidget {
     required this.value,
     required this.cs,
     required this.theme,
+    this.onTap,
+    this.trailing,
   });
 
   final IconData icon;
@@ -405,8 +450,15 @@ class _ContactRow extends StatelessWidget {
   final ColorScheme cs;
   final ThemeData theme;
 
+  /// Tapping the row's value (e.g. call the phone / open the email). Null = non-interactive.
+  final VoidCallback? onTap;
+
+  /// Optional trailing action (e.g. a Text button next to a phone number).
+  final Widget? trailing;
+
   @override
   Widget build(BuildContext context) {
+    final interactive = onTap != null;
     return Padding(
       padding: const EdgeInsets.only(top: 6),
       child: Row(
@@ -414,11 +466,21 @@ class _ContactRow extends StatelessWidget {
           Icon(icon, size: 16, color: cs.onSurfaceVariant),
           const SizedBox(width: 8),
           Expanded(
-            child: Text(
-              value,
-              style: theme.textTheme.bodyMedium,
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Text(
+                  value,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: interactive ? cs.primary : null,
+                  ),
+                ),
+              ),
             ),
           ),
+          ?trailing,
         ],
       ),
     );

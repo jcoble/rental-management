@@ -43,6 +43,9 @@ class Vendor {
   /// True when the vendor can be texted a job.
   bool get hasPhone => (phone ?? '').trim().isNotEmpty;
 
+  /// True when the vendor has an email on file (enables the email action).
+  bool get hasEmail => (email ?? '').trim().isNotEmpty;
+
   factory Vendor.fromJson(Map<String, dynamic> json) {
     String? asString(String key) {
       final raw = json[key];
