@@ -15,6 +15,7 @@
 	import { payments } from '$lib/api/endpoints/payments';
 	import type { PastDueLease } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { daysFromTodayUtc } from '$lib/utils/date';
 	import * as Card from '$lib/components/ui/card';
@@ -74,8 +75,8 @@
 	// --- Mark Paid modal ---
 	// Capture how/when the money arrived once, then apply it to every still-owed payment on the lease.
 	// Smart defaults: date = today, method = last-used (remembered in localStorage). The mark-paid
-	// endpoint accepts paidDate / method / externalReference.
-	const MARK_PAID_METHODS = ['Cash', 'Check', 'ACH', 'Card', 'Zelle', 'Venmo', 'Other'];
+	// endpoint accepts paidDate / method / externalReference / notes. Methods come from the shared
+	// canonical list so web + mobile offer identical values.
 	const LAST_METHOD_KEY = 'rc.payments.lastMethod';
 	function loadLastMethod(): string {
 		if (typeof localStorage === 'undefined') return '';
@@ -101,11 +102,11 @@
 
 	let showMarkPaidForm = $state(false);
 	let markPaidTarget = $state<PastDueLease | null>(null);
-	let markPaidForm = $state({ paidDate: '', method: '', externalReference: '' });
+	let markPaidForm = $state({ paidDate: '', method: '', externalReference: '', notes: '' });
 
 	function openMarkPaid(lease: PastDueLease) {
 		markPaidTarget = lease;
-		markPaidForm = { paidDate: todayLocal(), method: loadLastMethod(), externalReference: '' };
+		markPaidForm = { paidDate: todayLocal(), method: loadLastMethod(), externalReference: '', notes: '' };
 		showMarkPaidForm = true;
 	}
 	function closeMarkPaid() {
@@ -157,6 +158,7 @@
 		data.paidDate = markPaidForm.paidDate || todayLocal();
 		if (markPaidForm.method) data.method = markPaidForm.method;
 		if (markPaidForm.externalReference.trim()) data.externalReference = markPaidForm.externalReference.trim();
+		if (markPaidForm.notes.trim()) data.notes = markPaidForm.notes.trim();
 		markPaidMutation.mutate({ lease: markPaidTarget, data });
 	}
 
@@ -324,7 +326,7 @@
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="" label="No method">No method</Select.Item>
-						{#each MARK_PAID_METHODS as m}
+						{#each PAYMENT_METHODS as m}
 							<Select.Item value={m} label={m}>{m}</Select.Item>
 						{/each}
 					</Select.Content>
@@ -337,6 +339,17 @@
 					bind:value={markPaidForm.externalReference}
 					placeholder="Check #, confirmation #, etc. (optional)"
 				/>
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
+				<textarea
+					data-testid="past-due-mark-paid-notes-input"
+					bind:value={markPaidForm.notes}
+					rows={2}
+					maxlength={2000}
+					placeholder="Anything to remember about this payment (optional)"
+					class="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+				></textarea>
 			</div>
 		</div>
 		<Dialog.Footer>

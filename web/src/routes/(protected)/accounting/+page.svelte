@@ -16,6 +16,7 @@
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Payment, Expense, AccountingReports, AccountingSummary, AccountingTransaction } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
@@ -188,9 +189,9 @@
 	// --- Mark Paid modal ---
 	// Capture how the money arrived (method / reference) + when, with smart defaults so one click
 	// is still fast: date = today, method = the last method this user picked (remembered in
-	// localStorage). The mark-paid endpoint accepts paidDate / method / externalReference; the
-	// payment record already carries its own amount, so there's no amount field here.
-	const MARK_PAID_METHODS = ['Cash', 'Check', 'ACH', 'Card', 'Zelle', 'Venmo', 'Other'];
+	// localStorage). The mark-paid endpoint accepts paidDate / method / externalReference / notes; the
+	// payment record already carries its own amount, so there's no amount field here. Methods come from
+	// the shared canonical list so web + mobile offer identical values.
 	const LAST_METHOD_KEY = 'rc.payments.lastMethod';
 	function loadLastMethod(): string {
 		if (typeof localStorage === 'undefined') return '';
@@ -208,7 +209,7 @@
 			/* storage may be unavailable */
 		}
 	}
-	const emptyMarkPaid = { paidDate: '', method: '', externalReference: '' };
+	const emptyMarkPaid = { paidDate: '', method: '', externalReference: '', notes: '' };
 	let showMarkPaidForm = $state(false);
 	let markPaidTarget = $state<AccountingTransaction | null>(null);
 	let markPaidForm = $state({ ...emptyMarkPaid });
@@ -221,7 +222,7 @@
 
 	function openMarkPaid(t: AccountingTransaction) {
 		markPaidTarget = t;
-		markPaidForm = { paidDate: todayLocal(), method: loadLastMethod(), externalReference: '' };
+		markPaidForm = { paidDate: todayLocal(), method: loadLastMethod(), externalReference: '', notes: '' };
 		showMarkPaidForm = true;
 	}
 	function closeMarkPaid() {
@@ -246,6 +247,7 @@
 		if (markPaidForm.paidDate) data.paidDate = markPaidForm.paidDate;
 		if (markPaidForm.method) data.method = markPaidForm.method;
 		if (markPaidForm.externalReference.trim()) data.externalReference = markPaidForm.externalReference.trim();
+		if (markPaidForm.notes.trim()) data.notes = markPaidForm.notes.trim();
 		markPaidMutation.mutate({ id: markPaidTarget.id, data });
 	}
 
@@ -1197,7 +1199,7 @@
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="" label="No method">No method</Select.Item>
-						{#each MARK_PAID_METHODS as m}
+						{#each PAYMENT_METHODS as m}
 							<Select.Item value={m} label={m}>{m}</Select.Item>
 						{/each}
 					</Select.Content>
@@ -1210,6 +1212,17 @@
 					bind:value={markPaidForm.externalReference}
 					placeholder="Check #, confirmation #, etc. (optional)"
 				/>
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
+				<textarea
+					data-testid="mark-paid-notes-input"
+					bind:value={markPaidForm.notes}
+					rows={2}
+					maxlength={2000}
+					placeholder="Anything to remember about this payment (optional)"
+					class="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+				></textarea>
 			</div>
 		</div>
 		<Dialog.Footer>
