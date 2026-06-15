@@ -124,7 +124,14 @@ class OwnerReportsRepository {
         '/accounting/owner-statement',
         queryParameters: {'ownerId': ownerId, 'year': year},
       );
-      return OwnerStatement.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return OwnerStatement.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

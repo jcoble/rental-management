@@ -36,7 +36,14 @@ class TenantsRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/tenants/$id');
-      return Tenant.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Tenant.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -47,7 +54,14 @@ class TenantsRepository {
     try {
       final response =
           await _dio.post<Map<String, dynamic>>('/tenants', data: data);
-      return Tenant.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Tenant.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -60,7 +74,14 @@ class TenantsRepository {
         '/tenants/$id',
         data: data,
       );
-      return Tenant.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Tenant.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

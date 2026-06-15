@@ -35,7 +35,14 @@ class VendorsRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/vendors/$vendorId/scorecard');
-      return VendorScorecard.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return VendorScorecard.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -104,7 +111,14 @@ class VendorsRepository {
           if (trimmed != null && trimmed.isNotEmpty) 'note': trimmed,
         },
       );
-      return VendorDispatchResult.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return VendorDispatchResult.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

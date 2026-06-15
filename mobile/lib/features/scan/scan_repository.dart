@@ -47,7 +47,14 @@ class ScanRepository {
   Future<ScanDraft> getDraft(int id) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>('/scans/$id');
-      return ScanDraft.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ScanDraft.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -87,7 +94,14 @@ class ScanRepository {
             : null,
       );
 
-      return ScanCreatedResponse.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ScanCreatedResponse.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -113,7 +127,14 @@ class ScanRepository {
         data: formData,
       );
 
-      return ScanDraft.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ScanDraft.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

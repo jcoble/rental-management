@@ -41,7 +41,14 @@ class PropertiesRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/properties/$id');
-      return Property.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Property.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -52,7 +59,14 @@ class PropertiesRepository {
     try {
       final response =
           await _dio.post<Map<String, dynamic>>('/properties', data: data);
-      return Property.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Property.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -65,7 +79,14 @@ class PropertiesRepository {
         '/properties/$id',
         data: data,
       );
-      return Property.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Property.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -104,7 +125,14 @@ class PropertiesRepository {
         '/units',
         data: {...data, 'propertyId': propertyId},
       );
-      return Unit.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Unit.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -117,7 +145,14 @@ class PropertiesRepository {
         '/units/$id',
         data: data,
       );
-      return Unit.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Unit.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

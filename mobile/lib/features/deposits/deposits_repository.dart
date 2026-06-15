@@ -119,7 +119,14 @@ class DepositsRepository {
       final response =
           await _dio.post<Map<String, dynamic>>('/security-deposits',
               data: data);
-      return SecurityDeposit.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return SecurityDeposit.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -132,7 +139,14 @@ class DepositsRepository {
         '/security-deposits/$id/deductions',
         data: data,
       );
-      return SecurityDeposit.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return SecurityDeposit.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -146,7 +160,14 @@ class DepositsRepository {
         '/security-deposits/$id/return',
         data: body,
       );
-      return SecurityDeposit.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return SecurityDeposit.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
