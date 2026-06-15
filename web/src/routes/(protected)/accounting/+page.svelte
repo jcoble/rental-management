@@ -725,7 +725,7 @@
 				variant="outline"
 				size="sm"
 				onclick={(ev) => { ev.stopPropagation(); openMarkPaid(t); }}
-			>Mark Paid</Button>
+			>Mark paid</Button>
 		{/if}
 		{#if t.kind !== 'Bank'}
 			<Button
@@ -1167,7 +1167,7 @@
 		</div>
 		<Dialog.Footer>
 			<Button data-testid="payment-form-cancel" variant="outline" onclick={closePaymentForm}>Cancel</Button>
-			<Button data-testid="payment-form-save" onclick={submitPayment} disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save Payment'}</Button>
+			<Button data-testid="payment-form-save" onclick={submitPayment} disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save payment'}</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
@@ -1420,7 +1420,7 @@
 		</div>
 		<Dialog.Footer>
 			<Button data-testid="expense-form-cancel" variant="outline" onclick={closeExpenseForm}>Cancel</Button>
-			<Button data-testid="expense-form-save" onclick={submitExpense} disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save Expense'}</Button>
+			<Button data-testid="expense-form-save" onclick={submitExpense} disabled={saveExpenseMutation.isPending}>{saveExpenseMutation.isPending ? 'Saving…' : 'Save expense'}</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
