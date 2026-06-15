@@ -161,6 +161,101 @@ public class AccountingServiceTests : IDisposable
         snapshot.Explanations.PastDue.Should().Contain("1 tenant").And.Contain("behind");
     }
 
+    // Regression for TSK-268: the dashboard "tenants behind" KPI and the "Who's behind" list must
+    // never disagree. Both must read from one past-due definition — one row per behind lease — so the
+    // KPI count equals the list length and the amounts reconcile, even when a single lease has more
+    // than one past-due payment (the previous list counted payments, the KPI counted leases).
+    [Fact]
+    public async Task GetPastDueAsync_MatchesSnapshotKpi_OneRowPerBehindLease()
+    {
+        var now = DateTime.UtcNow;
+
+        // Lease A: two past-due payments ($1,000 + $200) → still ONE behind tenant.
+        var (_, leaseA) = SeedPropertyAndLease(now);
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = leaseA,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1000m,
+            DueDate = now.AddDays(-10),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = leaseA,
+            PaymentType = PaymentType.LateFee,
+            Status = PaymentStatus.Late,
+            Amount = 200m,
+            DueDate = now.AddDays(-3),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        // Lease B: one past-due payment ($800) → a second behind tenant.
+        var (_, leaseB) = SeedPropertyAndLease(now);
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = leaseB,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 800m,
+            DueDate = now.AddDays(-1),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        // Lease B also has a paid payment and a future-scheduled one — neither is "behind".
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = leaseB,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 800m,
+            DueDate = now.AddDays(-31),
+            PaidDate = now.AddDays(-30),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = leaseB,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 800m,
+            DueDate = now.AddDays(15),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.SaveChanges();
+
+        var snapshot = await _sut.GetSnapshotAsync(PortfolioId, CancellationToken.None);
+        var pastDue = await _sut.GetPastDueAsync(PortfolioId, CancellationToken.None);
+
+        // The KPI count equals the number of list rows (two distinct behind leases), and the amounts agree.
+        snapshot.PastDueCount.Should().Be(2);
+        pastDue.TotalCount.Should().Be(2);
+        pastDue.Items.Should().HaveCount(2);
+        snapshot.PastDueCount.Should().Be(pastDue.TotalCount);
+
+        snapshot.PastDueAmount.Should().Be(2000m); // 1000 + 200 + 800
+        pastDue.TotalPastDueAmount.Should().Be(snapshot.PastDueAmount);
+
+        // Lease A's row rolls up both of its past-due payments into one tenant.
+        var rowA = pastDue.Items.Single(i => i.LeaseId == leaseA.Id);
+        rowA.OverduePaymentCount.Should().Be(2);
+        rowA.PastDueAmount.Should().Be(1200m);
+
+        // Ordered by who's waited longest (oldest due date first) → Lease A leads.
+        pastDue.Items.First().LeaseId.Should().Be(leaseA.Id);
+    }
+
     [Fact]
     public async Task GetReportsAsync_LedgerEntriesCarryPlainEnglishExplanations()
     {
