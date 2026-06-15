@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
-	import { get } from 'svelte/store';
+	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { payments } from '$lib/api/endpoints/payments';
@@ -47,7 +46,7 @@
 	];
 	// Landing on the day-to-day Ledger view; Reports and Overview are secondary. Seeded from the URL so
 	// a deep-linked / Back-navigated tab is restored (the grid-state persistence below keeps it synced).
-	const initialTab = get(page).url.searchParams.get('tab');
+	const initialTab = page.url.searchParams.get('tab');
 	let activeTab = $state(
 		initialTab && accountingTabs.some((t) => t.value === initialTab) ? initialTab : 'ledger'
 	);
@@ -66,7 +65,7 @@
 	// Filter / sort / search / paging (and the active tab) round-trip through the URL so they survive
 	// navigation away-and-back and browser Back/Forward (EdiPlatform's grid pattern). Seed the initial
 	// values from the current URL on mount, then mirror state -> URL via a replaceState goto.
-	const initialParams = get(page).url.searchParams;
+	const initialParams = page.url.searchParams;
 	const DEFAULT_SORT = '-createdAt';
 
 	let transactionSearch = $state(readGridParam(initialParams, 'q'));
