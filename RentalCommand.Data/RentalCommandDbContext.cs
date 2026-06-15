@@ -866,6 +866,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Status).HasConversion<int>();
             // Full scan-extraction superset for work orders created from a scan draft (Postgres jsonb).
             entity.Property(e => e.ExtractedData).HasColumnType("jsonb");
+            // ScheduledFor + ScheduledWindowEnd bracket the tenant-facing arrival window.
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.UnitId);

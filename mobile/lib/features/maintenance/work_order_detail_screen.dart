@@ -272,6 +272,25 @@ class _WorkOrderDetailScreenState
     }
   }
 
+  Future<void> _callVendor() async {
+    final vendor = await showSelectVendorSheet(context);
+    if (vendor == null || !mounted) return;
+
+    final phone = vendor.phone?.trim() ?? '';
+    if (phone.isEmpty) {
+      _showError('${vendor.name} has no phone number on file.');
+      return;
+    }
+
+    final launched = await launchUrl(
+      Uri(scheme: 'tel', path: phone),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!launched && mounted) {
+      _showError('Could not start a call.');
+    }
+  }
+
   Future<void> _dispatchVendor() async {
     final vendor = await showDispatchVendorSheet(
       context,
@@ -388,6 +407,7 @@ class _WorkOrderDetailScreenState
             onAddPhoto: _showPhotoSourceSheet,
             onNavigate: () => _navigateToProperty(detail.workOrder),
             onDispatchVendor: _dispatchVendor,
+            onCallVendor: _callVendor,
             onRateVendor: () => _rateVendor(detail.workOrder),
           ),
         ),
@@ -409,6 +429,7 @@ class _DetailBody extends StatelessWidget {
     required this.onAddPhoto,
     required this.onNavigate,
     required this.onDispatchVendor,
+    required this.onCallVendor,
     required this.onRateVendor,
   });
 
@@ -421,6 +442,7 @@ class _DetailBody extends StatelessWidget {
   final VoidCallback onAddPhoto;
   final VoidCallback onNavigate;
   final VoidCallback onDispatchVendor;
+  final VoidCallback onCallVendor;
   final VoidCallback onRateVendor;
 
   @override
@@ -473,6 +495,12 @@ class _DetailBody extends StatelessWidget {
                 icon: const Icon(Icons.sms_outlined),
                 label: const Text('Text a vendor'),
               ),
+            // Call works regardless of status (e.g. follow-up on a completed job).
+            FilledButton.tonalIcon(
+              onPressed: onCallVendor,
+              icon: const Icon(Icons.call_outlined),
+              label: const Text('Call a vendor'),
+            ),
             if (isCompleted && hasVendor)
               OutlinedButton.icon(
                 onPressed: onRateVendor,

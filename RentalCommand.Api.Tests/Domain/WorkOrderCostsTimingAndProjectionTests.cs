@@ -1,6 +1,7 @@
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
@@ -47,7 +48,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         });
         _db.SaveChanges();
 
-        _workOrders = new WorkOrderService(_db, new NoopDataUpdate());
+        _workOrders = new WorkOrderService(_db, new NoopDataUpdate(), new NoopMessagePublisher(), NullLogger<WorkOrderService>.Instance);
         _properties = new PropertyService(_db, new NoopDataUpdate());
     }
 
@@ -281,6 +282,12 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             => Task.CompletedTask;
 
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
+            => Task.CompletedTask;
+    }
+
+    private sealed class NoopMessagePublisher : IMessagePublisher
+    {
+        public Task PublishAsync<TPayload>(int portfolioId, string messageType, TPayload payload, CancellationToken ct = default)
             => Task.CompletedTask;
     }
 }
