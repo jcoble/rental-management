@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
 	import { scan, type ScanFieldDto } from '$lib/api/scan';
 	import { leases } from '$lib/api/endpoints/leases';
@@ -88,7 +88,7 @@
 
 	const queryClient = useQueryClient();
 
-	const draftId = $derived(parseInt($page.params.draftId ?? '0', 10));
+	const draftId = $derived(parseInt(page.params.draftId ?? '0', 10));
 
 	const draftQuery = createQuery(() => ({
 		queryKey: ['scan', draftId],

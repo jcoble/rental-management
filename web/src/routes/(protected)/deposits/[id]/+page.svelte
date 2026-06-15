@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import {
 		securityDeposits,
 		downloadMoveOutStatement
@@ -22,7 +22,7 @@
 
 	const queryClient = useQueryClient();
 
-	const depositId = $derived(parseInt($page.params.id ?? '0', 10));
+	const depositId = $derived(parseInt(page.params.id ?? '0', 10));
 
 	const depositQuery = createQuery(() => ({
 		queryKey: ['deposit', depositId],

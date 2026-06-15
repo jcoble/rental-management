@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { ArrowLeft, Pencil, Save, Trash2, X, ReceiptText, Tags, FileText, ChevronDown, Plus } from '@lucide/svelte';
 	import { expenses } from '$lib/api/endpoints/expenses';
@@ -19,7 +19,7 @@
 	import * as Table from '$lib/components/ui/table';
 
 	const queryClient = useQueryClient();
-	const expenseId = $derived(parseInt($page.params.id ?? '0', 10));
+	const expenseId = $derived(parseInt(page.params.id ?? '0', 10));
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const STATUSES = ['Pending', 'Approved', 'Paid', 'Rejected', 'Draft'];
 	const CATEGORIES = ['Advertising', 'AutoTravel', 'CleaningMaintenance', 'Commissions', 'Insurance', 'LegalProfessional', 'ManagementFees', 'MortgageInterest', 'Repairs', 'Supplies', 'Taxes', 'Utilities', 'Depreciation', 'Other'];
