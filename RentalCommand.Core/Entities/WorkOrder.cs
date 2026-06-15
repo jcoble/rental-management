@@ -19,6 +19,13 @@ public class WorkOrder : IAuditable, IPortfolioScoped
     public WorkOrderStatus Status { get; set; } = WorkOrderStatus.New;
     public DateTime RequestedAt { get; set; }
     public DateTime? ScheduledFor { get; set; }
+
+    /// <summary>
+    /// End of the scheduled arrival window (the visit/appointment is expected between
+    /// <see cref="ScheduledFor"/> and this time). Null when no window end was given.
+    /// </summary>
+    public DateTime? ScheduledWindowEnd { get; set; }
+
     public DateTime? CompletedAt { get; set; }
     public decimal? EstimatedCost { get; set; }
     public decimal? ActualCost { get; set; }
