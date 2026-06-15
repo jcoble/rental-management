@@ -20,16 +20,24 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import * as Card from '$lib/components/ui/card';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const WO_STATUSES = ['New', 'Scheduled', 'InProgress', 'WaitingParts', 'Completed', 'Cancelled'];
 	const WO_PRIORITIES = ['Low', 'Normal', 'High', 'Emergency'];
 
-	let woSearch = $state('');
-	let woStatusFilter = $state('');
-	let woPriorityFilter = $state('');
+	// Work-order search / status / priority filters persisted in the URL so they survive navigating
+	// away and back.
+	let woSearch = $state(readGridParam(page.url.searchParams, 'q'));
+	let woStatusFilter = $state(readGridParam(page.url.searchParams, 'status'));
+	let woPriorityFilter = $state(readGridParam(page.url.searchParams, 'priority'));
 	const debouncedWoSearch = debounced(() => woSearch, 300);
+
+	$effect(() => {
+		syncGridUrl({ q: woSearch, status: woStatusFilter, priority: woPriorityFilter });
+	});
 
 	const workOrdersQuery = createQuery(() => ({
 		queryKey: ['work-orders', portfolioId, debouncedWoSearch.value],
