@@ -139,19 +139,38 @@
 	}));
 
 	// --- Lease draft selectors ---
-	// Property + unit are REQUIRED for a Lease confirm; tenant is optional (when
-	// omitted the server matches the extracted tenant_name or creates a new tenant).
-	// String-backed for the shadcn Select; converted to numbers at confirm time.
+	// A Lease confirm needs a property + unit; tenant is optional (when omitted the server matches the
+	// extracted tenant_name or creates a new tenant). The property can be an EXISTING in-portfolio record
+	// OR created from the scanned document (the empty-portfolio bootstrap — a brand-new landlord with zero
+	// properties must be able to proceed). String-backed for the shadcn Select; converted at confirm time.
 	const NO_TENANT = 'none';
+	// Sentinel for the property dropdown's "create from this document" option (distinct from a real id).
+	const CREATE_PROPERTY = '__create__';
 	let selectedLeasePropertyId = $state<string>('');
 	let selectedLeaseUnitId = $state<string>('');
 	let selectedTenantId = $state<string>(NO_TENANT);
+	// True when the property dropdown is on "create new" — the unit becomes a free-text new unit number
+	// (you can't pick a unit of a property that doesn't exist yet) and editable address fields appear.
+	const isCreatingLeaseProperty = $derived(selectedLeasePropertyId === CREATE_PROPERTY);
+	// The lease-import proposal from the API (link-existing vs create-new for property + unit).
+	const leaseProposal = $derived(data?.leaseProposal ?? null);
+	// One-shot guard so seeding the property pick from the proposal doesn't clobber the user's choice.
+	let leasePropertySeeded = $state(false);
+	// Editable new-property fields (create mode), seeded from the extracted lease fields.
+	let newPropertyName = $state('');
+	let newPropertyAddress = $state('');
+	let newPropertyCity = $state('');
+	let newPropertyState = $state('');
+	let newPropertyPostal = $state('');
+	let newUnitNumber = $state('');
+	let newPropertyFieldsSeeded = $state(false);
 
-	// Units scoped to the chosen property (required pick). Re-fetches per property.
+	// Units scoped to the chosen EXISTING property (required pick). Skipped in create-new mode (the
+	// CREATE_PROPERTY sentinel isn't a real id — the unit is created from a free-text number instead).
 	const leaseUnitsQuery = createQuery(() => ({
 		queryKey: ['units-for-lease-scan', selectedLeasePropertyId],
 		queryFn: () => properties.listUnits(Number(selectedLeasePropertyId)),
-		enabled: isLease && !!selectedLeasePropertyId
+		enabled: isLease && !!selectedLeasePropertyId && selectedLeasePropertyId !== CREATE_PROPERTY
 	}));
 
 	const tenantsQuery = createQuery(() => ({
@@ -163,7 +182,19 @@
 	// Extracted tenant name from the scan (drives the "create new tenant" default).
 	const extractedTenantName = $derived((fieldValue('tenant_name') ?? '').trim());
 
+	// Label for the "create a new property from this document" option, using the extracted address/name.
+	const newPropertyLabel = $derived.by(() => {
+		const extracted = (
+			fieldValue('property_address') ||
+			fieldValue('property_name') ||
+			leaseProposal?.property.label ||
+			''
+		).trim();
+		return extracted ? `Create "${extracted}" as a new property` : 'Create a new property from the lease';
+	});
+
 	const selectedLeasePropertyLabel = $derived.by(() => {
+		if (selectedLeasePropertyId === CREATE_PROPERTY) return newPropertyLabel;
 		if (!selectedLeasePropertyId) return '— Select a property —';
 		const sel = propertiesQuery.data?.find((p) => String(p.id) === selectedLeasePropertyId);
 		return sel ? sel.name : '— Select a property —';
@@ -205,6 +236,11 @@
 	// Reset the unit pick whenever the property changes (units are property-scoped).
 	$effect(() => {
 		const _ = selectedLeasePropertyId;
+		// Create-new mode has no existing-unit pick — drop any stale id so it can't leak.
+		if (isCreatingLeaseProperty) {
+			if (selectedLeaseUnitId) selectedLeaseUnitId = '';
+			return;
+		}
 		// Clear a stale unit selection if it no longer belongs to the chosen property.
 		if (selectedLeaseUnitId && leaseUnitsQuery.data && !leaseUnitsQuery.data.some((u) => String(u.id) === selectedLeaseUnitId)) {
 			selectedLeaseUnitId = '';
@@ -294,8 +330,17 @@
 	// Only applies to Expense drafts — Payment, WorkOrder, and Lease have their own guards.
 	const amountInvalid = $derived(!isPayment && !isWorkOrder && !isLease && (resolvedAmount == null || resolvedAmount <= 0));
 
-	// Lease drafts require an in-portfolio property AND unit before confirm.
-	const leaseSelectionInvalid = $derived(isLease && (!selectedLeasePropertyId || !selectedLeaseUnitId));
+	// Lease drafts require either (a) an existing in-portfolio property + unit, or (b) create-new with a
+	// usable property address/name + a unit number. Create-new is what lets a brand-new landlord with an
+	// empty portfolio confirm at all.
+	const leaseSelectionInvalid = $derived.by(() => {
+		if (!isLease) return false;
+		if (isCreatingLeaseProperty) {
+			const hasPropertyAnchor = !!(newPropertyAddress.trim() || newPropertyName.trim());
+			return !hasPropertyAnchor || !newUnitNumber.trim();
+		}
+		return !selectedLeasePropertyId || !selectedLeaseUnitId;
+	});
 
 	// Paid / Unpaid toggle — true = already paid (receipt), false = unpaid bill
 	let isPaid = $state(true);
@@ -335,17 +380,36 @@
 				const propertyField = data.fields.find((f) => f.name === 'property_id' || f.name === 'propertyId');
 				if (propertyField?.value) selectedPropertyId = propertyField.value;
 			}
-			// Lease drafts: seed the property/unit pickers from the extracted IDs (if present
-			// and the picked options exist). Tenant stays on "create new" unless the user picks.
+			// Lease drafts: seed the property/unit pickers + the create-new fields. Tenant stays on
+			// "create new" unless the user picks.
 			if (data.targetEntityType === 'Lease') {
-				if (!selectedLeasePropertyId) {
-					const propertyField = data.fields.find((f) => f.name === 'property_id' || f.name === 'propertyId');
-					const val = propertyField?.value;
-					if (val && propertiesQuery.data?.some((p) => String(p.id) === val)) {
-						selectedLeasePropertyId = val;
-					}
+				// Seed editable new-property fields from the extracted lease fields (one-shot, so later
+				// refetches / the user's own edits aren't clobbered).
+				if (!newPropertyFieldsSeeded) {
+					newPropertyName = fieldValue('property_name');
+					newPropertyAddress = fieldValue('property_address');
+					newPropertyCity = fieldValue('property_city');
+					newPropertyState = fieldValue('property_state');
+					newPropertyPostal = fieldValue('property_postal_code');
+					newUnitNumber = fieldValue('unit_number');
+					newPropertyFieldsSeeded = true;
 				}
-				if (!selectedLeaseUnitId) {
+				// Seed the property pick once: prefer an existing in-portfolio match (extracted id or the
+				// proposal's link), otherwise default to "create new" so an empty portfolio can proceed.
+				if (!leasePropertySeeded && (propertiesQuery.data || leaseProposal)) {
+					const propertyField = data.fields.find((f) => f.name === 'property_id' || f.name === 'propertyId');
+					const extractedId = propertyField?.value;
+					if (extractedId && propertiesQuery.data?.some((p) => String(p.id) === extractedId)) {
+						selectedLeasePropertyId = extractedId;
+					} else if (leaseProposal?.property.action === 'link' && leaseProposal.property.existingId != null) {
+						selectedLeasePropertyId = String(leaseProposal.property.existingId);
+					} else if (leaseProposal && (leaseProposal.property.action === 'create' || leaseProposal.property.action === 'select')) {
+						// Nothing to link — start in create-new mode (the empty-portfolio bootstrap).
+						selectedLeasePropertyId = CREATE_PROPERTY;
+					}
+					leasePropertySeeded = true;
+				}
+				if (!selectedLeaseUnitId && !isCreatingLeaseProperty) {
 					const unitField = data.fields.find((f) => f.name === 'unit_id' || f.name === 'unitId');
 					if (unitField?.value) selectedLeaseUnitId = unitField.value;
 				}
@@ -579,10 +643,24 @@
 		if (isLease) {
 			// Lease drafts: pass through the edited term fields (lease_number, start_date,
 			// end_date, monthly_rent, security_deposit, late_fee, rent_due_day — already in
-			// `overrides`) plus the required property/unit and the optional tenant.
+			// `overrides`) plus the property/unit resolution and the optional tenant.
 			// `tenantId` is omitted on "create new" so the server matches/creates by name.
-			overrides['propertyId'] = selectedLeasePropertyId ? Number(selectedLeasePropertyId) : null;
-			overrides['unitId'] = selectedLeaseUnitId ? Number(selectedLeaseUnitId) : null;
+			if (isCreatingLeaseProperty) {
+				// Create-new path: propertyId=null forces the server's match-or-create to CREATE from the
+				// (editable) extracted address. Send the address fields + the new unit number; omit unitId
+				// so the unit is created under the new property.
+				overrides['propertyId'] = null;
+				overrides['unitId'] = null;
+				if (newPropertyName.trim()) overrides['propertyName'] = newPropertyName.trim();
+				if (newPropertyAddress.trim()) overrides['propertyAddress'] = newPropertyAddress.trim();
+				if (newPropertyCity.trim()) overrides['propertyCity'] = newPropertyCity.trim();
+				if (newPropertyState.trim()) overrides['propertyState'] = newPropertyState.trim();
+				if (newPropertyPostal.trim()) overrides['propertyPostalCode'] = newPropertyPostal.trim();
+				if (newUnitNumber.trim()) overrides['unitNumber'] = newUnitNumber.trim();
+			} else {
+				overrides['propertyId'] = selectedLeasePropertyId ? Number(selectedLeasePropertyId) : null;
+				overrides['unitId'] = selectedLeaseUnitId ? Number(selectedLeaseUnitId) : null;
+			}
 			if (selectedTenantId && selectedTenantId !== NO_TENANT) {
 				overrides['tenantId'] = Number(selectedTenantId);
 			}
@@ -859,8 +937,36 @@
 							{/if}
 						</div>
 					{:else if isLease}
-						<!-- Lease selectors — property + unit required, tenant optional -->
+						<!-- Lease selectors — link an existing property/unit OR create them from the document. -->
 						<div class="mb-5 space-y-3 rounded-md border border-border bg-muted/30 p-3" data-testid="scan-lease-selectors">
+							<!-- "What this will do" summary from the import proposal, so the create-vs-link
+							     outcome (incl. the empty-portfolio bootstrap) is visible up front. -->
+							{#if leaseProposal}
+								<div class="rounded-md border border-accent/40 bg-accent/5 p-2.5 text-xs" data-testid="scan-lease-proposal">
+									<p class="mb-1 font-semibold text-foreground">When you confirm, this lease will:</p>
+									<ul class="space-y-0.5 text-muted-foreground">
+										<li data-testid="scan-lease-proposal-property">
+											{#if isCreatingLeaseProperty || leaseProposal.property.action === 'create'}
+												<span class="font-medium text-[var(--success)]">Create</span> a new property{leaseProposal.property.label ? ` — ${leaseProposal.property.label}` : ''}
+											{:else if leaseProposal.property.action === 'link'}
+												<span class="font-medium">Link</span> to {leaseProposal.property.label ?? 'an existing property'}
+											{:else}
+												Need you to choose a property
+											{/if}
+										</li>
+										<li data-testid="scan-lease-proposal-unit">
+											{#if isCreatingLeaseProperty || leaseProposal.unit.action === 'create'}
+												<span class="font-medium text-[var(--success)]">Create</span> {leaseProposal.unit.label ?? 'a unit'}
+											{:else if leaseProposal.unit.action === 'link'}
+												<span class="font-medium">Link</span> to {leaseProposal.unit.label ?? 'an existing unit'}
+											{:else}
+												Need you to choose a unit
+											{/if}
+										</li>
+									</ul>
+								</div>
+							{/if}
+
 							<div>
 								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-property-select">
 									Which property is this lease for? <span class="text-[var(--m3c-error)]">*</span>
@@ -870,6 +976,7 @@
 										{selectedLeasePropertyLabel}
 									</Select.Trigger>
 									<Select.Content>
+										<Select.Item value={CREATE_PROPERTY} label={newPropertyLabel}>{newPropertyLabel}</Select.Item>
 										{#if propertiesQuery.data}
 											{#each propertiesQuery.data as prop (prop.id)}
 												<Select.Item value={String(prop.id)} label={prop.name}>
@@ -884,32 +991,56 @@
 								{/if}
 							</div>
 
-							<div>
-								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-unit-select">
-									Which unit? <span class="text-[var(--m3c-error)]">*</span>
-								</label>
-								<Select.Root type="single" bind:value={selectedLeaseUnitId} disabled={!selectedLeasePropertyId}>
-									<Select.Trigger id="scan-lease-unit-select" data-testid="scan-lease-unit-select" class="w-full">
-										{selectedLeaseUnitLabel}
-									</Select.Trigger>
-									<Select.Content>
-										{#if leaseUnitsQuery.data}
-											{#each leaseUnitsQuery.data as unit (unit.id)}
-												<Select.Item value={String(unit.id)} label={`Unit ${unit.unitNumber}`}>
-													Unit {unit.unitNumber} ({unit.status})
-												</Select.Item>
-											{/each}
-										{/if}
-									</Select.Content>
-								</Select.Root>
-								{#if !selectedLeasePropertyId}
-									<p class="mt-1 text-xs text-muted-foreground">Pick a property first to see its units.</p>
-								{:else if leaseUnitsQuery.isLoading}
-									<p class="mt-1 text-xs text-muted-foreground">Loading units…</p>
-								{:else if (leaseUnitsQuery.data?.length ?? 0) === 0}
-									<p class="mt-1 text-xs text-[var(--warning)]">This property has no units yet. Add a unit before creating the lease.</p>
-								{/if}
-							</div>
+							{#if isCreatingLeaseProperty}
+								<!-- Create-new property: editable address (seeded from the document) so the
+								     reviewer can correct it before the property is created. -->
+								<div class="space-y-2 rounded-md border border-dashed border-border p-2.5" data-testid="scan-lease-new-property">
+									<p class="text-xs font-medium text-muted-foreground">New property details (from the document — edit if needed)</p>
+									<Input data-testid="scan-new-property-name" placeholder="Property name (optional)" bind:value={newPropertyName} />
+									<Input data-testid="scan-new-property-address" placeholder="Street address" bind:value={newPropertyAddress} />
+									<div class="grid grid-cols-3 gap-2">
+										<Input data-testid="scan-new-property-city" placeholder="City" bind:value={newPropertyCity} />
+										<Input data-testid="scan-new-property-state" placeholder="State" bind:value={newPropertyState} />
+										<Input data-testid="scan-new-property-postal" placeholder="ZIP" bind:value={newPropertyPostal} />
+									</div>
+									<p class="text-[11px] text-muted-foreground">Enter a street address or a property name so the property can be created.</p>
+								</div>
+
+								<div>
+									<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-new-unit">
+										Unit number <span class="text-[var(--m3c-error)]">*</span>
+									</label>
+									<Input id="scan-lease-new-unit" data-testid="scan-lease-new-unit" placeholder="e.g. 1 (single-family) or 2B" bind:value={newUnitNumber} />
+									<p class="mt-1 text-xs text-muted-foreground">A new unit with this number is created under the new property.</p>
+								</div>
+							{:else}
+								<div>
+									<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-unit-select">
+										Which unit? <span class="text-[var(--m3c-error)]">*</span>
+									</label>
+									<Select.Root type="single" bind:value={selectedLeaseUnitId} disabled={!selectedLeasePropertyId}>
+										<Select.Trigger id="scan-lease-unit-select" data-testid="scan-lease-unit-select" class="w-full">
+											{selectedLeaseUnitLabel}
+										</Select.Trigger>
+										<Select.Content>
+											{#if leaseUnitsQuery.data}
+												{#each leaseUnitsQuery.data as unit (unit.id)}
+													<Select.Item value={String(unit.id)} label={`Unit ${unit.unitNumber}`}>
+														Unit {unit.unitNumber} ({unit.status})
+													</Select.Item>
+												{/each}
+											{/if}
+										</Select.Content>
+									</Select.Root>
+									{#if !selectedLeasePropertyId}
+										<p class="mt-1 text-xs text-muted-foreground">Pick a property first to see its units.</p>
+									{:else if leaseUnitsQuery.isLoading}
+										<p class="mt-1 text-xs text-muted-foreground">Loading units…</p>
+									{:else if (leaseUnitsQuery.data?.length ?? 0) === 0}
+										<p class="mt-1 text-xs text-[var(--warning)]">This property has no units yet — switch to "{newPropertyLabel}" above, or add a unit to this property first.</p>
+									{/if}
+								</div>
+							{/if}
 
 							<div>
 								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-tenant-select">
@@ -1264,7 +1395,13 @@
 							<p class="text-center text-xs text-[var(--warning)]">Select a property above to enable work order creation.</p>
 						{/if}
 						{#if leaseSelectionInvalid && !isTerminal && !isProcessing}
-							<p class="text-center text-xs text-[var(--warning)]" data-testid="scan-lease-selection-error">Pick a property and a unit above to create this lease.</p>
+							<p class="text-center text-xs text-[var(--warning)]" data-testid="scan-lease-selection-error">
+								{#if isCreatingLeaseProperty}
+									Enter a property address (or name) and a unit number above to create this lease.
+								{:else}
+									Pick a property and a unit above to create this lease.
+								{/if}
+							</p>
 						{/if}
 						{#if data.status === 'Failed' && !isTerminal}
 							<p class="text-center text-xs text-muted-foreground">Couldn't read this document — enter the amount manually, or reject it.</p>

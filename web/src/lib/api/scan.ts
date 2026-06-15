@@ -8,6 +8,30 @@ export interface ScanFieldDto {
 	confidence: number;
 }
 
+/**
+ * One proposed entity in a {@link LeaseImportProposal} (mirrors RentalCommand.Core's ProposedRecord).
+ * `action` is "link" when an existing in-portfolio record was matched (`existingId` set), "create" when
+ * one would be created from the extracted document (`label`/`detail` describe it), or "select" when
+ * there isn't enough on the document to match or create and the reviewer must choose.
+ */
+export interface ProposedRecord {
+	action: 'link' | 'create' | 'select';
+	existingId: number | null;
+	label: string | null;
+	detail: string | null;
+}
+
+/**
+ * Lease-import preview for a Lease draft: what confirming would do with the property + unit
+ * (link an existing record vs create one from the scanned document). Lets a brand-new landlord with an
+ * empty portfolio SEE that a Property/Unit will be created — and proceed — rather than being blocked on
+ * an empty property dropdown. Null for non-lease drafts.
+ */
+export interface LeaseImportProposal {
+	property: ProposedRecord;
+	unit: ProposedRecord;
+}
+
 export interface ScanDraftResponse {
 	id: number;
 	portfolioId: number;
@@ -23,6 +47,12 @@ export interface ScanDraftResponse {
 	confirmedAt: string | null;
 	createdEntityType: string | null;
 	createdEntityId: number | null;
+	/**
+	 * Lease-import property/unit proposal (link-existing vs create-new). Populated by the API only for
+	 * Lease drafts; null otherwise. The review screen renders this so the empty-portfolio create path is
+	 * visible and the user can correct it before confirming.
+	 */
+	leaseProposal?: LeaseImportProposal | null;
 }
 
 export interface ScanCreatedResponse {
