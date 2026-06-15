@@ -205,17 +205,12 @@ const List<GettingStartedTask> kGettingStartedTasks = [
     core: false,
     isComplete: _automationsComplete,
   ),
-  GettingStartedTask(
-    key: 'texting',
-    label: 'Connect texting (optional)',
-    eli5:
-        'Texting tenants needs a SignalWire account. Totally optional — '
-        'everything works on email and in-app alerts without it.',
-    icon: Symbols.sms_rounded,
-    dest: GettingStartedDest.settings,
-    core: false,
-    isComplete: _textingComplete,
-  ),
+  // NOTE: "Connect texting (SignalWire)" was intentionally removed from the
+  // getting-started checklist (A13) — it's the most technical setup in the app
+  // (Project ID / Space URL / API Token / a purchased From number) and is
+  // optional/advanced, so it doesn't belong in the newcomer checklist. It
+  // remains fully available in Settings. The `hasTexting` signal stays on
+  // GettingStartedSignals (the settings screen still reads it).
 ];
 
 // Predicates kept as top-level functions so the task list can stay `const`.
@@ -226,7 +221,6 @@ bool _tenantComplete(GettingStartedSignals s) => s.tenantCount > 0;
 bool _leaseComplete(GettingStartedSignals s) => s.leaseCount > 0;
 bool _notificationsComplete(GettingStartedSignals s) => s.hasNotificationEmail;
 bool _automationsComplete(GettingStartedSignals s) => s.hasAutomations;
-bool _textingComplete(GettingStartedSignals s) => s.hasTexting;
 
 /// Progress rollup over the task set for a given snapshot of signals.
 class GettingStartedProgress {

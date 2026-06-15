@@ -106,7 +106,7 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
           ),
           data: (list) {
             if (list.isEmpty) {
-              return const _EmptyBody();
+              return _EmptyBody(onAdd: () => _showAddSheet(context));
             }
             return ListView.separated(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
@@ -278,31 +278,50 @@ class _MetaChip extends StatelessWidget {
 
 // ── Empty / Error ─────────────────────────────────────────────────────────────
 
+/// A15: a welcoming first-run empty state with a plain explanation and a
+/// primary "Create your first lease" button instead of a cold "tap +" hint.
 class _EmptyBody extends StatelessWidget {
-  const _EmptyBody();
+  const _EmptyBody({required this.onAdd});
+
+  final VoidCallback onAdd;
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.description_outlined,
-              size: 48, color: colorScheme.onSurfaceVariant),
-          const SizedBox(height: 12),
-          Text(
-            'No leases yet',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            'Tap + to create your first lease.',
-            style: TextStyle(color: colorScheme.onSurfaceVariant),
-          ),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.description_outlined,
+                size: 48, color: colorScheme.onSurfaceVariant),
+            const SizedBox(height: 12),
+            Text(
+              'No leases yet',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: colorScheme.onSurface,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'A lease ties a tenant to a unit and sets the rent, dates, and '
+              'deposit. Create your first to start tracking rent.',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 20),
+            FilledButton.icon(
+              onPressed: onAdd,
+              icon: const Icon(Icons.add),
+              label: const Text('Create your first lease'),
+            ),
+          ],
+        ),
       ),
     );
   }

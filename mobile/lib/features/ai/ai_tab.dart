@@ -46,7 +46,9 @@ class _AiTabState extends ConsumerState<AiTab>
               color: theme.colorScheme.primary,
             ),
             const SizedBox(width: 6),
-            const Text('Assistant'),
+            // A4: one name for the AI entry point — "Ask" (matches the web nav
+            // rename and the home "Ask" quick action).
+            const Text('Ask'),
           ],
         ),
         bottom: TabBar(
