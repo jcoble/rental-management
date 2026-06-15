@@ -38,13 +38,14 @@ class AuthRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/auth/login',
         data: {'email': email, 'password': password},
+        options: Options(headers: {clientTypeHeader: mobileClientType}),
       );
 
       final data = response.data!;
       final loginResponse = LoginResponse.fromJson(data);
 
-      // Extract refresh token from Set-Cookie header.
-      final refreshToken = _extractRefreshToken(response);
+      // Refresh token: body-first (mobile), Set-Cookie fallback.
+      final refreshToken = resolveRefreshToken(response);
 
       if (refreshToken == null || refreshToken.isEmpty) {
         throw const ApiException(
@@ -101,11 +102,13 @@ class AuthRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/auth/google',
         data: {'idToken': idToken},
+        options: Options(headers: {clientTypeHeader: mobileClientType}),
       );
 
       final loginResponse = LoginResponse.fromJson(response.data!);
 
-      final refreshToken = _extractRefreshToken(response);
+      // Refresh token: body-first (mobile), Set-Cookie fallback.
+      final refreshToken = resolveRefreshToken(response);
       if (refreshToken == null || refreshToken.isEmpty) {
         throw const ApiException(
           statusCode: 0,
@@ -218,22 +221,6 @@ class AuthRepository {
     } finally {
       await _tokenStore.clearTokens();
     }
-  }
-
-  String? _extractRefreshToken(Response<dynamic> response) {
-    final setCookies = response.headers['set-cookie'];
-    if (setCookies == null) return null;
-    for (final cookie in setCookies) {
-      if (cookie.contains('rc_refresh_token=')) {
-        final start =
-            cookie.indexOf('rc_refresh_token=') + 'rc_refresh_token='.length;
-        final end = cookie.indexOf(';', start);
-        return end == -1
-            ? cookie.substring(start)
-            : cookie.substring(start, end);
-      }
-    }
-    return null;
   }
 }
 

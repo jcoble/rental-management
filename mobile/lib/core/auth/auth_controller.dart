@@ -71,11 +71,17 @@ class AuthController extends Notifier<AuthState> {
   ///
   /// Throws [ApiException] on failure so the UI can display the error.
   Future<void> login(String email, String password) async {
-    state = const AuthStateUnknown(); // show loading
+    // Do NOT flip to AuthStateUnknown here: the router shows a full-screen splash
+    // for that state, which unmounts the login screen. On failure the router then
+    // rebuilds a FRESH /login with no error, swallowing the message. The login
+    // screen owns its own `_isLoading` spinner and stays mounted, so its local
+    // error (and our AuthStateUnauthenticated.error backstop) render correctly.
     try {
       final response = await _repository.login(email, password);
       state = AuthStateAuthenticated(response.user);
     } on ApiException catch (e) {
+      // User is already on /login, so setting this does not trigger a redirect;
+      // it just provides an error backstop the screen can watch.
       state = AuthStateUnauthenticated(error: e.message);
       rethrow;
     }
@@ -143,7 +149,9 @@ class AuthController extends Notifier<AuthState> {
   /// Mirrors [login]: hands the token to `/auth/google`, then transitions to
   /// [AuthStateAuthenticated] so the router redirect drives navigation.
   Future<void> signInWithGoogle(String idToken) async {
-    state = const AuthStateUnknown(); // show loading
+    // Same rationale as [login]: do NOT flip to AuthStateUnknown (it shows the
+    // splash and unmounts the login screen, dropping the error on failure). The
+    // login screen's `_isGoogleLoading` drives the spinner while it stays mounted.
     try {
       final response = await _repository.signInWithGoogle(idToken);
       state = AuthStateAuthenticated(response.user);

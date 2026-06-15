@@ -52,6 +52,35 @@ public class AuthController : ControllerBase
     private bool ShouldExposeDevTokens =>
         _environment.IsDevelopment() && _configuration.GetValue("Auth:ExposeDevTokens", false);
 
+    /// <summary>
+    /// Request header a non-cookie (mobile) client sets to opt into receiving the refresh token in the
+    /// response body. The httpOnly refresh cookie is always set as well; only callers that send this
+    /// header (value <c>mobile</c>) additionally get <see cref="LoginResponse.RefreshToken"/> populated.
+    /// Browsers never send it, so web responses keep the token out of JS-readable bodies.
+    /// </summary>
+    private const string ClientTypeHeader = "X-Client-Type";
+    private const string MobileClientType = "mobile";
+
+    /// <summary>
+    /// True when the caller identifies itself as the mobile client via <see cref="ClientTypeHeader"/>.
+    /// Mobile has no httpOnly-cookie jar it can read, so it needs the rotated refresh token in the body.
+    /// </summary>
+    private bool IsMobileClient =>
+        Request.Headers.TryGetValue(ClientTypeHeader, out var clientType) &&
+        string.Equals(clientType.ToString(), MobileClientType, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Copies the rotated refresh token into the response body, but only for mobile callers. Web callers
+    /// get <c>null</c> (serialized out), so the token stays confined to the httpOnly cookie for browsers.
+    /// </summary>
+    private void PopulateBodyRefreshTokenForMobile(LoginResponse? response, TokenResult tokens)
+    {
+        if (response is not null && IsMobileClient)
+        {
+            response.RefreshToken = tokens.RefreshToken;
+        }
+    }
+
     [HttpPost("login")]
     [AllowAnonymous]
     public async Task<ActionResult<LoginResponse>> Login([FromBody] LoginRequest request)
@@ -63,6 +92,7 @@ public class AuthController : ControllerBase
         }
 
         SetRefreshTokenCookie(result.Tokens!.RefreshToken, result.Tokens.RefreshTokenExpiration);
+        PopulateBodyRefreshTokenForMobile(result.Response, result.Tokens);
         return Ok(result.Response);
     }
 
@@ -124,6 +154,7 @@ public class AuthController : ControllerBase
         }
 
         SetRefreshTokenCookie(result.Tokens!.RefreshToken, result.Tokens.RefreshTokenExpiration);
+        PopulateBodyRefreshTokenForMobile(result.Response, result.Tokens);
         return Ok(result.Response);
     }
 
@@ -294,6 +325,7 @@ public class AuthController : ControllerBase
         }
 
         SetRefreshTokenCookie(result.Tokens!.RefreshToken, result.Tokens.RefreshTokenExpiration);
+        PopulateBodyRefreshTokenForMobile(result.Response, result.Tokens);
         return Ok(result.Response);
     }
 

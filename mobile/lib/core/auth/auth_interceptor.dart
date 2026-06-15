@@ -4,16 +4,58 @@ import 'package:dio/dio.dart';
 
 import 'token_store.dart';
 
+/// Header the mobile client sends on auth calls to opt into receiving the
+/// rotated refresh token in the response **body** (mobile has no httpOnly-cookie
+/// jar it can read). The server only populates `LoginResponse.refreshToken` when
+/// it sees this header; browsers never send it, so web bodies stay token-free.
+const String clientTypeHeader = 'X-Client-Type';
+const String mobileClientType = 'mobile';
+
+/// Resolves the refresh token from a `/auth/login`, `/auth/google`, or
+/// `/auth/refresh` response: the JSON **body** (`refreshToken`) is authoritative
+/// for mobile; the `Set-Cookie` header is kept only as a fallback for servers
+/// that haven't been updated to echo the token in the body.
+String? resolveRefreshToken(Response<dynamic> response) {
+  final data = response.data;
+  if (data is Map) {
+    final bodyToken = data['refreshToken'];
+    if (bodyToken is String && bodyToken.isNotEmpty) {
+      return bodyToken;
+    }
+  }
+  return extractRefreshTokenFromCookies(response);
+}
+
+/// Extracts the `rc_refresh_token` value from a response's `Set-Cookie` header,
+/// or `null` when absent. Fallback channel only — see [resolveRefreshToken].
+String? extractRefreshTokenFromCookies(Response<dynamic> response) {
+  final setCookies = response.headers['set-cookie'];
+  if (setCookies == null) return null;
+  for (final cookie in setCookies) {
+    if (cookie.contains('rc_refresh_token=')) {
+      final start =
+          cookie.indexOf('rc_refresh_token=') + 'rc_refresh_token='.length;
+      final end = cookie.indexOf(';', start);
+      return end == -1 ? cookie.substring(start) : cookie.substring(start, end);
+    }
+  }
+  return null;
+}
+
 /// Dio interceptor that:
 ///  1. Attaches `Authorization: Bearer <accessToken>` to every request.
 ///  2. On 401, refreshes the access token once (single-flight) and retries.
-///  3. On refresh failure, clears stored tokens and triggers the logout callback.
+///  3. Logs out ONLY when the refresh itself fails. If the refresh succeeds but
+///     the retried original request then errors (a non-token 401, a transient
+///     network error, a timeout, a 5xx, …), that error is propagated — the
+///     session is still valid, so we must not log the user out.
 ///
 /// The refresh endpoint accepts the refresh token either from the httpOnly
 /// `rc_refresh_token` cookie (web) or from a JSON body `{ refreshToken }`. The
 /// mobile client stores the token in secure storage and sends it in the body,
-/// so it never has to craft a `Cookie` header. The server rotates the token and
-/// returns the new one via `Set-Cookie`, which we read back below.
+/// so it never has to craft a `Cookie` header. It also sends `X-Client-Type:
+/// mobile` so the server echoes the rotated token in the response body; the
+/// `Set-Cookie` header is kept only as a fallback (see [resolveRefreshToken]).
 class AuthInterceptor extends Interceptor {
   AuthInterceptor({
     required this.tokenStore,
@@ -65,23 +107,30 @@ class AuthInterceptor extends Interceptor {
       return;
     }
 
-    try {
-      final newToken = await _singleFlightRefresh();
-      if (newToken == null) {
-        await tokenStore.clearTokens();
-        onLogout();
-        handler.next(err);
-        return;
-      }
-
-      // Retry the original request with the new access token.
-      final opts = err.requestOptions;
-      opts.headers['Authorization'] = 'Bearer $newToken';
-      final retryResponse = await dio.fetch<dynamic>(opts);
-      handler.resolve(retryResponse);
-    } catch (_) {
+    // Refresh the access token (single-flight). Only a FAILED refresh means the
+    // session is dead — that is the sole condition under which we log out.
+    final newToken = await _singleFlightRefresh();
+    if (newToken == null) {
       await tokenStore.clearTokens();
       onLogout();
+      handler.next(err);
+      return;
+    }
+
+    // Refresh succeeded; retry the original request with the new access token.
+    // If THIS retry throws (a non-token 401, a transient network error, a
+    // timeout, a 5xx, …) the session is still valid — propagate the error to the
+    // caller instead of logging the user out. Logging out here is the bug that
+    // killed valid sessions on any flaky retry.
+    final opts = err.requestOptions;
+    opts.headers['Authorization'] = 'Bearer $newToken';
+    try {
+      final retryResponse = await dio.fetch<dynamic>(opts);
+      handler.resolve(retryResponse);
+    } on DioException catch (retryErr) {
+      handler.next(retryErr);
+    } catch (_) {
+      // Non-Dio failure on the retry — surface the original error, do NOT log out.
       handler.next(err);
     }
   }
@@ -104,11 +153,14 @@ class AuthInterceptor extends Interceptor {
       }
 
       // Send the stored refresh token in the request body. The API resolves it
-      // from `{ refreshToken }` first, falling back to the cookie for web.
+      // from `{ refreshToken }` first, falling back to the cookie for web. The
+      // X-Client-Type header opts us into getting the rotated token back in the
+      // response body (mobile can't read an httpOnly Set-Cookie reliably).
       final response = await dio.post<Map<String, dynamic>>(
         '/auth/refresh',
         data: {'refreshToken': refreshToken},
         options: Options(
+          headers: {clientTypeHeader: mobileClientType},
           // Don't let this call go through AuthInterceptor again.
           extra: {'skipAuthInterceptor': true},
         ),
@@ -123,7 +175,8 @@ class AuthInterceptor extends Interceptor {
       }
 
       final newAccessToken = data['accessToken'] as String?;
-      final newRefreshToken = _extractRefreshTokenFromCookies(response);
+      // Body-first (mobile), Set-Cookie fallback.
+      final newRefreshToken = resolveRefreshToken(response);
 
       if (newAccessToken == null) {
         final c = _refreshCompleter!;
@@ -147,21 +200,5 @@ class AuthInterceptor extends Interceptor {
       c?.complete(null);
       return null;
     }
-  }
-
-  /// Extracts the rotated refresh token from the `Set-Cookie` header of the
-  /// refresh response.
-  String? _extractRefreshTokenFromCookies(Response<dynamic> response) {
-    final setCookies = response.headers['set-cookie'];
-    if (setCookies == null) return null;
-    for (final cookie in setCookies) {
-      if (cookie.contains('rc_refresh_token=')) {
-        final start = cookie.indexOf('rc_refresh_token=') +
-            'rc_refresh_token='.length;
-        final end = cookie.indexOf(';', start);
-        return end == -1 ? cookie.substring(start) : cookie.substring(start, end);
-      }
-    }
-    return null;
   }
 }
