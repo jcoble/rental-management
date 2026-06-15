@@ -9,11 +9,10 @@
  * single `$effect` that calls {@link syncGridUrl} with the current values. The query keys you pass are
  * the URL param names; only non-empty / non-default values are written, keeping the URL clean.
  *
- *     import { page } from '$app/stores';
- *     import { get } from 'svelte/store';
+ *     import { page } from '$app/state';
  *     import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
  *
- *     const seed = get(page).url.searchParams;
+ *     const seed = page.url.searchParams;
  *     let search = $state(readGridParam(seed, 'q'));
  *     let status = $state(readGridParam(seed, 'status'));
  *     let pageNum = $state(readGridParam(seed, 'page', 1));
@@ -27,8 +26,7 @@
  */
 
 import { goto } from '$app/navigation';
-import { get } from 'svelte/store';
-import { page } from '$app/stores';
+import { page } from '$app/state';
 
 /** Read a string grid param from the seed URL (empty string when absent). */
 export function readGridParam(params: URLSearchParams, key: string): string;
@@ -78,7 +76,7 @@ export function syncGridUrl(
 	values: Record<string, string | number | null | undefined>,
 	defaults: Record<string, string | number> = {}
 ): string {
-	const url = get(page).url;
+	const url = page.url;
 	const query = gridQueryString(values, defaults, url.searchParams);
 	const current = url.searchParams.toString();
 	if (query !== current) {

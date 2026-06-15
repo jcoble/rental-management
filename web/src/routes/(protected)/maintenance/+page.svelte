@@ -9,6 +9,7 @@
 	import type { WorkOrder } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { workOrderSchema, inspectionSchema, parseForm } from '$lib/schemas';
+	import { localInputToOffsetIso } from '$lib/utils/date';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -140,8 +141,24 @@
 			woErrors = result.errors;
 			return;
 		}
+		// Client guard: an arrival window can't end at or before it starts. Compare the raw
+		// wall-clock values (both local) so the error surfaces inline before we hit the server.
+		if (woForm.scheduledFor && woForm.scheduledWindowEnd) {
+			const start = new Date(woForm.scheduledFor).getTime();
+			const end = new Date(woForm.scheduledWindowEnd).getTime();
+			if (!isNaN(start) && !isNaN(end) && end <= start) {
+				woErrors = { scheduledWindowEnd: 'Window end must be after the start time.' };
+				return;
+			}
+		}
 		woErrors = {};
-		saveWoMutation.mutate({ id: editingWoId, data: { portfolioId, ...result.data } });
+		// FROZEN contract: send the schedule as ISO-8601 with the browser's local offset so the
+		// server stores the true instant (and the tenant SMS shows the landlord's wall-clock time),
+		// rather than the un-zoned datetime-local string the API would mislabel as UTC.
+		const data: Record<string, unknown> = { portfolioId, ...result.data };
+		data.scheduledFor = localInputToOffsetIso(woForm.scheduledFor);
+		data.scheduledWindowEnd = localInputToOffsetIso(woForm.scheduledWindowEnd);
+		saveWoMutation.mutate({ id: editingWoId, data });
 	}
 
 	// --- Inspection form/dialog ---

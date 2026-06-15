@@ -27,32 +27,20 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const LEASE_STATUSES = ['Draft', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
 
-	const PAGE_SIZE = 20;
-	// Search / status / paging persisted in the URL so they survive navigating away and back.
+	// Search / status persisted in the URL so they survive navigating away and back. Paging is handled
+	// client-side by the DataGrid over the fetched list (matching the tenants/properties grids); the
+	// list endpoint returns no total count, so server-side paging isn't wired here.
 	let search = $state(readGridParam(page.url.searchParams, 'q'));
 	let statusFilter = $state(readGridParam(page.url.searchParams, 'status'));
-	let skip = $state(Math.max(0, (readGridParam(page.url.searchParams, 'page', 1) - 1) * PAGE_SIZE));
 	const debouncedSearch = debounced(() => search, 300);
-	// Reset to the first page when the search/status changes — but not on the initial mount, so a
-	// deep-linked / restored page survives.
-	let leaseFilterPrimed = false;
-	$effect(() => {
-		debouncedSearch.value;
-		statusFilter;
-		if (!leaseFilterPrimed) {
-			leaseFilterPrimed = true;
-			return;
-		}
-		skip = 0;
-	});
 
 	$effect(() => {
-		syncGridUrl({ q: search, status: statusFilter, page: Math.floor(skip / PAGE_SIZE) + 1 }, { page: 1 });
+		syncGridUrl({ q: search, status: statusFilter });
 	});
 
 	const leasesQuery = createQuery(() => ({
-		queryKey: ['leases', portfolioId, debouncedSearch.value, statusFilter, skip],
-		queryFn: () => leases.list(portfolioId, { search: debouncedSearch.value, skip, take: PAGE_SIZE }),
+		queryKey: ['leases', portfolioId, debouncedSearch.value],
+		queryFn: () => leases.list(portfolioId, { search: debouncedSearch.value, take: 500 }),
 	}));
 
 	const propertiesQuery = createQuery(() => ({
