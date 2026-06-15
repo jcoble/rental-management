@@ -18,15 +18,18 @@ class LastPaymentMethod extends Notifier<String?> {
 final lastPaymentMethodProvider =
     NotifierProvider<LastPaymentMethod, String?>(LastPaymentMethod.new);
 
-/// Standard payment-method choices offered in the Record-payment sheet. The
-/// API stores `method` as free text, so an unrecognised existing value is added
-/// to the list dynamically (see [_RecordPaymentSheet._methodOptions]).
-const _standardMethods = <String>[
-  'Check',
+/// Canonical payment-method choices, shared with the web client so the same
+/// concept stores the same string value on both platforms (I2). The API stores
+/// `method` as free text, so an unrecognised existing value (e.g. a legacy
+/// "ACH" / "Credit card" record) is added to the list dynamically (see
+/// [_RecordPaymentSheet._methodOptions]).
+const kPaymentMethods = <String>[
   'Cash',
+  'Check',
+  'Card',
   'Bank transfer',
-  'ACH',
-  'Credit card',
+  'Zelle',
+  'Venmo',
   'Money order',
   'Online portal',
   'Other',
@@ -98,7 +101,7 @@ class _RecordPaymentSheetState extends ConsumerState<_RecordPaymentSheet> {
   /// Method options = the standard list plus the payment's existing method if it
   /// isn't already one of them (so an imported / unusual value still shows).
   List<String> get _methodOptions {
-    final options = [..._standardMethods];
+    final options = [...kPaymentMethods];
     final current = _method;
     if (current != null &&
         current.isNotEmpty &&

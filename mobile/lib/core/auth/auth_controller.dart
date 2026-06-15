@@ -23,10 +23,22 @@ final class AuthStateUnknown extends AuthState {
 /// choice; while true the router gates the user onto the choice screen. It is resolved (via
 /// `GET /portfolio/sandbox-state`) before this state is emitted, so the router can read it
 /// synchronously and never flashes the dashboard before the gate decision.
+///
+/// [onboardingResolved] is false when the `sandbox-state` lookup itself failed (offline /
+/// transient 5xx) so we could NOT determine whether the choice is owed. In that case
+/// [onboardingPending] is left false so a *returning* user is never trapped behind a flaky
+/// network — but the home shell re-resolves on its first build (mirroring the web's
+/// per-navigation re-check) so a genuinely-new account whose lookup hiccupped at login is
+/// re-checked and gated almost immediately rather than slipping past once. See I7.
 final class AuthStateAuthenticated extends AuthState {
-  const AuthStateAuthenticated(this.user, {this.onboardingPending = false});
+  const AuthStateAuthenticated(
+    this.user, {
+    this.onboardingPending = false,
+    this.onboardingResolved = true,
+  });
   final AuthUser user;
   final bool onboardingPending;
+  final bool onboardingResolved;
 }
 
 /// No valid session.
@@ -57,15 +69,19 @@ class AuthController extends Notifier<AuthState> {
   OnboardingRepository get _onboarding => ref.read(onboardingRepositoryProvider);
 
   /// Resolves whether the freshly-authenticated user still owes the first-login Sandbox-vs-Live
-  /// choice. Best-effort: a failed lookup (offline, transient 5xx) defaults to NOT pending so a
-  /// returning user is never trapped behind the gate by a flaky network — the worst case is the
-  /// gate is shown a moment later on a subsequent navigation once the state is readable.
-  Future<bool> _resolveOnboardingPending() async {
+  /// choice.
+  ///
+  /// Returns ([pending], [resolved]). On a failed lookup (offline, transient 5xx) [resolved] is
+  /// false and [pending] is false — so a returning user is never trapped behind the gate by a
+  /// flaky network. The unresolved flag lets the home shell re-resolve on its first build so a
+  /// genuinely-new account is still gated almost immediately (mirrors the web's per-navigation
+  /// re-check). See I7.
+  Future<({bool pending, bool resolved})> _resolveOnboardingPending() async {
     try {
       final state = await _onboarding.sandboxState();
-      return state.onboardingChoicePending;
+      return (pending: state.onboardingChoicePending, resolved: true);
     } on ApiException {
-      return false;
+      return (pending: false, resolved: false);
     }
   }
 
@@ -80,8 +96,12 @@ class AuthController extends Notifier<AuthState> {
 
     try {
       final user = await _repository.currentUser();
-      final pending = await _resolveOnboardingPending();
-      state = AuthStateAuthenticated(user, onboardingPending: pending);
+      final onboarding = await _resolveOnboardingPending();
+      state = AuthStateAuthenticated(
+        user,
+        onboardingPending: onboarding.pending,
+        onboardingResolved: onboarding.resolved,
+      );
     } on ApiException {
       // Stored token is invalid or expired and refresh also failed.
       await _tokenStore.clearTokens();
@@ -100,8 +120,12 @@ class AuthController extends Notifier<AuthState> {
     // error (and our AuthStateUnauthenticated.error backstop) render correctly.
     try {
       final response = await _repository.login(email, password);
-      final pending = await _resolveOnboardingPending();
-      state = AuthStateAuthenticated(response.user, onboardingPending: pending);
+      final onboarding = await _resolveOnboardingPending();
+      state = AuthStateAuthenticated(
+        response.user,
+        onboardingPending: onboarding.pending,
+        onboardingResolved: onboarding.resolved,
+      );
     } on ApiException catch (e) {
       // User is already on /login, so setting this does not trigger a redirect;
       // it just provides an error backstop the screen can watch.
@@ -177,12 +201,40 @@ class AuthController extends Notifier<AuthState> {
     // login screen's `_isGoogleLoading` drives the spinner while it stays mounted.
     try {
       final response = await _repository.signInWithGoogle(idToken);
-      final pending = await _resolveOnboardingPending();
-      state = AuthStateAuthenticated(response.user, onboardingPending: pending);
+      final onboarding = await _resolveOnboardingPending();
+      state = AuthStateAuthenticated(
+        response.user,
+        onboardingPending: onboarding.pending,
+        onboardingResolved: onboarding.resolved,
+      );
     } on ApiException catch (e) {
       state = AuthStateUnauthenticated(error: e.message);
       rethrow;
     }
+  }
+
+  /// Re-resolves the first-login gate when the initial lookup was undetermined
+  /// (offline / transient 5xx at login). Called from the home shell's first
+  /// build to mirror the web's per-navigation re-check (I7): a returning user is
+  /// let in immediately and re-checked here; a genuinely-new account whose
+  /// `sandbox-state` call hiccupped is gated as soon as the state becomes
+  /// readable, instead of slipping past the choice once. No-op unless currently
+  /// authenticated AND the gate is still unresolved.
+  Future<void> reresolveOnboardingIfUnresolved() async {
+    final current = state;
+    if (current is! AuthStateAuthenticated || current.onboardingResolved) {
+      return;
+    }
+    final onboarding = await _resolveOnboardingPending();
+    if (!onboarding.resolved) return; // still can't tell — try again next mount
+    // Re-read state in case it changed while awaiting (e.g. logout).
+    final latest = state;
+    if (latest is! AuthStateAuthenticated) return;
+    state = AuthStateAuthenticated(
+      latest.user,
+      onboardingPending: onboarding.pending,
+      onboardingResolved: true,
+    );
   }
 
   /// Clears the first-login gate after the user has made (and the server has recorded) the
@@ -191,7 +243,11 @@ class AuthController extends Notifier<AuthState> {
   void markOnboardingComplete() {
     final current = state;
     if (current is AuthStateAuthenticated && current.onboardingPending) {
-      state = AuthStateAuthenticated(current.user, onboardingPending: false);
+      state = AuthStateAuthenticated(
+        current.user,
+        onboardingPending: false,
+        onboardingResolved: true,
+      );
     }
   }
 
