@@ -59,7 +59,7 @@ export const actions: Actions = {
 		const requestedRedirect = formData.get('redirectTo')?.toString() ?? null;
 
 		if (!email || !password) {
-			return fail(400, { error: 'Email and password are required', email });
+			return fail(400, { error: 'Email and password are required', emailNotVerified: false, email });
 		}
 
 		let data: LoginResponse;
@@ -76,8 +76,16 @@ export const actions: Actions = {
 					typeof errorData.error === 'object'
 						? errorData.error?.message
 						: errorData.error;
+				// The API marks an unverified-email login with an EMAIL_NOT_VERIFIED: prefix. Surface a
+				// clean boolean (and keep the email) so the page can offer a "resend verification" action
+				// instead of just printing the raw marker string.
+				const emailNotVerified =
+					typeof errorMessage === 'string' && errorMessage.includes('EMAIL_NOT_VERIFIED');
 				return fail(response.status, {
-					error: errorMessage || 'Invalid email or password',
+					error: emailNotVerified
+						? 'Please verify your email address before signing in.'
+						: errorMessage || 'Invalid email or password',
+					emailNotVerified,
 					email
 				});
 			}
@@ -129,7 +137,7 @@ export const actions: Actions = {
 				message.includes('fetch failed') || message.includes('ECONNREFUSED')
 					? 'Unable to connect to the API server. Please ensure the backend is running.'
 					: 'An unexpected error occurred. Please try again.';
-			return fail(500, { error: userMessage, email });
+			return fail(500, { error: userMessage, emailNotVerified: false, email });
 		}
 
 		const fallback = defaultLandingFor(data.user.roles);
