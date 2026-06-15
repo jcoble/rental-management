@@ -13,6 +13,11 @@ class WorkOrder {
   final String status;
   final DateTime requestedAt;
   final DateTime? scheduledFor;
+
+  /// End of the scheduled arrival window (visit expected between [scheduledFor]
+  /// and this time). Null when no window end was set.
+  final DateTime? scheduledWindowEnd;
+
   final DateTime? completedAt;
   final double? estimatedCost;
   final double? actualCost;
@@ -38,6 +43,7 @@ class WorkOrder {
     required this.status,
     required this.requestedAt,
     this.scheduledFor,
+    this.scheduledWindowEnd,
     this.completedAt,
     this.estimatedCost,
     this.actualCost,
@@ -65,6 +71,7 @@ class WorkOrder {
       status: json['status'] as String? ?? '',
       requestedAt: DateTime.tryParse(json['requestedAt'] as String? ?? '') ?? DateTime(0),
       scheduledFor: DateTime.tryParse(json['scheduledFor'] as String? ?? ''),
+      scheduledWindowEnd: DateTime.tryParse(json['scheduledWindowEnd'] as String? ?? ''),
       completedAt: DateTime.tryParse(json['completedAt'] as String? ?? ''),
       estimatedCost: (json['estimatedCost'] as num?)?.toDouble(),
       actualCost: (json['actualCost'] as num?)?.toDouble(),
@@ -92,6 +99,8 @@ class WorkOrder {
       'status': status,
       'requestedAt': requestedAt.toIso8601String(),
       if (scheduledFor != null) 'scheduledFor': scheduledFor!.toIso8601String(),
+      if (scheduledWindowEnd != null)
+        'scheduledWindowEnd': scheduledWindowEnd!.toIso8601String(),
       if (completedAt != null) 'completedAt': completedAt!.toIso8601String(),
       if (estimatedCost != null) 'estimatedCost': estimatedCost,
       if (actualCost != null) 'actualCost': actualCost,

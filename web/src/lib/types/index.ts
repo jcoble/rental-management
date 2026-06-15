@@ -57,6 +57,11 @@ export interface SandboxState {
 	isSandbox: boolean;
 	/** When the sandbox demo data was seeded; null once graduated to Live. */
 	sandboxSeededAtUtc?: string | null;
+	/**
+	 * True when the account has not yet made the first-login Sandbox-vs-Live choice. While true the
+	 * app routes the user to the onboarding choice gate (`/choose-setup`) instead of the dashboard.
+	 */
+	onboardingChoicePending?: boolean;
 }
 
 export type OwnerEntityType = 'Person' | 'LLC' | 'Trust';
@@ -690,6 +695,8 @@ export interface WorkOrder {
 	status: WorkOrderStatus;
 	requestedAt: string;
 	scheduledFor?: string;
+	/** End of the scheduled arrival window (visit expected between scheduledFor and this). */
+	scheduledWindowEnd?: string;
 	completedAt?: string;
 	estimatedCost?: number;
 	actualCost?: number;

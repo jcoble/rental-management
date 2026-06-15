@@ -9,15 +9,18 @@ public sealed class SandboxService : ISandboxService
 {
     private readonly RentalCommandDbContext _db;
     private readonly ISelfOwnerProvisioner _selfOwnerProvisioner;
+    private readonly Auth.DemoDataSeeder _demoSeeder;
     private readonly ILogger<SandboxService> _logger;
 
     public SandboxService(
         RentalCommandDbContext db,
         ISelfOwnerProvisioner selfOwnerProvisioner,
+        Auth.DemoDataSeeder demoSeeder,
         ILogger<SandboxService> logger)
     {
         _db = db;
         _selfOwnerProvisioner = selfOwnerProvisioner;
+        _demoSeeder = demoSeeder;
         _logger = logger;
     }
 
@@ -68,6 +71,55 @@ public sealed class SandboxService : ISandboxService
 
         _logger.LogInformation(
             "Portfolio {PortfolioId} graduated from Sandbox to Live — demo data wiped.", portfolioId);
+
+        return ToState(portfolio);
+    }
+
+    public async Task<SandboxStateResponse?> ApplyOnboardingChoiceAsync(
+        int portfolioId, OnboardingChoice choice, CancellationToken ct = default)
+    {
+        // Scope strictly to the caller's own portfolio (IDOR guard): we only ever load + mutate this id.
+        var portfolio = await _db.Portfolios
+            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct);
+
+        if (portfolio is null)
+        {
+            return null;
+        }
+
+        // Idempotent: a decision was already recorded → do not re-seed or wipe; just return current state.
+        // This makes the first-login gate safe against double-submits and repeat logins racing the redirect.
+        if (!PortfolioOnboarding.IsPending(portfolio.Settings))
+        {
+            return ToState(portfolio);
+        }
+
+        var now = DateTime.UtcNow;
+
+        if (choice == OnboardingChoice.Sandbox)
+        {
+            // Seed the demo dataset, then flip to a seeded Sandbox. The seed is fast and server-side; the
+            // ~20s "Setting up your sandbox…" animation is client-side theater (no artificial server delay).
+            // SeedPortfolioAsync is itself idempotent + atomic, so a retry can't double-seed.
+            await _demoSeeder.SeedPortfolioAsync(portfolioId, ct);
+
+            portfolio.IsSandbox = true;
+            portfolio.SandboxSeededAtUtc = now;
+        }
+        else
+        {
+            // Live: an empty real portfolio. Registration already created it empty (no demo data) with the
+            // self-owner provisioned, so there is nothing to seed or wipe — just stamp the decision below.
+            portfolio.IsSandbox = false;
+            portfolio.SandboxSeededAtUtc = null;
+        }
+
+        portfolio.Settings = PortfolioOnboarding.WriteChoice(portfolio.Settings, choice);
+        portfolio.UpdatedAt = now;
+        await _db.SaveChangesAsync(ct);
+
+        _logger.LogInformation(
+            "Portfolio {PortfolioId} recorded first-login onboarding choice: {Choice}.", portfolioId, choice);
 
         return ToState(portfolio);
     }
@@ -205,5 +257,6 @@ public sealed class SandboxService : ISandboxService
         PortfolioId = p.Id,
         IsSandbox = p.IsSandbox,
         SandboxSeededAtUtc = p.SandboxSeededAtUtc,
+        OnboardingChoicePending = PortfolioOnboarding.IsPending(p.Settings),
     };
 }

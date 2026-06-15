@@ -24,6 +24,8 @@
 	import { Plus, RefreshCw, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -40,9 +42,13 @@
 		Annually: 'Runs every Year',
 	};
 
-	let search = $state('');
-	let activeOnly = $state(false);
+	// Search + the active-only toggle persisted in the URL so they survive navigating away and back.
+	let search = $state(readGridParam(page.url.searchParams, 'q'));
+	let activeOnly = $state(page.url.searchParams.get('active') === '1');
 	const debouncedSearch = debounced(() => search, 300);
+	$effect(() => {
+		syncGridUrl({ q: search, active: activeOnly ? '1' : '' });
+	});
 
 	const tasksQuery = createQuery(() => ({
 		queryKey: ['recurring-maintenance', portfolioId, debouncedSearch.value, activeOnly],

@@ -43,4 +43,34 @@ public class SandboxController : AuthenticatedPortfolioControllerBase
         var state = await _sandbox.GoLiveAsync(GetPortfolioId(), ct);
         return state is null ? NotFound(new { error = "Portfolio not found" }) : Ok(state);
     }
+
+    /// <summary>
+    /// Records the first-login Sandbox-vs-Live decision for the caller's own account.
+    /// <c>{ "mode": "sandbox" }</c> seeds the demo portfolio; <c>{ "mode": "live" }</c> keeps an empty real
+    /// portfolio. Idempotent — once a choice is recorded, repeat calls return the current state without
+    /// re-seeding or wiping. Returns the resulting sandbox state.
+    /// </summary>
+    [HttpPost("onboarding-choice")]
+    [ProducesResponseType(typeof(SandboxStateResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<SandboxStateResponse>> OnboardingChoice(
+        [FromBody] OnboardingChoiceRequest request, CancellationToken ct)
+    {
+        var mode = request.Mode?.Trim().ToLowerInvariant();
+        OnboardingChoice choice = mode switch
+        {
+            "sandbox" => Services.Domain.OnboardingChoice.Sandbox,
+            "live" => Services.Domain.OnboardingChoice.Live,
+            _ => Services.Domain.OnboardingChoice.Pending,
+        };
+
+        if (choice == Services.Domain.OnboardingChoice.Pending)
+        {
+            return BadRequest(new { error = "mode must be 'sandbox' or 'live'" });
+        }
+
+        var state = await _sandbox.ApplyOnboardingChoiceAsync(GetPortfolioId(), choice, ct);
+        return state is null ? NotFound(new { error = "Portfolio not found" }) : Ok(state);
+    }
 }

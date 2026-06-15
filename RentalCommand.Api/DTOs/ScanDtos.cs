@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using RentalCommand.Api.Services.Voice;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Interfaces;
 
 namespace RentalCommand.Api.DTOs;
 
@@ -20,8 +21,16 @@ public sealed record ScanDraftResponse(
     // for scanned documents (which the scan review screen never reads).
     IReadOnlyList<string>? MissingRequired = null,
     string? NextPrompt = null,
-    bool Complete = true)
+    bool Complete = true,
+    // Lease-import preview: for a lease draft, what confirm would do with the property/unit
+    // (link-existing vs create-new). Null for non-lease drafts. Populated by the controller via
+    // WithLeaseProposal() so the review UI can show + let the user correct before committing.
+    LeaseImportProposal? LeaseProposal = null)
 {
+    /// <summary>Returns a copy carrying the lease-import property/unit proposal for the review UI.</summary>
+    public ScanDraftResponse WithLeaseProposal(LeaseImportProposal? proposal) =>
+        this with { LeaseProposal = proposal };
+
     /// <summary>
     /// Builds a <see cref="ScanDraftResponse"/> from a <see cref="ScanDraft"/> entity,
     /// deserializing <see cref="ScanDraft.ExtractedFields"/> JSON

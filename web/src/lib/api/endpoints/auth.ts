@@ -14,6 +14,18 @@ export const auth = {
 			body: JSON.stringify(data)
 		}),
 	me: () => api.get<User>('/auth/me'),
+	/**
+	 * Re-send the email-verification message. Anonymous endpoint — the API always responds
+	 * with a neutral success (no account enumeration), so callers can fire-and-forget.
+	 */
+	resendVerification: (email: string) =>
+		fetchPublicApi<{ message: string }>('/auth/resend-verification', {
+			method: 'POST',
+			body: JSON.stringify({ email })
+		}),
+	/** Change the signed-in user's password (Bearer-authenticated). */
+	changePassword: (currentPassword: string, newPassword: string) =>
+		api.post<{ message: string }>('/auth/change-password', { currentPassword, newPassword }),
 	/** Revoke the refresh token (cookie sent automatically via credentials). */
 	logout: () => api.post<void>('/auth/logout'),
 	listUsers: (portfolioId: number) => api.get(`/auth/users?portfolioId=${portfolioId}`),

@@ -19,6 +19,7 @@ import '../notifications/notifications_repository.dart';
 import '../../core/voice/voice_command.dart';
 import '../../core/voice/voice_command_controller.dart';
 import '../accounting/accounting_repository.dart';
+import '../onboarding/onboarding_repository.dart';
 import '../ai/ai_models.dart';
 import '../ai/ai_repository.dart';
 import '../ai/ai_tab.dart';
@@ -137,6 +138,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      // I7: if the first-login gate couldn't be determined at login (the
+      // sandbox-state lookup hiccupped), re-resolve it now that the shell is up,
+      // mirroring the web's per-navigation re-check. No-op once resolved, so a
+      // returning user pays nothing; a genuinely-new account gets gated here
+      // instead of slipping past the Sandbox/Live choice.
+      ref.read(authControllerProvider.notifier).reresolveOnboardingIfUnresolved();
       // Initialise the realtime watcher so it stays alive for the shell. The
       // updates hub also carries in-app Notification events (see
       // realtime_providers' `_invalidateForEntity` 'Notification' case).
@@ -251,36 +258,46 @@ class _HomeShellState extends ConsumerState<HomeShell>
         : _selectedIndex;
 
     return Scaffold(
-      body: IndexedStack(
-        index: selectedIndex,
-        children: tenantMode
-            ? [
-                _TenantHomeTab(user: user),
-                const MessagesListScreen(),
-                const _TenantMaintenanceTab(),
-                const _TenantMoreTab(),
-              ]
-            : [
-                _HomeTab(
-                  user: user,
-                  onOpenCapture: _openCapture,
-                  onOpenOverdue: () => Navigator.of(context).push<void>(
-                    MaterialPageRoute<void>(
-                      builder: (_) => const OverdueScreen(),
-                    ),
-                  ),
-                  onSwitchToTab: (index) =>
-                      setState(() => _selectedIndex = index),
-                  onOpenAssistant: () {
-                    Navigator.of(context).push<void>(
-                      MaterialPageRoute<void>(builder: (_) => const AiTab()),
-                    );
-                  },
-                ),
-                const MoneyScreen(),
-                const WorkOrdersScreen(),
-                const MessagesListScreen(),
-              ],
+      body: Column(
+        children: [
+          // App-wide "Sandbox mode" indicator: a slim bar above the tabs, shown only while the
+          // account is a seeded demo sandbox. Inert (zero-height) once the account is Live.
+          const _SandboxIndicator(),
+          Expanded(
+            child: IndexedStack(
+              index: selectedIndex,
+              children: tenantMode
+                  ? [
+                      _TenantHomeTab(user: user),
+                      const MessagesListScreen(),
+                      const _TenantMaintenanceTab(),
+                      const _TenantMoreTab(),
+                    ]
+                  : [
+                      _HomeTab(
+                        user: user,
+                        onOpenCapture: _openCapture,
+                        onOpenOverdue: () => Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const OverdueScreen(),
+                          ),
+                        ),
+                        onSwitchToTab: (index) =>
+                            setState(() => _selectedIndex = index),
+                        onOpenAssistant: () {
+                          Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                                builder: (_) => const AiTab()),
+                          );
+                        },
+                      ),
+                      const MoneyScreen(),
+                      const WorkOrdersScreen(),
+                      const MessagesListScreen(),
+                    ],
+            ),
+          ),
+        ],
       ),
       floatingActionButton: tenantMode
           ? null
@@ -299,6 +316,53 @@ class _HomeShellState extends ConsumerState<HomeShell>
         // Landlord nav leaves a gap in the middle for the docked Capture FAB.
         centerGap: !tenantMode,
         onSelected: (index) => setState(() => _selectedIndex = index),
+      ),
+    );
+  }
+}
+
+/// App-wide "Sandbox mode" indicator — a slim warning-tinted bar shown at the top of the shell
+/// while the account is a seeded demo sandbox. Renders nothing (zero height) once the account is
+/// Live or while the state is still loading, so it never causes layout jank for real accounts.
+class _SandboxIndicator extends ConsumerWidget {
+  const _SandboxIndicator();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(sandboxStateProvider);
+    final isSandbox = state.maybeWhen(
+      data: (s) => s.isSandbox,
+      orElse: () => false,
+    );
+    if (!isSandbox) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Container(
+      key: const Key('sandbox-indicator'),
+      width: double.infinity,
+      color: scheme.tertiaryContainer,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+      child: SafeArea(
+        bottom: false,
+        child: Row(
+          children: [
+            Icon(Icons.science_outlined,
+                size: 15, color: scheme.onTertiaryContainer),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Sandbox mode — exploring with sample data. Nothing here is real.',
+                style: theme.textTheme.labelMedium?.copyWith(
+                  color: scheme.onTertiaryContainer,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

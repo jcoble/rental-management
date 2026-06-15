@@ -50,7 +50,7 @@
 	import PortfolioSelector from '$lib/components/shared/PortfolioSelector.svelte';
 	import NotificationBell from '$lib/components/notifications/NotificationBell.svelte';
 	import MaterialSymbol from '$lib/components/m3/MaterialSymbol.svelte';
-	import { getCurrentUser, hasAnyRole, clearAuth, getAuthState } from '$lib/stores/auth.svelte';
+	import { getCurrentUser, hasAnyRole, clearAuthState, getAuthState } from '$lib/stores/auth.svelte';
 	import { isPortalUser, isStaff } from '$lib/types/user';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { messages as messagesApi } from '$lib/api/endpoints/messages';
@@ -289,28 +289,35 @@
 		}
 	});
 
-	// Default any group with no stored preference to open, and always force-open
-	// the group that contains the active route. Reads openGroups untracked (it WRITES openGroups, and
-	// should only re-run when the route / visible groups change — not on its own write).
+	// Accordion default: groups start CLOSED; only the group containing the active route auto-opens
+	// (and, to keep the one-open-at-a-time invariant, its siblings are forced closed). No group is
+	// defaulted to open. Reads openGroups untracked (it WRITES openGroups, and should only re-run
+	// when the route / visible groups change — not on its own write).
 	$effect(() => {
-		const next = { ...untrack(() => openGroups) };
+		const current = untrack(() => openGroups);
+		const next = { ...current };
 		let changed = false;
 		const groupsForState = visibleSettingsGroup ? [...visibleGroups, visibleSettingsGroup] : visibleGroups;
-		for (const g of groupsForState) {
-			if (next[g.id] === undefined) {
-				next[g.id] = true;
-				changed = true;
-			}
-			if (groupHasActive(g) && next[g.id] !== true) {
-				next[g.id] = true;
-				changed = true;
+		const activeGroup = groupsForState.find((g) => groupHasActive(g));
+		if (activeGroup) {
+			for (const g of groupsForState) {
+				const shouldOpen = g.id === activeGroup.id;
+				if ((next[g.id] ?? false) !== shouldOpen) {
+					next[g.id] = shouldOpen;
+					changed = true;
+				}
 			}
 		}
 		if (changed) openGroups = next;
 	});
 
+	// Accordion: only one group open at a time. Opening a group closes every other group; clicking
+	// the open group's header just closes it. Persisted so the choice survives reloads.
 	function toggleGroup(id: string) {
-		const next = { ...openGroups, [id]: !openGroups[id] };
+		const willOpen = !openGroups[id];
+		const next: Record<string, boolean> = {};
+		for (const key of Object.keys(openGroups)) next[key] = false;
+		next[id] = willOpen;
 		openGroups = next;
 		if (browser) {
 			try {
@@ -342,8 +349,17 @@
 		if (isMobile) isSidebarOpen = false;
 	}
 
+	// Sign out: tear down the client mirror (which also fires the SignalR-disconnect callback), then
+	// hand off to the server /logout endpoint with a FULL-DOCUMENT navigation. A client-side goto can
+	// race the httpOnly Set-Cookie deletions, leaving a still-valid access-token cookie behind — so the
+	// next visit to /login sees locals.user and auto-resumes the dead session. A top-level navigation
+	// makes the browser apply the /logout cookie-deletion headers and follow its 303 → /login as a fresh
+	// request with no session cookies, so the session is actually dead (no auto-resume).
 	function signOut() {
-		clearAuth();
+		clearAuthState();
+		if (browser) {
+			window.location.href = '/logout';
+		}
 	}
 
 	// --- Header quick-action live counts ---------------------------------------
@@ -442,7 +458,7 @@
 
 <!-- An expanded collapsible group (header + its items). -->
 {#snippet navGroup(group: NavGroup)}
-	{@const open = openGroups[group.id] ?? true}
+	{@const open = openGroups[group.id] ?? false}
 	<div class="mb-0.5">
 		<button
 			type="button"
@@ -595,8 +611,14 @@
 									Settings
 								</a>
 							</DropdownMenuItem>
-							<DropdownMenuSeparator />
 						{/if}
+						<DropdownMenuItem data-testid="user-menu-security-collapsed">
+							<a href="/settings/security" class="flex w-full items-center gap-2">
+								<Shield class="h-4 w-4" />
+								Security
+							</a>
+						</DropdownMenuItem>
+						<DropdownMenuSeparator />
 						<DropdownMenuItem
 							class="text-destructive focus:text-destructive"
 							data-testid="user-menu-sign-out-collapsed"
@@ -640,8 +662,14 @@
 									Settings
 								</a>
 							</DropdownMenuItem>
-							<DropdownMenuSeparator />
 						{/if}
+						<DropdownMenuItem data-testid="user-menu-security">
+							<a href="/settings/security" class="flex w-full items-center gap-2">
+								<Shield class="h-4 w-4" />
+								Security
+							</a>
+						</DropdownMenuItem>
+						<DropdownMenuSeparator />
 						<DropdownMenuItem
 							class="text-destructive focus:text-destructive"
 							data-testid="user-menu-sign-out"

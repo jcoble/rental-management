@@ -58,7 +58,6 @@ public sealed class GoogleAuthService : IGoogleAuthService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly GoogleAuthOptions _options;
     private readonly RentalCommandDbContext _db;
-    private readonly DemoDataSeeder _demoSeeder;
     private readonly Domain.ISelfOwnerProvisioner _selfOwnerProvisioner;
     private readonly ILogger<GoogleAuthService> _logger;
 
@@ -71,7 +70,6 @@ public sealed class GoogleAuthService : IGoogleAuthService
         IHttpClientFactory httpClientFactory,
         IOptions<GoogleAuthOptions> options,
         RentalCommandDbContext db,
-        DemoDataSeeder demoSeeder,
         Domain.ISelfOwnerProvisioner selfOwnerProvisioner,
         ILogger<GoogleAuthService> logger)
     {
@@ -80,7 +78,6 @@ public sealed class GoogleAuthService : IGoogleAuthService
         _httpClientFactory = httpClientFactory;
         _options = options.Value;
         _db = db;
-        _demoSeeder = demoSeeder;
         _selfOwnerProvisioner = selfOwnerProvisioner;
         _logger = logger;
     }
@@ -328,19 +325,20 @@ public sealed class GoogleAuthService : IGoogleAuthService
     }
 
     /// <summary>
-    /// Ensures a Google user is fully provisioned as the owner of their portfolio: a sandbox
-    /// <see cref="Portfolio"/>, the <see cref="UserRole.Admin"/> Identity role, and a
-    /// <see cref="UserAccount"/> staff row. Google sign-in (unlike email/password registration) did
-    /// none of this, so the user had no portfolio (dashboard failed) and no role (only Dashboard +
-    /// Help showed in the nav). Mirrors the seeded-admin pattern and
-    /// <c>AuthService.ProvisionSandboxPortfolioAsync</c>. Every step is idempotent, so existing
-    /// role-less users created before this fix are back-filled on their next login.
+    /// Ensures a Google user is fully provisioned as the owner of their portfolio: an EMPTY
+    /// <see cref="Portfolio"/> with the first-login Sandbox-vs-Live choice still pending, the
+    /// <see cref="UserRole.Admin"/> Identity role, and a <see cref="UserAccount"/> staff row. Google
+    /// sign-in (unlike email/password registration) did none of this, so the user had no portfolio
+    /// (dashboard failed) and no role (only Dashboard + Help showed in the nav). Mirrors the seeded-admin
+    /// pattern and <c>AuthService.ProvisionPendingPortfolioAsync</c>: no demo data is seeded here — the
+    /// user picks Sandbox-vs-Live on first login. Every step is idempotent, so existing role-less users
+    /// created before this fix are back-filled on their next login.
     /// </summary>
     private async Task EnsureOwnerProvisioningAsync(ApplicationUser user)
     {
         try
         {
-            // 1) Sandbox portfolio — only if the user has none yet.
+            // 1) Empty portfolio with the choice pending — only if the user has none yet. No demo seed.
             if (user.PortfolioId == null)
             {
                 var now = DateTime.UtcNow;
@@ -350,8 +348,10 @@ public sealed class GoogleAuthService : IGoogleAuthService
                     ManagementCompanyName = string.IsNullOrWhiteSpace(user.DisplayName) ? "My Company" : user.DisplayName!,
                     Status = PortfolioStatus.Active,
                     Currency = "USD",
-                    IsSandbox = true,
-                    SandboxSeededAtUtc = now,
+                    // Pending the first-login choice: not a sandbox yet, no demo data.
+                    IsSandbox = false,
+                    SandboxSeededAtUtc = null,
+                    Settings = Domain.PortfolioOnboarding.WriteChoice(null, Domain.OnboardingChoice.Pending),
                     CreatedAt = now,
                     UpdatedAt = now,
                 };
@@ -361,10 +361,8 @@ public sealed class GoogleAuthService : IGoogleAuthService
                 user.PortfolioId = portfolio.Id;
                 await _userManager.UpdateAsync(user);
 
-                await _demoSeeder.SeedPortfolioAsync(portfolio.Id);
-
                 _logger.LogInformation(
-                    "Provisioned sandbox portfolio {PortfolioId} for Google user {Email} (id {UserId}).",
+                    "Provisioned pending portfolio {PortfolioId} (awaiting Sandbox/Live choice) for Google user {Email} (id {UserId}).",
                     portfolio.Id, user.Email, user.Id);
             }
 

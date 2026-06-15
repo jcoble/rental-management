@@ -220,7 +220,7 @@ public sealed class PushDispatchTests : IDisposable
 
     private sealed class ThrowingNotificationChannel : INotificationChannel
     {
-        public Task SendEmailAsync(string toEmail, string subject, string body, CancellationToken ct = default) =>
+        public Task SendEmailAsync(string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default) =>
             throw new InvalidOperationException("email channel should not be used by push tests");
 
         public Task SendSmsAsync(string toPhoneNumber, string message, int? portfolioId = null, CancellationToken ct = default) =>

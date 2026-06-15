@@ -4,6 +4,7 @@ import 'package:app_links/app_links.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../router/app_router.dart';
 import 'voice_command.dart';
 
 /// Holds the most recent voice command that the UI has not yet acted on.
@@ -77,6 +78,21 @@ class VoiceLinkService {
   }
 
   void _handle(Uri uri) {
+    // Password-reset deep link from the emailed link (custom scheme
+    // `rentalcommand://reset-password?userId=&token=`, or any link whose last
+    // path segment is `reset-password`). Route it straight to the in-app screen
+    // so the reset can be completed on device instead of bouncing to the web.
+    if (_isResetPasswordLink(uri)) {
+      final userId = uri.queryParameters['userId'] ?? '';
+      final token = uri.queryParameters['token'] ?? '';
+      final query = Uri(
+        queryParameters: {'userId': userId, 'token': token},
+      ).query;
+      if (kDebugMode) debugPrint('[deeplink] reset-password received');
+      _ref.read(appRouterProvider).go('/reset-password?$query');
+      return;
+    }
+
     final command = parseVoiceCommand(uri);
     if (command == null) {
       if (kDebugMode) debugPrint('[voice] ignored non-command link: $uri');
@@ -85,6 +101,12 @@ class VoiceLinkService {
     if (kDebugMode) debugPrint('[voice] received $command');
     _ref.read(pendingVoiceCommandProvider.notifier).set(command);
   }
+
+  /// True for a password-reset link in either the custom-scheme form
+  /// (`rentalcommand://reset-password?...`) or a path form (`.../reset-password?...`).
+  static bool _isResetPasswordLink(Uri uri) =>
+      uri.host == 'reset-password' ||
+      uri.pathSegments.contains('reset-password');
 
   void dispose() => _subscription?.cancel();
 }

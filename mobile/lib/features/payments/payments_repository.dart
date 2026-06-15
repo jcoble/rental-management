@@ -111,10 +111,20 @@ class PaymentsRepository {
 
   final Dio _dio;
 
-  Future<List<Payment>> listPayments({int? leaseId}) async {
+  /// Lists payments, newest first by default.
+  ///
+  /// The API defaults to ascending `CreatedAt` when no `sort` is supplied
+  /// (`PaymentService.ListAsync`), which surfaces the oldest payments on top.
+  /// We pass `-createdAt` so the Money ledger and the standalone Payments
+  /// screen both show the most recent activity first.
+  Future<List<Payment>> listPayments({
+    int? leaseId,
+    String sort = '-createdAt',
+  }) async {
     try {
       final params = <String, dynamic>{};
       if (leaseId != null) params['leaseId'] = leaseId;
+      if (sort.isNotEmpty) params['sort'] = sort;
       final response = await _dio.get<List<dynamic>>(
         '/payments',
         queryParameters: params.isEmpty ? null : params,
@@ -163,12 +173,23 @@ class PaymentsRepository {
     }
   }
 
-  /// POST /payments/{id}/mark-paid  body: { paidDate?, method? }
-  Future<Payment> markPaid(int id, {String? paidDate, String? method}) async {
+  /// POST /payments/{id}/mark-paid
+  /// body: { paidDate?, method?, externalReference?, notes? }
+  Future<Payment> markPaid(
+    int id, {
+    String? paidDate,
+    String? method,
+    String? externalReference,
+    String? notes,
+  }) async {
     try {
       final body = <String, dynamic>{};
       if (paidDate != null) body['paidDate'] = paidDate;
       if (method != null) body['method'] = method;
+      if (externalReference != null) {
+        body['externalReference'] = externalReference;
+      }
+      if (notes != null) body['notes'] = notes;
       final response = await _dio.post<Map<String, dynamic>>(
         '/payments/$id/mark-paid',
         data: body,
@@ -280,6 +301,17 @@ final paymentsProvider =
     NotifierProvider<PaymentsNotifier, AsyncValue<List<Payment>>>(
   PaymentsNotifier.new,
 );
+
+// ── Payments for a specific lease ─────────────────────────────────────────────
+
+/// Payments belonging to one lease, newest first. Backs the Payments section on
+/// the lease detail screen (`GET /payments?leaseId=…`). autoDispose so it
+/// refetches whenever the lease screen is reopened, and invalidate-able after an
+/// inline mark-paid.
+final leasePaymentsProvider =
+    FutureProvider.autoDispose.family<List<Payment>, int>((ref, leaseId) {
+  return ref.watch(paymentsRepositoryProvider).listPayments(leaseId: leaseId);
+});
 
 // ── Leases (for the create-payment dropdown) ──────────────────────────────────
 

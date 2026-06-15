@@ -208,6 +208,7 @@ public class PaymentService : IPaymentService
         entity.PaidDate = request.PaidDate?.ToUtc() ?? DateTime.UtcNow;
         if (request.Method != null) entity.Method = request.Method;
         if (request.ExternalReference != null) entity.ExternalReference = request.ExternalReference;
+        if (request.Notes != null) entity.Notes = request.Notes;
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);

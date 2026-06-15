@@ -20,7 +20,7 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import StarRating from '$lib/components/shared/StarRating.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
-	import { History, Pencil, Save, Trash2, X, MessageSquare, Star, Check, Wrench, Coins } from '@lucide/svelte';
+	import { History, Pencil, Save, Trash2, X, MessageSquare, Star, Check, Wrench, Coins, Phone, Mail } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import WorkOrderTimeline from '$lib/components/shared/WorkOrderTimeline.svelte';
@@ -174,9 +174,23 @@
 	const vendorsQuery = createQuery(() => ({
 		queryKey: ['vendors', portfolioId],
 		queryFn: () => vendors.list(portfolioId, { take: 200 }),
-		enabled: showDispatch && portfolioId > 0,
+		// Loaded for the dispatch picker AND whenever this work order already has a vendor, so the
+		// call/text/email contact links can resolve the assigned vendor's phone + email.
+		enabled: portfolioId > 0 && (showDispatch || (wo?.vendorId != null)),
 	}));
 	const vendorList = $derived(vendorsQuery.data ?? []);
+
+	// The vendor assigned to this work order (when any), resolved from the loaded list so we can offer
+	// call / text / email contact actions matching the mobile trio. tel:/sms: hrefs strip everything but
+	// digits and a leading +, and the whole value is URL-encoded.
+	const assignedVendor = $derived(
+		wo?.vendorId != null ? (vendorList.find((v) => v.id === wo.vendorId) ?? null) : null
+	);
+	function telHref(scheme: 'tel' | 'sms', phone: string | null | undefined): string | null {
+		if (!phone) return null;
+		const cleaned = phone.replace(/[^\d+]/g, '');
+		return cleaned ? `${scheme}:${encodeURIComponent(cleaned)}` : null;
+	}
 
 	function openDispatch() {
 		selectedVendorId = null;
@@ -419,6 +433,36 @@
 					{/if}
 					When they text back <span class="font-medium">DONE</span>, this work order closes automatically.
 				</p>
+			</div>
+		{/if}
+
+		<!-- Vendor contact: call / text / email the assigned vendor, mirroring the mobile trio.
+		     Shown once a vendor is assigned; the dispatch ("text the job") button stays in the header. -->
+		{#if assignedVendor}
+			<div class="mb-6 flex flex-wrap items-center gap-2 rounded-md border border-border bg-card p-3" data-testid="work-order-vendor-contact">
+				<span class="mr-1 text-sm">
+					<span class="text-muted-foreground">Vendor:</span>
+					<span class="font-medium text-foreground">{assignedVendor.name}</span>
+				</span>
+				{#if telHref('tel', assignedVendor.phone)}
+					<Button variant="outline" size="sm" href={telHref('tel', assignedVendor.phone)} data-testid="work-order-vendor-call">
+						<Phone class="h-4 w-4" />
+						Call
+					</Button>
+					<Button variant="outline" size="sm" href={telHref('sms', assignedVendor.phone)} data-testid="work-order-vendor-text">
+						<MessageSquare class="h-4 w-4" />
+						Text
+					</Button>
+				{/if}
+				{#if assignedVendor.email}
+					<Button variant="outline" size="sm" href={`mailto:${encodeURIComponent(assignedVendor.email)}`} data-testid="work-order-vendor-email">
+						<Mail class="h-4 w-4" />
+						Email
+					</Button>
+				{/if}
+				{#if !assignedVendor.phone && !assignedVendor.email}
+					<span class="text-xs text-muted-foreground" data-testid="work-order-vendor-no-contact">No phone or email on file for this vendor.</span>
+				{/if}
 			</div>
 		{/if}
 

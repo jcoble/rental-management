@@ -77,7 +77,7 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
         await RunCycle();
 
         _channel.Emails.Should().HaveCount(1);
-        var (to, subject, body) = _channel.Emails[0];
+        var (to, subject, body, _) = _channel.Emails[0];
         to.Should().Be("owner@landlord.test");
         subject.Should().StartWith("[Sandbox]");
         body.Should().Contain("real-tenant@example.com");
@@ -90,7 +90,7 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
         await RunCycle();
 
         _channel.Emails.Should().HaveCount(1);
-        var (to, subject, _) = _channel.Emails[0];
+        var (to, subject, _, _) = _channel.Emails[0];
         to.Should().Be("real-tenant@example.com");
         subject.Should().Be("Please sign your lease");
     }
@@ -146,12 +146,12 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
 
     private sealed class CapturingNotificationChannel : INotificationChannel
     {
-        public List<(string To, string Subject, string Body)> Emails { get; } = new();
+        public List<(string To, string Subject, string Body, string? HtmlBody)> Emails { get; } = new();
         public List<(string To, string Message)> SmsMessages { get; } = new();
 
-        public Task SendEmailAsync(string toEmail, string subject, string body, CancellationToken ct = default)
+        public Task SendEmailAsync(string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default)
         {
-            Emails.Add((toEmail, subject, body));
+            Emails.Add((toEmail, subject, body, htmlBody));
             return Task.CompletedTask;
         }
 

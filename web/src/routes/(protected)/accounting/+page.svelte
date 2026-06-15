@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { payments } from '$lib/api/endpoints/payments';
 	import { expenses } from '$lib/api/endpoints/expenses';
@@ -14,6 +16,7 @@
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Payment, Expense, AccountingReports, AccountingSummary, AccountingTransaction } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
@@ -37,13 +40,17 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
-	// Landing on the day-to-day Ledger view; Reports and Overview are secondary.
-	let activeTab = $state('ledger');
 	const accountingTabs = [
 		{ value: 'ledger', label: 'Ledger' },
 		{ value: 'reports', label: 'Reports' },
 		{ value: 'overview', label: 'Overview' },
 	];
+	// Landing on the day-to-day Ledger view; Reports and Overview are secondary. Seeded from the URL so
+	// a deep-linked / Back-navigated tab is restored (the grid-state persistence below keeps it synced).
+	const initialTab = page.url.searchParams.get('tab');
+	let activeTab = $state(
+		initialTab && accountingTabs.some((t) => t.value === initialTab) ? initialTab : 'ledger'
+	);
 	const PAGE_SIZE = 20;
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
@@ -55,21 +62,31 @@
 	];
 	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
 
-	let transactionSearch = $state('');
-	let transactionKindFilter = $state('');
-	let transactionStatusFilter = $state('');
-	let transactionCategoryFilter = $state('');
-	let transactionPropertyFilter = $state('');
-	let transactionFromFilter = $state('');
-	let transactionToFilter = $state('');
-	let transactionPage = $state(1);
+	// --- Ledger grid state, persisted in the URL query string -------------------
+	// Filter / sort / search / paging (and the active tab) round-trip through the URL so they survive
+	// navigation away-and-back and browser Back/Forward (EdiPlatform's grid pattern). Seed the initial
+	// values from the current URL on mount, then mirror state -> URL via a replaceState goto.
+	const initialParams = page.url.searchParams;
+	const DEFAULT_SORT = '-createdAt';
+
+	let transactionSearch = $state(readGridParam(initialParams, 'q'));
+	let transactionKindFilter = $state(readGridParam(initialParams, 'kind'));
+	let transactionStatusFilter = $state(readGridParam(initialParams, 'status'));
+	let transactionCategoryFilter = $state(readGridParam(initialParams, 'category'));
+	let transactionPropertyFilter = $state(readGridParam(initialParams, 'property'));
+	let transactionFromFilter = $state(readGridParam(initialParams, 'from'));
+	let transactionToFilter = $state(readGridParam(initialParams, 'to'));
+	let transactionPage = $state(readGridParam(initialParams, 'page', 1));
 	// Default newest-entered-first: a just-scanned item lands at the top of the ledger even when its
 	// transaction date is wrong/old. The "Date" (transaction date) column stays sortable too.
-	let transactionSort = $state('-createdAt');
+	let transactionSort = $state(readGridParam(initialParams, 'sort') || DEFAULT_SORT);
 	let transactionDeleteTarget = $state<AccountingTransaction | null>(null);
 	const debouncedTransactionSearch = debounced(() => transactionSearch, 300);
 	const selectedPropertyFilter = $derived(transactionPropertyFilter ? Number(transactionPropertyFilter) : undefined);
 
+	// Reset to page 1 whenever a filter/search changes — but NOT on the initial mount, so a deep-linked
+	// or restored ?page=3 loads as-is instead of being clobbered back to 1.
+	let filterResetPrimed = false;
 	$effect(() => {
 		debouncedTransactionSearch.value;
 		transactionKindFilter;
@@ -78,7 +95,34 @@
 		transactionPropertyFilter;
 		transactionFromFilter;
 		transactionToFilter;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
 		transactionPage = 1;
+	});
+
+	// Mirror the current ledger grid state into the URL query string (state -> URL). syncGridUrl uses a
+	// replaceState goto so each keystroke doesn't stack history, omits empties/defaults to keep the URL
+	// tidy, and no-ops when the URL already matches (so this effect can't loop). Going away and back —
+	// or browser Back/Forward — remounts the page, and the $state seeds above read these params straight
+	// back. TanStack already re-fetches off the state vars, so this is purely the persistence layer.
+	$effect(() => {
+		syncGridUrl(
+			{
+				tab: activeTab,
+				q: transactionSearch,
+				kind: transactionKindFilter,
+				status: transactionStatusFilter,
+				category: transactionCategoryFilter,
+				property: transactionPropertyFilter,
+				from: transactionFromFilter,
+				to: transactionToFilter,
+				page: transactionPage,
+				sort: transactionSort,
+			},
+			{ tab: 'ledger', page: 1, sort: DEFAULT_SORT }
+		);
 	});
 
 	const transactionsQuery = createQuery(() => ({
@@ -142,14 +186,70 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
+	// --- Mark Paid modal ---
+	// Capture how the money arrived (method / reference) + when, with smart defaults so one click
+	// is still fast: date = today, method = the last method this user picked (remembered in
+	// localStorage). The mark-paid endpoint accepts paidDate / method / externalReference / notes; the
+	// payment record already carries its own amount, so there's no amount field here. Methods come from
+	// the shared canonical list so web + mobile offer identical values.
+	const LAST_METHOD_KEY = 'rc.payments.lastMethod';
+	function loadLastMethod(): string {
+		if (typeof localStorage === 'undefined') return '';
+		try {
+			return localStorage.getItem(LAST_METHOD_KEY) ?? '';
+		} catch {
+			return '';
+		}
+	}
+	function rememberLastMethod(method: string) {
+		if (!method || typeof localStorage === 'undefined') return;
+		try {
+			localStorage.setItem(LAST_METHOD_KEY, method);
+		} catch {
+			/* storage may be unavailable */
+		}
+	}
+	const emptyMarkPaid = { paidDate: '', method: '', externalReference: '', notes: '' };
+	let showMarkPaidForm = $state(false);
+	let markPaidTarget = $state<AccountingTransaction | null>(null);
+	let markPaidForm = $state({ ...emptyMarkPaid });
+
+	function todayLocal(): string {
+		const d = new Date();
+		const p = (n: number) => String(n).padStart(2, '0');
+		return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+	}
+
+	function openMarkPaid(t: AccountingTransaction) {
+		markPaidTarget = t;
+		markPaidForm = { paidDate: todayLocal(), method: loadLastMethod(), externalReference: '', notes: '' };
+		showMarkPaidForm = true;
+	}
+	function closeMarkPaid() {
+		showMarkPaidForm = false;
+		markPaidTarget = null;
+	}
+
 	const markPaidMutation = createMutation(() => ({
-		mutationFn: (id: number) => payments.markPaid(id, {}),
-		onSuccess: () => {
+		mutationFn: ({ id, data }: { id: number; data: Record<string, unknown> }) => payments.markPaid(id, data),
+		onSuccess: (_r, vars) => {
 			showSuccess('Payment marked paid.');
+			rememberLastMethod(String(vars.data.method ?? ''));
+			closeMarkPaid();
 			invalidatePayments();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	function submitMarkPaid() {
+		if (!markPaidTarget) return;
+		const data: Record<string, unknown> = {};
+		if (markPaidForm.paidDate) data.paidDate = markPaidForm.paidDate;
+		if (markPaidForm.method) data.method = markPaidForm.method;
+		if (markPaidForm.externalReference.trim()) data.externalReference = markPaidForm.externalReference.trim();
+		if (markPaidForm.notes.trim()) data.notes = markPaidForm.notes.trim();
+		markPaidMutation.mutate({ id: markPaidTarget.id, data });
+	}
 
 	const deletePaymentMutation = createMutation(() => ({
 		mutationFn: (id: number) => payments.delete(id),
@@ -497,8 +597,8 @@
 		{
 			key: 'actions',
 			title: '',
+			isAction: true,
 			mobileRole: 'hidden',
-			width: '8rem',
 			cell: transactionActionsCell,
 		},
 	];
@@ -623,7 +723,7 @@
 				data-testid="payment-mark-paid"
 				variant="outline"
 				size="sm"
-				onclick={(ev) => { ev.stopPropagation(); markPaidMutation.mutate(t.id); }}
+				onclick={(ev) => { ev.stopPropagation(); openMarkPaid(t); }}
 			>Mark Paid</Button>
 		{/if}
 		{#if t.kind !== 'Bank'}
@@ -1067,6 +1167,69 @@
 		<Dialog.Footer>
 			<Button data-testid="payment-form-cancel" variant="outline" onclick={closePaymentForm}>Cancel</Button>
 			<Button data-testid="payment-form-save" onclick={submitPayment} disabled={savePaymentMutation.isPending}>{savePaymentMutation.isPending ? 'Saving…' : 'Save Payment'}</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<!-- Mark Paid: capture how/when the money arrived. Smart defaults (today + last-used method) keep
+	 it one quick confirm; the payment record carries its own amount so there's no amount field. -->
+<Dialog.Root
+	open={showMarkPaidForm}
+	onOpenChange={(v) => { if (!v) closeMarkPaid(); }}
+>
+	<Dialog.Content class="max-w-md" data-testid="mark-paid-dialog">
+		<Dialog.Header>
+			<Dialog.Title>Mark paid</Dialog.Title>
+			{#if markPaidTarget}
+				<Dialog.Description data-testid="mark-paid-summary">
+					{markPaidTarget.description} · {money(markPaidTarget.amount)}
+				</Dialog.Description>
+			{/if}
+		</Dialog.Header>
+		<div class="space-y-3" data-testid="mark-paid-form">
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Date received</span>
+				<DatePicker testid="mark-paid-date-input" bind:value={markPaidForm.paidDate} placeholder="Date received" />
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Method</span>
+				<Select.Root type="single" bind:value={markPaidForm.method}>
+					<Select.Trigger class="w-full" data-testid="mark-paid-method-input">
+						{markPaidForm.method || 'Select method'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="No method">No method</Select.Item>
+						{#each PAYMENT_METHODS as m}
+							<Select.Item value={m} label={m}>{m}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Reference</span>
+				<Input
+					data-testid="mark-paid-reference-input"
+					bind:value={markPaidForm.externalReference}
+					placeholder="Check #, confirmation #, etc. (optional)"
+				/>
+			</div>
+			<div>
+				<span class="mb-1 block text-xs text-muted-foreground">Notes</span>
+				<textarea
+					data-testid="mark-paid-notes-input"
+					bind:value={markPaidForm.notes}
+					rows={2}
+					maxlength={2000}
+					placeholder="Anything to remember about this payment (optional)"
+					class="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+				></textarea>
+			</div>
+		</div>
+		<Dialog.Footer>
+			<Button data-testid="mark-paid-cancel" variant="outline" onclick={closeMarkPaid}>Cancel</Button>
+			<Button data-testid="mark-paid-confirm" onclick={submitMarkPaid} disabled={markPaidMutation.isPending}>
+				{markPaidMutation.isPending ? 'Saving…' : 'Mark paid'}
+			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
