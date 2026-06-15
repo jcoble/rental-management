@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { leases } from '$lib/api/endpoints/leases';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
@@ -42,7 +42,7 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const LEASE_STATUSES = ['Draft', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
 
-	const leaseId = $derived(parseInt($page.params.id ?? '0', 10));
+	const leaseId = $derived(parseInt(page.params.id ?? '0', 10));
 
 	const leaseQuery = createQuery(() => ({
 		queryKey: ['lease', leaseId],

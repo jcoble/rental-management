@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { vendors } from '$lib/api/endpoints/vendors';
@@ -27,7 +27,7 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
-	const id = $derived(Number($page.params.id));
+	const id = $derived(Number(page.params.id));
 
 	const WO_PRIORITIES = ['Low', 'Normal', 'High', 'Emergency'];
 

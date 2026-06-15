@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { browser } from '$app/environment';
 	import { createQuery } from '@tanstack/svelte-query';
 	import {
@@ -251,7 +251,7 @@
 	);
 
 	function isActive(href: string): boolean {
-		const currentPath = $page.url.pathname;
+		const currentPath = page.url.pathname;
 		if (href === '/') return currentPath === '/';
 		return currentPath.startsWith(href);
 	}
@@ -800,7 +800,7 @@
 		<!-- Page content frame. Routes own their internal 100% scroll area. -->
 		<main class="customer-shell-main flex min-h-0 flex-1 justify-center overflow-hidden">
 			<div class="h-full w-full max-w-[1600px]">
-				{#key $page.url.pathname}
+				{#key page.url.pathname}
 					<div class="m3-route-transition" data-testid="route-transition-frame">
 						{@render children()}
 					</div>

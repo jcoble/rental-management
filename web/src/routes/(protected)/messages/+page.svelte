@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { tick } from 'svelte';
 	import { messages, type ConversationSummary, type ConversationMessage } from '$lib/api/endpoints/messages';
@@ -21,7 +21,7 @@
 	// --- Selected thread --------------------------------------------------------
 	let selectedId = $state<number | null>(null);
 	$effect(() => {
-		const queryId = Number($page.url.searchParams.get('conversation'));
+		const queryId = Number(page.url.searchParams.get('conversation'));
 		if (Number.isInteger(queryId) && queryId > 0 && selectedId !== queryId) {
 			selectedId = queryId;
 		}

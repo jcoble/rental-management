@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { ArrowLeft, Pencil, Save, Trash2, X, Receipt, CircleCheck, FileText } from '@lucide/svelte';
 	import { payments } from '$lib/api/endpoints/payments';
@@ -18,7 +18,7 @@
 	import { Button } from '$lib/components/ui/button';
 
 	const queryClient = useQueryClient();
-	const paymentId = $derived(parseInt($page.params.id ?? '0', 10));
+	const paymentId = $derived(parseInt(page.params.id ?? '0', 10));
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived', 'Failed', 'Refunded'];
