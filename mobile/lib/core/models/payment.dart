@@ -1,3 +1,25 @@
+/// Friendly, landlord-facing label for a payment-type enum value. The schema
+/// enums (`SecurityDeposit`, `LateFee`, …) must never be shown to the landlord
+/// with their raw PascalCase casing — map them to plain English for display only,
+/// keeping the enum as the value that's submitted/stored. Unknown values fall
+/// back to the raw string so nothing renders blank.
+String paymentTypeLabel(String type) {
+  switch (type) {
+    case 'Rent':
+      return 'Rent';
+    case 'SecurityDeposit':
+      return 'Security deposit';
+    case 'LateFee':
+      return 'Late fee';
+    case 'Utility':
+      return 'Utility';
+    case 'Other':
+      return 'Other';
+    default:
+      return type.isEmpty ? '' : type;
+  }
+}
+
 class Payment {
   final int id;
   final int portfolioId;

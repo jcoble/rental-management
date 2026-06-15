@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { Activity, ArrowLeft, ShieldAlert } from '@lucide/svelte';
 	import NavigationLoader from '$lib/components/NavigationLoader.svelte';
 	import ThemeModeToggle from '$lib/components/shared/ThemeModeToggle.svelte';
@@ -11,7 +11,7 @@
 	const navItems = [{ href: '/superadmin/engine', label: 'Engine Health', icon: Activity }];
 
 	function isActive(href: string): boolean {
-		return $page.url.pathname.startsWith(href);
+		return page.url.pathname.startsWith(href);
 	}
 </script>
 

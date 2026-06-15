@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { createQuery, createMutation } from '@tanstack/svelte-query';
 	import {
 		getApplicationContext,
@@ -15,7 +15,7 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 
-	const token = $derived($page.params.token ?? '');
+	const token = $derived(page.params.token ?? '');
 
 	// ── Load the apply context (company + properties/units) ─────────────────────
 	const contextQuery = createQuery(() => ({

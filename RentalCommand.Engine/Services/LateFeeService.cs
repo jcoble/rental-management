@@ -86,6 +86,21 @@ public sealed class LateFeeService : ILateFeeService
         if (overdueRent.Count == 0)
             return 0;
 
+        // Idempotency set, loaded ONCE for the candidate leases instead of an AnyAsync per overdue
+        // payment (N+1). A LateFee already exists for a (lease, period) pair when a prior cycle created
+        // it; we check this set in memory and add to it after each successful commit below. The DB
+        // unique index (LeaseId, PaymentType, PeriodKey) remains the hard backstop against a race.
+        var candidateLeaseIds = overdueRent.Select(p => p.LeaseId).Distinct().ToList();
+        var existingLateFeeKeys = (await _db.Payments
+                .AsNoTracking()
+                .Where(p => p.PaymentType == PaymentType.LateFee &&
+                            p.PeriodKey != null &&
+                            candidateLeaseIds.Contains(p.LeaseId))
+                .Select(p => new { p.LeaseId, p.PeriodKey })
+                .ToListAsync(ct))
+            .Select(p => (p.LeaseId, p.PeriodKey!))
+            .ToHashSet();
+
         var notifier = new AutomationNotifier(_db, _publisher);
         var configCache = new Dictionary<int, NotificationsConfig>();
         var now = DateTime.UtcNow;
@@ -121,13 +136,8 @@ public sealed class LateFeeService : ILateFeeService
             var periodKey = rp.PeriodKey!;
 
             // ---- Idempotency check (application-level; DB unique index is the backstop) ----
-            var alreadyAssessed = await _db.Payments.AnyAsync(
-                p => p.LeaseId == rp.LeaseId &&
-                     p.PaymentType == PaymentType.LateFee &&
-                     p.PeriodKey == periodKey,
-                ct);
-
-            if (alreadyAssessed)
+            // In-memory lookup against the pre-loaded set (no per-row query).
+            if (existingLateFeeKeys.Contains((rp.LeaseId, periodKey)))
                 continue;
 
             // ---- Compute fee amount ----
@@ -228,6 +238,8 @@ public sealed class LateFeeService : ILateFeeService
 
                 await tx.CommitAsync(ct);
                 count++;
+                // Record the just-assessed (lease, period) so a duplicate in this same batch is skipped.
+                existingLateFeeKeys.Add((rp.LeaseId, periodKey));
 
                 foreach (var row in inAppRows)
                     await _dataUpdate.BroadcastEntityUpdateAsync(

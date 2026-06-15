@@ -69,6 +69,14 @@ public class JwtTokenService : IJwtTokenService
     private static readonly TimeSpan ReuseGraceWindow = TimeSpan.FromSeconds(30);
     private static DateTime _lastGracePrune = DateTime.UtcNow;
 
+    // Test seam: clear the process-static in-flight/grace maps so a test starts from a known state and
+    // its concurrency assertions exercise the DB-level atomic claim rather than a leftover in-process entry.
+    internal static void ResetInProcessStateForTests()
+    {
+        InFlightRefreshes.Clear();
+        RecentlyRotated.Clear();
+    }
+
     private readonly JwtSettings _settings;
     private readonly RentalCommandDbContext _dbContext;
     private readonly UserManager<ApplicationUser> _userManager;
@@ -222,40 +230,56 @@ public class JwtTokenService : IJwtTokenService
             return null;
         }
 
+        var now = DateTime.UtcNow;
+
         // Single-use rotation with token-family invalidation: presenting an already-rotated
         // (used) or revoked token normally signals theft/replay of a leaked token, so we revoke
         // EVERY active refresh token for the user and force re-authentication.
         //
-        // EXCEPTION — the reuse grace window: if THIS process rotated this exact token moments
-        // ago, the presenter is almost certainly a legitimate straggler trigger (another tab, the
-        // SSR refresh, the mobile interceptor) that read the cookie just before the rotated one
-        // landed. Re-serve the SAME successor we already minted instead of nuking the family.
-        // This is idempotent and safe: it never issues a NEW token, only re-hands the one the
-        // valid refresh already produced, and only within ReuseGraceWindow of that rotation.
+        // EXCEPTION — the reuse grace window (see RefreshToken.GraceExpiresAt): if this token was
+        // rotated moments ago, the presenter is almost certainly a legitimate straggler trigger
+        // (another tab, the SSR refresh, the mobile interceptor in a SEPARATE process) that read
+        // the cookie just before the rotated one landed. The in-process map re-serves the EXACT
+        // successor; across instances the persisted GraceExpiresAt lets any replica re-serve a fresh
+        // valid pair. Either way we do NOT nuke the family inside the grace window.
         if (storedToken.IsUsed || storedToken.IsRevoked)
         {
-            if (TryGetRecentlyRotated(tokenHash, out var graceResult))
-            {
-                _logger.LogInformation(
-                    "Refresh token presented again within the reuse grace window for user {UserId}; re-serving the rotated successor (no family revoke).",
-                    storedToken.UserId);
-                return graceResult;
-            }
-
-            _logger.LogWarning(
-                "Refresh token reuse/revoked detected for user {UserId}; revoking the entire token family.",
-                storedToken.UserId);
-            await RevokeTokenFamilyAsync(storedToken.UserId);
-            return null;
+            return await TryServeWithinGraceAsync(storedToken, tokenHash, now, ipAddress, userAgent);
         }
 
-        if (storedToken.ExpiresAt < DateTime.UtcNow)
+        if (storedToken.ExpiresAt < now)
         {
             _logger.LogWarning("Refresh token expired for user {UserId}", storedToken.UserId);
             storedToken.IsRevoked = true;
             await _dbContext.SaveChangesAsync();
             return null;
         }
+
+        // Atomic, cross-process claim: flip used+revoked AND stamp the grace deadline in a single
+        // conditional UPDATE that only matches a still-live row. Exactly one concurrent refresh of the
+        // same token wins (1 row affected); the rest see 0 rows and fall through to the grace path,
+        // so two instances can never both rotate the same token (no lost update / double-rotate) and a
+        // benign concurrent double-submit never falsely trips the family-revoke.
+        var graceDeadline = now.Add(ReuseGraceWindow);
+        var claimed = await _dbContext.RefreshTokens
+            .Where(rt => rt.Id == storedToken.Id && !rt.IsUsed && !rt.IsRevoked)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(rt => rt.IsUsed, true)
+                .SetProperty(rt => rt.IsRevoked, true)
+                .SetProperty(rt => rt.GraceExpiresAt, graceDeadline));
+
+        if (claimed == 0)
+        {
+            // Lost the race to a concurrent rotation on this or another instance. Re-read and re-serve
+            // within the grace window rather than revoking the family.
+            await _dbContext.Entry(storedToken).ReloadAsync();
+            return await TryServeWithinGraceAsync(storedToken, tokenHash, now, ipAddress, userAgent);
+        }
+
+        // Keep the tracked entity consistent with the conditional UPDATE we just executed.
+        storedToken.IsUsed = true;
+        storedToken.IsRevoked = true;
+        storedToken.GraceExpiresAt = graceDeadline;
 
         var user = await _userManager.FindByIdAsync(storedToken.UserId.ToString());
         if (user == null)
@@ -265,20 +289,60 @@ public class JwtTokenService : IJwtTokenService
         }
 
         var roles = await _userManager.GetRolesAsync(user);
-
-        // Rotate: mark the presented token used+revoked, then issue a fresh pair.
-        storedToken.IsUsed = true;
-        storedToken.IsRevoked = true;
-        await _dbContext.SaveChangesAsync();
-
         var newTokens = await GenerateTokensAsync(user, roles, ipAddress, userAgent);
 
-        // Remember the successor briefly so a legitimate straggler that re-presents this exact
-        // (now-rotated) token within the grace window gets the same pair back instead of tripping
-        // the family-revoke. See RecentlyRotated / ReuseGraceWindow above.
+        // Remember the successor briefly so a same-process straggler that re-presents this exact
+        // (now-rotated) token within the grace window gets the SAME pair back. The persisted
+        // GraceExpiresAt covers the cross-process case. See RecentlyRotated / ReuseGraceWindow above.
         RememberRotation(tokenHash, newTokens);
 
         return newTokens;
+    }
+
+    /// <summary>
+    /// Handles a re-presented token that is already used/revoked. Returns a token pair (no family revoke)
+    /// when the presentation falls inside the reuse grace window — preferring the in-process map's exact
+    /// successor, otherwise minting a fresh valid pair off the persisted <see cref="RefreshToken.GraceExpiresAt"/>
+    /// so the grace is correct across API instances. Outside the grace window this is genuine reuse/theft:
+    /// it revokes the entire token family and returns null.
+    /// </summary>
+    private async Task<TokenResult?> TryServeWithinGraceAsync(
+        RefreshToken storedToken, string tokenHash, DateTime now, string? ipAddress, string? userAgent)
+    {
+        // Same-process fast path: hand back the EXACT successor we already minted (idempotent).
+        if (TryGetRecentlyRotated(tokenHash, out var graceResult))
+        {
+            _logger.LogInformation(
+                "Refresh token presented again within the in-process reuse grace window for user {UserId}; re-serving the rotated successor (no family revoke).",
+                storedToken.UserId);
+            return graceResult;
+        }
+
+        // Cross-process grace: the row was rotated very recently (by this or another instance) and is
+        // still inside its persisted grace window — treat as a benign straggler and mint a fresh pair.
+        if (storedToken.GraceExpiresAt is { } deadline && now < deadline)
+        {
+            var graceUser = await _userManager.FindByIdAsync(storedToken.UserId.ToString());
+            if (graceUser == null)
+            {
+                _logger.LogWarning("User {UserId} not found while serving refresh grace", storedToken.UserId);
+                return null;
+            }
+
+            var graceRoles = await _userManager.GetRolesAsync(graceUser);
+            var graceTokens = await GenerateTokensAsync(graceUser, graceRoles, ipAddress, userAgent);
+
+            _logger.LogInformation(
+                "Refresh token presented again within the persisted reuse grace window for user {UserId}; issuing a fresh pair across instances (no family revoke).",
+                storedToken.UserId);
+            return graceTokens;
+        }
+
+        _logger.LogWarning(
+            "Refresh token reuse/revoked detected for user {UserId}; revoking the entire token family.",
+            storedToken.UserId);
+        await RevokeTokenFamilyAsync(storedToken.UserId);
+        return null;
     }
 
     /// <summary>

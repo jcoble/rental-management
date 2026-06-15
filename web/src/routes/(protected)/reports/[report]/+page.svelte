@@ -6,7 +6,7 @@
   reports) deep-links to the existing PDF pages.
 -->
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { createQuery } from '@tanstack/svelte-query';
 	import {
@@ -56,7 +56,7 @@
 	} from '@lucide/svelte';
 
 	const portfolioId = $derived(getCurrentPortfolioId());
-	const reportKey = $derived($page.params.report);
+	const reportKey = $derived(page.params.report);
 
 	// --- Catalog (to resolve this report's title, endpoint, accepted params) -------------------------
 	const catalogQuery = createQuery(() => ({

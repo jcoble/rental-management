@@ -153,7 +153,9 @@ class InboxNotifier extends Notifier<AsyncValue<List<AppNotification>>> {
   }
 
   /// Marks one notification read locally + on the server, then refreshes the
-  /// unread badge.
+  /// unread badge. On a server failure the optimistic flip is rolled back so the
+  /// list and the badge can't disagree (the badge refetch below would otherwise
+  /// re-show the true unread count while the list still read all-read).
   Future<void> markRead(int id) async {
     final current = state.value;
     if (current != null) {
@@ -165,7 +167,8 @@ class InboxNotifier extends Notifier<AsyncValue<List<AppNotification>>> {
     try {
       await _repo.markRead(id);
     } on ApiException {
-      // Best effort; the optimistic local flip stays.
+      // Roll back the optimistic flip so list and badge stay consistent.
+      if (current != null) state = AsyncValue.data(current);
     }
     await ref.read(unreadCountProvider.notifier).refresh();
   }
@@ -180,7 +183,9 @@ class InboxNotifier extends Notifier<AsyncValue<List<AppNotification>>> {
     try {
       await _repo.markAllRead();
     } on ApiException {
-      // Best effort.
+      // Roll back the optimistic flip so the list doesn't show all-read while
+      // the badge refetch below restores the true (non-zero) unread count.
+      if (current != null) state = AsyncValue.data(current);
     }
     await ref.read(unreadCountProvider.notifier).refresh();
   }

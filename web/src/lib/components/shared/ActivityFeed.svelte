@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import type { AuditEntry } from '$lib/types';
 	import { formatRelative } from '$lib/utils/date';
 	import { Plus, Pencil, Trash2, CheckCircle, XCircle, Zap, ChevronRight, ArrowRight } from '@lucide/svelte';
@@ -46,8 +46,8 @@
 
 	function isCurrentPageHref(href: string): boolean {
 		try {
-			const target = new URL(href, $page.url);
-			return target.pathname === $page.url.pathname && target.search === $page.url.search;
+			const target = new URL(href, page.url);
+			return target.pathname === page.url.pathname && target.search === page.url.search;
 		} catch {
 			return false;
 		}

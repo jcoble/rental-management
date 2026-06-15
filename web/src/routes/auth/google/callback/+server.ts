@@ -6,16 +6,30 @@
  * redirects to the app home. On any error, redirects to /login?error=google_unavailable.
  */
 
-import { redirect } from '@sveltejs/kit';
+import { redirect, isRedirect } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import type { LoginResponse } from '$lib/types/user';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 import { AUTH_COOKIE_NAMES, deleteLegacyAuthCookies } from '$lib/server/auth-cookies';
+import { isValidOAuthState, clearOAuthStateCookie } from '$lib/server/oauth-state';
 
 export const GET: RequestHandler = async ({ url, cookies }) => {
+	// Anti-CSRF: read the state Google echoed back and the value we stored before the redirect, then
+	// ALWAYS clear the one-shot cookie so it can never be replayed — regardless of the outcome below.
+	const returnedState = url.searchParams.get('state');
+	const storedState = cookies.get(AUTH_COOKIE_NAMES.oauthState);
+	clearOAuthStateCookie(cookies);
+
 	// Google may return an error (e.g. user denied consent).
 	const oauthError = url.searchParams.get('error');
 	if (oauthError) {
+		throw redirect(302, '/login?error=google_unavailable');
+	}
+
+	// Reject the callback unless the state matches the browser that started the flow. This MUST run
+	// before exchanging the code — it blocks login-CSRF / authorization-code injection / session
+	// fixation (an attacker-minted code paired with a missing/forged state never reaches the exchange).
+	if (!isValidOAuthState(returnedState, storedState)) {
 		throw redirect(302, '/login?error=google_unavailable');
 	}
 
@@ -82,8 +96,9 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		}
 		deleteLegacyAuthCookies(cookies);
 	} catch (err) {
-		// Re-throw SvelteKit redirects (thrown as Response-like objects internally).
-		if (err instanceof Response) {
+		// Re-throw SvelteKit redirects — redirect() throws an internal Redirect (not a Response), so
+		// detect it with isRedirect rather than `instanceof Response` (which never matched).
+		if (isRedirect(err)) {
 			throw err;
 		}
 		console.error('Google OAuth callback error:', err);

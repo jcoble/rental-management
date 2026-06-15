@@ -41,7 +41,14 @@ class ApplicationsRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/applications/$id');
-      return RentalApplication.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return RentalApplication.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -54,7 +61,14 @@ class ApplicationsRepository {
         '/applications/$id/approve',
         data: {},
       );
-      return ApplicationApproval.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ApplicationApproval.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -69,7 +83,14 @@ class ApplicationsRepository {
           if (reason != null && reason.isNotEmpty) 'reason': reason,
         },
       );
-      return RentalApplication.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return RentalApplication.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -82,7 +103,14 @@ class ApplicationsRepository {
         '/applications/$id/withdraw',
         data: {},
       );
-      return RentalApplication.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return RentalApplication.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -93,7 +121,14 @@ class ApplicationsRepository {
     try {
       final response =
           await _dio.post<Map<String, dynamic>>('/applications/link', data: {});
-      return ApplicationLink.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ApplicationLink.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -110,7 +145,14 @@ class ApplicationsRepository {
         '/applications/$id/screen',
         data: {},
       );
-      return ScreeningResult.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return ScreeningResult.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -144,7 +186,14 @@ class ApplicationsRepository {
           'sendToApplicant': sendToApplicant,
         },
       );
-      return AdverseActionNotice.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return AdverseActionNotice.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

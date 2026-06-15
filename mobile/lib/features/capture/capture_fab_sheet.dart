@@ -154,7 +154,7 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
               ),
             ),
             Text(
-              'Capture',
+              'Scan / Add',
               style: theme.textTheme.titleLarge?.copyWith(
                 fontWeight: FontWeight.w700,
               ),

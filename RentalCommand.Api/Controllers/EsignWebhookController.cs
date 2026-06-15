@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Security;
@@ -27,17 +28,20 @@ public sealed class EsignWebhookController : ControllerBase
     private readonly ILeaseEsignService _esign;
     private readonly IEsignWebhookSignatureValidator _signatureValidator;
     private readonly EsignConfig _config;
+    private readonly IHostEnvironment _environment;
     private readonly ILogger<EsignWebhookController> _logger;
 
     public EsignWebhookController(
         ILeaseEsignService esign,
         IEsignWebhookSignatureValidator signatureValidator,
         IOptions<EsignConfig> config,
+        IHostEnvironment environment,
         ILogger<EsignWebhookController> logger)
     {
         _esign = esign;
         _signatureValidator = signatureValidator;
         _config = config.Value;
+        _environment = environment;
         _logger = logger;
     }
 
@@ -67,20 +71,26 @@ public sealed class EsignWebhookController : ControllerBase
         }
 
         // This endpoint flips lease state, so verify the provider signature before trusting the payload.
-        // When no webhook secret is configured (local dev), enforcement is skipped but loudly logged so it
-        // is never silently off in a real deployment (mirrors the SMS webhook).
-        if (_signatureValidator.IsEnforced)
+        // Fail CLOSED outside Development: if no webhook secret is configured we cannot prove the event came
+        // from the provider, so reject it (403) rather than process a potentially forged "signed" event.
+        // Skip-with-warning is allowed ONLY in local dev so a developer can exercise the flow without a secret.
+        if (!_signatureValidator.IsEnforced)
         {
-            if (!_signatureValidator.IsValid(envelope.EventTime, envelope.EventType, envelope.EventHash))
+            if (!_environment.IsDevelopment())
             {
-                return StatusCode(StatusCodes.Status403Forbidden, new { error = "Invalid signature" });
+                _logger.LogWarning(
+                    "E-sign webhook REJECTED: signature verification is not configured (Esign:WebhookSecret is unset) " +
+                    "in a non-Development environment. Refusing to process an unverifiable, spoofable event.");
+                return StatusCode(StatusCodes.Status403Forbidden, new { error = "Webhook signature verification is not configured" });
             }
-        }
-        else
-        {
+
             _logger.LogWarning(
                 "E-sign webhook signature verification is DISABLED (no Esign:WebhookSecret configured). " +
-                "This endpoint is spoofable until a secret is set.");
+                "This is permitted only in Development; the endpoint is spoofable until a secret is set.");
+        }
+        else if (!_signatureValidator.IsValid(envelope.EventTime, envelope.EventType, envelope.EventHash))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Invalid signature" });
         }
 
         // Match the lease by the provider envelope id. Unknown envelopes are a no-op (still 200, ack the

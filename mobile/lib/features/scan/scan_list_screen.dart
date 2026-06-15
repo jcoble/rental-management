@@ -115,7 +115,7 @@ class ScanListScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Scans'),
+        title: const Text('Scan / Add'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),

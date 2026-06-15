@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { leases } from '$lib/api/endpoints/leases';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
@@ -15,6 +15,7 @@
 	import { leaseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
@@ -42,7 +43,7 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const LEASE_STATUSES = ['Draft', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
 
-	const leaseId = $derived(parseInt($page.params.id ?? '0', 10));
+	const leaseId = $derived(parseInt(page.params.id ?? '0', 10));
 
 	const leaseQuery = createQuery(() => ({
 		queryKey: ['lease', leaseId],
@@ -458,8 +459,8 @@
 			title: 'Type',
 			mobileRole: 'subtitle',
 			// Payment serializes the field as `paymentType` (not `type`); without this accessor the
-			// column rendered blank for every row.
-			accessor: (p) => p.paymentType,
+			// column rendered blank for every row. Humanize the enum for display (M-13).
+			accessor: (p) => paymentTypeLabel(p.paymentType),
 		},
 		{
 			key: 'amount',
@@ -527,7 +528,7 @@
 			onclick={(e) => { e.stopPropagation(); markPaidMutation.mutate(payment.id); }}
 			disabled={markPaidMutation.isPending}
 		>
-			Mark Paid
+			Mark paid
 		</Button>
 	{/if}
 {/snippet}
@@ -1004,7 +1005,7 @@
 		<div>
 			<div class="mb-2 flex items-center justify-between">
 				<h2 class="text-lg font-semibold">Payments</h2>
-				<a href="/deposits" class="text-xs text-muted-foreground underline-offset-4 hover:underline">View Deposits</a>
+				<a href="/deposits" class="text-xs text-muted-foreground underline-offset-4 hover:underline">View deposits</a>
 			</div>
 			<DataGrid
 				data={paymentsQuery.data ?? []}

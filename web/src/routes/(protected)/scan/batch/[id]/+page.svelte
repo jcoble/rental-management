@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { scan, type ScanBatchDraft } from '$lib/api/scan';
 	import * as Card from '$lib/components/ui/card';
@@ -12,7 +12,7 @@
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import { CheckCircle2 } from '@lucide/svelte';
 
-	const batchId = $derived(parseInt($page.params.id ?? '0', 10));
+	const batchId = $derived(parseInt(page.params.id ?? '0', 10));
 
 	// Draft statuses don't all exist in StatusBadge's default map — supply a custom one.
 	const draftStatusMap: Record<string, { label?: string; class: string }> = {
