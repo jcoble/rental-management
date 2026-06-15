@@ -4,8 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
-import '../../core/models/models.dart';
+// `models.dart` and `vendors_models.dart` both declare `Vendor`; the create sheet uses the
+// vendors-feature one (from vendorsProvider), so hide the core model's to avoid the clash.
+import '../../core/models/models.dart' hide Vendor;
 import '../../core/api/api_exception.dart';
+import '../../core/utils/date_wire.dart';
+import '../properties/properties_repository.dart';
+import '../tenants/tenants_repository.dart';
+import '../vendors/vendors_repository.dart';
 import 'work_orders_repository.dart';
 import 'work_order_detail_screen.dart';
 
@@ -96,6 +102,7 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
 
   void _showCreateSheet(BuildContext context) {
     ref.read(propertiesForWoProvider.notifier).load();
+    ref.read(tenantsProvider.notifier).load();
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -432,10 +439,20 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   final _formKey = GlobalKey<FormState>();
   final _titleCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
+  final _estCostCtrl = TextEditingController();
 
   int? _selectedPropertyId;
+  int? _selectedUnitId;
+  int? _selectedTenantId;
+  int? _selectedVendorId;
   String _priority = 'Normal';
   String _category = 'General';
+
+  // Scheduled visit: a calendar day plus a start time and an arrival-window end time.
+  DateTime? _scheduledDate;
+  TimeOfDay? _startTime;
+  TimeOfDay? _windowEndTime;
+
   Uint8List? _photoBytes;
   String? _photoName;
   String? _photoContentType;
@@ -462,7 +479,50 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   void dispose() {
     _titleCtrl.dispose();
     _descCtrl.dispose();
+    _estCostCtrl.dispose();
     super.dispose();
+  }
+
+  /// Combines the chosen [date] and [time] into a single local DateTime, or null if either is unset.
+  DateTime? _combine(DateTime? date, TimeOfDay? time) {
+    if (date == null || time == null) return null;
+    return DateTime(date.year, date.month, date.day, time.hour, time.minute);
+  }
+
+  static String _fmtDate(DateTime d) {
+    const months = [
+      '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    return '${months[d.month]} ${d.day}, ${d.year}';
+  }
+
+  Future<void> _pickScheduledDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _scheduledDate ?? now,
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 5),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _scheduledDate = picked);
+  }
+
+  Future<void> _pickTime({required bool isStart}) async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime:
+          (isStart ? _startTime : _windowEndTime) ?? TimeOfDay.now(),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (isStart) {
+        _startTime = picked;
+      } else {
+        _windowEndTime = picked;
+      }
+    });
   }
 
   Future<void> _pickPhoto(ImageSource source) async {
@@ -493,6 +553,21 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
+    final scheduledFor = _combine(_scheduledDate, _startTime);
+    final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
+
+    // The arrival window must end after it starts. Block submit and surface a
+    // clear error rather than letting the API store (and text the tenant) an
+    // inverted window. Only validated when both ends are set.
+    if (scheduledFor != null &&
+        scheduledWindowEnd != null &&
+        !scheduledWindowEnd.isAfter(scheduledFor)) {
+      setState(
+        () => _error = 'Arrival window end must be after the start time.',
+      );
+      return;
+    }
+
     setState(() {
       _saving = true;
       _error = null;
@@ -500,12 +575,23 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
 
     try {
       final repo = ref.read(workOrdersRepositoryProvider);
+      final estCost = double.tryParse(_estCostCtrl.text.trim());
       final created = await repo.createWorkOrder({
         'propertyId': _selectedPropertyId,
         'title': _titleCtrl.text.trim(),
         'description': _descCtrl.text.trim(),
         'priority': _priority,
         'category': _category,
+        'unitId': ?_selectedUnitId,
+        'tenantId': ?_selectedTenantId,
+        'vendorId': ?_selectedVendorId,
+        // Send the wall-clock time WITH the device's local UTC offset so the API
+        // stores the true instant (not the digits relabeled as UTC). See C1.
+        if (scheduledFor != null)
+          'scheduledFor': localToWireIso(scheduledFor),
+        if (scheduledWindowEnd != null)
+          'scheduledWindowEnd': localToWireIso(scheduledWindowEnd),
+        'estimatedCost': ?estCost,
       });
       final photoBytes = _photoBytes;
       final photoName = _photoName;
@@ -531,6 +617,12 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   @override
   Widget build(BuildContext context) {
     final propertiesAsync = ref.watch(propertiesForWoProvider);
+    final tenantsAsync = ref.watch(tenantsProvider);
+    final vendorsAsync = ref.watch(vendorsProvider);
+    // Units are scoped to the chosen property; only fetch once one is selected.
+    final unitsAsync = _selectedPropertyId == null
+        ? null
+        : ref.watch(unitsProvider(_selectedPropertyId!));
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
@@ -586,7 +678,11 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
                         ),
                       )
                       .toList(),
-                  onChanged: (v) => setState(() => _selectedPropertyId = v),
+                  onChanged: (v) => setState(() {
+                    _selectedPropertyId = v;
+                    // A unit belongs to one property — drop a stale selection.
+                    _selectedUnitId = null;
+                  }),
                   validator: (v) =>
                       v == null ? 'Please select a property' : null,
                 ),
@@ -649,6 +745,215 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
                     ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 12),
+
+              // Unit dropdown (filtered to the selected property)
+              if (unitsAsync == null)
+                DropdownButtonFormField<int>(
+                  initialValue: null,
+                  decoration: const InputDecoration(
+                    labelText: 'Unit (optional)',
+                    hintText: 'Select a property first',
+                  ),
+                  items: const [],
+                  onChanged: null,
+                )
+              else
+                unitsAsync.when(
+                  loading: () => const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: LinearProgressIndicator(),
+                  ),
+                  error: (e, _) => Text(
+                    'Could not load units: ${e is ApiException ? e.message : e}',
+                    style: TextStyle(color: colorScheme.error, fontSize: 13),
+                  ),
+                  data: (units) => DropdownButtonFormField<int?>(
+                    initialValue: _selectedUnitId,
+                    decoration: const InputDecoration(
+                      labelText: 'Unit (optional)',
+                    ),
+                    items: [
+                      const DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text('No specific unit'),
+                      ),
+                      ...units.map(
+                        (u) => DropdownMenuItem<int?>(
+                          value: u.id,
+                          child: Text(
+                            'Unit ${u.unitNumber}',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ],
+                    onChanged: (v) => setState(() => _selectedUnitId = v),
+                  ),
+                ),
+              const SizedBox(height: 12),
+
+              // Scheduled date
+              InkWell(
+                onTap: _pickScheduledDate,
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Scheduled date (optional)',
+                    suffixIcon: Icon(Icons.calendar_today_outlined),
+                  ),
+                  child: Text(
+                    _scheduledDate == null
+                        ? 'Not scheduled'
+                        : _fmtDate(_scheduledDate!),
+                    style: TextStyle(
+                      color: _scheduledDate == null
+                          ? colorScheme.onSurfaceVariant
+                          : colorScheme.onSurface,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Start time + arrival-window end time
+              Row(
+                children: [
+                  Expanded(
+                    child: InkWell(
+                      onTap: _scheduledDate == null
+                          ? null
+                          : () => _pickTime(isStart: true),
+                      child: InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Start time',
+                          suffixIcon: Icon(Icons.schedule_outlined),
+                        ),
+                        child: Text(
+                          _startTime == null
+                              ? '--:--'
+                              : _startTime!.format(context),
+                          style: TextStyle(
+                            color: _startTime == null
+                                ? colorScheme.onSurfaceVariant
+                                : colorScheme.onSurface,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: InkWell(
+                      onTap: _scheduledDate == null
+                          ? null
+                          : () => _pickTime(isStart: false),
+                      child: InputDecorator(
+                        decoration: const InputDecoration(
+                          labelText: 'Arrival window end',
+                          suffixIcon: Icon(Icons.schedule_outlined),
+                        ),
+                        child: Text(
+                          _windowEndTime == null
+                              ? '--:--'
+                              : _windowEndTime!.format(context),
+                          style: TextStyle(
+                            color: _windowEndTime == null
+                                ? colorScheme.onSurfaceVariant
+                                : colorScheme.onSurface,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // Tenant dropdown (optional)
+              tenantsAsync.when(
+                loading: () => const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: LinearProgressIndicator(),
+                ),
+                error: (e, _) => Text(
+                  'Could not load tenants: ${e is ApiException ? e.message : e}',
+                  style: TextStyle(color: colorScheme.error, fontSize: 13),
+                ),
+                data: (tenants) => DropdownButtonFormField<int?>(
+                  initialValue: _selectedTenantId,
+                  decoration: const InputDecoration(
+                    labelText: 'Tenant (optional)',
+                  ),
+                  items: [
+                    const DropdownMenuItem<int?>(
+                      value: null,
+                      child: Text('No tenant'),
+                    ),
+                    ...tenants.map(
+                      (t) => DropdownMenuItem<int?>(
+                        value: t.id,
+                        child: Text(
+                          t.fullName ?? '${t.firstName} ${t.lastName}'.trim(),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ],
+                  onChanged: (v) => setState(() => _selectedTenantId = v),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Vendor dropdown (optional)
+              vendorsAsync.when(
+                loading: () => const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: LinearProgressIndicator(),
+                ),
+                error: (e, _) => Text(
+                  'Could not load vendors: ${e is ApiException ? e.message : e}',
+                  style: TextStyle(color: colorScheme.error, fontSize: 13),
+                ),
+                data: (vendors) => DropdownButtonFormField<int?>(
+                  initialValue: _selectedVendorId,
+                  decoration: const InputDecoration(
+                    labelText: 'Vendor (optional)',
+                  ),
+                  items: [
+                    const DropdownMenuItem<int?>(
+                      value: null,
+                      child: Text('No vendor'),
+                    ),
+                    ...vendors.map(
+                      (v) => DropdownMenuItem<int?>(
+                        value: v.id,
+                        child: Text(v.name, overflow: TextOverflow.ellipsis),
+                      ),
+                    ),
+                  ],
+                  onChanged: (v) => setState(() => _selectedVendorId = v),
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              // Estimated cost (optional)
+              TextFormField(
+                controller: _estCostCtrl,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Estimated cost (optional)',
+                  prefixText: '\$ ',
+                ),
+                validator: (v) {
+                  final t = v?.trim() ?? '';
+                  if (t.isEmpty) return null;
+                  final parsed = double.tryParse(t);
+                  if (parsed == null) return 'Enter a valid amount';
+                  if (parsed < 0) return 'Cannot be negative';
+                  return null;
+                },
               ),
               const SizedBox(height: 12),
 

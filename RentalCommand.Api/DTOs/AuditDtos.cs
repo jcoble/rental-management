@@ -60,7 +60,11 @@ public class AuditEntryResponse
     /// </summary>
     public IReadOnlyList<AuditFieldChange> Changes { get; set; } = Array.Empty<AuditFieldChange>();
 
-    public static AuditEntryResponse FromEntity(AuditLog e, AuditDescriber describer, AuditDiffBuilder? diff = null) => new()
+    public static AuditEntryResponse FromEntity(
+        AuditLog e,
+        AuditDescriber describer,
+        AuditDiffBuilder? diff = null,
+        IReadOnlyDictionary<int, string>? userNames = null) => new()
     {
         Id = e.Id,
         PortfolioId = e.PortfolioId,
@@ -68,21 +72,40 @@ public class AuditEntryResponse
         OperationName = e.Operation.ToString(),
         EntityType = e.EntityType,
         EntityId = e.EntityId,
-        Actor = ResolveActor(e),
+        Actor = ResolveActor(e, userNames),
         Description = describer.Describe(e),
         DetailHref = BuildDetailHref(e.EntityType, e.EntityId),
         Timestamp = e.Timestamp,
         Changes = diff?.Build(e) ?? Array.Empty<AuditFieldChange>(),
     };
 
-    internal static string ResolveActor(AuditLog e)
+    /// <summary>
+    /// Resolves a human-readable actor label. Precedence: the row's own <see cref="AuditLog.ActorLabel"/>
+    /// (set for system/AI actors and HTTP requests that carried a name claim) → the user's display
+    /// name/email resolved from <paramref name="userNames"/> when only a <see cref="AuditLog.UserId"/>
+    /// is present → "system" for actor-less rows. The bare "User #{id}" is a last resort only when a
+    /// user id has no resolvable account (e.g. a since-deleted user), never the normal case.
+    /// </summary>
+    internal static string ResolveActor(AuditLog e, IReadOnlyDictionary<int, string>? userNames = null)
     {
         if (!string.IsNullOrWhiteSpace(e.ActorLabel))
         {
             return e.ActorLabel!;
         }
 
-        return e.UserId.HasValue ? $"User #{e.UserId.Value}" : "system";
+        if (e.UserId.HasValue)
+        {
+            if (userNames is not null
+                && userNames.TryGetValue(e.UserId.Value, out var name)
+                && !string.IsNullOrWhiteSpace(name))
+            {
+                return name;
+            }
+
+            return $"User #{e.UserId.Value}";
+        }
+
+        return "system";
     }
 
     /// <summary>Maps an entity type + id to its web detail route (null when there is no page).</summary>
@@ -137,7 +160,10 @@ public sealed class AdminAuditEntryResponse
 
     public string TestId => $"admin-audit-{Id}";
 
-    public static AdminAuditEntryResponse FromEntity(AuditLog e, AuditDescriber describer) => new()
+    public static AdminAuditEntryResponse FromEntity(
+        AuditLog e,
+        AuditDescriber describer,
+        IReadOnlyDictionary<int, string>? userNames = null) => new()
     {
         Id = e.Id,
         PortfolioId = e.PortfolioId,
@@ -145,7 +171,7 @@ public sealed class AdminAuditEntryResponse
         OperationName = e.Operation.ToString(),
         EntityType = e.EntityType,
         EntityId = e.EntityId,
-        Actor = AuditEntryResponse.ResolveActor(e),
+        Actor = AuditEntryResponse.ResolveActor(e, userNames),
         UserId = e.UserId,
         ActorLabel = e.ActorLabel,
         Description = describer.Describe(e),

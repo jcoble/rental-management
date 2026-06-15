@@ -315,6 +315,41 @@ public sealed class AuditTrailTests : IDisposable
         (await SearchIds("recorded")).Should().BeEquivalentTo(new[] { 76, 7 });
     }
 
+    [Fact]
+    public async Task Query_Resolves_Actor_DisplayName_When_Row_Has_Only_UserId()
+    {
+        // The reported "User #1" bug: a row written with a user id but no ActorLabel (e.g. an HTTP
+        // request whose token lacked a name claim) must render the user's display name, not "User #7".
+        // A user with a blank display name falls back to the email; a row with no user id stays "system".
+        _db.Users.Add(new ApplicationUser
+        {
+            Id = 8,
+            PortfolioId = PortfolioId,
+            UserName = "noname@example.test",
+            NormalizedUserName = "NONAME@EXAMPLE.TEST",
+            Email = "noname@example.test",
+            NormalizedEmail = "NONAME@EXAMPLE.TEST",
+            DisplayName = "",
+        });
+        await _db.SaveChangesAsync();
+
+        _db.AuditLogs.AddRange(
+            new AuditLog { PortfolioId = PortfolioId, EntityType = "Payment", EntityId = 71, Operation = AuditLogOperation.Created, UserId = 7, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-3) },
+            new AuditLog { PortfolioId = PortfolioId, EntityType = "Payment", EntityId = 72, Operation = AuditLogOperation.Created, UserId = 8, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-2) },
+            new AuditLog { PortfolioId = PortfolioId, EntityType = "Payment", EntityId = 73, Operation = AuditLogOperation.Created, UserId = null, ActorLabel = null, Timestamp = DateTime.UtcNow.AddMinutes(-1) });
+        await _db.SaveChangesAsync();
+
+        var sut = new AuditQueryService(_db, new AuditDescriber(), new AuditDiffBuilder());
+        var page = await sut.ListAsync(PortfolioId, null, "Payment", null, new ListQuery());
+
+        // UserId present, no ActorLabel → resolved display name (NOT "User #7").
+        page.Single(p => p.EntityId == 71).Actor.Should().Be("Jane Landlord");
+        // Display name blank → falls back to email.
+        page.Single(p => p.EntityId == 72).Actor.Should().Be("noname@example.test");
+        // No user id at all → system.
+        page.Single(p => p.EntityId == 73).Actor.Should().Be("system");
+    }
+
     [Theory]
     [InlineData("Payment", AuditLogOperation.Created, "Recorded a payment")]
     [InlineData("Lease", AuditLogOperation.Updated, "Updated lease")]

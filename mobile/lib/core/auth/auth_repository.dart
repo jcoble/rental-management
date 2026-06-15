@@ -38,13 +38,14 @@ class AuthRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/auth/login',
         data: {'email': email, 'password': password},
+        options: Options(headers: {clientTypeHeader: mobileClientType}),
       );
 
       final data = response.data!;
       final loginResponse = LoginResponse.fromJson(data);
 
-      // Extract refresh token from Set-Cookie header.
-      final refreshToken = _extractRefreshToken(response);
+      // Refresh token: body-first (mobile), Set-Cookie fallback.
+      final refreshToken = resolveRefreshToken(response);
 
       if (refreshToken == null || refreshToken.isEmpty) {
         throw const ApiException(
@@ -101,11 +102,13 @@ class AuthRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/auth/google',
         data: {'idToken': idToken},
+        options: Options(headers: {clientTypeHeader: mobileClientType}),
       );
 
       final loginResponse = LoginResponse.fromJson(response.data!);
 
-      final refreshToken = _extractRefreshToken(response);
+      // Refresh token: body-first (mobile), Set-Cookie fallback.
+      final refreshToken = resolveRefreshToken(response);
       if (refreshToken == null || refreshToken.isEmpty) {
         throw const ApiException(
           statusCode: 0,
@@ -140,6 +143,57 @@ class AuthRepository {
     }
   }
 
+  /// Re-sends the email-verification message via `POST /auth/resend-verification`.
+  ///
+  /// Anonymous and intentionally neutral — the API always returns 200 regardless
+  /// of whether the email exists or is already verified (no account enumeration).
+  /// Throws [ApiException] only on transport/server errors.
+  Future<void> resendVerification(String email) async {
+    try {
+      await _dio.post<Map<String, dynamic>>(
+        '/auth/resend-verification',
+        data: {'email': email},
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Completes a password reset via `POST /auth/reset-password` using the
+  /// `userId` + `token` from the emailed link. Throws [ApiException] on an
+  /// invalid/expired token or a password-policy failure (message folded in).
+  Future<void> resetPassword({
+    required String userId,
+    required String token,
+    required String newPassword,
+  }) async {
+    try {
+      await _dio.post<Map<String, dynamic>>(
+        '/auth/reset-password',
+        data: {'userId': userId, 'token': token, 'newPassword': newPassword},
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Changes the signed-in user's password via `POST /auth/change-password`
+  /// (Bearer-authenticated). Throws [ApiException] when the current password is
+  /// wrong, the new one fails policy, or the account is external-login only.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    try {
+      await _dio.post<Map<String, dynamic>>(
+        '/auth/change-password',
+        data: {'currentPassword': currentPassword, 'newPassword': newPassword},
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Fetches the current authenticated user via `GET /auth/me`.
   Future<AuthUser> currentUser() async {
     try {
@@ -167,22 +221,6 @@ class AuthRepository {
     } finally {
       await _tokenStore.clearTokens();
     }
-  }
-
-  String? _extractRefreshToken(Response<dynamic> response) {
-    final setCookies = response.headers['set-cookie'];
-    if (setCookies == null) return null;
-    for (final cookie in setCookies) {
-      if (cookie.contains('rc_refresh_token=')) {
-        final start =
-            cookie.indexOf('rc_refresh_token=') + 'rc_refresh_token='.length;
-        final end = cookie.indexOf(';', start);
-        return end == -1
-            ? cookie.substring(start)
-            : cookie.substring(start, end);
-      }
-    }
-    return null;
   }
 }
 

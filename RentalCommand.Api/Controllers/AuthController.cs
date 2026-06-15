@@ -52,6 +52,35 @@ public class AuthController : ControllerBase
     private bool ShouldExposeDevTokens =>
         _environment.IsDevelopment() && _configuration.GetValue("Auth:ExposeDevTokens", false);
 
+    /// <summary>
+    /// Request header a non-cookie (mobile) client sets to opt into receiving the refresh token in the
+    /// response body. The httpOnly refresh cookie is always set as well; only callers that send this
+    /// header (value <c>mobile</c>) additionally get <see cref="LoginResponse.RefreshToken"/> populated.
+    /// Browsers never send it, so web responses keep the token out of JS-readable bodies.
+    /// </summary>
+    private const string ClientTypeHeader = "X-Client-Type";
+    private const string MobileClientType = "mobile";
+
+    /// <summary>
+    /// True when the caller identifies itself as the mobile client via <see cref="ClientTypeHeader"/>.
+    /// Mobile has no httpOnly-cookie jar it can read, so it needs the rotated refresh token in the body.
+    /// </summary>
+    private bool IsMobileClient =>
+        Request.Headers.TryGetValue(ClientTypeHeader, out var clientType) &&
+        string.Equals(clientType.ToString(), MobileClientType, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Copies the rotated refresh token into the response body, but only for mobile callers. Web callers
+    /// get <c>null</c> (serialized out), so the token stays confined to the httpOnly cookie for browsers.
+    /// </summary>
+    private void PopulateBodyRefreshTokenForMobile(LoginResponse? response, TokenResult tokens)
+    {
+        if (response is not null && IsMobileClient)
+        {
+            response.RefreshToken = tokens.RefreshToken;
+        }
+    }
+
     [HttpPost("login")]
     [AllowAnonymous]
     public async Task<ActionResult<LoginResponse>> Login([FromBody] LoginRequest request)
@@ -63,6 +92,7 @@ public class AuthController : ControllerBase
         }
 
         SetRefreshTokenCookie(result.Tokens!.RefreshToken, result.Tokens.RefreshTokenExpiration);
+        PopulateBodyRefreshTokenForMobile(result.Response, result.Tokens);
         return Ok(result.Response);
     }
 
@@ -124,6 +154,7 @@ public class AuthController : ControllerBase
         }
 
         SetRefreshTokenCookie(result.Tokens!.RefreshToken, result.Tokens.RefreshTokenExpiration);
+        PopulateBodyRefreshTokenForMobile(result.Response, result.Tokens);
         return Ok(result.Response);
     }
 
@@ -182,6 +213,46 @@ public class AuthController : ControllerBase
         return Ok(new { message = "Password has been reset successfully. You can now sign in." });
     }
 
+    [HttpPost("resend-verification")]
+    [AllowAnonymous]
+    public async Task<IActionResult> ResendVerification([FromBody] ResendVerificationRequest request)
+    {
+        var result = await _authService.ResendVerificationEmailAsync(request.Email);
+
+        // Neutral response either way (no account enumeration). When the account is already
+        // verified we can say so — that is not an enumeration signal a logged-out attacker can
+        // act on, and it helps a real user who simply forgot they had already confirmed.
+        if (result.Error is not null && result.Error.Contains("already verified", StringComparison.OrdinalIgnoreCase))
+        {
+            return Ok(new { message = "Email is already verified. You can log in." });
+        }
+
+        return Ok(new { message = "If an account exists, a verification email has been sent." });
+    }
+
+    [HttpPost("change-password")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId))
+        {
+            return Unauthorized(new { error = "Not authenticated" });
+        }
+
+        var result = await _authService.ChangePasswordAsync(userId, request.CurrentPassword, request.NewPassword);
+        if (!result.Success)
+        {
+            if (result.ErrorType == AuthErrorType.NotFound)
+            {
+                return NotFound(new { error = result.Error ?? "User not found" });
+            }
+            return BadRequest(new { error = result.Error ?? "Password change failed" });
+        }
+
+        return Ok(new { message = "Password changed successfully." });
+    }
+
     [HttpGet("me")]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
     public async Task<ActionResult<UserDto>> GetCurrentUser()
@@ -208,7 +279,10 @@ public class AuthController : ControllerBase
         var refreshToken = Request.Cookies[AuthCookieNames.RefreshToken];
         if (!string.IsNullOrEmpty(refreshToken))
         {
-            await _tokenService.RevokeRefreshTokenAsync(refreshToken);
+            // Explicit user logout ends ALL of the user's sessions (every device), not just the
+            // presenting one — revoke the whole token family. The token-expiry/401 auto-refresh path
+            // stays single-token (it rotates one token, never calls this).
+            await _tokenService.RevokeRefreshTokenFamilyAsync(refreshToken);
         }
 
         ClearRefreshTokenCookies();
@@ -254,6 +328,7 @@ public class AuthController : ControllerBase
         }
 
         SetRefreshTokenCookie(result.Tokens!.RefreshToken, result.Tokens.RefreshTokenExpiration);
+        PopulateBodyRefreshTokenForMobile(result.Response, result.Tokens);
         return Ok(result.Response);
     }
 

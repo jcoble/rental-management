@@ -7,7 +7,11 @@ import '../voice/voice_command.dart';
 import '../../features/auth/forgot_password_screen.dart';
 import '../../features/auth/login_screen.dart';
 import '../../features/auth/register_screen.dart';
+import '../../features/auth/reset_password_screen.dart';
 import '../../features/home/home_shell.dart';
+import '../../features/onboarding/onboarding_choice_screen.dart';
+import '../../features/onboarding/onboarding_live_setup_screen.dart';
+import '../../features/onboarding/onboarding_seeding_screen.dart';
 import '../../features/maintenance/work_order_detail_screen.dart';
 import '../../features/maintenance/work_orders_screen.dart';
 import '../../features/messages/message_detail_screen.dart';
@@ -20,7 +24,11 @@ import '../../features/scan/scan_review_screen.dart';
 const _loginPath = '/login';
 const _registerPath = '/register';
 const _forgotPasswordPath = '/forgot-password';
+const _resetPasswordPath = '/reset-password';
 const _homePath = '/';
+const _chooseSetupPath = '/choose-setup';
+const _settingUpPath = '/setting-up';
+const _liveSetupPath = '/live-setup';
 
 /// Routes an unauthenticated user is allowed to sit on without being bounced
 /// back to `/login`.
@@ -28,6 +36,14 @@ const _publicAuthPaths = <String>{
   _loginPath,
   _registerPath,
   _forgotPasswordPath,
+  _resetPasswordPath,
+};
+
+/// First-login onboarding gate routes — an authenticated-but-undecided user is
+/// allowed to sit on these (and only these); everything else bounces here.
+const _onboardingGatePaths = <String>{
+  _chooseSetupPath,
+  _settingUpPath,
 };
 
 /// True for voice / App Actions deep links (`rentalcommand://voice/...`).
@@ -82,8 +98,20 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         return onPublicAuthPage ? null : _loginPath;
       }
 
-      // Authenticated — keep them out of the auth pages.
-      return onPublicAuthPage ? _homePath : null;
+      // Authenticated from here on.
+      final onGatePage = _onboardingGatePaths.contains(state.matchedLocation);
+
+      // First-login Sandbox-vs-Live gate: an undecided account is kept on the choice/seeding
+      // screens until it chooses. This catches login landing, deep links and cold starts alike.
+      if (authState is AuthStateAuthenticated && authState.onboardingPending) {
+        return onGatePage ? null : _chooseSetupPath;
+      }
+
+      // Decided (or returning) user must not linger on the auth pages or the onboarding gate.
+      if (onPublicAuthPage || onGatePage) {
+        return _homePath;
+      }
+      return null;
     },
     routes: [
       GoRoute(
@@ -98,7 +126,32 @@ final appRouterProvider = Provider<GoRouter>((ref) {
         path: _forgotPasswordPath,
         builder: (context, state) => const ForgotPasswordScreen(),
       ),
+      GoRoute(
+        // Reached from the emailed reset link's userId+token query params (and
+        // from in-app navigation). The screen handles a missing/blank pair.
+        path: _resetPasswordPath,
+        builder: (context, state) => ResetPasswordScreen(
+          userId: state.uri.queryParameters['userId'] ?? '',
+          token: state.uri.queryParameters['token'] ?? '',
+        ),
+      ),
       GoRoute(path: _homePath, builder: (context, state) => const HomeShell()),
+
+      // ── First-login Sandbox-vs-Live gate ──────────────────────────────────
+      GoRoute(
+        path: _chooseSetupPath,
+        builder: (context, state) => const OnboardingChoiceScreen(),
+      ),
+      GoRoute(
+        path: _settingUpPath,
+        builder: (context, state) => const OnboardingSeedingScreen(),
+      ),
+      GoRoute(
+        // Guided first step after the Live choice (I8): "add your first
+        // property". Not a gate path — reached once the gate is cleared.
+        path: _liveSetupPath,
+        builder: (context, state) => const OnboardingLiveSetupScreen(),
+      ),
 
       // ── Addressable detail / section routes ───────────────────────────────
       // These render on top of the shell so push notifications and in-app

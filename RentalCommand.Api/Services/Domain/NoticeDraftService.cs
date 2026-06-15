@@ -53,54 +53,83 @@ public class NoticeDraftService : INoticeDraftService
         return drafts.Select(Map).ToList();
     }
 
-    public async Task<GenerateNoticeDraftsResponse> GenerateAsync(int portfolioId, CancellationToken ct = default)
+    public async Task<GenerateNoticeDraftsResponse> GenerateAsync(
+        int portfolioId,
+        GenerateNoticeDraftsRequest? request = null,
+        CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
         var today = now.Date;
         var created = new List<NoticeDraft>();
 
-        var leases = await _db.Leases
+        var tenantId = request?.TenantId;
+        var requestedType = string.IsNullOrWhiteSpace(request?.NoticeType) ? null : request!.NoticeType!.Trim();
+        // When a specific type is requested for a tenant, force renewal/move-out even outside the
+        // usual trigger window — the landlord explicitly asked for that notice.
+        var forced = requestedType != null;
+
+        bool WantsType(string type) => requestedType == null || string.Equals(requestedType, type, StringComparison.OrdinalIgnoreCase);
+
+        var leaseQuery = _db.Leases
             .Include(l => l.Tenant)
             .Include(l => l.Property)
             .Include(l => l.Unit)
-            .Where(l => l.PortfolioId == portfolioId && l.Status == LeaseStatus.Active)
-            .ToListAsync(ct);
+            .Where(l => l.PortfolioId == portfolioId && l.Status == LeaseStatus.Active);
+        if (tenantId.HasValue)
+        {
+            leaseQuery = leaseQuery.Where(l => l.TenantId == tenantId.Value);
+        }
+        var leases = await leaseQuery.ToListAsync(ct);
 
         foreach (var lease in leases)
         {
             if (lease.Tenant == null) continue;
 
             var daysToEnd = (lease.EndDate.Date - today).Days;
-            if (daysToEnd >= 0 && daysToEnd <= 75
+            if (WantsType("RenewalOffer")
+                && (forced || (daysToEnd >= 0 && daysToEnd <= 75))
                 && !await DraftExistsAsync(portfolioId, lease.Id, "RenewalOffer", created, ct))
             {
                 created.Add(await BuildRenewalDraftAsync(portfolioId, lease, daysToEnd, now, ct));
             }
 
-            if (daysToEnd >= 0 && daysToEnd <= 30
+            if (WantsType("MoveOutReminder")
+                && (forced || (daysToEnd >= 0 && daysToEnd <= 30))
                 && !await DraftExistsAsync(portfolioId, lease.Id, "MoveOutReminder", created, ct))
             {
                 created.Add(await BuildMoveOutDraftAsync(portfolioId, lease, daysToEnd, now, ct));
             }
         }
 
-        var latePayments = await _db.Payments
-            .Include(p => p.Lease).ThenInclude(l => l!.Tenant)
-            .Include(p => p.Lease).ThenInclude(l => l!.Property)
-            .Include(p => p.Lease).ThenInclude(l => l!.Unit)
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                p.DueDate.Date < today &&
-                (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Partial))
-            .ToListAsync(ct);
-
-        foreach (var payment in latePayments)
+        // Late-rent notices are always grounded in a real overdue payment (we need the amount/due
+        // date), so even a forced request only produces one when such a payment exists.
+        if (WantsType("LateRentNotice"))
         {
-            if (payment.Lease?.Tenant == null) continue;
-            var daysLate = (today - payment.DueDate.Date).Days;
-            if (!await DraftExistsAsync(portfolioId, payment.LeaseId, "LateRentNotice", created, ct))
+            var lateQuery = _db.Payments
+                .Include(p => p.Lease).ThenInclude(l => l!.Tenant)
+                .Include(p => p.Lease).ThenInclude(l => l!.Property)
+                .Include(p => p.Lease).ThenInclude(l => l!.Unit)
+                .Where(p =>
+                    p.PortfolioId == portfolioId &&
+                    p.DueDate.Date < today &&
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Partial));
+            if (tenantId.HasValue)
             {
-                created.Add(await BuildLateDraftAsync(portfolioId, payment, daysLate, now, ct));
+                lateQuery = lateQuery.Where(p => p.Lease != null && p.Lease.TenantId == tenantId.Value);
+            }
+            // Most overdue first so a forced single-tenant request picks the worst payment.
+            var latePayments = await lateQuery
+                .OrderBy(p => p.DueDate)
+                .ToListAsync(ct);
+
+            foreach (var payment in latePayments)
+            {
+                if (payment.Lease?.Tenant == null) continue;
+                var daysLate = (today - payment.DueDate.Date).Days;
+                if (!await DraftExistsAsync(portfolioId, payment.LeaseId, "LateRentNotice", created, ct))
+                {
+                    created.Add(await BuildLateDraftAsync(portfolioId, payment, daysLate, now, ct));
+                }
             }
         }
 

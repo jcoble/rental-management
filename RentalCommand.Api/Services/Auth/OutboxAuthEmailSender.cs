@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text.Json;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data;
@@ -34,10 +35,12 @@ public sealed class OutboxAuthEmailSender : IAuthEmailSender
 
             var greeting = !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : user.Email ?? "there";
             var subject = "Confirm your Rental Command email";
+
+            // Plaintext fallback keeps the raw URL so a text-only client can still complete the flow.
             var body = $"""
 Hi {greeting},
 
-Thanks for signing up for Rental Command! Please confirm your email address by clicking (or copying) the link below:
+Thanks for signing up for Rental Command! Please confirm your email — click the link below:
 
 {link}
 
@@ -46,7 +49,14 @@ This link will expire within 24 hours. If you didn't create an account, you can 
 – The Rental Command Team
 """;
 
-            await EnqueueAsync(user.Email!, subject, body, "email-confirmation", ct);
+            // HTML body renders a single "Here" anchor instead of printing the full raw URL inline.
+            var htmlBody = BuildAuthEmailHtml(
+                greeting,
+                introHtml: "Thanks for signing up for Rental Command! Please confirm your email — click",
+                link: link,
+                footerHtml: "This link will expire within 24 hours. If you didn't create an account, you can safely ignore this email.");
+
+            await EnqueueAsync(user.Email!, subject, body, htmlBody, "email-confirmation", ct);
             _logger.LogInformation("Enqueued email-confirmation email for {Email}.", user.Email);
         }
         catch (Exception ex)
@@ -65,10 +75,12 @@ This link will expire within 24 hours. If you didn't create an account, you can 
 
             var greeting = !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : user.Email ?? "there";
             var subject = "Reset your Rental Command password";
+
+            // Plaintext fallback keeps the raw URL so a text-only client can still complete the flow.
             var body = $"""
 Hi {greeting},
 
-We received a request to reset the password for your Rental Command account. Use the link below to set a new password:
+We received a request to reset the password for your Rental Command account. To set a new password, click the link below:
 
 {link}
 
@@ -77,7 +89,14 @@ This link expires in 1 hour. If you didn't request a password reset, you can saf
 – The Rental Command Team
 """;
 
-            await EnqueueAsync(user.Email!, subject, body, "password-reset", ct);
+            // HTML body renders a single "Here" anchor instead of printing the full raw URL inline.
+            var htmlBody = BuildAuthEmailHtml(
+                greeting,
+                introHtml: "We received a request to reset the password for your Rental Command account. To set a new password, click",
+                link: link,
+                footerHtml: "This link expires in 1 hour. If you didn't request a password reset, you can safely ignore this email — your password won't change.");
+
+            await EnqueueAsync(user.Email!, subject, body, htmlBody, "password-reset", ct);
             _logger.LogInformation("Enqueued password-reset email for {Email}.", user.Email);
         }
         catch (Exception ex)
@@ -86,9 +105,13 @@ This link expires in 1 hour. If you didn't request a password reset, you can saf
         }
     }
 
-    private async Task EnqueueAsync(string to, string subject, string body, string kind, CancellationToken ct)
+    private async Task EnqueueAsync(string to, string subject, string body, string htmlBody, string kind, CancellationToken ct)
     {
-        var payload = JsonSerializer.Serialize(new { to, subject, body });
+        // The outbox carries both a plaintext body (the source of truth / fallback) and an
+        // optional htmlBody. The Engine's OutboxDispatchWorker passes both to the email transport;
+        // SendGrid adds a text/html part and SMTP uses it as the HtmlBody. kind is retained for
+        // logging/diagnostics only — the routing key stays "email".
+        var payload = JsonSerializer.Serialize(new { to, subject, body, htmlBody });
 
         _db.OutboxMessages.Add(new OutboxMessage
         {
@@ -99,5 +122,27 @@ This link expires in 1 hour. If you didn't request a password reset, you can saf
         });
 
         await _db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Builds a minimal, safe HTML body for an auth email: a greeting, an intro sentence ending in a
+    /// single <c>Here</c> hyperlink to <paramref name="link"/>, and a footer. The dynamic greeting is
+    /// HTML-encoded; the intro/footer are fixed English copy supplied by this class (not user input).
+    /// </summary>
+    private static string BuildAuthEmailHtml(string greeting, string introHtml, string link, string footerHtml)
+    {
+        var safeGreeting = WebUtility.HtmlEncode(greeting);
+        var safeLink = WebUtility.HtmlEncode(link);
+        return $$"""
+<!DOCTYPE html>
+<html>
+<body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.6;color:#1a1a2e;">
+  <p>Hi {{safeGreeting}},</p>
+  <p>{{introHtml}} <a href="{{safeLink}}">Here</a>.</p>
+  <p style="color:#6b7280;font-size:13px;">{{footerHtml}}</p>
+  <p>– The Rental Command Team</p>
+</body>
+</html>
+""";
     }
 }

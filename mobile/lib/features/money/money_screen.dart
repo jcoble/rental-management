@@ -3,18 +3,30 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../accounting/accounting_repository.dart';
 import '../payments/payment_detail_screen.dart';
-import '../payments/payments_repository.dart';
 import 'expense_detail_screen.dart';
-import 'expenses_list_screen.dart';
 import 'money_format.dart';
-import 'money_repository.dart';
 import 'money_snapshot_card.dart';
 import 'overdue_screen.dart';
 import 'transaction_models.dart';
 import 'transactions_controller.dart';
 
-/// The Money tab — full snapshot + a "Who's behind" drill-in, plus a unified
-/// transactions ledger, expenses, and payments under a tab bar.
+/// Whether the Money screen's snapshot card is expanded. A session-scoped
+/// Notifier so the choice is remembered while the app is open (collapsing it
+/// gives the ledger room without losing the preference on every rebuild).
+class MoneySnapshotExpanded extends Notifier<bool> {
+  @override
+  bool build() => true;
+
+  void toggle() => state = !state;
+}
+
+final moneySnapshotExpandedProvider =
+    NotifierProvider<MoneySnapshotExpanded, bool>(MoneySnapshotExpanded.new);
+
+/// The Money tab — a collapsible plain-English snapshot plus a single unified
+/// transactions ledger (with Payments / Expenses filter chips). The previously
+/// separate Expenses and Payments tabs were redundant with the Ledger's own
+/// kind filter, so they were consolidated here.
 class MoneyScreen extends ConsumerStatefulWidget {
   const MoneyScreen({super.key});
 
@@ -22,24 +34,13 @@ class MoneyScreen extends ConsumerStatefulWidget {
   ConsumerState<MoneyScreen> createState() => _MoneyScreenState();
 }
 
-class _MoneyScreenState extends ConsumerState<MoneyScreen>
-    with SingleTickerProviderStateMixin {
-  late final TabController _tabs;
-
+class _MoneyScreenState extends ConsumerState<MoneyScreen> {
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 3, vsync: this);
     Future.microtask(() {
       ref.read(transactionsProvider.notifier).load();
-      ref.read(paymentsProvider.notifier).load();
     });
-  }
-
-  @override
-  void dispose() {
-    _tabs.dispose();
-    super.dispose();
   }
 
   void _openOverdue() {
@@ -51,47 +52,99 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen>
   @override
   Widget build(BuildContext context) {
     final moneyAsync = ref.watch(moneySnapshotProvider);
+    final expanded = ref.watch(moneySnapshotExpandedProvider);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Money'),
-        bottom: TabBar(
-          controller: _tabs,
-          tabs: const [
-            Tab(text: 'Ledger'),
-            Tab(text: 'Expenses'),
-            Tab(text: 'Payments'),
-          ],
-        ),
-      ),
+      appBar: AppBar(title: const Text('Money')),
       body: Column(
         children: [
-          // ── Snapshot headline (shared widget) ──────────────────────────
+          // ── Collapsible snapshot headline ──────────────────────────────
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: MoneySnapshotCard(
-              snapshotAsync: moneyAsync,
-              onRetry: () => ref.invalidate(moneySnapshotProvider),
-              onPastDueTap: _openOverdue,
+            child: _CollapsibleSnapshot(
+              expanded: expanded,
+              onToggle: () =>
+                  ref.read(moneySnapshotExpandedProvider.notifier).toggle(),
+              child: MoneySnapshotCard(
+                snapshotAsync: moneyAsync,
+                onRetry: () => ref.invalidate(moneySnapshotProvider),
+                onPastDueTap: _openOverdue,
+              ),
             ),
           ),
-          Expanded(
-            child: TabBarView(
-              controller: _tabs,
-              children: const [
-                _LedgerTab(),
-                _ExpensesTab(),
-                _PaymentsTab(),
-              ],
-            ),
-          ),
+          const Expanded(child: _LedgerTab()),
         ],
       ),
     );
   }
 }
 
-// ── Ledger tab — paginated unified transactions ────────────────────────────
+/// Wraps the snapshot card with a tappable header (title + expand arrow) so the
+/// landlord can collapse it and give the ledger room. When collapsed it shows a
+/// one-line summary (collected / kept / who's behind) instead of the full card.
+class _CollapsibleSnapshot extends StatelessWidget {
+  const _CollapsibleSnapshot({
+    required this.expanded,
+    required this.onToggle,
+    required this.child,
+  });
+
+  final bool expanded;
+  final VoidCallback onToggle;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        InkWell(
+          onTap: onToggle,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+            child: Row(
+              children: [
+                Icon(Icons.savings_outlined, size: 18, color: cs.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'Your money',
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w700),
+                ),
+                const Spacer(),
+                Text(
+                  expanded ? 'Hide' : 'Show',
+                  style: theme.textTheme.labelMedium
+                      ?.copyWith(color: cs.onSurfaceVariant),
+                ),
+                Icon(
+                  expanded ? Icons.expand_less : Icons.expand_more,
+                  color: cs.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
+        ),
+        AnimatedCrossFade(
+          duration: const Duration(milliseconds: 180),
+          crossFadeState:
+              expanded ? CrossFadeState.showFirst : CrossFadeState.showSecond,
+          firstChild: Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: child,
+          ),
+          secondChild: const SizedBox(width: double.infinity),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Ledger — paginated unified transactions ─────────────────────────────────
 
 class _LedgerTab extends ConsumerStatefulWidget {
   const _LedgerTab();
@@ -297,125 +350,3 @@ class _TransactionCard extends StatelessWidget {
     );
   }
 }
-
-// ── Expenses tab ────────────────────────────────────────────────────────────
-
-class _ExpensesTab extends ConsumerWidget {
-  const _ExpensesTab();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(expensesListProvider);
-    return RefreshIndicator(
-      onRefresh: () async => ref.invalidate(expensesListProvider),
-      child: async.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => ListView(
-          children: const [
-            SizedBox(height: 120),
-            Center(child: Text("Couldn't load expenses.")),
-          ],
-        ),
-        data: (expenses) {
-          if (expenses.isEmpty) {
-            return ListView(
-              children: const [
-                SizedBox(height: 120),
-                Center(child: Text('No expenses yet.')),
-              ],
-            );
-          }
-          return ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: expenses.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
-            itemBuilder: (_, i) => ExpenseRowCard(expense: expenses[i]),
-          );
-        },
-      ),
-    );
-  }
-}
-
-// ── Payments tab ────────────────────────────────────────────────────────────
-
-class _PaymentsTab extends ConsumerWidget {
-  const _PaymentsTab();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final async = ref.watch(paymentsProvider);
-    return RefreshIndicator(
-      onRefresh: () => ref.read(paymentsProvider.notifier).refresh(),
-      child: async.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => ListView(
-          children: const [
-            SizedBox(height: 120),
-            Center(child: Text("Couldn't load payments.")),
-          ],
-        ),
-        data: (payments) {
-          if (payments.isEmpty) {
-            return ListView(
-              children: const [
-                SizedBox(height: 120),
-                Center(child: Text('No payments yet.')),
-              ],
-            );
-          }
-          return ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-            itemCount: payments.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
-            itemBuilder: (_, i) {
-              final p = payments[i];
-              final cs = Theme.of(context).colorScheme;
-              final isPaid = p.status.toLowerCase() == 'paid';
-              return Card(
-                child: ListTile(
-                  onTap: () => Navigator.of(context).push<void>(
-                    MaterialPageRoute<void>(
-                      builder: (_) => PaymentDetailScreen(paymentId: p.id),
-                    ),
-                  ),
-                  leading: CircleAvatar(
-                    backgroundColor:
-                        isPaid ? cs.primaryContainer : cs.secondaryContainer,
-                    child: Icon(
-                      Icons.payments_outlined,
-                      color: isPaid
-                          ? cs.onPrimaryContainer
-                          : cs.onSecondaryContainer,
-                      size: 18,
-                    ),
-                  ),
-                  title: Text(
-                    p.tenantName ??
-                        (p.leaseNumber != null
-                            ? 'Lease ${p.leaseNumber}'
-                            : 'Payment #${p.id}'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  subtitle: Text(
-                    '${p.type.isEmpty ? 'Payment' : p.type} · '
-                    'Due ${shortDateFmt(p.dueDate)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  trailing: Text(
-                    moneyFmt(p.amount),
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-}
-

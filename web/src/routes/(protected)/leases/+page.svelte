@@ -20,25 +20,27 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const LEASE_STATUSES = ['Draft', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
 
-	const PAGE_SIZE = 20;
-	let search = $state('');
-	let statusFilter = $state('');
-	let skip = $state(0);
+	// Search / status persisted in the URL so they survive navigating away and back. Paging is handled
+	// client-side by the DataGrid over the fetched list (matching the tenants/properties grids); the
+	// list endpoint returns no total count, so server-side paging isn't wired here.
+	let search = $state(readGridParam(page.url.searchParams, 'q'));
+	let statusFilter = $state(readGridParam(page.url.searchParams, 'status'));
 	const debouncedSearch = debounced(() => search, 300);
+
 	$effect(() => {
-		debouncedSearch.value;
-		statusFilter;
-		skip = 0;
+		syncGridUrl({ q: search, status: statusFilter });
 	});
 
 	const leasesQuery = createQuery(() => ({
-		queryKey: ['leases', portfolioId, debouncedSearch.value, statusFilter, skip],
-		queryFn: () => leases.list(portfolioId, { search: debouncedSearch.value, skip, take: PAGE_SIZE }),
+		queryKey: ['leases', portfolioId, debouncedSearch.value],
+		queryFn: () => leases.list(portfolioId, { search: debouncedSearch.value, take: 500 }),
 	}));
 
 	const propertiesQuery = createQuery(() => ({

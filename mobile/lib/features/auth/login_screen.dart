@@ -22,7 +22,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   bool _obscurePassword = true;
   bool _isLoading = false;
   bool _isGoogleLoading = false;
+  bool _isResendingVerification = false;
+  bool _resendSucceeded = false;
   String? _errorMessage;
+
+  /// True when the last login failed specifically because the email is unverified
+  /// (the API marks it with an `EMAIL_NOT_VERIFIED:` prefix). Drives the resend UI.
+  bool _emailNotVerified = false;
 
   /// True while either sign-in path is in flight — disables all actions.
   bool get _busy => _isLoading || _isGoogleLoading;
@@ -40,6 +46,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
+      _emailNotVerified = false;
+      _resendSucceeded = false;
     });
 
     try {
@@ -49,12 +57,41 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       // Router redirect handles navigation on success.
     } on ApiException catch (e) {
       if (mounted) {
-        setState(() => _errorMessage = e.message);
+        final unverified = e.message.contains('EMAIL_NOT_VERIFIED');
+        setState(() {
+          _emailNotVerified = unverified;
+          // Show friendly copy for the unverified case; the inline resend button
+          // explains the next step, so we don't echo the raw marker string.
+          _errorMessage = unverified
+              ? 'Please verify your email address before signing in.'
+              : e.message;
+        });
       }
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
       }
+    }
+  }
+
+  /// Re-sends the verification email for the address in the box. The endpoint is
+  /// anonymous and neutral (no account enumeration), so any non-throw = "sent".
+  Future<void> _resendVerification() async {
+    final email = _emailController.text.trim();
+    if (email.isEmpty) return;
+
+    setState(() {
+      _isResendingVerification = true;
+      _resendSucceeded = false;
+    });
+
+    try {
+      await ref.read(authControllerProvider.notifier).resendVerification(email);
+      if (mounted) setState(() => _resendSucceeded = true);
+    } on ApiException {
+      // Stay silent — the API intentionally hides whether the account exists.
+    } finally {
+      if (mounted) setState(() => _isResendingVerification = false);
     }
   }
 
@@ -94,6 +131,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+
+    // Backstop: if a sign-in attempt left the controller in an unauthenticated
+    // state with an error but our local `_errorMessage` wasn't set for some
+    // reason, still surface it. The local message (set in _submit/_signInWithGoogle)
+    // takes priority so we never show two error chips for the same failure.
+    final authState = ref.watch(authControllerProvider);
+    final stateError =
+        authState is AuthStateUnauthenticated ? authState.error : null;
+    final effectiveError = _errorMessage ?? stateError;
 
     return Scaffold(
       body: SafeArea(
@@ -198,7 +244,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         ),
                         const SizedBox(height: 24),
 
-                        if (_errorMessage != null) ...[
+                        if (effectiveError != null) ...[
                           Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 12,
@@ -218,7 +264,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
-                                    _errorMessage!,
+                                    effectiveError,
                                     style: theme.textTheme.bodySmall?.copyWith(
                                       color: colorScheme.onErrorContainer,
                                     ),
@@ -228,6 +274,46 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                             ),
                           ),
                           const SizedBox(height: 16),
+                        ],
+
+                        // Unverified-email recovery: offer to resend the
+                        // verification email for the address in the box.
+                        if (_emailNotVerified) ...[
+                          if (_resendSucceeded)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 16),
+                              child: Text(
+                                'Verification email sent! Check your inbox '
+                                '(and spam folder).',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.primary,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            )
+                          else ...[
+                            OutlinedButton.icon(
+                              onPressed: _isResendingVerification
+                                  ? null
+                                  : _resendVerification,
+                              icon: _isResendingVerification
+                                  ? const SizedBox(
+                                      height: 18,
+                                      width: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.mark_email_read_outlined,
+                                      size: 18),
+                              label: Text(
+                                _isResendingVerification
+                                    ? 'Sending…'
+                                    : 'Resend verification email',
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                          ],
                         ],
 
                         FilledButton(

@@ -21,6 +21,10 @@ public class WorkOrderResponse
     public WorkOrderStatus Status { get; set; }
     public DateTime RequestedAt { get; set; }
     public DateTime? ScheduledFor { get; set; }
+
+    /// <summary>End of the scheduled arrival window (visit expected between <see cref="ScheduledFor"/> and this time). Null when none.</summary>
+    public DateTime? ScheduledWindowEnd { get; set; }
+
     public DateTime? CompletedAt { get; set; }
     public decimal? EstimatedCost { get; set; }
     public decimal? ActualCost { get; set; }
@@ -58,6 +62,7 @@ public class WorkOrderResponse
         Status = e.Status,
         RequestedAt = e.RequestedAt,
         ScheduledFor = e.ScheduledFor,
+        ScheduledWindowEnd = e.ScheduledWindowEnd,
         CompletedAt = e.CompletedAt,
         EstimatedCost = e.EstimatedCost,
         ActualCost = e.ActualCost,
@@ -131,6 +136,7 @@ public class WorkOrderDetailResponse : WorkOrderResponse
             Status = e.Status,
             RequestedAt = e.RequestedAt,
             ScheduledFor = e.ScheduledFor,
+            ScheduledWindowEnd = e.ScheduledWindowEnd,
             CompletedAt = e.CompletedAt,
             EstimatedCost = e.EstimatedCost,
             ActualCost = e.ActualCost,
@@ -183,7 +189,18 @@ public class CreateWorkOrderRequest
     public WorkOrderStatus Status { get; set; } = WorkOrderStatus.New;
 
     public DateTime? RequestedAt { get; set; }
-    public DateTime? ScheduledFor { get; set; }
+
+    /// <summary>
+    /// Start of the scheduled arrival window. Clients send this as an ISO-8601 instant carrying the
+    /// landlord's local UTC offset (e.g. <c>2026-06-20T14:00:00-04:00</c>); the offset is preserved so
+    /// the value is stored as the true UTC instant AND the tenant SMS can be rendered back in the
+    /// landlord's local time. A zoneless value is treated as already-UTC.
+    /// </summary>
+    public DateTimeOffset? ScheduledFor { get; set; }
+
+    /// <summary>End of the scheduled arrival window. Should be at/after <see cref="ScheduledFor"/>. Same offset-preserving convention as <see cref="ScheduledFor"/>.</summary>
+    public DateTimeOffset? ScheduledWindowEnd { get; set; }
+
     public DateTime? CompletedAt { get; set; }
 
     [Range(0, 99999999)]
@@ -241,7 +258,17 @@ public class UpdateWorkOrderRequest
     /// </summary>
     public DateTime? RequestedAt { get; set; }
 
-    public DateTime? ScheduledFor { get; set; }
+    /// <summary>
+    /// Start of the scheduled arrival window. Null = unchanged (same nullable-means-untouched PATCH
+    /// semantics). When supplied, clients send an ISO-8601 instant carrying the landlord's local UTC
+    /// offset; the offset is preserved so the value stores as the true UTC instant and the tenant SMS
+    /// renders in the landlord's local time. A zoneless value is treated as already-UTC.
+    /// </summary>
+    public DateTimeOffset? ScheduledFor { get; set; }
+
+    /// <summary>End of the scheduled arrival window. Null = unchanged (same nullable-means-untouched PATCH semantics). Same offset-preserving convention as <see cref="ScheduledFor"/>.</summary>
+    public DateTimeOffset? ScheduledWindowEnd { get; set; }
+
     public DateTime? CompletedAt { get; set; }
 
     [Range(0, 99999999)]

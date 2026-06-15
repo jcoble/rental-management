@@ -3341,6 +3341,9 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime?>("ScheduledFor")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<DateTime?>("ScheduledWindowEnd")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<int>("Status")
                         .HasColumnType("integer");
 

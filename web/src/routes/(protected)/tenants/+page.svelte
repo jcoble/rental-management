@@ -13,12 +13,18 @@
 	import { Input } from '$lib/components/ui/input';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 
-	let search = $state('');
+	// Search persisted in the URL so it survives navigating away and back.
+	let search = $state(readGridParam(page.url.searchParams, 'q'));
+	$effect(() => {
+		syncGridUrl({ q: search });
+	});
 
 	const tenantsQuery = createQuery(() => ({
 		queryKey: ['tenants', portfolioId],

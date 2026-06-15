@@ -263,6 +263,15 @@ export const workOrderSchema = z.object({
 	description: required('Description'),
 	priority: z.string(),
 	category: required('Category'),
+	// Optional maintenance context (all blank → null). unitId is filtered to the chosen property
+	// in the UI; scheduledFor + scheduledWindowEnd are `datetime-local` strings bracketing the
+	// arrival window (the API pins them to UTC); estimatedCost is optional non-negative money.
+	unitId: idString,
+	tenantId: idString,
+	vendorId: idString,
+	scheduledFor: optionalText,
+	scheduledWindowEnd: optionalText,
+	estimatedCost: optionalNonNegative('Estimated cost'),
 });
 
 /**

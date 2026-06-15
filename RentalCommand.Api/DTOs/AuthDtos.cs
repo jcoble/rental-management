@@ -48,6 +48,16 @@ public class LoginResponse
     public string AccessToken { get; set; } = string.Empty;
     public DateTime AccessTokenExpiration { get; set; }
     public UserDto User { get; set; } = new();
+
+    /// <summary>
+    /// The refresh token, in the response body. Populated ONLY for non-cookie (mobile) callers that
+    /// opt in via the <c>X-Client-Type: mobile</c> header — the mobile app stores it in the OS secure
+    /// enclave and sends it back in the refresh body. Web clients never receive it here (it stays
+    /// <c>null</c> and is omitted from the JSON): they continue to rely on the httpOnly
+    /// <c>rc_refresh_token</c> cookie, so the token is never exposed to browser JS.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? RefreshToken { get; set; }
 }
 
 public class ConfirmEmailRequest
@@ -76,6 +86,26 @@ public class ResetPasswordRequest
     [Required]
     [MaxLength(4000)]
     public string Token { get; set; } = string.Empty;
+
+    [Required]
+    [MinLength(8)]
+    [MaxLength(200)]
+    public string NewPassword { get; set; } = string.Empty;
+}
+
+public class ResendVerificationRequest
+{
+    [Required]
+    [EmailAddress]
+    [MaxLength(200)]
+    public string Email { get; set; } = string.Empty;
+}
+
+public class ChangePasswordRequest
+{
+    [Required]
+    [MaxLength(200)]
+    public string CurrentPassword { get; set; } = string.Empty;
 
     [Required]
     [MinLength(8)]
