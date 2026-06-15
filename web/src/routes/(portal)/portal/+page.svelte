@@ -4,6 +4,7 @@
 	import { notifications } from '$lib/api/endpoints/notifications';
 	import { getCurrentUser } from '$lib/stores/auth.svelte';
 	import { portalActionUrl } from '$lib/utils/portalLinks';
+	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import { formatDateOnly, daysFromTodayUtc, isPastDueUtc } from '$lib/utils/date';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
@@ -217,7 +218,7 @@
 						{#each upcomingPayments.slice(0, 5) as payment}
 							<div class="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
 								<div>
-									<p class="text-sm font-medium">{payment.paymentType ?? payment.type} · {money(payment.amount)}</p>
+									<p class="text-sm font-medium">{paymentTypeLabel(payment.paymentType ?? payment.type)} · {money(payment.amount)}</p>
 									<p class="text-xs text-muted-foreground">Due {date(payment.dueDate)} · {payment.status}</p>
 								</div>
 								<span class="text-xs text-muted-foreground">

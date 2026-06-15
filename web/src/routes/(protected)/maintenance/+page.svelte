@@ -268,7 +268,7 @@
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="maintenance-page">
 	<div class="mb-6 flex items-center justify-between gap-3">
 		<div>
-			<h1 class="text-2xl font-bold">Maintenance & Inspections</h1>
+			<h1 class="text-2xl font-bold">Maintenance</h1>
 			<p class="text-sm text-muted-foreground">Track resident requests, vendor execution, and compliance checks.</p>
 		</div>
 		<div class="flex gap-2">
@@ -490,7 +490,7 @@
 		</div>
 		<Dialog.Footer>
 			<Button data-testid="work-order-form-cancel" variant="outline" onclick={closeWoForm}>Cancel</Button>
-			<Button data-testid="work-order-form-save" onclick={submitWo} disabled={saveWoMutation.isPending}>{saveWoMutation.isPending ? 'Saving…' : 'Save Work Order'}</Button>
+			<Button data-testid="work-order-form-save" onclick={submitWo} disabled={saveWoMutation.isPending}>{saveWoMutation.isPending ? 'Saving…' : 'Save work order'}</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

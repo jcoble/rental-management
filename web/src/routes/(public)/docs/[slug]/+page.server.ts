@@ -6,23 +6,53 @@
  * with `marked` server-side. Rendering on the server keeps `marked` out of the
  * client bundle and makes the article SSR/SEO friendly while working logged-out.
  *
- * The content is our own trusted Knowledge Base, so we only do a light strip of
- * <script>/<style>/event-handler attributes rather than a full sanitizer.
+ * The rendered HTML is run through a real allowlist sanitizer (sanitize-html)
+ * before it reaches the `{@html}` sink. A regex scrub of <script>/<style>/on*=
+ * is well-known bypassable (e.g. <svg><animate onbegin>, attribute-splitting,
+ * data:/srcdoc payloads); even though the body comes from our own Knowledge
+ * Base, this is the load-bearing defense the moment an article can be influenced
+ * by an untrusted author (L-14).
  */
 
 import { error } from '@sveltejs/kit';
 import { marked } from 'marked';
+import sanitizeHtmlLib from 'sanitize-html';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 import type { DocArticle, DocsIndex } from '$lib/api/endpoints/docs';
 import type { PageServerLoad } from './$types';
 
-/** Light defense-in-depth scrub for our own trusted markdown output. */
+/**
+ * Allowlist sanitizer for rendered markdown. Tags cover everything `marked` (gfm)
+ * emits for our docs — headings, text formatting, lists, links, code/pre, tables,
+ * blockquotes, images, hr. Notably absent: <script>, <style>, <iframe> (so srcdoc
+ * can't smuggle markup). Schemes are restricted to http/https/mailto for links and
+ * http/https for images — `data:`/`javascript:` URIs are dropped. Heading `id`s are
+ * injected AFTER this pass (trusted, server-generated slugs), so they don't need to
+ * survive sanitization here.
+ */
 function sanitizeHtml(html: string): string {
-	return html
-		.replace(/<\s*script[^>]*>[\s\S]*?<\s*\/\s*script\s*>/gi, '')
-		.replace(/<\s*style[^>]*>[\s\S]*?<\s*\/\s*style\s*>/gi, '')
-		.replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-		.replace(/(href|src)\s*=\s*("|')\s*javascript:[^"']*\2/gi, '$1=$2#$2');
+	return sanitizeHtmlLib(html, {
+		allowedTags: [
+			'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+			'p', 'a', 'ul', 'ol', 'li',
+			'blockquote', 'code', 'pre', 'em', 'strong', 'del', 's',
+			'hr', 'br', 'span',
+			'table', 'thead', 'tbody', 'tr', 'th', 'td',
+			'img'
+		],
+		allowedAttributes: {
+			a: ['href', 'name', 'target', 'rel'],
+			img: ['src', 'alt', 'title'],
+			th: ['align'],
+			td: ['align']
+		},
+		allowedSchemes: ['http', 'https', 'mailto'],
+		allowedSchemesByTag: { img: ['http', 'https'] },
+		// Drop protocol-relative (//evil.com) URLs.
+		allowProtocolRelative: false,
+		// Strip the CONTENTS of these disallowed tags too, not just the tags.
+		nonTextTags: ['style', 'script', 'textarea', 'option', 'noscript']
+	});
 }
 
 export interface DocTocItem {

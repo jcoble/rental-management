@@ -20,6 +20,18 @@ let isLoading = $state(true);
 let platformAdmin = $state(false);
 const isAuthenticated = $derived(!!user && !!accessToken);
 
+/**
+ * Client-only write guard (L-13). This is module-scoped state; under adapter-node the server
+ * shares module scope across all concurrent requests, so a server-side write would bleed one
+ * user's identity into another's SSR render. Every mutator routes through here. Reads stay
+ * unguarded — they're consumed during SSR render and safely return the null/default seed.
+ */
+function assertClientWrite(fn: string): void {
+	if (!browser) {
+		throw new Error(`${fn} must not be called on the server (auth store is client-only).`);
+	}
+}
+
 /** Optional hook fired when auth is cleared (e.g. to disconnect SignalR). */
 let onAuthClearedCallback: (() => void) | null = null;
 
@@ -34,6 +46,7 @@ export function initAuth(
 	expiration: Date | null,
 	initialPlatformAdmin = false
 ) {
+	assertClientWrite('initAuth');
 	user = initialUser;
 	accessToken = initialToken;
 	accessTokenExpiration = expiration;
@@ -43,6 +56,7 @@ export function initAuth(
 
 /** Set auth after a successful login (client-side). */
 export function setAuth(newUser: User, newToken: string, expiration: Date) {
+	assertClientWrite('setAuth');
 	user = newUser;
 	accessToken = newToken;
 	accessTokenExpiration = expiration;
@@ -51,6 +65,7 @@ export function setAuth(newUser: User, newToken: string, expiration: Date) {
 
 /** Update only the token (after a refresh). */
 export function updateToken(newToken: string, expiration: Date) {
+	assertClientWrite('updateToken');
 	accessToken = newToken;
 	accessTokenExpiration = expiration;
 }
@@ -62,6 +77,7 @@ export function updateToken(newToken: string, expiration: Date) {
  * so the httpOnly cookie deletions can't be raced by a client-side goto).
  */
 export function clearAuthState() {
+	assertClientWrite('clearAuthState');
 	user = null;
 	accessToken = null;
 	accessTokenExpiration = null;
@@ -131,6 +147,7 @@ export function getCurrentUser(): User | null {
 
 /** Replace the current user (e.g. after a fresh /auth/me fetch). */
 export function setCurrentUser(newUser: User | null) {
+	assertClientWrite('setCurrentUser');
 	user = newUser;
 	isLoading = false;
 }

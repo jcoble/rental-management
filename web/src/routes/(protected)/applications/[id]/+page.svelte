@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import {
@@ -37,7 +37,7 @@
 	} from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
-	const id = $derived(Number($page.params.id));
+	const id = $derived(Number(page.params.id));
 
 	const applicationQuery = createQuery(() => ({
 		queryKey: ['application', id],

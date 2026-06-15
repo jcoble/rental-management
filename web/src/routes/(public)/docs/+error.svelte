@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { FileQuestion, ArrowLeft } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 </script>
@@ -9,10 +9,10 @@
 		<FileQuestion class="h-7 w-7 text-muted-foreground" />
 	</div>
 	<h1 class="mt-6 text-2xl font-semibold tracking-tight">
-		{$page.status === 404 ? 'Article not found' : 'Something went wrong'}
+		{page.status === 404 ? 'Article not found' : 'Something went wrong'}
 	</h1>
 	<p class="mt-2 max-w-md text-sm text-muted-foreground">
-		{$page.error?.message ?? 'We could not load that page. Try heading back to the docs home.'}
+		{page.error?.message ?? 'We could not load that page. Try heading back to the docs home.'}
 	</p>
 	<Button href="/docs" class="mt-6">
 		<ArrowLeft class="h-4 w-4" />

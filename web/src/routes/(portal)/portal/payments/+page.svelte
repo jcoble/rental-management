@@ -4,6 +4,7 @@
 	import { ApiError } from '$lib/api/client';
 	import { showSuccess, showInfo, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import type { Payment } from '$lib/types';
 	import { Button } from '$lib/components/ui/button';
 	import { CreditCard, Repeat } from '@lucide/svelte';
@@ -195,7 +196,7 @@
 				<div class="rounded-lg border border-border bg-card p-4" data-testid="portal-payment-row">
 					<div class="flex flex-wrap items-center justify-between gap-2">
 						<div class="flex items-center gap-1.5">
-							<p class="font-medium">{payment.paymentType} · {money(payment.amount)}</p>
+							<p class="font-medium">{paymentTypeLabel(payment.paymentType)} · {money(payment.amount)}</p>
 							<HelpTooltip text={explain(payment)} label="What is this charge?" />
 						</div>
 						{#if isPayable(payment)}

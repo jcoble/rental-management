@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { tick } from 'svelte';
 	import {
 		portal,
@@ -20,7 +20,7 @@
 	let selectedId = $state<number | null>(null);
 
 	$effect(() => {
-		const fromUrl = $page.url.searchParams.get('conversation');
+		const fromUrl = page.url.searchParams.get('conversation');
 		if (fromUrl && Number.isFinite(Number(fromUrl))) {
 			selectedId = Number(fromUrl);
 		}

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { tenants } from '$lib/api/endpoints/tenants';
@@ -26,7 +26,7 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
-	const id = $derived(Number($page.params.id));
+	const id = $derived(Number(page.params.id));
 
 	const tenantQuery = createQuery(() => ({
 		queryKey: ['tenant', id],

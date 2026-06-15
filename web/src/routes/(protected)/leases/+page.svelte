@@ -363,7 +363,7 @@
 		<Dialog.Footer>
 			<Button data-testid="lease-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
 			<Button data-testid="lease-form-save" onclick={submit} disabled={saveMutation.isPending}>
-				{saveMutation.isPending ? 'Saving…' : 'Save Lease'}
+				{saveMutation.isPending ? 'Saving…' : 'Save lease'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

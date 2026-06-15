@@ -2,14 +2,14 @@
   Reports Hub — catalog. Grouped cards (one per report) from GET /reports/catalog.
   Clicking a non-external report opens the generic viewer at /reports/[key]; external reports
   (Schedule E / Owner Statement / Year-End Packet) deep-link to their existing pages.
-  A "Need a report you don't see?" card captures custom-report requests (stored locally for now).
+  A "Need a report you don't see?" card opens the user's email client (mailto) with the request
+  pre-filled — there is no server-side intake yet, so it never claims a request was recorded.
 -->
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { browser } from '$app/environment';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { reports, type ReportCatalogEntry } from '$lib/api/endpoints/reports';
-	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { showInfo, showError, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import {
@@ -90,8 +90,14 @@
 		goto(`/reports/${entry.key}`);
 	}
 
-	// --- Custom report request (local-only for now; TODO: POST to a backend endpoint) ----------------
-	const CUSTOM_REQUESTS_KEY = 'rc.reports.customRequests';
+	// --- Custom report request --------------------------------------------------------------------
+	// There is no server-side intake endpoint for custom-report requests (ReportsController is
+	// read-only and no operator/support inbox is configured). Rather than fake a "we've received it"
+	// confirmation for a request that never leaves the browser, we open the user's email client with
+	// the request pre-filled so it actually reaches the team. Address is configurable via
+	// VITE_SUPPORT_EMAIL (same pattern as VITE_API_URL in $lib/config).
+	const SUPPORT_EMAIL =
+		(import.meta.env.VITE_SUPPORT_EMAIL as string | undefined) || 'support@rentalcommand.app';
 	let customRequest = $state('');
 
 	function submitCustomRequest() {
@@ -100,19 +106,12 @@
 			showError('Tell us a little about the report you need.');
 			return;
 		}
-		// TODO: POST { text } to a future /reports/requests endpoint; for now persist locally.
-		if (browser) {
-			try {
-				const raw = localStorage.getItem(CUSTOM_REQUESTS_KEY);
-				const list: { text: string; at: string }[] = raw ? JSON.parse(raw) : [];
-				list.push({ text, at: new Date().toISOString() });
-				localStorage.setItem(CUSTOM_REQUESTS_KEY, JSON.stringify(list));
-			} catch {
-				/* storage may be unavailable — the toast is still the user-facing confirmation */
-			}
-		}
-		customRequest = '';
-		showSuccess("Thanks — we've noted your request. Custom reports are a paid add-on, so we'll quote it before building anything.");
+		const subject = 'Custom report request';
+		const body = `I'd like a report that isn't in Reports yet:\n\n${text}\n`;
+		const href = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+		// Hand off to the user's mail client; nothing is "recorded" server-side, so we don't claim it.
+		window.location.href = href;
+		showInfo("Opening your email app — send the message and we'll take it from there.");
 	}
 </script>
 
@@ -200,10 +199,8 @@
 							<div class="flex-1">
 								<h3 class="font-semibold">Need a report you don't see?</h3>
 								<p class="mt-1 text-sm text-muted-foreground">
-									Tell us what you're trying to figure out and we'll look at adding it.
-								</p>
-								<p class="mt-2 text-sm text-[var(--warning)]" data-testid="custom-report-paid-note">
-									Custom reports are a paid add-on — we'll quote it before building anything, so there are no surprises.
+									Describe what you're trying to figure out and we'll email it to our team to look at
+									adding. Custom reports are a paid add-on, so we'll quote it before building anything.
 								</p>
 								<div class="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
 									<textarea
@@ -213,7 +210,7 @@
 										class="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
 										data-testid="custom-report-input"
 									></textarea>
-									<Button onclick={submitCustomRequest} data-testid="custom-report-submit">Request</Button>
+									<Button onclick={submitCustomRequest} data-testid="custom-report-submit">Email request</Button>
 								</div>
 							</div>
 						</div>
