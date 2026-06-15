@@ -449,10 +449,38 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
   /// Rent items the tenant can pay online: anything not already settled.
   static const _settledStatuses = {'Paid', 'Waived', 'Refunded', 'Cancelled'};
 
-  Future<void> _open(String url) async {
+  /// Opens [url] in an external browser. Returns true on success; on a malformed
+  /// URL or when no browser/handler is available (or `launchUrl` throws), it
+  /// snackbars a clear message and returns false so a caller never treats a
+  /// silent dead-end as success. Mirrors the vendor/work-order launch pattern.
+  Future<bool> _open(String url) async {
+    final messenger = ScaffoldMessenger.of(context);
+    const failureMessage =
+        "Couldn't open the payment page. Make sure you have a web browser "
+        'installed, then try again.';
     final uri = Uri.tryParse(url);
-    if (uri == null) return;
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (uri == null) {
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(content: Text(failureMessage)));
+      return false;
+    }
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text(failureMessage)));
+      }
+      return ok;
+    } catch (_) {
+      if (mounted) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(const SnackBar(content: Text(failureMessage)));
+      }
+      return false;
+    }
   }
 
   /// Starts hosted Checkout for one rent item and opens it in the browser.
@@ -493,9 +521,13 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
       final url = await ref
           .read(tenantPortalRepositoryProvider)
           .autopayEnroll(leaseId);
-      if (url.isNotEmpty) await _open(url);
-      // The tenant finishes setup in the browser; refresh status on return.
-      ref.invalidate(tenantAutopayStatusProvider(leaseId));
+      // Only refresh status if the browser actually opened — otherwise the
+      // tenant never reached the hosted setup, so there's nothing new to read
+      // (and _open has already told them the browser couldn't open).
+      if (url.isNotEmpty && await _open(url)) {
+        // The tenant finishes setup in the browser; refresh status on return.
+        ref.invalidate(tenantAutopayStatusProvider(leaseId));
+      }
     } on ApiException catch (e) {
       messenger
         ..hideCurrentSnackBar()
