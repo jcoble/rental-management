@@ -646,12 +646,12 @@
 {/snippet}
 
 <svelte:head>
-	<title>Accounting - Rental Command</title>
+	<title>Money - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="accounting-page">
 	<div class="mb-5">
-		<h1 class="text-2xl font-bold">Accounting</h1>
+		<h1 class="text-2xl font-bold">Money</h1>
 		<p class="text-sm text-muted-foreground">Rent ledger, receivables, expenses, and owner-facing books.</p>
 	</div>
 

@@ -66,7 +66,7 @@
 						</p>
 					</div>
 				</div>
-				<Button href="/get-started" class="shrink-0 gap-2" data-testid="dashboard-getting-started-cta">
+				<Button href="/get-started?view=checklist" class="shrink-0 gap-2" data-testid="dashboard-getting-started-cta">
 					See the checklist
 					<ArrowRight class="h-4 w-4" />
 				</Button>

@@ -719,8 +719,8 @@
 					<a
 						href="/scan"
 						class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-						aria-label="Scan a document"
-						data-m3-tooltip="Scan a document"
+						aria-label="Scan / Add"
+						data-m3-tooltip="Scan / Add"
 						data-testid="header-scan"
 					>
 						<ScanLine class="h-5 w-5" />
