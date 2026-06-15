@@ -121,9 +121,31 @@ public class AuthControllerCookieTests
             .Should().Contain("rc_refresh_token=issued-refresh-token");
     }
 
-    private static AuthController CreateController(IAuthService authService)
+    // Explicit user logout must end ALL sessions (sign out everywhere) — it revokes the whole token
+    // family, not just the presenting device's token.
+    [Fact]
+    public async Task Logout_revokes_the_whole_token_family_not_just_one_token()
     {
         var tokenService = new Mock<IJwtTokenService>();
+        tokenService.Setup(t => t.RevokeRefreshTokenFamilyAsync("presented-refresh-token"))
+            .ReturnsAsync(true)
+            .Verifiable();
+
+        var controller = CreateController(Mock.Of<IAuthService>(), tokenService);
+        controller.Request.Headers.Cookie = "rc_refresh_token=presented-refresh-token";
+
+        var result = await controller.Logout();
+
+        result.Should().BeOfType<OkObjectResult>();
+        tokenService.Verify();
+        tokenService.Verify(t => t.RevokeRefreshTokenAsync(It.IsAny<string>()), Times.Never);
+    }
+
+    private static AuthController CreateController(IAuthService authService)
+        => CreateController(authService, new Mock<IJwtTokenService>());
+
+    private static AuthController CreateController(IAuthService authService, Mock<IJwtTokenService> tokenService)
+    {
         var googleAuthService = new Mock<IGoogleAuthService>();
         var googleOptions = Options.Create(new GoogleAuthOptions());
         var environment = new Mock<IWebHostEnvironment>();
