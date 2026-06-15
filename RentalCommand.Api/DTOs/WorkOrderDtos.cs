@@ -21,6 +21,10 @@ public class WorkOrderResponse
     public WorkOrderStatus Status { get; set; }
     public DateTime RequestedAt { get; set; }
     public DateTime? ScheduledFor { get; set; }
+
+    /// <summary>End of the scheduled arrival window (visit expected between <see cref="ScheduledFor"/> and this time). Null when none.</summary>
+    public DateTime? ScheduledWindowEnd { get; set; }
+
     public DateTime? CompletedAt { get; set; }
     public decimal? EstimatedCost { get; set; }
     public decimal? ActualCost { get; set; }
@@ -58,6 +62,7 @@ public class WorkOrderResponse
         Status = e.Status,
         RequestedAt = e.RequestedAt,
         ScheduledFor = e.ScheduledFor,
+        ScheduledWindowEnd = e.ScheduledWindowEnd,
         CompletedAt = e.CompletedAt,
         EstimatedCost = e.EstimatedCost,
         ActualCost = e.ActualCost,
@@ -131,6 +136,7 @@ public class WorkOrderDetailResponse : WorkOrderResponse
             Status = e.Status,
             RequestedAt = e.RequestedAt,
             ScheduledFor = e.ScheduledFor,
+            ScheduledWindowEnd = e.ScheduledWindowEnd,
             CompletedAt = e.CompletedAt,
             EstimatedCost = e.EstimatedCost,
             ActualCost = e.ActualCost,
@@ -184,6 +190,10 @@ public class CreateWorkOrderRequest
 
     public DateTime? RequestedAt { get; set; }
     public DateTime? ScheduledFor { get; set; }
+
+    /// <summary>End of the scheduled arrival window. Should be at/after <see cref="ScheduledFor"/>.</summary>
+    public DateTime? ScheduledWindowEnd { get; set; }
+
     public DateTime? CompletedAt { get; set; }
 
     [Range(0, 99999999)]
@@ -242,6 +252,10 @@ public class UpdateWorkOrderRequest
     public DateTime? RequestedAt { get; set; }
 
     public DateTime? ScheduledFor { get; set; }
+
+    /// <summary>End of the scheduled arrival window. Null = unchanged (same nullable-means-untouched PATCH semantics).</summary>
+    public DateTime? ScheduledWindowEnd { get; set; }
+
     public DateTime? CompletedAt { get; set; }
 
     [Range(0, 99999999)]

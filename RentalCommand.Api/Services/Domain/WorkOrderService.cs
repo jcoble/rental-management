@@ -1,4 +1,6 @@
+using System.Text;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
@@ -13,11 +15,19 @@ public class WorkOrderService : IWorkOrderService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly IMessagePublisher _publisher;
+    private readonly ILogger<WorkOrderService> _logger;
 
-    public WorkOrderService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public WorkOrderService(
+        RentalCommandDbContext db,
+        IDataUpdateService dataUpdate,
+        IMessagePublisher publisher,
+        ILogger<WorkOrderService> logger)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _publisher = publisher;
+        _logger = logger;
     }
 
     public async Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? vendorId, ListQuery query, CancellationToken ct = default)
@@ -167,6 +177,7 @@ public class WorkOrderService : IWorkOrderService
             Status = request.Status,
             RequestedAt = request.RequestedAt?.ToUtc() ?? now,
             ScheduledFor = request.ScheduledFor.ToUtc(),
+            ScheduledWindowEnd = request.ScheduledWindowEnd.ToUtc(),
             CompletedAt = request.CompletedAt.ToUtc(),
             EstimatedCost = request.EstimatedCost,
             ActualCost = request.ActualCost,
@@ -192,10 +203,78 @@ public class WorkOrderService : IWorkOrderService
 
         await _db.SaveChangesAsync(ct);
 
+        // When the work order is scheduled with an arrival window AND tied to a tenant, text the tenant
+        // the appointment window so they know when to expect access. Best-effort: a notification failure
+        // must never roll back the created work order.
+        await NotifyTenantOfScheduleAsync(portfolioId, entity, ct);
+
         var response = WorkOrderResponse.FromEntity(entity);
         await HydrateDisplayNamesAsync(portfolioId, response, ct);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
+    }
+
+    /// <summary>
+    /// Enqueues a tenant-facing SMS describing the scheduled arrival window for a newly created work
+    /// order. No-ops unless the work order has a tenant, a <see cref="WorkOrder.ScheduledFor"/>, and a
+    /// <see cref="WorkOrder.ScheduledWindowEnd"/>, and that tenant has a phone number on file. Wrapped so
+    /// any failure (missing phone, outbox error) is logged and swallowed rather than failing the create.
+    /// </summary>
+    private async Task NotifyTenantOfScheduleAsync(int portfolioId, WorkOrder entity, CancellationToken ct)
+    {
+        if (entity.TenantId is null || entity.ScheduledFor is null || entity.ScheduledWindowEnd is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var tenant = await _db.Tenants
+                .AsNoTracking()
+                .Where(t => t.Id == entity.TenantId.Value && t.PortfolioId == portfolioId)
+                .Select(t => new { t.Phone })
+                .FirstOrDefaultAsync(ct);
+
+            var tenantPhone = SmsPhone.Normalize(tenant?.Phone);
+            if (string.IsNullOrWhiteSpace(tenantPhone))
+            {
+                return;
+            }
+
+            var message = BuildTenantScheduleSms(entity);
+            await _publisher.PublishAsync(portfolioId, "sms", new
+            {
+                to = tenantPhone,
+                message,
+            }, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Tenant schedule notification for work order #{WorkOrderId} failed (continuing).", entity.Id);
+        }
+    }
+
+    /// <summary>
+    /// Builds the tenant arrival-window SMS. Callers guarantee <see cref="WorkOrder.ScheduledFor"/> and
+    /// <see cref="WorkOrder.ScheduledWindowEnd"/> are set. Times are rendered in UTC (the stored kind);
+    /// formatting/localization can be revisited when tenants get a timezone preference.
+    /// </summary>
+    private static string BuildTenantScheduleSms(WorkOrder entity)
+    {
+        var start = entity.ScheduledFor!.Value;
+        var end = entity.ScheduledWindowEnd!.Value;
+
+        var sb = new StringBuilder();
+        sb.Append($"Maintenance scheduled for {entity.Title}: ");
+        sb.Append(start.ToString("ddd MMM d, h:mm tt"));
+        sb.Append(" – ");
+        // Same-day window: show only the end time; otherwise show the full end date too.
+        sb.Append(end.Date == start.Date
+            ? end.ToString("h:mm tt")
+            : end.ToString("ddd MMM d, h:mm tt"));
+        sb.Append(" (UTC). Please ensure access is available during this window.");
+        return sb.ToString();
     }
 
     /// <summary>
@@ -278,6 +357,7 @@ public class WorkOrderService : IWorkOrderService
 
         if (request.RequestedAt.HasValue) entity.RequestedAt = request.RequestedAt.Value.ToUtc();
         if (request.ScheduledFor.HasValue) entity.ScheduledFor = request.ScheduledFor.ToUtc();
+        if (request.ScheduledWindowEnd.HasValue) entity.ScheduledWindowEnd = request.ScheduledWindowEnd.ToUtc();
         if (request.CompletedAt.HasValue) entity.CompletedAt = request.CompletedAt.ToUtc();
         if (request.EstimatedCost.HasValue) entity.EstimatedCost = request.EstimatedCost;
         if (request.ActualCost.HasValue) entity.ActualCost = request.ActualCost;
