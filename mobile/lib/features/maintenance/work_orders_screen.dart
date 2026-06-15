@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 // vendors-feature one (from vendorsProvider), so hide the core model's to avoid the clash.
 import '../../core/models/models.dart' hide Vendor;
 import '../../core/api/api_exception.dart';
+import '../../core/utils/date_wire.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../vendors/vendors_repository.dart';
@@ -552,6 +553,21 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
+    final scheduledFor = _combine(_scheduledDate, _startTime);
+    final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
+
+    // The arrival window must end after it starts. Block submit and surface a
+    // clear error rather than letting the API store (and text the tenant) an
+    // inverted window. Only validated when both ends are set.
+    if (scheduledFor != null &&
+        scheduledWindowEnd != null &&
+        !scheduledWindowEnd.isAfter(scheduledFor)) {
+      setState(
+        () => _error = 'Arrival window end must be after the start time.',
+      );
+      return;
+    }
+
     setState(() {
       _saving = true;
       _error = null;
@@ -559,8 +575,6 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
 
     try {
       final repo = ref.read(workOrdersRepositoryProvider);
-      final scheduledFor = _combine(_scheduledDate, _startTime);
-      final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
       final estCost = double.tryParse(_estCostCtrl.text.trim());
       final created = await repo.createWorkOrder({
         'propertyId': _selectedPropertyId,
@@ -571,8 +585,12 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
         'unitId': ?_selectedUnitId,
         'tenantId': ?_selectedTenantId,
         'vendorId': ?_selectedVendorId,
-        'scheduledFor': ?scheduledFor?.toIso8601String(),
-        'scheduledWindowEnd': ?scheduledWindowEnd?.toIso8601String(),
+        // Send the wall-clock time WITH the device's local UTC offset so the API
+        // stores the true instant (not the digits relabeled as UTC). See C1.
+        if (scheduledFor != null)
+          'scheduledFor': localToWireIso(scheduledFor),
+        if (scheduledWindowEnd != null)
+          'scheduledWindowEnd': localToWireIso(scheduledWindowEnd),
         'estimatedCost': ?estCost,
       });
       final photoBytes = _photoBytes;
