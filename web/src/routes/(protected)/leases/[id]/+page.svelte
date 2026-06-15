@@ -528,7 +528,7 @@
 			onclick={(e) => { e.stopPropagation(); markPaidMutation.mutate(payment.id); }}
 			disabled={markPaidMutation.isPending}
 		>
-			Mark Paid
+			Mark paid
 		</Button>
 	{/if}
 {/snippet}
@@ -1005,7 +1005,7 @@
 		<div>
 			<div class="mb-2 flex items-center justify-between">
 				<h2 class="text-lg font-semibold">Payments</h2>
-				<a href="/deposits" class="text-xs text-muted-foreground underline-offset-4 hover:underline">View Deposits</a>
+				<a href="/deposits" class="text-xs text-muted-foreground underline-offset-4 hover:underline">View deposits</a>
 			</div>
 			<DataGrid
 				data={paymentsQuery.data ?? []}

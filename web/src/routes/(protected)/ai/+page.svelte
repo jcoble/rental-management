@@ -126,7 +126,7 @@
 </script>
 
 <svelte:head>
-	<title>AI Assistant - Rental Command</title>
+	<title>Assistant - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="ai-page">
@@ -135,7 +135,7 @@
 			<Sparkles class="h-4 w-4" />
 		</div>
 		<div>
-			<h1 class="text-2xl font-bold">AI Assistant</h1>
+			<h1 class="text-2xl font-bold">Assistant</h1>
 			<p class="text-sm text-muted-foreground">Your property portfolio, summarised and ready to answer questions.</p>
 		</div>
 	</div>

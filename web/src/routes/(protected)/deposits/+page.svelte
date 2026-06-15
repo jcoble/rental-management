@@ -247,7 +247,7 @@
 			onclick={(e) => { e.stopPropagation(); openDeduction(d); }}
 			data-testid="add-deduction-{d.id}"
 		>
-			Add Deduction
+			Add deduction
 		</Button>
 		<Button
 			size="sm"
@@ -371,7 +371,7 @@
 <Dialog.Root open={deductionTarget !== null} onOpenChange={(v) => { if (!v) closeDeduction(); }}>
 	<Dialog.Content class="max-w-md">
 		<Dialog.Header>
-			<Dialog.Title>Add Deduction</Dialog.Title>
+			<Dialog.Title>Add deduction</Dialog.Title>
 			<Dialog.Description>
 				{deductionTarget ? `Deduct from the ${money(deductionTarget.amount)} deposit on lease ${deductionTarget.leaseNumber ?? deductionTarget.leaseId}.` : ''}
 			</Dialog.Description>
@@ -411,7 +411,7 @@
 		<Dialog.Footer>
 			<Button variant="outline" onclick={closeDeduction} data-testid="deduction-cancel">Cancel</Button>
 			<Button onclick={submitDeduction} disabled={deductionMut.isPending} data-testid="deduction-save">
-				{deductionMut.isPending ? 'Saving…' : 'Add Deduction'}
+				{deductionMut.isPending ? 'Saving…' : 'Add deduction'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

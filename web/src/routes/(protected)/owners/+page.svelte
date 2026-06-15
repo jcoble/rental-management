@@ -260,7 +260,7 @@
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button data-testid="owner-form-cancel" variant="outline" onclick={closeOwnerForm}>Cancel</Button>
-			<Button data-testid="owner-form-save" onclick={submitOwner} disabled={saveOwnerMutation.isPending}>{saveOwnerMutation.isPending ? 'Saving…' : 'Save Owner'}</Button>
+			<Button data-testid="owner-form-save" onclick={submitOwner} disabled={saveOwnerMutation.isPending}>{saveOwnerMutation.isPending ? 'Saving…' : 'Save owner'}</Button>
 		</div>
 	</Dialog.Content>
 </Dialog.Root>

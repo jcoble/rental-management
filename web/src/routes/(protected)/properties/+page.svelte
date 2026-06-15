@@ -366,7 +366,7 @@
 		<div class="mt-4 flex justify-end gap-2">
 			<Button data-testid="property-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
 			<Button data-testid="property-form-save" onclick={submitProperty} disabled={savePropertyMutation.isPending}>
-				{savePropertyMutation.isPending ? 'Saving…' : 'Save Property'}
+				{savePropertyMutation.isPending ? 'Saving…' : 'Save property'}
 			</Button>
 		</div>
 	</Dialog.Content>

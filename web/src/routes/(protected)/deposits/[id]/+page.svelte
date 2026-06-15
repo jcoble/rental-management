@@ -254,7 +254,7 @@
 					size="sm"
 					onclick={openDeduction}
 				>
-					Add Deduction
+					Add deduction
 				</Button>
 				<Button
 					data-testid="deposit-process-return"
@@ -419,7 +419,7 @@
 <Dialog.Root open={showDeductionForm} onOpenChange={(v) => { if (!v) closeDeduction(); }}>
 	<Dialog.Content class="max-w-md">
 		<Dialog.Header>
-			<Dialog.Title>Add Deduction</Dialog.Title>
+			<Dialog.Title>Add deduction</Dialog.Title>
 			{#if deposit}
 				<Dialog.Description>
 					Deduct from the {money(deposit.amount)} deposit on lease {deposit.leaseNumber ?? deposit.leaseId}.
@@ -461,7 +461,7 @@
 		<Dialog.Footer>
 			<Button variant="outline" onclick={closeDeduction} data-testid="deduction-cancel">Cancel</Button>
 			<Button onclick={submitDeduction} disabled={deductionMut.isPending} data-testid="deduction-save">
-				{deductionMut.isPending ? 'Saving…' : 'Add Deduction'}
+				{deductionMut.isPending ? 'Saving…' : 'Add deduction'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
