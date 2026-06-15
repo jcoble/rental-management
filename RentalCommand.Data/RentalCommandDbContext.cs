@@ -145,6 +145,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Email).HasMaxLength(200);
             entity.Property(e => e.OwnerEntityType).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
+            // Find the auto-created self-owner quickly (and assert at most one per portfolio in code).
+            entity.HasIndex(e => new { e.PortfolioId, e.IsPrimary });
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.OwnerEntities)

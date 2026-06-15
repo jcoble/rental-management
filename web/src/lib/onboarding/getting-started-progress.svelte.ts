@@ -11,9 +11,14 @@
 import { browser } from '$app/environment';
 
 const KEY_PREFIX = 'rc.getStarted.done.';
+const SETTLED_KEY_PREFIX = 'rc.getStarted.settled.';
 
 function storageKey(portfolioId: number): string {
 	return `${KEY_PREFIX}${portfolioId}`;
+}
+
+function settledKey(portfolioId: number): string {
+	return `${SETTLED_KEY_PREFIX}${portfolioId}`;
 }
 
 /** Read the persisted set of manually-completed/skipped task keys for a portfolio. */
@@ -44,7 +49,34 @@ export function clearManualDone(portfolioId: number): void {
 	if (!browser || portfolioId <= 0) return;
 	try {
 		localStorage.removeItem(storageKey(portfolioId));
+		// "Start over" should also re-open the checklist's settled/dismissed state so the optional-task
+		// queries run again and the card can reappear.
+		localStorage.removeItem(settledKey(portfolioId));
 	} catch {
 		/* ignore */
+	}
+}
+
+/**
+ * Has this portfolio's checklist been "settled" — everything (core + optional) seen done at least once?
+ * Used as a cheap, persisted gate so the dashboard's hot path can skip the optional-only queries
+ * (notification email/settings, sandbox state) for a fully-set-up landlord. Cleared by "start over".
+ */
+export function isChecklistSettled(portfolioId: number): boolean {
+	if (!browser || portfolioId <= 0) return false;
+	try {
+		return localStorage.getItem(settledKey(portfolioId)) === '1';
+	} catch {
+		return false;
+	}
+}
+
+/** Mark this portfolio's checklist settled (called once everything is observed done). */
+export function markChecklistSettled(portfolioId: number): void {
+	if (!browser || portfolioId <= 0) return;
+	try {
+		localStorage.setItem(settledKey(portfolioId), '1');
+	} catch {
+		/* storage may be unavailable — the gate just won't persist, queries run as before. */
 	}
 }
