@@ -195,16 +195,25 @@ public class AuditQueryService : IAuditQueryService
     /// noun (derived from <see cref="Core.Entities.AuditLog.EntityType"/>), the actor (label or
     /// <c>User #id</c>), the entity id (so a bare <c>76</c> matches), the compound entity label
     /// (<c>Expense #76</c> / <c>expense 76</c>), the action verb (<c>Created</c>/<c>Updated</c>…), and
-    /// the IP address. Runs entirely Postgres-side as one translated query — pg_trgm GIN indexes on the
-    /// searchable text columns (see migration <c>AuditSearchTrgmIndexes</c>) keep the <c>ILIKE %term%</c>
-    /// scans index-backed rather than sequential, so it scales past the in-memory filtering it replaced.
+    /// the IP address. Runs entirely Postgres-side as one translated query.
+    /// <para>
+    /// The text predicates only touch the columns that carry pg_trgm GIN indexes
+    /// (<c>EntityType</c>/<c>ActorLabel</c>/<c>IpAddress</c>, see migration <c>AuditSearchTrgmIndexes</c>),
+    /// so Postgres can BitmapOr the index-backed branches. The entity-id / actor-id / compound-label
+    /// matching is done as <em>integer equality</em> on a parsed id (<c>EntityId == n</c> /
+    /// <c>UserId == n</c>) rather than <c>LIKE</c> over <c>EntityId::text</c>: the old computed-column
+    /// LIKEs were unindexable and, OR'd into the predicate, forced the whole search to a sequential scan
+    /// (defeating the trgm indexes). A purely-numeric term ("76") matches the id; a "noun + number"
+    /// term ("expense 76", "Expense #76") matches the entity noun on the trgm column AND the id.
+    /// </para>
     /// </summary>
     private static IQueryable<Core.Entities.AuditLog> ApplySearch(IQueryable<Core.Entities.AuditLog> q, string term)
     {
-        // Case-insensitive contains via LOWER(col) LIKE LOWER(%term%). This shape translates on both
-        // Npgsql and SQLite, and on Postgres is backed by the `gin (lower(col) gin_trgm_ops)` trigram
-        // indexes added in the AuditSearchTrgmIndexes migration — so the scan stays index-driven, never
-        // sequential, and never pulls rows into memory to filter.
+        // Case-insensitive contains via LOWER(col) LIKE %lowered-term%. This shape translates on both
+        // Npgsql and SQLite, and on Postgres is served by the `gin (lower(col) gin_trgm_ops)` trigram
+        // indexes (AuditSearchTrgmIndexes) — index-driven, never a sequential scan. Only the three
+        // trgm-indexed columns appear here; the unindexable computed-column LIKEs that used to be OR'd
+        // in (and forced a seq scan of the whole predicate) are gone, replaced by id equality below.
         var like = $"%{term.ToLower()}%";
 
         // Verb search: "Created", "create", "recorded", "scheduled", etc. should narrow by operation.
@@ -212,19 +221,32 @@ public class AuditQueryService : IAuditQueryService
         // verbs the describer uses so a user can search by what they SEE.
         var matchedOps = MatchOperations(term);
 
+        // Pull any integer out of the term for index-friendly id equality: "76", "#76", "expense 76",
+        // "User #1" all yield 76 / 1. Null when the term carries no digits. This replaces the old
+        // LIKE-over-EntityId::text / "Type #id" / "User #id" computed-column matches, which no index
+        // could serve.
+        var parsedId = ExtractFirstInteger(term);
+
         return q.Where(a =>
             EF.Functions.Like(a.EntityType.ToLower(), like)
             || (a.ActorLabel != null && EF.Functions.Like(a.ActorLabel.ToLower(), like))
             || (a.IpAddress != null && EF.Functions.Like(a.IpAddress.ToLower(), like))
-            // Entity id: bare numeric ("76") and as text inside a larger term.
-            || EF.Functions.Like(a.EntityId.ToString(), like)
-            // Compound entity label exactly as rendered: "Expense #76" and "Expense 76".
-            || EF.Functions.Like((a.EntityType + " #" + a.EntityId.ToString()).ToLower(), like)
-            || EF.Functions.Like((a.EntityType + " " + a.EntityId.ToString()).ToLower(), like)
-            // Actor as rendered for user actors: "User #1".
-            || (a.UserId != null && EF.Functions.Like(("User #" + a.UserId.ToString()).ToLower(), like))
+            // Entity / actor id as integer equality (sargable) instead of LIKE on its text form.
+            || (parsedId != null && a.EntityId == parsedId.Value)
+            || (parsedId != null && a.UserId != null && a.UserId == parsedId.Value)
             // Action verb → operation.
             || matchedOps.Contains(a.Operation));
+    }
+
+    /// <summary>
+    /// Extracts the first run of digits from a free-text term as an int (e.g. "Expense #76" → 76,
+    /// "user 1" → 1). Returns null when the term has no digits or the number overflows an int.
+    /// </summary>
+    private static int? ExtractFirstInteger(string term)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(term, @"\d+");
+        if (!match.Success) return null;
+        return int.TryParse(match.Value, out var n) ? n : null;
     }
 
     /// <summary>
