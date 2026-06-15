@@ -156,4 +156,8 @@ public class MarkPaidRequest
 
     [MaxLength(200)]
     public string? ExternalReference { get; set; }
+
+    /// <summary>Optional free-text note captured when marking the payment paid (persisted to <see cref="Payment.Notes"/>).</summary>
+    [MaxLength(2000)]
+    public string? Notes { get; set; }
 }
