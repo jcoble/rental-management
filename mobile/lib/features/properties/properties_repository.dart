@@ -242,3 +242,13 @@ final propertyLeasesProvider =
         int>(
   PropertyLeasesNotifier.new,
 );
+
+// ── Single property (by id) ───────────────────────────────────────────────────
+
+/// Fetches one property by id. Backs by-id drill-through (e.g. a lease's
+/// property link, which only carries `propertyId`). autoDispose so it refetches
+/// when reopened.
+final propertyDetailProvider =
+    FutureProvider.autoDispose.family<Property, int>((ref, id) {
+  return ref.watch(propertiesRepositoryProvider).getProperty(id);
+});
