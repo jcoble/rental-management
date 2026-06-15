@@ -15,7 +15,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
-	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Users } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -201,7 +201,12 @@
 		data={list}
 		{columns}
 		loading={tenantsQuery.isLoading}
-		emptyMessage="No tenants found."
+		emptyMessage="No tenants yet"
+		emptyDescription="Tenants are the people who rent from you. Add your first to start tracking leases and rent."
+		emptyIcon={Users}
+		emptyActionLabel="Add your first tenant"
+		emptyOnAction={openCreate}
+		emptyTone="primary"
 		onRowClick={(t) => goto(`/tenants/${t.id}`)}
 		getRowKey={(t) => t.id}
 		getRowTestId={() => 'tenant-row'}

@@ -16,7 +16,7 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
-	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, Building } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
@@ -259,7 +259,12 @@
 		data={list}
 		{columns}
 		loading={propertiesQuery.isLoading}
-		emptyMessage="No properties found."
+		emptyMessage="No rentals yet"
+		emptyDescription="A property is one building or address. Add your first to get started."
+		emptyIcon={Building}
+		emptyActionLabel="Add your first property"
+		emptyOnAction={openCreate}
+		emptyTone="primary"
 		onRowClick={openProperty}
 		getRowKey={(p) => p.id}
 		getRowTestId={() => 'property-row'}

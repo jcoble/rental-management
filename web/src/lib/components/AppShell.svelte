@@ -56,7 +56,6 @@
 	import { messages as messagesApi } from '$lib/api/endpoints/messages';
 	import { appointments as appointmentsApi } from '$lib/api/endpoints/appointments';
 	import NavigationLoader from '$lib/components/NavigationLoader.svelte';
-	import AssistantBubble from '$lib/components/assistant/AssistantBubble.svelte';
 	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
 	import M3TooltipLayer from '$lib/components/shared/M3TooltipLayer.svelte';
 	import ThemeModeToggle from '$lib/components/shared/ThemeModeToggle.svelte';
@@ -129,7 +128,9 @@
 			label: 'Work',
 			icon: Wrench,
 			items: [
-				{ href: '/maintenance', label: 'Maintenance', icon: Wrench, roles: ['Admin', 'Manager', 'Agent'] },
+				// A6: one professional term for the "things to fix" concept — "Work Orders" — used
+				// consistently across the staff nav, the page heading, and the dashboard.
+				{ href: '/maintenance', label: 'Work Orders', icon: Wrench, roles: ['Admin', 'Manager', 'Agent'] },
 				{ href: '/appointments', label: 'Appointments', icon: Calendar, roles: ['Admin', 'Manager', 'Agent'] },
 				{ href: '/vendors', label: 'Vendors', icon: Contact, roles: ['Admin', 'Manager'] }
 			]
@@ -148,8 +149,10 @@
 	// Bottom rail (IA Wave 1 §4.2): Assistant (ambient), Help, and the Settings hub. The
 	// Settings hub's internal section split is Wave 4 — for now the relocated Administration
 	// entries (Team, Owners, Activity history) live under it as sub-links.
+	// A4: ONE AI entry point. "Ask" (→ /ai) is the single doorway to the assistant; the redundant
+	// floating AssistantBubble was removed from this shell so there aren't multiple competing doorways.
 	const bottomRailItems: NavItem[] = [
-		{ href: '/ai', label: 'Assistant', icon: Sparkles, roles: ['Admin', 'Manager', 'Agent'] },
+		{ href: '/ai', label: 'Ask', icon: Sparkles, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/docs', label: 'Help', icon: BookOpen }
 	];
 
@@ -817,7 +820,6 @@
 				{/key}
 			</div>
 		</main>
-		<AssistantBubble />
 	</div>
 </div>
 

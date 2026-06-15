@@ -181,6 +181,8 @@ export function useGettingStarted(): UseGettingStarted {
 		if (pid <= 0 || settled) return;
 		if (!ready() || optionalGatedOff()) return;
 		const s = signals();
+		// Mirrors the checklist's "all tasks done" rule. Texting (SignalWire) was removed from the
+		// checklist (A13), so it no longer gates the settled flag — only the tasks the checklist shows.
 		const allDone =
 			s.portfolioNamed &&
 			s.ownerCount > 0 &&
@@ -189,7 +191,6 @@ export function useGettingStarted(): UseGettingStarted {
 			s.tenantCount > 0 &&
 			s.leaseCount > 0 &&
 			s.hasNotificationEmail &&
-			s.hasTexting &&
 			s.hasAutomations;
 		if (allDone) {
 			markChecklistSettled(pid);

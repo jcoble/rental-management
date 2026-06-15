@@ -16,7 +16,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
-	import { Plus } from '@lucide/svelte';
+	import { Plus, FileText } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -244,7 +244,12 @@
 		data={list}
 		{columns}
 		loading={leasesQuery.isLoading}
-		emptyMessage="No leases found."
+		emptyMessage="No leases yet"
+		emptyDescription="A lease ties a tenant to a unit and sets the rent and dates. Add your first to start tracking rent."
+		emptyIcon={FileText}
+		emptyActionLabel="Add your first lease"
+		emptyOnAction={openCreate}
+		emptyTone="primary"
 		onRowClick={(lease) => goto('/leases/' + lease.id)}
 		getRowKey={(l) => l.id}
 		data-testid="leases-list"
