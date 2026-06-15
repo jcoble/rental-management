@@ -319,6 +319,9 @@ public class ScanBatchControllerTests : IDisposable
         public Task<ScanConfirmResult> ConfirmAndCreateAsync(int portfolioId, int draftId, int userId, string overridesJson, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for batch tests.");
 
+        public Task<LeaseImportProposal?> BuildLeaseProposalAsync(int portfolioId, int draftId, string overridesJson, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for batch tests.");
+
         public Task<bool> RejectDraftAsync(int portfolioId, int draftId, int userId, string? reason, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for batch tests.");
     }

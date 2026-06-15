@@ -390,7 +390,18 @@ public class ScanController : AuthenticatedPortfolioControllerBase
             .AsNoTracking()
             .FirstOrDefaultAsync(f => f.PortfolioId == portfolioId && f.FilePath == draft.FilePath, ct);
 
-        return Ok(ScanDraftResponse.FromEntity(draft, linkedFile?.EntityType, linkedFile?.EntityId));
+        var response = ScanDraftResponse.FromEntity(draft, linkedFile?.EntityType, linkedFile?.EntityId);
+
+        // For a lease draft, attach the property/unit import proposal (link-existing vs create-new) so the
+        // review UI can show what confirming will do — the empty-portfolio bootstrap is visible up front.
+        // Uses no overrides: this is the default preview before the reviewer edits anything.
+        if (draft.TargetEntityType is "Lease")
+        {
+            var proposal = await _scan.BuildLeaseProposalAsync(portfolioId, id, overridesJson: "{}", ct);
+            response = response.WithLeaseProposal(proposal);
+        }
+
+        return Ok(response);
     }
 
     // -------------------------------------------------------------------------
