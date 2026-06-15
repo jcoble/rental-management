@@ -19,14 +19,20 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import type { OwnerEntityType } from '$lib/types';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 
 	const OWNER_ENTITY_TYPES: OwnerEntityType[] = ['Person', 'LLC', 'Trust'];
 
-	let ownerSearch = $state('');
+	// Search persisted in the URL so it survives navigating away and back.
+	let ownerSearch = $state(readGridParam(page.url.searchParams, 'q'));
 	const debouncedOwnerSearch = debounced(() => ownerSearch, 300);
+	$effect(() => {
+		syncGridUrl({ q: ownerSearch });
+	});
 
 	const ownersQuery = createQuery(() => ({
 		queryKey: ['owners', portfolioId, debouncedOwnerSearch.value],
