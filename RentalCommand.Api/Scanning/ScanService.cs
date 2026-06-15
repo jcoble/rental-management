@@ -23,6 +23,8 @@ public sealed class ScanService : IScanService
     private readonly IWorkOrderService _workOrders;
     private readonly ILeaseService _leases;
     private readonly ITenantService _tenants;
+    private readonly IPropertyService _properties;
+    private readonly IUnitService _units;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<ScanService> _logger;
 
@@ -34,6 +36,8 @@ public sealed class ScanService : IScanService
         IWorkOrderService workOrders,
         ILeaseService leases,
         ITenantService tenants,
+        IPropertyService properties,
+        IUnitService units,
         IAuditTrailService audit,
         ILogger<ScanService> logger)
     {
@@ -44,6 +48,8 @@ public sealed class ScanService : IScanService
         _workOrders = workOrders;
         _leases = leases;
         _tenants = tenants;
+        _properties = properties;
+        _units = units;
         _audit = audit;
         _logger = logger;
     }
@@ -201,6 +207,100 @@ public sealed class ScanService : IScanService
 
         await tx.CommitAsync(ct);
         return result;
+    }
+
+    // -------------------------------------------------------------------------
+    // BuildLeaseProposalAsync  — read-only "what confirm will do" for the review UI
+    // -------------------------------------------------------------------------
+
+    public async Task<LeaseImportProposal?> BuildLeaseProposalAsync(
+        int portfolioId,
+        int draftId,
+        string overridesJson,
+        CancellationToken ct = default)
+    {
+        var draft = await _db.ScanDrafts
+            .AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == draftId && d.PortfolioId == portfolioId, ct);
+
+        // Only lease drafts have a property/unit proposal; everything else returns null (no preview).
+        if (draft is null || draft.TargetEntityType is not "Lease")
+            return null;
+
+        // Same field-building → IDOR validation → overrides chain the confirm path uses, so the preview
+        // reflects exactly what confirm would do. Writes nothing.
+        var fields = BuildLeaseFields(draft.ExtractedFields);
+        await ValidateLeaseIdsInPortfolioAsync(portfolioId, fields, ct);
+        ApplyLeaseOverrides(fields, overridesJson);
+
+        // ---- Property proposal ----
+        ProposedRecord propertyProposal;
+        int? resolvedPropertyId = null;
+        if (fields.PropertyId > 0 &&
+            await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId, ct))
+        {
+            // A grounded/override id that checks out → link the existing property.
+            var existing = await _db.Properties.AsNoTracking()
+                .Where(p => p.Id == fields.PropertyId)
+                .Select(p => new { p.Name, p.AddressLine1, p.City })
+                .FirstOrDefaultAsync(ct);
+            resolvedPropertyId = fields.PropertyId;
+            propertyProposal = new ProposedRecord("link", fields.PropertyId,
+                existing?.Name, FormatAddress(existing?.AddressLine1, existing?.City));
+        }
+        else
+        {
+            var match = await FindMatchingPropertyAsync(portfolioId, fields, ct);
+            if (match is not null)
+            {
+                resolvedPropertyId = match.Id;
+                propertyProposal = new ProposedRecord("link", match.Id, match.Label, match.Detail);
+            }
+            else if (!string.IsNullOrWhiteSpace(fields.PropertyAddress) || !string.IsNullOrWhiteSpace(fields.PropertyName))
+            {
+                // Nothing matched but we have enough to create one.
+                var label = !string.IsNullOrWhiteSpace(fields.PropertyName)
+                    ? fields.PropertyName!.Trim()
+                    : fields.PropertyAddress!.Trim();
+                propertyProposal = new ProposedRecord("create", null, label,
+                    FormatAddress(fields.PropertyAddress, fields.PropertyCity));
+            }
+            else
+            {
+                // No id, no address, no name — the reviewer must choose a property.
+                propertyProposal = new ProposedRecord("select", null, null, null);
+            }
+        }
+
+        // ---- Unit proposal (scoped to the resolved property when there is one) ----
+        ProposedRecord unitProposal;
+        var unitNumber = DefaultUnitNumber(fields.UnitNumber);
+        if (fields.UnitId is > 0 &&
+            await _db.EnsureUnitInPortfolioAsync(portfolioId, fields.UnitId.Value,
+                resolvedPropertyId, ct))
+        {
+            var existingUnit = await _db.Units.AsNoTracking()
+                .Where(u => u.Id == fields.UnitId.Value)
+                .Select(u => u.UnitNumber)
+                .FirstOrDefaultAsync(ct);
+            unitProposal = new ProposedRecord("link", fields.UnitId.Value,
+                $"Unit {existingUnit}", null);
+        }
+        else if (resolvedPropertyId is int propId)
+        {
+            var unitMatch = await FindMatchingUnitAsync(propId, unitNumber, ct);
+            unitProposal = unitMatch is not null
+                ? new ProposedRecord("link", unitMatch.Id, $"Unit {unitMatch.Label}", null)
+                : new ProposedRecord("create", null, $"Unit {unitNumber}", null);
+        }
+        else
+        {
+            // Property itself is unresolved, so the unit will be created under whatever property the
+            // reviewer ends up with — describe it as a create with the (defaulted) unit number.
+            unitProposal = new ProposedRecord("create", null, $"Unit {unitNumber}", null);
+        }
+
+        return new LeaseImportProposal(propertyProposal, unitProposal);
     }
 
     // -------------------------------------------------------------------------
@@ -571,18 +671,45 @@ public sealed class ScanService : IScanService
         // Trusted user selections from the review UI win and are re-validated in-portfolio below.
         ApplyLeaseOverrides(fields, overridesJson);
 
-        if (fields.PropertyId <= 0)
-            return new ScanConfirmResult(false, null, "Select a property for this lease");
+        // Resolve the property: a validated grounded/override id wins; otherwise match the extracted
+        // leased-premises address to an existing in-portfolio property, and if none matches, CREATE
+        // it. This is the empty-portfolio bootstrap — a brand-new landlord scans a stack of leases and
+        // the properties are created from the documents (no "the property must already exist" wall).
+        int propertyId;
+        if (fields.PropertyId > 0)
+        {
+            // Re-validate the (possibly override-supplied) id — never trust a raw override id either.
+            if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId, ct))
+                return new ScanConfirmResult(false, null, "Selected property is not in this portfolio");
+            propertyId = fields.PropertyId;
+        }
+        else
+        {
+            var resolvedProperty = await ResolveOrCreatePropertyAsync(portfolioId, fields, ct);
+            if (resolvedProperty is null)
+                return new ScanConfirmResult(false, null,
+                    "Select a property for this lease, or provide the property address so it can be created");
+            propertyId = resolvedProperty.Value;
+        }
 
-        if (fields.UnitId is not > 0)
-            return new ScanConfirmResult(false, null, "Select a unit for this lease");
-
-        // Re-validate the (possibly override-supplied) ids — never trust a raw override id either.
-        if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId, ct))
-            return new ScanConfirmResult(false, null, "Selected property is not in this portfolio");
-
-        if (!await _db.EnsureUnitInPortfolioAsync(portfolioId, fields.UnitId.Value, fields.PropertyId, ct))
-            return new ScanConfirmResult(false, null, "Selected unit is not in this portfolio");
+        // Resolve the unit UNDER the resolved property: a validated grounded/override id wins (and must
+        // belong to that property); otherwise match the extracted unit number under the property, and if
+        // none matches, CREATE it. A single-family lease with no unit designation still gets a unit row
+        // (a sensible default unit number) so every lease has the property→unit→lease spine.
+        int unitId;
+        if (fields.UnitId is > 0)
+        {
+            if (!await _db.EnsureUnitInPortfolioAsync(portfolioId, fields.UnitId.Value, propertyId, ct))
+                return new ScanConfirmResult(false, null, "Selected unit is not in this portfolio");
+            unitId = fields.UnitId.Value;
+        }
+        else
+        {
+            var resolvedUnit = await ResolveOrCreateUnitAsync(portfolioId, propertyId, fields, ct);
+            if (resolvedUnit is null)
+                return new ScanConfirmResult(false, null, "Unit creation failed for this lease");
+            unitId = resolvedUnit.Value;
+        }
 
         // Resolve the tenant: an override-supplied tenantId wins (validated in-portfolio); otherwise, if
         // the extracted tenant_name doesn't match an existing tenant, chain a new in-portfolio Tenant from
@@ -615,8 +742,8 @@ public sealed class ScanService : IScanService
 
         var request = new CreateLeaseRequest
         {
-            PropertyId      = fields.PropertyId,
-            UnitId          = fields.UnitId.Value,
+            PropertyId      = propertyId,
+            UnitId          = unitId,
             TenantId        = tenantId,
             LeaseNumber     = leaseNumber,
             Status          = LeaseStatus.Active,
@@ -716,6 +843,220 @@ public sealed class ScanService : IScanService
 
         return created.Id;
     }
+
+    /// <summary>
+    /// Resolves the property for an imported lease from the extracted leased-premises address: returns
+    /// an existing in-portfolio property's id when its address matches (normalized AddressLine1 + City,
+    /// or property name as a fallback), otherwise CREATES a new property from the extracted address and
+    /// returns its id. This is the empty-portfolio bootstrap — properties are created from the documents.
+    /// Returns null only when there is no usable address or name to match/create from (so the reviewer
+    /// must supply one). Matching is the dedupe guard: re-scanning a lease for an existing property links
+    /// rather than duplicates.
+    /// </summary>
+    private async Task<int?> ResolveOrCreatePropertyAsync(
+        int portfolioId, LeaseDraftFields fields, CancellationToken ct)
+    {
+        var address = fields.PropertyAddress?.Trim();
+        var name = fields.PropertyName?.Trim();
+
+        // Nothing to anchor on — neither a street address nor a building name. The reviewer must pick.
+        if (string.IsNullOrWhiteSpace(address) && string.IsNullOrWhiteSpace(name))
+            return null;
+
+        // Reuse the same match key the proposal preview uses, so "what confirm will do" never drifts
+        // from what confirm actually does.
+        var match = await FindMatchingPropertyAsync(portfolioId, fields, ct);
+        if (match is not null)
+            return match.Id;
+
+        // No match — create the property from the extracted premises. Required-ish address parts that the
+        // lease omitted get a clear placeholder so the row is obviously "needs review" rather than blank.
+        var created = await _properties.CreateAsync(
+            portfolioId,
+            new CreatePropertyRequest
+            {
+                Name = !string.IsNullOrWhiteSpace(name)
+                    ? name!
+                    : !string.IsNullOrWhiteSpace(address) ? address! : "Imported Property",
+                AddressLine1 = !string.IsNullOrWhiteSpace(address) ? address! : "Unknown",
+                City = !string.IsNullOrWhiteSpace(fields.PropertyCity) ? fields.PropertyCity!.Trim() : "Unknown",
+                State = !string.IsNullOrWhiteSpace(fields.PropertyState) ? fields.PropertyState!.Trim() : "Unknown",
+                PostalCode = !string.IsNullOrWhiteSpace(fields.PropertyPostalCode) ? fields.PropertyPostalCode!.Trim() : "Unknown",
+                Notes = "Created from scanned lease PDF.",
+            },
+            ct);
+
+        // CreateAsync only returns null on a cross-tenant owner reference, which this path never sets.
+        return created?.Id;
+    }
+
+    /// <summary>
+    /// Resolves the unit for an imported lease UNDER the already-resolved property: returns an existing
+    /// unit's id when its unit number matches (case-insensitive) within that property, otherwise CREATES
+    /// a new unit and returns its id. A lease with no unit designation (single-family home) uses a default
+    /// unit number so every lease still has a property→unit→lease spine, and re-scanning that lease matches
+    /// the same default unit rather than duplicating it. Returns null only if unit creation fails.
+    /// </summary>
+    private async Task<int?> ResolveOrCreateUnitAsync(
+        int portfolioId, int propertyId, LeaseDraftFields fields, CancellationToken ct)
+    {
+        // Default a missing unit number so a single-family lease still produces a unit (and re-scans dedupe).
+        var unitNumber = DefaultUnitNumber(fields.UnitNumber);
+
+        var match = await FindMatchingUnitAsync(propertyId, unitNumber, ct);
+        if (match is not null)
+            return match.Id;
+
+        var created = await _units.CreateAsync(
+            portfolioId,
+            new CreateUnitRequest
+            {
+                PropertyId = propertyId,
+                UnitNumber = unitNumber,
+                Bedrooms = fields.UnitBedrooms is >= 0 and <= 99 ? fields.UnitBedrooms.Value : 0m,
+                Bathrooms = fields.UnitBathrooms is >= 0 and <= 99 ? fields.UnitBathrooms.Value : 0m,
+                SquareFeet = fields.UnitSquareFeet is > 0 ? fields.UnitSquareFeet : null,
+                MarketRent = fields.MonthlyRent is > 0m ? fields.MonthlyRent.Value : 0m,
+                Status = UnitStatus.Occupied, // an imported lease means the unit is currently leased
+                Notes = "Created from scanned lease PDF.",
+            },
+            ct);
+
+        // CreateAsync returns null only when the property is missing/out of scope — we just resolved it
+        // in-portfolio above, so this is a real failure (don't silently swallow it into a foreign link).
+        return created?.Id;
+    }
+
+    /// <summary>A property the lease's extracted address/name matched in this portfolio, or null.</summary>
+    private sealed record PropertyMatch(int Id, string Label, string? Detail);
+
+    /// <summary>A unit the lease's extracted unit number matched under the property, or null.</summary>
+    private sealed record UnitMatch(int Id, string Label);
+
+    /// <summary>
+    /// Finds the in-portfolio property the lease's extracted leased-premises address/name dedupes to,
+    /// or null when none matches. Primary key is the normalized street address (+ city when both sides
+    /// specify one); falls back to a building/community name match when no street address was extracted.
+    /// Shared by the confirm path and the read-only proposal preview so the two never diverge.
+    /// </summary>
+    private async Task<PropertyMatch?> FindMatchingPropertyAsync(
+        int portfolioId, LeaseDraftFields fields, CancellationToken ct)
+    {
+        var addressKey = NormalizeAddress(fields.PropertyAddress);
+        var nameKey = CollapseWhitespace(fields.PropertyName ?? string.Empty).ToLowerInvariant();
+        var cityKey = CollapseWhitespace(fields.PropertyCity ?? string.Empty).ToLowerInvariant();
+
+        if (string.IsNullOrWhiteSpace(addressKey) && nameKey.Length == 0)
+            return null;
+
+        // Pull the portfolio's active properties and match in memory: address normalization (suffix
+        // abbreviations, punctuation, case) isn't expressible in a translatable EF query.
+        var candidates = await _db.Properties
+            .Where(p => p.PortfolioId == portfolioId && p.DeletedAt == null)
+            .Select(p => new { p.Id, p.Name, p.AddressLine1, p.City })
+            .ToListAsync(ct);
+
+        if (!string.IsNullOrWhiteSpace(addressKey))
+        {
+            var byAddress = candidates.FirstOrDefault(p =>
+            {
+                var pAddr = NormalizeAddress(p.AddressLine1);
+                if (string.IsNullOrWhiteSpace(pAddr) || pAddr != addressKey)
+                    return false;
+                var pCity = CollapseWhitespace(p.City ?? string.Empty).ToLowerInvariant();
+                // Only require city agreement when BOTH sides actually specify one.
+                return string.IsNullOrWhiteSpace(cityKey) || string.IsNullOrWhiteSpace(pCity) || pCity == cityKey;
+            });
+            if (byAddress is not null)
+                return new PropertyMatch(byAddress.Id, byAddress.Name, FormatAddress(byAddress.AddressLine1, byAddress.City));
+        }
+        else
+        {
+            var byName = candidates.FirstOrDefault(p =>
+                !string.IsNullOrWhiteSpace(p.Name) &&
+                CollapseWhitespace(p.Name).ToLowerInvariant() == nameKey);
+            if (byName is not null)
+                return new PropertyMatch(byName.Id, byName.Name, FormatAddress(byName.AddressLine1, byName.City));
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Finds the in-portfolio unit with the given unit number under the property, or null. Shared by the
+    /// confirm path and the proposal preview.
+    /// </summary>
+    private async Task<UnitMatch?> FindMatchingUnitAsync(int propertyId, string unitNumber, CancellationToken ct)
+    {
+        var unitKey = CollapseWhitespace(unitNumber).ToLowerInvariant();
+
+        var existing = await _db.Units
+            .Where(u => u.PropertyId == propertyId && u.DeletedAt == null)
+            .Select(u => new { u.Id, u.UnitNumber })
+            .ToListAsync(ct);
+
+        var match = existing.FirstOrDefault(u =>
+            CollapseWhitespace(u.UnitNumber ?? string.Empty).ToLowerInvariant() == unitKey);
+        return match is null ? null : new UnitMatch(match.Id, match.UnitNumber);
+    }
+
+    /// <summary>The unit number to use, defaulting a blank one to "1" so single-family leases still get a unit.</summary>
+    private static string DefaultUnitNumber(string? unitNumber) =>
+        string.IsNullOrWhiteSpace(unitNumber) ? "1" : unitNumber!.Trim();
+
+    private static string FormatAddress(string? line1, string? city)
+    {
+        var parts = new[] { line1?.Trim(), city?.Trim() }
+            .Where(s => !string.IsNullOrWhiteSpace(s));
+        return string.Join(", ", parts);
+    }
+
+    /// <summary>
+    /// Normalizes a US street address for dedupe matching: lowercase, strip punctuation, collapse
+    /// whitespace, and fold the most common street-suffix abbreviations so "123 Maple St" and
+    /// "123 Maple Street" compare equal. Best-effort — not a full address parser; it just makes the
+    /// match-or-create dedupe forgiving of the formatting noise typical of scanned leases.
+    /// </summary>
+    private static string NormalizeAddress(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var lowered = value.ToLowerInvariant();
+        var cleaned = new System.Text.StringBuilder(lowered.Length);
+        foreach (var ch in lowered)
+            cleaned.Append(char.IsLetterOrDigit(ch) ? ch : ' ');
+
+        var tokens = cleaned.ToString().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < tokens.Length; i++)
+        {
+            if (StreetSuffixAbbreviations.TryGetValue(tokens[i], out var canonical))
+                tokens[i] = canonical;
+        }
+        return string.Join(' ', tokens);
+    }
+
+    // Common US street-suffix variants → a single canonical token, so address dedupe doesn't break on
+    // "St" vs "Street". Bounded, well-known set; not an attempt at a full USPS suffix table.
+    private static readonly Dictionary<string, string> StreetSuffixAbbreviations =
+        new(StringComparer.Ordinal)
+        {
+            ["st"] = "street", ["str"] = "street", ["street"] = "street",
+            ["ave"] = "avenue", ["av"] = "avenue", ["avenue"] = "avenue",
+            ["rd"] = "road", ["road"] = "road",
+            ["dr"] = "drive", ["drive"] = "drive",
+            ["ln"] = "lane", ["lane"] = "lane",
+            ["ct"] = "court", ["court"] = "court",
+            ["blvd"] = "boulevard", ["boulevard"] = "boulevard",
+            ["pl"] = "place", ["place"] = "place",
+            ["cir"] = "circle", ["circle"] = "circle",
+            ["ter"] = "terrace", ["terrace"] = "terrace",
+            ["pkwy"] = "parkway", ["parkway"] = "parkway",
+            ["hwy"] = "highway", ["highway"] = "highway",
+            ["way"] = "way",
+            ["apt"] = "apt", ["unit"] = "unit", ["ste"] = "suite", ["suite"] = "suite",
+            ["n"] = "north", ["s"] = "south", ["e"] = "east", ["w"] = "west",
+        };
 
     private static string CollapseWhitespace(string value) =>
         string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
@@ -1309,6 +1650,15 @@ public sealed class ScanService : IScanService
             fields.UnitId = ParseIntField(root, "unit_id") ?? ParseIntField(root, "unitId");
             fields.TenantId = ParseIntField(root, "tenant_id") ?? ParseIntField(root, "tenantId");
             fields.TenantName = ReadFieldValue(root, "tenant_name") ?? ReadFieldValue(root, "tenantName");
+            fields.PropertyName = ReadFieldValue(root, "property_name") ?? ReadFieldValue(root, "propertyName");
+            fields.PropertyAddress = ReadFieldValue(root, "property_address") ?? ReadFieldValue(root, "propertyAddress");
+            fields.PropertyCity = ReadFieldValue(root, "property_city") ?? ReadFieldValue(root, "propertyCity");
+            fields.PropertyState = ReadFieldValue(root, "property_state") ?? ReadFieldValue(root, "propertyState");
+            fields.PropertyPostalCode = ReadFieldValue(root, "property_postal_code") ?? ReadFieldValue(root, "propertyPostalCode");
+            fields.UnitNumber = ReadFieldValue(root, "unit_number") ?? ReadFieldValue(root, "unitNumber");
+            fields.UnitBedrooms = ParseDecimalField(root, "unit_bedrooms") ?? ParseDecimalField(root, "unitBedrooms");
+            fields.UnitBathrooms = ParseDecimalField(root, "unit_bathrooms") ?? ParseDecimalField(root, "unitBathrooms");
+            fields.UnitSquareFeet = ParseIntField(root, "unit_square_feet") ?? ParseIntField(root, "unitSquareFeet");
             fields.LeaseNumber = ReadFieldValue(root, "lease_number") ?? ReadFieldValue(root, "leaseNumber");
             fields.StartDate = ParseDateField(root, "start_date") ?? ParseDateField(root, "startDate");
             fields.EndDate = ParseDateField(root, "end_date") ?? ParseDateField(root, "endDate");
@@ -1371,6 +1721,27 @@ public sealed class ScanService : IScanService
                 fields.TenantId = tenantId > 0 ? tenantId : null;
             if (TryGetOverrideString(root, out var tenantName, "tenantName", "tenant_name"))
                 fields.TenantName = tenantName;
+            // Leased-premises corrections: the reviewer can fix the address/unit the match-or-create
+            // uses. Supplying propertyId=0 (above) forces "create new" using these fields even if the
+            // model had guessed an id.
+            if (TryGetOverrideString(root, out var propertyName, "propertyName", "property_name"))
+                fields.PropertyName = propertyName;
+            if (TryGetOverrideString(root, out var propertyAddress, "propertyAddress", "property_address"))
+                fields.PropertyAddress = propertyAddress;
+            if (TryGetOverrideString(root, out var propertyCity, "propertyCity", "property_city"))
+                fields.PropertyCity = propertyCity;
+            if (TryGetOverrideString(root, out var propertyState, "propertyState", "property_state"))
+                fields.PropertyState = propertyState;
+            if (TryGetOverrideString(root, out var propertyPostal, "propertyPostalCode", "property_postal_code"))
+                fields.PropertyPostalCode = propertyPostal;
+            if (TryGetOverrideString(root, out var unitNumber, "unitNumber", "unit_number"))
+                fields.UnitNumber = unitNumber;
+            if (TryGetOverrideDecimal(root, out var unitBeds, "unitBedrooms", "unit_bedrooms"))
+                fields.UnitBedrooms = unitBeds;
+            if (TryGetOverrideDecimal(root, out var unitBaths, "unitBathrooms", "unit_bathrooms"))
+                fields.UnitBathrooms = unitBaths;
+            if (TryGetOverrideInt(root, out var unitSqft, "unitSquareFeet", "unit_square_feet"))
+                fields.UnitSquareFeet = unitSqft > 0 ? unitSqft : null;
             if (TryGetOverrideString(root, out var leaseNumber, "leaseNumber", "lease_number"))
                 fields.LeaseNumber = leaseNumber;
             if (TryGetOverrideString(root, out var startStr, "startDate", "start_date") &&
@@ -1488,6 +1859,19 @@ public sealed class ScanService : IScanService
         public int? UnitId { get; set; }
         public int? TenantId { get; set; }
         public string? TenantName { get; set; }
+
+        // Leased-premises text extracted straight off the document, used to match-or-create the
+        // Property/Unit when no in-portfolio id was matched (the empty-portfolio bootstrap path).
+        public string? PropertyName { get; set; }
+        public string? PropertyAddress { get; set; }
+        public string? PropertyCity { get; set; }
+        public string? PropertyState { get; set; }
+        public string? PropertyPostalCode { get; set; }
+        public string? UnitNumber { get; set; }
+        public decimal? UnitBedrooms { get; set; }
+        public decimal? UnitBathrooms { get; set; }
+        public int? UnitSquareFeet { get; set; }
+
         public string? LeaseNumber { get; set; }
         public DateTime? StartDate { get; set; }
         public DateTime? EndDate { get; set; }
