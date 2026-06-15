@@ -16,4 +16,14 @@ internal static class DateTimeNormalization
     };
 
     public static DateTime? ToUtc(this DateTime? value) => value.HasValue ? value.Value.ToUtc() : null;
+
+    /// <summary>
+    /// Converts an offset-bearing instant to the equivalent UTC <see cref="DateTime"/> (Kind=Utc) for
+    /// storage. Clients send schedule times as ISO-8601 with the landlord's local UTC offset; this turns
+    /// that into the true UTC instant the <c>timestamp with time zone</c> columns require, while the
+    /// caller keeps the original <see cref="DateTimeOffset"/> when it needs to render local wall-clock.
+    /// </summary>
+    public static DateTime ToUtcDateTime(this DateTimeOffset value) => value.UtcDateTime;
+
+    public static DateTime? ToUtcDateTime(this DateTimeOffset? value) => value.HasValue ? value.Value.UtcDateTime : null;
 }

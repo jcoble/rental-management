@@ -189,10 +189,17 @@ public class CreateWorkOrderRequest
     public WorkOrderStatus Status { get; set; } = WorkOrderStatus.New;
 
     public DateTime? RequestedAt { get; set; }
-    public DateTime? ScheduledFor { get; set; }
 
-    /// <summary>End of the scheduled arrival window. Should be at/after <see cref="ScheduledFor"/>.</summary>
-    public DateTime? ScheduledWindowEnd { get; set; }
+    /// <summary>
+    /// Start of the scheduled arrival window. Clients send this as an ISO-8601 instant carrying the
+    /// landlord's local UTC offset (e.g. <c>2026-06-20T14:00:00-04:00</c>); the offset is preserved so
+    /// the value is stored as the true UTC instant AND the tenant SMS can be rendered back in the
+    /// landlord's local time. A zoneless value is treated as already-UTC.
+    /// </summary>
+    public DateTimeOffset? ScheduledFor { get; set; }
+
+    /// <summary>End of the scheduled arrival window. Should be at/after <see cref="ScheduledFor"/>. Same offset-preserving convention as <see cref="ScheduledFor"/>.</summary>
+    public DateTimeOffset? ScheduledWindowEnd { get; set; }
 
     public DateTime? CompletedAt { get; set; }
 
@@ -251,10 +258,16 @@ public class UpdateWorkOrderRequest
     /// </summary>
     public DateTime? RequestedAt { get; set; }
 
-    public DateTime? ScheduledFor { get; set; }
+    /// <summary>
+    /// Start of the scheduled arrival window. Null = unchanged (same nullable-means-untouched PATCH
+    /// semantics). When supplied, clients send an ISO-8601 instant carrying the landlord's local UTC
+    /// offset; the offset is preserved so the value stores as the true UTC instant and the tenant SMS
+    /// renders in the landlord's local time. A zoneless value is treated as already-UTC.
+    /// </summary>
+    public DateTimeOffset? ScheduledFor { get; set; }
 
-    /// <summary>End of the scheduled arrival window. Null = unchanged (same nullable-means-untouched PATCH semantics).</summary>
-    public DateTime? ScheduledWindowEnd { get; set; }
+    /// <summary>End of the scheduled arrival window. Null = unchanged (same nullable-means-untouched PATCH semantics). Same offset-preserving convention as <see cref="ScheduledFor"/>.</summary>
+    public DateTimeOffset? ScheduledWindowEnd { get; set; }
 
     public DateTime? CompletedAt { get; set; }
 
