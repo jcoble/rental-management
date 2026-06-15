@@ -134,6 +134,60 @@ public class PaymentServiceTests : IDisposable
         fetched.TenantName.Should().Be("Marcus Williams");
     }
 
+    [Fact]
+    public async Task MarkPaidAsync_PersistsNotes()
+    {
+        // Regression: the mobile Mark Paid sheet captures + sends a Notes value, but MarkPaidRequest had
+        // no Notes property and MarkPaidAsync never wrote entity.Notes — the note was silently dropped.
+        var now = DateTime.UtcNow;
+        var created = await _sut.CreateAsync(PortfolioId, new CreatePaymentRequest
+        {
+            LeaseId = LeaseId,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1200.00m,
+            DueDate = now,
+        });
+        created.Should().NotBeNull();
+
+        var marked = await _sut.MarkPaidAsync(PortfolioId, created!.Id, new MarkPaidRequest
+        {
+            PaidDate = now,
+            Method = "Check",
+            ExternalReference = "1487",
+            Notes = "Dropped in the night box, slightly torn",
+        });
+
+        marked.Should().NotBeNull();
+        marked!.Status.Should().Be(PaymentStatus.Paid);
+        marked.Notes.Should().Be("Dropped in the night box, slightly torn");
+
+        var fromDb = await _db.Payments.AsNoTracking().SingleAsync(p => p.Id == created.Id);
+        fromDb.Notes.Should().Be("Dropped in the night box, slightly torn");
+    }
+
+    [Fact]
+    public async Task MarkPaidAsync_NullNotes_LeavesExistingNoteUnchanged()
+    {
+        // Mark-paid with no Notes must not wipe a note set at create time (nullable-means-untouched).
+        var now = DateTime.UtcNow;
+        var created = await _sut.CreateAsync(PortfolioId, new CreatePaymentRequest
+        {
+            LeaseId = LeaseId,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1200.00m,
+            DueDate = now,
+            Notes = "Original note",
+        });
+        created.Should().NotBeNull();
+
+        await _sut.MarkPaidAsync(PortfolioId, created!.Id, new MarkPaidRequest { PaidDate = now });
+
+        var fromDb = await _db.Payments.AsNoTracking().SingleAsync(p => p.Id == created.Id);
+        fromDb.Notes.Should().Be("Original note");
+    }
+
     private void SeedPortfolioAndLease()
     {
         var now = DateTime.UtcNow;
