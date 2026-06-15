@@ -252,9 +252,14 @@ Map<String, dynamic> buildOverridesMap({
   required bool isLease,
   required bool isPaid,
   required int? selectedLeaseId,
+  required bool createNewProperty,
   required int? selectedPropertyId,
   required int? selectedUnitId,
   required int? selectedTenantId,
+  // Create-new-property fields (only used when createNewProperty is true).
+  String? newPropertyName,
+  String? newPropertyAddress,
+  String? newPropertyCity,
 }) {
   final overrides = <String, dynamic>{};
   for (final entry in editedFields.entries) {
@@ -263,11 +268,28 @@ Map<String, dynamic> buildOverridesMap({
     overrides[key] = entry.value;
   }
   if (isLease) {
-    // Property + unit are required; the API also accepts the edited lease terms
-    // (lease_number, start_date, monthly_rent, …) passed through above. When no
-    // tenant is selected the server matches/creates one from the tenant_name.
-    if (selectedPropertyId != null) overrides['propertyId'] = selectedPropertyId;
-    if (selectedUnitId != null) overrides['unitId'] = selectedUnitId;
+    if (createNewProperty) {
+      // Empty-portfolio bootstrap (C3): send no propertyId/unitId so the server
+      // resolves-or-CREATES the property from the (possibly edited) extracted
+      // leased-premises address, then creates the unit from the unit number.
+      // propertyId=0 forces "create new" even if the model had guessed an id.
+      overrides['propertyId'] = 0;
+      final name = newPropertyName?.trim() ?? '';
+      final address = newPropertyAddress?.trim() ?? '';
+      final city = newPropertyCity?.trim() ?? '';
+      if (name.isNotEmpty) overrides['propertyName'] = name;
+      if (address.isNotEmpty) overrides['propertyAddress'] = address;
+      if (city.isNotEmpty) overrides['propertyCity'] = city;
+    } else {
+      // Link to existing property + unit (both required in this mode). The API
+      // also accepts the edited lease terms passed through above.
+      if (selectedPropertyId != null) {
+        overrides['propertyId'] = selectedPropertyId;
+      }
+      if (selectedUnitId != null) overrides['unitId'] = selectedUnitId;
+    }
+    // Tenant: a chosen id links; null lets the server match/create from
+    // tenant_name (same in both property modes).
     if (selectedTenantId != null) overrides['tenantId'] = selectedTenantId;
   } else if (isPayment) {
     overrides['leaseId'] = selectedLeaseId;
@@ -302,13 +324,21 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   // Selected lease id (Payment only).
   int? _selectedLeaseId;
 
-  // Lease-draft selections. Property + unit are required; tenant is optional
-  // (null = create/match from the extracted tenant_name). Seeded once from any
-  // in-portfolio ids the backend already resolved.
+  // Lease-draft selections. In LINK mode property + unit are required; tenant is
+  // optional (null = create/match from the extracted tenant_name). Seeded once
+  // from any in-portfolio ids the backend already resolved.
   int? _selectedPropertyId;
   int? _selectedUnitId;
   int? _selectedTenantId;
   bool _leaseSelectionsInitialized = false;
+
+  // CREATE-NEW-PROPERTY mode (C3): the flagship empty-portfolio bootstrap. When
+  // true, the property + unit are created from the scanned document instead of
+  // being linked to existing rows. Defaulted from the server's import proposal
+  // (create/select → true) so a brand-new landlord with zero properties can
+  // actually confirm. The address fields live in _editedFields under
+  // property_name/property_address/property_city.
+  bool _createNewProperty = false;
 
   // Polling timer — used while draft is Pending.
   Timer? _pollTimer;
@@ -355,11 +385,42 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
     // only emits property_id/unit_id/tenant_id that are in-portfolio). The
     // pickers still validate against the loaded lists, so a stale id just shows
     // as "unselected" until the user chooses.
-    if (draft.isLease && !_leaseSelectionsInitialized && draft.fields.isNotEmpty) {
+    if (draft.isLease &&
+        !_leaseSelectionsInitialized &&
+        draft.fields.isNotEmpty) {
       _leaseSelectionsInitialized = true;
       _selectedPropertyId = _extractedInt(draft, 'property_id');
       _selectedUnitId = _extractedInt(draft, 'unit_id');
       _selectedTenantId = _extractedInt(draft, 'tenant_id');
+
+      // Seed the create-new-property address fields from the extracted
+      // leased-premises so the create-mode form is pre-filled (C3). These
+      // aren't part of the lease-terms group, so seed them explicitly.
+      for (final key in const [
+        'property_name',
+        'property_address',
+        'property_city',
+      ]) {
+        _editedFields[key] ??= _extractedValue(draft, key);
+      }
+
+      // Default the property mode from the server's import proposal: when it
+      // would CREATE (no existing match) or needs the reviewer to choose
+      // (SELECT, e.g. empty portfolio), start in create-new mode so a landlord
+      // with zero properties can confirm. A LINK proposal starts in link mode
+      // with the matched property pre-selected.
+      final proposal = draft.leaseProposal;
+      if (proposal != null) {
+        _createNewProperty =
+            proposal.property.isCreate || proposal.property.isSelect;
+        if (proposal.property.isLink && _selectedPropertyId == null) {
+          _selectedPropertyId = proposal.property.existingId;
+        }
+      } else {
+        // No proposal (older server) — fall back to create mode only when we
+        // have no grounded property id to link.
+        _createNewProperty = _selectedPropertyId == null;
+      }
     }
 
     // Start/stop polling based on status. The worker flips the draft
@@ -398,6 +459,13 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
     return (parsed != null && parsed > 0) ? parsed : null;
   }
 
+  /// Reads an extracted scalar field's raw value, or '' when absent. Used to
+  /// seed the create-new-property address fields.
+  String _extractedValue(ScanDraft draft, String name) {
+    final field = draft.fields.where((f) => f.name == name).firstOrNull;
+    return field?.value ?? '';
+  }
+
   Future<void> _confirm(ScanDraft draft) async {
     if (_confirming) return;
     setState(() => _confirming = true);
@@ -409,9 +477,13 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         isLease: draft.isLease,
         isPaid: _isPaid,
         selectedLeaseId: _selectedLeaseId,
+        createNewProperty: _createNewProperty,
         selectedPropertyId: _selectedPropertyId,
         selectedUnitId: _selectedUnitId,
         selectedTenantId: _selectedTenantId,
+        newPropertyName: _editedFields['property_name'],
+        newPropertyAddress: _editedFields['property_address'],
+        newPropertyCity: _editedFields['property_city'],
       );
       final result = await ref
           .read(scanRepositoryProvider)
@@ -567,6 +639,14 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
           onIsPaidChanged: (v) => setState(() => _isPaid = v),
           selectedLeaseId: _selectedLeaseId,
           onLeaseSelected: (id) => setState(() => _selectedLeaseId = id),
+          createNewProperty: _createNewProperty,
+          onCreateNewPropertyChanged: (v) => setState(() {
+            _createNewProperty = v;
+            // Switching to link mode drops any half-entered create state's unit;
+            // switching to create mode drops the linked unit too (it's recreated
+            // from the document). Either way clear the unit selection.
+            _selectedUnitId = null;
+          }),
           selectedPropertyId: _selectedPropertyId,
           onPropertySelected: (id) => setState(() {
             _selectedPropertyId = id;
@@ -601,6 +681,8 @@ class _ReviewBody extends ConsumerWidget {
     required this.onIsPaidChanged,
     required this.selectedLeaseId,
     required this.onLeaseSelected,
+    required this.createNewProperty,
+    required this.onCreateNewPropertyChanged,
     required this.selectedPropertyId,
     required this.onPropertySelected,
     required this.selectedUnitId,
@@ -620,6 +702,8 @@ class _ReviewBody extends ConsumerWidget {
   final ValueChanged<bool> onIsPaidChanged;
   final int? selectedLeaseId;
   final ValueChanged<int?> onLeaseSelected;
+  final bool createNewProperty;
+  final ValueChanged<bool> onCreateNewPropertyChanged;
   final int? selectedPropertyId;
   final ValueChanged<int?> onPropertySelected;
   final int? selectedUnitId;
@@ -650,11 +734,18 @@ class _ReviewBody extends ConsumerWidget {
     final busy = confirming || rejecting;
 
     // Confirm is only possible once the draft is ready for review (or Failed, so
-    // manual values can still be entered) and nothing is in flight. A lease also
-    // needs a property + unit chosen before it can be created.
+    // manual values can still be entered) and nothing is in flight. For a lease:
+    //  - CREATE mode (C3): a usable property name/address is needed (the server
+    //    creates the property + unit from the document).
+    //  - LINK mode: an existing property + unit must be chosen.
+    final hasUsablePropertyText =
+        (editedFields['property_address']?.trim().isNotEmpty ?? false) ||
+        (editedFields['property_name']?.trim().isNotEmpty ?? false);
     final leaseReady =
         !draft.isLease ||
-        (selectedPropertyId != null && selectedUnitId != null);
+        (createNewProperty
+            ? hasUsablePropertyText
+            : (selectedPropertyId != null && selectedUnitId != null));
     final confirmEnabled =
         !actionsLocked &&
         !busy &&
@@ -727,9 +818,17 @@ class _ReviewBody extends ConsumerWidget {
                   ),
 
                 if (draft.isLease) ...[
+                  // ---- "What confirming will do" proposal summary ----
+                  if (draft.leaseProposal != null)
+                    _LeaseProposalSummary(proposal: draft.leaseProposal!),
+
                   // ---- Property / Unit / Tenant pickers ----
                   _LeasePickers(
                     extractedTenantName: editedFields['tenant_name'],
+                    createNewProperty: createNewProperty,
+                    onCreateNewPropertyChanged: onCreateNewPropertyChanged,
+                    editedFields: editedFields,
+                    onFieldChanged: onFieldChanged,
                     selectedPropertyId: selectedPropertyId,
                     onPropertySelected: onPropertySelected,
                     selectedUnitId: selectedUnitId,
@@ -804,7 +903,9 @@ class _ReviewBody extends ConsumerWidget {
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Text(
-                  'Choose a property and unit above to create this lease.',
+                  createNewProperty
+                      ? 'Enter a property name or address above to create this lease.'
+                      : 'Choose a property and unit above to create this lease.',
                   style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
                   textAlign: TextAlign.center,
                 ),
@@ -1096,9 +1197,113 @@ String _tenantLabel(Tenant t) {
   return name.isEmpty ? 'Tenant #${t.id}' : name;
 }
 
+/// "What confirming will do" summary for a lease draft (C3): one line each for
+/// the property and the unit — link an existing record vs create a new one from
+/// the document — so the empty-portfolio bootstrap is visible up front.
+class _LeaseProposalSummary extends StatelessWidget {
+  const _LeaseProposalSummary({required this.proposal});
+
+  final LeaseImportProposal proposal;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'When you confirm',
+            style: theme.textTheme.labelMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          _ProposalLine(record: proposal.property, kind: 'property'),
+          const SizedBox(height: 6),
+          _ProposalLine(record: proposal.unit, kind: 'unit'),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProposalLine extends StatelessWidget {
+  const _ProposalLine({required this.record, required this.kind});
+
+  final ProposedRecord record;
+  final String kind;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    final IconData icon;
+    final Color color;
+    final String text;
+    if (record.isLink) {
+      icon = Icons.link_rounded;
+      color = scheme.primary;
+      final label = record.label?.trim();
+      text =
+          'Link existing $kind${label != null && label.isNotEmpty ? ': $label' : ''}';
+    } else if (record.isCreate) {
+      icon = Icons.add_circle_outline_rounded;
+      color = scheme.tertiary;
+      final label = record.label?.trim();
+      text =
+          'Create new $kind${label != null && label.isNotEmpty ? ': $label' : ''}';
+    } else {
+      icon = Icons.help_outline_rounded;
+      color = Colors.amber.shade700;
+      text = 'Choose a $kind below';
+    }
+
+    final detail = record.detail?.trim();
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(text, style: theme.textTheme.bodySmall),
+              if (detail != null && detail.isNotEmpty)
+                Text(
+                  detail,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _LeasePickers extends ConsumerWidget {
   const _LeasePickers({
     required this.extractedTenantName,
+    required this.createNewProperty,
+    required this.onCreateNewPropertyChanged,
+    required this.editedFields,
+    required this.onFieldChanged,
     required this.selectedPropertyId,
     required this.onPropertySelected,
     required this.selectedUnitId,
@@ -1108,6 +1313,10 @@ class _LeasePickers extends ConsumerWidget {
   });
 
   final String? extractedTenantName;
+  final bool createNewProperty;
+  final ValueChanged<bool> onCreateNewPropertyChanged;
+  final Map<String, String> editedFields;
+  final void Function(String name, String value) onFieldChanged;
   final int? selectedPropertyId;
   final ValueChanged<int?> onPropertySelected;
   final int? selectedUnitId;
@@ -1119,7 +1328,6 @@ class _LeasePickers extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final propertiesAsync = ref.watch(_propertiesProvider);
     final tenantsAsync = ref.watch(_tenantsProvider);
 
     final newTenantName = (extractedTenantName ?? '').trim();
@@ -1140,58 +1348,47 @@ class _LeasePickers extends ConsumerWidget {
           ),
           const SizedBox(height: 2),
           Text(
-            'Pick the property and unit. The tenant is matched from the lease — '
-            'or you can choose one.',
+            createNewProperty
+                ? 'No matching property — a new one will be created from the '
+                      'document. Check the address, or link an existing property '
+                      'instead.'
+                : 'Link the property and unit. The tenant is matched from the '
+                      'lease — or you can choose one.',
             style: theme.textTheme.bodySmall?.copyWith(
               color: colorScheme.onSurfaceVariant,
             ),
           ),
           const SizedBox(height: 12),
 
-          // ── Property (required) ──────────────────────────────────────────
-          _PickerLabel(text: 'Property', required: true),
-          propertiesAsync.when(
-            loading: () => const LinearProgressIndicator(),
-            error: (e, _) => Text(
-              'Could not load properties.',
-              style: TextStyle(color: colorScheme.error),
-            ),
-            data: (properties) {
-              final ids = properties.map((p) => p.id).toSet();
-              final value = ids.contains(selectedPropertyId)
-                  ? selectedPropertyId
-                  : null;
-              return DropdownButtonFormField<int>(
-                initialValue: value,
-                hint: const Text('Select a property'),
-                isExpanded: true,
-                decoration: _pickerDecoration,
-                items: properties
-                    .map(
-                      (p) => DropdownMenuItem(
-                        value: p.id,
-                        child: Text(p.name, overflow: TextOverflow.ellipsis),
-                      ),
-                    )
-                    .toList(),
-                onChanged: onPropertySelected,
-              );
-            },
+          // ── Property mode toggle: create-new vs link-existing (C3) ────────
+          SegmentedButton<bool>(
+            segments: const [
+              ButtonSegment<bool>(
+                value: true,
+                label: Text('Create new'),
+                icon: Icon(Icons.add_home_outlined),
+              ),
+              ButtonSegment<bool>(
+                value: false,
+                label: Text('Link existing'),
+                icon: Icon(Icons.link_outlined),
+              ),
+            ],
+            selected: {createNewProperty},
+            onSelectionChanged: (s) => onCreateNewPropertyChanged(s.first),
+            showSelectedIcon: false,
           ),
           const SizedBox(height: 14),
 
-          // ── Unit (required, scoped to property) ──────────────────────────
-          _PickerLabel(text: 'Unit', required: true),
-          if (selectedPropertyId == null)
-            Text(
-              'Choose a property first.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: colorScheme.onSurfaceVariant,
-              ),
+          if (createNewProperty)
+            _CreatePropertyFields(
+              editedFields: editedFields,
+              onFieldChanged: onFieldChanged,
             )
           else
-            _UnitPicker(
-              propertyId: selectedPropertyId!,
+            _LinkPropertyFields(
+              selectedPropertyId: selectedPropertyId,
+              onPropertySelected: onPropertySelected,
               selectedUnitId: selectedUnitId,
               onUnitSelected: onUnitSelected,
             ),
@@ -1243,11 +1440,210 @@ class _LeasePickers extends ConsumerWidget {
       ),
     );
   }
+}
 
-  static const _pickerDecoration = InputDecoration(
-    border: OutlineInputBorder(),
-    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-  );
+/// Shared input decoration for the lease pickers (property / unit / tenant).
+const _pickerDecoration = InputDecoration(
+  border: OutlineInputBorder(),
+  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+);
+
+/// Link-to-existing property → unit pickers (both required in this mode).
+class _LinkPropertyFields extends ConsumerWidget {
+  const _LinkPropertyFields({
+    required this.selectedPropertyId,
+    required this.onPropertySelected,
+    required this.selectedUnitId,
+    required this.onUnitSelected,
+  });
+
+  final int? selectedPropertyId;
+  final ValueChanged<int?> onPropertySelected;
+  final int? selectedUnitId;
+  final ValueChanged<int?> onUnitSelected;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final propertiesAsync = ref.watch(_propertiesProvider);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── Property (required) ──────────────────────────────────────────
+        _PickerLabel(text: 'Property', required: true),
+        propertiesAsync.when(
+          loading: () => const LinearProgressIndicator(),
+          error: (e, _) => Text(
+            'Could not load properties.',
+            style: TextStyle(color: colorScheme.error),
+          ),
+          data: (properties) {
+            if (properties.isEmpty) {
+              return Text(
+                'You have no properties yet — switch to "Create new" to add one '
+                'from this lease.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: colorScheme.error,
+                ),
+              );
+            }
+            final ids = properties.map((p) => p.id).toSet();
+            final value = ids.contains(selectedPropertyId)
+                ? selectedPropertyId
+                : null;
+            return DropdownButtonFormField<int>(
+              initialValue: value,
+              hint: const Text('Select a property'),
+              isExpanded: true,
+              decoration: _pickerDecoration,
+              items: properties
+                  .map(
+                    (p) => DropdownMenuItem(
+                      value: p.id,
+                      child: Text(p.name, overflow: TextOverflow.ellipsis),
+                    ),
+                  )
+                  .toList(),
+              onChanged: onPropertySelected,
+            );
+          },
+        ),
+        const SizedBox(height: 14),
+
+        // ── Unit (required, scoped to property) ──────────────────────────
+        _PickerLabel(text: 'Unit', required: true),
+        if (selectedPropertyId == null)
+          Text(
+            'Choose a property first.',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+            ),
+          )
+        else
+          _UnitPicker(
+            propertyId: selectedPropertyId!,
+            selectedUnitId: selectedUnitId,
+            onUnitSelected: onUnitSelected,
+          ),
+      ],
+    );
+  }
+}
+
+/// Create-new-property address form (C3). The fields are bound to the draft's
+/// extracted property_name / property_address / property_city via [onFieldChanged];
+/// the server creates the property (and the unit, from the extracted unit number)
+/// on confirm.
+class _CreatePropertyFields extends StatelessWidget {
+  const _CreatePropertyFields({
+    required this.editedFields,
+    required this.onFieldChanged,
+  });
+
+  final Map<String, String> editedFields;
+  final void Function(String name, String value) onFieldChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _PickerLabel(text: 'Property name or address', required: true),
+        _PlainFieldInput(
+          fieldName: 'property_address',
+          value: editedFields['property_address'] ?? '',
+          hintText: 'Street address',
+          onChanged: (v) => onFieldChanged('property_address', v),
+        ),
+        const SizedBox(height: 10),
+        _PlainFieldInput(
+          fieldName: 'property_name',
+          value: editedFields['property_name'] ?? '',
+          hintText: 'Property name (optional)',
+          onChanged: (v) => onFieldChanged('property_name', v),
+        ),
+        const SizedBox(height: 10),
+        _PlainFieldInput(
+          fieldName: 'property_city',
+          value: editedFields['property_city'] ?? '',
+          hintText: 'City (optional)',
+          onChanged: (v) => onFieldChanged('property_city', v),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'The unit is created from the lease automatically.',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A self-contained editable text field (manages its own controller) used by the
+/// create-new-property form. Mirrors [_FieldInputState]'s controller handling
+/// but without the confidence chrome.
+class _PlainFieldInput extends StatefulWidget {
+  const _PlainFieldInput({
+    required this.fieldName,
+    required this.value,
+    required this.hintText,
+    required this.onChanged,
+  });
+
+  final String fieldName;
+  final String value;
+  final String hintText;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_PlainFieldInput> createState() => _PlainFieldInputState();
+}
+
+class _PlainFieldInputState extends State<_PlainFieldInput> {
+  late TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.value);
+  }
+
+  @override
+  void didUpdateWidget(_PlainFieldInput old) {
+    super.didUpdateWidget(old);
+    if (old.value != widget.value && _controller.text != widget.value) {
+      _controller.text = widget.value;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextFormField(
+      key: Key('create-property-${widget.fieldName}'),
+      controller: _controller,
+      onChanged: widget.onChanged,
+      textInputAction: TextInputAction.next,
+      textCapitalization: TextCapitalization.words,
+      decoration: InputDecoration(
+        border: const OutlineInputBorder(),
+        hintText: widget.hintText,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 10,
+        ),
+      ),
+    );
+  }
 }
 
 /// Unit dropdown scoped to a single property; rebuilds when [propertyId] changes.
@@ -1327,10 +1723,7 @@ class _PickerLabel extends StatelessWidget {
           ),
           if (required) ...[
             const SizedBox(width: 4),
-            Text(
-              '*',
-              style: TextStyle(fontSize: 12, color: colorScheme.error),
-            ),
+            Text('*', style: TextStyle(fontSize: 12, color: colorScheme.error)),
           ] else ...[
             const SizedBox(width: 6),
             Text(
