@@ -595,8 +595,14 @@
 									Settings
 								</a>
 							</DropdownMenuItem>
-							<DropdownMenuSeparator />
 						{/if}
+						<DropdownMenuItem data-testid="user-menu-security-collapsed">
+							<a href="/settings/security" class="flex w-full items-center gap-2">
+								<Shield class="h-4 w-4" />
+								Security
+							</a>
+						</DropdownMenuItem>
+						<DropdownMenuSeparator />
 						<DropdownMenuItem
 							class="text-destructive focus:text-destructive"
 							data-testid="user-menu-sign-out-collapsed"
@@ -640,8 +646,14 @@
 									Settings
 								</a>
 							</DropdownMenuItem>
-							<DropdownMenuSeparator />
 						{/if}
+						<DropdownMenuItem data-testid="user-menu-security">
+							<a href="/settings/security" class="flex w-full items-center gap-2">
+								<Shield class="h-4 w-4" />
+								Security
+							</a>
+						</DropdownMenuItem>
+						<DropdownMenuSeparator />
 						<DropdownMenuItem
 							class="text-destructive focus:text-destructive"
 							data-testid="user-menu-sign-out"

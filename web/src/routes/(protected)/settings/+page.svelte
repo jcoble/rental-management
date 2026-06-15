@@ -1306,6 +1306,20 @@
 		<Tabs.Content value="team">
 			<div class="space-y-4">
 				{@render sectionIntro(section('team'))}
+
+				<!-- Account security: change-password lives on its own focused route. -->
+				<Card.Root class="gap-0 py-0" data-testid="settings-security-link">
+					<Card.Content class="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
+						<div>
+							<p class="text-sm font-semibold">Your sign-in &amp; security</p>
+							<p class="text-xs text-muted-foreground">Change your password and manage how you sign in.</p>
+						</div>
+						<Button href="/settings/security" data-testid="settings-security-open">
+							Open security <ArrowRight class="ml-1.5 h-4 w-4" />
+						</Button>
+					</Card.Content>
+				</Card.Root>
+
 				<Card.Root class="gap-0 py-0" data-testid="settings-team-link">
 					<Card.Content class="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
 						<div>

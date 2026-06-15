@@ -5,6 +5,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import AuthBrandPanel from '$lib/components/auth/AuthBrandPanel.svelte';
+	import { auth } from '$lib/api/endpoints/auth';
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let submitting = $state(false);
@@ -13,10 +14,31 @@
 	let email = $state('');
 	let password = $state('');
 
+	// "Resend verification" affordance, shown only when the API flags the login as EMAIL_NOT_VERIFIED.
+	let resendingVerification = $state(false);
+	let resendSuccess = $state(false);
+	const emailNotVerified = $derived(form?.emailNotVerified === true);
+
 	// Repopulate the email after a failed submit (the action echoes it back).
 	$effect(() => {
 		if (form?.email) email = form.email;
 	});
+
+	// Re-send the verification email for the address in the box. The endpoint is anonymous and always
+	// returns a neutral success (no account enumeration), so we treat any non-throw as "sent".
+	async function handleResendVerification() {
+		if (!email) return;
+		resendingVerification = true;
+		resendSuccess = false;
+		try {
+			await auth.resendVerification(email);
+			resendSuccess = true;
+		} catch {
+			// Silent — the API intentionally hides whether the account exists.
+		} finally {
+			resendingVerification = false;
+		}
+	}
 
 	// Dev-only convenience: prefill the seeded admin so manual testing doesn't
 	// require retyping credentials. Stripped from production builds via the DEV flag.
@@ -110,13 +132,49 @@
 				</div>
 
 				{#if form?.error}
-					<div
-						class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-						role="alert"
-						data-testid="login-error"
-					>
-						{form.error}
-					</div>
+					{#if emailNotVerified}
+						<div
+							class="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-sm"
+							role="alert"
+							data-testid="login-email-not-verified"
+						>
+							<p class="font-medium text-amber-700 dark:text-amber-200">
+								Please verify your email address before signing in.
+							</p>
+							<p class="mt-1 text-amber-700/80 dark:text-amber-200/80">
+								Check your inbox for a verification link.
+							</p>
+							{#if resendSuccess}
+								<p
+									class="mt-2 font-medium text-emerald-600 dark:text-emerald-400"
+									data-testid="login-resend-success"
+								>
+									Verification email sent! Check your inbox.
+								</p>
+							{:else}
+								<button
+									type="button"
+									onclick={handleResendVerification}
+									disabled={resendingVerification || !email}
+									class="mt-2 text-sm font-medium text-amber-700 underline underline-offset-4 hover:no-underline disabled:opacity-50 dark:text-amber-200"
+									data-testid="login-resend-verification-btn"
+								>
+									{resendingVerification ? 'Sending…' : 'Resend verification email'}
+								</button>
+							{/if}
+							<p class="mt-1 text-xs text-amber-700/70 dark:text-amber-200/60">
+								Check your spam folder if you don't see it.
+							</p>
+						</div>
+					{:else}
+						<div
+							class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+							role="alert"
+							data-testid="login-error"
+						>
+							{form.error}
+						</div>
+					{/if}
 				{/if}
 
 				<Button type="submit" data-testid="login-submit" disabled={submitting} class="h-11 w-full">
