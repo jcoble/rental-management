@@ -125,7 +125,9 @@ class _WorkOrdersScreenState extends ConsumerState<WorkOrdersScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Maintenance'),
+        // A6: one professional term for the "things to fix" concept across the
+        // app — "Work Orders" (the bottom-nav tab stays the short "Work").
+        title: const Text('Work Orders'),
         actions: [
           // Open / All toggle
           Padding(

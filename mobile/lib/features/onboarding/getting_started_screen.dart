@@ -8,6 +8,8 @@ import '../settings/settings_screen.dart';
 import '../tenants/tenants_list_screen.dart';
 import 'getting_started_provider.dart';
 import 'getting_started_tasks.dart';
+import 'go_live_sheet.dart';
+import 'onboarding_repository.dart';
 
 /// The durable "Getting started" checklist — every onboarding task with its
 /// plain-English explanation, a checkmark that fills in as the underlying data
@@ -46,6 +48,13 @@ class GettingStartedScreen extends ConsumerWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final signalsAsync = ref.watch(gettingStartedSignalsProvider);
+    // A1: in Sandbox the seeded demo data auto-checks every task, so the screen
+    // must NOT celebrate "you're all set!" — that completion isn't real. Show
+    // honest "example data" framing + the go-live nudge instead.
+    final isSandbox = ref.watch(sandboxStateProvider).maybeWhen(
+          data: (s) => s.isSandbox,
+          orElse: () => false,
+        );
 
     final coreTasks =
         kGettingStartedTasks.where((t) => t.core).toList(growable: false);
@@ -82,7 +91,7 @@ class GettingStartedScreen extends ConsumerWidget {
             return ListView(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
               children: [
-                _Intro(progress: progress),
+                _Intro(progress: progress, isSandbox: isSandbox),
                 const SizedBox(height: 16),
                 _SectionLabel(label: 'The essentials'),
                 const SizedBox(height: 8),
@@ -106,7 +115,11 @@ class GettingStartedScreen extends ConsumerWidget {
                         : () => _openDest(context, task.dest),
                   ),
                 const SizedBox(height: 24),
-                if (progress.allDone)
+                // A1: only celebrate real completion (a Live account). In
+                // Sandbox the "all done" is seeded, so show the go-live nudge.
+                if (isSandbox)
+                  _SandboxNote(scheme: cs)
+                else if (progress.allDone)
                   _AllDoneNote(scheme: cs)
                 else
                   _ProgressFootnote(progress: progress, theme: theme),
@@ -121,9 +134,13 @@ class GettingStartedScreen extends ConsumerWidget {
 
 /// Header: a friendly explainer plus the overall progress bar.
 class _Intro extends StatelessWidget {
-  const _Intro({required this.progress});
+  const _Intro({required this.progress, required this.isSandbox});
 
   final GettingStartedProgress progress;
+
+  /// A1: in Sandbox the counts come from seeded demo data, so we don't show a
+  /// progress bar or claim completion here — that's reserved for a real spine.
+  final bool isSandbox;
 
   @override
   Widget build(BuildContext context) {
@@ -154,9 +171,12 @@ class _Intro extends StatelessWidget {
                 const SizedBox(width: 14),
                 Expanded(
                   child: Text(
-                    'Work through these to get up and running. Tap any step and '
-                    "we'll take you to the right spot. Steps check themselves "
-                    'off as you go.',
+                    isSandbox
+                        ? "You're looking at example data so you can explore. "
+                            "When you're ready, set up your own rentals below."
+                        : 'Work through these to get up and running. Tap any '
+                            "step and we'll take you to the right spot. Steps "
+                            'check themselves off as you go.',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: cs.onSurfaceVariant,
                     ),
@@ -164,37 +184,40 @@ class _Intro extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Text(
-                  progress.allDone
-                      ? "You're all set!"
-                      : '${progress.doneCount} of ${progress.totalCount} done',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const Spacer(),
-                if (progress.allCoreDone && !progress.allDone)
+            if (!isSandbox) ...[
+              const SizedBox(height: 16),
+              Row(
+                children: [
                   Text(
-                    'Core setup complete',
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: cs.primary,
+                    progress.allDone
+                        ? "You're all set!"
+                        : '${progress.doneCount} of ${progress.totalCount} '
+                            'done',
+                    style: theme.textTheme.titleSmall?.copyWith(
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: LinearProgressIndicator(
-                value: fraction,
-                minHeight: 8,
-                backgroundColor: cs.surfaceContainerHighest,
+                  const Spacer(),
+                  if (progress.allCoreDone && !progress.allDone)
+                    Text(
+                      'Core setup complete',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: cs.primary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                ],
               ),
-            ),
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: fraction,
+                  minHeight: 8,
+                  backgroundColor: cs.surfaceContainerHighest,
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -373,6 +396,53 @@ class _AllDoneNote extends StatelessWidget {
               child: Text(
                 "You're all set up. Everything on the checklist is done.",
                 style: theme.textTheme.bodyMedium,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A1: shown in Sandbox in place of the completion celebration — the seeded
+/// data means nothing here is really "done", so we offer the go-live step.
+class _SandboxNote extends StatelessWidget {
+  const _SandboxNote({required this.scheme});
+
+  final ColorScheme scheme;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      color: scheme.tertiaryContainer.withValues(alpha: 0.4),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Symbols.science_rounded,
+                    color: scheme.onTertiaryContainer, fill: 1),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Everything here is filled in with example data so you can '
+                    "explore. It isn't your real portfolio yet.",
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.tonalIcon(
+                onPressed: () => showGoLiveSheet(context),
+                icon: const Icon(Symbols.rocket_launch_rounded, fill: 1),
+                label: const Text('Set up my real rentals'),
               ),
             ),
           ],

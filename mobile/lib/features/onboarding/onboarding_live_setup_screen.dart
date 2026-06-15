@@ -66,9 +66,11 @@ class OnboardingLiveSetupScreen extends ConsumerWidget {
                   ),
                   const SizedBox(height: 20),
                   Text(
+                    // A1: don't claim "all set up" on a deliberately-empty
+                    // account — invite the first real step instead.
                     firstName.isEmpty
-                        ? "You're all set up"
-                        : "You're all set up, $firstName",
+                        ? "You're in — let's add your first property"
+                        : "You're in — let's add your first property, $firstName",
                     style: theme.textTheme.headlineSmall?.copyWith(
                       fontWeight: FontWeight.w700,
                       color: scheme.onSurface,
