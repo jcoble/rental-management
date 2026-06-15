@@ -29,11 +29,19 @@ public class NoticeDraftsController : AuthenticatedPortfolioControllerBase
         return Ok(await _service.ListAsync(GetPortfolioId(), status, ct));
     }
 
+    /// <summary>
+    /// Generates notice drafts for the caller's portfolio. With an empty/absent body this runs
+    /// portfolio-wide (every applicable lease + late payment). Supply <c>tenantId</c> to scope to one
+    /// tenant — the primary path from a tenant's page — and optionally <c>noticeType</c> to generate just
+    /// that kind. The body is optional so existing callers keep working unchanged.
+    /// </summary>
     [HttpPost("generate")]
     [ProducesResponseType(typeof(GenerateNoticeDraftsResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<GenerateNoticeDraftsResponse>> Generate(CancellationToken ct)
+    public async Task<ActionResult<GenerateNoticeDraftsResponse>> Generate(
+        [FromBody] GenerateNoticeDraftsRequest? request,
+        CancellationToken ct)
     {
-        return Ok(await _service.GenerateAsync(GetPortfolioId(), ct));
+        return Ok(await _service.GenerateAsync(GetPortfolioId(), request, ct));
     }
 
     [HttpPatch("{id:int}")]

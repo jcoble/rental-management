@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../leases/lease_detail_screen.dart';
 import '../leases/leases_repository.dart';
+import '../notices/create_tenant_notice.dart';
 import 'tenants_list_screen.dart';
 import 'tenants_repository.dart';
 
@@ -27,10 +29,43 @@ String _formatCurrency(double amount) {
   return buf.toString();
 }
 
+/// Loads a tenant by id, then shows [TenantDetailScreen]. Use this when the
+/// caller only has a tenant id (e.g. a lease's tenant link, or an approved
+/// application that created a tenant).
+class TenantDetailLoaderScreen extends ConsumerWidget {
+  const TenantDetailLoaderScreen({super.key, required this.tenantId});
+
+  final int tenantId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final async = ref.watch(tenantDetailProvider(tenantId));
+    return async.when(
+      loading: () => const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      ),
+      error: (e, _) => Scaffold(
+        appBar: AppBar(title: const Text('Tenant')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text(
+              e is ApiException ? e.message : e.toString(),
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        ),
+      ),
+      data: (tenant) => TenantDetailScreen(tenant: tenant),
+    );
+  }
+}
+
 /// Detail screen for a single tenant.
 ///
-/// Shows tenant info with an edit button and their active leases (read-only),
-/// loaded from GET /leases filtered client-side by tenantId.
+/// Shows tenant info with an edit button and their leases, loaded from
+/// GET /leases filtered by tenantId.
 class TenantDetailScreen extends ConsumerStatefulWidget {
   const TenantDetailScreen({super.key, required this.tenant});
 
@@ -80,6 +115,15 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
     );
   }
 
+  Future<void> _createNotice() async {
+    await showCreateTenantNoticeFlow(
+      context,
+      ref,
+      tenantId: _tenant.id,
+      tenantName: '${_tenant.firstName} ${_tenant.lastName}'.trim(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -93,6 +137,11 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.campaign_outlined),
+            tooltip: 'Create / send notice',
+            onPressed: _createNotice,
+          ),
           IconButton(
             icon: const Icon(Icons.edit_outlined),
             tooltip: 'Edit tenant',
@@ -113,9 +162,9 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
             ),
             const SizedBox(height: 24),
 
-            // ── Active leases ──────────────────────────────────────────────
+            // ── Leases ─────────────────────────────────────────────────────
             Text(
-              'Active Leases',
+              'Leases',
               style: theme.textTheme.titleMedium
                   ?.copyWith(fontWeight: FontWeight.w700),
             ),
@@ -129,22 +178,24 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
                     e is ApiException ? e.message : e.toString(),
               ),
               data: (leases) {
-                final active = leases
-                    .where((l) =>
-                        l.status.toLowerCase() == 'active')
-                    .toList();
-                if (active.isEmpty) {
+                if (leases.isEmpty) {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Text(
-                      'No active leases for this tenant.',
+                      'No leases for this tenant.',
                       style: TextStyle(
                           color: colorScheme.onSurfaceVariant),
                     ),
                   );
                 }
+                // Active leases first, then the rest.
+                final sorted = [...leases]..sort((a, b) {
+                    final aActive = a.status.toLowerCase() == 'active' ? 0 : 1;
+                    final bActive = b.status.toLowerCase() == 'active' ? 0 : 1;
+                    return aActive.compareTo(bActive);
+                  });
                 return Column(
-                  children: active
+                  children: sorted
                       .map((l) => _LeaseSummaryTile(lease: l))
                       .toList(),
                 );
@@ -290,40 +341,75 @@ class _LeaseSummaryTile extends StatelessWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
+    final isActive = lease.status.toLowerCase() == 'active';
+
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    lease.propertyName ?? 'Lease #${lease.leaseNumber}',
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(fontWeight: FontWeight.w600),
+      child: InkWell(
+        onTap: () => Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => LeaseDetailScreen(lease: lease),
+          ),
+        ),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      lease.propertyName ?? 'Lease #${lease.leaseNumber}',
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(fontWeight: FontWeight.w600),
+                    ),
                   ),
-                ),
-                Text(
-                  _formatCurrency(lease.monthlyRent),
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: colorScheme.primary,
+                  Text(
+                    _formatCurrency(lease.monthlyRent),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                      color: colorScheme.primary,
+                    ),
                   ),
-                ),
-                const Text('/mo', style: TextStyle(fontSize: 12)),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Unit ${lease.unitNumber ?? lease.unitId}  ·  '
-              '${_fmt(lease.startDate)} – ${_fmt(lease.endDate)}',
-              style: TextStyle(
-                  fontSize: 12, color: colorScheme.onSurfaceVariant),
-            ),
-          ],
+                  const Text('/mo', style: TextStyle(fontSize: 12)),
+                  Icon(Icons.chevron_right,
+                      size: 18, color: colorScheme.onSurfaceVariant),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Unit ${lease.unitNumber ?? lease.unitId}  ·  '
+                      '${_fmt(lease.startDate)} – ${_fmt(lease.endDate)}',
+                      style: TextStyle(
+                          fontSize: 12, color: colorScheme.onSurfaceVariant),
+                    ),
+                  ),
+                  if (!isActive)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 7, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        lease.status,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
