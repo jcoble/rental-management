@@ -285,17 +285,20 @@
 				<Input data-testid="lease-number-input" bind:value={form.leaseNumber} placeholder="Lease number" />
 				{#if formErrors.leaseNumber}<p class="mt-1 text-xs text-destructive" data-testid="lease-number-error">{formErrors.leaseNumber}</p>{/if}
 			</div>
-			<Select.Root type="single" bind:value={form.propertyId}>
-				<Select.Trigger class="w-full" data-testid="lease-property-input">
-					{selectedPropertyLabel ? selectedPropertyLabel : 'Select property'}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="Select property">Select property</Select.Item>
-					{#each propertiesQuery.data || [] as property}
-						<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-					{/each}
-				</Select.Content>
-			</Select.Root>
+			<div>
+				<Select.Root type="single" bind:value={form.propertyId}>
+					<Select.Trigger class="w-full" data-testid="lease-property-input">
+						{selectedPropertyLabel ? selectedPropertyLabel : 'Select property'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="Select property">Select property</Select.Item>
+						{#each propertiesQuery.data || [] as property}
+							<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+				{#if formErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="lease-property-error">{formErrors.propertyId}</p>{/if}
+			</div>
 			<div>
 				<Select.Root type="single" bind:value={form.unitId} disabled={!form.propertyId}>
 					<Select.Trigger class="w-full" data-testid="lease-unit-input" disabled={!form.propertyId}>
