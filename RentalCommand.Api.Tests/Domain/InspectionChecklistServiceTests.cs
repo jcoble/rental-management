@@ -51,7 +51,7 @@ public class InspectionChecklistServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _workOrders = new WorkOrderService(_db, new NoopInspectionDataUpdate());
+        _workOrders = new WorkOrderService(_db, new NoopInspectionDataUpdate(), new NoopInspectionMessagePublisher(), NullLogger<WorkOrderService>.Instance);
         _service = new InspectionService(
             _db,
             new NoopInspectionDataUpdate(),
@@ -236,6 +236,12 @@ public class InspectionChecklistServiceTests : IDisposable
             => Task.CompletedTask;
 
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
+            => Task.CompletedTask;
+    }
+
+    private sealed class NoopInspectionMessagePublisher : IMessagePublisher
+    {
+        public Task PublishAsync<TPayload>(int portfolioId, string messageType, TPayload payload, CancellationToken ct = default)
             => Task.CompletedTask;
     }
 
