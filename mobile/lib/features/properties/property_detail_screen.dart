@@ -77,15 +77,9 @@ class PropertyDetailScreen extends ConsumerStatefulWidget {
 
 class _PropertyDetailScreenState
     extends ConsumerState<PropertyDetailScreen> {
-  @override
-  void initState() {
-    super.initState();
-    // Trigger first load for both providers.
-    Future.microtask(() {
-      ref.read(unitsProvider(widget.property.id).notifier).load();
-      ref.read(propertyLeasesProvider(widget.property.id).notifier).load();
-    });
-  }
+  // unitsProvider and propertyLeasesProvider both self-load on first watch
+  // (their notifier build() calls Future.microtask(load)), so no explicit
+  // initState load is needed — adding one just double-fetches.
 
   Future<void> _refresh() async {
     await Future.wait<void>([
