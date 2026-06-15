@@ -58,6 +58,7 @@
 		Users,
 		Bell,
 		MessageSquare,
+		ListChecks,
 	} from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -183,6 +184,11 @@
 		notifications: notificationsSaved || hasNotificationEmail,
 		texting: textingSaved || hasTexting,
 	});
+
+	// A1: the real "set-up spine" — a property, a tenant, and a lease all exist. The wizard lets a user
+	// Skip straight through, so we only show the "You're all set!" celebration when this is truly true;
+	// otherwise we tell the truth ("You can finish anytime") and point back to what's left.
+	const coreSpineComplete = $derived(stepDone.property && stepDone.tenants && stepDone.lease);
 
 	// ---------------------------------------------------------------------------
 	// Initial positioning. Priority:
@@ -763,14 +769,49 @@
 		{#if finished}
 			<Card.Root class="mt-10" data-testid="onboarding-complete">
 				<Card.Content class="flex flex-col items-center gap-4 px-8 py-12 text-center">
-					<div class="flex h-16 w-16 items-center justify-center rounded-full bg-success/15 text-success">
-						<PartyPopper class="h-8 w-8" />
-					</div>
-					<h1 class="text-2xl font-bold">You're all set!</h1>
-					<p class="max-w-md text-sm text-muted-foreground">
-						Your portfolio is ready to go. You can always add more properties, tenants, and leases
-						from the menu on the left.
-					</p>
+					{#if coreSpineComplete}
+						<!-- A1: genuine completion — a property, tenant, and lease all exist. -->
+						<div class="flex h-16 w-16 items-center justify-center rounded-full bg-success/15 text-success">
+							<PartyPopper class="h-8 w-8" />
+						</div>
+						<h1 class="text-2xl font-bold" data-testid="onboarding-complete-title">You're all set!</h1>
+						<p class="max-w-md text-sm text-muted-foreground">
+							Your portfolio is ready to go. You can always add more properties, tenants, and leases
+							from the menu on the left.
+						</p>
+					{:else}
+						<!-- A1: the user skipped one or more essentials — don't claim they're done. -->
+						<div class="flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-primary">
+							<ListChecks class="h-8 w-8" />
+						</div>
+						<h1 class="text-2xl font-bold" data-testid="onboarding-complete-title">You can finish anytime</h1>
+						<p class="max-w-md text-sm text-muted-foreground">
+							You skipped a few essentials. Add a property, a tenant, and a lease whenever you're
+							ready — your getting-started checklist keeps track of what's left.
+						</p>
+						<div class="mt-1 flex flex-col items-stretch gap-2 sm:flex-row">
+							{#if !stepDone.property}
+								<Button variant="outline" class="gap-2" data-testid="onboarding-finish-property" onclick={() => { finished = false; goToStep('property'); }}>
+									<Home class="h-4 w-4" />
+									Add a property
+								</Button>
+							{:else if !stepDone.tenants}
+								<Button variant="outline" class="gap-2" data-testid="onboarding-finish-tenants" onclick={() => { finished = false; goToStep('tenants'); }}>
+									<Users class="h-4 w-4" />
+									Add a tenant
+								</Button>
+							{:else if !stepDone.lease}
+								<Button variant="outline" class="gap-2" data-testid="onboarding-finish-lease" onclick={() => { finished = false; goToStep('lease'); }}>
+									<FileText class="h-4 w-4" />
+									Create a lease
+								</Button>
+							{/if}
+							<Button variant="outline" class="gap-2" data-testid="onboarding-finish-checklist" onclick={() => goto('/get-started?view=checklist')}>
+								<ListChecks class="h-4 w-4" />
+								See my checklist
+							</Button>
+						</div>
+					{/if}
 					<!-- Optional add-ons the user can still set up, clearly marked optional. -->
 					<div class="mt-2 flex flex-col items-stretch gap-2 sm:flex-row">
 						{#if !stepDone.notifications}
@@ -1216,8 +1257,16 @@
 					Back
 				</Button>
 				<div class="flex items-center gap-2">
-					<Button variant="outline" data-testid="onboarding-skip" disabled={anyPending} onclick={skip}>
-						{currentStep.core ? 'Skip this step' : 'Skip'}
+					<!-- A2: on core steps, Skip is a quiet text link ("I'll add this later"), not a button that
+					     competes with the primary "Save & continue". Optional steps keep a plain "Skip". -->
+					<Button
+						variant={currentStep.core ? 'ghost' : 'outline'}
+						class={currentStep.core ? 'text-muted-foreground underline-offset-4 hover:bg-transparent hover:text-foreground hover:underline' : undefined}
+						data-testid="onboarding-skip"
+						disabled={anyPending}
+						onclick={skip}
+					>
+						{currentStep.core ? "I'll add this later" : 'Skip'}
 					</Button>
 
 					{#if currentStep.key === 'portfolio'}

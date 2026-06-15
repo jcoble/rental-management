@@ -45,7 +45,7 @@
 			await queryClient.invalidateQueries();
 			dialogOpen = false;
 			confirmText = '';
-			showSuccess("You're live! Your demo data was cleared and the account is now real.");
+			showSuccess("You're set up with your real rentals! The example data was cleared.");
 			await goto('/');
 		},
 		onError: (err) => showError(apiErrorMessage(err, 'Could not go live. Please try again.'))
@@ -77,11 +77,11 @@
 		>
 			<FlaskConical class="h-4 w-4 shrink-0 text-warning" />
 			<p class="min-w-0 flex-1 leading-tight">
-				<span class="font-semibold">Sandbox mode</span>
+				<span class="font-semibold">Example data</span>
 				<span class="hidden text-muted-foreground sm:inline">
-					— you're exploring with demo data. Nothing here sends real emails/texts or charges cards.
+					— you're exploring with example data. Nothing here sends real emails/texts or charges cards.
 				</span>
-				<span class="text-muted-foreground sm:hidden">— demo data, nothing is real.</span>
+				<span class="text-muted-foreground sm:hidden">— nothing here is real.</span>
 			</p>
 			<Button
 				size="sm"
@@ -90,7 +90,7 @@
 				data-testid="go-live-button"
 			>
 				<Rocket class="h-3.5 w-3.5" />
-				Go Live
+				Use my real rentals
 			</Button>
 		</div>
 	{/if}
@@ -118,11 +118,11 @@
 				{#if stateQuery.isLoading}
 					<p class="text-sm text-muted-foreground">Checking account mode…</p>
 				{:else if isSandbox}
-					<p class="text-sm font-semibold">Sandbox mode</p>
+					<p class="text-sm font-semibold">Example data</p>
 					<p class="mt-1 text-xs text-muted-foreground">
-						This account is loaded with demo data so you can explore safely. Nothing you do here
+						This account is loaded with example data so you can explore safely. Nothing you do here
 						sends real emails or texts, or charges any cards. When you're ready to run your real
-						business, go live — this permanently clears the demo data and starts you clean.
+						rentals, switch over — this permanently clears the example data and starts you clean.
 						<span class="font-medium text-foreground">This can't be undone.</span>
 					</p>
 					<div class="mt-3">
@@ -132,13 +132,14 @@
 							data-testid="go-live-button"
 						>
 							<Rocket class="h-4 w-4" />
-							Go Live
+							Use my real rentals
 						</Button>
 					</div>
 				{:else}
-					<p class="text-sm font-semibold">Live account</p>
+					<p class="text-sm font-semibold">My real rentals</p>
 					<p class="mt-1 text-xs text-muted-foreground">
-						You've graduated out of sandbox mode. This account is live and all data here is real.
+						You're all set up with your real rentals — the example data is gone and everything here
+						is real.
 					</p>
 				{/if}
 			</div>
@@ -152,12 +153,12 @@
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
 				<TriangleAlert class="h-5 w-5 text-warning" />
-				Go live — this can't be undone
+				Switch to my real rentals — this can't be undone
 			</Dialog.Title>
 			<Dialog.Description>
-				Going live <strong class="font-semibold text-foreground">permanently deletes all the demo
-				and sample data</strong> in this account and switches it to live for good. You'll start with
-				a clean, real portfolio. There's no way back to the sandbox afterward.
+				This <strong class="font-semibold text-foreground">permanently deletes all the example
+				data</strong> in this account and switches it over to your real rentals for good. You'll start
+				with a clean account. There's no way back to the example data afterward.
 			</Dialog.Description>
 		</Dialog.Header>
 
@@ -193,10 +194,10 @@
 			>
 				{#if goLiveMutation.isPending}
 					<Loader2 class="h-4 w-4 animate-spin" />
-					Going live…
+					Switching over…
 				{:else}
 					<Rocket class="h-4 w-4" />
-					Yes, wipe demo &amp; go live
+					Yes, switch to my real rentals
 				{/if}
 			</Button>
 		</Dialog.Footer>

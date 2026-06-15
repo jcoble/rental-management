@@ -304,7 +304,7 @@
 	<div class="mb-4">
 		<PageBreadcrumb
 			crumbs={[
-				{ label: 'Maintenance', href: '/maintenance' },
+				{ label: 'Work Orders', href: '/maintenance' },
 				{ label: wo?.title ?? 'Work Order' },
 			]}
 		/>

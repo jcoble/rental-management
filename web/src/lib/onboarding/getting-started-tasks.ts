@@ -32,7 +32,6 @@ import {
 	Users,
 	FileText,
 	Bell,
-	MessageSquare,
 	SlidersHorizontal,
 } from '@lucide/svelte';
 import type { Component } from 'svelte';
@@ -46,7 +45,6 @@ export type GettingStartedTaskKey =
 	| 'tenant'
 	| 'lease'
 	| 'notifications'
-	| 'texting'
 	| 'automations';
 
 /**
@@ -225,21 +223,11 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		core: false,
 		isComplete: (s) => s.hasAutomations,
 	},
-	{
-		key: 'texting',
-		label: 'Connect texting (optional)',
-		eli5: wizardExplanation(
-			'texting',
-			'Texting tenants needs a SignalWire account. Totally optional — everything works on email and in-app alerts without it.'
-		),
-		icon: MessageSquare,
-		route: '/settings',
-		// SMS provider config lives in the Messaging tab (NOT Automations) — point there and spotlight it.
-		hash: 'messaging',
-		coach: 'settings-messaging',
-		core: false,
-		isComplete: (s) => s.hasTexting,
-	},
+	// NOTE: "Connect texting (SignalWire)" was intentionally removed from the getting-started checklist
+	// (A13) — it's the most technical setup in the app (Project ID / Space URL / API Token / a purchased
+	// From number) and is optional/advanced, so it doesn't belong in the newcomer checklist. It remains
+	// fully available in Settings → Messaging (and as the optional `texting` wizard step). The `hasTexting`
+	// signal stays on GettingStartedSignals because the data hook still reads it for the "settled" gate.
 ];
 
 /** The must-do spine (portfolio → lease). */

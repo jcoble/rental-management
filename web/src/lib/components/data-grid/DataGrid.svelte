@@ -44,7 +44,14 @@
 		data: T[];
 		columns: ColumnDef<T>[];
 		loading?: boolean;
+		/** Headline for the first-run / no-results empty state. */
 		emptyMessage?: string;
+		/** A15: optional friendly empty-state extras forwarded to <EmptyState>. */
+		emptyDescription?: string;
+		emptyIcon?: import('svelte').Component<{ class?: string }>;
+		emptyActionLabel?: string;
+		emptyOnAction?: () => void;
+		emptyTone?: 'muted' | 'primary' | 'success' | 'warning' | 'destructive';
 		/** Called when a row (desktop) or card (mobile) is clicked. */
 		onRowClick?: (item: T) => void;
 		/** Stable key extractor (falls back to item.id then index). */
@@ -80,6 +87,11 @@
 		columns,
 		loading = false,
 		emptyMessage = 'No results found.',
+		emptyDescription,
+		emptyIcon,
+		emptyActionLabel,
+		emptyOnAction,
+		emptyTone,
 		onRowClick,
 		getRowKey,
 		getRowTestId,
@@ -409,7 +421,14 @@
 					{:else if !loading && pagedData.length === 0}
 						<Table.Row class="hover:[&,&>svelte-css-wrapper]:[&>th,td]:bg-transparent">
 							<Table.Cell colspan={columns.length} class="py-2">
-								<EmptyState title={emptyMessage} />
+								<EmptyState
+									title={emptyMessage}
+									description={emptyDescription}
+									icon={emptyIcon}
+									actionLabel={emptyActionLabel}
+									onaction={emptyOnAction}
+									tone={emptyTone ?? 'muted'}
+								/>
 							</Table.Cell>
 						</Table.Row>
 					{:else}
@@ -509,7 +528,14 @@
 			</div>
 		{:else if !loading && pagedData.length === 0}
 			<div class="rounded-lg border border-border" data-testid="datagrid-mobile-empty">
-				<EmptyState title={emptyMessage} />
+				<EmptyState
+					title={emptyMessage}
+					description={emptyDescription}
+					icon={emptyIcon}
+					actionLabel={emptyActionLabel}
+					onaction={emptyOnAction}
+					tone={emptyTone ?? 'muted'}
+				/>
 			</div>
 		{:else}
 			{#each pagedData as item, i (rowKey(item, i))}

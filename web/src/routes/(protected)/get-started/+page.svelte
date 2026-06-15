@@ -239,9 +239,15 @@
 				<Card.Content class="p-5">
 					<div class="mb-2 flex items-center justify-between gap-3">
 						<div class="flex items-center gap-2">
-							{#if progress.allDone}
+							{#if progress.allDone && !isSandbox}
+								<!-- A1: only celebrate on a real (Live) account. In Sandbox the steps are auto-checked
+								     by seeded demo data, so "You're all set!" would be a lie. -->
 								<PartyPopper class="h-5 w-5 text-success" />
 								<span class="font-semibold text-foreground" data-testid="get-started-progress-text">You're all set!</span>
+							{:else if isSandbox}
+								<span class="font-semibold text-foreground" data-testid="get-started-progress-text">
+									Exploring with sample data
+								</span>
 							{:else}
 								<span class="font-semibold text-foreground" data-testid="get-started-progress-text">
 									{progress.doneCount} of {progress.totalCount} done

@@ -262,17 +262,17 @@
 {/snippet}
 
 <svelte:head>
-	<title>Maintenance - Rental Command</title>
+	<title>Work Orders - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="maintenance-page">
 	<div class="mb-6 flex items-center justify-between gap-3">
 		<div>
-			<h1 class="text-2xl font-bold">Maintenance</h1>
+			<h1 class="text-2xl font-bold">Work Orders</h1>
 			<p class="text-sm text-muted-foreground">Track resident requests, vendor execution, and compliance checks.</p>
 		</div>
 		<div class="flex gap-2">
-			<Button data-testid="work-order-create-button" onclick={openCreateWo}><Plus class="h-4 w-4" /> Work Order</Button>
+			<Button data-testid="work-order-create-button" onclick={openCreateWo}><Plus class="h-4 w-4" /> New Work Order</Button>
 			<Button data-testid="inspection-create-button" variant="outline" onclick={() => (showInspectionForm = true)}><ShieldCheck class="h-4 w-4" /> Inspection</Button>
 			<Button data-testid="recurring-maintenance-link" variant="outline" onclick={() => goto('/maintenance/recurring')}><RefreshCw class="h-4 w-4" /> Recurring</Button>
 		</div>

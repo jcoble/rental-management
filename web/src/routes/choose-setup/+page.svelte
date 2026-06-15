@@ -89,7 +89,7 @@
 				<span
 					class="mt-0.5 inline-flex w-fit items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-warning"
 				>
-					Sandbox · sample data
+					Example data
 				</span>
 				<p class="mt-3 flex-1 text-sm text-muted-foreground">
 					Jump into a fully loaded demo portfolio — properties, tenants, leases, payments and work
@@ -130,7 +130,7 @@
 				<span
 					class="mt-0.5 inline-flex w-fit items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-primary"
 				>
-					Live · your real data
+					My real rentals
 				</span>
 				<p class="mt-3 flex-1 text-sm text-muted-foreground">
 					Start with a clean, empty account and add your own properties, tenants and leases. A quick
@@ -152,7 +152,7 @@
 		<!-- reassurance footnote -->
 		<p class="mt-8 flex items-center gap-1.5 text-xs text-muted-foreground">
 			<Check class="h-3.5 w-3.5 text-primary" />
-			Not sure? Start with the sandbox — going live later clears the sample data and starts you clean.
+			Not sure? Start with the example data — switching to your real rentals later clears it and starts you clean.
 		</p>
 	</div>
 </div>
