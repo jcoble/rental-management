@@ -198,24 +198,17 @@ builder.Services.AddAuthentication(options =>
         ApiKeyAuthenticationDefaults.AuthenticationScheme, _ => { });
 
 // Platform super-admin allowlist (F6 / TSK-212): operator endpoints (Engine Health) are gated
-// by a config email list, not a role. Fail closed when the list is empty.
-var platformAdminEmails = (builder.Configuration
+// by a config email list, not a role. Fails closed when the list is empty. The policy logic and
+// its allowlist parsing live in RentalCommand.Api.Auth.PlatformAdminPolicy so the gate and its
+// security test share one source of truth.
+var platformAdminAllowlist = RentalCommand.Api.Auth.PlatformAdminPolicy.BuildAllowlist(
+    builder.Configuration
         .GetSection(RentalCommand.Core.Configuration.PlatformAdminOptions.SectionName)
-        .Get<RentalCommand.Core.Configuration.PlatformAdminOptions>()?.Emails
-        ?? System.Array.Empty<string>())
-    .Select(e => e.Trim())
-    .Where(e => !string.IsNullOrEmpty(e))
-    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        .Get<RentalCommand.Core.Configuration.PlatformAdminOptions>());
 
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy("PlatformAdmin", policy =>
-        policy.RequireAssertion(ctx =>
-        {
-            var email = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
-                ?? ctx.User.FindFirst("email")?.Value;
-            return email is not null && platformAdminEmails.Contains(email);
-        }));
+    RentalCommand.Api.Auth.PlatformAdminPolicy.Register(options, platformAdminAllowlist);
 });
 
 // --- Auth services ---

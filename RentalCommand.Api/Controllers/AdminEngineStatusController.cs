@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using RentalCommand.Api.Auth;
 using RentalCommand.Api.Services.Admin;
 
 namespace RentalCommand.Api.Controllers;
@@ -17,7 +18,7 @@ namespace RentalCommand.Api.Controllers;
 [Route("api/v1/admin/engine-status")]
 // Platform-operator surface — gated by the PlatformAdmin email allowlist (F6 / TSK-212),
 // NOT the landlord Admin role. Ordinary portfolio admins must not see Engine internals.
-[Authorize(Policy = "PlatformAdmin")]
+[Authorize(Policy = PlatformAdminPolicy.Name)]
 [Produces("application/json")]
 public class AdminEngineStatusController : ControllerBase
 {
