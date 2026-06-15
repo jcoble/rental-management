@@ -10,6 +10,7 @@ import 'onboarding_models.dart';
 /// Endpoints (under /api/v1/portfolio, all portfolio-scoped via the JWT claim):
 ///   GET  /portfolio/sandbox-state      — current Sandbox/Live + onboardingChoicePending
 ///   POST /portfolio/onboarding-choice  — body: { mode: "sandbox" | "live" }
+///   POST /portfolio/go-live            — wipes the seeded demo data, switches the account to Live
 class OnboardingRepository {
   const OnboardingRepository(this._dio);
 
@@ -41,6 +42,26 @@ class OnboardingRepository {
         '/portfolio/onboarding-choice',
         data: {'mode': mode.wire},
       );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return SandboxState.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  /// Switches the account from Sandbox to Live: permanently deletes the seeded
+  /// demo data server-side and returns the resulting (Live) sandbox state. This
+  /// is irreversible — the UI guards it with a type-to-confirm step.
+  Future<SandboxState> goLive() async {
+    try {
+      final response =
+          await _dio.post<Map<String, dynamic>>('/portfolio/go-live');
       final data = response.data;
       if (data == null) {
         throw const ApiException(

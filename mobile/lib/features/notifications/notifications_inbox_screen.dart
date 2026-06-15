@@ -48,7 +48,10 @@ class _NotificationsInboxScreenState
   Future<void> _open(AppNotification n) async {
     await ref.read(inboxProvider.notifier).markRead(n.id);
     if (!mounted) return;
-    context.go(resolveNotificationRoute(n.actionUrl));
+    // A14: PUSH the target detail screen onto the stack (not `go`, which
+    // REPLACES it) so the detail screen keeps a working back button and the
+    // user lands back here on `pop()` instead of being stranded.
+    context.push(resolveNotificationRoute(n.actionUrl));
   }
 
   @override

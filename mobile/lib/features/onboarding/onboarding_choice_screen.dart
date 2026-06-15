@@ -129,7 +129,7 @@ class _OnboardingChoiceScreenState
                     accentContainer: scheme.tertiaryContainer,
                     onAccentContainer: scheme.onTertiaryContainer,
                     title: 'Explore with sample data',
-                    badge: 'Sandbox · sample data',
+                    badge: 'Example data',
                     body:
                         "Jump into a fully loaded demo portfolio — properties, "
                         "tenants, leases, payments and work orders — so you can try "
@@ -151,7 +151,7 @@ class _OnboardingChoiceScreenState
                     accentContainer: scheme.primaryContainer,
                     onAccentContainer: scheme.onPrimaryContainer,
                     title: 'Set up my real portfolio',
-                    badge: 'Live · your real data',
+                    badge: 'My real rentals',
                     body:
                         'Start with a clean, empty account and add your own '
                         'properties, tenants and leases. No sample data — this is '
@@ -172,8 +172,9 @@ class _OnboardingChoiceScreenState
                       const SizedBox(width: 6),
                       Flexible(
                         child: Text(
-                          'Not sure? Start with the sandbox — going live later '
-                          'clears the sample data.',
+                          'Not sure? Start with the example data — switching to '
+                          'your real rentals later clears it and starts you '
+                          'clean.',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: scheme.onSurfaceVariant,
                           ),

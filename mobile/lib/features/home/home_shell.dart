@@ -38,6 +38,7 @@ import '../messages/messages_repository.dart';
 import '../money/money_screen.dart';
 import '../money/money_snapshot_card.dart';
 import '../money/overdue_screen.dart';
+import '../onboarding/go_live_sheet.dart';
 import '../onboarding/getting_started_provider.dart';
 import '../onboarding/getting_started_screen.dart';
 import '../onboarding/getting_started_tasks.dart';
@@ -46,7 +47,6 @@ import '../portal/tenant_portal_repository.dart';
 import '../portal/tenant_work_order_detail_screen.dart';
 import '../tenants/tenants_list_screen.dart';
 import '../tenants/tenant_lease_screen.dart';
-import '../voice/tell_me_screen.dart';
 import 'more_tab.dart';
 
 // ---------------------------------------------------------------------------
@@ -185,7 +185,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (ref.read(authControllerProvider) is AuthStateAuthenticated) {
-        context.go(route);
+        // A14: PUSH the deep-linked target on top of the shell (not `go`,
+        // which REPLACES the stack) so a detail screen opened from a
+        // notification tap keeps a working back button to the dashboard
+        // instead of stranding the user with no way back.
+        context.push(route);
       }
       ref.read(pendingPushLinkProvider.notifier).consume();
     });
@@ -324,9 +328,15 @@ class _HomeShellState extends ConsumerState<HomeShell>
   }
 }
 
-/// App-wide "Sandbox mode" indicator — a slim warning-tinted bar shown at the top of the shell
-/// while the account is a seeded demo sandbox. Renders nothing (zero height) once the account is
-/// Live or while the state is still loading, so it never causes layout jank for real accounts.
+/// App-wide "Example data" indicator — a slim tinted bar shown at the top of the
+/// shell while the account is a seeded demo sandbox. Renders nothing (zero
+/// height) once the account is Live or while the state is still loading, so it
+/// never causes layout jank for real accounts.
+///
+/// A11: softer, plainer wording ("Example data" instead of dev-term "Sandbox
+/// mode") and — unlike the old informational-only bar — it is now ACTIONABLE:
+/// tapping it opens the guarded go-live flow so the user can start fresh with
+/// their own rentals. The Sandbox feature itself is unchanged.
 class _SandboxIndicator extends ConsumerWidget {
   const _SandboxIndicator();
 
@@ -341,30 +351,38 @@ class _SandboxIndicator extends ConsumerWidget {
 
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    return Container(
-      key: const Key('sandbox-indicator'),
-      width: double.infinity,
+    return Material(
       color: scheme.tertiaryContainer,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-      child: SafeArea(
-        bottom: false,
-        child: Row(
-          children: [
-            Icon(Icons.science_outlined,
-                size: 15, color: scheme.onTertiaryContainer),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Sandbox mode — exploring with sample data. Nothing here is real.',
-                style: theme.textTheme.labelMedium?.copyWith(
-                  color: scheme.onTertiaryContainer,
-                  fontWeight: FontWeight.w600,
+      child: InkWell(
+        onTap: () => showGoLiveSheet(context),
+        child: Container(
+          key: const Key('sandbox-indicator'),
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+          child: SafeArea(
+            bottom: false,
+            child: Row(
+              children: [
+                Icon(Icons.science_outlined,
+                    size: 15, color: scheme.onTertiaryContainer),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Example data — tap to start fresh with your own.',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: scheme.onTertiaryContainer,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
+                const SizedBox(width: 8),
+                Icon(Icons.arrow_forward_rounded,
+                    size: 15, color: scheme.onTertiaryContainer),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -1318,11 +1336,8 @@ class _HomeTab extends ConsumerWidget {
               MaterialPageRoute<void>(builder: (_) => const MoreTab()),
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.auto_awesome_outlined),
-            tooltip: 'Assistant',
-            onPressed: onOpenAssistant,
-          ),
+          // A4: the duplicate AppBar "Assistant" sparkle was removed — the
+          // single AI entry point is now the "Ask" quick-action tile below.
           IconButton(
             icon: const Icon(Icons.logout_outlined),
             tooltip: 'Sign out',
@@ -1356,16 +1371,10 @@ class _HomeTab extends ConsumerWidget {
                     ),
                     const SizedBox(height: 24),
 
-                    // ── Quick actions ─────────────────────────────────────
+                    // ── Quick actions (A3: two doorways, not four) ────────
                     _QuickActions(
-                      onTellMe: () => Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) => const TellMeScreen(),
-                        ),
-                      ),
-                      onScan: onOpenCapture,
+                      onScanOrAdd: onOpenCapture,
                       onAskAi: onOpenAssistant,
-                      onAddExpense: onOpenCapture,
                     ),
                     const SizedBox(height: 32),
 
@@ -1446,8 +1455,10 @@ class _HomeTab extends ConsumerWidget {
                   _LatestMessagesSection(messagesAsync: messagesAsync),
                   const SizedBox(height: 24),
                   _HomeSectionHeader(
-                    title: 'Field queue',
-                    actionLabel: 'Open maintenance',
+                    // A6: one professional term — "Work Orders" — for the
+                    // "things to fix" concept (was "Field queue").
+                    title: 'Work Orders',
+                    actionLabel: 'View all',
                     onAction: () => Navigator.of(context).push<void>(
                       MaterialPageRoute<void>(
                         builder: (_) => const WorkOrdersScreen(),
@@ -1568,7 +1579,7 @@ class _FieldQueueSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return queueAsync.when(
-      loading: () => const _LoadingCard(label: 'Loading field queue...'),
+      loading: () => const _LoadingCard(label: 'Loading work orders...'),
       error: (_, _) => const _EmptyInlineCard(
         icon: Icons.build_outlined,
         text: "Couldn't load work orders.",
@@ -1577,7 +1588,7 @@ class _FieldQueueSection extends StatelessWidget {
         if (queue.isEmpty) {
           return const _EmptyInlineCard(
             icon: Icons.check_circle_outline,
-            text: 'No open field work.',
+            text: 'No open work orders right now.',
           );
         }
 
@@ -1783,14 +1794,33 @@ class _EmptyInlineCard extends StatelessWidget {
 /// signals are still loading or errored (no layout jank / no flash of an
 /// "all to-do" card) AND once every task is complete, so it never nags a
 /// set-up landlord.
+///
+/// A1: in Sandbox the checklist is auto-satisfied by SEEDED demo records, so
+/// "core setup complete" / "all done" would be a lie — the account has no REAL
+/// property/tenant/lease. In Sandbox we therefore keep the card up with honest
+/// "Exploring with sample data" framing plus a "set up my own rentals" nudge
+/// (the actionable go-live control, shared with A11), and never celebrate the
+/// seeded spine. Only a Live account celebrates / hides on completion.
 class _GettingStartedCard extends ConsumerWidget {
   const _GettingStartedCard();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Decide Sandbox-vs-Live from the dedicated sandbox-state provider (shared
+    // autoDispose cache with the _SandboxIndicator). While it's still loading we
+    // fall back to the honest "not sandbox" path — the card already hides itself
+    // until the checklist signals settle, so nothing flashes.
+    final isSandbox = ref.watch(sandboxStateProvider).maybeWhen(
+          data: (s) => s.isSandbox,
+          orElse: () => false,
+        );
+
     final progress = ref.watch(gettingStartedProgressProvider);
-    // Hidden until data settles, and hidden once everything's done.
-    if (progress == null || progress.allDone) return const SizedBox.shrink();
+    // Hidden until data settles. In Live, also hidden once everything's done. In
+    // Sandbox we NEVER treat the seeded "all done" as real completion (A1), so
+    // the card stays up to point the user at setting up their own rentals.
+    if (progress == null) return const SizedBox.shrink();
+    if (!isSandbox && progress.allDone) return const SizedBox.shrink();
 
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
@@ -1804,14 +1834,17 @@ class _GettingStartedCard extends ConsumerWidget {
           ),
         );
 
-    // The next not-yet-done task, surfaced inline as a one-tap hint.
+    // The next not-yet-done task, surfaced inline as a one-tap hint (Live only —
+    // in Sandbox the seeded records auto-check everything, so there is no "next").
     GettingStartedTask? nextTask;
-    final signals = ref.watch(gettingStartedSignalsProvider).value;
-    if (signals != null) {
-      for (final task in kGettingStartedTasks) {
-        if (!task.isComplete(signals)) {
-          nextTask = task;
-          break;
+    if (!isSandbox) {
+      final signals = ref.watch(gettingStartedSignalsProvider).value;
+      if (signals != null) {
+        for (final task in kGettingStartedTasks) {
+          if (!task.isComplete(signals)) {
+            nextTask = task;
+            break;
+          }
         }
       }
     }
@@ -1852,8 +1885,11 @@ class _GettingStartedCard extends ConsumerWidget {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            'A short checklist to get your rentals set up — '
-                            'each step takes you to the right spot.',
+                            isSandbox
+                                ? "This is example data so you can look around. "
+                                    "When you're ready, set up your own rentals."
+                                : 'A short checklist to get your rentals set up '
+                                    '— each step takes you to the right spot.',
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: cs.onSurfaceVariant,
                             ),
@@ -1866,63 +1902,76 @@ class _GettingStartedCard extends ConsumerWidget {
                   ],
                 ),
                 const SizedBox(height: 14),
-                Row(
-                  children: [
-                    Text(
-                      '${progress.coreDoneCount} of ${progress.coreTotalCount} '
-                      'essentials',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: cs.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
-                      ),
+                if (isSandbox)
+                  // A1/A11: honest "sample data" framing + the actionable
+                  // go-live nudge — no progress bar, no "core setup complete".
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.tonalIcon(
+                      onPressed: () => showGoLiveSheet(context),
+                      icon: const Icon(Symbols.rocket_launch_rounded, fill: 1),
+                      label: const Text('Set up my rentals'),
                     ),
-                    const Spacer(),
-                    if (progress.allCoreDone)
+                  )
+                else ...[
+                  Row(
+                    children: [
                       Text(
-                        'Core setup complete',
+                        '${progress.coreDoneCount} of '
+                        '${progress.coreTotalCount} essentials',
                         style: theme.textTheme.labelMedium?.copyWith(
-                          color: cs.primary,
-                          fontWeight: FontWeight.w700,
+                          color: cs.onSurfaceVariant,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: LinearProgressIndicator(
-                    value: fraction,
-                    minHeight: 8,
-                    backgroundColor: cs.surfaceContainerHighest,
-                  ),
-                ),
-                if (nextTask != null) ...[
-                  const SizedBox(height: 14),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: cs.surface.withValues(alpha: 0.6),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(nextTask.icon,
-                            size: 18, color: cs.primary, fill: 1),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            'Next: ${nextTask.label}',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                      const Spacer(),
+                      if (progress.allCoreDone)
+                        Text(
+                          'Core setup complete',
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: cs.primary,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
-                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: LinearProgressIndicator(
+                      value: fraction,
+                      minHeight: 8,
+                      backgroundColor: cs.surfaceContainerHighest,
                     ),
                   ),
+                  if (nextTask != null) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      decoration: BoxDecoration(
+                        color: cs.surface.withValues(alpha: 0.6),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(nextTask.icon,
+                              size: 18, color: cs.primary, fill: 1),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Next: ${nextTask.label}',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ],
             ),
@@ -1937,18 +1986,25 @@ class _GettingStartedCard extends ConsumerWidget {
 // Quick-action buttons
 // ---------------------------------------------------------------------------
 
+/// The two home quick actions.
+///
+/// A3 collapsed the old four tiles ("Tell me", "Scan a document", "Ask AI",
+/// "Add expense") to two: "Scan or add" and "Ask". The two removed tiles were
+/// duplicate doorways — "Scan a document" and "Add expense" opened the *same*
+/// capture sheet, and "Tell me" (voice) already lives inside that sheet — so no
+/// capability is lost: the capture sheet still covers scan / gallery / PDF /
+/// voice ("Tell me") / type. A4 also makes "Ask" the single AI entry point.
 class _QuickActions extends StatelessWidget {
   const _QuickActions({
-    required this.onTellMe,
-    required this.onScan,
+    required this.onScanOrAdd,
     required this.onAskAi,
-    required this.onAddExpense,
   });
 
-  final VoidCallback onTellMe;
-  final VoidCallback onScan;
+  /// Opens the capture sheet (scan / gallery / PDF / voice / type).
+  final VoidCallback onScanOrAdd;
+
+  /// Opens the AI assistant (the single "Ask" entry point).
   final VoidCallback onAskAi;
-  final VoidCallback onAddExpense;
 
   @override
   Widget build(BuildContext context) {
@@ -1956,37 +2012,19 @@ class _QuickActions extends StatelessWidget {
       children: [
         Expanded(
           child: _QuickActionButton(
-            icon: Symbols.mic_rounded,
-            label: 'Tell\nme',
-            family: M3TonalFamily.violet,
-            onTap: onTellMe,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _QuickActionButton(
-            icon: Symbols.document_scanner_rounded,
-            label: 'Scan a\ndocument',
+            icon: Symbols.add_a_photo_rounded,
+            label: 'Scan or add',
             family: M3TonalFamily.sky,
-            onTap: onScan,
+            onTap: onScanOrAdd,
           ),
         ),
         const SizedBox(width: 10),
         Expanded(
           child: _QuickActionButton(
             icon: Symbols.auto_awesome_rounded,
-            label: 'Ask\nAI',
+            label: 'Ask',
             family: M3TonalFamily.mint,
             onTap: onAskAi,
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _QuickActionButton(
-            icon: Symbols.receipt_long_rounded,
-            label: 'Add\nexpense',
-            family: M3TonalFamily.amber,
-            onTap: onAddExpense,
           ),
         ),
       ],
