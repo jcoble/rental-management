@@ -66,6 +66,61 @@ public class AuthControllerCookieTests
             .Should().Contain("rc_refresh_token=rotated-refresh-token");
     }
 
+    // Security invariant: a web (browser) caller — which does NOT send X-Client-Type:
+    // mobile — must never receive the refresh token in the JSON body. The token stays
+    // confined to the httpOnly cookie so browser JS can't read it.
+    [Fact]
+    public async Task Login_without_mobile_header_does_not_put_refresh_token_in_body()
+    {
+        var tokens = CreateTokens("issued-refresh-token");
+        var authService = new Mock<IAuthService>();
+        authService
+            .Setup(service => service.LoginAsync(
+                It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(AuthResult.Ok(CreateLoginResponse(tokens), tokens));
+
+        var controller = CreateController(authService.Object);
+
+        var result = await controller.Login(new LoginRequest
+        {
+            Email = "admin@rentalcommand.local",
+            Password = "Admin123!"
+        });
+
+        var body = ((OkObjectResult)result.Result!).Value.Should().BeOfType<LoginResponse>().Subject;
+        body.RefreshToken.Should().BeNull();
+    }
+
+    // The mobile client opts in via X-Client-Type: mobile and DOES get the rotated
+    // refresh token in the body (it has no readable httpOnly cookie jar). The cookie
+    // is still set as well.
+    [Fact]
+    public async Task Login_with_mobile_header_returns_refresh_token_in_body()
+    {
+        var tokens = CreateTokens("issued-refresh-token");
+        var authService = new Mock<IAuthService>();
+        authService
+            .Setup(service => service.LoginAsync(
+                It.IsAny<string>(), It.IsAny<string>(),
+                It.IsAny<string?>(), It.IsAny<string?>()))
+            .ReturnsAsync(AuthResult.Ok(CreateLoginResponse(tokens), tokens));
+
+        var controller = CreateController(authService.Object);
+        controller.Request.Headers["X-Client-Type"] = "mobile";
+
+        var result = await controller.Login(new LoginRequest
+        {
+            Email = "admin@rentalcommand.local",
+            Password = "Admin123!"
+        });
+
+        var body = ((OkObjectResult)result.Result!).Value.Should().BeOfType<LoginResponse>().Subject;
+        body.RefreshToken.Should().Be("issued-refresh-token");
+        controller.Response.Headers.SetCookie.ToString()
+            .Should().Contain("rc_refresh_token=issued-refresh-token");
+    }
+
     private static AuthController CreateController(IAuthService authService)
     {
         var tokenService = new Mock<IJwtTokenService>();

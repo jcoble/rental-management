@@ -132,6 +132,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
+    // Backstop: if a sign-in attempt left the controller in an unauthenticated
+    // state with an error but our local `_errorMessage` wasn't set for some
+    // reason, still surface it. The local message (set in _submit/_signInWithGoogle)
+    // takes priority so we never show two error chips for the same failure.
+    final authState = ref.watch(authControllerProvider);
+    final stateError =
+        authState is AuthStateUnauthenticated ? authState.error : null;
+    final effectiveError = _errorMessage ?? stateError;
+
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -235,7 +244,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         ),
                         const SizedBox(height: 24),
 
-                        if (_errorMessage != null) ...[
+                        if (effectiveError != null) ...[
                           Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 12,
@@ -255,7 +264,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
-                                    _errorMessage!,
+                                    effectiveError,
                                     style: theme.textTheme.bodySmall?.copyWith(
                                       color: colorScheme.onErrorContainer,
                                     ),
