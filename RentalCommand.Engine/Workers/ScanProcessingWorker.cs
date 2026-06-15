@@ -234,10 +234,13 @@ public class ScanProcessingWorker : EngineWorkerBase
             .Take(GroundingCap)
             .ToListAsync(ct);
 
+        // Carry the address (line1 + city) alongside the name so the lease importer's LLM can
+        // match a scanned lease's leased-premises address to an existing property by address, not
+        // just by a building name the lease may not even mention.
         var properties = await db.Properties.AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId && p.DeletedAt == null)
             .OrderByDescending(p => p.UpdatedAt)
-            .Select(p => new { id = p.Id, name = p.Name })
+            .Select(p => new { id = p.Id, name = p.Name, addressLine1 = p.AddressLine1, city = p.City })
             .Take(GroundingCap)
             .ToListAsync(ct);
 
