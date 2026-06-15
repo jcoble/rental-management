@@ -57,9 +57,15 @@ public class WorkOrderController : AuthenticatedPortfolioControllerBase
 
     [HttpPost]
     [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<WorkOrderResponse>> Create([FromBody] CreateWorkOrderRequest request, CancellationToken ct)
     {
+        if (!IsScheduleWindowValid(request.ScheduledFor, request.ScheduledWindowEnd))
+        {
+            return BadRequest(new { error = "The arrival window end must be after its start." });
+        }
+
         var created = await _service.CreateAsync(GetPortfolioId(), request, GetUserId(), "Staff", ct);
         return created == null
             ? NotFound(new { error = "Referenced property, unit, tenant, lease, or vendor not found in this portfolio" })
@@ -68,12 +74,27 @@ public class WorkOrderController : AuthenticatedPortfolioControllerBase
 
     [HttpPatch("{id:int}")]
     [ProducesResponseType(typeof(WorkOrderResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<ActionResult<WorkOrderResponse>> Update(int id, [FromBody] UpdateWorkOrderRequest request, CancellationToken ct)
     {
+        if (!IsScheduleWindowValid(request.ScheduledFor, request.ScheduledWindowEnd))
+        {
+            return BadRequest(new { error = "The arrival window end must be after its start." });
+        }
+
         var updated = await _service.UpdateAsync(GetPortfolioId(), id, request, GetUserId(), "Staff", ct);
         return updated == null ? NotFound(new { error = "Work order not found" }) : Ok(updated);
     }
+
+    /// <summary>
+    /// Validates the scheduled arrival window: when both ends are supplied on the request,
+    /// <paramref name="windowEnd"/> must be strictly after <paramref name="start"/>. A window-end with
+    /// no start (or vice versa) is left to the partial-update semantics and not rejected here. Compared
+    /// as instants, so the landlord's offset is honored.
+    /// </summary>
+    private static bool IsScheduleWindowValid(DateTimeOffset? start, DateTimeOffset? windowEnd)
+        => !(start.HasValue && windowEnd.HasValue) || windowEnd.Value > start.Value;
 
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
