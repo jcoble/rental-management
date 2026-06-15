@@ -33,7 +33,7 @@
 
 <script lang="ts" generics="T extends object">
 	import type { Snippet } from 'svelte';
-	import type { ColumnDef, SortDirection } from './types.js';
+	import type { ColumnDef, MobileColumnRole, SortDirection } from './types.js';
 	import { cn } from '$lib/utils.js';
 	import { Loader2, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import EmptyState from '$lib/components/shared/EmptyState.svelte';
@@ -128,6 +128,17 @@
 		}
 	}
 
+	// ── Column ordering: pinned action columns first ──────────────────────────────
+	// Action columns (isAction) render at the LEFT of the desktop table and stick there while the
+	// rest of the grid scrolls horizontally, so a row's Mark Paid / Edit / Delete controls are never
+	// pushed off-screen. Original relative order is preserved within each group. The mobile card list
+	// keys off the original `columns` array, so this reorder only affects the desktop table.
+	const orderedColumns = $derived.by(() => {
+		const actions = columns.filter((c) => c.isAction);
+		const rest = columns.filter((c) => !c.isAction);
+		return [...actions, ...rest];
+	});
+
 	// ── Value extraction ──────────────────────────────────────────────────────────
 	function getValue(item: T, col: ColumnDef<T>): unknown {
 		if (col.accessor) return col.accessor(item);
@@ -172,6 +183,16 @@
 		right: 'text-right'
 	};
 
+	// Sticky-left classes for a pinned action column. The opaque background lets data cells scroll
+	// underneath it; a right divider separates the pinned block from the scrolling columns. The
+	// `<th>` gets the header tint, the `<td>` the surface tint — both supplied by the m3-data-surface.
+	function pinnedHeadClass(col: ColumnDef<T>): string {
+		return col.isAction ? 'datagrid-pinned-head sticky left-0 z-20' : '';
+	}
+	function pinnedCellClass(col: ColumnDef<T>): string {
+		return col.isAction ? 'datagrid-pinned-cell sticky left-0 z-10' : '';
+	}
+
 	// ── Column sizing ───────────────────────────────────────────────────────────────
 	// Builds the inline `style` for a column's <th>/<td> from width/minWidth/maxWidth.
 	// A baseline min-width is applied to every column (unless it sets its own width/minWidth)
@@ -179,13 +200,15 @@
 	// (horizontal scroll) instead of squishing every column to nothing. A sparse table whose
 	// columns fit stays w-full and fills the container, so there's no lonely scrollbar.
 	// max-width caps a long free-text column so it truncates instead of blowing out the layout.
-	const DEFAULT_MIN_WIDTH = '7rem';
+	const DEFAULT_MIN_WIDTH = '5rem';
 	function colStyle(col: ColumnDef<T>): string {
 		const parts: string[] = [];
 		if (col.width) parts.push(`width:${col.width}`);
 		// An explicit fixed `width` already pins the column; only add a min-width otherwise.
 		if (col.minWidth) parts.push(`min-width:${col.minWidth}`);
-		else if (!col.width) parts.push(`min-width:${DEFAULT_MIN_WIDTH}`);
+		// Action columns size to their buttons (best-fit, whitespace-nowrap) — never pad them out
+		// with the baseline min-width, which only exists to stop data columns squishing to nothing.
+		else if (!col.width && !col.isAction) parts.push(`min-width:${DEFAULT_MIN_WIDTH}`);
 		if (col.maxWidth) parts.push(`max-width:${col.maxWidth}`);
 		return parts.join(';');
 	}
@@ -285,7 +308,10 @@
 	const mobileGroups = $derived.by<MobileGroup>(() => {
 		const groups: MobileGroup = { title: [], subtitle: [], badge: [], metric: [], meta: [] };
 		columns.forEach((col, i) => {
-			const role = col.mobileRole ?? (i === 0 ? 'title' : 'meta');
+			// Action columns never become the implicit mobile title and default to hidden — the mobile
+			// card uses its own row-tap/affordances, so an action column with no explicit role is dropped.
+			const fallback: MobileColumnRole = col.isAction ? 'hidden' : i === 0 ? 'title' : 'meta';
+			const role = col.mobileRole ?? fallback;
 			if (role === 'hidden') return;
 			groups[role].push(col);
 		});
@@ -314,7 +340,7 @@
 
 	<!-- ── Desktop table (hidden on mobile + tablet) ──────────────────────────── -->
 	<div
-		class="m3-data-surface hidden overflow-x-auto rounded-lg border lg:block"
+		class="datagrid-desktop-surface m3-data-surface hidden overflow-x-auto rounded-lg border lg:block"
 		data-testid="datagrid-desktop"
 		aria-busy={loading}
 	>
@@ -332,13 +358,14 @@
 			<Table.Root>
 				<Table.Header>
 					<Table.Row class="hover:[&,&>svelte-css-wrapper]:[&>th,td]:bg-transparent">
-						{#each columns as col}
+						{#each orderedColumns as col}
 							{@const align = effectiveAlign(col)}
 							<Table.Head
 								class={cn(
-									'select-none whitespace-nowrap px-3 py-2.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground',
+									'select-none whitespace-nowrap px-2.5 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground',
 									alignClass[align],
 									col.sortable && 'cursor-pointer hover:text-foreground',
+									pinnedHeadClass(col),
 									col.class
 								)}
 								style={colStyle(col)}
@@ -401,14 +428,15 @@
 								onkeydown={onRowClick ? (e) => handleRowKeydown(e, item) : undefined}
 								data-testid={getRowTestId ? getRowTestId(item) : 'datagrid-row'}
 							>
-								{#each columns as col}
+								{#each orderedColumns as col}
 									{@const align = effectiveAlign(col)}
 									{@const tabular = isTabular(col.format)}
 									<Table.Cell
 										class={cn(
-											'px-3 py-2.5 text-sm',
+											'px-2.5 py-2 text-sm',
 											alignClass[align],
 											tabular && 'font-mono tabular-nums',
+											pinnedCellClass(col),
 											col.class
 										)}
 										style={colStyle(col)}
@@ -598,3 +626,31 @@
 		{/if}
 	</div>
 </div>
+
+<style>
+	/* ── Pinned (sticky-left) action column ──────────────────────────────────────
+	   The action column is rendered first and stuck to the left edge so a row's
+	   controls stay on-screen while the data columns scroll horizontally. Sticky
+	   cells must paint an OPAQUE background or the scrolling cells show through, so
+	   each pinned cell composites its contextual tint over the opaque surface base
+	   (the m3-data-surface wrapper's `background`). A right border divides the pinned
+	   block from the scrolling region. */
+	:global(.datagrid-desktop-surface .datagrid-pinned-head) {
+		background:
+			color-mix(in srgb, var(--m3c-surface-violet-high, var(--m3c-surface-container-high)) 64%, transparent),
+			var(--m3c-surface-violet, var(--m3c-surface-container));
+		box-shadow: inset -1px 0 0 color-mix(in srgb, var(--m3c-outline-variant) 60%, transparent);
+	}
+	:global(.datagrid-desktop-surface .datagrid-pinned-cell) {
+		background: var(--m3c-surface-violet, var(--m3c-surface-container));
+		box-shadow: inset -1px 0 0 color-mix(in srgb, var(--m3c-outline-variant) 60%, transparent);
+	}
+	/* Keep the pinned cell opaque on row hover — layer the row's hover tint over the
+	   opaque base instead of the table component's semi-transparent bg-muted/50, which
+	   would let scrolling cells bleed through the pinned column. */
+	:global(.datagrid-desktop-surface [data-slot='table-row']:hover .datagrid-pinned-cell) {
+		background:
+			color-mix(in srgb, var(--m3c-surface-container-lowest) 42%, transparent),
+			var(--m3c-surface-violet, var(--m3c-surface-container));
+	}
+</style>

@@ -49,4 +49,11 @@ export interface ColumnDef<T> {
 	mobileRole?: MobileColumnRole;
 	/** Override the label shown in the mobile card fields grid. Defaults to `title`. */
 	mobileLabel?: string;
+	/**
+	 * Marks this as an action column (Mark Paid / Edit / Delete buttons). Action columns are
+	 * pinned sticky to the LEFT edge of the desktop table and rendered before the data columns,
+	 * so the row's controls stay visible even when the grid overflows horizontally. They never
+	 * become the implicit mobile `title` and default to `mobileRole: 'hidden'`.
+	 */
+	isAction?: boolean;
 }
