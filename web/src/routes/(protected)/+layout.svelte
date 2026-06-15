@@ -4,6 +4,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { setOnAuthCleared, isTokenExpired } from '$lib/stores/auth.svelte';
+	import { initPortfolio } from '$lib/stores/portfolio.svelte';
 	import { refreshToken } from '$lib/api/client';
 	import { signalRService } from '$lib/realtime/signalr';
 	import { useInvalidateOnSignalR } from '$lib/realtime/invalidate';
@@ -14,6 +15,13 @@
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
+
+	// Reconcile the active-portfolio selection with localStorage AFTER hydration (L-18): the
+	// store defaults to a deterministic placeholder during SSR + first client render so markup
+	// agrees, and the real persisted id is applied here on the client.
+	$effect(() => {
+		initPortfolio();
+	});
 
 	// Bridge SignalR data-update events to TanStack Query invalidation (wired once).
 	const queryClient = useQueryClient();
