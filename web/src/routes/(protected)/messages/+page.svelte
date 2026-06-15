@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { tick } from 'svelte';
 	import { messages, type ConversationSummary, type ConversationMessage } from '$lib/api/endpoints/messages';
@@ -21,7 +21,7 @@
 	// --- Selected thread --------------------------------------------------------
 	let selectedId = $state<number | null>(null);
 	$effect(() => {
-		const queryId = Number($page.url.searchParams.get('conversation'));
+		const queryId = Number(page.url.searchParams.get('conversation'));
 		if (Number.isInteger(queryId) && queryId > 0 && selectedId !== queryId) {
 			selectedId = queryId;
 		}
@@ -105,13 +105,27 @@
 	let replyBody = $state('');
 	let replyChannels = $state({ portal: true, email: false, sms: false });
 
-	// When the active thread changes, reset the reply box and pre-fill channels
-	// from the saved settings defaults (this choice applies to this send only).
+	// L-15: the reply box must be cleared ONLY on an actual thread switch — never when the
+	// portfolio query resolves/invalidates (e.g. a SignalR Portfolio event), which would
+	// silently erase a half-typed reply. Split into two effects:
+	//
+	//   1. Thread switch (depends only on selectedId): clear the body + reset channels to base.
+	//   2. Channel-defaults seed (once per thread): apply the saved email/sms defaults. This
+	//      handles the case where defaults arrive AFTER the thread was opened, without touching
+	//      replyBody — so a later portfolio refresh can't wipe the draft.
+	let channelsSeededFor = $state<number | null>(null);
 	$effect(() => {
-		// Touch selectedId so this reruns on thread switch.
-		void selectedId;
+		void selectedId; // thread switch is the only trigger
 		replyBody = '';
-		replyChannels = { portal: true, email: messagingDefaults.email, sms: messagingDefaults.sms };
+		replyChannels = { portal: true, email: false, sms: false };
+		channelsSeededFor = null;
+	});
+	$effect(() => {
+		const defaults = messagingDefaults; // re-run when defaults become available/change
+		if (selectedId !== null && channelsSeededFor !== selectedId) {
+			channelsSeededFor = selectedId;
+			replyChannels = { portal: true, email: defaults.email, sms: defaults.sms };
+		}
 	});
 
 	const replyAnyChannel = $derived(replyChannels.portal || replyChannels.email || replyChannels.sms);

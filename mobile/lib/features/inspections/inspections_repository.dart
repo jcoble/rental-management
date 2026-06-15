@@ -58,7 +58,14 @@ class InspectionsRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/inspections/$id');
-      return InspectionDetail.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return InspectionDetail.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -70,7 +77,14 @@ class InspectionsRepository {
     try {
       final response =
           await _dio.post<Map<String, dynamic>>('/inspections', data: data);
-      return InspectionDetail.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return InspectionDetail.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -91,7 +105,14 @@ class InspectionsRepository {
           'note': ?note,
         },
       );
-      return InspectionItem.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return InspectionItem.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -118,7 +139,14 @@ class InspectionsRepository {
       });
       final response =
           await _dio.post<Map<String, dynamic>>('/documents', data: formData);
-      return (response.data!['id'] as num).toInt();
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return (data['id'] as num).toInt();
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -135,7 +163,14 @@ class InspectionsRepository {
         '/inspections/$inspectionId/items/$itemId/photo',
         data: {'storedFileId': storedFileId},
       );
-      return InspectionItem.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return InspectionItem.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -148,7 +183,14 @@ class InspectionsRepository {
         '/inspections/$inspectionId/complete',
         data: {},
       );
-      return CompleteInspectionResult.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return CompleteInspectionResult.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

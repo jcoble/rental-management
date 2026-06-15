@@ -91,7 +91,14 @@ class TeamRepository {
         '/admin/users/$id/role',
         data: {'role': role},
       );
-      return TeamMember.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return TeamMember.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -103,7 +110,14 @@ class TeamRepository {
         '/admin/users/$id/active',
         data: {'isActive': isActive},
       );
-      return TeamMember.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return TeamMember.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -126,7 +140,13 @@ class TeamRepository {
       };
       final response =
           await _dio.post<Map<String, dynamic>>('/admin/users', data: body);
-      final data = response.data!;
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
       final member = TeamMember.fromJson(data);
       final generatedPassword = data['generatedPassword'] as String?;
       return InviteResult(member: member, generatedPassword: generatedPassword);

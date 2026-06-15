@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { browser } from '$app/environment';
 	import { createQuery } from '@tanstack/svelte-query';
 	import {
@@ -50,8 +50,8 @@
 	import PortfolioSelector from '$lib/components/shared/PortfolioSelector.svelte';
 	import NotificationBell from '$lib/components/notifications/NotificationBell.svelte';
 	import MaterialSymbol from '$lib/components/m3/MaterialSymbol.svelte';
-	import { getCurrentUser, hasAnyRole, clearAuthState, getAuthState } from '$lib/stores/auth.svelte';
-	import { isPortalUser, isStaff } from '$lib/types/user';
+	import { clearAuthState } from '$lib/stores/auth.svelte';
+	import { hasRole, isPortalUser, isStaff } from '$lib/types/user';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { messages as messagesApi } from '$lib/api/endpoints/messages';
 	import { appointments as appointmentsApi } from '$lib/api/endpoints/appointments';
@@ -201,7 +201,14 @@
 		settings: 'settings'
 	};
 
-	let currentUser = $derived(getCurrentUser());
+	// Identity is sourced from the SERVER layout data (page.data.user), which is populated during
+	// SSR by every group layout's +layout.server.ts (root + protected/portal/admin/superadmin all
+	// return `user: locals.user`). Reading the client auth store here instead would be null on the
+	// server (the store seeds inside a $effect, which doesn't run during SSR), so the nav/account
+	// menu would render logged-out and then "pop" to authenticated after hydration — a visible
+	// wrong-state flash plus server/client markup divergence (M-15). The client store stays the
+	// source for outgoing Authorization headers and post-login mutations, not for shell rendering.
+	let currentUser = $derived(page.data.user ?? null);
 	let portalUser = $derived(isPortalUser(currentUser) && !isStaff(currentUser));
 
 	const portalNavItems: NavItem[] = [
@@ -216,7 +223,7 @@
 
 	function itemVisible(item: NavItem): boolean {
 		if (!item.roles || item.roles.length === 0) return true;
-		return hasAnyRole(...item.roles);
+		return hasRole(currentUser, ...item.roles);
 	}
 
 	// Staff groups filtered to the items the current user may see; empty groups dropped.
@@ -251,7 +258,7 @@
 	);
 
 	function isActive(href: string): boolean {
-		const currentPath = $page.url.pathname;
+		const currentPath = page.url.pathname;
 		if (href === '/') return currentPath === '/';
 		return currentPath.startsWith(href);
 	}
@@ -363,12 +370,15 @@
 	}
 
 	// --- Header quick-action live counts ---------------------------------------
-	const auth = getAuthState();
+	// Gate the live-count queries on the server-sourced identity too, so they don't fire a
+	// 401-bound request during the brief pre-hydration window. `enabled` is reactive (createQuery
+	// takes a thunk), so it flips on once page.data.user is present.
+	const isStaffSession = $derived(hasRole(currentUser, 'Admin', 'Manager', 'Agent'));
 	const showStaffHeader = $derived(!portalUser);
 
 	const unreadMessagesQuery = createQuery(() => ({
 		queryKey: ['header-unread-messages'],
-		enabled: auth.isAuthenticated && !portalUser && hasAnyRole('Admin', 'Manager', 'Agent'),
+		enabled: isStaffSession && !portalUser,
 		queryFn: () => messagesApi.list(),
 		staleTime: 30_000,
 		refetchInterval: 60_000
@@ -380,7 +390,7 @@
 
 	const upcomingApptsQuery = createQuery(() => ({
 		queryKey: ['header-upcoming-appointments', getCurrentPortfolioId()],
-		enabled: auth.isAuthenticated && !portalUser && hasAnyRole('Admin', 'Manager', 'Agent'),
+		enabled: isStaffSession && !portalUser,
 		queryFn: () => appointmentsApi.list(getCurrentPortfolioId(), { take: 100 }),
 		staleTime: 60_000,
 		refetchInterval: 120_000
@@ -800,7 +810,7 @@
 		<!-- Page content frame. Routes own their internal 100% scroll area. -->
 		<main class="customer-shell-main flex min-h-0 flex-1 justify-center overflow-hidden">
 			<div class="h-full w-full max-w-[1600px]">
-				{#key $page.url.pathname}
+				{#key page.url.pathname}
 					<div class="m3-route-transition" data-testid="route-transition-frame">
 						{@render children()}
 					</div>

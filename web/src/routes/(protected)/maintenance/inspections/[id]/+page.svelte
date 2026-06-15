@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { inspections, openInspectionReport } from '$lib/api/endpoints/inspections';
 	import { documents, fileObjectUrl } from '$lib/api/endpoints/documents';
 	import type { InspectionCompleteResult, InspectionDetail, InspectionItem } from '$lib/types';
@@ -15,7 +15,7 @@
 	import { Camera, Check, ClipboardCheck, Download, Minus, X } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
-	const id = $derived(Number($page.params.id));
+	const id = $derived(Number(page.params.id));
 
 	const inspectionQuery = createQuery(() => ({
 		queryKey: ['inspection', id],

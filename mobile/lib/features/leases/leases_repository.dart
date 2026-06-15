@@ -52,7 +52,14 @@ class LeasesRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/leases/$id');
-      return Lease.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Lease.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -65,7 +72,14 @@ class LeasesRepository {
     try {
       final response =
           await _dio.post<Map<String, dynamic>>('/leases', data: data);
-      return Lease.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Lease.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -78,7 +92,14 @@ class LeasesRepository {
         '/leases/$id',
         data: data,
       );
-      return Lease.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Lease.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -95,7 +116,14 @@ class LeasesRepository {
         '/leases/$id/ask',
         data: {'question': question},
       );
-      return LeaseQuestionResponse.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return LeaseQuestionResponse.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -110,7 +138,14 @@ class LeasesRepository {
       final response = await _dio.post<Map<String, dynamic>>(
         '/leases/$id/generate-document',
       );
-      return LeaseDocument.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return LeaseDocument.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -138,7 +173,14 @@ class LeasesRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/leases/$id/ledger');
-      return LeaseLedger.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return LeaseLedger.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -166,7 +208,14 @@ class LeasesRepository {
         '/leases/$id/send-for-signature',
         data: body.isNotEmpty ? body : null,
       );
-      return LeaseSignatureStatus.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return LeaseSignatureStatus.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -180,7 +229,14 @@ class LeasesRepository {
       final response = await _dio.get<Map<String, dynamic>>(
         '/leases/$id/signature-status',
       );
-      return LeaseSignatureStatus.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return LeaseSignatureStatus.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

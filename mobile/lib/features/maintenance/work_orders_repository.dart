@@ -42,7 +42,14 @@ class WorkOrdersRepository {
   Future<WorkOrder> getWorkOrder(int id) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>('/work-orders/$id');
-      return WorkOrder.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return WorkOrder.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -52,7 +59,14 @@ class WorkOrdersRepository {
   Future<WorkOrderDetail> getWorkOrderDetail(int id) async {
     try {
       final response = await _dio.get<Map<String, dynamic>>('/work-orders/$id');
-      return WorkOrderDetail.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return WorkOrderDetail.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -96,7 +110,14 @@ class WorkOrdersRepository {
         '/work-orders',
         data: data,
       );
-      return WorkOrder.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return WorkOrder.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -132,7 +153,14 @@ class WorkOrdersRepository {
         '/work-orders/$id',
         data: data,
       );
-      return WorkOrder.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return WorkOrder.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -151,7 +179,14 @@ class WorkOrdersRepository {
           if (trimmed != null && trimmed.isNotEmpty) 'statusNote': trimmed,
         },
       );
-      return WorkOrder.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return WorkOrder.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

@@ -43,9 +43,16 @@ builder.Services.AddScoped<RentalCommand.Core.Interfaces.IAuditScope,
     RentalCommand.Data.Auditing.AuditScope>();
 builder.Services.AddScoped<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>();
 
+// Row-Level Security backstop (audit M-1): the Engine operates across all portfolios, so its RLS
+// interceptor always sets app.is_admin = true (no HTTP context, no single portfolio). It sets the
+// same session GUCs the tenant_isolation policies read, mirroring EdiPlatform's Engine.
+builder.Services.AddSingleton<RentalCommand.Engine.Data.EngineRlsInterceptor>();
+
 builder.Services.AddDbContext<RentalCommandDbContext>((sp, options) =>
     options.UseNpgsql(connectionString)
-        .AddInterceptors(sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>()));
+        .AddInterceptors(
+            sp.GetRequiredService<RentalCommand.Data.Auditing.AuditSaveChangesInterceptor>(),
+            sp.GetRequiredService<RentalCommand.Engine.Data.EngineRlsInterceptor>()));
 
 // DB-outbox publisher + notification channel (SignalWire/Twilio SMS; SMTP/Zoho or SendGrid email,
 // config-selected; logs when unconfigured).

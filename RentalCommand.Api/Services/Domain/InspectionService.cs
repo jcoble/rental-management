@@ -509,24 +509,35 @@ public class InspectionService : IInspectionService
             : $"{property.Name} — {property.AddressLine1}, {property.City}, {property.State} {property.PostalCode}";
 
         // Load photo bytes for items that have a photo (best-effort; skip any that fail to load).
+        // Resolve the StoredFile metadata for every photo in ONE query (keyed by file id), instead of
+        // a FirstOrDefaultAsync per item (N+1). The per-file binary download still happens in the loop
+        // — that's an unavoidable per-object stream fetch from blob storage, not a DB round-trip.
         var photos = new Dictionary<int, byte[]>();
-        foreach (var item in items.Where(it => it.PhotoStoredFileId.HasValue))
+        var photoItems = items.Where(it => it.PhotoStoredFileId.HasValue).ToList();
+        if (photoItems.Count > 0)
         {
-            var file = await _db.StoredFiles
+            var photoFileIds = photoItems.Select(it => it.PhotoStoredFileId!.Value).Distinct().ToList();
+            var filePathById = await _db.StoredFiles
                 .AsNoTracking()
-                .FirstOrDefaultAsync(f => f.Id == item.PhotoStoredFileId!.Value && f.PortfolioId == portfolioId, ct);
-            if (file == null) continue;
+                .Where(f => photoFileIds.Contains(f.Id) && f.PortfolioId == portfolioId)
+                .Select(f => new { f.Id, f.FilePath })
+                .ToDictionaryAsync(f => f.Id, f => f.FilePath, ct);
 
-            try
+            foreach (var item in photoItems)
             {
-                await using var s = await _storage.DownloadAsync(file.FilePath, ct);
-                using var ms = new MemoryStream();
-                await s.CopyToAsync(ms, ct);
-                photos[item.Id] = ms.ToArray();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Could not load photo for inspection item {ItemId}; omitting from report.", item.Id);
+                if (!filePathById.TryGetValue(item.PhotoStoredFileId!.Value, out var filePath)) continue;
+
+                try
+                {
+                    await using var s = await _storage.DownloadAsync(filePath, ct);
+                    using var ms = new MemoryStream();
+                    await s.CopyToAsync(ms, ct);
+                    photos[item.Id] = ms.ToArray();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not load photo for inspection item {ItemId}; omitting from report.", item.Id);
+                }
             }
         }
 

@@ -6,16 +6,16 @@
   SvelteKit's bare unstyled "404 Not Found".
 -->
 <script lang="ts">
-	import { page } from '$app/stores';
+	import { page } from '$app/state';
 	import { Home, Compass, AlertTriangle } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 
-	const isNotFound = $derived($page.status === 404);
+	const isNotFound = $derived(page.status === 404);
 	const title = $derived(isNotFound ? "We can't find that page" : 'Something went wrong');
 	const message = $derived(
 		isNotFound
 			? "The page you're looking for doesn't exist or may have moved. Let's get you back on track."
-			: ($page.error?.message ?? 'An unexpected error occurred. Please try again in a moment.')
+			: (page.error?.message ?? 'An unexpected error occurred. Please try again in a moment.')
 	);
 </script>
 
@@ -38,7 +38,7 @@
 	</div>
 
 	<p class="mt-6 text-sm font-medium uppercase tracking-wide text-muted-foreground">
-		{isNotFound ? 'Error 404' : `Error ${$page.status}`}
+		{isNotFound ? 'Error 404' : `Error ${page.status}`}
 	</p>
 	<h1 class="mt-1 text-3xl font-semibold tracking-tight">{title}</h1>
 	<p class="mt-3 max-w-md text-sm text-muted-foreground">{message}</p>
