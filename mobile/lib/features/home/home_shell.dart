@@ -304,7 +304,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
           : FloatingActionButton(
         heroTag: 'home-capture-fab',
               onPressed: _openCapture,
-              tooltip: 'Capture',
+              tooltip: 'Scan / Add',
               elevation: 2,
               child: const Icon(Symbols.add_a_photo_rounded, fill: 1),
             ),
@@ -780,7 +780,7 @@ class _PayItemCard extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    '${payment.type.isEmpty ? 'Rent' : payment.type} · $dueLabel',
+                    '${payment.type.isEmpty ? 'Rent' : paymentTypeLabel(payment.type)} · $dueLabel',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: isLate ? cs.error : cs.onSurfaceVariant,
                     ),
@@ -1317,7 +1317,7 @@ class _HomeTab extends ConsumerWidget {
           ),
           IconButton(
             icon: const Icon(Icons.auto_awesome_outlined),
-            tooltip: 'AI Assistant',
+            tooltip: 'Assistant',
             onPressed: onOpenAssistant,
           ),
           IconButton(

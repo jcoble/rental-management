@@ -90,7 +90,9 @@ class _MoreTabState extends State<MoreTab> {
       ],
     ),
     _BrowseGroup(
-      title: 'Operations',
+      // "Work" is the frozen cross-surface group name (web nav group "Work";
+      // see Docs/label-glossary.md). Was "Operations" on mobile Browse (aligned).
+      title: 'Work',
       items: [
         _BrowseItem(
           icon: Symbols.event_repeat_rounded,
