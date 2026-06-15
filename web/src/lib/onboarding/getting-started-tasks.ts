@@ -63,7 +63,11 @@ export interface GettingStartedSignals {
 	hasNotificationEmail: boolean;
 	/** SignalWire / SMS provider credentials are configured. */
 	hasTexting: boolean;
-	/** At least one automated reminder (rent charge / late fee / lease expiry) is switched on. */
+	/**
+	 * The user deliberately switched on an automation that defaults OFF (rent charges or late fees).
+	 * Lease-expiry reminders are intentionally excluded — they default ON, so counting them would
+	 * auto-check this task for a brand-new account that never touched Settings.
+	 */
 	hasAutomations: boolean;
 }
 
@@ -108,7 +112,10 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		eli5: 'Give your whole operation a name — it shows on every report and reminder. Just use what you call your rentals.',
 		icon: Building,
 		route: '/settings',
-		hash: 'settings-portfolio-basics',
+		// Settings is tabbed: the hash must be a TAB KEY so the right tab opens (settings/+page.svelte's
+		// $effect honors tab-key hashes), and the coach key spotlights the section once that tab renders.
+		hash: 'portfolio',
+		coach: 'settings-portfolio',
 		core: true,
 		isComplete: (s) => s.portfolioNamed,
 	},
@@ -179,7 +186,8 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		eli5: 'Pick the email where rent reminders and your daily briefing land. Leave it blank to use your login email.',
 		icon: Bell,
 		route: '/settings',
-		hash: 'settings-notification-email',
+		hash: 'notifications',
+		coach: 'settings-notifications',
 		core: false,
 		isComplete: (s) => s.hasNotificationEmail,
 	},
@@ -189,7 +197,8 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		eli5: 'Let the app charge rent, add late fees, and warn about expiring leases on its own — so you do not have to remember.',
 		icon: SlidersHorizontal,
 		route: '/settings',
-		hash: 'settings-notification-delivery',
+		hash: 'automations',
+		coach: 'settings-automations',
 		core: false,
 		isComplete: (s) => s.hasAutomations,
 	},
@@ -202,7 +211,9 @@ export const GETTING_STARTED_TASKS: GettingStartedTask[] = [
 		),
 		icon: MessageSquare,
 		route: '/settings',
-		hash: 'settings-notification-delivery',
+		// SMS provider config lives in the Messaging tab (NOT Automations) — point there and spotlight it.
+		hash: 'messaging',
+		coach: 'settings-messaging',
 		core: false,
 		isComplete: (s) => s.hasTexting,
 	},
