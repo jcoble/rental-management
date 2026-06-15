@@ -7,6 +7,13 @@ on:
     branches: ["**"]
   workflow_dispatch:
 
+# Auto-cancel superseded CI runs for the same ref so rapid pushes (and batch
+# merges) don't pile a queue of stale runs onto the single self-hosted runner
+# and starve the deploy. Only the latest commit for a ref keeps its CI run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   DOTNET_VERSION: "10.0.x"
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
