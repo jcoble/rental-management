@@ -7,6 +7,7 @@ import '../voice/voice_command.dart';
 import '../../features/auth/forgot_password_screen.dart';
 import '../../features/auth/login_screen.dart';
 import '../../features/auth/register_screen.dart';
+import '../../features/auth/reset_password_screen.dart';
 import '../../features/home/home_shell.dart';
 import '../../features/maintenance/work_order_detail_screen.dart';
 import '../../features/maintenance/work_orders_screen.dart';
@@ -20,6 +21,7 @@ import '../../features/scan/scan_review_screen.dart';
 const _loginPath = '/login';
 const _registerPath = '/register';
 const _forgotPasswordPath = '/forgot-password';
+const _resetPasswordPath = '/reset-password';
 const _homePath = '/';
 
 /// Routes an unauthenticated user is allowed to sit on without being bounced
@@ -28,6 +30,7 @@ const _publicAuthPaths = <String>{
   _loginPath,
   _registerPath,
   _forgotPasswordPath,
+  _resetPasswordPath,
 };
 
 /// True for voice / App Actions deep links (`rentalcommand://voice/...`).
@@ -97,6 +100,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: _forgotPasswordPath,
         builder: (context, state) => const ForgotPasswordScreen(),
+      ),
+      GoRoute(
+        // Reached from the emailed reset link's userId+token query params (and
+        // from in-app navigation). The screen handles a missing/blank pair.
+        path: _resetPasswordPath,
+        builder: (context, state) => ResetPasswordScreen(
+          userId: state.uri.queryParameters['userId'] ?? '',
+          token: state.uri.queryParameters['token'] ?? '',
+        ),
       ),
       GoRoute(path: _homePath, builder: (context, state) => const HomeShell()),
 

@@ -105,6 +105,39 @@ class AuthController extends Notifier<AuthState> {
     return _repository.forgotPassword(email);
   }
 
+  /// Re-sends the email-verification message. Neutral by design (no account
+  /// enumeration). Throws [ApiException] only on transport error.
+  Future<void> resendVerification(String email) {
+    return _repository.resendVerification(email);
+  }
+
+  /// Completes a password reset using the emailed userId + token. Does NOT
+  /// establish a session — the user signs in afterward. Throws [ApiException]
+  /// on an invalid/expired token or password-policy failure.
+  Future<void> resetPassword({
+    required String userId,
+    required String token,
+    required String newPassword,
+  }) {
+    return _repository.resetPassword(
+      userId: userId,
+      token: token,
+      newPassword: newPassword,
+    );
+  }
+
+  /// Changes the signed-in user's password (Bearer-authenticated). Does not
+  /// alter [AuthState]. Throws [ApiException] on failure so the UI can show it.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) {
+    return _repository.changePassword(
+      currentPassword: currentPassword,
+      newPassword: newPassword,
+    );
+  }
+
   /// Completes sign-in using a Google **id_token** obtained on-device.
   ///
   /// Mirrors [login]: hands the token to `/auth/google`, then transitions to

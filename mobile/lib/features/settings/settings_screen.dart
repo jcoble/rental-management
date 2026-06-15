@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import 'change_password_screen.dart';
 import 'notification_settings_repository.dart';
 
 /// Notification settings screen.
@@ -103,6 +104,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 const SizedBox(height: 12),
                 _ProviderStatusCard(settings: settings),
               ],
+              const SizedBox(height: 24),
+              _SectionHeader(
+                title: 'Account',
+                subtitle: 'Manage your sign-in and security.',
+              ),
+              const SizedBox(height: 12),
+              const _AccountSecurityCard(),
             ],
           ),
         ),
@@ -520,6 +528,38 @@ class _ProviderStatusCard extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Account / security ──────────────────────────────────────────────────────
+
+class _AccountSecurityCard extends StatelessWidget {
+  const _AccountSecurityCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+        leading: Icon(Icons.lock_outline, color: theme.colorScheme.primary),
+        title: Text(
+          'Change password',
+          style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          'Update the password you use to sign in.',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => const ChangePasswordScreen(),
+          ),
         ),
       ),
     );
