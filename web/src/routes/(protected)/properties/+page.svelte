@@ -20,9 +20,22 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
+	import { page } from '$app/state';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+
+	// Second coach hop for the "add a unit" checklist step. That step lands here (the property LIST)
+	// and spotlights "open a property", but units are added on the property DETAIL page. When we arrive
+	// via that coach, latch it so the row the user opens carries ?coach=add-unit onward — the detail
+	// page's CoachTrigger then spotlights its "Add Unit" button, continuing the guidance.
+	let forwardUnitCoach = $state(false);
+	$effect(() => {
+		if (page.url.searchParams.get('coach') === 'open-property-for-units') forwardUnitCoach = true;
+	});
+	function openProperty(p: Property) {
+		goto(`/properties/${p.id}${forwardUnitCoach ? '?coach=add-unit' : ''}`);
+	}
 
 	let search = $state('');
 	let typeFilter = $state('');
@@ -240,7 +253,7 @@
 		{columns}
 		loading={propertiesQuery.isLoading}
 		emptyMessage="No properties found."
-		onRowClick={(p) => goto(`/properties/${p.id}`)}
+		onRowClick={openProperty}
 		getRowKey={(p) => p.id}
 		getRowTestId={() => 'property-row'}
 		data-testid="properties-list"

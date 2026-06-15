@@ -89,10 +89,13 @@ export function useGettingStarted(): UseGettingStarted {
 			hasNotificationEmail: !!notificationEmailQuery.data?.email,
 			hasTexting:
 				settings?.smsCredentialASet === true || settings?.smsCredentialBSet === true,
+			// Only the two toggles that default OFF (rent charges, late fees) count as "the user turned
+			// automations on". enableLeaseExpiryReminders defaults TRUE on the server
+			// (NotificationSettings.cs), so counting it here auto-checked this task for brand-new accounts
+			// that never opened Settings — the checklist claiming a deliberate setup that never happened.
 			hasAutomations:
 				settings?.enableRentCharges === true ||
-				settings?.enableLateFees === true ||
-				settings?.enableLeaseExpiryReminders === true,
+				settings?.enableLateFees === true,
 		};
 	}
 

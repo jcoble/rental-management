@@ -188,13 +188,13 @@
 {/snippet}
 
 <svelte:head>
-	<title>Scan Receipts - Rental Command</title>
+	<title>Scan / Add - Rental Command</title>
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="scan-page">
 	<div class="mb-4 flex flex-wrap items-start justify-between gap-3">
 		<div>
-			<h1 class="text-2xl font-bold">Scan a Document</h1>
+			<h1 class="text-2xl font-bold">Scan / Add</h1>
 			<p class="text-sm text-muted-foreground">Upload a photo or PDF and the computer pulls out the details for you to confirm.</p>
 		</div>
 		<Button variant="outline" class="gap-2" href="/scan/batch" data-testid="scan-bulk-import-leases">

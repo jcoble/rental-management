@@ -419,13 +419,28 @@
 							<p class="mt-1.5 text-sm leading-snug text-muted-foreground">{snap.explanations.net}</p>
 						</div>
 					</div>
-					<div
-						class="mt-4 flex items-start gap-2 rounded-lg border px-4 py-3 text-sm {snap.pastDueCount > 0 ? 'border-warning/40 bg-warning/10 text-foreground' : 'border-border bg-background text-muted-foreground'}"
-						data-testid="dashboard-money-pastdue"
-					>
-						<AlertTriangle class="mt-0.5 h-4 w-4 shrink-0 {snap.pastDueCount > 0 ? 'text-warning' : 'text-muted-foreground'}" />
-						<span>{snap.explanations.pastDue}</span>
-					</div>
+					{#if snap.pastDueCount > 0}
+						<!-- Actionable: drills into the "Who's behind" list (Mark paid / Text), mirroring the
+						     mobile OverdueScreen. The list reads the SAME GET /accounting/past-due source as this
+						     KPI, so its row count always equals snap.pastDueCount. -->
+						<a
+							href="/accounting/past-due"
+							class="group mt-4 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-foreground transition-colors hover:bg-warning/20"
+							data-testid="dashboard-money-pastdue"
+						>
+							<AlertTriangle class="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+							<span class="flex-1">{snap.explanations.pastDue}</span>
+							<ChevronRight class="mt-0.5 h-4 w-4 shrink-0 text-warning/70 transition-transform group-hover:translate-x-0.5" />
+						</a>
+					{:else}
+						<div
+							class="mt-4 flex items-start gap-2 rounded-lg border border-border bg-background px-4 py-3 text-sm text-muted-foreground"
+							data-testid="dashboard-money-pastdue"
+						>
+							<AlertTriangle class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+							<span>{snap.explanations.pastDue}</span>
+						</div>
+					{/if}
 				{/if}
 			</Card.Content>
 		</Card.Root>

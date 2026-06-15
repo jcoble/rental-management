@@ -308,7 +308,7 @@
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="expense-detail-page">
 	<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
 		<div class="min-w-0">
-			<Button variant="ghost" href="/accounting" class="mb-2 -ml-3"><ArrowLeft class="h-4 w-4" />Accounting</Button>
+			<Button variant="ghost" href="/accounting" class="mb-2 -ml-3"><ArrowLeft class="h-4 w-4" />Money</Button>
 			<h1 class="truncate text-2xl font-bold">{expense?.description ?? 'Expense'}</h1>
 			<p class="text-sm text-muted-foreground">{expense ? `${expense.category} · $${expense.amount} · ${expense.status}` : ''}</p>
 		</div>

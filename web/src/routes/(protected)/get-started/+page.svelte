@@ -2,6 +2,7 @@
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
+	import { page } from '$app/state';
 	import {
 		FlaskConical,
 		Rocket,
@@ -60,9 +61,13 @@
 	}
 	let choiceMade = $state(hasMadeChoice());
 	const isSandbox = $derived(stateQuery.data?.isSandbox === true);
-	// Show the fork only for a Sandbox account that hasn't answered yet. Live (or errored state) and
-	// post-choice Sandbox fall through to the checklist.
-	const showFork = $derived(isSandbox && !choiceMade);
+	// An explicit ?view=checklist (e.g. the dashboard "See the checklist" card) means "show me my
+	// progress", NOT "let me pick explore-vs-go-live" — so it bypasses the first-run fork. Without this
+	// a Sandbox user who hasn't persisted a choice was sent to the demo-data-wipe screen instead.
+	const forceChecklist = $derived(page.url.searchParams.get('view') === 'checklist');
+	// Show the fork only for a Sandbox account that hasn't answered yet AND didn't ask for the checklist
+	// directly. Live (or errored state), post-choice Sandbox, and ?view=checklist fall through to it.
+	const showFork = $derived(isSandbox && !choiceMade && !forceChecklist);
 
 	function exploreSandbox() {
 		if (browser) {
