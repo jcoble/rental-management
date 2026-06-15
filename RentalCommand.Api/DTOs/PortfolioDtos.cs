@@ -43,7 +43,8 @@ public class PortfolioResponse
 
 /// <summary>
 /// Current Sandbox/Live state of the account (portfolio). The web app uses <see cref="IsSandbox"/> to
-/// render the persistent "Sandbox" banner and to offer the one-way "Go Live" action.
+/// render the persistent "Sandbox" banner and to offer the one-way "Go Live" action, and
+/// <see cref="OnboardingChoicePending"/> to gate the first-login Sandbox-vs-Live choice screen.
 /// </summary>
 public class SandboxStateResponse
 {
@@ -54,6 +55,22 @@ public class SandboxStateResponse
 
     /// <summary>When the sandbox demo data was seeded; null once graduated to Live.</summary>
     public DateTime? SandboxSeededAtUtc { get; set; }
+
+    /// <summary>
+    /// True when the account has not yet made the first-login Sandbox-vs-Live choice. While true, the
+    /// web/mobile clients route the user to the onboarding choice gate instead of the dashboard.
+    /// </summary>
+    public bool OnboardingChoicePending { get; set; }
+}
+
+/// <summary>
+/// Body for the first-login onboarding decision. <c>mode</c> is "sandbox" (seed the demo portfolio) or
+/// "live" (keep an empty real portfolio). Any other value is rejected with 400.
+/// </summary>
+public class OnboardingChoiceRequest
+{
+    [Required]
+    public string Mode { get; set; } = string.Empty;
 }
 
 public class CreatePortfolioRequest

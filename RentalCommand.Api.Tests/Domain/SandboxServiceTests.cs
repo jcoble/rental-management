@@ -23,7 +23,9 @@ public class SandboxServiceTests : IDisposable
     private SandboxService BuildService()
     {
         var provisioner = new SelfOwnerProvisioner(_ctx.Db, NullLogger<SelfOwnerProvisioner>.Instance);
-        return new SandboxService(_ctx.Db, provisioner, NullLogger<SandboxService>.Instance);
+        var seeder = new RentalCommand.Api.Services.Auth.DemoDataSeeder(
+            _ctx.Db, NullLogger<RentalCommand.Api.Services.Auth.DemoDataSeeder>.Instance);
+        return new SandboxService(_ctx.Db, provisioner, seeder, NullLogger<SandboxService>.Instance);
     }
 
     // -----------------------------------------------------------------------
@@ -191,6 +193,83 @@ public class SandboxServiceTests : IDisposable
         (await _ctx.Db.Properties.IgnoreQueryFilters().CountAsync(p => p.PortfolioId == 2)).Should().Be(p2PropsBefore);
         (await _ctx.Db.Payments.CountAsync(p => p.PortfolioId == 2)).Should().BeGreaterThan(0);
         (await _ctx.Db.Conversations.CountAsync(c => c.PortfolioId == 2)).Should().BeGreaterThan(0);
+    }
+
+    // -----------------------------------------------------------------------
+    // First-login onboarding choice (Sandbox vs Live)
+
+    [Fact]
+    public async Task GetState_OnFreshPortfolio_ReportsOnboardingChoicePending()
+    {
+        // Portfolio 1 has null Settings → no choice recorded yet → the gate must fire.
+        var state = await BuildService().GetStateAsync(1, CancellationToken.None);
+
+        state.Should().NotBeNull();
+        state!.OnboardingChoicePending.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task OnboardingChoice_Sandbox_SeedsDemoData_AndFlipsToSandbox()
+    {
+        (await _ctx.Db.Properties.CountAsync()).Should().Be(0);
+
+        var state = await BuildService()
+            .ApplyOnboardingChoiceAsync(1, OnboardingChoice.Sandbox, CancellationToken.None);
+
+        state.Should().NotBeNull();
+        state!.IsSandbox.Should().BeTrue();
+        state.SandboxSeededAtUtc.Should().NotBeNull();
+        state.OnboardingChoicePending.Should().BeFalse();
+
+        // Demo data was actually seeded.
+        (await _ctx.Db.Properties.CountAsync()).Should().BeGreaterThan(0);
+
+        var portfolio = await _ctx.Db.Portfolios.SingleAsync(p => p.Id == 1);
+        portfolio.IsSandbox.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task OnboardingChoice_Live_LeavesPortfolioEmpty_AndLive()
+    {
+        var state = await BuildService()
+            .ApplyOnboardingChoiceAsync(1, OnboardingChoice.Live, CancellationToken.None);
+
+        state.Should().NotBeNull();
+        state!.IsSandbox.Should().BeFalse();
+        state.SandboxSeededAtUtc.Should().BeNull();
+        state.OnboardingChoicePending.Should().BeFalse();
+
+        // No demo data was seeded — a real, empty portfolio.
+        (await _ctx.Db.Properties.CountAsync()).Should().Be(0);
+        (await _ctx.Db.Tenants.CountAsync()).Should().Be(0);
+
+        var portfolio = await _ctx.Db.Portfolios.SingleAsync(p => p.Id == 1);
+        portfolio.IsSandbox.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task OnboardingChoice_IsIdempotent_SecondCallDoesNotReSeedOrWipe()
+    {
+        var svc = BuildService();
+        await svc.ApplyOnboardingChoiceAsync(1, OnboardingChoice.Sandbox, CancellationToken.None);
+        var seededCount = await _ctx.Db.Properties.CountAsync();
+        seededCount.Should().BeGreaterThan(0);
+
+        // A second, conflicting choice must be a no-op: the recorded Sandbox state stands, data intact.
+        var state = await svc.ApplyOnboardingChoiceAsync(1, OnboardingChoice.Live, CancellationToken.None);
+
+        state.Should().NotBeNull();
+        state!.IsSandbox.Should().BeTrue();
+        state.OnboardingChoicePending.Should().BeFalse();
+        (await _ctx.Db.Properties.CountAsync()).Should().Be(seededCount);
+    }
+
+    [Fact]
+    public async Task OnboardingChoice_ForMissingPortfolio_ReturnsNull()
+    {
+        var state = await BuildService()
+            .ApplyOnboardingChoiceAsync(999, OnboardingChoice.Sandbox, CancellationToken.None);
+        state.Should().BeNull();
     }
 
     // -----------------------------------------------------------------------

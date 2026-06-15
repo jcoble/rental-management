@@ -22,4 +22,19 @@ public interface ISandboxService
     /// affects the passed (caller's own) portfolio.
     /// </summary>
     Task<SandboxStateResponse?> GoLiveAsync(int portfolioId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Records the first-login Sandbox-vs-Live decision for the caller's own portfolio:
+    /// <list type="bullet">
+    ///   <item><see cref="OnboardingChoice.Sandbox"/> seeds the demo dataset and flips the portfolio to a
+    ///   seeded Sandbox (<c>IsSandbox = true</c>, <c>SandboxSeededAtUtc</c> stamped).</item>
+    ///   <item><see cref="OnboardingChoice.Live"/> leaves the portfolio empty and Live (<c>IsSandbox =
+    ///   false</c>) — the empty real portfolio the user sets up by hand.</item>
+    /// </list>
+    /// Idempotent: once a non-pending choice is persisted, calling it again is a no-op that returns the
+    /// current state (it never re-seeds or wipes). The seed itself is fast and server-side; clients pace
+    /// any "setting up…" theater on their end. Only ever affects the passed (caller's own) portfolio.
+    /// Returns null if the portfolio does not exist.
+    /// </summary>
+    Task<SandboxStateResponse?> ApplyOnboardingChoiceAsync(int portfolioId, OnboardingChoice choice, CancellationToken ct = default);
 }
