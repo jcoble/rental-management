@@ -297,12 +297,19 @@ public class OutboxDispatchWorker : EngineWorkerBase
         var originalEmail = GetString(root, "to") ?? GetString(root, "toEmail");
         var subject = GetString(root, "subject") ?? string.Empty;
         var emailBody = GetString(root, "body") ?? GetString(root, "message") ?? string.Empty;
+        var htmlBody = GetString(root, "htmlBody");
         var taggedSubject = subject.StartsWith("[Sandbox]", StringComparison.OrdinalIgnoreCase)
             ? subject
             : $"[Sandbox] {subject}";
-        var redirectedBody =
-            $"[Sandbox mode] This message was intended for {originalEmail ?? "the tenant"} but was redirected to you so you can try the flow safely.\n\n{emailBody}";
-        return JsonSerializer.Serialize(new { to = owner.Email, subject = taggedSubject, body = redirectedBody });
+        var sandboxNote =
+            $"[Sandbox mode] This message was intended for {originalEmail ?? "the tenant"} but was redirected to you so you can try the flow safely.";
+        var redirectedBody = $"{sandboxNote}\n\n{emailBody}";
+        // Prefix the same note onto the HTML alternative when present, so the rich part is redirected
+        // too (rather than the original HTML — which names the real recipient — overriding plaintext).
+        var redirectedHtml = string.IsNullOrWhiteSpace(htmlBody)
+            ? null
+            : $"<p>{System.Net.WebUtility.HtmlEncode(sandboxNote)}</p>{htmlBody}";
+        return JsonSerializer.Serialize(new { to = owner.Email, subject = taggedSubject, body = redirectedBody, htmlBody = redirectedHtml });
     }
 
     /// <summary>Resolved sandbox-redirect contact: exactly one of email/phone is set per channel.</summary>
@@ -406,7 +413,9 @@ public class OutboxDispatchWorker : EngineWorkerBase
                     ?? throw new InvalidOperationException("Email outbox message is missing a 'to' address.");
                 var subject = GetString(root, "subject") ?? string.Empty;
                 var body = GetString(root, "body") ?? GetString(root, "message") ?? string.Empty;
-                await channel.SendEmailAsync(to, subject, body, ct);
+                // Optional pre-composed HTML alternative (e.g. auth emails with a "Here" hyperlink).
+                var htmlBody = GetString(root, "htmlBody");
+                await channel.SendEmailAsync(to, subject, body, htmlBody, ct);
                 break;
             }
             default:

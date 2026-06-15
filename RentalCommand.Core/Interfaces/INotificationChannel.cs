@@ -14,6 +14,11 @@ public interface INotificationChannel
     /// </summary>
     Task SendSmsAsync(string toPhoneNumber, string message, int? portfolioId = null, CancellationToken ct = default);
 
-    /// <summary>Send an email message.</summary>
-    Task SendEmailAsync(string toEmail, string subject, string body, CancellationToken ct = default);
+    /// <summary>
+    /// Send an email message. <paramref name="body"/> is the plaintext body (always present).
+    /// <paramref name="htmlBody"/> is an optional pre-composed HTML alternative — when supplied it is
+    /// used verbatim as the rich part (SendGrid text/html, SMTP HtmlBody); when null the transport
+    /// falls back to its own minimal HTML wrapping of the plaintext.
+    /// </summary>
+    Task SendEmailAsync(string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default);
 }

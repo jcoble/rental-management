@@ -61,9 +61,27 @@ public class EmailTransportSelectionTests
         };
         var (channel, smtp) = BuildChannel(cfg);
 
-        await channel.SendEmailAsync("to@x.com", "Hi", "Body", default);
+        await channel.SendEmailAsync("to@x.com", "Hi", "Body", htmlBody: null);
 
-        smtp.Verify(s => s.SendAsync(cfg.Smtp, "to@x.com", "Hi", "Body", It.IsAny<CancellationToken>()), Times.Once);
+        // The plaintext body must reach the SMTP sender's body parameter; htmlBody is forwarded too
+        // (null here — the auth-email callers supply it, this transport-selection test does not).
+        smtp.Verify(s => s.SendAsync(cfg.Smtp, "to@x.com", "Hi", "Body", null, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task SendEmailAsync_ForwardsHtmlBodyToSmtp_WhenSupplied()
+    {
+        var cfg = new NotificationsConfig
+        {
+            Email = new EmailTransportOptions { Transport = "Smtp" },
+            Smtp = new SmtpOptions { Host = "smtp.zoho.com", Username = "u@d.com", Password = "p" },
+        };
+        var (channel, smtp) = BuildChannel(cfg);
+
+        await channel.SendEmailAsync("to@x.com", "Hi", "Body", htmlBody: "<p>Click <a href=\"x\">Here</a>.</p>");
+
+        smtp.Verify(s => s.SendAsync(cfg.Smtp, "to@x.com", "Hi", "Body",
+            "<p>Click <a href=\"x\">Here</a>.</p>", It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -79,10 +97,10 @@ public class EmailTransportSelectionTests
 
         // SendGrid path would attempt an HTTP POST; the bare HttpClient throws on a real send, which
         // confirms it tried SendGrid (not SMTP, not suppression). We only need to assert SMTP was skipped.
-        try { await channel.SendEmailAsync("to@x.com", "Hi", "Body", default); } catch { /* expected: HTTP send */ }
+        try { await channel.SendEmailAsync("to@x.com", "Hi", "Body", htmlBody: null); } catch { /* expected: HTTP send */ }
 
         smtp.Verify(s => s.SendAsync(It.IsAny<SmtpOptions>(), It.IsAny<string>(), It.IsAny<string>(),
-            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -96,10 +114,10 @@ public class EmailTransportSelectionTests
         };
         var (channel, smtp) = BuildChannel(cfg);
 
-        try { await channel.SendEmailAsync("to@x.com", "Hi", "Body", default); } catch { /* expected: HTTP send */ }
+        try { await channel.SendEmailAsync("to@x.com", "Hi", "Body", htmlBody: null); } catch { /* expected: HTTP send */ }
 
         smtp.Verify(s => s.SendAsync(It.IsAny<SmtpOptions>(), It.IsAny<string>(), It.IsAny<string>(),
-            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -109,17 +127,17 @@ public class EmailTransportSelectionTests
         var (channel, smtp) = BuildChannel(cfg);
 
         // Must NOT throw and must NOT hit any transport.
-        await channel.SendEmailAsync("to@x.com", "Hi", "Body", default);
+        await channel.SendEmailAsync("to@x.com", "Hi", "Body", htmlBody: null);
 
         smtp.Verify(s => s.SendAsync(It.IsAny<SmtpOptions>(), It.IsAny<string>(), It.IsAny<string>(),
-            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+            It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     private static (RoutingNotificationChannel channel, Mock<ISmtpEmailSender> smtp) BuildChannel(NotificationsConfig cfg)
     {
         var smtp = new Mock<ISmtpEmailSender>();
         smtp.Setup(s => s.SendAsync(It.IsAny<SmtpOptions>(), It.IsAny<string>(), It.IsAny<string>(),
-                It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         // Email path never touches the SMS dispatcher; a no-op mock satisfies the dependency.

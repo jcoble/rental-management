@@ -83,6 +83,26 @@ public class ResetPasswordRequest
     public string NewPassword { get; set; } = string.Empty;
 }
 
+public class ResendVerificationRequest
+{
+    [Required]
+    [EmailAddress]
+    [MaxLength(200)]
+    public string Email { get; set; } = string.Empty;
+}
+
+public class ChangePasswordRequest
+{
+    [Required]
+    [MaxLength(200)]
+    public string CurrentPassword { get; set; } = string.Empty;
+
+    [Required]
+    [MinLength(8)]
+    [MaxLength(200)]
+    public string NewPassword { get; set; } = string.Empty;
+}
+
 public class GoogleAuthRequest
 {
     /// <summary>Web OAuth flow: the authorization code to exchange server-side (with <see cref="RedirectUri"/>).</summary>

@@ -182,6 +182,46 @@ public class AuthController : ControllerBase
         return Ok(new { message = "Password has been reset successfully. You can now sign in." });
     }
 
+    [HttpPost("resend-verification")]
+    [AllowAnonymous]
+    public async Task<IActionResult> ResendVerification([FromBody] ResendVerificationRequest request)
+    {
+        var result = await _authService.ResendVerificationEmailAsync(request.Email);
+
+        // Neutral response either way (no account enumeration). When the account is already
+        // verified we can say so — that is not an enumeration signal a logged-out attacker can
+        // act on, and it helps a real user who simply forgot they had already confirmed.
+        if (result.Error is not null && result.Error.Contains("already verified", StringComparison.OrdinalIgnoreCase))
+        {
+            return Ok(new { message = "Email is already verified. You can log in." });
+        }
+
+        return Ok(new { message = "If an account exists, a verification email has been sent." });
+    }
+
+    [HttpPost("change-password")]
+    [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest request)
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId))
+        {
+            return Unauthorized(new { error = "Not authenticated" });
+        }
+
+        var result = await _authService.ChangePasswordAsync(userId, request.CurrentPassword, request.NewPassword);
+        if (!result.Success)
+        {
+            if (result.ErrorType == AuthErrorType.NotFound)
+            {
+                return NotFound(new { error = result.Error ?? "User not found" });
+            }
+            return BadRequest(new { error = result.Error ?? "Password change failed" });
+        }
+
+        return Ok(new { message = "Password changed successfully." });
+    }
+
     [HttpGet("me")]
     [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
     public async Task<ActionResult<UserDto>> GetCurrentUser()
