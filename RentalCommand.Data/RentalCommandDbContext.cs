@@ -531,6 +531,13 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Error).HasMaxLength(4000);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.SentAt);
+            // Drain hot path (OutboxDispatchWorker): WHERE SentAt IS NULL AND RetryCount < 5
+            // ORDER BY CreatedAt. A partial index over the unsent rows, ordered by CreatedAt, serves
+            // both the filter and the sort without scanning/sorting the (ever-growing) sent rows.
+            // RetryCount is included so the retry-budget predicate is covered too.
+            entity.HasIndex(e => new { e.CreatedAt, e.RetryCount })
+                  .HasDatabaseName("IX_OutboxMessages_Unsent_CreatedAt")
+                  .HasFilter("\"SentAt\" IS NULL");
             // PortfolioId is optional: system/auth emails are not scoped to any portfolio.
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
@@ -727,6 +734,14 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.LeaseId);
             entity.HasIndex(e => e.Status);
+            // LateFee daily sweep (LateFeeService.AssessAsync) scans ALL portfolios:
+            // WHERE PaymentType = Rent AND PeriodKey IS NOT NULL AND Status IN (Scheduled/Late/Partial)
+            // AND DueDate < today. None of the single-column indexes above cover that, so it degraded
+            // to a sequential scan of the unbounded Payments table. This composite, filtered to the
+            // auto-generated rent rows (PeriodKey IS NOT NULL), covers the predicate.
+            entity.HasIndex(e => new { e.PaymentType, e.Status, e.DueDate })
+                  .HasDatabaseName("IX_Payments_LateFeeSweep")
+                  .HasFilter("\"PeriodKey\" IS NOT NULL");
             entity.HasOne(e => e.Portfolio)
                 .WithMany(p => p.Payments)
                 .HasForeignKey(e => e.PortfolioId)
