@@ -690,6 +690,8 @@ export interface WorkOrder {
 	status: WorkOrderStatus;
 	requestedAt: string;
 	scheduledFor?: string;
+	/** End of the scheduled arrival window (visit expected between scheduledFor and this). */
+	scheduledWindowEnd?: string;
 	completedAt?: string;
 	estimatedCost?: number;
 	actualCost?: number;
