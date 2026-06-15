@@ -95,6 +95,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # subosito/flutter-action's setup.sh hard-requires `jq`, and the self-hosted
+      # runner doesn't ship it — so the whole Mobile job was dying at "Setup Flutter"
+      # ("jq not found") before flutter analyze/build ever ran. Install a static jq
+      # into a user-writable dir (no sudo) and add it to PATH for later steps.
+      - name: Ensure jq (subosito/flutter-action dependency)
+        working-directory: ${{ github.workspace }}
+        run: |
+          if command -v jq >/dev/null 2>&1; then
+            echo "jq present: $(jq --version)"
+          else
+            echo "jq missing on runner — installing static binary (no sudo)"
+            mkdir -p "$HOME/.local/bin"
+            curl -fsSL https://github.com/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64 -o "$HOME/.local/bin/jq"
+            chmod +x "$HOME/.local/bin/jq"
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            "$HOME/.local/bin/jq" --version
+          fi
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -108,5 +126,9 @@ jobs:
       - name: Analyze
         run: flutter analyze
 
-      - name: Build debug APK
-        run: flutter build apk --debug
+      # NOTE: no `flutter build apk` here. The self-hosted runner has no Android SDK
+      # ("No Android SDK found / set ANDROID_HOME"), and installing the full Android
+      # toolchain + Gradle on the shared, RAM-constrained build box isn't worth it —
+      # the deployable APK is built on the dev machine for on-device testing. `flutter
+      # analyze` is the mobile CI gate (catches Dart/compile errors). If APK CI builds
+      # are wanted later, provision the Android SDK on the runner and re-add the step.
