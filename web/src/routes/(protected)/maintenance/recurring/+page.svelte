@@ -287,7 +287,7 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="recurring-maintenance-page">
-	<PageBreadcrumb crumbs={[{ label: 'Maintenance', href: '/maintenance' }, { label: 'Recurring' }]} />
+	<PageBreadcrumb crumbs={[{ label: 'Work Orders', href: '/maintenance' }, { label: 'Recurring' }]} />
 
 	<div class="mt-4 mb-6 flex items-center justify-between gap-3">
 		<div>

@@ -477,7 +477,7 @@
 		</div>
 
 		<!-- Secondary row: Latest Messages collapses entirely when empty so it never eats prime
-		     space; Latest Maintenance then expands to fill the row. -->
+		     space; Latest Work Orders then expands to fill the row. -->
 		{@const hasMessages = messagesQuery.isLoading || (messagesQuery.data?.length ?? 0) > 0}
 		<div class="m3-motion-enter mb-6 grid gap-4 {hasMessages ? 'lg:grid-cols-2' : ''}" style="--m3-motion-index: 4">
 			{#if hasMessages}
@@ -519,7 +519,7 @@
 				<Card.Header class="px-4 pt-4 pb-3">
 					<Card.Title class="flex items-center gap-2 text-base font-semibold">
 						<Wrench class="h-4 w-4 text-primary" />
-						Latest Maintenance
+						Latest Work Orders
 					</Card.Title>
 				</Card.Header>
 				<Card.Content class="px-4 pb-4 pt-0">
@@ -530,7 +530,7 @@
 							{/each}
 						</div>
 					{:else if workOrdersQuery.isError}
-						<p class="text-sm text-muted-foreground">Maintenance is unavailable.</p>
+						<p class="text-sm text-muted-foreground">Work orders are unavailable.</p>
 					{:else}
 						<div class="space-y-2">
 							{#each (workOrdersQuery.data ?? []).filter((w) => !['Completed', 'Cancelled', 'Archived'].includes(String(w.status))).slice(0, 3) as order}
@@ -542,7 +542,7 @@
 									<p class="mt-1 truncate text-xs text-muted-foreground">{order.status} · {new Date(order.requestedAt).toLocaleDateString()}</p>
 								</a>
 							{:else}
-								<p class="text-sm text-muted-foreground">No open maintenance requests.</p>
+								<p class="text-sm text-muted-foreground">No open work orders.</p>
 							{/each}
 						</div>
 					{/if}

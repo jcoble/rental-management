@@ -500,12 +500,21 @@
 	const recentLedger = $derived((reports?.ledger ?? []).slice(0, 8));
 	const vendorReviewCount = $derived((reports?.vendors1099 ?? []).filter((v) => v.needsW9 || v.needs1099Review).length);
 
-	// Derived labels for Select triggers
-	const selectedLeaseLabel = $derived(
-		(leasesQuery.data || []).find((l) => String(l.id) === paymentForm.leaseId)
-			? `${(leasesQuery.data || []).find((l) => String(l.id) === paymentForm.leaseId)!.leaseNumber} · ${(leasesQuery.data || []).find((l) => String(l.id) === paymentForm.leaseId)!.tenantName}`
-			: null
-	);
+	// Derived labels for Select triggers.
+	// A8: the lease picker reads as "which tenant/unit?" to a landlord, so we lead the option label with
+	// the tenant and unit and keep the lease number as quiet secondary context.
+	function leasePickerLabel(lease: { tenantName?: string; unitNumber?: string; propertyName?: string; leaseNumber?: string }): string {
+		const who = lease.tenantName?.trim() || 'Unassigned';
+		const unit = lease.unitNumber?.trim()
+			? `Unit ${lease.unitNumber.trim()}`
+			: lease.propertyName?.trim() || '';
+		const lead = unit ? `${who} — ${unit}` : who;
+		return lease.leaseNumber ? `${lead} · ${lease.leaseNumber}` : lead;
+	}
+	const selectedLeaseLabel = $derived.by(() => {
+		const lease = (leasesQuery.data || []).find((l) => String(l.id) === paymentForm.leaseId);
+		return lease ? leasePickerLabel(lease) : null;
+	});
 	const selectedPropertyLabel = $derived(
 		(propertiesQuery.data || []).find((p) => String(p.id) === expenseForm.propertyId)?.name ?? null
 	);
@@ -1119,14 +1128,16 @@
 		</Dialog.Header>
 		<div class="space-y-2" data-testid="payment-form">
 			<div>
+				<!-- A8: labelled "Tenant / unit" — clearer than "Select lease" for a landlord recording rent. -->
+				<label for="payment-lease-input" class="mb-1 block text-xs font-medium text-muted-foreground">Tenant / unit</label>
 				<Select.Root type="single" bind:value={paymentForm.leaseId}>
-					<Select.Trigger class="w-full" data-testid="payment-lease-input">
-						{selectedLeaseLabel ?? 'Select lease'}
+					<Select.Trigger id="payment-lease-input" class="w-full" data-testid="payment-lease-input">
+						{selectedLeaseLabel ?? 'Tenant / unit'}
 					</Select.Trigger>
 					<Select.Content>
-						<Select.Item value="" label="Select lease">Select lease</Select.Item>
+						<Select.Item value="" label="Tenant / unit">Tenant / unit</Select.Item>
 						{#each leasesQuery.data || [] as lease}
-							<Select.Item value={String(lease.id)} label="{lease.leaseNumber} · {lease.tenantName}">{lease.leaseNumber} · {lease.tenantName}</Select.Item>
+							<Select.Item value={String(lease.id)} label={leasePickerLabel(lease)}>{leasePickerLabel(lease)}</Select.Item>
 						{/each}
 					</Select.Content>
 				</Select.Root>
