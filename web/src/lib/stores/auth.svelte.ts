@@ -56,6 +56,28 @@ export function updateToken(newToken: string, expiration: Date) {
 }
 
 /**
+ * Tear down just the client-side auth mirror (and fire the cleared callback, e.g. to disconnect
+ * SignalR), WITHOUT navigating. Used by {@link clearAuth} and by callers that own the redirect
+ * themselves (e.g. AppShell's Sign Out, which hands off to /logout with a full-document navigation
+ * so the httpOnly cookie deletions can't be raced by a client-side goto).
+ */
+export function clearAuthState() {
+	user = null;
+	accessToken = null;
+	accessTokenExpiration = null;
+	platformAdmin = false;
+	isLoading = false;
+
+	if (browser && onAuthClearedCallback) {
+		try {
+			onAuthClearedCallback();
+		} catch {
+			/* best effort */
+		}
+	}
+}
+
+/**
  * Clear auth state on logout / session expiry. In the browser, fires the
  * cleared callback and navigates to /logout.
  *
@@ -67,20 +89,8 @@ export function updateToken(newToken: string, expiration: Date) {
  * revokes the refresh token) server-side, then redirects to /login cleanly.
  */
 export function clearAuth() {
-	user = null;
-	accessToken = null;
-	accessTokenExpiration = null;
-	platformAdmin = false;
-	isLoading = false;
-
+	clearAuthState();
 	if (browser) {
-		if (onAuthClearedCallback) {
-			try {
-				onAuthClearedCallback();
-			} catch {
-				/* best effort */
-			}
-		}
 		void goto('/logout');
 	}
 }
