@@ -138,7 +138,7 @@
 			await queryClient.invalidateQueries();
 			dialogOpen = false;
 			confirmText = '';
-			showSuccess("You're live! The demo data was cleared — let's set up your real portfolio.");
+			showSuccess("You're set up with your real rentals! The example data was cleared.");
 			await goto('/onboarding');
 		},
 		onError: (err) =>
@@ -171,13 +171,13 @@
 			Loading…
 		</div>
 	{:else if showFork}
-		<!-- First-run Sandbox fork: explore the demo, or wipe it and set up for real. -->
+		<!-- First-run fork: explore the example data, or wipe it and set up your real rentals. -->
 		<div class="mx-auto w-full max-w-3xl">
 			<div class="mb-6 text-center">
 				<h1 class="text-2xl font-bold" data-testid="get-started-title">How do you want to start?</h1>
 				<p class="mt-1 text-sm text-muted-foreground">
-					Explore the app with sample data, or set up your own real portfolio. You can always go
-					live later.
+					Explore the app with sample data, or set up your own real rentals. You can switch to
+					your real rentals anytime.
 				</p>
 			</div>
 			<div class="grid gap-4 sm:grid-cols-2">
@@ -186,13 +186,13 @@
 						<span class="flex h-10 w-10 items-center justify-center rounded-full bg-warning/15 text-warning">
 							<FlaskConical class="h-5 w-5" />
 						</span>
-						<h2 class="text-lg font-semibold">Explore in Sandbox</h2>
+						<h2 class="text-lg font-semibold">Explore with sample data</h2>
 						<p class="flex-1 text-sm text-muted-foreground">
-							Jump into a demo account already filled with sample properties, tenants, and leases.
+							Jump into an account already filled with sample properties, tenants, and leases.
 							Nothing sends real emails or texts, or charges any cards — poke around freely.
 						</p>
 						<Button variant="outline" class="gap-1.5" data-testid="get-started-explore-sandbox" onclick={exploreSandbox}>
-							Explore the demo
+							Start exploring
 							<ArrowRight class="h-4 w-4" />
 						</Button>
 					</Card.Content>
@@ -205,7 +205,7 @@
 						</span>
 						<h2 class="text-lg font-semibold">Set up my real portfolio</h2>
 						<p class="flex-1 text-sm text-muted-foreground">
-							Clear the demo data and start clean with your own properties. We'll walk you through it
+							Clear the example data and start clean with your own properties. We'll walk you through it
 							step by step — the computer does the typing.
 						</p>
 						<Button class="gap-1.5" data-testid="get-started-setup-real" onclick={openDialog}>
@@ -273,13 +273,13 @@
 			{#if isSandbox}
 				<div class="mb-5 flex flex-col gap-3 rounded-[var(--m3-shape-large)] border border-warning/40 bg-warning/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between" data-testid="get-started-sandbox-note">
 					<p class="text-sm text-foreground">
-						You're in the <strong class="font-semibold">demo (Sandbox)</strong>. Some steps are
-						locked until you switch to a real account — that clears the sample data and starts you
-						clean.
+						You're using <strong class="font-semibold">example data</strong>. Some steps are
+						locked until you switch to your real rentals — that clears the example data and starts
+						you clean.
 					</p>
 					<Button class="shrink-0 gap-1.5" size="sm" data-testid="get-started-go-live" onclick={openDialog}>
 						<Rocket class="h-4 w-4" />
-						Set up for real
+						Use my real rentals
 					</Button>
 				</div>
 			{/if}
