@@ -143,7 +143,14 @@ class PaymentsRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/payments/$id');
-      return Payment.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Payment.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -154,7 +161,14 @@ class PaymentsRepository {
     try {
       final response =
           await _dio.post<Map<String, dynamic>>('/payments', data: data);
-      return Payment.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Payment.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -167,7 +181,14 @@ class PaymentsRepository {
         '/payments/$id',
         data: data,
       );
-      return Payment.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Payment.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -194,7 +215,14 @@ class PaymentsRepository {
         '/payments/$id/mark-paid',
         data: body,
       );
-      return Payment.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Payment.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -205,7 +233,14 @@ class PaymentsRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/accounting/summary');
-      return AccountingSummary.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return AccountingSummary.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

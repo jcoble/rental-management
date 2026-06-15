@@ -147,7 +147,14 @@ class TenantPortalRepository {
           'priority': priority,
         },
       );
-      return WorkOrder.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return WorkOrder.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -159,7 +166,14 @@ class TenantPortalRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/portal/work-orders/$id');
-      return WorkOrderDetail.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return WorkOrderDetail.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

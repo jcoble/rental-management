@@ -48,7 +48,14 @@ class AppointmentsRepository {
     try {
       final response =
           await _dio.get<Map<String, dynamic>>('/appointments/$id');
-      return Appointment.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Appointment.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -63,7 +70,14 @@ class AppointmentsRepository {
     try {
       final response =
           await _dio.post<Map<String, dynamic>>('/appointments', data: data);
-      return Appointment.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Appointment.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -77,7 +91,14 @@ class AppointmentsRepository {
         '/appointments/$id',
         data: data,
       );
-      return Appointment.fromJson(response.data!);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Appointment.fromJson(responseData);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

@@ -41,7 +41,13 @@ class AuthRepository {
         options: Options(headers: {clientTypeHeader: mobileClientType}),
       );
 
-      final data = response.data!;
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
       final loginResponse = LoginResponse.fromJson(data);
 
       // Refresh token: body-first (mobile), Set-Cookie fallback.
@@ -105,7 +111,14 @@ class AuthRepository {
         options: Options(headers: {clientTypeHeader: mobileClientType}),
       );
 
-      final loginResponse = LoginResponse.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      final loginResponse = LoginResponse.fromJson(data);
 
       // Refresh token: body-first (mobile), Set-Cookie fallback.
       final refreshToken = resolveRefreshToken(response);
@@ -198,7 +211,14 @@ class AuthRepository {
   Future<AuthUser> currentUser() async {
     try {
       final response = await _dio.get<Map<String, dynamic>>('/auth/me');
-      return AuthUser.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return AuthUser.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }

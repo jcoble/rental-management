@@ -13,7 +13,14 @@ class BankingRepository {
   Future<BankingSummary> summary() async {
     try {
       final response = await _dio.get<Map<String, dynamic>>('/banking/summary');
-      return BankingSummary.fromJson(response.data!);
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return BankingSummary.fromJson(data);
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
