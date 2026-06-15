@@ -83,11 +83,8 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
   void initState() {
     super.initState();
     _tenant = widget.tenant;
-    Future.microtask(
-      () => ref
-          .read(tenantLeasesProvider(_tenant.id).notifier)
-          .load(),
-    );
+    // tenantLeasesProvider self-loads on first watch (TenantLeasesNotifier.build
+    // calls Future.microtask(load)), so an explicit load() here just double-fetches.
   }
 
   Future<void> _refresh() async {
