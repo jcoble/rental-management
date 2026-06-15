@@ -3,10 +3,12 @@
 # The Engine is a Microsoft.NET.Sdk.Worker host (Host.CreateApplicationBuilder)
 # with NO Kestrel/HTTP endpoint, so it has no /health URL. The healthcheck below
 # is therefore process-based: it confirms the worker process is still running.
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
+# .NET base images mirrored into our own GHCR (ghcr.io/jcoble/rentalcommand-dotnet-*) to avoid
+# Microsoft MCR's anonymous-pull rate limit (429) on the build box. See Dockerfile.api for refresh cmd.
+FROM ghcr.io/jcoble/rentalcommand-dotnet-aspnet:10.0 AS base
 WORKDIR /app
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM ghcr.io/jcoble/rentalcommand-dotnet-sdk:10.0 AS build
 WORKDIR /src
 
 # Copy solution and project files first (better layer caching).
