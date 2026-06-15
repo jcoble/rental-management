@@ -9,6 +9,13 @@ using RentalCommand.Data;
 
 namespace RentalCommand.Api.Tests.Domain;
 
+// NOTE: GetTransactionsAsync (the accounting transactions grid) is covered by
+// RentalCommand.IntegrationTests/AccountingTransactionsViewTests.cs, NOT here. It reads the
+// vw_accounting_transactions Postgres VIEW and uses ILIKE — neither of which exists/works under the
+// in-memory SQLite provider this class uses (EnsureCreated does not create raw-SQL-migration views,
+// and SQLite has no ILIKE). Those tests run against a real Postgres (Testcontainers) and self-skip
+// when Docker is unavailable. This SQLite class keeps the non-view accounting logic
+// (summary / snapshot / past-due / reports / year-end), which translates on both providers.
 public class AccountingServiceTests : IDisposable
 {
     private const int PortfolioId = 1;
@@ -47,35 +54,6 @@ public class AccountingServiceTests : IDisposable
     {
         _db.Dispose();
         _conn.Dispose();
-    }
-
-    [Fact]
-    public async Task GetTransactionsAsync_ReturnsUnifiedDatabasePageWithScannedExpense()
-    {
-        var now = new DateTime(2026, 05, 25, 12, 0, 0, DateTimeKind.Utc);
-        SeedPropertyLeaseAndPayment(now);
-        SeedOlderExpenses(now);
-        var scannedExpense = SeedExpense(
-            description: "ComfortZone HVAC",
-            amount: 456.88m,
-            incurredAt: now,
-            category: ScheduleECategory.Repairs,
-            status: ExpenseStatus.Pending);
-
-        var page = await _sut.GetTransactionsAsync(
-            PortfolioId,
-            new AccountingTransactionsQuery { Take = 20 },
-            CancellationToken.None);
-
-        page.TotalCount.Should().Be(122);
-        page.Items.Should().HaveCount(20);
-        page.Items.Should().ContainSingle(t =>
-            t.Kind == "Expense" &&
-            t.Id == scannedExpense.Id &&
-            t.Description == "ComfortZone HVAC" &&
-            t.Category == "Repairs" &&
-            t.Status == "Pending" &&
-            t.DetailHref == $"/accounting/expenses/{scannedExpense.Id}");
     }
 
     [Fact]
@@ -284,71 +262,6 @@ public class AccountingServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GetTransactionsAsync_FiltersByKindStatusPropertyAndDescription()
-    {
-        var property = SeedPropertyLeaseAndPayment(DateTime.UtcNow);
-        SeedExpense(
-            description: "ComfortZone HVAC",
-            amount: 456.88m,
-            incurredAt: new DateTime(2026, 05, 05, 0, 0, 0, DateTimeKind.Utc),
-            category: ScheduleECategory.Repairs,
-            status: ExpenseStatus.Pending,
-            propertyId: property.Id);
-        SeedExpense(
-            description: "Paid insurance",
-            amount: 300m,
-            incurredAt: new DateTime(2026, 05, 06, 0, 0, 0, DateTimeKind.Utc),
-            category: ScheduleECategory.Insurance,
-            status: ExpenseStatus.Paid,
-            propertyId: property.Id);
-
-        var page = await _sut.GetTransactionsAsync(
-            PortfolioId,
-            new AccountingTransactionsQuery
-            {
-                Kind = "Expense",
-                Status = "Pending",
-                PropertyId = property.Id,
-                Search = "ComfortZone",
-                Take = 20,
-            },
-            CancellationToken.None);
-
-        page.TotalCount.Should().Be(1);
-        page.Items.Single().Description.Should().Be("ComfortZone HVAC");
-    }
-
-    [Fact]
-    public async Task GetTransactionsAsync_IncludesBankFeedRowsAndSearchesCaseInsensitively()
-    {
-        SeedBankTransaction(
-            description: "HOME DEPOT STORE",
-            merchantName: "Home Depot",
-            amount: -84.25m,
-            postedAt: new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc),
-            category: "Hardware",
-            matchStatus: "Unmatched");
-
-        var page = await _sut.GetTransactionsAsync(
-            PortfolioId,
-            new AccountingTransactionsQuery
-            {
-                Kind = "Bank",
-                Search = "home depot",
-                Take = 20,
-            },
-            CancellationToken.None);
-
-        page.TotalCount.Should().Be(1);
-        page.Items.Single().Should().Match<AccountingTransactionResponse>(t =>
-            t.Kind == "Bank" &&
-            t.Description == "HOME DEPOT STORE" &&
-            t.Amount == -84.25m &&
-            t.Category == "Hardware" &&
-            t.DetailHref == "/banking");
-    }
-
-    [Fact]
     public async Task GetSummaryAndReports_CountUnmatchedBankActivityWithoutDoubleCountingMatchedRows()
     {
         SeedPropertyLeaseAndPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
@@ -422,116 +335,6 @@ public class AccountingServiceTests : IDisposable
         // Only the dismissed $300 counts; the confirmed/matched $1,200 is excluded as already-recorded.
         summary.Payments.Collected.Should().Be(300m);
         snapshot.Collected.Should().Be(300m);
-    }
-
-    [Fact]
-    public async Task GetTransactionsAsync_MatchedBankLine_MarksPaymentReconciledWithClearedFields()
-    {
-        var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
-        SeedPropertyLeaseAndPayment(date); // seeds payment Id 1
-        var paymentId = _db.Payments.Single().Id;
-
-        // A bank deposit confirmed (Matched) against the payment → the payment row should read as
-        // "cleared" by that bank, on that date.
-        SeedBankTransaction(
-            description: "Tenant ACH",
-            merchantName: "Maria Tenant",
-            amount: 1200m,
-            postedAt: date,
-            category: "Deposit",
-            matchStatus: "Matched",
-            matchedPaymentId: paymentId);
-
-        var page = await _sut.GetTransactionsAsync(
-            PortfolioId,
-            new AccountingTransactionsQuery { Kind = "Payment", Take = 20 },
-            CancellationToken.None);
-
-        var paymentRow = page.Items.Single(t => t.Kind == "Payment" && t.Id == paymentId);
-        paymentRow.Reconciled.Should().BeTrue();
-        paymentRow.ClearedBankName.Should().Be("Sandbox Bank");
-        paymentRow.ClearedAt.Should().Be(date);
-        paymentRow.SuggestedBankMatch.Should().BeNull();
-    }
-
-    [Fact]
-    public async Task GetTransactionsAsync_UnmatchedBankLine_SurfacesSuggestedBankMatchOnPayment()
-    {
-        var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
-        SeedPropertyLeaseAndPayment(date); // tenant "Maria Tenant", payment $1,200 due that day
-        var paymentId = _db.Payments.Single().Id;
-
-        // An OPEN (Unmatched) deposit that lines up by amount + date, and whose merchant carries the
-        // tenant name → it should be offered as a one-tap suggestion (not auto-applied).
-        SeedBankTransaction(
-            description: "ACH CREDIT",
-            merchantName: "Maria Tenant",
-            amount: 1200m,
-            postedAt: date,
-            category: "Deposit",
-            matchStatus: "Unmatched");
-
-        var page = await _sut.GetTransactionsAsync(
-            PortfolioId,
-            new AccountingTransactionsQuery { Kind = "Payment", Take = 20 },
-            CancellationToken.None);
-
-        var paymentRow = page.Items.Single(t => t.Kind == "Payment" && t.Id == paymentId);
-        paymentRow.Reconciled.Should().BeFalse();
-        paymentRow.SuggestedBankMatch.Should().NotBeNull();
-        paymentRow.SuggestedBankMatch!.Amount.Should().Be(1200m);
-        paymentRow.SuggestedBankMatch.Date.Should().Be(date);
-        paymentRow.SuggestedBankMatch.Name.Should().Be("Maria Tenant");
-        paymentRow.SuggestedBankMatch.Confidence.Should().BeGreaterThan(0m);
-    }
-
-    [Fact]
-    public async Task GetTransactionsAsync_UnmatchedBankLine_SurfacesSuggestedBankMatchOnExpense()
-    {
-        var date = new DateTime(2026, 06, 02, 0, 0, 0, DateTimeKind.Utc);
-        var expense = SeedExpense(
-            description: "Hardware supply",
-            amount: 84.25m,
-            incurredAt: date,
-            category: ScheduleECategory.Repairs,
-            status: ExpenseStatus.Paid);
-
-        // Open withdrawal that matches the expense amount/date (expense amounts are positive; the
-        // bank withdrawal is negative).
-        SeedBankTransaction(
-            description: "HARDWARE STORE",
-            merchantName: "Hardware Store",
-            amount: -84.25m,
-            postedAt: date,
-            category: "Withdrawal",
-            matchStatus: "Unmatched");
-
-        var page = await _sut.GetTransactionsAsync(
-            PortfolioId,
-            new AccountingTransactionsQuery { Kind = "Expense", Take = 20 },
-            CancellationToken.None);
-
-        var expenseRow = page.Items.Single(t => t.Kind == "Expense" && t.Id == expense.Id);
-        expenseRow.Reconciled.Should().BeFalse();
-        expenseRow.SuggestedBankMatch.Should().NotBeNull();
-        expenseRow.SuggestedBankMatch!.Amount.Should().Be(-84.25m);
-    }
-
-    [Fact]
-    public async Task GetTransactionsAsync_NoOpenBankLine_LeavesPaymentUnreconciledWithNoSuggestion()
-    {
-        var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
-        SeedPropertyLeaseAndPayment(date);
-        var paymentId = _db.Payments.Single().Id;
-
-        var page = await _sut.GetTransactionsAsync(
-            PortfolioId,
-            new AccountingTransactionsQuery { Kind = "Payment", Take = 20 },
-            CancellationToken.None);
-
-        var paymentRow = page.Items.Single(t => t.Kind == "Payment" && t.Id == paymentId);
-        paymentRow.Reconciled.Should().BeFalse();
-        paymentRow.SuggestedBankMatch.Should().BeNull();
     }
 
     private (Property Property, Lease Lease) SeedPropertyAndLease(DateTime now)
@@ -642,21 +445,6 @@ public class AccountingServiceTests : IDisposable
         });
         _db.SaveChanges();
         return property;
-    }
-
-    private void SeedOlderExpenses(DateTime now)
-    {
-        for (var i = 0; i < 120; i++)
-        {
-            SeedExpense(
-                description: $"Operating expense {i}",
-                amount: 100 + i,
-                incurredAt: now.AddDays(-30 - i),
-                category: ScheduleECategory.Utilities,
-                status: ExpenseStatus.Paid,
-                save: false);
-        }
-        _db.SaveChanges();
     }
 
     private Expense SeedExpense(
