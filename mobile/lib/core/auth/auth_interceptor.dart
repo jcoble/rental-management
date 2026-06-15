@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'token_store.dart';
 
@@ -124,6 +125,16 @@ class AuthInterceptor extends Interceptor {
     // killed valid sessions on any flaky retry.
     final opts = err.requestOptions;
     opts.headers['Authorization'] = 'Bearer $newToken';
+    // A multipart `FormData` body is single-use: dispatching the original
+    // request finalized it (and each of its `MultipartFile`s) in place, so
+    // re-sending the same instance throws `StateError: already finalized` and
+    // the upload is lost. Rebuild a fresh, replayable `FormData` for the retry.
+    // This is exactly the case the flagship photo/voice/inspection capture
+    // uploads hit when the access token lapses mid-session. `FormData.clone()`
+    // re-uses each file's stream-builder closure (our uploads use
+    // `MultipartFile.fromBytes`, whose builder yields a fresh in-memory stream
+    // every call), so no file stream is double-read.
+    opts.data = _replayableBody(opts.data);
     try {
       final retryResponse = await dio.fetch<dynamic>(opts);
       handler.resolve(retryResponse);
@@ -133,6 +144,20 @@ class AuthInterceptor extends Interceptor {
       // Non-Dio failure on the retry — surface the original error, do NOT log out.
       handler.next(err);
     }
+  }
+
+  /// Returns a body safe to re-send on a retry. A consumed (finalized)
+  /// [FormData] cannot be re-dispatched, so it is cloned into a fresh instance;
+  /// all other body shapes (JSON maps, strings, lists, streams owned by the
+  /// caller, `null`) are replayable as-is and returned unchanged.
+  @visibleForTesting
+  static Object? replayableBody(Object? data) => _replayableBody(data);
+
+  static Object? _replayableBody(Object? data) {
+    if (data is FormData) {
+      return data.clone();
+    }
+    return data;
   }
 
   /// Ensures only one refresh call happens even when multiple 401s arrive
