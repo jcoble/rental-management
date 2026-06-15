@@ -8,11 +8,16 @@ namespace RentalCommand.Api.Services.Domain;
 public sealed class SandboxService : ISandboxService
 {
     private readonly RentalCommandDbContext _db;
+    private readonly ISelfOwnerProvisioner _selfOwnerProvisioner;
     private readonly ILogger<SandboxService> _logger;
 
-    public SandboxService(RentalCommandDbContext db, ILogger<SandboxService> logger)
+    public SandboxService(
+        RentalCommandDbContext db,
+        ISelfOwnerProvisioner selfOwnerProvisioner,
+        ILogger<SandboxService> logger)
     {
         _db = db;
+        _selfOwnerProvisioner = selfOwnerProvisioner;
         _logger = logger;
     }
 
@@ -53,12 +58,41 @@ public sealed class SandboxService : ISandboxService
         portfolio.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
+        // The wipe removed the demo owners, so the fresh Live portfolio has none. Re-create the primary
+        // self-owner from the landlord's own account so the getting-started "owner" step is satisfied
+        // before they add a property (the wipe's SetNull FK already cleared the stale OwnerEntityId).
+        // Best-effort: if no admin user resolves, skip rather than fail the graduation.
+        await EnsureSelfOwnerAfterWipeAsync(portfolioId, ct);
+
         await tx.CommitAsync(ct);
 
         _logger.LogInformation(
             "Portfolio {PortfolioId} graduated from Sandbox to Live — demo data wiped.", portfolioId);
 
         return ToState(portfolio);
+    }
+
+    /// <summary>
+    /// After a Go-Live wipe, recreates the portfolio's primary self-owner from its administering user.
+    /// Resolves the owner-user as the earliest Admin-role-eligible account scoped to the portfolio; if no
+    /// such user exists (e.g. a test fixture with no Identity users) it is a safe no-op.
+    /// </summary>
+    private async Task EnsureSelfOwnerAfterWipeAsync(int portfolioId, CancellationToken ct)
+    {
+        var user = await _db.Users
+            .Where(u => u.PortfolioId == portfolioId && u.TenantId == null)
+            .OrderBy(u => u.Id)
+            .FirstOrDefaultAsync(ct);
+
+        if (user is null)
+        {
+            _logger.LogWarning(
+                "Go-Live for portfolio {PortfolioId}: no administering user found; skipped self-owner creation.",
+                portfolioId);
+            return;
+        }
+
+        await _selfOwnerProvisioner.EnsureSelfOwnerAsync(user, portfolioId, ct);
     }
 
     /// <summary>

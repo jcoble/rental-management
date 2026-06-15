@@ -16,15 +16,18 @@ public class PortfolioService : IPortfolioService
     private readonly RentalCommandDbContext _db;
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly ISelfOwnerProvisioner _selfOwnerProvisioner;
 
     public PortfolioService(
         RentalCommandDbContext db,
         UserManager<ApplicationUser> userManager,
-        IDataUpdateService dataUpdate)
+        IDataUpdateService dataUpdate,
+        ISelfOwnerProvisioner selfOwnerProvisioner)
     {
         _db = db;
         _userManager = userManager;
         _dataUpdate = dataUpdate;
+        _selfOwnerProvisioner = selfOwnerProvisioner;
     }
 
     public async Task<IReadOnlyList<PortfolioResponse>> ListForUserAsync(int portfolioId, CancellationToken ct = default)
@@ -82,6 +85,10 @@ public class PortfolioService : IPortfolioService
         {
             user.PortfolioId = entity.Id;
             await _userManager.UpdateAsync(user);
+
+            // The landlord IS the first owner — auto-create a primary self-owner so the new portfolio is
+            // never owner-less and onboarding skips the manual "add an owner" step. Idempotent.
+            await _selfOwnerProvisioner.EnsureSelfOwnerAsync(user, entity.Id, ct);
         }
 
         var response = PortfolioResponse.FromEntity(entity);

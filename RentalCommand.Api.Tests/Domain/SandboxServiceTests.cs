@@ -11,7 +11,8 @@ namespace RentalCommand.Api.Tests.Domain;
 /// <summary>
 /// Go-live (graduate-once → wipe demo) coverage for <see cref="SandboxService"/>: a sandbox portfolio's
 /// data is wiped and the flag flipped to Live; the operation is idempotent; and it only ever affects the
-/// caller's own portfolio (IDOR-safe) — a second, sandboxed portfolio is left fully intact.
+/// caller's own portfolio (IDOR-safe) — a second, sandboxed portfolio is left fully intact. Also pins
+/// C-4: after the wipe the new Live portfolio is re-seeded with the landlord's own primary self-owner.
 /// </summary>
 public class SandboxServiceTests : IDisposable
 {
@@ -19,7 +20,11 @@ public class SandboxServiceTests : IDisposable
 
     public void Dispose() => _ctx.Dispose();
 
-    private SandboxService BuildService() => new(_ctx.Db, NullLogger<SandboxService>.Instance);
+    private SandboxService BuildService()
+    {
+        var provisioner = new SelfOwnerProvisioner(_ctx.Db, NullLogger<SelfOwnerProvisioner>.Instance);
+        return new SandboxService(_ctx.Db, provisioner, NullLogger<SandboxService>.Instance);
+    }
 
     // -----------------------------------------------------------------------
     // State read
@@ -107,6 +112,46 @@ public class SandboxServiceTests : IDisposable
     {
         var state = await BuildService().GoLiveAsync(999, CancellationToken.None);
         state.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GoLive_CreatesPrimarySelfOwner_FromTheAdminUser_AfterWipingDemoOwners()
+    {
+        // C-4: the wipe removes the demo owners, so the fresh Live portfolio must be re-seeded with the
+        // landlord's own primary owner — otherwise the getting-started "owner" step blocks "add property".
+        MarkSandbox(portfolioId: 1, DateTime.UtcNow);
+        SeedRichGraph(portfolioId: 1);
+        // Demo owner that the wipe should remove.
+        _ctx.Db.OwnerEntities.Add(new OwnerEntity
+        {
+            PortfolioId = 1,
+            OwnerEntityType = OwnerEntityType.LLC,
+            Name = "Demo Holdings LLC",
+            IsPrimary = false,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        // The administering landlord account (kept by the wipe).
+        _ctx.Db.Users.Add(new ApplicationUser
+        {
+            UserName = "owner@example.com",
+            Email = "owner@example.com",
+            DisplayName = "Pat Owner",
+            PortfolioId = 1,
+            EmailConfirmed = true,
+            CreatedAt = DateTime.UtcNow,
+        });
+        _ctx.Db.SaveChanges();
+
+        await BuildService().GoLiveAsync(1, CancellationToken.None);
+
+        // Exactly one owner remains: the primary self-owner derived from the account.
+        var owners = await _ctx.Db.OwnerEntities.IgnoreQueryFilters()
+            .Where(o => o.PortfolioId == 1).ToListAsync();
+        owners.Should().ContainSingle();
+        owners[0].IsPrimary.Should().BeTrue();
+        owners[0].Name.Should().Be("Pat Owner");
+        owners[0].Email.Should().Be("owner@example.com");
     }
 
     [Fact]
