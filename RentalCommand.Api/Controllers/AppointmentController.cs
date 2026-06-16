@@ -13,7 +13,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/appointments")]
 [Produces("application/json")]
-public class AppointmentController : AuthenticatedPortfolioControllerBase
+public class AppointmentController : ManagementControllerBase
 {
     private readonly IAppointmentService _service;
 

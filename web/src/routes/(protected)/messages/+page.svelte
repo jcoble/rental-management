@@ -8,11 +8,13 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatRelative } from '$lib/utils/date';
+	import { ApiError, type FairHousingConcern } from '$lib/api/client';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Checkbox } from '$lib/components/ui/checkbox';
+	import FairHousingReviewDialog from '$lib/components/shared/FairHousingReviewDialog.svelte';
 	import { Plus, MessageSquare, ArrowLeft, Send, MailWarning } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -191,26 +193,52 @@
 		composeForm = { ...composeEmpty };
 	}
 
+	// Fair Housing review gate: a 422 from POST /conversations means the copy was flagged. We show the
+	// concerns and let the landlord either Edit (revise) or send anyway (re-submit with the ack flag).
+	let fhReviewOpen = $state(false);
+	let fhDetail = $state('');
+	let fhConcerns = $state<FairHousingConcern[]>([]);
+
 	const startMutation = createMutation(() => ({
-		mutationFn: () =>
+		mutationFn: (acknowledgedFairHousingReview: boolean = false) =>
 			messages.start({
 				tenantId: Number(composeForm.tenantId),
 				subject: composeForm.subject.trim(),
 				body: composeForm.body.trim(),
 				channels: channelsToList(composeChannels),
+				...(acknowledgedFairHousingReview ? { acknowledgedFairHousingReview: true } : {}),
 			}),
 		onSuccess: (created) => {
+			fhReviewOpen = false;
 			queryClient.setQueryData(['conversation', created.id], created);
 			queryClient.invalidateQueries({ queryKey: ['conversations'] });
 			closeCompose();
 			openConversation(created.id);
 		},
-		onError: (err) => showError(apiErrorMessage(err)),
+		onError: (err) => {
+			if (err instanceof ApiError && err.fairHousingConcerns) {
+				fhDetail = err.message;
+				fhConcerns = err.fairHousingConcerns;
+				fhReviewOpen = true;
+				return;
+			}
+			showError(apiErrorMessage(err));
+		},
 	}));
 
 	function startConversation() {
 		if (!canStart || startMutation.isPending) return;
-		startMutation.mutate();
+		startMutation.mutate(false);
+	}
+
+	function editFairHousing() {
+		// Dismiss the review so the landlord can revise the copy in the still-open compose dialog.
+		fhReviewOpen = false;
+	}
+
+	function sendAnyway() {
+		if (startMutation.isPending) return;
+		startMutation.mutate(true);
 	}
 
 	// --- Auto-scroll the thread to the newest message --------------------------
@@ -548,3 +576,14 @@
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
+
+<!-- Fair Housing review gate (422 on send) -->
+<FairHousingReviewDialog
+	open={fhReviewOpen}
+	detail={fhDetail}
+	concerns={fhConcerns}
+	busy={startMutation.isPending}
+	testid="conversation-fair-housing"
+	onedit={editFairHousing}
+	onsendanyway={sendAnyway}
+/>

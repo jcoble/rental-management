@@ -18,7 +18,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/reports")]
 [Produces("application/json")]
-public class ReportsController : AuthenticatedPortfolioControllerBase
+public class ReportsController : ManagementControllerBase
 {
     private readonly IReportsService _service;
 

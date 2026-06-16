@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -12,6 +13,36 @@ namespace RentalCommand.Api.Services.Domain;
 public class LeaseService : ILeaseService
 {
     private const string EntityType = "Lease";
+
+    // Allowed lease lifecycle transitions. A lease is a legal contract, so status may only move along
+    // these edges — anything else (e.g. resurrecting a Terminated lease, or jumping Draft→Expired) is a
+    // data-integrity defect and is rejected with a 400 before it can desync occupancy or orphan an
+    // executed signature. A same→same move is always allowed (no-op) and is handled separately, so the
+    // sets below list only genuine forward moves.
+    //   Draft            → PendingSignature, Active, Void
+    //   PendingSignature → Active, Draft, Void           (sign completes → Active; recall → Draft)
+    //   Active           → NoticeGiven, Expired, Terminated
+    //   NoticeGiven      → Active, Expired, Terminated    (Active = notice cancelled)
+    //   Expired/Terminated/Void = terminal — no outbound edges (no reactivation)
+    // NOTE: the e-sign "send" path (Draft/PendingSignature → PendingSignature) sets the status directly
+    // on the entity in LeaseEsignService, NOT through UpdateAsync, so it is unaffected by this guard.
+    private static readonly IReadOnlyDictionary<LeaseStatus, IReadOnlySet<LeaseStatus>> AllowedTransitions =
+        new Dictionary<LeaseStatus, IReadOnlySet<LeaseStatus>>
+        {
+            [LeaseStatus.Draft] = new HashSet<LeaseStatus> { LeaseStatus.PendingSignature, LeaseStatus.Active, LeaseStatus.Void },
+            [LeaseStatus.PendingSignature] = new HashSet<LeaseStatus> { LeaseStatus.Active, LeaseStatus.Draft, LeaseStatus.Void },
+            [LeaseStatus.Active] = new HashSet<LeaseStatus> { LeaseStatus.NoticeGiven, LeaseStatus.Expired, LeaseStatus.Terminated },
+            [LeaseStatus.NoticeGiven] = new HashSet<LeaseStatus> { LeaseStatus.Active, LeaseStatus.Expired, LeaseStatus.Terminated },
+            [LeaseStatus.Expired] = new HashSet<LeaseStatus>(),
+            [LeaseStatus.Terminated] = new HashSet<LeaseStatus>(),
+            [LeaseStatus.Void] = new HashSet<LeaseStatus>(),
+        };
+
+    // A lease "occupies" its unit while it is Active or under NoticeGiven (tenant hasn't moved out yet).
+    // Only these states conflict for the double-booking guard; a Draft/Pending/terminal lease holds no
+    // unit. Mirrors the occupancy logic in SyncUnitOccupancyAsync.
+    private static bool OccupiesUnit(LeaseStatus status)
+        => status == LeaseStatus.Active || status == LeaseStatus.NoticeGiven;
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -96,6 +127,64 @@ public class LeaseService : ILeaseService
         if (!stillOccupied && unit.Status == UnitStatus.Occupied)
         {
             unit.Status = UnitStatus.Vacant;
+        }
+    }
+
+    // Reject a status move that isn't on the lifecycle graph. A same→same move is always allowed (a PATCH
+    // that re-sends the current status, or that touches only rent/dates, must not be blocked). Throws a
+    // 400 DomainValidationException with a message naming the illegal edge.
+    private static void EnsureTransitionAllowed(LeaseStatus from, LeaseStatus to)
+    {
+        if (from == to)
+        {
+            return;
+        }
+
+        if (!AllowedTransitions.TryGetValue(from, out var allowed) || !allowed.Contains(to))
+        {
+            throw new DomainValidationException(
+                $"A lease cannot move from {from} to {to}.");
+        }
+    }
+
+    // Reject booking/activating a unit that another lease already holds over an overlapping date range.
+    // Scoped to the SAME portfolio + unit, excludes the lease being edited and any soft-deleted lease
+    // (the global query filter already drops soft-deleted rows), and only conflicts with a lease that
+    // OCCUPIES the unit (Active or NoticeGiven — a tenant in place). Half-open overlap: [s1,e1) and
+    // [s2,e2) overlap iff s1 < e2 AND s2 < e1. Runs as a single EF-translated EXISTS query (SQL-side).
+    // Throws a 409 DomainValidationException on conflict.
+    private async Task EnsureNoOverlappingActiveLeaseAsync(
+        int portfolioId, int unitId, int leaseId, DateTime startUtc, DateTime endUtc, CancellationToken ct)
+    {
+        var conflict = await _db.Leases
+            .AsNoTracking()
+            .Where(l => l.PortfolioId == portfolioId
+                && l.UnitId == unitId
+                && l.Id != leaseId
+                && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
+                && l.StartDate < endUtc
+                && startUtc < l.EndDate)
+            .Select(l => l.LeaseNumber)
+            .FirstOrDefaultAsync(ct);
+
+        if (conflict != null)
+        {
+            throw new DomainValidationException(
+                $"This unit already has an active lease ({conflict}) overlapping these dates. "
+                    + "End or move that lease before activating another for the same dates.",
+                statusCode: 409);
+        }
+    }
+
+    // Validate the date range BEFORE the DB CHECK constraint (CK_Lease_StartBeforeEnd) is hit, so the
+    // client gets a clean 400 instead of a constraint-violation 500. The DB constraint remains the
+    // backstop. Compares the UTC-normalized values that will actually be persisted.
+    private static void EnsureValidDateRange(DateTime startUtc, DateTime endUtc)
+    {
+        if (startUtc >= endUtc)
+        {
+            throw new DomainValidationException(
+                "The lease start date must be before its end date.");
         }
     }
 
@@ -262,16 +351,29 @@ public class LeaseService : ILeaseService
         // come back, and the relevant statuses are summed from that tiny grouped result.
         var statusTotals = await paymentsQuery
             .GroupBy(p => p.Status)
-            .Select(g => new { Status = g.Key, Total = g.Sum(p => p.Amount) })
+            .Select(g => new
+            {
+                Status = g.Key,
+                Total = g.Sum(p => p.Amount),
+                // Cash collected against this status' charges: only a Partial carries a split AmountPaid.
+                Collected = g.Sum(p => p.AmountPaid ?? 0m),
+            })
             .ToListAsync(ct);
 
+        // Charged = every real charge at its full billed Amount (Waived/Failed/Refunded excluded).
         var totalCharged = statusTotals
             .Where(s => s.Status is PaymentStatus.Scheduled or PaymentStatus.Partial
                 or PaymentStatus.Late or PaymentStatus.Paid)
             .Sum(s => s.Total);
+        // Paid = the full Amount of Paid charges plus the collected-so-far of Partial charges; the
+        // Partial remainder stays in the balance (Balance = Charged − Paid). The grouped sums above are
+        // already DB-side aggregates over the tiny per-status result.
         var totalPaid = statusTotals
             .Where(s => s.Status == PaymentStatus.Paid)
-            .Sum(s => s.Total);
+            .Sum(s => s.Total)
+            + statusTotals
+                .Where(s => s.Status == PaymentStatus.Partial)
+                .Sum(s => s.Collected);
 
         if (opening != null)
         {
@@ -330,6 +432,20 @@ public class LeaseService : ILeaseService
             return null;
         }
 
+        var startUtc = request.StartDate.ToUtc();
+        var endUtc = request.EndDate.ToUtc();
+
+        // Clean 400 for an inverted range before the DB CHECK constraint turns it into a raw 500.
+        EnsureValidDateRange(startUtc, endUtc);
+
+        // A new lease created already-occupying its unit (Active/NoticeGiven) must not double-book a unit
+        // that another lease already holds over an overlapping range. A Draft/Pending lease books nothing,
+        // so it skips the check. Id 0 (unsaved) never matches an existing row.
+        if (OccupiesUnit(request.Status))
+        {
+            await EnsureNoOverlappingActiveLeaseAsync(portfolioId, request.UnitId, 0, startUtc, endUtc, ct);
+        }
+
         var now = DateTime.UtcNow;
         var entity = new Lease
         {
@@ -339,8 +455,8 @@ public class LeaseService : ILeaseService
             TenantId = request.TenantId,
             LeaseNumber = request.LeaseNumber,
             Status = request.Status,
-            StartDate = request.StartDate.ToUtc(),
-            EndDate = request.EndDate.ToUtc(),
+            StartDate = startUtc,
+            EndDate = endUtc,
             MoveInDate = request.MoveInDate.ToUtc(),
             MoveOutDate = request.MoveOutDate.ToUtc(),
             MonthlyRent = request.MonthlyRent,
@@ -394,6 +510,28 @@ public class LeaseService : ILeaseService
         var prevRent = entity.MonthlyRent;
         var prevEnd = entity.EndDate;
         var prevDeposit = entity.SecurityDeposit;
+
+        // Resolve the post-update status + date range up front (request value when supplied, else current)
+        // so the integrity guards reason about what will ACTUALLY be persisted.
+        var newStatus = request.Status ?? entity.Status;
+        var newStartUtc = request.StartDate?.ToUtc() ?? entity.StartDate;
+        var newEndUtc = request.EndDate?.ToUtc() ?? entity.EndDate;
+
+        // 1. State machine: a status move must be a legal lifecycle edge (no-op same→same allowed).
+        EnsureTransitionAllowed(prevStatus, newStatus);
+
+        // 2. Date range: clean 400 before the DB CHECK constraint would 500.
+        EnsureValidDateRange(newStartUtc, newEndUtc);
+
+        // 3. Double-booking: when this edit ACTIVATES the lease (a genuine new occupation of the unit —
+        //    Draft/Pending/terminal → Active/NoticeGiven), reject if another occupying lease already holds
+        //    the unit over an overlapping range. Editing an already-occupying lease (e.g. a rent change on
+        //    an Active lease) does NOT re-run the check, so it never trips on pre-existing data; the
+        //    excluded-self clause also keeps a no-op safe.
+        if (OccupiesUnit(newStatus) && !OccupiesUnit(prevStatus))
+        {
+            await EnsureNoOverlappingActiveLeaseAsync(portfolioId, entity.UnitId, entity.Id, newStartUtc, newEndUtc, ct);
+        }
 
         if (request.LeaseNumber != null) entity.LeaseNumber = request.LeaseNumber;
         if (request.Status.HasValue) entity.Status = request.Status.Value;

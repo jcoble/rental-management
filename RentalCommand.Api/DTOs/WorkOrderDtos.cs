@@ -185,7 +185,10 @@ public class CreateWorkOrderRequest
     [MaxLength(120)]
     public string Category { get; set; } = "General";
 
+    [EnumDataType(typeof(WorkOrderPriority))]
     public WorkOrderPriority Priority { get; set; } = WorkOrderPriority.Normal;
+
+    [EnumDataType(typeof(WorkOrderStatus))]
     public WorkOrderStatus Status { get; set; } = WorkOrderStatus.New;
 
     public DateTime? RequestedAt { get; set; }
@@ -239,7 +242,10 @@ public class UpdateWorkOrderRequest
     [MaxLength(120)]
     public string? Category { get; set; }
 
+    [EnumDataType(typeof(WorkOrderPriority))]
     public WorkOrderPriority? Priority { get; set; }
+
+    [EnumDataType(typeof(WorkOrderStatus))]
     public WorkOrderStatus? Status { get; set; }
 
     /// <summary>

@@ -71,13 +71,17 @@ public class OwnerStatementService : IOwnerStatementService
             .ToDictionary(g => g.PropertyId, g => g.Total);
 
         // ── Expenses in year, keyed by PropertyId ────────────────────────────────────────────────
+        // Cash basis (to match the cash-basis rental income above): only Paid expenses count, dated by
+        // PaidAt (falling back to IncurredAt) — the same COALESCE(PaidAt, IncurredAt) convention used
+        // across the accounting/reports services and the vw_accounting_transactions view.
         var expensesByProperty = (await _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
                 e.PropertyId != null &&
                 propertyIds.Contains(e.PropertyId!.Value) &&
-                e.IncurredAt.Year == year)
+                e.Status == ExpenseStatus.Paid &&
+                (e.PaidAt ?? e.IncurredAt).Year == year)
             .GroupBy(e => e.PropertyId!.Value)
             .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct))
@@ -168,13 +172,17 @@ public class OwnerStatementService : IOwnerStatementService
             .ToListAsync(ct))
             .ToDictionary(g => g.PropertyId, g => g.Total);
 
+        // Cash basis (to match the cash-basis rental income above): only Paid expenses count, dated by
+        // PaidAt (falling back to IncurredAt) — the same COALESCE(PaidAt, IncurredAt) convention used
+        // across the accounting/reports services and the vw_accounting_transactions view.
         var expensesByProperty = (await _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
                 e.PropertyId != null &&
                 propertyIds.Contains(e.PropertyId!.Value) &&
-                e.IncurredAt.Year == year)
+                e.Status == ExpenseStatus.Paid &&
+                (e.PaidAt ?? e.IncurredAt).Year == year)
             .GroupBy(e => e.PropertyId!.Value)
             .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct))

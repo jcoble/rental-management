@@ -21,32 +21,40 @@ public class ScheduleEService : IScheduleEService
     public async Task<ScheduleEReport> GetReportAsync(int portfolioId, int year, CancellationToken ct = default)
     {
         // ── Income ──────────────────────────────────────────────────────────────────────────────
-        // Qualifying rent payments: PaymentType == Rent, Status == Paid, PaidDate in the target year.
-        // Grouped by PropertyId via Payment → Lease → Property and summed SQL-side (one row per
-        // property), not by grouping materialized rows. Payments with no lease/property bucket to the
-        // synthetic "Unassigned" id via the COALESCE-equivalent grouping key.
+        // Qualifying rent cash received: PaymentType == Rent, PaidDate in the target year, status Paid
+        // (full Amount) or Partial (the collected AmountPaid). Rental income on Schedule E is cash
+        // actually received, so a partially-collected rent counts for what was paid. Grouped by
+        // PropertyId via Payment → Lease → Property and summed SQL-side (one row per property), not by
+        // grouping materialized rows. Payments with no lease/property bucket to the synthetic
+        // "Unassigned" id via the COALESCE-equivalent grouping key.
         var incomeByProperty = (await _db.Payments
             .AsNoTracking()
             .Where(p =>
                 p.PortfolioId == portfolioId &&
                 p.PaymentType == PaymentType.Rent &&
-                p.Status == PaymentStatus.Paid &&
+                (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
                 p.PaidDate != null &&
                 p.PaidDate.Value.Year == year)
             .GroupBy(p => p.Lease != null ? p.Lease.PropertyId : UnassignedPropertyId)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) })
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p =>
+                p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) })
             .ToListAsync(ct))
             .ToDictionary(g => g.PropertyId, g => g.Total);
 
         // ── Expenses ─────────────────────────────────────────────────────────────────────────────
-        // Soft-deleted records are excluded by the global query filter. Grouped on (property, category)
-        // and summed SQL-side; the flat (propertyId, category, total) rows are reshaped into the nested
-        // map in memory, but no SUM runs in memory.
+        // Cash basis (to match the cash-basis rental income above): only expenses actually Paid count,
+        // dated by when the cash left (PaidAt, falling back to IncurredAt when a paid expense predates
+        // the PaidAt field) — the same COALESCE(PaidAt, IncurredAt) convention used across the
+        // accounting/reports services and the vw_accounting_transactions view. Unpaid expenses do not
+        // count on a cash-basis tax statement. Soft-deleted records are excluded by the global query
+        // filter. Grouped on (property, category) and summed SQL-side; the flat (propertyId, category,
+        // total) rows are reshaped into the nested map in memory, but no SUM runs in memory.
         var expenseCategoryTotals = await _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
-                e.IncurredAt.Year == year)
+                e.Status == ExpenseStatus.Paid &&
+                (e.PaidAt ?? e.IncurredAt).Year == year)
             .GroupBy(e => new { PropertyId = e.PropertyId ?? UnassignedPropertyId, e.Category })
             .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct);

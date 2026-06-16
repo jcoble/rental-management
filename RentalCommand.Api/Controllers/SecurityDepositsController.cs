@@ -11,7 +11,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/security-deposits")]
 [Produces("application/json")]
-public class SecurityDepositsController : AuthenticatedPortfolioControllerBase
+public class SecurityDepositsController : ManagementControllerBase
 {
     private readonly ISecurityDepositService _service;
 

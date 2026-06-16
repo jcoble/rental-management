@@ -162,7 +162,9 @@
 	const workOrdersQuery = createQuery(() => ({ queryKey: ['work-orders', portfolioId], queryFn: () => workOrders.list(portfolioId, { take: 200 }) }));
 
 	// --- Payment form/dialog ---
-	const emptyPayment = { leaseId: '', amount: '', dueDate: '', paymentType: 'Rent', status: 'Scheduled' };
+	// amountPaid is the cash-collected-so-far split that only applies to a Partial payment; blank for
+	// every other status (dropped on submit so the server clears it).
+	const emptyPayment = { leaseId: '', amount: '', amountPaid: '', dueDate: '', paymentType: 'Rent', status: 'Scheduled' };
 	let showPaymentForm = $state(false);
 	let editingPaymentId = $state<number | null>(null);
 	let paymentForm = $state({ ...emptyPayment });
@@ -270,7 +272,7 @@
 	}
 	function openEditPayment(p: Payment) {
 		editingPaymentId = p.id;
-		paymentForm = { leaseId: String(p.leaseId), amount: String(p.amount), dueDate: p.dueDate?.slice(0, 10) ?? '', paymentType: p.paymentType, status: p.status };
+		paymentForm = { leaseId: String(p.leaseId), amount: String(p.amount), amountPaid: p.amountPaid != null ? String(p.amountPaid) : '', dueDate: p.dueDate?.slice(0, 10) ?? '', paymentType: p.paymentType, status: p.status };
 		paymentErrors = {};
 		showPaymentForm = true;
 	}
@@ -286,7 +288,13 @@
 			return;
 		}
 		paymentErrors = {};
-		savePaymentMutation.mutate({ id: editingPaymentId, data: { portfolioId, ...result.data } });
+		// amountPaid only travels for a Partial payment. For any other status send null so the server
+		// clears a stale collected-so-far (e.g. when editing a payment away from Partial); mirrors
+		// PaymentService.NormalizeAmountPaid, which nulls AmountPaid for non-Partial statuses.
+		const { amountPaid, ...rest } = result.data;
+		const data: Record<string, unknown> =
+			rest.status === 'Partial' ? { portfolioId, ...rest, amountPaid } : { portfolioId, ...rest, amountPaid: null };
+		savePaymentMutation.mutate({ id: editingPaymentId, data });
 	}
 
 	// --- Expense form/dialog ---
@@ -769,7 +777,7 @@
 	<div class="mb-5 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
 		<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0" data-testid="accounting-collected">
 			<Card.Content class="p-4">
-				<p class="text-xs font-medium text-muted-foreground">Collected</p>
+				<p class="text-xs font-medium text-muted-foreground" title="All payments received — rent, deposits, and fees">Total Collected</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
 				{:else}
@@ -1175,6 +1183,20 @@
 					</Select.Content>
 				</Select.Root>
 			</div>
+			<!-- Partial payments collect only some of the amount up front. The "Amount paid" split is
+			     shown (and required) only for status = Partial; the remainder (amount − paid) stays owed.
+			     Hidden for every other status, where it has no meaning. -->
+			{#if paymentForm.status === 'Partial'}
+				<div>
+					<label for="payment-amount-paid-input" class="mb-1 block text-xs font-medium text-muted-foreground">Amount paid (so far)</label>
+					<Input id="payment-amount-paid-input" data-testid="payment-amount-paid-input" bind:value={paymentForm.amountPaid} placeholder="Amount paid" />
+					{#if paymentErrors.amountPaid}
+						<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-paid-error">{paymentErrors.amountPaid}</p>
+					{:else}
+						<p class="mt-1 text-xs text-muted-foreground">How much was collected. The rest stays owed.</p>
+					{/if}
+				</div>
+			{/if}
 		</div>
 		<Dialog.Footer>
 			<Button data-testid="payment-form-cancel" variant="outline" onclick={closePaymentForm}>Cancel</Button>

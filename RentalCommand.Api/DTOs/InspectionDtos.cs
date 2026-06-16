@@ -210,7 +210,10 @@ public class CreateInspectionRequest
     [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
 
+    [EnumDataType(typeof(InspectionType))]
     public InspectionType Type { get; set; } = InspectionType.Routine;
+
+    [EnumDataType(typeof(InspectionStatus))]
     public InspectionStatus Status { get; set; } = InspectionStatus.Scheduled;
 
     [Required]
@@ -243,7 +246,10 @@ public class UpdateInspectionRequest
     [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
 
+    [EnumDataType(typeof(InspectionType))]
     public InspectionType? Type { get; set; }
+
+    [EnumDataType(typeof(InspectionStatus))]
     public InspectionStatus? Status { get; set; }
 
     public DateTime? ScheduledFor { get; set; }

@@ -17,6 +17,12 @@ public class VendorDispatchService : IVendorDispatchService
     private const string WorkOrderEntityType = "WorkOrder";
     private const string DispatchEntityType = "VendorDispatch";
 
+    // A dispatch is still "open" (awaiting the vendor's DONE) in these statuses. Matches the set the
+    // inbound-DONE handler uses to find the dispatch to close, so the idempotency guard and the closer
+    // agree on what "already dispatched" means.
+    private static readonly VendorDispatchStatus[] OpenStatuses =
+        { VendorDispatchStatus.Dispatched, VendorDispatchStatus.Acknowledged };
+
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
@@ -57,6 +63,21 @@ public class VendorDispatchService : IVendorDispatchService
         if (string.IsNullOrWhiteSpace(vendorPhone))
         {
             return DispatchResult.NoPhone();
+        }
+
+        // Idempotency: if this work order already has an OPEN dispatch to this same vendor, refuse to
+        // create a second one. Re-dispatching the same job to the same vendor would stack duplicate open
+        // dispatches and duplicate SMS, yet a single "DONE" reply only closes the most recent — leaving
+        // the rest permanently open and double-counting the vendor's job stats. Re-dispatch to a DIFFERENT
+        // vendor, or after this one is completed/cancelled, is still allowed.
+        var alreadyOpen = await _db.VendorDispatches
+            .AnyAsync(d => d.PortfolioId == portfolioId
+                && d.WorkOrderId == workOrder.Id
+                && d.VendorId == vendor.Id
+                && OpenStatuses.Contains(d.Status), ct);
+        if (alreadyOpen)
+        {
+            return DispatchResult.AlreadyDispatched();
         }
 
         // Property/unit context for the job summary (best-effort labels).

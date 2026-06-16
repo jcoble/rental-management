@@ -695,7 +695,7 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
                   title: 'Next rent due',
                   value: nextPayment == null
                       ? 'None'
-                      : '${nextPayment.dueDate.difference(DateTime.now()).inDays} days',
+                      : _dueInLabel(nextPayment.dueDate),
                   subtitle: nextPayment == null
                       ? 'No unpaid rent scheduled'
                       : '${_money(nextPayment.amount)} due',
@@ -962,6 +962,21 @@ class _AutopayCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Human-friendly "time until due" label for the next rent payment.
+///
+/// Past-due dates never render a negative number ("-70 days"); they read as
+/// "Past due by N days", matching how [_PayItemCard] surfaces late rent.
+String _dueInLabel(DateTime dueDate) {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final due = DateTime(dueDate.year, dueDate.month, dueDate.day);
+  final days = due.difference(today).inDays;
+  if (days > 0) return '$days day${days == 1 ? '' : 's'}';
+  if (days == 0) return 'Due today';
+  final overdueBy = -days;
+  return 'Past due by $overdueBy day${overdueBy == 1 ? '' : 's'}';
 }
 
 String _shortDate(DateTime date) {
