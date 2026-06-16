@@ -120,7 +120,22 @@ public sealed class RoutingNotificationChannel : INotificationChannel
             },
             from = new { email = sg.FromEmail, name = sg.FromName },
             subject,
-            content
+            content,
+            // Disable click/open tracking PER MESSAGE so it can never silently regress.
+            // We send transactional auth/notice mail (verify-email, password-reset, late notices) — the
+            // links MUST stay direct. SendGrid's account-level click-tracking default rewrites every
+            // <a href> to a branded "urlNNNN.coblesolutions.com/ls/click?upn=…" link; that link-branding
+            // CNAME isn't in Cloudflare DNS, so a tracked verify link dies with ERR_NAME_NOT_RESOLVED and
+            // locks the new user out (login is gated on EmailConfirmed). The API send otherwise INHERITS
+            // whatever the dashboard Tracking toggle is at send time — turning it off in the portal only
+            // holds until that account default flips back on. Setting it false in the payload is
+            // independent of the dashboard and ships with deploy, so the verify link stays direct forever.
+            tracking_settings = new
+            {
+                click_tracking = new { enable = false, enable_text = false },
+                open_tracking = new { enable = false },
+                subscription_tracking = new { enable = false }
+            }
         };
 
         var json    = JsonSerializer.Serialize(payload);
