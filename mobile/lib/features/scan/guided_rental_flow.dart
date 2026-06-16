@@ -82,9 +82,20 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
     super.dispose();
   }
 
+  // Extraction runs a real LLM (Claude/Sonnet) server-side, which on a slow run
+  // can take well over a minute. Poll against an elapsed-time budget rather than
+  // a fixed iteration count so a slow-but-valid draft is never abandoned, with a
+  // gentle backoff (1.5s ramping to 3s) so we don't hammer the API early while
+  // still staying responsive once the draft flips to Reviewing.
+  static const _pollBudget = Duration(seconds: 180);
+  static const _pollDelayInitial = Duration(milliseconds: 1500);
+  static const _pollDelayMax = Duration(seconds: 3);
+
   Future<void> _poll() async {
     final repo = ref.read(scanRepositoryProvider);
-    for (var i = 0; i < 40; i++) {
+    final deadline = DateTime.now().add(_pollBudget);
+    var delay = _pollDelayInitial;
+    while (DateTime.now().isBefore(deadline)) {
       late final ScanDraft draft;
       try {
         draft = await repo.getDraft(widget.draftId);
@@ -109,7 +120,12 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
         });
         return;
       }
-      await Future<void>.delayed(const Duration(milliseconds: 1500));
+      await Future<void>.delayed(delay);
+      // Gentle backoff: each idle pass lengthens the wait by 250ms up to the cap.
+      if (delay < _pollDelayMax) {
+        final next = delay + const Duration(milliseconds: 250);
+        delay = next > _pollDelayMax ? _pollDelayMax : next;
+      }
     }
     if (!mounted) return;
     setState(() {
