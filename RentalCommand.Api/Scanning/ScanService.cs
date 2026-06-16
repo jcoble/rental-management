@@ -1008,6 +1008,11 @@ public sealed class ScanService : IScanService
                 Name = !string.IsNullOrWhiteSpace(name)
                     ? name!
                     : !string.IsNullOrWhiteSpace(address) ? address! : "Imported Property",
+                // Honor the reviewer's chosen property type; fall back to the request default
+                // (MultiFamily) when absent or an unrecognized value, rather than crashing.
+                PropertyType = Enum.TryParse<PropertyType>(fields.PropertyType, ignoreCase: true, out var parsedType)
+                    ? parsedType
+                    : PropertyType.MultiFamily,
                 AddressLine1 = !string.IsNullOrWhiteSpace(address) ? address! : "Unknown",
                 City = !string.IsNullOrWhiteSpace(fields.PropertyCity) ? fields.PropertyCity!.Trim() : "Unknown",
                 State = !string.IsNullOrWhiteSpace(fields.PropertyState) ? fields.PropertyState!.Trim() : "Unknown",
@@ -1856,6 +1861,8 @@ public sealed class ScanService : IScanService
             // model had guessed an id.
             if (TryGetOverrideString(root, out var propertyName, "propertyName", "property_name"))
                 fields.PropertyName = propertyName;
+            if (TryGetOverrideString(root, out var propertyType, "propertyType", "property_type"))
+                fields.PropertyType = propertyType;
             if (TryGetOverrideString(root, out var propertyAddress, "propertyAddress", "property_address"))
                 fields.PropertyAddress = propertyAddress;
             if (TryGetOverrideString(root, out var propertyCity, "propertyCity", "property_city"))
@@ -2111,6 +2118,7 @@ public sealed class ScanService : IScanService
         // Leased-premises text extracted straight off the document, used to match-or-create the
         // Property/Unit when no in-portfolio id was matched (the empty-portfolio bootstrap path).
         public string? PropertyName { get; set; }
+        public string? PropertyType { get; set; }
         public string? PropertyAddress { get; set; }
         public string? PropertyCity { get; set; }
         public string? PropertyState { get; set; }

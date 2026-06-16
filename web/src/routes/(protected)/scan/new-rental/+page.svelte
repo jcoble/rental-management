@@ -221,6 +221,7 @@
 		const o: Record<string, unknown> = {};
 		if (isCreatingProperty) {
 			o.propertyId = null;
+			if (propertyForm.type) o.propertyType = propertyForm.type;
 			if (propertyForm.name.trim()) o.propertyName = propertyForm.name.trim();
 			if (propertyForm.addressLine1.trim()) o.propertyAddress = propertyForm.addressLine1.trim();
 			if (propertyForm.city.trim()) o.propertyCity = propertyForm.city.trim();
