@@ -33,7 +33,7 @@ public class ScanController : AuthenticatedPortfolioControllerBase
     // a batch always has a concrete target (defaulting to "Lease", the migration on-ramp).
     private static readonly HashSet<string> ValidTargets = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Expense", "Payment", "WorkOrder", "Lease"
+        "Expense", "Payment", "WorkOrder", "Lease", "Application"
     };
 
     // Cap per batch so one request can't enqueue an unbounded number of (paid) LLM extractions.
@@ -64,13 +64,9 @@ public class ScanController : AuthenticatedPortfolioControllerBase
 
         // When a targetEntityType is explicitly provided it must be a recognised value.
         // Empty/null is allowed — the LLM worker will classify it during processing.
-        if (!string.IsNullOrEmpty(targetEntityType)
-            && !string.Equals(targetEntityType, "Expense", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(targetEntityType, "Payment", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(targetEntityType, "WorkOrder", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(targetEntityType, "Lease", StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrEmpty(targetEntityType) && !ValidTargets.Contains(targetEntityType))
         {
-            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease (or omit to auto-classify)." });
+            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease, Application (or omit to auto-classify)." });
         }
 
         using var ms = new MemoryStream();
@@ -535,6 +531,7 @@ public class ScanController : AuthenticatedPortfolioControllerBase
             "Payment" => Ok(new { paymentId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
             "WorkOrder" => Ok(new { workOrderId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
             "Lease" => Ok(new { leaseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
+            "Application" => Ok(new { applicationId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
             _ => Ok(new { expenseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
         };
     }

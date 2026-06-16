@@ -25,6 +25,7 @@ public sealed class ScanService : IScanService
     private readonly ITenantService _tenants;
     private readonly IPropertyService _properties;
     private readonly IUnitService _units;
+    private readonly IApplicationService _applications;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<ScanService> _logger;
 
@@ -38,6 +39,7 @@ public sealed class ScanService : IScanService
         ITenantService tenants,
         IPropertyService properties,
         IUnitService units,
+        IApplicationService applications,
         IAuditTrailService audit,
         ILogger<ScanService> logger)
     {
@@ -50,6 +52,7 @@ public sealed class ScanService : IScanService
         _tenants = tenants;
         _properties = properties;
         _units = units;
+        _applications = applications;
         _audit = audit;
         _logger = logger;
     }
@@ -157,7 +160,7 @@ public sealed class ScanService : IScanService
         if (draft.Status != "Reviewing")
             return new ScanConfirmResult(false, null, "Draft is not ready to confirm; it must be reviewed first.");
 
-        if (draft.TargetEntityType is not ("Expense" or "Payment" or "WorkOrder" or "Lease"))
+        if (draft.TargetEntityType is not ("Expense" or "Payment" or "WorkOrder" or "Lease" or "Application"))
             return new ScanConfirmResult(false, null, $"Unsupported target '{draft.TargetEntityType}'");
 
         // Start from the extracted fields, then apply the user's reviewed overrides (overrides win).
@@ -195,6 +198,7 @@ public sealed class ScanService : IScanService
             "Payment" => await ConfirmAsPaymentAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct),
             "WorkOrder" => await ConfirmAsWorkOrderAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
             "Lease" => await ConfirmAsLeaseAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
+            "Application" => await ConfirmAsApplicationAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
             _ => await ConfirmAsExpenseAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct),
         };
 
@@ -802,6 +806,132 @@ public sealed class ScanService : IScanService
             ct: ct);
 
         return new ScanConfirmResult(true, lease.Id, null, "Lease");
+    }
+
+    // -------------------------------------------------------------------------
+    // ConfirmAsApplicationAsync  (called by the router) — the "scan a completed paper application" path
+    // -------------------------------------------------------------------------
+
+    private async Task<ScanConfirmResult> ConfirmAsApplicationAsync(
+        int portfolioId,
+        int draftId,
+        int userId,
+        ScanDraft draft,
+        string overridesJson,
+        CancellationToken ct)
+    {
+        var fields = BuildApplicationFields(draft.ExtractedFields);
+
+        // The property/unit ids came straight from the LLM. Drop any that aren't actually in THIS portfolio
+        // before we trust them (IDOR) — same pattern as the lease/work-order paths. Trusted reviewer
+        // selections from the review UI then win and are re-validated below.
+        await ValidateApplicationIdsInPortfolioAsync(portfolioId, fields, ct);
+        ApplyApplicationOverrides(fields, overridesJson);
+
+        // First + last name anchor the applicant record (both are [Required] on the create request).
+        if (string.IsNullOrWhiteSpace(fields.FirstName) || string.IsNullOrWhiteSpace(fields.LastName))
+            return new ScanConfirmResult(false, null, "Applicant first and last name are required");
+
+        // Re-validate any reviewer-supplied property/unit id in-portfolio (never trust a raw override id).
+        int? propertyId = null;
+        if (fields.PropertyId is > 0)
+        {
+            if (await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId.Value, ct))
+                propertyId = fields.PropertyId;
+        }
+        int? unitId = null;
+        if (fields.UnitId is > 0)
+        {
+            if (await _db.EnsureUnitInPortfolioAsync(portfolioId, fields.UnitId.Value, propertyId, ct))
+                unitId = fields.UnitId;
+        }
+
+        // Fold the application-only details that have no dedicated RentalApplication column (the applied-for
+        // property/unit text, the ID last-4 hint, and any co-signer) into the Notes so they aren't lost. The
+        // structured property/unit selection (above) is the queryable link; this is the human-readable record.
+        var notes = BuildApplicationNotes(fields);
+
+        var request = new CreateApplicationRequest
+        {
+            PropertyId = propertyId,
+            UnitId = unitId,
+            FirstName = fields.FirstName!.Trim(),
+            LastName = fields.LastName!.Trim(),
+            Email = fields.Email,
+            Phone = fields.Phone,
+            DateOfBirth = fields.DateOfBirth,
+            CurrentAddress = fields.CurrentAddress,
+            Employer = fields.Employer,
+            MonthlyIncome = fields.MonthlyIncome,
+            DesiredMoveInDate = fields.DesiredMoveInDate,
+            Notes = notes,
+            // Keep the full scan extraction superset as the provenance JSON.
+            IdExtractedFields = NormalizeExtractedData(draft.ExtractedFields),
+        };
+
+        ApplicationResponse application;
+        try
+        {
+            application = await _applications.CreateFromScanAsync(portfolioId, request, userId, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Application creation threw while confirming scan draft {DraftId}", draftId);
+            return new ScanConfirmResult(false, null, "Application creation failed");
+        }
+
+        // Re-attach the source document to the created application (re-key the StoredFile + mark Confirmed).
+        await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "Application", application.Id, ct);
+
+        var appliedJson = JsonSerializer.Serialize(new
+        {
+            request.FirstName,
+            request.LastName,
+            request.Email,
+            request.Phone,
+            request.DateOfBirth,
+            request.Employer,
+            request.MonthlyIncome,
+            request.PropertyId,
+            request.UnitId,
+        });
+
+        await _audit.LogAsync(
+            portfolioId,
+            "RentalApplication",
+            application.Id,
+            AuditLogOperation.Created,
+            userId: userId,
+            oldValues: draft.ExtractedFields,
+            newValues: appliedJson,
+            changeReason: "Created from scan draft #" + draftId,
+            ct: ct);
+
+        return new ScanConfirmResult(true, application.Id, null, "Application");
+    }
+
+    /// <summary>
+    /// Folds the scanned-application details that have no dedicated <see cref="Core.Entities.RentalApplication"/>
+    /// column — the applied-for property/unit free text, the government-ID last-4 hint, and any co-signer name —
+    /// into the application Notes, after any free-text notes the reviewer entered, so nothing the scan captured
+    /// is silently dropped. Returns null when there is nothing to record.
+    /// </summary>
+    private static string? BuildApplicationNotes(ApplicationDraftFields fields)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(fields.Notes))
+            parts.Add(fields.Notes!.Trim());
+        if (!string.IsNullOrWhiteSpace(fields.ApplyingFor))
+            parts.Add($"Applying for: {fields.ApplyingFor!.Trim()}.");
+        if (!string.IsNullOrWhiteSpace(fields.IdLast4))
+            parts.Add($"ID last-4: {fields.IdLast4!.Trim()}.");
+        if (!string.IsNullOrWhiteSpace(fields.CoSignerName))
+            parts.Add($"Co-signer: {fields.CoSignerName!.Trim()}.");
+
+        if (parts.Count == 0)
+            return null;
+        var note = string.Join(" ", parts);
+        return note.Length > 2000 ? note[..2000] : note;
     }
 
     /// <summary>
@@ -1773,6 +1903,124 @@ public sealed class ScanService : IScanService
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Application extraction helpers (scan a completed paper rental application)
+    // -------------------------------------------------------------------------
+
+    private ApplicationDraftFields BuildApplicationFields(string? extractedFieldsJson)
+    {
+        var fields = new ApplicationDraftFields();
+        if (string.IsNullOrWhiteSpace(extractedFieldsJson))
+            return fields;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(extractedFieldsJson);
+            var root = doc.RootElement;
+
+            fields.FirstName = ReadFieldValue(root, "first_name") ?? ReadFieldValue(root, "firstName");
+            fields.LastName = ReadFieldValue(root, "last_name") ?? ReadFieldValue(root, "lastName");
+            fields.Email = ReadFieldValue(root, "email");
+            fields.Phone = ReadFieldValue(root, "phone");
+            fields.DateOfBirth = ParseDateField(root, "date_of_birth") ?? ParseDateField(root, "dateOfBirth");
+            fields.CurrentAddress = ReadFieldValue(root, "current_address") ?? ReadFieldValue(root, "currentAddress");
+            fields.Employer = ReadFieldValue(root, "employer");
+            fields.MonthlyIncome = ParseDecimalField(root, "monthly_income") ?? ParseDecimalField(root, "monthlyIncome");
+            fields.ApplyingFor = ReadFieldValue(root, "applying_for") ?? ReadFieldValue(root, "applyingFor");
+            fields.DesiredMoveInDate = ParseDateField(root, "desired_move_in_date") ?? ParseDateField(root, "desiredMoveInDate");
+            fields.IdLast4 = ReadFieldValue(root, "id_last4") ?? ReadFieldValue(root, "idLast4");
+            fields.CoSignerName = ReadFieldValue(root, "co_signer_name") ?? ReadFieldValue(root, "coSignerName");
+            fields.PropertyId = ParseIntField(root, "property_id") ?? ParseIntField(root, "propertyId");
+            fields.UnitId = ParseIntField(root, "unit_id") ?? ParseIntField(root, "unitId");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse application extraction JSON.");
+        }
+
+        return fields;
+    }
+
+    /// <summary>
+    /// Drops any LLM-suggested property/unit id that doesn't belong to this portfolio (IDOR-safe) — same
+    /// pattern as the lease/work-order paths. Unit must additionally belong to the matched property. Bad ids
+    /// fall back to null so the applicant is simply filed without a property rather than failing the confirm.
+    /// </summary>
+    private async Task ValidateApplicationIdsInPortfolioAsync(
+        int portfolioId, ApplicationDraftFields fields, CancellationToken ct)
+    {
+        if (fields.PropertyId is > 0 &&
+            !await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId.Value, ct))
+        {
+            fields.PropertyId = null;
+        }
+
+        if (fields.UnitId is > 0 &&
+            !await _db.EnsureUnitInPortfolioAsync(
+                portfolioId, fields.UnitId.Value, fields.PropertyId is > 0 ? fields.PropertyId : null, ct))
+        {
+            fields.UnitId = null;
+        }
+    }
+
+    private void ApplyApplicationOverrides(ApplicationDraftFields fields, string overridesJson)
+    {
+        if (string.IsNullOrWhiteSpace(overridesJson))
+            return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(overridesJson);
+            var root = doc.RootElement;
+
+            if (TryGetOverrideString(root, out var firstName, "firstName", "first_name"))
+                fields.FirstName = firstName;
+            if (TryGetOverrideString(root, out var lastName, "lastName", "last_name"))
+                fields.LastName = lastName;
+            if (TryGetOverrideString(root, out var email, "email"))
+                fields.Email = email;
+            if (TryGetOverrideString(root, out var phone, "phone"))
+                fields.Phone = phone;
+            if (TryGetOverrideString(root, out var dobStr, "dateOfBirth", "date_of_birth") &&
+                DateTime.TryParse(dobStr, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var dob))
+            {
+                fields.DateOfBirth = dob;
+            }
+            if (TryGetOverrideString(root, out var currentAddress, "currentAddress", "current_address"))
+                fields.CurrentAddress = currentAddress;
+            if (TryGetOverrideString(root, out var employer, "employer"))
+                fields.Employer = employer;
+            if (TryGetOverrideDecimal(root, out var income, "monthlyIncome", "monthly_income"))
+                fields.MonthlyIncome = income;
+            if (TryGetOverrideString(root, out var applyingFor, "applyingFor", "applying_for"))
+                fields.ApplyingFor = applyingFor;
+            if (TryGetOverrideString(root, out var moveInStr, "desiredMoveInDate", "desired_move_in_date") &&
+                DateTime.TryParse(moveInStr, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var moveIn))
+            {
+                fields.DesiredMoveInDate = moveIn;
+            }
+            if (TryGetOverrideString(root, out var idLast4, "idLast4", "id_last4"))
+                fields.IdLast4 = idLast4;
+            if (TryGetOverrideString(root, out var coSigner, "coSignerName", "co_signer_name"))
+                fields.CoSignerName = coSigner;
+            if (TryGetOverrideString(root, out var notes, "notes"))
+                fields.Notes = notes;
+            // Reviewer can correct the property/unit link; 0 clears it back to "no property".
+            if (TryGetOverrideInt(root, out var propertyId, "propertyId", "property_id"))
+                fields.PropertyId = propertyId > 0 ? propertyId : null;
+            if (TryGetOverrideInt(root, out var unitId, "unitId", "unit_id"))
+                fields.UnitId = unitId > 0 ? unitId : null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse application overridesJson; skipping overrides.");
+        }
+    }
+
     /// <summary>Parses an ISO date from a field's "value" sub-property, normalized to UTC. Null on failure.</summary>
     private static DateTime? ParseDateField(JsonElement root, string key)
     {
@@ -1879,5 +2127,28 @@ public sealed class ScanService : IScanService
         public decimal? SecurityDeposit { get; set; }
         public decimal? LateFee { get; set; }
         public int? RentDueDay { get; set; }
+    }
+
+    private sealed class ApplicationDraftFields
+    {
+        public string? FirstName { get; set; }
+        public string? LastName { get; set; }
+        public string? Email { get; set; }
+        public string? Phone { get; set; }
+        public DateTime? DateOfBirth { get; set; }
+        public string? CurrentAddress { get; set; }
+        public string? Employer { get; set; }
+        public decimal? MonthlyIncome { get; set; }
+        public DateTime? DesiredMoveInDate { get; set; }
+
+        // Application-only details with no dedicated RentalApplication column — folded into Notes on confirm.
+        public string? ApplyingFor { get; set; }
+        public string? IdLast4 { get; set; }
+        public string? CoSignerName { get; set; }
+        public string? Notes { get; set; }
+
+        // Optional in-portfolio property/unit the applicant is applying for (validated before trust).
+        public int? PropertyId { get; set; }
+        public int? UnitId { get; set; }
     }
 }
