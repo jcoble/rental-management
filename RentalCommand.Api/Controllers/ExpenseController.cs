@@ -13,7 +13,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/expenses")]
 [Produces("application/json")]
-public class ExpenseController : AuthenticatedPortfolioControllerBase
+public class ExpenseController : ManagementControllerBase
 {
     private readonly IExpenseService _service;
     private readonly RentalCommandDbContext _db;

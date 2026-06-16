@@ -14,6 +14,16 @@ namespace RentalCommand.Api.Controllers;
 /// General-purpose document attachment hub: upload, list, download, and soft-delete
 /// <see cref="Core.Entities.StoredFile"/> rows for any entity type within the caller's portfolio.
 /// All routes are portfolio-scoped via the JWT <c>portfolioId</c> claim.
+///
+/// <para>
+/// This controller is tenant-reachable on purpose (tenants attach a photo to their own maintenance
+/// request from the portal), so it stays on the plain <see cref="AuthenticatedPortfolioControllerBase"/>
+/// rather than the staff-only <see cref="ManagementControllerBase"/>. Portfolio scoping alone is NOT
+/// sufficient for a Tenant principal — every other tenant in the same portfolio shares that scope — so a
+/// tenant caller is additionally constrained to documents on a <c>WorkOrder</c> they own (their only
+/// legitimate document surface). Staff callers (no <c>tenantId</c> claim) keep full portfolio access. See
+/// <see cref="TenantMayAccessEntityAsync"/>.
+/// </para>
 /// </summary>
 [ApiController]
 [Route("api/v1/documents")]
@@ -114,6 +124,12 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         if (!entityInPortfolio)
             return NotFound(new { error = "The referenced record was not found in your portfolio." });
 
+        // Tenant guard: a tenant principal may only attach to a WorkOrder they own (their sole document
+        // surface). Portfolio scope above is shared by every tenant in the portfolio, so without this a
+        // tenant could attach to another tenant's lease/payment/work-order record by id.
+        if (!await TenantMayAccessEntityAsync(normalizedEntityType, entityId, portfolioId, ct))
+            return NotFound(new { error = "The referenced record was not found in your portfolio." });
+
         // Store the blob.
         string storageKey;
         try
@@ -166,7 +182,15 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         if (string.IsNullOrWhiteSpace(entityType))
             return BadRequest(new { error = "entityType query parameter is required." });
 
-        var docs = await _documents.ListAsync(GetPortfolioId(), entityType.Trim(), entityId, ct);
+        var portfolioId = GetPortfolioId();
+        var normalizedEntityType = entityType.Trim();
+
+        // Tenant guard: a tenant may only list documents for a WorkOrder they own. Returning an empty
+        // list (rather than 403) keeps the response shape identical for any non-owned/foreign entity.
+        if (!await TenantMayAccessEntityAsync(normalizedEntityType, entityId, portfolioId, ct))
+            return Ok(Array.Empty<DocumentDto>());
+
+        var docs = await _documents.ListAsync(portfolioId, normalizedEntityType, entityId, ct);
         return Ok(docs);
     }
 
@@ -179,8 +203,15 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetFile(int id, CancellationToken ct)
     {
-        var row = await _documents.FindAsync(GetPortfolioId(), id, ct);
+        var portfolioId = GetPortfolioId();
+        var row = await _documents.FindAsync(portfolioId, id, ct);
         if (row is null)
+            return NotFound(new { error = "Document not found." });
+
+        // Tenant guard: a tenant may only download a document attached to a WorkOrder they own. Without
+        // this, any tenant could stream every document in the portfolio by id (other tenants' lease PDFs,
+        // ID scans, owner financials). 404 (not 403) so a foreign id is indistinguishable from a missing one.
+        if (!await TenantMayAccessEntityAsync(row.EntityType, row.EntityId, portfolioId, ct))
             return NotFound(new { error = "Document not found." });
 
         Stream stream;
@@ -218,8 +249,51 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Delete(int id, CancellationToken ct)
     {
-        var deleted = await _documents.DeleteAsync(GetPortfolioId(), id, ct);
+        var portfolioId = GetPortfolioId();
+
+        // Tenant guard: resolve the row first so a tenant can only delete a document on a WorkOrder they
+        // own; a tenant must never soft-delete another tenant's (or the owner's) portfolio documents.
+        var row = await _documents.FindAsync(portfolioId, id, ct);
+        if (row is null)
+            return NotFound(new { error = "Document not found." });
+        if (!await TenantMayAccessEntityAsync(row.EntityType, row.EntityId, portfolioId, ct))
+            return NotFound(new { error = "Document not found." });
+
+        var deleted = await _documents.DeleteAsync(portfolioId, id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Document not found." });
+    }
+
+    // -------------------------------------------------------------------------
+    // Tenant access guard (within-portfolio)
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Whether the CALLER may act on a document attached to <paramref name="entityType"/>/
+    /// <paramref name="entityId"/>. Staff callers (no <c>tenantId</c> claim) always may — portfolio scope
+    /// is enforced elsewhere. A tenant caller may ONLY when the entity is a <c>WorkOrder</c> that belongs
+    /// to that tenant (their single legitimate document surface — a maintenance-request photo). Every other
+    /// entity type, or a work order owned by a different tenant, is denied. Fail-closed: an unknown/missing
+    /// entity reference returns <c>false</c> for a tenant.
+    /// </summary>
+    private async Task<bool> TenantMayAccessEntityAsync(
+        string? entityType, int? entityId, int portfolioId, CancellationToken ct)
+    {
+        var tenantId = GetTenantIdOrNull();
+        if (tenantId is null)
+        {
+            // Staff/owner/manager/agent: not tenant-constrained (portfolio scope already applied).
+            return true;
+        }
+
+        if (entityId is null || string.IsNullOrWhiteSpace(entityType))
+            return false;
+
+        // A tenant's only document surface is a photo on their OWN maintenance request.
+        if (!string.Equals(entityType.Trim(), "WorkOrder", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return await _db.WorkOrders.AnyAsync(
+            w => w.Id == entityId.Value && w.PortfolioId == portfolioId && w.TenantId == tenantId.Value, ct);
     }
 
     // -------------------------------------------------------------------------

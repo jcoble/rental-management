@@ -12,7 +12,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/conversations")]
 [Produces("application/json")]
-public class ConversationsController : AuthenticatedPortfolioControllerBase
+public class ConversationsController : ManagementControllerBase
 {
     private readonly IConversationService _service;
 

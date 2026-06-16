@@ -15,7 +15,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/payments")]
 [Produces("application/json")]
-public class PaymentController : AuthenticatedPortfolioControllerBase
+public class PaymentController : ManagementControllerBase
 {
     private readonly IPaymentService _service;
     private readonly IStripePaymentService _stripeService;

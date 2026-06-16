@@ -15,7 +15,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/work-orders")]
 [Produces("application/json")]
-public class WorkOrderController : AuthenticatedPortfolioControllerBase
+public class WorkOrderController : ManagementControllerBase
 {
     private readonly IWorkOrderService _service;
     private readonly IVendorDispatchService _dispatch;

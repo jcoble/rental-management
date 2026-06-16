@@ -14,7 +14,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/opening-balances")]
 [Produces("application/json")]
-public class OpeningBalanceController : AuthenticatedPortfolioControllerBase
+public class OpeningBalanceController : ManagementControllerBase
 {
     private readonly IOpeningBalanceService _service;
 

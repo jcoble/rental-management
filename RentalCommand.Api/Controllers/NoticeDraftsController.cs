@@ -11,7 +11,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/notices")]
 [Produces("application/json")]
-public class NoticeDraftsController : AuthenticatedPortfolioControllerBase
+public class NoticeDraftsController : ManagementControllerBase
 {
     private readonly INoticeDraftService _service;
 
