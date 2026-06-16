@@ -117,7 +117,11 @@ public class PaymentService : IPaymentService
             Status = request.Status,
             Amount = request.Amount,
             DueDate = request.DueDate.ToUtc(),
-            PaidDate = request.PaidDate.ToUtc(),
+            // A payment created as Paid must carry a PaidDate or it's invisible to the income/collected
+            // aggregations (which require PaidDate != null). Prefer DueDate so income lands in the right period.
+            PaidDate = request.Status == PaymentStatus.Paid
+                ? (request.PaidDate.ToUtc() ?? request.DueDate.ToUtc())
+                : request.PaidDate.ToUtc(),
             Method = request.Method,
             ExternalReference = request.ExternalReference,
             Notes = request.Notes,
@@ -171,6 +175,14 @@ public class PaymentService : IPaymentService
         if (request.Method != null) entity.Method = request.Method;
         if (request.ExternalReference != null) entity.ExternalReference = request.ExternalReference;
         if (request.Notes != null) entity.Notes = request.Notes;
+
+        // A payment that ends up Paid without a PaidDate is invisible to income/collected reports.
+        // Default it (preferring DueDate so income lands in the right period) — covers transitions TO Paid.
+        if (entity.Status == PaymentStatus.Paid && entity.PaidDate is null)
+        {
+            entity.PaidDate = request.PaidDate.ToUtc() ?? entity.DueDate;
+        }
+
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
