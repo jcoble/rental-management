@@ -39,6 +39,12 @@ dependencies:
   open_filex: ^4.7.0
   file_picker: ^8.1.7
   path_provider: ^2.1.5
+  # Client-side multi-photo -> single-PDF stitch for the scan front door (Lane A
+  # frozen contract): each captured lease photo becomes one PDF page, uploaded via
+  # the existing single-file /scans path (server already handles PDF). `image`
+  # decodes/re-encodes each frame to a predictable JPEG; `pdf` lays out the pages.
+  pdf: ^3.11.1
+  image: ^4.3.0
   # Push notifications E2E (P0-2): FCM (Android) + APNs (iOS) via firebase_messaging,
   # surfaced as OS notifications by flutter_local_notifications when the app is
   # foregrounded. Placeholder-safe: Firebase.initializeApp fails soft when no
