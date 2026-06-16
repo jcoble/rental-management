@@ -203,6 +203,12 @@
 		</Button>
 	</div>
 
+	<!-- Primary front door: guided, pre-filled new-rental-from-your-lease flow -->
+	<a href="/scan/new-rental" class="mb-6 block rounded-lg border border-accent/40 bg-accent/5 p-4 hover:bg-accent/10" data-testid="scan-new-rental-cta">
+		<p class="text-sm font-semibold text-foreground">New rental from your lease</p>
+		<p class="text-xs text-muted-foreground">Snap or upload a lease → we pre-fill the property, unit, tenant, and lease for you to review.</p>
+	</a>
+
 	<!-- Document type selector -->
 	{#if !uploadMutation.isPending}
 		<div class="mb-4" data-testid="scan-doc-type">
