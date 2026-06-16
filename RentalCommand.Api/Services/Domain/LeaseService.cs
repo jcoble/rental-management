@@ -351,16 +351,29 @@ public class LeaseService : ILeaseService
         // come back, and the relevant statuses are summed from that tiny grouped result.
         var statusTotals = await paymentsQuery
             .GroupBy(p => p.Status)
-            .Select(g => new { Status = g.Key, Total = g.Sum(p => p.Amount) })
+            .Select(g => new
+            {
+                Status = g.Key,
+                Total = g.Sum(p => p.Amount),
+                // Cash collected against this status' charges: only a Partial carries a split AmountPaid.
+                Collected = g.Sum(p => p.AmountPaid ?? 0m),
+            })
             .ToListAsync(ct);
 
+        // Charged = every real charge at its full billed Amount (Waived/Failed/Refunded excluded).
         var totalCharged = statusTotals
             .Where(s => s.Status is PaymentStatus.Scheduled or PaymentStatus.Partial
                 or PaymentStatus.Late or PaymentStatus.Paid)
             .Sum(s => s.Total);
+        // Paid = the full Amount of Paid charges plus the collected-so-far of Partial charges; the
+        // Partial remainder stays in the balance (Balance = Charged − Paid). The grouped sums above are
+        // already DB-side aggregates over the tiny per-status result.
         var totalPaid = statusTotals
             .Where(s => s.Status == PaymentStatus.Paid)
-            .Sum(s => s.Total);
+            .Sum(s => s.Total)
+            + statusTotals
+                .Where(s => s.Status == PaymentStatus.Partial)
+                .Sum(s => s.Collected);
 
         if (opening != null)
         {
