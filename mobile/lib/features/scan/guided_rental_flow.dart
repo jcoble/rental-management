@@ -298,34 +298,52 @@ class _GuidedRentalFlowState extends ConsumerState<GuidedRentalFlow> {
                         child: _stepBody(),
                       ),
                     ),
-                    SafeArea(
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Row(
-                          children: [
-                            TextButton(
-                              onPressed: _step == 0 ? null : () => setState(() => _step -= 1),
-                              child: const Text('Back'),
-                            ),
-                            const Spacer(),
-                            if (_step < _total)
-                              FilledButton(
-                                onPressed: () {
-                                  if (_validateStep()) setState(() => _step += 1);
-                                },
-                                child: const Text('Next'),
-                              )
-                            else
-                              FilledButton(
-                                onPressed: _confirming ? null : _confirm,
-                                child: Text(_confirming ? 'Creating…' : 'Confirm & create'),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
+                    _bottomBar(),
                   ],
                 ),
+    );
+  }
+
+  /// Persistent Back / Next (or Confirm) action bar pinned to the bottom of the
+  /// stepped form.
+  ///
+  /// Why `OverflowBar` and not a plain `Row` + `Spacer`: this bar is the last
+  /// child of a `Column` that also has an `Expanded` child. Flex sizes its
+  /// non-flex children with an unbounded main-axis extent to measure them, so
+  /// the bar is laid out with an unbounded height. A horizontal `Row` in that
+  /// context hands its non-flex children (a default `FilledButton`, whose
+  /// `ButtonStyle.maximumSize` is `Size.infinite`) an unbounded width, tripping
+  /// `RenderConstrainedBox`'s "BoxConstraints forces an infinite width" assert.
+  /// That assert aborts layout of the entire body subtree — the symptom was a
+  /// completely blank Step 1. `OverflowBar` lays its children out without
+  /// forcing them to an unbounded width, so the buttons size to their content.
+  Widget _bottomBar() {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: OverflowBar(
+          alignment: MainAxisAlignment.spaceBetween,
+          overflowAlignment: OverflowBarAlignment.end,
+          children: [
+            TextButton(
+              onPressed: _step == 0 ? null : () => setState(() => _step -= 1),
+              child: const Text('Back'),
+            ),
+            if (_step < _total)
+              FilledButton(
+                onPressed: () {
+                  if (_validateStep()) setState(() => _step += 1);
+                },
+                child: const Text('Next'),
+              )
+            else
+              FilledButton(
+                onPressed: _confirming ? null : _confirm,
+                child: Text(_confirming ? 'Creating…' : 'Confirm & create'),
+              ),
+          ],
+        ),
+      ),
     );
   }
 
