@@ -810,15 +810,30 @@ class _PayItemCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            FilledButton(
-              onPressed: enabled && !busy ? onPay : null,
-              child: busy
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Pay now'),
+            // Why `Flexible` (loose) and not a bare `FilledButton`: this Row
+            // already has an `Expanded` child, so when Flex measures its
+            // *inflexible* children it hands them an unbounded main-axis
+            // (width) extent. A default Material button's
+            // `ButtonStyle.maximumSize` is `Size.infinite`, so its internal
+            // `RenderConstrainedBox` enforces that as a tight `w=Infinity` and
+            // trips "BoxConstraints forces an infinite width" — aborting layout
+            // of the whole ListView subtree and rendering tenant Home blank.
+            // (`_TenantCard` escapes this only because its inflexible children
+            // are Icons, which have a finite intrinsic width.) Making the button
+            // a `Flexible` flex child means Flex sizes it against the *remaining
+            // bounded* width instead of infinity; `FlexFit.loose` lets it shrink
+            // to its content so the "Pay now" pill keeps its natural size.
+            Flexible(
+              child: FilledButton(
+                onPressed: enabled && !busy ? onPay : null,
+                child: busy
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Pay now'),
+              ),
             ),
           ],
         ),
@@ -914,23 +929,33 @@ class _AutopayCard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            statusAsync.maybeWhen(
-              data: (status) => busy
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : status.active
-                  ? OutlinedButton(
-                      onPressed: onCancel,
-                      child: const Text('Turn off'),
-                    )
-                  : FilledButton(
-                      onPressed: onEnroll,
-                      child: const Text('Set up'),
-                    ),
-              orElse: () => const SizedBox.shrink(),
+            // Flexible for the same reason as _PayItemCard's "Pay now": this Row
+            // has an Expanded sibling, so Flex measures this inflexible trailing
+            // child with an unbounded width. A default Material button
+            // (maximumSize == Size.infinite) cannot be measured at infinite
+            // width and trips "BoxConstraints forces an infinite width", which
+            // aborts the whole tenant-Home ListView subtree. Flexible makes Flex
+            // size the button against the remaining bounded width; FlexFit.loose
+            // keeps the button at its natural content width.
+            Flexible(
+              child: statusAsync.maybeWhen(
+                data: (status) => busy
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : status.active
+                    ? OutlinedButton(
+                        onPressed: onCancel,
+                        child: const Text('Turn off'),
+                      )
+                    : FilledButton(
+                        onPressed: onEnroll,
+                        child: const Text('Set up'),
+                      ),
+                orElse: () => const SizedBox.shrink(),
+              ),
             ),
           ],
         ),
