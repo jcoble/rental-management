@@ -154,6 +154,9 @@ function buildErrorFromBody(response: Response, errorData: unknown): ApiError {
 	const message =
 		primaryError?.message ??
 		(typeof body.error === 'string' ? body.error : null) ??
+		// ProblemDetails.detail carries the specific, user-facing reason (e.g. a domain validation
+		// message like "A partial payment requires…"); prefer it over the generic `title`.
+		(typeof body.detail === 'string' ? body.detail : null) ??
 		(typeof body.title === 'string' ? body.title : null) ??
 		(typeof body.message === 'string' ? body.message : null) ??
 		fallbackHttpErrorMessage(response);
