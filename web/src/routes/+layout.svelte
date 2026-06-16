@@ -31,7 +31,16 @@
 		defaultOptions: {
 			queries: {
 				staleTime: 15000,
-				refetchOnWindowFocus: false
+				refetchOnWindowFocus: false,
+				// Don't retry deterministic client errors (4xx — esp. a 404 on a not-found detail page):
+				// retrying a 404 four times with exponential backoff stalled the page ~12s behind a spinner
+				// before its "not found" state could show. ApiError carries the HTTP status on `.status`.
+				// Transient errors (network/5xx) still get a couple of retries.
+				retry: (failureCount, error) => {
+					const status = (error as { status?: number })?.status;
+					if (status !== undefined && status >= 400 && status < 500) return false;
+					return failureCount < 2;
+				}
 			}
 		}
 	});
