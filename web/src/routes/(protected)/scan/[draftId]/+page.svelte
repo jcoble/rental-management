@@ -109,9 +109,11 @@
 	const isPayment = $derived(data?.targetEntityType === 'Payment');
 	const isWorkOrder = $derived(data?.targetEntityType === 'WorkOrder');
 	const isLease = $derived(data?.targetEntityType === 'Lease');
+	// A scanned completed paper rental application → creates an applicant / RentalApplication.
+	const isApplication = $derived(data?.targetEntityType === 'Application');
 	// Line items are an Expense concept — only the expense confirm path persists them — so the
 	// editable line-items table and its override are scoped to expense drafts.
-	const isExpense = $derived(!isPayment && !isWorkOrder && !isLease);
+	const isExpense = $derived(!isPayment && !isWorkOrder && !isLease && !isApplication);
 
 	// The worker is still reading the document while Pending or Processing.
 	const isProcessing = $derived(data?.status === 'Pending' || data?.status === 'Processing');
@@ -222,6 +224,29 @@
 		return sel ? tenantLabel(sel) : newTenantLabel;
 	});
 
+	// Applicant fields shown as editable inputs for an Application draft (in display order). Single-entity
+	// review, like the Payment/Expense pattern — NOT the 4-step guided lease flow.
+	const APPLICATION_FIELDS: { name: string; label: string; type: 'text' | 'date' | 'number' }[] = [
+		{ name: 'first_name', label: 'First name', type: 'text' },
+		{ name: 'last_name', label: 'Last name', type: 'text' },
+		{ name: 'email', label: 'Email', type: 'text' },
+		{ name: 'phone', label: 'Phone', type: 'text' },
+		{ name: 'date_of_birth', label: 'Date of birth', type: 'date' },
+		{ name: 'current_address', label: 'Current address', type: 'text' },
+		{ name: 'employer', label: 'Employer', type: 'text' },
+		{ name: 'monthly_income', label: 'Monthly income', type: 'number' },
+		{ name: 'applying_for', label: 'Applying for', type: 'text' },
+		{ name: 'desired_move_in_date', label: 'Desired move-in', type: 'date' },
+		{ name: 'id_last4', label: 'ID last 4', type: 'text' },
+		{ name: 'co_signer_name', label: 'Co-signer', type: 'text' }
+	];
+
+	// Application requires a first + last name (both [Required] on the create). Mirrors leaseSelectionInvalid.
+	const applicationInvalid = $derived.by(() => {
+		if (!isApplication) return false;
+		return !(editedFields['first_name'] ?? '').trim() || !(editedFields['last_name'] ?? '').trim();
+	});
+
 	// Lease term fields shown as editable inputs (in display order).
 	const LEASE_TERM_FIELDS: { name: string; label: string; type: 'text' | 'date' | 'number' }[] = [
 		{ name: 'lease_number', label: 'Lease number', type: 'text' },
@@ -327,8 +352,8 @@
 	);
 
 	// Block confirming an expense whose amount is blank/0/negative (server rejects amount <= 0).
-	// Only applies to Expense drafts — Payment, WorkOrder, and Lease have their own guards.
-	const amountInvalid = $derived(!isPayment && !isWorkOrder && !isLease && (resolvedAmount == null || resolvedAmount <= 0));
+	// Only applies to Expense drafts — Payment, WorkOrder, Lease, and Application have their own guards.
+	const amountInvalid = $derived(isExpense && (resolvedAmount == null || resolvedAmount <= 0));
 
 	// Lease drafts require either (a) an existing in-portfolio property + unit, or (b) create-new with a
 	// usable property address/name + a unit number. Create-new is what lets a brand-new landlord with an
@@ -586,6 +611,13 @@
 					return;
 				}
 			}
+			// Application drafts land on the applications list, where the new applicant appears.
+			if (isApplication) {
+				queryClient.invalidateQueries({ queryKey: ['applications'] });
+				toast.success('Applicant created');
+				goto('/applications');
+				return;
+			}
 			// Capture the resolved amount before refetch can mutate editedFields.
 			const type = (result.entityType === 'Payment' || result.entityType === 'Expense' || result.entityType === 'WorkOrder')
 				? result.entityType
@@ -638,6 +670,19 @@
 		for (const [name, value] of Object.entries(editedFields)) {
 			if (name === LINE_ITEMS_FIELD) continue;
 			overrides[keyMap[name] ?? name] = value;
+		}
+
+		if (isApplication) {
+			// Application drafts: the edited applicant scalar fields (first_name, last_name, email, phone,
+			// date_of_birth, current_address, employer, monthly_income, applying_for, desired_move_in_date,
+			// id_last4, co_signer_name) are already in `overrides` as snake_case keys, which the server's
+			// ApplyApplicationOverrides accepts directly. Carry through the extracted property/unit link so
+			// the applicant can be filed under the unit they applied for (server re-validates it in-portfolio).
+			const propertyField = data?.fields.find((f) => f.name === 'property_id' || f.name === 'propertyId');
+			const unitField = data?.fields.find((f) => f.name === 'unit_id' || f.name === 'unitId');
+			if (propertyField?.value) overrides['propertyId'] = Number(propertyField.value) || null;
+			if (unitField?.value) overrides['unitId'] = Number(unitField.value) || null;
+			return JSON.stringify(overrides);
 		}
 
 		if (isLease) {
@@ -1095,6 +1140,37 @@
 								{/each}
 							</div>
 						</div>
+					{:else if isApplication}
+						<!-- Applicant review — a single editable applicant form (Payment/Expense model, NOT the
+						     4-step guided lease flow). Confirming creates a RentalApplication on /applications. -->
+						<div class="mb-5" data-testid="scan-application-fields">
+							<h2 class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Applicant details</h2>
+							<div class="grid grid-cols-2 gap-x-4 gap-y-3">
+								{#each APPLICATION_FIELDS as appField (appField.name)}
+									{@const field = data.fields.find((f) => f.name === appField.name)}
+									{@const level = field ? confidenceLevel(field.confidence) : 'high'}
+									{@const required = appField.name === 'first_name' || appField.name === 'last_name'}
+									<div class="{appField.name === 'current_address' || appField.name === 'applying_for' ? 'col-span-2' : ''}">
+										<div class="mb-1 flex items-center justify-between">
+											<label class="text-xs font-medium {level === 'medium' ? 'text-muted-foreground' : 'text-foreground'}" for="application-{appField.name}">
+												{appField.label}{#if required}<span class="text-[var(--m3c-error)]"> *</span>{/if}
+											</label>
+											{#if field && level !== 'high'}
+												<span class="text-xs {level === 'low' ? 'text-[var(--m3c-error)]' : 'text-muted-foreground'}">
+													{confidenceLabel(field.confidence)}
+												</span>
+											{/if}
+										</div>
+										<Input
+											id="application-{appField.name}"
+											data-testid="scan-field-{appField.name}"
+											type={appField.type}
+											bind:value={editedFields[appField.name]}
+										/>
+									</div>
+								{/each}
+							</div>
+						</div>
 					{:else}
 						<!-- Property selector for Expense/WorkOrder drafts (sends propertyId override) -->
 						<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
@@ -1124,9 +1200,9 @@
 							{/if}
 						</div>
 					{/if}
-					{#if isLease}
-						<!-- Lease terms + selectors are rendered above; the generic extracted-field
-						     groups are suppressed so the lease fields aren't duplicated. -->
+					{#if isLease || isApplication}
+						<!-- Lease terms / applicant details are rendered above; the generic extracted-field
+						     groups are suppressed so those fields aren't duplicated. -->
 					{:else if data.fields.length === 0}
 						<p class="text-sm text-muted-foreground">
 							{#if isProcessing}
@@ -1328,8 +1404,8 @@
 					{/if}
 				</Card.Content>
 
-				<!-- Paid / Unpaid toggle — hidden for Payment, WorkOrder, and Lease drafts -->
-				{#if !isPayment && !isWorkOrder && !isLease}
+				<!-- Paid / Unpaid toggle — hidden for Payment, WorkOrder, Lease, and Application drafts -->
+				{#if !isPayment && !isWorkOrder && !isLease && !isApplication}
 				<div class="border-t border-border px-4 py-3" data-testid="scan-paid-toggle">
 					<span class="mb-1.5 block text-xs font-medium text-muted-foreground">Payment status</span>
 					<!-- Segmented control: a single bordered track with two equal segments -->
@@ -1368,10 +1444,10 @@
 							<Button
 								data-testid="scan-confirm"
 								onclick={() => confirmMutation.mutate()}
-								disabled={confirmMutation.isPending || isProcessing || isTerminal || (isPayment && !selectedLeaseId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || amountInvalid}
+								disabled={confirmMutation.isPending || isProcessing || isTerminal || (isPayment && !selectedLeaseId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || applicationInvalid || amountInvalid}
 								class="flex-1"
 							>
-								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : isLease ? 'Create Lease' : 'Confirm & Create Expense'}
+								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : isLease ? 'Create Lease' : isApplication ? 'Create Applicant' : 'Confirm & Create Expense'}
 							</Button>
 							<Button
 								data-testid="scan-reject"
@@ -1401,6 +1477,11 @@
 								{:else}
 									Pick a property and a unit above to create this lease.
 								{/if}
+							</p>
+						{/if}
+						{#if applicationInvalid && !isTerminal && !isProcessing}
+							<p class="text-center text-xs text-[var(--warning)]" data-testid="scan-application-error">
+								Enter the applicant's first and last name above to create the applicant.
 							</p>
 						{/if}
 						{#if data.status === 'Failed' && !isTerminal}

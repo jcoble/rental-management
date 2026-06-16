@@ -184,6 +184,10 @@ class ScanDraft {
   /// Target is a lease draft (scanned/imported lease agreement).
   bool get isLease => targetEntityType == 'Lease';
 
+  /// Target is a scanned completed paper rental application; confirming creates
+  /// a RentalApplication (applicant), mirroring the public apply form.
+  bool get isApplication => targetEntityType == 'Application';
+
   /// Queued for extraction; the Engine has not picked it up yet.
   bool get isPending => status == 'Pending';
 

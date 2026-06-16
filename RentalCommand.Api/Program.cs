@@ -79,6 +79,12 @@ else if (string.Equals(llmProvider, "gemini", StringComparison.OrdinalIgnoreCase
         c.Timeout = TimeSpan.FromSeconds(90);
     });
 }
+else if (string.Equals(llmProvider, "claude-cli", StringComparison.OrdinalIgnoreCase))
+{
+    // DEV-ONLY: shells out to the local Claude Code CLI (the developer's Claude subscription).
+    // No HttpClient — it invokes `claude -p`. Unsuitable for production; see ClaudeCliLlmProvider.
+    builder.Services.AddSingleton<RentalCommand.Core.Interfaces.ILlmProvider, RentalCommand.Api.Scanning.ClaudeCliLlmProvider>();
+}
 else // default: openai
 {
     builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.ILlmProvider, RentalCommand.Api.Scanning.OpenAiLlmProvider>(c =>

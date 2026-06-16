@@ -148,6 +148,75 @@ public sealed class ApplicationService : IApplicationService
     // Authed (portfolio-scoped)
     // -------------------------------------------------------------------------
 
+    public async Task<ApplicationResponse> CreateFromScanAsync(
+        int portfolioId, CreateApplicationRequest request, int userId, CancellationToken ct = default)
+    {
+        // IDOR guard: honor a PropertyId/UnitId only when it actually lives in THIS portfolio; otherwise
+        // drop it (the landlord simply filed the applicant without a specific property) rather than letting
+        // a hallucinated/foreign id from the scan reference another portfolio's record. Same shape as the
+        // public SubmitAsync guard.
+        int? propertyId = null;
+        if (request.PropertyId is > 0 &&
+            await _db.Properties.AnyAsync(p => p.Id == request.PropertyId && p.PortfolioId == portfolioId, ct))
+        {
+            propertyId = request.PropertyId;
+        }
+
+        int? unitId = null;
+        if (request.UnitId is > 0 &&
+            await _db.Units.AnyAsync(u => u.Id == request.UnitId
+                && u.Property != null && u.Property.PortfolioId == portfolioId
+                && (propertyId == null || u.PropertyId == propertyId), ct))
+        {
+            unitId = request.UnitId;
+        }
+
+        var now = DateTime.UtcNow;
+        var entity = new RentalApplication
+        {
+            PortfolioId = portfolioId,
+            PropertyId = propertyId,
+            UnitId = unitId,
+            FirstName = request.FirstName.Trim(),
+            LastName = request.LastName.Trim(),
+            Email = request.Email,
+            Phone = request.Phone,
+            DateOfBirth = request.DateOfBirth.ToUtc(),
+            // The scanned application carries a single-line current address; keep it on the legacy
+            // CurrentAddress column (the structured line1/city/... fields stay null, same as a public
+            // submit that only sends a single-line address).
+            CurrentAddress = string.IsNullOrWhiteSpace(request.CurrentAddress) ? null : request.CurrentAddress.Trim(),
+            Employer = request.Employer,
+            MonthlyIncome = request.MonthlyIncome,
+            DesiredMoveInDate = request.DesiredMoveInDate.ToUtc(),
+            Notes = request.Notes,
+            IdExtractedFields = request.IdExtractedFields,
+            // A landlord-keyed paper application carries no in-app FCRA consent event.
+            ConsentGiven = false,
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+        _db.RentalApplications.Add(entity);
+        await _db.SaveChangesAsync(ct);
+
+        // Audit the PII-touching create (an applicant record was created from a scanned application).
+        await _audit.LogAsync(
+            portfolioId,
+            EntityType,
+            entity.Id,
+            AuditLogOperation.Created,
+            userId: userId,
+            changeReason: "Created from scanned rental application",
+            ct: ct);
+
+        var response = ApplicationResponse.FromEntity(entity);
+        await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
+        return response;
+    }
+
     public async Task<IReadOnlyList<ApplicationResponse>> ListAsync(
         int portfolioId, string? status, ListQuery query, CancellationToken ct = default)
     {
