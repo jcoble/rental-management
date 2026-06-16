@@ -57,6 +57,48 @@ public class LeaseService : ILeaseService
         unitId = l.UnitId,
     });
 
+    // Unit.Status is the canonical occupancy source ("Unit.Status everywhere, SQL-side"), so the lease
+    // lifecycle owns keeping it correct. A lease that is Active occupies its unit; a unit under NoticeGiven
+    // is still occupied (the tenant hasn't moved out yet), so only a genuine exit (Expired/Terminated/Void/
+    // Draft/PendingSignature, or a soft-delete) frees the unit — and even then only when NO other Active
+    // lease still references that unit. Called inside the same transaction as the lease save (before
+    // SaveChanges) so the unit row participates in the same write.
+    private async Task SyncUnitOccupancyAsync(int portfolioId, int unitId, int leaseId, LeaseStatus leaseStatus, CancellationToken ct)
+    {
+        // Units are scoped to a portfolio through their Property (Unit has no PortfolioId of its own).
+        var unit = await _db.Units.FirstOrDefaultAsync(
+            u => u.Id == unitId && u.Property!.PortfolioId == portfolioId, ct);
+        if (unit == null)
+        {
+            return;
+        }
+
+        if (leaseStatus == LeaseStatus.Active)
+        {
+            unit.Status = UnitStatus.Occupied;
+            return;
+        }
+
+        // The lease is not Active. NoticeGiven keeps the unit occupied until move-out, so it does NOT free
+        // the unit here. For a real exit, only vacate when no OTHER lease still holds the unit Active.
+        if (leaseStatus == LeaseStatus.NoticeGiven)
+        {
+            return;
+        }
+
+        var stillOccupied = await _db.Leases.AnyAsync(
+            l => l.UnitId == unitId
+                && l.PortfolioId == portfolioId
+                && l.Id != leaseId
+                && l.Status == LeaseStatus.Active,
+            ct);
+
+        if (!stillOccupied && unit.Status == UnitStatus.Occupied)
+        {
+            unit.Status = UnitStatus.Vacant;
+        }
+    }
+
     public async Task<IReadOnlyList<LeaseResponse>> ListAsync(int portfolioId, int? tenantId, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
         var q = _db.Leases
@@ -312,6 +354,15 @@ public class LeaseService : ILeaseService
         };
 
         _db.Leases.Add(entity);
+
+        // A lease created Active immediately occupies its unit. (A non-Active new lease never frees a unit
+        // here — that only happens when an existing Active lease exits.) Tracked unit is saved in the same
+        // transaction below.
+        if (entity.Status == LeaseStatus.Active)
+        {
+            await SyncUnitOccupancyAsync(portfolioId, entity.UnitId, entity.Id, entity.Status, ct);
+        }
+
         await _db.SaveChangesAsync(ct);
 
         // The generic Created twin already holds a full snapshot; add the legal change reason to it.
@@ -357,6 +408,14 @@ public class LeaseService : ILeaseService
         if (request.Notes != null) entity.Notes = request.Notes;
         entity.UpdatedAt = DateTime.UtcNow;
 
+        // Keep the canonical Unit.Status in step with the lease lifecycle whenever the status moves:
+        // activating occupies the unit; a real exit frees it (unless another Active lease still holds it).
+        // Tracked unit is saved in the same transaction below.
+        if (entity.Status != prevStatus)
+        {
+            await SyncUnitOccupancyAsync(portfolioId, entity.UnitId, entity.Id, entity.Status, ct);
+        }
+
         await _db.SaveChangesAsync(ct);
 
         // Record the full before→after snapshot, summarizing the high-stakes field changes in the reason.
@@ -390,6 +449,13 @@ public class LeaseService : ILeaseService
         var before = Snapshot(entity);
 
         entity.DeletedAt = DateTime.UtcNow;
+
+        // Terminating (soft-deleting) a lease is a real exit: free the unit unless another Active lease
+        // still holds it. The soft-deleted lease is excluded both by the explicit Id guard and by the
+        // global soft-delete query filter, so it never counts itself as the occupant. Tracked unit saves
+        // in the same transaction below.
+        await SyncUnitOccupancyAsync(portfolioId, entity.UnitId, entity.Id, LeaseStatus.Terminated, ct);
+
         await _db.SaveChangesAsync(ct);
 
         await _audit.LogAsync(portfolioId, EntityType, id, AuditLogOperation.Deleted,
