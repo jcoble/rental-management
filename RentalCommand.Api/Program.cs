@@ -259,6 +259,12 @@ builder.Services.AddControllers()
     });
 builder.Services.AddHealthChecks();
 
+// Global exception handling: maps domain-rule violations to clean 400/409 ProblemDetails and prevents
+// raw persistence faults (DbUpdate/Postgres constraint violations) from leaking SQL/type/stack/constraint
+// names to the client (full detail is still logged server-side). See GlobalExceptionHandler.
+builder.Services.AddExceptionHandler<RentalCommand.Api.GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
+
 // --- SignalR (realtime hubs) + DataUpdateService broadcaster ---
 // Mirror the REST enum-as-string convention on realtime payloads too.
 builder.Services.AddSignalR().AddJsonProtocol(options =>
@@ -399,6 +405,13 @@ foreach (var cidr in knownNetworkCidrs)
     }
 }
 app.UseForwardedHeaders(forwardedHeadersOptions);
+
+// Outermost exception wrapper: turns domain-rule violations into clean 400/409 ProblemDetails and keeps
+// raw persistence faults from leaking internals (see GlobalExceptionHandler). Registered before the
+// inline auth-context middleware below so anything that bubbles past it (DbUpdateException, domain
+// validation, etc.) is mapped cleanly; MissingAuthContextException is still handled by that middleware
+// and never reaches here.
+app.UseExceptionHandler();
 
 app.UseCors("WebApp");
 
