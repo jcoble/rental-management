@@ -2,7 +2,9 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -12,6 +14,30 @@ namespace RentalCommand.Api.Services.Domain;
 public class WorkOrderService : IWorkOrderService
 {
     private const string EntityType = "WorkOrder";
+
+    // Work-order statuses a user can actually move a ticket INTO. These are exactly the values the web
+    // and mobile detail screens expose as transition targets (web's STATUS_TRANSITIONS map and mobile's
+    // _allStatuses list). Moves AMONG these six are left fully open on purpose: the mobile UI offers
+    // every other core status as a target from any non-current status — including reopening a Completed
+    // or Cancelled ticket (web also exposes Cancelled→New) — so a stricter per-edge graph would reject
+    // a path the shipping apps legitimately drive. What this set DOES reject via the generic PATCH is a
+    // jump to a status no flow ever assigns (OnHold / Archived) — those are read-only/reporting states,
+    // never user-set — and any undefined enum value the wire smuggles past JsonStringEnumConverter as a
+    // raw integer. A same→same PATCH is always allowed (so re-sending a current OnHold/Archived, or a
+    // PATCH that only touches costs/dates, never trips this).
+    private static readonly IReadOnlySet<WorkOrderStatus> UserAssignableStatuses = new HashSet<WorkOrderStatus>
+    {
+        WorkOrderStatus.New,
+        WorkOrderStatus.Scheduled,
+        WorkOrderStatus.InProgress,
+        WorkOrderStatus.WaitingParts,
+        WorkOrderStatus.Completed,
+        WorkOrderStatus.Cancelled,
+    };
+
+    // A CompletedAt further than this past "now" is treated as a typo/garbage entry rather than a real
+    // completion time. Generous enough to never reject a legitimately back- or forward-dated entry.
+    private static readonly TimeSpan MaxCompletedAtFutureSkew = TimeSpan.FromDays(1);
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -358,6 +384,10 @@ public class WorkOrderService : IWorkOrderService
         // Capture the status transition (if any) so we can append a timeline entry in the same save.
         var previousStatus = entity.Status;
         var statusChanged = request.Status.HasValue && request.Status.Value != previousStatus;
+        if (statusChanged)
+        {
+            EnsureStatusAssignable(request.Status!.Value);
+        }
         if (request.Status.HasValue) entity.Status = request.Status.Value;
 
         if (request.RequestedAt.HasValue) entity.RequestedAt = request.RequestedAt.Value.ToUtc();
@@ -367,6 +397,19 @@ public class WorkOrderService : IWorkOrderService
         if (request.EstimatedCost.HasValue) entity.EstimatedCost = request.EstimatedCost;
         if (request.ActualCost.HasValue) entity.ActualCost = request.ActualCost;
         var now = DateTime.UtcNow;
+
+        // A supplied completion timestamp can't sit unreasonably far in the future, and an explicitly
+        // inverted pair (the client sends BOTH RequestedAt and CompletedAt with completed < requested in
+        // the same request) is rejected. We deliberately do NOT compare a lone CompletedAt PATCH against
+        // the stored RequestedAt: RequestedAt auto-defaults to creation time, so back-dating only the
+        // completion date on an existing/closed order (a supported edit — there is no reopen workflow) is
+        // legitimate and must not be blocked. An out-of-order pair corrupts age/SLA reporting; the future
+        // bound catches typo'd far-future dates.
+        EnsureCompletedAtInRange(
+            request.RequestedAt.HasValue, entity.RequestedAt,
+            request.CompletedAt.HasValue, entity.CompletedAt,
+            now);
+
         entity.UpdatedAt = now;
 
         if (statusChanged)
@@ -389,6 +432,47 @@ public class WorkOrderService : IWorkOrderService
         await HydrateDisplayNamesAsync(portfolioId, response, ct);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
+    }
+
+    // Reject a status PATCH that targets a status no UI ever assigns (OnHold / Archived are reporting-only
+    // states) or an undefined enum value. Moves among the user-assignable statuses — including reopening a
+    // closed ticket — are intentionally left open to match the web + mobile detail screens. A same→same
+    // move never reaches here (the caller only validates an actual change). Throws a 400.
+    private static void EnsureStatusAssignable(WorkOrderStatus to)
+    {
+        if (!UserAssignableStatuses.Contains(to))
+        {
+            throw new DomainValidationException(
+                $"A work order cannot be moved to {to}.");
+        }
+    }
+
+    // Validates the (RequestedAt, CompletedAt) pair on an update. A supplied CompletedAt must not be far
+    // in the future. The "completed before requested" check only fires when the SAME request explicitly
+    // sets BOTH dates — an inverted pair the user actually typed — so back-dating a lone CompletedAt
+    // against an auto-defaulted RequestedAt (a supported edit on a completed order) is never blocked.
+    // Throws a 400.
+    private static void EnsureCompletedAtInRange(
+        bool requestedProvided, DateTime effectiveRequestedAt,
+        bool completedProvided, DateTime? effectiveCompletedAt,
+        DateTime nowUtc)
+    {
+        if (effectiveCompletedAt is not { } completed)
+        {
+            return;
+        }
+
+        if (completedProvided && completed > nowUtc + MaxCompletedAtFutureSkew)
+        {
+            throw new DomainValidationException(
+                "The completion date can't be in the future.");
+        }
+
+        if (requestedProvided && completedProvided && completed < effectiveRequestedAt)
+        {
+            throw new DomainValidationException(
+                "The completion date can't be before the work order was requested.");
+        }
     }
 
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)

@@ -78,7 +78,10 @@ public class CreatePaymentRequest
     [Range(1, int.MaxValue)]
     public int LeaseId { get; set; }
 
+    [EnumDataType(typeof(PaymentType))]
     public PaymentType PaymentType { get; set; } = PaymentType.Rent;
+
+    [EnumDataType(typeof(PaymentStatus))]
     public PaymentStatus Status { get; set; } = PaymentStatus.Scheduled;
 
     [Range(0.01, 99999999)]
@@ -123,7 +126,10 @@ public class UpdatePaymentRequest
     [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
 
+    [EnumDataType(typeof(PaymentType))]
     public PaymentType? PaymentType { get; set; }
+
+    [EnumDataType(typeof(PaymentStatus))]
     public PaymentStatus? Status { get; set; }
 
     [Range(0.01, 99999999)]
