@@ -14,7 +14,15 @@
 		'image/tiff'
 	];
 
-	let { onselected }: { onselected: (file: File) => void } = $props();
+	let {
+		onselected,
+		onselectedmany,
+		multiple = false
+	}: {
+		onselected?: (file: File) => void;
+		onselectedmany?: (files: File[]) => void;
+		multiple?: boolean;
+	} = $props();
 
 	let isDragging = $state(false);
 	let selectedFile = $state<File | null>(null);
@@ -26,12 +34,16 @@
 		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 	}
 
-	function handleFile(file: File) {
-		if (!ALLOWED_MIME_TYPES.includes(file.type)) {
-			toast.warning(`File type "${file.type || 'unknown'}" may not be supported. Expected a PDF or image.`);
+	function handleFiles(files: File[]) {
+		if (files.length === 0) return;
+		for (const f of files) {
+			if (!ALLOWED_MIME_TYPES.includes(f.type)) {
+				toast.warning(`File type "${f.type || 'unknown'}" may not be supported. Expected a PDF or image.`);
+			}
 		}
-		selectedFile = file;
-		onselected(file);
+		selectedFile = files[0];
+		if (multiple) onselectedmany?.(files);
+		else onselected?.(files[0]);
 	}
 
 	function onDragOver(e: DragEvent) {
@@ -47,8 +59,8 @@
 	function onDrop(e: DragEvent) {
 		e.preventDefault();
 		isDragging = false;
-		const file = e.dataTransfer?.files?.[0];
-		if (file) handleFile(file);
+		const files = Array.from(e.dataTransfer?.files ?? []);
+		handleFiles(files);
 	}
 
 	function onClick() {
@@ -56,8 +68,8 @@
 	}
 
 	function onInputChange(e: Event) {
-		const file = (e.target as HTMLInputElement).files?.[0];
-		if (file) handleFile(file);
+		const files = Array.from((e.target as HTMLInputElement).files ?? []);
+		handleFiles(files);
 	}
 
 	function clearFile(e: MouseEvent) {
@@ -86,6 +98,7 @@
 		data-testid="file-drop-input"
 		type="file"
 		accept="application/pdf,image/*"
+		{multiple}
 		class="sr-only hidden"
 		onchange={onInputChange}
 	/>
