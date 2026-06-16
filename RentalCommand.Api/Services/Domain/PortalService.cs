@@ -32,38 +32,46 @@ public class PortalService : IPortalService
     public async Task<PortalBalanceResponse> GetBalanceAsync(int portfolioId, int tenantId, CancellationToken ct = default)
     {
         var now = DateTime.UtcNow;
-        var payments = await _db.Payments
+
+        // All four figures are conditional SUM/COUNT aggregates computed SQL-side in a single grouped
+        // round-trip — no payment rows are pulled into memory. Partial-aware: a Paid payment contributes
+        // its full Amount to Collected; a Partial contributes its collected AmountPaid to Collected and
+        // only its unpaid remainder (Amount − AmountPaid) to Outstanding/Overdue; Scheduled/Late owe in
+        // full. Waived/Failed/Refunded are not money currently owed.
+        var rollup = await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId &&
                 _db.Leases.Any(l => l.Id == p.LeaseId && l.TenantId == tenantId))
-            .Select(p => new { p.Status, p.Amount, p.DueDate })
-            .ToListAsync(ct);
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Collected = g.Sum(p =>
+                    p.Status == PaymentStatus.Paid ? p.Amount
+                    : p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m)
+                    : 0m),
+                Outstanding = g.Sum(p =>
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late) ? p.Amount
+                    : p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m)
+                    : 0m),
+                Overdue = g.Sum(p =>
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
+                    && (p.Status == PaymentStatus.Late || p.DueDate < now)
+                        ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount)
+                        : 0m),
+                OverdueCount = g.Count(p =>
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
+                    && (p.Status == PaymentStatus.Late || p.DueDate < now)),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        var result = new PortalBalanceResponse { TenantId = tenantId };
-        foreach (var p in payments)
+        return new PortalBalanceResponse
         {
-            if (p.Status == PaymentStatus.Paid)
-            {
-                result.Collected += p.Amount;
-                continue;
-            }
-
-            // Waived/Failed/Refunded are not money currently owed.
-            var owed = p.Status is PaymentStatus.Scheduled or PaymentStatus.Partial or PaymentStatus.Late;
-            if (!owed)
-            {
-                continue;
-            }
-
-            result.Outstanding += p.Amount;
-            if (p.Status == PaymentStatus.Late || p.DueDate < now)
-            {
-                result.Overdue += p.Amount;
-                result.OverdueCount++;
-            }
-        }
-
-        return result;
+            TenantId = tenantId,
+            Collected = rollup?.Collected ?? 0m,
+            Outstanding = rollup?.Outstanding ?? 0m,
+            Overdue = rollup?.Overdue ?? 0m,
+            OverdueCount = rollup?.OverdueCount ?? 0,
+        };
     }
 
     public async Task<IReadOnlyList<PortalPaymentResponse>> GetPaymentsAsync(int portfolioId, int tenantId, CancellationToken ct = default)
