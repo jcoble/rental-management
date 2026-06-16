@@ -925,32 +925,48 @@ class _ReviewBody extends ConsumerWidget {
                   textAlign: TextAlign.center,
                 ),
               ),
-            Row(
+            // Why `OverflowBar` and not a plain `Row`: this Scaffold.bottomSheet
+            // is driven by a DraggableScrollableActuator/Stack that lays its
+            // child out with an unbounded width (constraints: unconstrained in
+            // the render tree). A horizontal `Row` in that context hands its
+            // non-flex children an unbounded width; a default OutlinedButton
+            // (ButtonStyle.maximumSize == Size.infinite) cannot accept that and
+            // trips RenderConstrainedBox's "BoxConstraints forces an infinite
+            // width" assert, which aborts layout of the whole bottom-sheet
+            // subtree — the symptom was a bottom bar that never rendered, a body
+            // ListView that would not scroll, and a lease dropdown that would
+            // not open. Wrapping the buttons in Expanded does NOT help, because
+            // an Expanded child of an unbounded-width Row also fails to resolve.
+            // `OverflowBar` lays its children out without forcing an unbounded
+            // width, so the buttons size to their content (and wrap to a second
+            // line if they ever overflow). Mirrors the guided-flow fix in
+            // commit cee9e78.
+            OverflowBar(
+              alignment: MainAxisAlignment.spaceBetween,
+              overflowAlignment: OverflowBarAlignment.end,
+              overflowSpacing: 8,
               children: [
-                Expanded(
-                  child: FilledButton(
-                    onPressed: confirmEnabled ? onConfirm : null,
-                    child: (confirming || (draft.isInFlight && !isFailed))
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : Text(
-                            draft.isPayment
-                                ? 'Create Payment'
-                                : draft.isWorkOrder
-                                ? 'Create Work Order'
-                                : draft.isLease
-                                ? 'Create Lease'
-                                : 'Confirm & Create Expense',
+                FilledButton(
+                  onPressed: confirmEnabled ? onConfirm : null,
+                  child: (confirming || (draft.isInFlight && !isFailed))
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
                           ),
-                  ),
+                        )
+                      : Text(
+                          draft.isPayment
+                              ? 'Create Payment'
+                              : draft.isWorkOrder
+                              ? 'Create Work Order'
+                              : draft.isLease
+                              ? 'Create Lease'
+                              : 'Confirm & Create Expense',
+                        ),
                 ),
-                const SizedBox(width: 12),
                 // design#9: Reject is clearly destructive (error-coloured text +
                 // border) so it can't be mistaken for a secondary action.
                 OutlinedButton(
