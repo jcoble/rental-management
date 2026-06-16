@@ -34,7 +34,7 @@
 	const TOTAL = STEP_LABELS.length;
 
 	// ----- the four step forms (string-bound, schema-validated) -----
-	let propertyForm = $state({ name: '', type: 'MultiFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '' });
+	let propertyForm = $state({ name: '', type: 'SingleFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '' });
 	let unitForm = $state({ unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' });
 	let tenantForm = $state({ firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' });
 	let leaseForm = $state({ leaseNumber: '', startDate: '', endDate: '', monthlyRent: '', securityDeposit: '', lateFeeAmount: '', rentDueDay: '1', status: 'Active', notes: '' });
