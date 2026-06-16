@@ -225,7 +225,7 @@
 			<AlertTriangle class="h-4 w-4 shrink-0 text-warning" />
 			<span>
 				<span class="font-semibold">{result?.totalCount ?? behind.length}</span>
-				{(result?.totalCount ?? behind.length) === 1 ? 'tenant' : 'tenants'} behind, owing
+				{(result?.totalCount ?? behind.length) === 1 ? 'rental' : 'rentals'} behind, owing
 				<span class="font-semibold">{money(result?.totalPastDueAmount ?? 0)}</span>
 			</span>
 		</div>

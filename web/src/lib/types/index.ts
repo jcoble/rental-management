@@ -174,6 +174,8 @@ export interface Payment {
 	paymentType: PaymentType;
 	status: PaymentStatus;
 	amount: number;
+	/** Cash collected so far on a Partial payment (strictly between 0 and amount); null/absent otherwise. */
+	amountPaid?: number | null;
 	dueDate: string;
 	paidDate?: string;
 	method?: string;
