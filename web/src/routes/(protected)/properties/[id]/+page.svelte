@@ -20,6 +20,7 @@
 	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
+	import UnitFields from '$lib/components/forms/UnitFields.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -589,25 +590,8 @@
 		<Dialog.Header>
 			<Dialog.Title>{editingUnitId == null ? 'Add Unit' : 'Edit Unit'}</Dialog.Title>
 		</Dialog.Header>
-		<div class="grid gap-3" data-testid="unit-form">
-			<div>
-				<Input data-testid="unit-number-input" bind:value={unitForm.unitNumber} placeholder="Unit number" />
-				{#if unitFormErrors.unitNumber}<p class="mt-1 text-xs text-destructive" data-testid="unit-number-error">{unitFormErrors.unitNumber}</p>{/if}
-			</div>
-			<div class="grid grid-cols-3 gap-2">
-				<div>
-					<Input data-testid="unit-bedrooms-input" bind:value={unitForm.bedrooms} placeholder="Beds" />
-					{#if unitFormErrors.bedrooms}<p class="mt-1 text-xs text-destructive">{unitFormErrors.bedrooms}</p>{/if}
-				</div>
-				<div>
-					<Input data-testid="unit-bathrooms-input" bind:value={unitForm.bathrooms} placeholder="Baths" />
-					{#if unitFormErrors.bathrooms}<p class="mt-1 text-xs text-destructive">{unitFormErrors.bathrooms}</p>{/if}
-				</div>
-				<div>
-					<Input data-testid="unit-rent-input" bind:value={unitForm.marketRent} placeholder="Rent" />
-					{#if unitFormErrors.marketRent}<p class="mt-1 text-xs text-destructive">{unitFormErrors.marketRent}</p>{/if}
-				</div>
-			</div>
+		<div data-testid="unit-form">
+			<UnitFields bind:form={unitForm} errors={unitFormErrors} />
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button variant="outline" onclick={closeUnitForm}>Cancel</Button>
