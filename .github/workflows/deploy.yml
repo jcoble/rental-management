@@ -39,6 +39,11 @@ env:
   # (observed twice: "graceful_stop" buildkit deaths). This path lives under
   # this runner's _work dir, so builders/registry logins never cross repos.
   DOCKER_CONFIG: ${{ github.workspace }}/../.docker
+  # Self-hosted runner: the github service user can't mkdir under setup-dotnet's default
+  # (/usr/share/dotnet), so install to a runner-writable dir. The 10.0 SDK is pre-seeded
+  # there (shared with the EdiPlatform runner on the same box/user), so setup-dotnet detects
+  # it and skips the per-run download.
+  DOTNET_INSTALL_DIR: '/home/github/.dotnet'
 
 jobs:
   build-push:
@@ -59,8 +64,21 @@ jobs:
         id: meta
         run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # Compile the solution ONCE on the runner, then publish Api + Engine from that warm
+      # build (incremental, no recompile). This replaces the old per-image in-Docker compile
+      # where Dockerfile.api and Dockerfile.engine each rebuilt Core/Data/Engine separately.
+      # Published before the images are assembled; the images are runtime-only COPYs.
+      - name: Restore, build & publish (.NET)
+        run: |
+          dotnet restore
+          dotnet build --no-restore -c Release
+          dotnet publish RentalCommand.Api/RentalCommand.Api.csproj -c Release --no-build -o publish/api /p:UseAppHost=false /p:ErrorOnDuplicatePublishOutputFiles=false
+          dotnet publish RentalCommand.Engine/RentalCommand.Engine.csproj -c Release --no-build -o publish/engine /p:UseAppHost=false /p:ErrorOnDuplicatePublishOutputFiles=false
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -69,45 +87,42 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Plain `docker build` on the persistent self-hosted daemon: its local layer cache
+      # survives between runs, so buildx + the network-round-tripping type=gha cache are gone.
+      # The .NET images are runtime-only and take a NARROW context (publish/<app>).
       - name: Build & push API
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.api
-          push: true
-          tags: |
-            ${{ env.IMAGE_PREFIX }}-api:${{ steps.meta.outputs.tag }}
-            ${{ env.IMAGE_PREFIX }}-api:latest
-          cache-from: type=gha,scope=api
-          cache-to: type=gha,scope=api,mode=max
+        run: |
+          docker build -f Dockerfile.api \
+            -t "${IMAGE_PREFIX}-api:${{ steps.meta.outputs.tag }}" \
+            -t "${IMAGE_PREFIX}-api:latest" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            publish/api
+          docker push "${IMAGE_PREFIX}-api:${{ steps.meta.outputs.tag }}"
+          docker push "${IMAGE_PREFIX}-api:latest"
 
       - name: Build & push Engine
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.engine
-          push: true
-          tags: |
-            ${{ env.IMAGE_PREFIX }}-engine:${{ steps.meta.outputs.tag }}
-            ${{ env.IMAGE_PREFIX }}-engine:latest
-          cache-from: type=gha,scope=engine
-          cache-to: type=gha,scope=engine,mode=max
+        run: |
+          docker build -f Dockerfile.engine \
+            -t "${IMAGE_PREFIX}-engine:${{ steps.meta.outputs.tag }}" \
+            -t "${IMAGE_PREFIX}-engine:latest" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            publish/engine
+          docker push "${IMAGE_PREFIX}-engine:${{ steps.meta.outputs.tag }}"
+          docker push "${IMAGE_PREFIX}-engine:latest"
 
+      # Web still builds in Docker (unchanged Dockerfile.web). VITE_API_URL MUST be /api/v1 —
+      # the .NET API mounts every controller under /api/v1/* and the web client appends bare
+      # paths. The new repo-root .dockerignore keeps this root context lean.
       - name: Build & push Web
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.web
-          push: true
-          # VITE_API_URL is baked into the client bundle here. MUST be /api/v1 — the .NET API
-          # mounts every controller under /api/v1/* and the web client appends bare paths.
-          build-args: |
-            VITE_API_URL=/api/v1
-          tags: |
-            ${{ env.IMAGE_PREFIX }}-web:${{ steps.meta.outputs.tag }}
-            ${{ env.IMAGE_PREFIX }}-web:latest
-          cache-from: type=gha,scope=web
-          cache-to: type=gha,scope=web,mode=max
+        run: |
+          docker build -f Dockerfile.web \
+            -t "${IMAGE_PREFIX}-web:${{ steps.meta.outputs.tag }}" \
+            -t "${IMAGE_PREFIX}-web:latest" \
+            --build-arg VITE_API_URL=/api/v1 \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            .
+          docker push "${IMAGE_PREFIX}-web:${{ steps.meta.outputs.tag }}"
+          docker push "${IMAGE_PREFIX}-web:latest"
 
   deploy:
     name: Pull & restart on prod box
