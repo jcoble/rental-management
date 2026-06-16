@@ -121,6 +121,7 @@ public class WorkOrderController : ManagementControllerBase
         {
             DispatchOutcome.Dispatched => CreatedAtAction(nameof(Get), new { id }, result.Dispatch),
             DispatchOutcome.VendorHasNoPhone => BadRequest(new { error = "Vendor has no phone number on file; add one before dispatching." }),
+            DispatchOutcome.AlreadyDispatched => BadRequest(new { error = "This work order is already dispatched to this vendor; wait for their DONE reply or reassign it." }),
             _ => NotFound(new { error = "Work order or vendor not found in this portfolio" }),
         };
     }

@@ -216,6 +216,7 @@ public class CreateLeaseRequest
     [MaxLength(100)]
     public string LeaseNumber { get; set; } = string.Empty;
 
+    [EnumDataType(typeof(LeaseStatus))]
     public LeaseStatus Status { get; set; } = LeaseStatus.Draft;
 
     [Required]
@@ -251,6 +252,7 @@ public class UpdateLeaseRequest
     [MaxLength(100)]
     public string? LeaseNumber { get; set; }
 
+    [EnumDataType(typeof(LeaseStatus))]
     public LeaseStatus? Status { get; set; }
 
     public DateTime? StartDate { get; set; }
