@@ -116,6 +116,25 @@ const _leaseFieldOrder = <String>[
   'rent_due_day',
 ];
 
+// Applicant-draft field group (target == 'Application'). The applicant scalar
+// fields are shown as editable inputs in this display order (mirrors the web
+// review page's APPLICATION_FIELDS). property_id/unit_id are NOT shown — they're
+// the in-portfolio link carried through to confirm, validated server-side.
+const _applicationFieldOrder = <String>[
+  'first_name',
+  'last_name',
+  'email',
+  'phone',
+  'date_of_birth',
+  'current_address',
+  'employer',
+  'monthly_income',
+  'applying_for',
+  'desired_move_in_date',
+  'id_last4',
+  'co_signer_name',
+];
+
 const _knownScalarFields = {
   'vendor_name',
   'vendor_address',
@@ -153,6 +172,8 @@ const _moneyFields = {
   'monthly_rent',
   'security_deposit',
   'late_fee',
+  // Applicant fields
+  'monthly_income',
 };
 
 const _dateFields = {
@@ -161,6 +182,9 @@ const _dateFields = {
   // Lease terms
   'start_date',
   'end_date',
+  // Applicant fields
+  'date_of_birth',
+  'desired_move_in_date',
 };
 
 // Whole-number fields use an integer keypad (e.g. the rent due day-of-month).
@@ -189,6 +213,16 @@ const _labelOverrides = <String, String>{
   'late_fee': 'Late fee',
   'rent_due_day': 'Rent due day (of month)',
   'tenant_name': 'Tenant',
+  // Applicant fields (mirror the web review page's labels)
+  'first_name': 'First name',
+  'last_name': 'Last name',
+  'date_of_birth': 'Date of birth',
+  'current_address': 'Current address',
+  'monthly_income': 'Monthly income',
+  'applying_for': 'Applying for',
+  'desired_move_in_date': 'Desired move-in',
+  'id_last4': 'ID last 4',
+  'co_signer_name': 'Co-signer',
 };
 
 /// Turns a raw snake_case field name into a human-readable label, e.g.
@@ -251,8 +285,14 @@ Map<String, dynamic> buildOverridesMap({
   required bool isPayment,
   required bool isWorkOrder,
   required bool isLease,
+  required bool isApplication,
   required bool isPaid,
   required int? selectedLeaseId,
+  // Extracted, in-portfolio-validated property/unit link for an Application
+  // draft, carried through so the applicant can be filed under the unit they
+  // applied for (the server re-validates both in-portfolio).
+  required int? applicationPropertyId,
+  required int? applicationUnitId,
   required bool createNewProperty,
   required int? selectedPropertyId,
   required int? selectedUnitId,
@@ -292,6 +332,16 @@ Map<String, dynamic> buildOverridesMap({
     // Tenant: a chosen id links; null lets the server match/create from
     // tenant_name (same in both property modes).
     if (selectedTenantId != null) overrides['tenantId'] = selectedTenantId;
+  } else if (isApplication) {
+    // The edited applicant scalar fields (first_name, last_name, email, …) are
+    // already in `overrides` as snake_case keys, which the server's
+    // ApplyApplicationOverrides accepts directly. Carry through the extracted
+    // property/unit link (camelCase) so the applicant is filed under the unit
+    // they applied for; the server re-validates both in-portfolio.
+    if (applicationPropertyId != null) {
+      overrides['propertyId'] = applicationPropertyId;
+    }
+    if (applicationUnitId != null) overrides['unitId'] = applicationUnitId;
   } else if (isPayment) {
     overrides['leaseId'] = selectedLeaseId;
   } else if (!isWorkOrder) {
@@ -365,8 +415,13 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
   }
 
   void _onDraftLoaded(ScanDraft draft) {
-    // Initialize editable field values on first data.
-    if (!_fieldsInitialized) {
+    // Initialize editable field values once the extracted fields actually
+    // arrive. The screen first loads while the draft is still Processing (no
+    // fields yet); seeding then would lock in empty values and never refresh
+    // when extraction completes — leaving confirm guards that read
+    // `_editedFields` (e.g. the Application first/last-name guard) permanently
+    // unsatisfied. Wait for non-empty scalar fields before seeding.
+    if (!_fieldsInitialized && draft.scalarFields.isNotEmpty) {
       _fieldsInitialized = true;
       for (final f in draft.scalarFields) {
         _editedFields[f.name] = f.value;
@@ -476,8 +531,11 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         isPayment: draft.isPayment,
         isWorkOrder: draft.isWorkOrder,
         isLease: draft.isLease,
+        isApplication: draft.isApplication,
         isPaid: _isPaid,
         selectedLeaseId: _selectedLeaseId,
+        applicationPropertyId: _extractedInt(draft, 'property_id'),
+        applicationUnitId: _extractedInt(draft, 'unit_id'),
         createNewProperty: _createNewProperty,
         selectedPropertyId: _selectedPropertyId,
         selectedUnitId: _selectedUnitId,
@@ -499,6 +557,8 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
                 ? 'Work order created!'
                 : draft.isLease
                 ? 'Lease created!'
+                : draft.isApplication
+                ? 'Application created!'
                 : 'Expense created!',
           ),
           backgroundColor: Colors.green,
@@ -747,12 +807,19 @@ class _ReviewBody extends ConsumerWidget {
         (createNewProperty
             ? hasUsablePropertyText
             : (selectedPropertyId != null && selectedUnitId != null));
+    // An Application needs a first + last name (both [Required] on the create),
+    // mirroring the web review page's applicationInvalid guard.
+    final applicationReady =
+        !draft.isApplication ||
+        ((editedFields['first_name']?.trim().isNotEmpty ?? false) &&
+            (editedFields['last_name']?.trim().isNotEmpty ?? false));
     final confirmEnabled =
         !actionsLocked &&
         !busy &&
         !isTerminal &&
         (!draft.isPayment || selectedLeaseId != null) &&
-        leaseReady;
+        leaseReady &&
+        applicationReady;
     // Reject stays available on Failed so a bad scan can always be cleared, but
     // never while processing, mid-action, or already terminal.
     final rejectEnabled = (!actionsLocked || isFailed) && !busy && !isTerminal;
@@ -845,6 +912,21 @@ class _ReviewBody extends ConsumerWidget {
                       editedFields: editedFields,
                       onFieldChanged: onFieldChanged,
                     ),
+                ] else if (draft.isApplication) ...[
+                  // ---- Applicant details (editable, single-entity review) ----
+                  // Mirrors the web review page: a flat applicant form (NOT the
+                  // guided lease flow). Confirming creates a RentalApplication.
+                  if (draft.scalarFields.isNotEmpty)
+                    _ApplicantSection(
+                      draft: draft,
+                      editedFields: editedFields,
+                      onFieldChanged: onFieldChanged,
+                    )
+                  else if (draft.status != 'Pending')
+                    _ManualEntrySection(
+                      editedFields: editedFields,
+                      onFieldChanged: onFieldChanged,
+                    ),
                 ] else ...[
                   // ---- Extracted field groups ----
                   if (draft.scalarFields.isNotEmpty)
@@ -911,6 +993,15 @@ class _ReviewBody extends ConsumerWidget {
                   textAlign: TextAlign.center,
                 ),
               ),
+            if (draft.isApplication && !applicationReady && !isTerminal)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'Enter the applicant’s first and last name to create this application.',
+                  style: TextStyle(fontSize: 12, color: Colors.amber.shade700),
+                  textAlign: TextAlign.center,
+                ),
+              ),
             // Surface the interim "Confirming" state (L19): the server is mid-
             // confirm even though this client didn't start it.
             if (draft.isInFlight && !isFailed && !confirming)
@@ -964,6 +1055,8 @@ class _ReviewBody extends ConsumerWidget {
                               ? 'Create Work Order'
                               : draft.isLease
                               ? 'Create Lease'
+                              : draft.isApplication
+                              ? 'Create Application'
                               : 'Confirm & Create Expense',
                         ),
                 ),
@@ -1866,6 +1959,65 @@ class _LeaseTermsSection extends StatelessWidget {
         children: [
           Text(
             'LEASE TERMS',
+            style: theme.textTheme.labelSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.8,
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 8),
+          ...ordered.map(
+            (field) => Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _FieldInput(
+                field: field,
+                value: editedFields[field.name] ?? field.value,
+                onChanged: (v) => onFieldChanged(field.name, v),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _ApplicantSection — editable applicant fields in a fixed, readable order
+// ---------------------------------------------------------------------------
+
+/// Renders a scanned application's applicant fields as a flat editable form, in
+/// the same display order as the web review page. property_id/unit_id are NOT
+/// shown — they're the in-portfolio link carried to confirm (validated server-
+/// side), not user-editable here.
+class _ApplicantSection extends StatelessWidget {
+  const _ApplicantSection({
+    required this.draft,
+    required this.editedFields,
+    required this.onFieldChanged,
+  });
+
+  final ScanDraft draft;
+  final Map<String, String> editedFields;
+  final void Function(String, String) onFieldChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fieldMap = {for (final f in draft.scalarFields) f.name: f};
+
+    final ordered = <ScanField>[
+      for (final name in _applicationFieldOrder)
+        fieldMap[name] ?? ScanField(name: name, value: '', confidence: 1.0),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'APPLICANT',
             style: theme.textTheme.labelSmall?.copyWith(
               fontWeight: FontWeight.w700,
               letterSpacing: 0.8,
