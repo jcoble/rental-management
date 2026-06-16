@@ -611,6 +611,12 @@ export interface GenerateNoticeDraftsResponse {
 
 export interface ApproveNoticeDraftRequest {
 	channels: string[];
+	/**
+	 * Set true to send even when the Fair Housing review flags the notice copy (the landlord
+	 * reviewed the concerns and is overriding). Omitted/false → flagged copy is blocked with a 422
+	 * carrying `fairHousingConcerns`.
+	 */
+	acknowledgedFairHousingReview?: boolean;
 }
 
 export interface UpdateNoticeDraftRequest {
