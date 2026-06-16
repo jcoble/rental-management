@@ -27,7 +27,8 @@
 		{ value: 'Expense', label: 'Receipt / Bill', hint: 'Becomes an expense record' },
 		{ value: 'Payment', label: 'Rent Check / Payment', hint: 'Becomes a payment record' },
 		{ value: 'WorkOrder', label: 'Maintenance Request', hint: 'Becomes a work order' },
-		{ value: 'Lease', label: 'Lease Agreement', hint: 'Becomes a lease record' }
+		{ value: 'Lease', label: 'Lease Agreement', hint: 'Becomes a lease record' },
+		{ value: 'Application', label: 'Rental Application', hint: 'Becomes an applicant record' }
 	] as const;
 	let docType = $state<string>('Expense');
 	let isRecording = $state(false);
@@ -157,6 +158,7 @@
 		if (type === 'Payment') return `/accounting/payments/${id}`;
 		if (type === 'WorkOrder') return `/maintenance/${id}`;
 		if (type === 'Lease') return `/leases/${id}`;
+		if (type === 'Application') return `/applications/${id}`;
 		return `/accounting/expenses/${id}`;
 	}
 

@@ -27,6 +27,15 @@ public interface IApplicationService
 
     // --- Authed (portfolio-scoped) ---
 
+    /// <summary>
+    /// Creates a Submitted application directly in the given portfolio from a landlord-scanned paper
+    /// application (the scan-IN counterpart of <see cref="SubmitAsync"/>). PropertyId/UnitId on the request
+    /// are honored only when they actually live in this portfolio (IDOR guard); otherwise they are dropped.
+    /// Returns the created application as an <see cref="ApplicationResponse"/>.
+    /// </summary>
+    Task<ApplicationResponse> CreateFromScanAsync(
+        int portfolioId, CreateApplicationRequest request, int userId, CancellationToken ct = default);
+
     Task<IReadOnlyList<ApplicationResponse>> ListAsync(
         int portfolioId, string? status, ListQuery query, CancellationToken ct = default);
 
