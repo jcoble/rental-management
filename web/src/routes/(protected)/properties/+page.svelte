@@ -73,7 +73,7 @@
 		});
 	});
 
-	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '' };
+	const emptyProperty = { name: '', type: 'MultiFamily', status: 'Active', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '' };
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
 	let form = $state({ ...emptyProperty });
@@ -117,6 +117,7 @@
 		form = {
 			name: p.name,
 			type: p.type ?? 'MultiFamily',
+			status: p.status ?? 'Active',
 			addressLine1: p.addressLine1,
 			addressLine2: p.addressLine2 ?? '',
 			city: p.city,
@@ -311,6 +312,17 @@
 		</Dialog.Header>
 		<div class="space-y-3" data-testid="property-form">
 			<PropertyFields bind:form errors={formErrors} />
+			<div>
+				<span class="mb-1 block text-xs font-medium text-muted-foreground">Status</span>
+				<Select.Root type="single" bind:value={form.status}>
+					<Select.Trigger class="w-full" data-testid="property-status-input">{form.status || 'Select status'}</Select.Trigger>
+					<Select.Content>
+						{#each propertyStatuses as ps}
+							<Select.Item value={ps} label={ps}>{ps}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</div>
 			<div>
 				<span class="mb-1 block text-xs font-medium text-muted-foreground">Apt / Suite / Unit #</span>
 				<Input data-testid="property-address2-input" bind:value={form.addressLine2} placeholder="Apt / Suite / Unit # (optional)" />
