@@ -22,7 +22,7 @@ String paymentTypeLabel(String type) {
 
 class Payment {
   final int id;
-  final int portfolioId;
+  final int? portfolioId;
   final int leaseId;
   final String type;
   final String status;
@@ -39,7 +39,7 @@ class Payment {
 
   const Payment({
     required this.id,
-    required this.portfolioId,
+    this.portfolioId,
     required this.leaseId,
     required this.type,
     required this.status,
@@ -58,7 +58,7 @@ class Payment {
   factory Payment.fromJson(Map<String, dynamic> json) {
     return Payment(
       id: (json['id'] as num).toInt(),
-      portfolioId: (json['portfolioId'] as num).toInt(),
+      portfolioId: (json['portfolioId'] as num?)?.toInt(),
       leaseId: (json['leaseId'] as num).toInt(),
       type: json['paymentType'] as String? ?? json['type'] as String? ?? '',
       status: json['status'] as String? ?? '',
@@ -77,7 +77,7 @@ class Payment {
 
   Map<String, dynamic> toJson() {
     return {
-      'portfolioId': portfolioId,
+      if (portfolioId != null) 'portfolioId': portfolioId,
       'leaseId': leaseId,
       'type': type,
       'status': status,

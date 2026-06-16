@@ -125,19 +125,24 @@ public class AccountingService : IAccountingService
         var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var last30Start = now.AddDays(-30);
 
-        // Money in: payments actually collected. Use PaidDate when present (that's when the cash
-        // landed), falling back to DueDate. Bank deposits not yet matched to a payment also count as
-        // money in, so the snapshot reflects real cash movement. Both period figures (month-to-date and
-        // trailing 30 days) are computed SQL-side as conditional SUMs in one grouped round-trip per
-        // source — no rows are loaded into memory.
+        // Money in: payments actually collected. "Collected" means Status == Paid AND a real PaidDate
+        // (the date the cash landed) — a row marked Paid but lacking a PaidDate is not yet collected and
+        // must NOT count, otherwise scheduled/expected rent would inflate money-in by its due date. This
+        // matches the DashboardService "PaidThisMonth" KPI (Paid + PaidDate in period) so the two figures
+        // can't disagree. Bank deposits not yet matched to a payment also count as money in, so the
+        // snapshot reflects real cash movement. Both period figures (month-to-date and trailing 30 days)
+        // are computed SQL-side as conditional SUMs in one grouped round-trip per source — no rows are
+        // loaded into memory.
         var paymentsCollected = await _db.Payments
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
+            .Where(p => p.PortfolioId == portfolioId
+                && p.Status == PaymentStatus.Paid
+                && p.PaidDate != null)
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Mtd = g.Sum(p => (p.PaidDate ?? p.DueDate) >= monthStart ? p.Amount : 0m),
-                Last30 = g.Sum(p => (p.PaidDate ?? p.DueDate) >= last30Start ? p.Amount : 0m),
+                Mtd = g.Sum(p => p.PaidDate >= monthStart ? p.Amount : 0m),
+                Last30 = g.Sum(p => p.PaidDate >= last30Start ? p.Amount : 0m),
             })
             .FirstOrDefaultAsync(ct);
 
