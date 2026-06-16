@@ -349,8 +349,8 @@ public class AccountingService : IAccountingService
             : $"You spent {Money(-net)} more than you collected this month, after {Money(spent)} of expenses.";
 
         var pastDueExplanation = pastDueCount == 0
-            ? "Everyone is caught up — no tenants are behind right now."
-            : $"{pastDueCount} tenant{(pastDueCount == 1 ? " is" : "s are")} behind, owing {Money(pastDueAmount)} in total.";
+            ? "Everyone is caught up — no rentals are behind right now."
+            : $"{pastDueCount} rental{(pastDueCount == 1 ? " is" : "s are")} behind, owing {Money(pastDueAmount)} in total.";
 
         return new MoneySnapshotExplanations
         {
