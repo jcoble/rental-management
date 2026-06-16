@@ -25,8 +25,9 @@ import '../voice/tell_me_screen.dart';
 ///   Scan a lease   → photos (stitched PDF) OR an imported PDF → guided flow
 ///   Tell me        → voice capture screen
 ///   Type it        → record a payment manually (no-paper intake)
-/// How the user wants to bring in a lease via "Scan a lease".
-enum _LeaseSource { photos, pdf }
+/// How the user wants to bring in a multi-page document (lease / application):
+/// snap each page as photos (stitched into one PDF) or import an existing PDF.
+enum _DocSource { photos, pdf }
 
 class CaptureFabSheet extends ConsumerStatefulWidget {
   const CaptureFabSheet({super.key});
@@ -113,7 +114,34 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
   /// draft so the server runs the lease schema (not the receipt/expense one)
   /// and the draft routes to the guided "New rental from your lease" flow.
   Future<void> _scanLease() async {
-    final choice = await showModalBottomSheet<_LeaseSource>(
+    final choice = await _pickDocSource(photosSubtitle: 'Snap each page of the lease', pdfSubtitle: 'Import an existing lease PDF');
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case _DocSource.photos:
+        await _scanLeaseFromPhotos();
+      case _DocSource.pdf:
+        await _scanLeaseFromFile();
+    }
+  }
+
+  /// "Scan an application": import a COMPLETED paper rental application (multi-
+  /// page photos stitched to a PDF, OR an existing PDF) as an `Application` draft
+  /// so the worker runs [ApplicationExtractionSchema] and the review screen shows
+  /// applicant fields. Confirming creates a RentalApplication — mirrors web.
+  Future<void> _scanApplication() async {
+    final choice = await _pickDocSource(photosSubtitle: 'Snap each page of the application', pdfSubtitle: 'Import an existing application PDF');
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case _DocSource.photos:
+        await _scanApplicationFromPhotos();
+      case _DocSource.pdf:
+        await _scanApplicationFromFile();
+    }
+  }
+
+  /// Shared "photos OR PDF" source chooser used by lease/application scan-IN.
+  Future<_DocSource?> _pickDocSource({required String photosSubtitle, required String pdfSubtitle}) {
+    return showModalBottomSheet<_DocSource>(
       context: context,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -125,26 +153,19 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
             ListTile(
               leading: const Icon(Symbols.photo_camera_rounded),
               title: const Text('Take photos'),
-              subtitle: const Text('Snap each page of the lease'),
-              onTap: () => Navigator.of(sheetCtx).pop(_LeaseSource.photos),
+              subtitle: Text(photosSubtitle),
+              onTap: () => Navigator.of(sheetCtx).pop(_DocSource.photos),
             ),
             ListTile(
               leading: const Icon(Symbols.picture_as_pdf_rounded),
               title: const Text('Pick a PDF'),
-              subtitle: const Text('Import an existing lease PDF'),
-              onTap: () => Navigator.of(sheetCtx).pop(_LeaseSource.pdf),
+              subtitle: Text(pdfSubtitle),
+              onTap: () => Navigator.of(sheetCtx).pop(_DocSource.pdf),
             ),
           ],
         ),
       ),
     );
-    if (choice == null || !mounted) return;
-    switch (choice) {
-      case _LeaseSource.photos:
-        await _scanLeaseFromPhotos();
-      case _LeaseSource.pdf:
-        await _scanLeaseFromFile();
-    }
   }
 
   /// Captures MANY photos of a lease, stitches them into one PDF client-side,
@@ -235,6 +256,105 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
     final navigator = Navigator.of(context);
     navigator.pop(); // close the capture sheet
     await GuidedRentalFlow.open(navigator.context, created.draftId);
+  }
+
+  /// Captures MANY photos of an application, stitches them into one PDF client-
+  /// side, uploads as an Application draft, and opens the scan-review screen.
+  Future<void> _scanApplicationFromPhotos() async {
+    final picked = await ImagePicker().pickMultiImage(
+      imageQuality: 80,
+      maxWidth: 1600,
+      maxHeight: 1600,
+    );
+    if (picked.isEmpty) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final images = <Uint8List>[];
+      for (final x in picked) {
+        images.add(Uint8List.fromList(await x.readAsBytes()));
+      }
+      final pdf = await stitchImagesToPdf(images);
+      await _uploadApplicationAndReview(
+        pdf,
+        'application-scan.pdf',
+        'application/pdf',
+      );
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.message;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = "Couldn't read that application. Try clearer photos or a PDF.";
+      });
+    }
+  }
+
+  /// Imports an existing application PDF (or image) and uploads it as an
+  /// Application draft so it routes to the applicant review screen.
+  Future<void> _scanApplicationFromFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'heic'],
+      withData: true,
+    );
+    final file = result?.files.single;
+    if (file == null) return;
+    final bytes = file.bytes;
+    if (bytes == null) {
+      setState(() => _error = "Couldn't read the selected file.");
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await _uploadApplicationAndReview(bytes, file.name, _mime(file.name));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.message;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = "Couldn't read that application. Try a clearer PDF.";
+      });
+    }
+  }
+
+  /// Uploads bytes as an `Application` draft, closes the sheet, and opens the
+  /// scan-review screen (applications use the review screen, not the guided
+  /// rental flow). The server routes confirm by the draft's TargetEntityType.
+  Future<void> _uploadApplicationAndReview(
+    Uint8List bytes,
+    String filename,
+    String contentType,
+  ) async {
+    final created = await ref.read(scanRepositoryProvider).uploadImage(
+          bytes,
+          filename,
+          contentType,
+          targetEntityType: 'Application',
+        );
+    if (!mounted) return;
+    final navigator = Navigator.of(context);
+    navigator.pop(); // close the capture sheet
+    await navigator.push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => ScanReviewScreen(draftId: created.draftId),
+      ),
+    );
   }
 
   String _mime(String filename) {
@@ -377,6 +497,25 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
                     onTap: _scanLease,
                   ),
                 ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: _CaptureTile(
+                    icon: Symbols.assignment_ind_rounded,
+                    label: 'Scan an application',
+                    family: M3TonalFamily.sky,
+                    onTap: _scanApplication,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                // Spacers keep the application tile the same width as the tiles
+                // in the rows above (3-up grid) rather than stretching full-width.
+                const Spacer(),
+                const SizedBox(width: 10),
+                const Spacer(),
               ],
             ),
           ],
