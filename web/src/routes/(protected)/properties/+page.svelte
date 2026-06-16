@@ -37,14 +37,35 @@
 		goto(`/properties/${p.id}${forwardUnitCoach ? '?coach=add-unit' : ''}`);
 	}
 
-	// Filter/search state persisted in the URL so it survives navigating away and back (and browser
-	// Back/Forward, which remounts and re-seeds from these params).
-	let search = $state(readGridParam(page.url.searchParams, 'q'));
-	let typeFilter = $state(readGridParam(page.url.searchParams, 'type'));
-	let statusFilter = $state(readGridParam(page.url.searchParams, 'status'));
+	// Filter/search/sort/page state persisted in the URL so it survives navigating away and back (and
+	// browser Back/Forward, which remounts and re-seeds from these params). Sort/page are seeded into the
+	// client-side DataGrid (initialSort / page) and mirrored back via its onSortChange/onPageChange.
+	const initialParams = page.url.searchParams;
+	let search = $state(readGridParam(initialParams, 'q'));
+	let typeFilter = $state(readGridParam(initialParams, 'type'));
+	let statusFilter = $state(readGridParam(initialParams, 'status'));
+	let gridSort = $state(readGridParam(initialParams, 'sort'));
+	let gridPage = $state(readGridParam(initialParams, 'page', 1));
+
+	// Reset to page 1 when a filter/search changes — but not on initial mount, so a deep-linked/restored
+	// ?page= loads as-is.
+	let filterResetPrimed = false;
+	$effect(() => {
+		search;
+		typeFilter;
+		statusFilter;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
+	});
 
 	$effect(() => {
-		syncGridUrl({ q: search, type: typeFilter, status: statusFilter });
+		syncGridUrl(
+			{ q: search, type: typeFilter, status: statusFilter, sort: gridSort, page: gridPage },
+			{ page: 1 }
+		);
 	});
 
 	const propertiesQuery = createQuery(() => ({
@@ -269,6 +290,9 @@
 		getRowKey={(p) => p.id}
 		getRowTestId={() => 'property-row'}
 		data-testid="properties-list"
+		initialSort={gridSort}
+		bind:page={gridPage}
+		onSortChange={(s) => (gridSort = s ?? '')}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 flex-wrap items-center gap-2">
