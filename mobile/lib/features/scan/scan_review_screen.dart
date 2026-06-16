@@ -916,14 +916,11 @@ class _ReviewBody extends ConsumerWidget {
                   // ---- Applicant details (editable, single-entity review) ----
                   // Mirrors the web review page: a flat applicant form (NOT the
                   // guided lease flow). Confirming creates a RentalApplication.
-                  if (draft.scalarFields.isNotEmpty)
+                  // When extraction fails (no scalar fields) the same applicant
+                  // form is shown with empty inputs — NOT the Expense fallback.
+                  if (draft.scalarFields.isNotEmpty || draft.status != 'Pending')
                     _ApplicantSection(
                       draft: draft,
-                      editedFields: editedFields,
-                      onFieldChanged: onFieldChanged,
-                    )
-                  else if (draft.status != 'Pending')
-                    _ManualEntrySection(
                       editedFields: editedFields,
                       onFieldChanged: onFieldChanged,
                     ),
