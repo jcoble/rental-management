@@ -22,9 +22,12 @@ import '../voice/tell_me_screen.dart';
 ///   Scan (camera)  → photo → scan draft → review
 ///   Gallery        → pick image → scan draft → review
 ///   PDF / file     → file picker (pdf/image) → scan draft → review
-///   Scan a lease   → multi-photo → stitched PDF → guided New-rental flow
+///   Scan a lease   → photos (stitched PDF) OR an imported PDF → guided flow
 ///   Tell me        → voice capture screen
 ///   Type it        → record a payment manually (no-paper intake)
+/// How the user wants to bring in a lease via "Scan a lease".
+enum _LeaseSource { photos, pdf }
+
 class CaptureFabSheet extends ConsumerStatefulWidget {
   const CaptureFabSheet({super.key});
 
@@ -105,10 +108,48 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
     await _uploadAndReview(bytes, file.name, _mime(file.name));
   }
 
-  /// Captures MANY photos of a lease, stitches them into one PDF client-side,
-  /// uploads via the existing single-file /scans path as a Lease draft, then
-  /// opens the guided "New rental from your lease" flow for the new draft.
+  /// A lease can be captured as multi-page phone photos OR imported as a PDF.
+  /// Tapping "Scan a lease" first asks which; both paths upload as a `Lease`
+  /// draft so the server runs the lease schema (not the receipt/expense one)
+  /// and the draft routes to the guided "New rental from your lease" flow.
   Future<void> _scanLease() async {
+    final choice = await showModalBottomSheet<_LeaseSource>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Symbols.photo_camera_rounded),
+              title: const Text('Take photos'),
+              subtitle: const Text('Snap each page of the lease'),
+              onTap: () => Navigator.of(sheetCtx).pop(_LeaseSource.photos),
+            ),
+            ListTile(
+              leading: const Icon(Symbols.picture_as_pdf_rounded),
+              title: const Text('Pick a PDF'),
+              subtitle: const Text('Import an existing lease PDF'),
+              onTap: () => Navigator.of(sheetCtx).pop(_LeaseSource.pdf),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (choice == null || !mounted) return;
+    switch (choice) {
+      case _LeaseSource.photos:
+        await _scanLeaseFromPhotos();
+      case _LeaseSource.pdf:
+        await _scanLeaseFromFile();
+    }
+  }
+
+  /// Captures MANY photos of a lease, stitches them into one PDF client-side,
+  /// then uploads as a Lease draft and opens the guided flow.
+  Future<void> _scanLeaseFromPhotos() async {
     final picked = await ImagePicker().pickMultiImage(
       imageQuality: 80,
       maxWidth: 1600,
@@ -125,18 +166,7 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
         images.add(Uint8List.fromList(await x.readAsBytes()));
       }
       final pdf = await stitchImagesToPdf(images);
-      final created = await ref
-          .read(scanRepositoryProvider)
-          .uploadImage(
-            pdf,
-            'lease-scan.pdf',
-            'application/pdf',
-            targetEntityType: 'Lease',
-          );
-      if (!mounted) return;
-      final navigator = Navigator.of(context);
-      navigator.pop(); // close the capture sheet
-      await GuidedRentalFlow.open(navigator.context, created.draftId);
+      await _uploadLeaseAndOpen(pdf, 'lease-scan.pdf', 'application/pdf');
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -150,6 +180,61 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
         _error = "Couldn't read that lease. Try clearer photos or a PDF.";
       });
     }
+  }
+
+  /// Imports an existing lease PDF (or image) and uploads it as a Lease draft so
+  /// it routes to the guided flow rather than being misclassified as an expense.
+  Future<void> _scanLeaseFromFile() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['pdf', 'jpg', 'jpeg', 'png', 'webp', 'heic'],
+      withData: true,
+    );
+    final file = result?.files.single;
+    if (file == null) return;
+    final bytes = file.bytes;
+    if (bytes == null) {
+      setState(() => _error = "Couldn't read the selected file.");
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await _uploadLeaseAndOpen(bytes, file.name, _mime(file.name));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.message;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = "Couldn't read that lease. Try a clearer PDF.";
+      });
+    }
+  }
+
+  /// Uploads lease bytes as a `Lease` draft, closes the sheet, and opens the
+  /// guided rental flow for the new draft.
+  Future<void> _uploadLeaseAndOpen(
+    Uint8List bytes,
+    String filename,
+    String contentType,
+  ) async {
+    final created = await ref.read(scanRepositoryProvider).uploadImage(
+          bytes,
+          filename,
+          contentType,
+          targetEntityType: 'Lease',
+        );
+    if (!mounted) return;
+    final navigator = Navigator.of(context);
+    navigator.pop(); // close the capture sheet
+    await GuidedRentalFlow.open(navigator.context, created.draftId);
   }
 
   String _mime(String filename) {
