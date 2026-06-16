@@ -475,7 +475,7 @@ public class ScanController : AuthenticatedPortfolioControllerBase
         }
 
         var storedFile = await _db.StoredFiles
-            .FirstOrDefaultAsync(f => f.FilePath == draft.FilePath, ct);
+            .FirstOrDefaultAsync(f => f.FilePath == draft.FilePath && f.PortfolioId == portfolioId, ct);
 
         if (storedFile is null)
             return NotFound(new { error = "File record not found" });
