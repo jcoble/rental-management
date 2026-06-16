@@ -14,7 +14,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/inspections")]
 [Produces("application/json")]
-public class InspectionController : AuthenticatedPortfolioControllerBase
+public class InspectionController : ManagementControllerBase
 {
     private readonly IInspectionService _service;
 

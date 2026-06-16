@@ -12,7 +12,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/units")]
 [Produces("application/json")]
-public class UnitController : AuthenticatedPortfolioControllerBase
+public class UnitController : ManagementControllerBase
 {
     private readonly IUnitService _service;
 

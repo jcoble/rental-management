@@ -14,7 +14,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/leases")]
 [Produces("application/json")]
-public class LeaseController : AuthenticatedPortfolioControllerBase
+public class LeaseController : ManagementControllerBase
 {
     private readonly ILeaseService _service;
     private readonly ILeaseQaService _qa;

@@ -7,7 +7,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/voice")]
 [Produces("application/json")]
-public class VoiceController : AuthenticatedPortfolioControllerBase
+public class VoiceController : ManagementControllerBase
 {
     private readonly IVoiceIntakeService _voice;
 

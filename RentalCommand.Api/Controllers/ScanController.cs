@@ -16,7 +16,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/scans")]
 [Produces("application/json")]
-public class ScanController : AuthenticatedPortfolioControllerBase
+public class ScanController : ManagementControllerBase
 {
     private readonly IScanService _scan;
     private readonly RentalCommandDbContext _db;
