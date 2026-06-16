@@ -135,6 +135,7 @@ const optionalNonNegative = (label: string) =>
 export const propertySchema = z.object({
 	name: required('Name'),
 	type: z.string(),
+	status: z.string(),
 	addressLine1: required('Address'),
 	addressLine2: optionalText,
 	city: required('City'),
