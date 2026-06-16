@@ -9,6 +9,8 @@ import 'package:material_symbols_icons/symbols.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/theme/app_recipes.dart';
 import '../payments/payments_screen.dart';
+import '../scan/guided_rental_flow.dart';
+import '../scan/pdf_stitch.dart';
 import '../scan/scan_repository.dart';
 import '../scan/scan_review_screen.dart';
 import '../voice/tell_me_screen.dart';
@@ -20,6 +22,7 @@ import '../voice/tell_me_screen.dart';
 ///   Scan (camera)  → photo → scan draft → review
 ///   Gallery        → pick image → scan draft → review
 ///   PDF / file     → file picker (pdf/image) → scan draft → review
+///   Scan a lease   → multi-photo → stitched PDF → guided New-rental flow
 ///   Tell me        → voice capture screen
 ///   Type it        → record a payment manually (no-paper intake)
 class CaptureFabSheet extends ConsumerStatefulWidget {
@@ -96,9 +99,57 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
       setState(() => _error = "Couldn't read the selected file.");
       return;
     }
-    // NOTE (P0): the scan pipeline accepts PDF bytes on /scans; deeper
-    // multi-page PDF assembly + on-device doc-scanner is P1 (see review §B2).
+    // The scan pipeline accepts PDF bytes on /scans; multi-photo lease
+    // assembly shipped via `_scanLease` (pdf_stitch.dart). On-device
+    // doc-scanner remains a later enhancement (see review §B2).
     await _uploadAndReview(bytes, file.name, _mime(file.name));
+  }
+
+  /// Captures MANY photos of a lease, stitches them into one PDF client-side,
+  /// uploads via the existing single-file /scans path as a Lease draft, then
+  /// opens the guided "New rental from your lease" flow for the new draft.
+  Future<void> _scanLease() async {
+    final picked = await ImagePicker().pickMultiImage(
+      imageQuality: 80,
+      maxWidth: 1600,
+      maxHeight: 1600,
+    );
+    if (picked.isEmpty) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final images = <Uint8List>[];
+      for (final x in picked) {
+        images.add(Uint8List.fromList(await x.readAsBytes()));
+      }
+      final pdf = await stitchImagesToPdf(images);
+      final created = await ref
+          .read(scanRepositoryProvider)
+          .uploadImage(
+            pdf,
+            'lease-scan.pdf',
+            'application/pdf',
+            targetEntityType: 'Lease',
+          );
+      if (!mounted) return;
+      final navigator = Navigator.of(context);
+      navigator.pop(); // close the capture sheet
+      await GuidedRentalFlow.open(navigator.context, created.draftId);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.message;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = "Couldn't read that lease. Try clearer photos or a PDF.";
+      });
+    }
   }
 
   String _mime(String filename) {
@@ -233,7 +284,14 @@ class _CaptureFabSheetState extends ConsumerState<CaptureFabSheet> {
                   ),
                 ),
                 const SizedBox(width: 10),
-                const Expanded(child: SizedBox.shrink()),
+                Expanded(
+                  child: _CaptureTile(
+                    icon: Symbols.home_work_rounded,
+                    label: 'Scan a lease',
+                    family: M3TonalFamily.rose,
+                    onTap: _scanLease,
+                  ),
+                ),
               ],
             ),
           ],
