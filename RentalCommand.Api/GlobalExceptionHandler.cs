@@ -43,6 +43,21 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
 
         switch (exception)
         {
+            case FairHousingBlockedException fairHousing:
+                // A soft, overridable content gate — the copy was flagged by the Fair Housing review and
+                // not acknowledged. 422 (Unprocessable Content) with the structured concern list so the UI
+                // can render each flagged phrase + reason and offer "send anyway".
+                problem = new ProblemDetails
+                {
+                    Status = StatusCodes.Status422UnprocessableEntity,
+                    Title = "Fair Housing review",
+                    Detail = fairHousing.Message,
+                };
+                problem.Extensions["fairHousingConcerns"] = fairHousing.Concerns
+                    .Select(c => new { phrase = c.Phrase, concern = c.Concern })
+                    .ToArray();
+                break;
+
             case DomainValidationException domain:
                 // Safe, user-facing message authored by the domain service.
                 problem = new ProblemDetails

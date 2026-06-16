@@ -43,16 +43,20 @@ public class ConversationsController : ManagementControllerBase
     /// <summary>
     /// Open a new topic thread with a tenant and send the first message over the chosen channels.
     /// Returns 201 with the conversation detail, or 404 when the tenant is not in this portfolio.
+    /// A 422 is returned when the Fair Housing review flags the copy and
+    /// <c>acknowledgedFairHousingReview</c> is false; the body carries a <c>fairHousingConcerns</c> list.
     /// </summary>
     [HttpPost]
     [ProducesResponseType(typeof(ConversationDetail), StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status422UnprocessableEntity)]
     public async Task<ActionResult<ConversationDetail>> Start(
         [FromBody] StartConversationRequest request, CancellationToken ct)
     {
         var result = await _service.StartAsync(
-            GetPortfolioId(), request.TenantId, request.Subject, request.Body, request.Channels, ct);
+            GetPortfolioId(), request.TenantId, request.Subject, request.Body, request.Channels,
+            request.AcknowledgedFairHousingReview, ct);
 
         return result == null
             ? NotFound(new { error = "Tenant not found" })
