@@ -165,6 +165,7 @@ public class LeaseController : ManagementControllerBase
             SendForSignatureOutcome.Sent => Ok(result.Status),
             SendForSignatureOutcome.NotFound => NotFound(new { error = result.Error }),
             SendForSignatureOutcome.MissingSigner => BadRequest(new { error = result.Error }),
+            SendForSignatureOutcome.AlreadyFinalized => BadRequest(new { error = result.Error }),
             SendForSignatureOutcome.NotConfigured =>
                 StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = result.Error }),
             _ => StatusCode(StatusCodes.Status502BadGateway, new { error = result.Error }),

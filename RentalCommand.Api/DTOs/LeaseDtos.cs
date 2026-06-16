@@ -155,6 +155,9 @@ public sealed class SendForSignatureResult
     public static SendForSignatureResult MissingSigner()
         => new() { Outcome = SendForSignatureOutcome.MissingSigner, Error = "A signer name and email are required (the lease's tenant has none)." };
 
+    public static SendForSignatureResult AlreadyFinalized()
+        => new() { Outcome = SendForSignatureOutcome.AlreadyFinalized, Error = "This lease is already signed/active; sending it again would discard the executed agreement." };
+
     public static SendForSignatureResult ProviderError(string error)
         => new() { Outcome = SendForSignatureOutcome.ProviderError, Error = error };
 
@@ -168,7 +171,10 @@ public enum SendForSignatureOutcome
     NotFound,
     NotConfigured,
     MissingSigner,
-    ProviderError
+    ProviderError,
+
+    /// <summary>The lease is already signed/active (or has an executed document); re-sending is refused.</summary>
+    AlreadyFinalized
 }
 
 /// <summary>Signature-workflow snapshot for a lease, returned by the status endpoint and after sending.</summary>
