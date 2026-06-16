@@ -2,6 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { notices } from '$lib/api/endpoints/notices';
 	import { ai, type FairHousingReviewResult } from '$lib/api/endpoints/ai';
+	import { ApiError, type FairHousingConcern } from '$lib/api/client';
 	import type { NoticeDraft } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { formatDateOnly } from '$lib/utils/date';
@@ -11,6 +12,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import FairHousingReviewDialog from '$lib/components/shared/FairHousingReviewDialog.svelte';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { AlertTriangle, CheckCircle2, FileText, Mail, MessageSquare, MonitorSmartphone, RefreshCw, Send, ShieldCheck, Trash2 } from '@lucide/svelte';
 
@@ -125,14 +127,50 @@
 		onError: (err) => showError(apiErrorMessage(err))
 	}));
 
+	// Fair Housing review gate: a 422 from POST /notices/{id}/approve means the copy was flagged. We show
+	// the concerns and let the landlord either Edit (revise) or send anyway (re-approve with the ack flag).
+	let fhReviewOpen = $state(false);
+	let fhDetail = $state('');
+	let fhConcerns = $state<FairHousingConcern[]>([]);
+	let fhPendingDraft = $state<NoticeDraft | null>(null);
+
 	const approveMutation = createMutation(() => ({
-		mutationFn: (draft: NoticeDraft) => notices.approve(draft.id, { channels: draftChannels(draft) }),
+		mutationFn: ({ draft, acknowledged = false }: { draft: NoticeDraft; acknowledged?: boolean }) =>
+			notices.approve(draft.id, {
+				channels: draftChannels(draft),
+				...(acknowledged ? { acknowledgedFairHousingReview: true } : {})
+			}),
 		onSuccess: () => {
+			fhReviewOpen = false;
+			fhPendingDraft = null;
 			showSuccess('Notice approved and sent.');
 			invalidate();
 		},
-		onError: (err) => showError(apiErrorMessage(err))
+		onError: (err) => {
+			if (err instanceof ApiError && err.fairHousingConcerns) {
+				fhDetail = err.message;
+				fhConcerns = err.fairHousingConcerns;
+				fhReviewOpen = true;
+				return;
+			}
+			showError(apiErrorMessage(err));
+		}
 	}));
+
+	function approveDraft(draft: NoticeDraft) {
+		fhPendingDraft = draft;
+		approveMutation.mutate({ draft });
+	}
+
+	function editFairHousing() {
+		// Dismiss the review so the landlord can revise the copy (Edit on the draft card).
+		fhReviewOpen = false;
+	}
+
+	function sendNoticeAnyway() {
+		if (!fhPendingDraft || approveMutation.isPending) return;
+		approveMutation.mutate({ draft: fhPendingDraft, acknowledged: true });
+	}
 
 	const dismissMutation = createMutation(() => ({
 		mutationFn: (id: number) => notices.dismiss(id),
@@ -328,7 +366,7 @@
 								</div>
 								<div class="flex flex-wrap gap-2">
 									<Button size="sm" variant="outline" onclick={() => startEdit(draft)}>Edit</Button>
-									<Button size="sm" onclick={() => approveMutation.mutate(draft)} disabled={approveMutation.isPending || draftChannels(draft).length === 0}>
+									<Button size="sm" onclick={() => approveDraft(draft)} disabled={approveMutation.isPending || draftChannels(draft).length === 0}>
 										<Send class="mr-1.5 h-4 w-4" />
 										Approve & send
 									</Button>
@@ -350,4 +388,15 @@
 			{/each}
 		</div>
 	{/if}
+
+	<!-- Fair Housing review gate (422 on approve) -->
+	<FairHousingReviewDialog
+		open={fhReviewOpen}
+		detail={fhDetail}
+		concerns={fhConcerns}
+		busy={approveMutation.isPending}
+		testid="notice-fair-housing"
+		onedit={editFairHousing}
+		onsendanyway={sendNoticeAnyway}
+	/>
 </div>
