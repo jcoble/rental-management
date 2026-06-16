@@ -274,6 +274,7 @@ class _EditPaymentSheet extends ConsumerStatefulWidget {
 class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _amountCtrl;
+  late final TextEditingController _amountPaidCtrl;
   late final TextEditingController _referenceCtrl;
   late final TextEditingController _notesCtrl;
   late DateTime _dueDate;
@@ -303,6 +304,9 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
     super.initState();
     final p = widget.payment;
     _amountCtrl = TextEditingController(text: p.amount.toStringAsFixed(2));
+    _amountPaidCtrl = TextEditingController(
+      text: p.amountPaid != null ? p.amountPaid!.toStringAsFixed(2) : '',
+    );
     _referenceCtrl = TextEditingController(text: p.externalReference ?? '');
     _notesCtrl = TextEditingController(text: p.notes ?? '');
     _dueDate = p.dueDate.year > 1 ? p.dueDate : DateTime.now();
@@ -314,6 +318,7 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
   @override
   void dispose() {
     _amountCtrl.dispose();
+    _amountPaidCtrl.dispose();
     _referenceCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
@@ -332,6 +337,29 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    final amount = double.tryParse(_amountCtrl.text.trim()) ?? 0;
+    // Partial-payment split: the server requires an Amount paid strictly between
+    // 0 and the full Amount (mirrors web paymentSchema.superRefine /
+    // PaymentService.NormalizeAmountPaid). Surface it inline before submit.
+    final isPartial = _status == 'Partial';
+    final amountPaid =
+        isPartial ? double.tryParse(_amountPaidCtrl.text.trim()) : null;
+    if (isPartial) {
+      if (amountPaid == null) {
+        setState(() => _error = 'Amount paid is required for a partial payment');
+        return;
+      }
+      if (amountPaid <= 0) {
+        setState(() => _error = 'Amount paid must be greater than zero');
+        return;
+      }
+      if (amountPaid >= amount) {
+        setState(() => _error = 'Amount paid must be less than the full amount');
+        return;
+      }
+    }
+
     setState(() {
       _saving = true;
       _error = null;
@@ -341,7 +369,11 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
       await ref.read(paymentsRepositoryProvider).updatePayment(
         widget.payment.id,
         {
-          'amount': double.tryParse(_amountCtrl.text.trim()) ?? 0,
+          'amount': amount,
+          // amountPaid only travels for a Partial payment; null for any other
+          // status so the server clears a stale collected-so-far when editing
+          // away from Partial (matches the web client + server normalization).
+          'amountPaid': isPartial ? amountPaid : null,
           'dueDate': _dueDate.toIso8601String().split('T').first,
           'type': _type,
           'status': _status,
@@ -449,6 +481,22 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
                 ],
               ),
               const SizedBox(height: 12),
+              // Amount paid (so far) — only meaningful for a Partial payment.
+              // The remainder (amount − paid) stays owed. Hidden for every other
+              // status, where it has no meaning. Mirrors the web client.
+              if (_status == 'Partial') ...[
+                TextFormField(
+                  controller: _amountPaidCtrl,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'Amount paid (so far)',
+                    prefixText: '\$',
+                    helperText: 'How much was collected. The rest stays owed.',
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
               DropdownButtonFormField<String>(
                 initialValue: _method,
                 isExpanded: true,

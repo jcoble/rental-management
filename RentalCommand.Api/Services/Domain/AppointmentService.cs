@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -87,6 +88,10 @@ public class AppointmentService : IAppointmentService
         }
 
         var now = DateTime.UtcNow;
+        var startUtc = request.ScheduledStart.ToUtc();
+        var endUtc = request.ScheduledEnd.ToUtc();
+        EnsureValidTimeRange(startUtc, endUtc);
+
         var entity = new Appointment
         {
             PortfolioId = portfolioId,
@@ -99,8 +104,8 @@ public class AppointmentService : IAppointmentService
             ProspectEmail = request.ProspectEmail,
             Type = request.Type,
             Status = request.Status,
-            ScheduledStart = request.ScheduledStart.ToUtc(),
-            ScheduledEnd = request.ScheduledEnd.ToUtc(),
+            ScheduledStart = startUtc,
+            ScheduledEnd = endUtc,
             AssignedTo = request.AssignedTo,
             Notes = request.Notes,
             CreatedAt = now,
@@ -142,6 +147,11 @@ public class AppointmentService : IAppointmentService
         if (request.ScheduledEnd.HasValue) entity.ScheduledEnd = request.ScheduledEnd.ToUtc();
         if (request.AssignedTo != null) entity.AssignedTo = request.AssignedTo;
         if (request.Notes != null) entity.Notes = request.Notes;
+
+        // Re-check the window against the effective values, since either end could have been patched
+        // independently (e.g. moving only the start past a previously-set end).
+        EnsureValidTimeRange(entity.ScheduledStart, entity.ScheduledEnd);
+
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
@@ -166,6 +176,20 @@ public class AppointmentService : IAppointmentService
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
+    }
+
+    /// <summary>
+    /// Rejects an inverted or zero-length appointment window: when an end time is supplied it must be
+    /// strictly after the start. A null end (open-ended appointment) is always allowed. Compares the
+    /// UTC-normalized instants that will actually be stored. Throws a 400.
+    /// </summary>
+    private static void EnsureValidTimeRange(DateTime startUtc, DateTime? endUtc)
+    {
+        if (endUtc is { } end && end <= startUtc)
+        {
+            throw new DomainValidationException(
+                "The appointment end time must be after its start time.");
+        }
     }
 
     /// <summary>Confirms each supplied optional FK belongs to the caller's portfolio (no cross-tenant linking).</summary>

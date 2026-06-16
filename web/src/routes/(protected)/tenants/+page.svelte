@@ -20,10 +20,26 @@
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 
-	// Search persisted in the URL so it survives navigating away and back.
-	let search = $state(readGridParam(page.url.searchParams, 'q'));
+	// Search/sort/page persisted in the URL so they survive navigating away and back. Sort/page seed the
+	// client-side DataGrid (initialSort / page) and are mirrored back via its onSortChange/bind:page.
+	const initialParams = page.url.searchParams;
+	let search = $state(readGridParam(initialParams, 'q'));
+	let gridSort = $state(readGridParam(initialParams, 'sort'));
+	let gridPage = $state(readGridParam(initialParams, 'page', 1));
+
+	// Reset to page 1 when the search changes — but not on initial mount, so a restored ?page= loads as-is.
+	let filterResetPrimed = false;
 	$effect(() => {
-		syncGridUrl({ q: search });
+		search;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
+	});
+
+	$effect(() => {
+		syncGridUrl({ q: search, sort: gridSort, page: gridPage }, { page: 1 });
 	});
 
 	const tenantsQuery = createQuery(() => ({
@@ -211,6 +227,9 @@
 		getRowKey={(t) => t.id}
 		getRowTestId={() => 'tenant-row'}
 		data-testid="tenants-list"
+		initialSort={gridSort}
+		bind:page={gridPage}
+		onSortChange={(s) => (gridSort = s ?? '')}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 items-center gap-2">

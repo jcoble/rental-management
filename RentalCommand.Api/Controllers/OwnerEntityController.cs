@@ -11,7 +11,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/owner-entities")]
 [Produces("application/json")]
-public class OwnerEntityController : AuthenticatedPortfolioControllerBase
+public class OwnerEntityController : ManagementControllerBase
 {
     private readonly IOwnerEntityService _service;
 

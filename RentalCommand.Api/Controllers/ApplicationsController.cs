@@ -11,7 +11,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/applications")]
 [Produces("application/json")]
-public class ApplicationsController : AuthenticatedPortfolioControllerBase
+public class ApplicationsController : ManagementControllerBase
 {
     private readonly IApplicationService _service;
     private readonly IScreeningService _screening;

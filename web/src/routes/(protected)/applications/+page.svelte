@@ -18,19 +18,39 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
-	// Search + status filter persisted in the URL so they survive navigating away and back.
-	let search = $state(readGridParam(page.url.searchParams, 'q'));
+	// Search + status filter + sort + page persisted in the URL so they survive navigating away and back.
+	// Sort/page seed the client-side DataGrid (initialSort / page) and are mirrored back via
+	// onSortChange / bind:page.
+	const initialParams = page.url.searchParams;
+	let search = $state(readGridParam(initialParams, 'q'));
 
 	// shadcn Select binds a string; bits-ui treats '' as "no selection", so the "all" sentinel stands
 	// in for "no status filter". `statusFilter` (below) maps it back to '' for the query.
 	const ALL_STATUSES = 'all';
-	let statusValue = $state<string>(readGridParam(page.url.searchParams, 'status') || ALL_STATUSES);
+	let statusValue = $state<string>(readGridParam(initialParams, 'status') || ALL_STATUSES);
 	const statusFilter = $derived<ApplicationStatus | ''>(
 		statusValue === ALL_STATUSES ? '' : (statusValue as ApplicationStatus)
 	);
+	let gridSort = $state(readGridParam(initialParams, 'sort'));
+	let gridPage = $state(readGridParam(initialParams, 'page', 1));
+
+	// Reset to page 1 when a filter/search changes — but not on initial mount.
+	let filterResetPrimed = false;
+	$effect(() => {
+		search;
+		statusValue;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
+	});
 
 	$effect(() => {
-		syncGridUrl({ q: search, status: statusValue }, { status: ALL_STATUSES });
+		syncGridUrl(
+			{ q: search, status: statusValue, sort: gridSort, page: gridPage },
+			{ status: ALL_STATUSES, page: 1 }
+		);
 	});
 
 	const STATUS_OPTIONS: { value: string; label: string }[] = [
@@ -162,6 +182,9 @@
 		getRowKey={(a) => a.id}
 		getRowTestId={() => 'application-row'}
 		data-testid="applications-list"
+		initialSort={gridSort}
+		bind:page={gridPage}
+		onSortChange={(s) => (gridSort = s ?? '')}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 flex-wrap items-center gap-2">

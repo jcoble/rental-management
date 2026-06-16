@@ -26,15 +26,32 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const LEASE_STATUSES = ['Draft', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
 
-	// Search / status persisted in the URL so they survive navigating away and back. Paging is handled
-	// client-side by the DataGrid over the fetched list (matching the tenants/properties grids); the
-	// list endpoint returns no total count, so server-side paging isn't wired here.
-	let search = $state(readGridParam(page.url.searchParams, 'q'));
-	let statusFilter = $state(readGridParam(page.url.searchParams, 'status'));
+	// Search / status / sort / page persisted in the URL so they survive navigating away and back. Paging
+	// and sorting are handled client-side by the DataGrid over the fetched list (matching the
+	// tenants/properties grids); the list endpoint returns no total count, so server-side paging isn't
+	// wired here. Sort/page seed the grid (initialSort / page) and are mirrored back via
+	// onSortChange / bind:page.
+	const initialParams = page.url.searchParams;
+	let search = $state(readGridParam(initialParams, 'q'));
+	let statusFilter = $state(readGridParam(initialParams, 'status'));
+	let gridSort = $state(readGridParam(initialParams, 'sort'));
+	let gridPage = $state(readGridParam(initialParams, 'page', 1));
 	const debouncedSearch = debounced(() => search, 300);
 
+	// Reset to page 1 when a filter/search changes — but not on initial mount.
+	let filterResetPrimed = false;
 	$effect(() => {
-		syncGridUrl({ q: search, status: statusFilter });
+		search;
+		statusFilter;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
+	});
+
+	$effect(() => {
+		syncGridUrl({ q: search, status: statusFilter, sort: gridSort, page: gridPage }, { page: 1 });
 	});
 
 	const leasesQuery = createQuery(() => ({
@@ -253,6 +270,9 @@
 		onRowClick={(lease) => goto('/leases/' + lease.id)}
 		getRowKey={(l) => l.id}
 		data-testid="leases-list"
+		initialSort={gridSort}
+		bind:page={gridPage}
+		onSortChange={(s) => (gridSort = s ?? '')}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 flex-wrap items-center gap-2">

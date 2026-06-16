@@ -14,7 +14,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/audit")]
 [Produces("application/json")]
-public class AuditController : AuthenticatedPortfolioControllerBase
+public class AuditController : ManagementControllerBase
 {
     private readonly IAuditQueryService _service;
 

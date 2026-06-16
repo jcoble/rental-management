@@ -614,6 +614,7 @@ class _CreatePaymentSheet extends ConsumerStatefulWidget {
 class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
   final _formKey = GlobalKey<FormState>();
   final _amountCtrl = TextEditingController();
+  final _amountPaidCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
 
   int? _selectedLeaseId;
@@ -635,6 +636,7 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
   @override
   void dispose() {
     _amountCtrl.dispose();
+    _amountPaidCtrl.dispose();
     _notesCtrl.dispose();
     super.dispose();
   }
@@ -671,6 +673,28 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
       return;
     }
 
+    final amount = double.tryParse(_amountCtrl.text.trim()) ?? 0;
+    // Partial-payment split: the server requires an Amount paid strictly between
+    // 0 and the full Amount (mirrors web paymentSchema.superRefine /
+    // PaymentService.NormalizeAmountPaid). Surface it inline before submit.
+    final isPartial = _status == 'Partial';
+    final amountPaid =
+        isPartial ? double.tryParse(_amountPaidCtrl.text.trim()) : null;
+    if (isPartial) {
+      if (amountPaid == null) {
+        setState(() => _error = 'Amount paid is required for a partial payment');
+        return;
+      }
+      if (amountPaid <= 0) {
+        setState(() => _error = 'Amount paid must be greater than zero');
+        return;
+      }
+      if (amountPaid >= amount) {
+        setState(() => _error = 'Amount paid must be less than the full amount');
+        return;
+      }
+    }
+
     setState(() {
       _saving = true;
       _error = null;
@@ -679,7 +703,10 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
     try {
       await ref.read(paymentsRepositoryProvider).createPayment({
         'leaseId': _selectedLeaseId,
-        'amount': double.tryParse(_amountCtrl.text.trim()) ?? 0,
+        'amount': amount,
+        // amountPaid only travels for a Partial payment; null for any other
+        // status (matches the web client + server normalization).
+        'amountPaid': isPartial ? amountPaid : null,
         'dueDate': _dueDate!.toIso8601String().split('T').first,
         'type': _type,
         'status': _status,
@@ -851,6 +878,25 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
                 ],
               ),
               const SizedBox(height: 12),
+
+              // Amount paid (so far) — only meaningful for a Partial payment.
+              // The remainder (amount − paid) stays owed. Hidden for every other
+              // status, where it has no meaning. Mirrors the web client.
+              if (_status == 'Partial') ...[
+                TextFormField(
+                  controller: _amountPaidCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Amount paid (so far)',
+                    prefixText: '\$',
+                    helperText: 'How much was collected. The rest stays owed.',
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
 
               // Notes (optional)
               TextFormField(

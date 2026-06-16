@@ -28,6 +28,7 @@
 	let form = $state({
 		leaseId: '',
 		amount: '',
+		amountPaid: '',
 		dueDate: '',
 		paymentType: 'Rent',
 		status: 'Scheduled',
@@ -78,6 +79,7 @@
 		form = {
 			leaseId: String(payment.leaseId),
 			amount: String(payment.amount),
+			amountPaid: payment.amountPaid != null ? String(payment.amountPaid) : '',
 			dueDate: payment.dueDate?.slice(0, 10) ?? '',
 			paymentType: payment.paymentType,
 			status: payment.status,
@@ -114,7 +116,12 @@
 			return;
 		}
 		formErrors = {};
-		saveMutation.mutate({ portfolioId, ...result.data });
+		// amountPaid only applies to a Partial payment; for any other status send null so the server
+		// clears a stale collected-so-far (mirrors PaymentService.NormalizeAmountPaid).
+		const { amountPaid, ...rest } = result.data;
+		saveMutation.mutate(
+			rest.status === 'Partial' ? { portfolioId, ...rest, amountPaid } : { portfolioId, ...rest, amountPaid: null }
+		);
 	}
 
 	const deleteMutation = createMutation(() => ({
@@ -221,6 +228,12 @@
 
 			<DetailCard title="Payment tracking" icon={CircleCheck} accent="success" testid="payment-card-tracking" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Status" bind:value={form.status} display={payment.status} {editing} type="select" options={statusOptions} testid="payment-detail-status" />
+				<!-- Amount paid (collected-so-far) only applies to a Partial payment. While editing show it
+				     only when the chosen status is Partial; read-only show it only when the payment IS
+				     Partial — every other status has no split to display. -->
+				{#if editing ? form.status === 'Partial' : payment.status === 'Partial'}
+					<InlineField label="Amount paid" bind:value={form.amountPaid} display={payment.amountPaid != null ? `$${payment.amountPaid}` : '-'} {editing} error={formErrors.amountPaid} testid="payment-detail-amount-paid" />
+				{/if}
 				{@render dateField({ label: 'Paid date', value: form.paidDate, setValue: (v) => (form.paidDate = v), display: payment.paidDate ? formatDateOnly(payment.paidDate) : '', testid: 'payment-detail-paid-date' })}
 				<InlineField label="Method" bind:value={form.method} display={payment.method} {editing} testid="payment-detail-method" />
 				<InlineField label="Reference" bind:value={form.externalReference} display={payment.externalReference} {editing} testid="payment-detail-reference" />

@@ -12,7 +12,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/analytics")]
 [Produces("application/json")]
-public class AnalyticsController : AuthenticatedPortfolioControllerBase
+public class AnalyticsController : ManagementControllerBase
 {
     private readonly IAnalyticsService _analytics;
 

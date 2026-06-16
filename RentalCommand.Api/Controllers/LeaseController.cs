@@ -14,7 +14,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/leases")]
 [Produces("application/json")]
-public class LeaseController : AuthenticatedPortfolioControllerBase
+public class LeaseController : ManagementControllerBase
 {
     private readonly ILeaseService _service;
     private readonly ILeaseQaService _qa;
@@ -165,6 +165,7 @@ public class LeaseController : AuthenticatedPortfolioControllerBase
             SendForSignatureOutcome.Sent => Ok(result.Status),
             SendForSignatureOutcome.NotFound => NotFound(new { error = result.Error }),
             SendForSignatureOutcome.MissingSigner => BadRequest(new { error = result.Error }),
+            SendForSignatureOutcome.AlreadyFinalized => BadRequest(new { error = result.Error }),
             SendForSignatureOutcome.NotConfigured =>
                 StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = result.Error }),
             _ => StatusCode(StatusCodes.Status502BadGateway, new { error = result.Error }),

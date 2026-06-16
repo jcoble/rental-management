@@ -30,6 +30,7 @@ public sealed record DispatchResult(DispatchOutcome Outcome, VendorDispatchRespo
     public static DispatchResult Ok(VendorDispatchResponse dispatch) => new(DispatchOutcome.Dispatched, dispatch);
     public static DispatchResult NotFound() => new(DispatchOutcome.NotFound, null);
     public static DispatchResult NoPhone() => new(DispatchOutcome.VendorHasNoPhone, null);
+    public static DispatchResult AlreadyDispatched() => new(DispatchOutcome.AlreadyDispatched, null);
 }
 
 public enum DispatchOutcome
@@ -41,4 +42,10 @@ public enum DispatchOutcome
 
     /// <summary>The vendor exists but has no phone number, so no SMS can be sent.</summary>
     VendorHasNoPhone,
+
+    /// <summary>
+    /// An OPEN dispatch for this (work order, vendor) already exists, so a second one would create a
+    /// duplicate open job + duplicate SMS that the single DONE reply can't both close. Maps to 400.
+    /// </summary>
+    AlreadyDispatched,
 }

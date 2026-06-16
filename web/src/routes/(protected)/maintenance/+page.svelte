@@ -31,15 +31,35 @@
 	const WO_STATUSES = ['New', 'Scheduled', 'InProgress', 'WaitingParts', 'Completed', 'Cancelled'];
 	const WO_PRIORITIES = ['Low', 'Normal', 'High', 'Emergency'];
 
-	// Work-order search / status / priority filters persisted in the URL so they survive navigating
-	// away and back.
-	let woSearch = $state(readGridParam(page.url.searchParams, 'q'));
-	let woStatusFilter = $state(readGridParam(page.url.searchParams, 'status'));
-	let woPriorityFilter = $state(readGridParam(page.url.searchParams, 'priority'));
+	// Work-order search / status / priority / sort / page persisted in the URL so they survive navigating
+	// away and back. Sort/page seed the client-side DataGrid (initialSort / page) and are mirrored back
+	// via onSortChange / bind:page.
+	const initialParams = page.url.searchParams;
+	let woSearch = $state(readGridParam(initialParams, 'q'));
+	let woStatusFilter = $state(readGridParam(initialParams, 'status'));
+	let woPriorityFilter = $state(readGridParam(initialParams, 'priority'));
+	let gridSort = $state(readGridParam(initialParams, 'sort'));
+	let gridPage = $state(readGridParam(initialParams, 'page', 1));
 	const debouncedWoSearch = debounced(() => woSearch, 300);
 
+	// Reset to page 1 when a filter/search changes — but not on initial mount.
+	let filterResetPrimed = false;
 	$effect(() => {
-		syncGridUrl({ q: woSearch, status: woStatusFilter, priority: woPriorityFilter });
+		woSearch;
+		woStatusFilter;
+		woPriorityFilter;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
+	});
+
+	$effect(() => {
+		syncGridUrl(
+			{ q: woSearch, status: woStatusFilter, priority: woPriorityFilter, sort: gridSort, page: gridPage },
+			{ page: 1 }
+		);
 	});
 
 	const workOrdersQuery = createQuery(() => ({
@@ -287,6 +307,9 @@
 		onRowClick={(wo) => goto('/maintenance/' + wo.id)}
 		getRowKey={(wo) => wo.id}
 		data-testid="work-orders-list"
+		initialSort={gridSort}
+		bind:page={gridPage}
+		onSortChange={(s) => (gridSort = s ?? '')}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 items-center gap-2 min-w-0">

@@ -283,10 +283,12 @@ class _YearEndPacketCard extends StatelessWidget {
                   },
                 ),
                 const Spacer(),
-                FilledButton.icon(
-                  onPressed: onOpen,
-                  icon: const Icon(Icons.download_outlined, size: 18),
-                  label: const Text('Download'),
+                Flexible(
+                  child: FilledButton.icon(
+                    onPressed: onOpen,
+                    icon: const Icon(Icons.download_outlined, size: 18),
+                    label: const Text('Download'),
+                  ),
                 ),
               ],
             ),
