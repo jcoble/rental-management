@@ -14,8 +14,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import StateSelect from '$lib/components/shared/StateSelect.svelte';
-	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
+	import PropertyFields from '$lib/components/forms/PropertyFields.svelte';
 	import { Plus, Pencil, Trash2, Building } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -310,62 +309,25 @@
 		<Dialog.Header>
 			<Dialog.Title>{editingId == null ? 'New Property' : 'Edit Property'}</Dialog.Title>
 		</Dialog.Header>
-		<div class="grid gap-3 md:grid-cols-2" data-testid="property-form">
-			<div class="md:col-span-2">
-				<Input data-testid="property-name-input" bind:value={form.name} placeholder="Property name" />
-				{#if formErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="property-name-error">{formErrors.name}</p>{/if}
-			</div>
-			<Select.Root type="single" bind:value={form.type}>
-				<Select.Trigger class="w-full" data-testid="property-type-input">
-					{form.type ? form.type : 'Select type'}
-				</Select.Trigger>
-				<Select.Content>
-					{#each propertyTypes as pt}
-						<Select.Item value={pt} label={pt}>{pt}</Select.Item>
-					{/each}
-				</Select.Content>
-			</Select.Root>
-			<Select.Root type="single" bind:value={form.ownerEntityId}>
-				<Select.Trigger class="w-full" data-testid="property-owner-input">
-					{form.ownerEntityId ? ((ownersQuery.data || []).find(o => String(o.id) === form.ownerEntityId)?.name ?? 'No owner assigned') : 'No owner assigned'}
-				</Select.Trigger>
-				<Select.Content>
-					<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>
-					{#each ownersQuery.data || [] as owner}
-						<Select.Item value={String(owner.id)} label={owner.name}>{owner.name}</Select.Item>
-					{/each}
-				</Select.Content>
-			</Select.Root>
-			<div class="md:col-span-2">
-				<AddressAutocomplete
-					testid="property-address-input"
-					bind:value={form.addressLine1}
-					placeholder="Address"
-					onresolved={(a) => {
-						// Street line is owned by the address input (manual edits stick); only fill the rest.
-						if (a.city) form.city = a.city;
-						if (a.state) form.state = a.state;
-						if (a.zip) form.postalCode = a.zip;
-					}}
-				/>
-				{#if formErrors.addressLine1}<p class="mt-1 text-xs text-destructive" data-testid="property-address-error">{formErrors.addressLine1}</p>{/if}
-			</div>
-			<div class="md:col-span-2">
+		<div class="space-y-3" data-testid="property-form">
+			<PropertyFields bind:form errors={formErrors} />
+			<div>
+				<span class="mb-1 block text-xs font-medium text-muted-foreground">Apt / Suite / Unit #</span>
 				<Input data-testid="property-address2-input" bind:value={form.addressLine2} placeholder="Apt / Suite / Unit # (optional)" />
 			</div>
 			<div>
-				<Input data-testid="property-city-input" bind:value={form.city} placeholder="City" />
-				{#if formErrors.city}<p class="mt-1 text-xs text-destructive" data-testid="property-city-error">{formErrors.city}</p>{/if}
-			</div>
-			<div class="grid grid-cols-2 gap-2">
-				<div>
-					<StateSelect testid="property-state-input" bind:value={form.state} placeholder="State" />
-					{#if formErrors.state}<p class="mt-1 text-xs text-destructive" data-testid="property-state-error">{formErrors.state}</p>{/if}
-				</div>
-				<div>
-					<Input data-testid="property-zip-input" bind:value={form.postalCode} placeholder="ZIP" />
-					{#if formErrors.postalCode}<p class="mt-1 text-xs text-destructive" data-testid="property-zip-error">{formErrors.postalCode}</p>{/if}
-				</div>
+				<span class="mb-1 block text-xs font-medium text-muted-foreground">Owner</span>
+				<Select.Root type="single" bind:value={form.ownerEntityId}>
+					<Select.Trigger class="w-full" data-testid="property-owner-input">
+						{form.ownerEntityId ? ((ownersQuery.data || []).find(o => String(o.id) === form.ownerEntityId)?.name ?? 'No owner assigned') : 'No owner assigned'}
+					</Select.Trigger>
+					<Select.Content>
+						<Select.Item value="" label="No owner assigned">No owner assigned</Select.Item>
+						{#each ownersQuery.data || [] as owner}
+							<Select.Item value={String(owner.id)} label={owner.name}>{owner.name}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
 			</div>
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
