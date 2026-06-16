@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -16,11 +18,19 @@ public class ConversationService : IConversationService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly IFairHousingReviewService _fairHousing;
+    private readonly ILogger<ConversationService> _logger;
 
-    public ConversationService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public ConversationService(
+        RentalCommandDbContext db,
+        IDataUpdateService dataUpdate,
+        IFairHousingReviewService fairHousing,
+        ILogger<ConversationService> logger)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _fairHousing = fairHousing;
+        _logger = logger;
     }
 
     // ===========================================================================================
@@ -64,7 +74,8 @@ public class ConversationService : IConversationService
     }
 
     public async Task<ConversationDetail?> StartAsync(
-        int portfolioId, int tenantId, string subject, string body, List<string> channels, CancellationToken ct = default)
+        int portfolioId, int tenantId, string subject, string body, List<string> channels,
+        bool acknowledgedFairHousingReview = false, CancellationToken ct = default)
     {
         var tenant = await _db.Tenants
             .FirstOrDefaultAsync(t => t.Id == tenantId && t.PortfolioId == portfolioId && t.DeletedAt == null, ct);
@@ -73,6 +84,12 @@ public class ConversationService : IConversationService
         {
             return null; // → controller 404
         }
+
+        // Fair Housing gate: screen the outgoing copy before it leaves the building. Throws a
+        // FairHousingBlockedException (→ 422) when flagged and not acknowledged; otherwise (clean,
+        // acknowledged-override, or review-unavailable) falls through and the send proceeds.
+        await EnforceFairHousingGateAsync(
+            portfolioId, tenantId, conversationId: null, subject, body, acknowledgedFairHousingReview, ct);
 
         var now = DateTime.UtcNow;
         var preview = Preview(body);
@@ -322,6 +339,58 @@ public class ConversationService : IConversationService
     // ===========================================================================================
     // Helpers
     // ===========================================================================================
+
+    /// <summary>
+    /// Runs the Fair Housing review on the outgoing <paramref name="subject"/>+<paramref name="body"/>
+    /// and enforces the send gate:
+    /// <list type="bullet">
+    ///   <item>Flagged + NOT acknowledged → throws <see cref="FairHousingBlockedException"/> (→ 422).</item>
+    ///   <item>Flagged + acknowledged → logs a Warning (who/where + the flagged phrases) and proceeds.</item>
+    ///   <item>Compliant → proceeds silently.</item>
+    ///   <item>Review unavailable/errored (<c>Reviewed == false</c>) → fail-open: logs and proceeds, so an
+    ///         AI outage never blocks legitimate landlord mail (mirrors AiController's tolerance).</item>
+    /// </list>
+    /// One review call per send — no looping.
+    /// </summary>
+    private async Task EnforceFairHousingGateAsync(
+        int portfolioId, int tenantId, int? conversationId,
+        string subject, string body, bool acknowledged, CancellationToken ct)
+    {
+        // Review the full outgoing copy (subject + body) the tenant will actually see.
+        var text = string.IsNullOrWhiteSpace(subject) ? body : $"{subject}\n\n{body}";
+        var review = await _fairHousing.ReviewAsync(text, ct);
+
+        // Fail-open: an unavailable or errored review (no AI key, provider hiccup, unparseable output)
+        // must not block the send. ReviewAsync already swallows provider errors into Reviewed=false.
+        if (!review.Reviewed)
+        {
+            _logger.LogInformation(
+                "Fair Housing review unavailable for send (portfolio {PortfolioId}, tenant {TenantId}, conversation {ConversationId}); proceeding without screening.",
+                portfolioId, tenantId, conversationId);
+            return;
+        }
+
+        if (review.Compliant)
+        {
+            return; // Clean — nothing to gate.
+        }
+
+        var concerns = review.Issues
+            .Select(i => new FairHousingConcern(i.Phrase, i.Concern))
+            .ToList();
+
+        if (!acknowledged)
+        {
+            // Block: surface the concerns to the human (controller maps to 422).
+            throw new FairHousingBlockedException(concerns);
+        }
+
+        // Acknowledged override: a human consciously chose to send flagged copy. Record it.
+        _logger.LogWarning(
+            "Fair Housing-flagged message SENT via acknowledged override (portfolio {PortfolioId}, tenant {TenantId}, conversation {ConversationId}). Flagged phrases: {Phrases}",
+            portfolioId, tenantId, conversationId,
+            string.Join(" | ", concerns.Select(c => c.Phrase)));
+    }
 
     /// <summary>
     /// Queues email/SMS outbox rows for the requested channels the tenant has contact info for and
