@@ -66,6 +66,7 @@ export interface ScanConfirmResponse {
 	paymentId?: number | null;
 	workOrderId?: number | null;
 	leaseId?: number | null;
+	applicationId?: number | null;
 	entityType?: string | null;
 	entityId?: number | null;
 }

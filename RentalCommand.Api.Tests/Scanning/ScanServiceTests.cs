@@ -81,6 +81,8 @@ public class ScanServiceTests : IDisposable
             _tenants,
             _properties,
             _units,
+            // Existing tests don't exercise the Application confirm path; a default mock satisfies the ctor.
+            new Mock<IApplicationService>().Object,
             _audit,
             NullLogger<ScanService>.Instance);
     }
