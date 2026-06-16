@@ -42,14 +42,19 @@ public class ScheduleEService : IScheduleEService
             .ToDictionary(g => g.PropertyId, g => g.Total);
 
         // ── Expenses ─────────────────────────────────────────────────────────────────────────────
-        // Soft-deleted records are excluded by the global query filter. Grouped on (property, category)
-        // and summed SQL-side; the flat (propertyId, category, total) rows are reshaped into the nested
-        // map in memory, but no SUM runs in memory.
+        // Cash basis (to match the cash-basis rental income above): only expenses actually Paid count,
+        // dated by when the cash left (PaidAt, falling back to IncurredAt when a paid expense predates
+        // the PaidAt field) — the same COALESCE(PaidAt, IncurredAt) convention used across the
+        // accounting/reports services and the vw_accounting_transactions view. Unpaid expenses do not
+        // count on a cash-basis tax statement. Soft-deleted records are excluded by the global query
+        // filter. Grouped on (property, category) and summed SQL-side; the flat (propertyId, category,
+        // total) rows are reshaped into the nested map in memory, but no SUM runs in memory.
         var expenseCategoryTotals = await _db.Expenses
             .AsNoTracking()
             .Where(e =>
                 e.PortfolioId == portfolioId &&
-                e.IncurredAt.Year == year)
+                e.Status == ExpenseStatus.Paid &&
+                (e.PaidAt ?? e.IncurredAt).Year == year)
             .GroupBy(e => new { PropertyId = e.PropertyId ?? UnassignedPropertyId, e.Category })
             .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct);

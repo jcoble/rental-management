@@ -1141,11 +1141,14 @@ public class AccountingService : IAccountingService
             .ToDictionary(g => g.PropertyId, g => g.Total);
 
         // Expenses for the year, keyed by property + Schedule E category — grouped on both keys
-        // SQL-side. The result (one row per property/category pair) is reshaped into the nested map
-        // in memory, but no SUM is computed in memory.
+        // SQL-side. Cash basis (matching the cash-basis income above and the packet's monthly cash-flow
+        // block below): only Paid expenses count, dated by PaidAt (falling back to IncurredAt) — the same
+        // COALESCE(PaidAt, IncurredAt) convention used elsewhere. The result (one row per
+        // property/category pair) is reshaped into the nested map in memory, but no SUM is computed in
+        // memory.
         var expenseCategoryTotals = await _db.Expenses
             .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId && e.IncurredAt.Year == year && e.PropertyId != null)
+            .Where(e => e.PortfolioId == portfolioId && e.Status == ExpenseStatus.Paid && (e.PaidAt ?? e.IncurredAt).Year == year && e.PropertyId != null)
             .GroupBy(e => new { PropertyId = e.PropertyId!.Value, e.Category })
             .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct);
