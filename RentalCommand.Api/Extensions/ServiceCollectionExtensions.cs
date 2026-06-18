@@ -71,6 +71,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<AccountingProviderResolver>();
         services.AddScoped<AccountingAppSettingsResolver>();
         services.AddScoped<AccountingConnectionService>();
+        // Phase 2 — pull-into-domain import engine + the QuickBooks provider (provider #1).
+        // AddAccountingProviders is shared with the Engine so the pull worker resolves the same
+        // provider/resolver/import-engine the API uses for import-on-connect.
+        services.AddScoped<AccountingImportService>();
+        services.AddAccountingProviders();
         // Per-lease carried-over balance from before the landlord migrated onto Rental Command.
         services.AddScoped<IOpeningBalanceService, OpeningBalanceService>();
 
