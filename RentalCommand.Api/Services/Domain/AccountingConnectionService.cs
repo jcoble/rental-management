@@ -399,6 +399,129 @@ public class AccountingConnectionService
         await _db.SaveChangesAsync(ct);
     }
 
+    // --- Phase 2: import / mappings / confirm / review-queue ------------------------------
+
+    /// <summary>
+    /// Run a one-time / backfill import for a connected provider over an optional date range. Delegates
+    /// to <see cref="AccountingImportService"/>; the date range is advisory (the provider pulls deltas,
+    /// the import is idempotent). Returns the per-resource counts for the caller to surface.
+    /// </summary>
+    public async Task<AccountingImportService.ImportSummary> RunImportAsync(
+        int portfolioId, AccountingProvider provider, DateTime? fromDate, DateTime? toDate, CancellationToken ct)
+    {
+        var conn = await _db.AccountingConnections
+            .FirstOrDefaultAsync(c => c.PortfolioId == portfolioId && c.Provider == provider, ct)
+            ?? throw new InvalidOperationException(
+                $"No {provider} connection to import. Connect the provider first.");
+
+        if (conn.Status != AccountingConnectionStatus.Connected)
+        {
+            throw new InvalidOperationException(
+                $"{provider} is not connected (status: {conn.Status}). Reconnect before importing.");
+        }
+
+        // A backfill explicitly asks to re-scan from a start date, so honour fromDate as the delta floor
+        // when supplied (null = use each resource's stored cursor).
+        return await _importService.ImportAsync(conn, since: fromDate, ct);
+    }
+
+    /// <summary>
+    /// The entity mappings (suggested + confirmed) for a connected provider, newest first. Projected
+    /// DB-side. The UI shows these in the mapping-review panel so the landlord can confirm/adjust.
+    /// </summary>
+    public async Task<List<AccountingMappingResponse>> GetMappingsAsync(
+        int portfolioId, AccountingProvider provider, CancellationToken ct)
+    {
+        return await _db.AccountingEntityMappings
+            .Where(m => m.PortfolioId == portfolioId
+                && m.AccountingConnection!.Provider == provider)
+            .OrderByDescending(m => m.ConfirmedAt == null) // unconfirmed (needs attention) first
+            .ThenByDescending(m => m.UpdatedAt)
+            .Select(m => new AccountingMappingResponse
+            {
+                Id = m.Id,
+                ExternalType = m.ExternalType,
+                ExternalId = m.ExternalId,
+                ExternalDisplayName = m.ExternalDisplayName,
+                LocalEntityType = m.LocalEntityType,
+                LocalEntityId = m.LocalEntityId,
+                LocalEnumValue = m.LocalEnumValue,
+                Confidence = m.Confidence,
+                Confirmed = m.ConfirmedAt != null,
+                ConfirmedAt = m.ConfirmedAt,
+            })
+            .ToListAsync(ct);
+    }
+
+    /// <summary>
+    /// Confirm (or create) a landlord-chosen mapping between an external entity and a local one, then
+    /// promote any transactions that were parked waiting on it (D-3). Stamps the confirming user for audit.
+    /// </summary>
+    public async Task<int> ConfirmMappingAsync(
+        int portfolioId, AccountingProvider provider, int userId,
+        ConfirmAccountingMappingRequest request, CancellationToken ct)
+    {
+        var conn = await _db.AccountingConnections
+            .FirstOrDefaultAsync(c => c.PortfolioId == portfolioId && c.Provider == provider, ct)
+            ?? throw new InvalidOperationException(
+                $"No {provider} connection. Connect the provider first.");
+
+        var mapping = await _db.AccountingEntityMappings
+            .FirstOrDefaultAsync(m => m.PortfolioId == portfolioId
+                && m.AccountingConnectionId == conn.Id
+                && m.ExternalType == request.ExternalType
+                && m.ExternalId == request.ExternalId, ct);
+
+        if (mapping == null)
+        {
+            mapping = new AccountingEntityMapping
+            {
+                PortfolioId = portfolioId,
+                AccountingConnectionId = conn.Id,
+                ExternalType = request.ExternalType,
+                ExternalId = request.ExternalId,
+                ExternalDisplayName = request.ExternalDisplayName,
+                CreatedAt = DateTime.UtcNow,
+            };
+            _db.AccountingEntityMappings.Add(mapping);
+        }
+
+        mapping.LocalEntityType = request.LocalEntityType;
+        mapping.LocalEntityId = request.LocalEntityId;
+        mapping.LocalEnumValue = request.LocalEnumValue;
+        mapping.ConfirmedAt = DateTime.UtcNow;
+        mapping.ConfirmedByUserId = userId;
+        mapping.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        // Promote any parked (NeedsReview/Unmatched) transactions now resolvable by this confirmation.
+        return await _importService.RetryPendingForConnectionAsync(conn, ct);
+    }
+
+    /// <summary>
+    /// The review queue: imported transactions that could not be auto-created (unmatched / needs-review)
+    /// for a connected provider. The landlord confirms a mapping or creates the missing entity from here.
+    /// </summary>
+    public async Task<List<AccountingReviewItemResponse>> GetReviewQueueAsync(
+        int portfolioId, AccountingProvider provider, CancellationToken ct)
+    {
+        return await _db.AccountingSyncMaps
+            .Where(m => m.PortfolioId == portfolioId
+                && m.AccountingConnection!.Provider == provider
+                && m.Direction == LedgerDirection.Import
+                && (m.Status == LedgerStatus.NeedsReview || m.Status == LedgerStatus.Unmatched))
+            .OrderByDescending(m => m.UpdatedAt)
+            .Select(m => new AccountingReviewItemResponse
+            {
+                Id = m.Id,
+                ExternalType = m.ExternalType,
+                ExternalId = m.ExternalId,
+                Status = m.Status,
+                Reason = m.LastError,
+            })
+            .ToListAsync(ct);
+    }
+
     private AccountingAppSettings? TryResolveSettings(AccountingProvider provider)
     {
         try

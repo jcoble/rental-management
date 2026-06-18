@@ -407,20 +407,20 @@ Unique index (PortfolioId, AccountingConnectionId, Direction, ExternalType, Exte
 
 ---
 
-## 7. Open product decisions for the user (reframed for pull-first + backbone)
+## 7. Product decisions (DECIDED — locked by the user; implemented in Phase 2)
 
-- **D-1 — One-time import vs continuous pull.** v1 default: **on-demand backfill import** (landlord picks a date range) PLUS the scheduled `AccountingPullWorker` doing ongoing deltas when `PullEnabled`. Alternative: import is strictly manual (no background pull) until the landlord opts into "keep syncing." **Recommend: on-demand backfill + opt-in continuous pull.** Confirm.
-- **D-2 — Direction defaults / is push in v1.** Plan defaults **pull ON, push OFF** (the stated primary value). Confirm that's the right default, and whether push ships in v1 at all or defers to v1.1 (Phase 3 can split out cleanly).
-- **D-3 — Unmatched transactions: queue vs auto-create vs drop.** Plan: **review queue** (never dropped, never silently created); from the queue the landlord confirms a mapping or "create the missing Tenant/Vendor/Property." Confirm the queue model (vs. auto-creating a placeholder).
-- **D-4 — Account/category mapping UX.** On pull, an unmapped QBO account → `Other` + a hint to map. Auto-map by the §3.3 name table, or always require a one-time landlord confirm of the account→category map per company? **Recommend: auto-map by name, surface for one-time confirm.** Confirm.
-- **D-5 — Matching aggressiveness / auto-link threshold.** Plan reuses `BankingService` scoring; auto-link only when unambiguous (confidence ≥ 0.8, no rival within 0.15, or the single-candidate case). Confirm the threshold, or prefer "always confirm the first time, remember thereafter."
-- **D-6 — Push income object: Sales Receipt vs Invoice+Payment** (PUSH side only). **Recommend Sales Receipt** (cash already collected; one object; avoids double-count vs bank feed). Confirm.
-- **D-7 — Push expense object: Purchase vs Bill.** **Recommend Purchase** (we only push Paid). Confirm.
-- **D-8 — Money-in scope on pull.** Pull ALL accounting deposits/payments, or only those mapping to a known tenant/lease (skip owner contributions, transfers)? **Recommend: pull all, but only auto-create RC `Payment` rows for tenant-mapped ones; the rest sit in the review queue as "not a rent payment?"** Confirm.
-- **D-9 — Security deposits / non-cash (Depreciation).** Treat SecurityDeposit + Depreciation specially? **Recommend: import deposits as `SecurityDeposit` payments; skip Depreciation on both directions.** Confirm.
-- **D-10 — Callback lands on API vs SvelteKit origin.** Plan routes the Intuit callback to the **API** controller (owns token exchange) → 302 into `/settings#accounting`. Confirm (sets the redirect URI registered at Intuit).
-- **D-11 — Status: enum vs string.** New `AccountingConnectionStatus` enum (matches EdiPlatform) vs `BankConnection`'s string convention. **Recommend enum.** Confirm.
-- **D-12 — Which 2nd provider validates the abstraction (Phase 5).** Xero (largest QBO alternative; OAuth2+PKCE+tenant header — a good genericity stress test) vs FreshBooks vs Wave. Pick the strategically-valuable one.
+- **D-1 — One-time import vs continuous pull. DECIDED: both.** On-demand date-range backfill import (`POST {provider}/import`) AND the scheduled `AccountingPullWorker` doing ongoing deltas. `PullEnabled` defaults true (continuous-on after connect); the worker only pulls Connected + PullEnabled connections, so toggling pull off makes it manual/backfill-only.
+- **D-2 — Direction defaults / is push in v1. DECIDED: pull-only v1.** Pull ON, push OFF by default. The full PULL side ships in v1. The provider's two push methods (`UpsertIncomeAsync`/`UpsertExpenseAsync`) are implemented as real ports (`Capabilities.CanPush* = true`), but the push worker/service/endpoint/UI are deferred to v1.1.
+- **D-3 — Unmatched transactions. DECIDED: review queue.** Never dropped, never silently created. Unmatched/needs-review land in `AccountingSyncMap` (`Unmatched`/`NeedsReview`) and surface via `GET {provider}/review-queue`; from there the landlord confirms a mapping or creates the missing Tenant/Vendor/Property.
+- **D-4 — Account/category mapping UX. DECIDED: auto-map by name, surface for confirm.** Auto-map QBO Account → Schedule-E category via the §3.3 name table; an unmapped account → `Other` + a review hint. (The one-time confirm UI is Phase 4.)
+- **D-5 — Auto-link threshold. DECIDED: unambiguous only.** Auto-link when there is a single viable candidate, OR confidence ≥ 0.8 with no rival within 0.15; otherwise surface as a suggestion for the landlord to confirm. (`AccountingImportService.ResolveBest`.)
+- **D-6 — Push income object. DECIDED: Sales Receipt** (cash already collected; one object; avoids double-count vs a bank feed). Implemented in `QuickBooksAccountingProvider.UpsertIncomeAsync`; wired by v1.1.
+- **D-7 — Push expense object. DECIDED: Purchase** (we only push Paid). Implemented in `UpsertExpenseAsync`; wired by v1.1.
+- **D-8 — Money-in scope on pull. DECIDED: pull all, auto-create only tenant-mapped.** The pull pulls ALL money-in, but auto-creates an RC `Payment` ONLY for a transaction whose Customer maps (confirmed or unambiguously auto-linked) to a known Tenant→active Lease. Everything else (owner contributions, transfers, unmapped) → review queue.
+- **D-9 — Security deposits / non-cash. DECIDED.** Import money-in as `PaymentType.SecurityDeposit` when the source account maps to a deposit/liability account; otherwise default tenant-mapped money-in to `Rent`. Skip Depreciation on both directions (non-cash). Deposit detection is deliberately light (default Rent; truly-ambiguous lands in review).
+- **D-10 — Callback lands on API. DECIDED: API.** The Intuit callback hits the API controller (owns token exchange) → 302 into `/settings#accounting`. (Shipped in Phase 1.)
+- **D-11 — Status enum. DECIDED: enum.** `AccountingConnectionStatus` (matches EdiPlatform's `ErpConnectionStatus`). (Shipped in Phase 1.)
+- **D-12 — 2nd provider (Phase 5).** Still open — Xero (OAuth2 + PKCE + tenant header; a good genericity stress test) is the recommended candidate, decided at Phase 5 time. Not needed for v1.
 
 ---
 
