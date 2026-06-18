@@ -60,6 +60,25 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMoveOutStatementPdfGenerator, MoveOutStatementPdfGenerator>();
         services.AddScoped<IBankingService, BankingService>();
         services.AddHttpClient<IPlaidBankingProvider, PlaidBankingProvider>();
+
+        // --- accounting-integration backbone (provider-agnostic; QuickBooks is provider #1) ---
+        // The resolver dispatches the AccountingProvider enum to the registered IAccountingProvider
+        // implementations (none in Phase 1 — provider impls land in Phase 2). Scoped (mirrors
+        // EdiPlatform's ErpProviderResolver registration) so it can consume the providers Phase 2
+        // registers via AddHttpClient without a captive-dependency problem. The app-settings resolver
+        // maps the enum to the right *Options POCO so the backbone never reads QuickBooksOptions
+        // directly (AC-1).
+        services.AddScoped<AccountingProviderResolver>();
+        services.AddScoped<AccountingAppSettingsResolver>();
+        services.AddScoped<AccountingConnectionService>();
+        // Phase 2 — pull-into-domain import engine + the QuickBooks provider (provider #1).
+        // AddAccountingProviders is shared with the Engine so the pull worker resolves the same
+        // provider/resolver/import-engine the API uses for import-on-connect.
+        services.AddScoped<AccountingImportService>();
+        // Phase 3 — the ONE provider-agnostic token refresh+persist service, shared by the import path's
+        // refresh-on-401 and the Engine's AccountingTokenRefreshWorker.
+        services.AddScoped<AccountingTokenService>();
+        services.AddAccountingProviders();
         // Per-lease carried-over balance from before the landlord migrated onto Rental Command.
         services.AddScoped<IOpeningBalanceService, OpeningBalanceService>();
 

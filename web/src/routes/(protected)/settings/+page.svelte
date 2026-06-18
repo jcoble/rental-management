@@ -1382,6 +1382,23 @@
 						</div>
 					</Card.Content>
 				</Card.Root>
+
+				<!-- Connect your accounting: brings rent payments + expenses in from QuickBooks (and
+				     future providers) — its own focused route. -->
+				<Card.Root class="gap-0 py-0" data-testid="settings-accounting-link">
+					<Card.Content class="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
+						<div>
+							<p class="text-sm font-semibold">Connect your accounting</p>
+							<p class="text-xs text-muted-foreground">
+								Link QuickBooks (more coming) to bring your existing rent payments and expenses
+								into Rental Command — no double entry.
+							</p>
+						</div>
+						<Button href="/settings/accounting" data-testid="settings-accounting-open">
+							Connect accounting <ArrowRight class="ml-1.5 h-4 w-4" />
+						</Button>
+					</Card.Content>
+				</Card.Root>
 			</div>
 		</Tabs.Content>
 

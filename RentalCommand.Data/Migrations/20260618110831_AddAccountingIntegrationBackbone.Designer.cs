@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RentalCommand.Data;
@@ -11,9 +12,11 @@ using RentalCommand.Data;
 namespace RentalCommand.Data.Migrations
 {
     [DbContext(typeof(RentalCommandDbContext))]
-    partial class RentalCommandDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260618110831_AddAccountingIntegrationBackbone")]
+    partial class AddAccountingIntegrationBackbone
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -341,9 +344,6 @@ namespace RentalCommand.Data.Migrations
                     b.Property<string>("LocalEntityType")
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)");
-
-                    b.Property<string>("MetadataJson")
-                        .HasColumnType("jsonb");
 
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
