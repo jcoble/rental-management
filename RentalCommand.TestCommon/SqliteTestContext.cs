@@ -72,6 +72,7 @@ internal sealed class AutomationTestDbContext : RentalCommandDbContext
         modelBuilder.Entity<QueuedJob>().Property(e => e.Payload).HasColumnType("TEXT");
         modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
         modelBuilder.Entity<SecurityDepositHolding>().Property(e => e.DeductionsJson).HasColumnType("TEXT");
+        modelBuilder.Entity<AccountingConnection>().Property(e => e.LastPulledAtJson).HasColumnType("TEXT");
 
         // ---- Remove Postgres check constraints that SQLite cannot execute ----
         // Calling ToTable() without a builder action replaces the existing table configuration
