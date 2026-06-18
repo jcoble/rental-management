@@ -52,6 +52,7 @@ public class AccountingConnectionService
     private readonly IDataProtector _protector;
     private readonly AccountingProviderResolver _providerResolver;
     private readonly AccountingAppSettingsResolver _settingsResolver;
+    private readonly AccountingImportService _importService;
     private readonly ILogger<AccountingConnectionService> _logger;
 
     public AccountingConnectionService(
@@ -59,12 +60,14 @@ public class AccountingConnectionService
         IDataProtectionProvider dataProtection,
         AccountingProviderResolver providerResolver,
         AccountingAppSettingsResolver settingsResolver,
+        AccountingImportService importService,
         ILogger<AccountingConnectionService> logger)
     {
         _db = db;
         _protector = dataProtection.CreateProtector("RentalCommand.Accounting.v1");
         _providerResolver = providerResolver;
         _settingsResolver = settingsResolver;
+        _importService = importService;
         _logger = logger;
     }
 
@@ -208,8 +211,39 @@ public class AccountingConnectionService
             "AccountingConnection {ConnectionId} now Connected for portfolio {PortfolioId} ({Provider})",
             conn.Id, portfolioId, provider);
 
-        // Phase 2 hooks an initial pull here (import-on-connect); Phase 1 is connection-only.
+        // Import-on-connect: kick an initial pull so the landlord's money flows in immediately rather
+        // than waiting for the first scheduled worker cycle. Best-effort — a failure here must never
+        // fail the connect (the connection is already Connected; the worker will retry on its cadence).
+        await RunInitialPullAsync(conn, ct);
+
         return (portfolioId, provider);
+    }
+
+    /// <summary>
+    /// Best-effort initial import right after a successful connect (port of EdiPlatform's
+    /// <c>RunInitialPullAsync</c>). Only runs when pull is enabled; swallows + logs failures so the
+    /// connect flow is never broken by a transient provider error.
+    /// </summary>
+    private async Task RunInitialPullAsync(AccountingConnection conn, CancellationToken ct)
+    {
+        if (!conn.PullEnabled)
+        {
+            return;
+        }
+
+        try
+        {
+            var summary = await _importService.ImportAsync(conn, since: null, ct);
+            _logger.LogInformation(
+                "Initial accounting import for connection {ConnectionId}: {Payments} payments, {Expenses} expenses, {Review} for review",
+                conn.Id, summary.PaymentsImported, summary.ExpensesImported, summary.NeedsReview);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex,
+                "Initial accounting import failed for connection {ConnectionId} — the scheduled pull worker will retry",
+                conn.Id);
+        }
     }
 
     /// <summary>Best-effort revoke at the provider, then flip Disconnected and blank the tokens.</summary>

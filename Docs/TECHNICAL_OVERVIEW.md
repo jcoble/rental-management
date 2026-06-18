@@ -176,8 +176,10 @@ lock.
 
 Workers (all on `EngineWorkerBase`: fresh DI scope per cycle, per-cycle `StepTimeout`,
 error-isolated): `OutboxDispatchWorker`, `ScanProcessingWorker`, `RentChargeWorker` (hourly),
-`LateFeeWorker` / `LeaseExpiryReminderWorker` (6-hourly). The financial workers wrap the business
-record + its tenant notification in **one transaction**, and compute period/due-day in the
+`LateFeeWorker` / `LeaseExpiryReminderWorker` (6-hourly), `AccountingPullWorker` (15-min;
+imports each Connected + PullEnabled accounting connection's deltas into the domain via
+`AccountingImportService`, per-connection Postgres advisory lock). The financial workers wrap the
+business record + its tenant notification in **one transaction**, and compute period/due-day in the
 landlord's **local timezone** (`App:TimeZone`), not UTC.
 
 `WorkerWatchdogService` flags a worker stuck (no heartbeat past a threshold, or `Error` status) and
