@@ -146,6 +146,94 @@ public class AccountingIntegrationsController : ManagementControllerBase
         return NoContent();
     }
 
+    /// <summary>
+    /// Run a one-time / backfill import for <paramref name="provider"/> over an optional date range.
+    /// Idempotent (the ledger gates re-import); returns the per-resource counts.
+    /// </summary>
+    [HttpPost("{provider}/import")]
+    [ProducesResponseType(typeof(RunAccountingImportResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<RunAccountingImportResponse>> Import(
+        string provider, [FromBody] RunAccountingImportRequest request, CancellationToken ct)
+    {
+        if (!TryParseProvider(provider, out var parsed))
+        {
+            return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
+        }
+
+        try
+        {
+            var s = await _service.RunImportAsync(GetPortfolioId(), parsed, request.FromDate, request.ToDate, ct);
+            return Ok(new RunAccountingImportResponse
+            {
+                CustomersMapped = s.CustomersMapped,
+                VendorsMapped = s.VendorsMapped,
+                AccountsMapped = s.AccountsMapped,
+                PaymentsImported = s.PaymentsImported,
+                ExpensesImported = s.ExpensesImported,
+                NeedsReview = s.NeedsReview,
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>The entity mappings (suggested + confirmed) for <paramref name="provider"/> (mapping-review panel).</summary>
+    [HttpGet("{provider}/mappings")]
+    [ProducesResponseType(typeof(IReadOnlyList<AccountingMappingResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<IReadOnlyList<AccountingMappingResponse>>> Mappings(string provider, CancellationToken ct)
+    {
+        if (!TryParseProvider(provider, out var parsed))
+        {
+            return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
+        }
+
+        return Ok(await _service.GetMappingsAsync(GetPortfolioId(), parsed, ct));
+    }
+
+    /// <summary>
+    /// Confirm (or hand-create) an entity mapping for <paramref name="provider"/>, then promote any
+    /// transactions parked waiting on it. Returns the number of newly-promoted transactions.
+    /// </summary>
+    [HttpPost("{provider}/mappings/confirm")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> ConfirmMapping(
+        string provider, [FromBody] ConfirmAccountingMappingRequest request, CancellationToken ct)
+    {
+        if (!TryParseProvider(provider, out var parsed))
+        {
+            return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
+        }
+
+        try
+        {
+            var promoted = await _service.ConfirmMappingAsync(GetPortfolioId(), parsed, GetUserId(), request, ct);
+            return Ok(new { promoted });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>The review queue (unmatched / needs-review imported transactions) for <paramref name="provider"/>.</summary>
+    [HttpGet("{provider}/review-queue")]
+    [ProducesResponseType(typeof(IReadOnlyList<AccountingReviewItemResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<IReadOnlyList<AccountingReviewItemResponse>>> ReviewQueue(string provider, CancellationToken ct)
+    {
+        if (!TryParseProvider(provider, out var parsed))
+        {
+            return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
+        }
+
+        return Ok(await _service.GetReviewQueueAsync(GetPortfolioId(), parsed, ct));
+    }
+
     private static bool TryParseProvider(string provider, out AccountingProvider parsed) =>
         Enum.TryParse(provider, ignoreCase: true, out parsed) && Enum.IsDefined(parsed);
 

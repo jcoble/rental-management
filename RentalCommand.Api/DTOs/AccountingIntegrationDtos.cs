@@ -68,3 +68,78 @@ public class SetAccountingDirectionRequest
     public bool PullEnabled { get; set; }
     public bool PushEnabled { get; set; }
 }
+
+/// <summary>Optional date range for a one-time / backfill import (deltas + idempotency make it advisory).</summary>
+public class RunAccountingImportRequest
+{
+    public DateTime? FromDate { get; set; }
+    public DateTime? ToDate { get; set; }
+}
+
+/// <summary>Result counts for a one-time import run.</summary>
+public class RunAccountingImportResponse
+{
+    public int CustomersMapped { get; set; }
+    public int VendorsMapped { get; set; }
+    public int AccountsMapped { get; set; }
+    public int PaymentsImported { get; set; }
+    public int ExpensesImported { get; set; }
+    public int NeedsReview { get; set; }
+}
+
+/// <summary>One entity mapping (suggested or confirmed) for the mapping-review panel.</summary>
+public class AccountingMappingResponse
+{
+    public int Id { get; set; }
+
+    /// <summary>"Customer" | "Vendor" | "Account" | "Class".</summary>
+    public string ExternalType { get; set; } = string.Empty;
+    public string ExternalId { get; set; } = string.Empty;
+    public string? ExternalDisplayName { get; set; }
+
+    /// <summary>"Tenant" | "Lease" | "Vendor" | "Property" | "ScheduleECategory".</summary>
+    public string LocalEntityType { get; set; } = string.Empty;
+    public int? LocalEntityId { get; set; }
+
+    /// <summary>Set instead of <see cref="LocalEntityId"/> when the target is an enum (a Schedule-E category).</summary>
+    public string? LocalEnumValue { get; set; }
+
+    /// <summary>The suggester's confidence (0–1) when surfaced; null for a hand-created confirm.</summary>
+    public decimal? Confidence { get; set; }
+
+    /// <summary>True once the landlord (or an unambiguous auto-link) confirmed the mapping.</summary>
+    public bool Confirmed { get; set; }
+    public DateTime? ConfirmedAt { get; set; }
+}
+
+/// <summary>
+/// Confirm (or hand-create) a mapping between an external entity and a local one. Either
+/// <see cref="LocalEntityId"/> (Tenant/Vendor/Property/…) or <see cref="LocalEnumValue"/>
+/// (a Schedule-E category) is set, matching the external type.
+/// </summary>
+public class ConfirmAccountingMappingRequest
+{
+    public string ExternalType { get; set; } = string.Empty;
+    public string ExternalId { get; set; } = string.Empty;
+    public string? ExternalDisplayName { get; set; }
+
+    public string LocalEntityType { get; set; } = string.Empty;
+    public int? LocalEntityId { get; set; }
+    public string? LocalEnumValue { get; set; }
+}
+
+/// <summary>One imported transaction parked in the review queue (unmatched / needs-review).</summary>
+public class AccountingReviewItemResponse
+{
+    public int Id { get; set; }
+
+    /// <summary>"Payment" | "Purchase" | "Bill".</summary>
+    public string ExternalType { get; set; } = string.Empty;
+    public string ExternalId { get; set; } = string.Empty;
+
+    /// <summary>"NeedsReview" | "Unmatched".</summary>
+    public string Status { get; set; } = string.Empty;
+
+    /// <summary>Why it could not be auto-created (e.g. "No tenant mapping for this customer").</summary>
+    public string? Reason { get; set; }
+}
