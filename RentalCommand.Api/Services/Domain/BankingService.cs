@@ -833,73 +833,11 @@ public class BankingService : IBankingService
 
     /// <summary>
     /// Strength in [0,1] that the bank line's merchant/description refers to one of the candidate
-    /// names. 1.0 = a candidate name is fully contained in the bank text (or vice-versa); partial
-    /// credit for shared significant tokens; 0 when there is nothing to compare or no overlap.
+    /// names. Delegates to the shared <see cref="NameMatcher"/> (one engine, also used by the
+    /// accounting import mapper) after combining the merchant + description into one external string.
     /// </summary>
     private static decimal NameMatchStrength(string? bankMerchant, string? bankDescription, params string?[] candidateNames)
-    {
-        var bankText = NormalizeName($"{bankMerchant} {bankDescription}");
-        if (bankText.Length == 0) return 0m;
-
-        var bankTokens = SignificantTokens(bankText);
-        if (bankTokens.Count == 0) return 0m;
-
-        var best = 0m;
-        foreach (var candidate in candidateNames)
-        {
-            var normalized = NormalizeName(candidate);
-            if (normalized.Length == 0) continue;
-
-            // Whole-name containment either way is the strongest signal.
-            if (bankText.Contains(normalized, StringComparison.Ordinal) ||
-                normalized.Contains(bankText, StringComparison.Ordinal))
-            {
-                return 1m;
-            }
-
-            var candidateTokens = SignificantTokens(normalized);
-            if (candidateTokens.Count == 0) continue;
-
-            var shared = candidateTokens.Count(t => bankTokens.Contains(t));
-            if (shared == 0) continue;
-
-            // Fraction of the candidate's significant tokens found in the bank text.
-            var fraction = (decimal)shared / candidateTokens.Count;
-            if (fraction > best) best = fraction;
-        }
-
-        return best;
-    }
-
-    private static string NormalizeName(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
-
-        var sb = new System.Text.StringBuilder(value.Length);
-        foreach (var ch in value.Trim().ToLowerInvariant())
-        {
-            if (char.IsLetterOrDigit(ch)) sb.Append(ch);
-            else if (char.IsWhiteSpace(ch)) sb.Append(' ');
-            // drop punctuation entirely
-        }
-
-        // Collapse runs of spaces.
-        return string.Join(' ', sb.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries));
-    }
-
-    // Tokens with at least 2 characters that are not generic banking/transfer filler, so noise like
-    // "ach", "the", "llc" doesn't manufacture a false name match.
-    private static readonly HashSet<string> NameStopWords = new(StringComparer.Ordinal)
-    {
-        "ach", "the", "and", "llc", "inc", "co", "payment", "pmt", "deposit", "debit", "credit",
-        "transfer", "xfer", "online", "pos", "purchase", "rent", "from", "for", "ref", "id",
-    };
-
-    private static HashSet<string> SignificantTokens(string normalized) =>
-        normalized
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .Where(t => t.Length >= 2 && !NameStopWords.Contains(t))
-            .ToHashSet(StringComparer.Ordinal);
+        => NameMatcher.NameMatchStrength($"{bankMerchant} {bankDescription}", candidateNames);
 
     private static BankConnectionResponse MapConnection(BankConnection c) => new()
     {
