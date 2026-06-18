@@ -964,29 +964,11 @@ public sealed class AccountingImportService
 
     private static bool IsDepositPayment(ExtPaymentDto dto, HashSet<string> depositAccountIds)
     {
-        // QBO Payments deposit to an account via DepositToAccountRef in the metadata; if that account is a
-        // known deposit account, treat the money-in as a security deposit.
-        if (depositAccountIds.Count == 0 || string.IsNullOrWhiteSpace(dto.MetadataJson))
-        {
-            return false;
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(dto.MetadataJson);
-            if (doc.RootElement.TryGetProperty("DepositToAccountRef", out var r)
-                && r.TryGetProperty("value", out var v))
-            {
-                var id = v.GetString();
-                return id != null && depositAccountIds.Contains(id);
-            }
-        }
-        catch (JsonException)
-        {
-            // fall through
-        }
-
-        return false;
+        // Purely neutral: the provider already projected the deposit-to account id onto the DTO, so a
+        // money-in that landed in a known deposit/liability account is a security deposit (D-9). No
+        // provider-shaped JSON is parsed here — the backbone stays 100% provider-agnostic (AC-1).
+        return dto.DepositAccountExternalId != null
+            && depositAccountIds.Contains(dto.DepositAccountExternalId);
     }
 
     private static bool IsDepositAccountName(string? name)

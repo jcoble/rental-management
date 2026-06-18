@@ -66,9 +66,9 @@ public sealed class AccountingImportServiceTests : IDisposable
             Payments =
             {
                 // Mapped customer → becomes a real Payment.
-                new ExtPaymentDto("QBP-1", "QBC-1", 1200m, paidOn, "Check", "1001", paidOn, null, "{}"),
+                new ExtPaymentDto("QBP-1", "QBC-1", 1200m, paidOn, "Check", "1001", paidOn, null, null, "{}"),
                 // Unmapped customer → review queue (AC-6 / D-8).
-                new ExtPaymentDto("QBP-2", "QBC-UNKNOWN", 500m, paidOn, "Cash", "1002", paidOn, null, "{}"),
+                new ExtPaymentDto("QBP-2", "QBC-UNKNOWN", 500m, paidOn, "Cash", "1002", paidOn, null, null, "{}"),
             },
         };
 
@@ -172,13 +172,31 @@ public sealed class AccountingImportServiceTests : IDisposable
         SeedSkeleton(now);
         var conn = SeedConnectedConnection();
 
+        // An Account mapping whose display name reads as a deposit account (so the import service treats
+        // money-in to "ACC-DEP" as a security deposit). This also proves the neutral DepositAccountExternalId
+        // survives the park→serialize→deserialize round trip (deposit classification still works on promote).
+        _ctx.Db.AccountingEntityMappings.Add(new AccountingEntityMapping
+        {
+            PortfolioId = PortfolioId,
+            AccountingConnectionId = conn.Id,
+            ExternalType = ExternalKind.Account,
+            ExternalId = "ACC-DEP",
+            ExternalDisplayName = "Security Deposit Liability",
+            LocalEntityType = LocalEntityKind.ScheduleECategory,
+            LocalEnumValue = ScheduleECategory.Other.ToString(),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
         var paidOn = new DateTime(2026, 5, 3, 0, 0, 0, DateTimeKind.Utc);
         var sut = CreateService(new FakeAccountingProvider(AccountingProvider.QuickBooks)
         {
-            Payments = { new ExtPaymentDto("QBP-9", "QBC-9", 1200m, paidOn, "Check", "9001", paidOn, null, "{}") },
+            // DepositAccountExternalId points at the deposit account → classifies SecurityDeposit (D-9).
+            Payments = { new ExtPaymentDto("QBP-9", "QBC-9", 1200m, paidOn, "Check", "9001", paidOn, null, "ACC-DEP", "{}") },
         });
 
-        // First import → no mapping yet → parked Unmatched.
+        // First import → no customer mapping yet → parked Unmatched.
         await sut.ImportAsync(conn, since: null, CancellationToken.None);
         (await _ctx.Db.Payments.CountAsync(p => p.PortfolioId == PortfolioId)).Should().Be(0);
         var parked = await _ctx.Db.AccountingSyncMaps.AsNoTracking().SingleAsync(m => m.ExternalId == "QBP-9");
@@ -213,6 +231,8 @@ public sealed class AccountingImportServiceTests : IDisposable
         payment.Status.Should().Be(PaymentStatus.Paid);
         payment.PaidDate.Should().Be(paidOn);
         payment.ExternalReference.Should().Be("9001");
+        // Deposit account → SecurityDeposit, proven through the neutral DepositAccountExternalId round trip (D-9).
+        payment.PaymentType.Should().Be(PaymentType.SecurityDeposit);
 
         var promotedLedger = await _ctx.Db.AccountingSyncMaps.AsNoTracking().SingleAsync(m => m.ExternalId == "QBP-9");
         promotedLedger.Status.Should().Be(LedgerStatus.Imported);
