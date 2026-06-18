@@ -97,8 +97,11 @@ public class AccountingConnectionServiceTests : IDisposable
         });
         var settingsResolver = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(qbOptions.Value));
         var providerResolver = new AccountingProviderResolver(providers);
-        return new AccountingConnectionService(
+        var importService = new AccountingImportService(
             _ctx.Db, _dp, providerResolver, settingsResolver,
+            NullLogger<AccountingImportService>.Instance);
+        return new AccountingConnectionService(
+            _ctx.Db, _dp, providerResolver, settingsResolver, importService,
             NullLogger<AccountingConnectionService>.Instance);
     }
 
