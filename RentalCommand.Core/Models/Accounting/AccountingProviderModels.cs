@@ -155,6 +155,11 @@ public enum AccountingListKind
 }
 
 /// <summary>An external money-in transaction (maps → RC <c>Payment</c>). Port of <c>ErpPaymentDto</c>.</summary>
+/// <param name="DepositAccountExternalId">
+/// Neutral external id of the account the money was deposited to (QBO <c>DepositToAccountRef.value</c>,
+/// a Xero bank-account id, etc.). The provider projects it so the generic import service can recognise a
+/// deposit/liability account WITHOUT parsing provider-shaped JSON. Null when the provider doesn't supply one.
+/// </param>
 public sealed record ExtPaymentDto(
     string ExternalId,
     string? CustomerExternalId,
@@ -165,6 +170,7 @@ public sealed record ExtPaymentDto(
     DateTime? UpdatedAtUtc,
     /// <summary>External invoice ids this payment applies to (QBO linked txns).</summary>
     IReadOnlyList<string>? InvoiceExternalIds,
+    string? DepositAccountExternalId,
     string? MetadataJson);
 
 /// <summary>An external money-out transaction (maps → RC <c>Expense</c>).</summary>

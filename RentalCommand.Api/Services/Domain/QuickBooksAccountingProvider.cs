@@ -396,6 +396,9 @@ public sealed class QuickBooksAccountingProvider : IAccountingProvider
             ReferenceNumber: GetStringOrNull(p, "PaymentRefNum"),
             UpdatedAtUtc: updated,
             InvoiceExternalIds: invoiceIds,
+            // Project the deposit-to account so the import service can detect a deposit/liability account
+            // (security-deposit classification) without parsing this provider's JSON downstream.
+            DepositAccountExternalId: GetRefValue(p, "DepositToAccountRef"),
             MetadataJson: p.GetRawText()), updated);
     }
 
