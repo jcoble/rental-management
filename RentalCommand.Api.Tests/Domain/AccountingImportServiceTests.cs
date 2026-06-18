@@ -19,8 +19,8 @@ namespace RentalCommand.Api.Tests.Domain;
 /// the pull-into-domain import (a) creates a real RC <see cref="Payment"/> from a pulled payment
 /// whose customer has a confirmed Customer→Tenant mapping (right lease / amount / Paid / date),
 /// (b) does NOT duplicate on re-import (the ledger gates it), and (c) routes an unmatchable txn to
-/// the review queue (never silently created, never dropped). Plus the auto-link decision: an
-/// unambiguous name match auto-confirms; two equally-strong rivals stay a suggestion.
+/// the review queue (never silently created, never dropped). Plus the auto-link decision and the
+/// park→promote neutral round-trip after a mapping is confirmed.
 /// Deliberately the single focused integration test — the sandbox flow is the real signal.
 /// </summary>
 public sealed class AccountingImportServiceTests : IDisposable
@@ -160,6 +160,63 @@ public sealed class AccountingImportServiceTests : IDisposable
             .SingleAsync(m => m.ExternalType == ExternalKind.Customer && m.ExternalId == "QBC-B");
         mapping.LocalEntityId.Should().NotBeNull("the best candidate is still recorded for the landlord to confirm");
         mapping.ConfirmedAt.Should().BeNull("two equally-strong rivals are ambiguous → never auto-linked");
+    }
+
+    [Fact]
+    public async Task ParkedPayment_PromotesToRealPayment_AfterMappingConfirmed_ViaNeutralRoundTrip()
+    {
+        // A payment whose customer has no mapping parks as Unmatched (the NEUTRAL DTO is stored). After
+        // the landlord confirms the Customer→Tenant mapping, RetryPendingForConnectionAsync re-resolves
+        // the parked row FROM THE NEUTRAL PAYLOAD (no provider-shaped re-parse) and creates the Payment.
+        var now = DateTime.UtcNow;
+        SeedSkeleton(now);
+        var conn = SeedConnectedConnection();
+
+        var paidOn = new DateTime(2026, 5, 3, 0, 0, 0, DateTimeKind.Utc);
+        var sut = CreateService(new FakeAccountingProvider(AccountingProvider.QuickBooks)
+        {
+            Payments = { new ExtPaymentDto("QBP-9", "QBC-9", 1200m, paidOn, "Check", "9001", paidOn, null, "{}") },
+        });
+
+        // First import → no mapping yet → parked Unmatched.
+        await sut.ImportAsync(conn, since: null, CancellationToken.None);
+        (await _ctx.Db.Payments.CountAsync(p => p.PortfolioId == PortfolioId)).Should().Be(0);
+        var parked = await _ctx.Db.AccountingSyncMaps.AsNoTracking().SingleAsync(m => m.ExternalId == "QBP-9");
+        parked.Status.Should().Be(LedgerStatus.Unmatched);
+        parked.MetadataJson.Should().NotBeNullOrEmpty("the neutral DTO is stashed so a retry needs no fresh pull");
+
+        // Landlord confirms QBC-9 → Tenant 30.
+        _ctx.Db.AccountingEntityMappings.Add(new AccountingEntityMapping
+        {
+            PortfolioId = PortfolioId,
+            AccountingConnectionId = conn.Id,
+            ExternalType = ExternalKind.Customer,
+            ExternalId = "QBC-9",
+            LocalEntityType = LocalEntityKind.Tenant,
+            LocalEntityId = 30,
+            ConfirmedAt = now,
+            ConfirmedByUserId = 7,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        // Retry the parked rows for this connection.
+        var promoted = await sut.RetryPendingForConnectionAsync(
+            await _ctx.Db.AccountingConnections.SingleAsync(c => c.Id == conn.Id),
+            CancellationToken.None);
+
+        promoted.Should().Be(1);
+        var payment = await _ctx.Db.Payments.AsNoTracking().SingleAsync(p => p.PortfolioId == PortfolioId);
+        payment.LeaseId.Should().Be(100);
+        payment.Amount.Should().Be(1200m);
+        payment.Status.Should().Be(PaymentStatus.Paid);
+        payment.PaidDate.Should().Be(paidOn);
+        payment.ExternalReference.Should().Be("9001");
+
+        var promotedLedger = await _ctx.Db.AccountingSyncMaps.AsNoTracking().SingleAsync(m => m.ExternalId == "QBP-9");
+        promotedLedger.Status.Should().Be(LedgerStatus.Imported);
+        promotedLedger.LocalEntityId.Should().Be(payment.Id);
     }
 
     // ----------------------------------------------------------------------------------

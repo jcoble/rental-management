@@ -401,9 +401,10 @@ public sealed class AccountingImportService
             return (0, 0);
         }
 
-        // DB-side idempotency: load the already-seen external ids for this connection+direction ONCE,
-        // then process only the unseen ones (set difference, not a per-row NOT EXISTS query).
-        var seen = await LoadSeenExternalIdsAsync(conn, ExternalKind.Payment, ct);
+        // DB-side idempotency: in ONE query, find which of THIS batch's external ids were already
+        // imported (bounded by the batch, not the whole history), then process only the unseen ones.
+        var batchIds = dtos.Select(d => d.ExternalId).ToList();
+        var seen = await LoadSeenExternalIdsAsync(conn, ExternalKind.Payment, batchIds, ct);
 
         // Confirmed Customer→Tenant mappings (batch) + their lease + deposit-account hints.
         var customerToTenant = await LoadConfirmedMapAsync(conn, ExternalKind.Customer, LocalEntityKind.Tenant, ct);
@@ -430,7 +431,7 @@ public sealed class AccountingImportService
                 WriteLedger(conn, ExternalKind.Payment, dto.ExternalId, LedgerStatus.Unmatched,
                     localType: null, localId: null,
                     note: tenantId == null ? "No tenant mapping for this customer" : "Tenant has no active lease",
-                    metadata: dto.MetadataJson);
+                    metadata: SerializeParked(dto));
                 review++;
                 continue;
             }
@@ -456,7 +457,7 @@ public sealed class AccountingImportService
             await _db.SaveChangesAsync(ct); // need the generated Id for the ledger row
 
             WriteLedger(conn, ExternalKind.Payment, dto.ExternalId, LedgerStatus.Imported,
-                localType: LocalEntityKind.Payment, localId: payment.Id, note: null, metadata: dto.MetadataJson);
+                localType: LocalEntityKind.Payment, localId: payment.Id, note: null, metadata: SerializeParked(dto));
             imported++;
         }
 
@@ -472,7 +473,8 @@ public sealed class AccountingImportService
             return (0, 0);
         }
 
-        var seen = await LoadSeenExternalIdsAsync(conn, ExternalKind.Purchase, ExternalKind.Bill, ct);
+        var batchIds = dtos.Select(d => d.ExternalId).ToList();
+        var seen = await LoadSeenExternalIdsAsync(conn, ExternalKind.Purchase, ExternalKind.Bill, batchIds, ct);
 
         var vendorMap = await LoadConfirmedMapAsync(conn, ExternalKind.Vendor, LocalEntityKind.Vendor, ct);
         var classToProperty = await LoadConfirmedMapAsync(conn, ExternalKind.Class, LocalEntityKind.Property, ct);
@@ -481,7 +483,8 @@ public sealed class AccountingImportService
         int imported = 0, review = 0;
         foreach (var dto in dtos)
         {
-            var externalKind = ExternalKindForExpense(dto);
+            // The provider already told us Purchase vs Bill via the neutral SourceKind discriminator.
+            var externalKind = NormalizeExpenseKind(dto.SourceKind);
             if (seen.Contains(dto.ExternalId))
             {
                 continue;
@@ -501,7 +504,7 @@ public sealed class AccountingImportService
             {
                 WriteLedger(conn, externalKind, dto.ExternalId, LedgerStatus.NeedsReview,
                     localType: null, localId: null, note: "Depreciation is non-cash; skipped on import",
-                    metadata: dto.MetadataJson);
+                    metadata: SerializeParked(dto));
                 review++;
                 continue;
             }
@@ -512,7 +515,7 @@ public sealed class AccountingImportService
             {
                 WriteLedger(conn, externalKind, dto.ExternalId, LedgerStatus.Unmatched,
                     localType: null, localId: null, note: "No vendor / property / category mapping resolved",
-                    metadata: dto.MetadataJson);
+                    metadata: SerializeParked(dto));
                 review++;
                 continue;
             }
@@ -535,7 +538,7 @@ public sealed class AccountingImportService
             await _db.SaveChangesAsync(ct);
 
             WriteLedger(conn, externalKind, dto.ExternalId, LedgerStatus.Imported,
-                localType: LocalEntityKind.Expense, localId: expense.Id, note: null, metadata: dto.MetadataJson);
+                localType: LocalEntityKind.Expense, localId: expense.Id, note: null, metadata: SerializeParked(dto));
             imported++;
         }
 
@@ -825,18 +828,29 @@ public sealed class AccountingImportService
     // Ledger helpers
     // =====================================================================================
 
-    private async Task<HashSet<string>> LoadSeenExternalIdsAsync(
-        AccountingConnection conn, string type, CancellationToken ct)
-        => await LoadSeenExternalIdsAsync(conn, type, type, ct);
+    private Task<HashSet<string>> LoadSeenExternalIdsAsync(
+        AccountingConnection conn, string type, IReadOnlyList<string> batchIds, CancellationToken ct)
+        => LoadSeenExternalIdsAsync(conn, type, type, batchIds, ct);
 
+    /// <summary>
+    /// Which of THIS batch's external ids were already imported for this connection — bounded by the
+    /// batch (EF → <c>WHERE ExternalId = ANY(@batch)</c>), never the whole connection history, so the
+    /// query load does not grow with total imported volume (the DB-side/scale HARD RULE).
+    /// </summary>
     private async Task<HashSet<string>> LoadSeenExternalIdsAsync(
-        AccountingConnection conn, string typeA, string typeB, CancellationToken ct)
+        AccountingConnection conn, string typeA, string typeB, IReadOnlyList<string> batchIds, CancellationToken ct)
     {
+        if (batchIds.Count == 0)
+        {
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
+
         var ids = await _db.AccountingSyncMaps
             .Where(m => m.PortfolioId == conn.PortfolioId
                 && m.AccountingConnectionId == conn.Id
                 && m.Direction == LedgerDirection.Import
-                && (m.ExternalType == typeA || m.ExternalType == typeB))
+                && (m.ExternalType == typeA || m.ExternalType == typeB)
+                && batchIds.Contains(m.ExternalId))
             .Select(m => m.ExternalId)
             .ToListAsync(ct);
         return ids.ToHashSet(StringComparer.Ordinal);
@@ -986,58 +1000,33 @@ public sealed class AccountingImportService
         return DepositAccountHints.Any(h => lower.Contains(h, StringComparison.Ordinal));
     }
 
-    private static string ExternalKindForExpense(ExtExpenseDto dto)
-    {
-        // The provider tags Purchase vs Bill in the raw metadata via the response key; default Purchase.
-        if (!string.IsNullOrWhiteSpace(dto.MetadataJson))
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(dto.MetadataJson);
-                // A Bill carries a "Balance" + "DueDate"; a Purchase carries "PaymentType". Use the
-                // strongest discriminator: presence of "VendorRef" + "DueDate" ⇒ Bill.
-                if (doc.RootElement.TryGetProperty("DueDate", out _)
-                    && doc.RootElement.TryGetProperty("VendorRef", out _))
-                {
-                    return ExternalKind.Bill;
-                }
-            }
-            catch (JsonException)
-            {
-                // fall through
-            }
-        }
-
-        return ExternalKind.Purchase;
-    }
+    /// <summary>Map the provider's neutral <c>SourceKind</c> to the ledger's expense external type.</summary>
+    private static string NormalizeExpenseKind(string? sourceKind)
+        => string.Equals(sourceKind, ExternalKind.Bill, StringComparison.OrdinalIgnoreCase)
+            ? ExternalKind.Bill
+            : ExternalKind.Purchase;
 
     private static string BuildExpenseDescription(ExtExpenseDto dto)
         => !string.IsNullOrWhiteSpace(dto.ReferenceNumber)
             ? $"Imported expense {dto.ReferenceNumber}"
             : $"Imported expense {dto.ExternalId}";
 
-    private static ExtPaymentDto? DeserializePayment(AccountingSyncMap row)
-    {
-        var json = row.MetadataJson;
-        if (string.IsNullOrWhiteSpace(json))
-        {
-            return null;
-        }
+    // --- Parked-row payload: store + restore the NEUTRAL DTO (provider-agnostic; AC-1) -----------
+    //
+    // We park the provider-neutral DTO the provider already projected, NOT the raw provider payload —
+    // so a confirm-driven retry round-trips through pure neutral types and the generic import service
+    // never re-parses provider-shaped JSON (which would silently mis-read a different provider's payload).
 
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            return QuickBooksLikePayment(doc.RootElement, row.ExternalId);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
+    private static string SerializeParked<T>(T dto) => JsonSerializer.Serialize(dto);
+
+    private static ExtPaymentDto? DeserializePayment(AccountingSyncMap row)
+        => DeserializeNeutral<ExtPaymentDto>(row.MetadataJson);
 
     private static ExtExpenseDto? DeserializeExpense(AccountingSyncMap row)
+        => DeserializeNeutral<ExtExpenseDto>(row.MetadataJson);
+
+    private static T? DeserializeNeutral<T>(string? json) where T : class
     {
-        var json = row.MetadataJson;
         if (string.IsNullOrWhiteSpace(json))
         {
             return null;
@@ -1045,70 +1034,12 @@ public sealed class AccountingImportService
 
         try
         {
-            using var doc = JsonDocument.Parse(json);
-            return QuickBooksLikeExpense(doc.RootElement, row.ExternalId);
+            return JsonSerializer.Deserialize<T>(json);
         }
         catch (JsonException)
         {
             return null;
         }
-    }
-
-    // Minimal re-parse of the stored raw payload back into the neutral DTO for a confirm-driven retry.
-    private static ExtPaymentDto QuickBooksLikePayment(JsonElement el, string externalId)
-        => new(
-            ExternalId: externalId,
-            CustomerExternalId: el.TryGetProperty("CustomerRef", out var cr) && cr.TryGetProperty("value", out var crv) ? crv.GetString() : null,
-            Amount: el.TryGetProperty("TotalAmt", out var ta) && ta.ValueKind == JsonValueKind.Number ? ta.GetDecimal() : 0m,
-            TxnDateUtc: el.TryGetProperty("TxnDate", out var td) && DateTime.TryParse(td.GetString(), out var d) ? DateTime.SpecifyKind(d.Date, DateTimeKind.Utc) : DateTime.UtcNow.Date,
-            PaymentMethod: el.TryGetProperty("PaymentMethodRef", out var pm) && pm.TryGetProperty("value", out var pmv) ? pmv.GetString() : null,
-            ReferenceNumber: el.TryGetProperty("PaymentRefNum", out var pr) && pr.ValueKind == JsonValueKind.String ? pr.GetString() : null,
-            UpdatedAtUtc: null,
-            InvoiceExternalIds: null,
-            MetadataJson: el.GetRawText());
-
-    private static ExtExpenseDto QuickBooksLikeExpense(JsonElement el, string externalId)
-    {
-        string? vendorRef = el.TryGetProperty("VendorRef", out var vr) && vr.TryGetProperty("value", out var vrv)
-            ? vrv.GetString()
-            : el.TryGetProperty("EntityRef", out var er) && er.TryGetProperty("value", out var erv) ? erv.GetString() : null;
-
-        string? accountRef = null;
-        string? classRef = null;
-        if (el.TryGetProperty("Line", out var lines) && lines.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var line in lines.EnumerateArray())
-            {
-                if (line.TryGetProperty("AccountBasedExpenseLineDetail", out var detail))
-                {
-                    if (accountRef == null && detail.TryGetProperty("AccountRef", out var ar) && ar.TryGetProperty("value", out var arv))
-                    {
-                        accountRef = arv.GetString();
-                    }
-
-                    if (classRef == null && detail.TryGetProperty("ClassRef", out var cl) && cl.TryGetProperty("value", out var clv))
-                    {
-                        classRef = clv.GetString();
-                    }
-                }
-            }
-        }
-
-        if (accountRef == null && el.TryGetProperty("AccountRef", out var topAr) && topAr.TryGetProperty("value", out var topArv))
-        {
-            accountRef = topArv.GetString();
-        }
-
-        return new ExtExpenseDto(
-            ExternalId: externalId,
-            VendorExternalId: vendorRef,
-            AccountExternalId: accountRef,
-            ClassExternalId: classRef,
-            Amount: el.TryGetProperty("TotalAmt", out var ta) && ta.ValueKind == JsonValueKind.Number ? ta.GetDecimal() : 0m,
-            TxnDateUtc: el.TryGetProperty("TxnDate", out var td) && DateTime.TryParse(td.GetString(), out var d) ? DateTime.SpecifyKind(d.Date, DateTimeKind.Utc) : DateTime.UtcNow.Date,
-            ReferenceNumber: el.TryGetProperty("DocNumber", out var dn) && dn.ValueKind == JsonValueKind.String ? dn.GetString() : null,
-            UpdatedAtUtc: null,
-            MetadataJson: el.GetRawText());
     }
 
     private static Dictionary<string, DateTime> ParseCursors(string? json)
