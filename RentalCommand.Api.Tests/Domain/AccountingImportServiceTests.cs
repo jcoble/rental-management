@@ -298,8 +298,10 @@ public sealed class AccountingImportServiceTests : IDisposable
         };
         var settingsResolver = new AccountingAppSettingsResolver(new StaticOptionsMonitor<QuickBooksOptions>(qbOptions));
         var providerResolver = new AccountingProviderResolver(new[] { provider });
+        var tokenService = new AccountingTokenService(
+            _dp, providerResolver, settingsResolver, NullLogger<AccountingTokenService>.Instance);
         return new AccountingImportService(
-            _ctx.Db, _dp, providerResolver, settingsResolver,
+            _ctx.Db, _dp, providerResolver, settingsResolver, tokenService,
             NullLogger<AccountingImportService>.Instance);
     }
 

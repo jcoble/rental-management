@@ -191,8 +191,17 @@ public sealed class QuickBooksAccountingProvider : IAccountingProvider
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            // Never log the request body — it carries the code/refresh token.
+            // Never log the request/response body — it carries the code/refresh token. We DO inspect the
+            // body's OAuth `error` code (not logged) to distinguish a permanently-dead refresh token
+            // (invalid_grant → reconnect required) from a transient failure (retryable).
             _logger.LogError("QuickBooks {Operation} failed: {Status}", operation, response.StatusCode);
+
+            if (IsInvalidGrant(json))
+            {
+                throw new AccountingReconnectRequiredException(
+                    $"QuickBooks {operation} returned invalid_grant — the refresh token is dead; reconnect required.");
+            }
+
             throw new HttpRequestException(
                 $"QuickBooks {operation} failed: {(int)response.StatusCode} {response.StatusCode}",
                 inner: null, statusCode: response.StatusCode);
@@ -200,6 +209,29 @@ public sealed class QuickBooksAccountingProvider : IAccountingProvider
 
         return JsonSerializer.Deserialize<QbTokenResponse>(json, JsonOptions)
             ?? throw new InvalidOperationException($"QuickBooks returned empty {operation} response.");
+    }
+
+    /// <summary>
+    /// True when an OAuth token-endpoint error body carries <c>"error":"invalid_grant"</c> (Intuit's
+    /// signal that the refresh token is permanently dead). The body is parsed but never logged.
+    /// </summary>
+    private static bool IsInvalidGrant(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            return doc.RootElement.TryGetProperty("error", out var err)
+                && string.Equals(err.GetString(), "invalid_grant", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static AuthenticationHeaderValue BasicAuth(AccountingAppSettings settings)

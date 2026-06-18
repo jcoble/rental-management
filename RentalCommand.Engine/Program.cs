@@ -136,6 +136,8 @@ builder.Services.AddScoped<INoticeDraftGenerationService, NoticeDraftGenerationS
 builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingProviderResolver>();
 builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingAppSettingsResolver>();
 builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingImportService>();
+// Shared token refresh+persist service — used by the import path's refresh-on-401 AND the token-refresh worker.
+builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingTokenService>();
 builder.Services.AddAccountingProviders();
 
 // Engine resilience — persists worker heartbeats; consumed by the watchdog + health check.
@@ -154,6 +156,8 @@ builder.Services.AddHostedService<DailyBriefingDeliveryWorker>();
 builder.Services.AddHostedService<NoticeDraftWorker>();
 // Continuous accounting pull: imports each Connected + PullEnabled connection's deltas into the domain.
 builder.Services.AddHostedService<AccountingPullWorker>();
+// Proactive token refresh: rotates access tokens before expiry so the continuous pull never dies on a stale token.
+builder.Services.AddHostedService<AccountingTokenRefreshWorker>();
 
 // Watcher: monitors the advisory lock connection; triggers graceful shutdown if a newer Engine takes over.
 builder.Services.AddHostedService<AdvisoryLockWatcherService>();

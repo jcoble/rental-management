@@ -49,6 +49,7 @@ public sealed class AccountingImportService
     private readonly IDataProtector _protector;
     private readonly AccountingProviderResolver _providerResolver;
     private readonly AccountingAppSettingsResolver _settingsResolver;
+    private readonly AccountingTokenService _tokenService;
     private readonly ILogger<AccountingImportService> _logger;
 
     public AccountingImportService(
@@ -56,6 +57,7 @@ public sealed class AccountingImportService
         IDataProtectionProvider dataProtection,
         AccountingProviderResolver providerResolver,
         AccountingAppSettingsResolver settingsResolver,
+        AccountingTokenService tokenService,
         ILogger<AccountingImportService> logger)
     {
         _db = db;
@@ -63,6 +65,7 @@ public sealed class AccountingImportService
         _protector = dataProtection.CreateProtector("RentalCommand.Accounting.v1");
         _providerResolver = providerResolver;
         _settingsResolver = settingsResolver;
+        _tokenService = tokenService;
         _logger = logger;
     }
 
@@ -85,6 +88,8 @@ public sealed class AccountingImportService
         AccountingConnection connection, DateTime? since, CancellationToken ct)
     {
         var provider = _providerResolver.Resolve(connection.Provider);
+        // ctx is rebuilt (with a freshly-decrypted token) by PullWithRefreshAsync after a 401-driven
+        // refresh, so it is a mutable local the per-resource pulls read through that helper.
         var ctx = BuildCallContext(connection);
         var caps = provider.Capabilities;
 
@@ -97,7 +102,7 @@ public sealed class AccountingImportService
         {
             (customers, var c) = await SafeAsync("customers", connection, async () =>
             {
-                var pulled = await provider.PullCustomersAsync(ctx, GetCursor(cursors, "customers", since), ct);
+                var pulled = await PullWithRefreshAsync(connection, c => provider.PullCustomersAsync(c, GetCursor(cursors, "customers", since), ct), ct);
                 var n = await MapCustomersAsync(connection, pulled.Items, ct);
                 SetCursor(cursors, "customers", pulled.MaxUpdatedAtUtc);
                 return n;
@@ -108,7 +113,7 @@ public sealed class AccountingImportService
         {
             (vendors, _) = await SafeAsync("vendors", connection, async () =>
             {
-                var pulled = await provider.PullVendorsAsync(ctx, GetCursor(cursors, "vendors", since), ct);
+                var pulled = await PullWithRefreshAsync(connection, c => provider.PullVendorsAsync(c, GetCursor(cursors, "vendors", since), ct), ct);
                 var n = await MapVendorsAsync(connection, pulled.Items, ct);
                 SetCursor(cursors, "vendors", pulled.MaxUpdatedAtUtc);
                 return n;
@@ -119,7 +124,7 @@ public sealed class AccountingImportService
         {
             (accounts, _) = await SafeAsync("accounts", connection, async () =>
             {
-                var pulled = await provider.PullAccountsAsync(ctx, GetCursor(cursors, "accounts", since), ct);
+                var pulled = await PullWithRefreshAsync(connection, c => provider.PullAccountsAsync(c, GetCursor(cursors, "accounts", since), ct), ct);
                 var n = await MapAccountsAsync(connection, pulled.Items, ct);
                 SetCursor(cursors, "accounts", pulled.MaxUpdatedAtUtc);
                 return n;
@@ -131,7 +136,7 @@ public sealed class AccountingImportService
         {
             (payments, var rv) = await SafeAsync("payments", connection, async () =>
             {
-                var pulled = await provider.PullPaymentsAsync(ctx, GetCursor(cursors, "payments", since), ct);
+                var pulled = await PullWithRefreshAsync(connection, c => provider.PullPaymentsAsync(c, GetCursor(cursors, "payments", since), ct), ct);
                 var r = await ImportPaymentsAsync(connection, pulled.Items, ct);
                 SetCursor(cursors, "payments", pulled.MaxUpdatedAtUtc);
                 return r;
@@ -143,12 +148,37 @@ public sealed class AccountingImportService
         {
             (expenses, var rv) = await SafeAsync("expenses", connection, async () =>
             {
-                var pulled = await provider.PullExpensesAsync(ctx, GetCursor(cursors, "expenses", since), ct);
+                var pulled = await PullWithRefreshAsync(connection, c => provider.PullExpensesAsync(c, GetCursor(cursors, "expenses", since), ct), ct);
                 var r = await ImportExpensesAsync(connection, pulled.Items, ct);
                 SetCursor(cursors, "expenses", pulled.MaxUpdatedAtUtc);
                 return r;
             });
             review += rv;
+        }
+
+        // Local: run a provider pull; on a 401/unauthorized, refresh the token ONCE (provider-agnostic,
+        // via the shared AccountingTokenService), rebuild ctx with the new token, and retry once. A dead
+        // refresh token surfaces as a clear error (the connection is already flipped to NeedsReconnect).
+        async Task<T> PullWithRefreshAsync<T>(
+            AccountingConnection conn, Func<AcctCallCtx, Task<T>> call, CancellationToken token)
+        {
+            try
+            {
+                return await call(ctx);
+            }
+            catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+            {
+                var refresh = await _tokenService.RefreshAsync(_db, conn, token);
+                if (refresh.Outcome != AccountingTokenService.RefreshOutcome.Refreshed || refresh.AccessToken == null)
+                {
+                    throw new InvalidOperationException(
+                        $"Accounting access token for connection {conn.Id} is unauthorized and could not be refreshed — reconnect required.", ex);
+                }
+
+                // Rebuild ctx with the freshly-decrypted access token and retry the call once.
+                ctx = ctx with { AccessToken = refresh.AccessToken };
+                return await call(ctx);
+            }
         }
 
         // Persist delta cursors + last-sync on the connection.
