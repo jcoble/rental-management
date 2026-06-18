@@ -60,6 +60,17 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMoveOutStatementPdfGenerator, MoveOutStatementPdfGenerator>();
         services.AddScoped<IBankingService, BankingService>();
         services.AddHttpClient<IPlaidBankingProvider, PlaidBankingProvider>();
+
+        // --- accounting-integration backbone (provider-agnostic; QuickBooks is provider #1) ---
+        // The resolver dispatches the AccountingProvider enum to the registered IAccountingProvider
+        // implementations (none in Phase 1 — provider impls land in Phase 2). Scoped (mirrors
+        // EdiPlatform's ErpProviderResolver registration) so it can consume the providers Phase 2
+        // registers via AddHttpClient without a captive-dependency problem. The app-settings resolver
+        // maps the enum to the right *Options POCO so the backbone never reads QuickBooksOptions
+        // directly (AC-1).
+        services.AddScoped<AccountingProviderResolver>();
+        services.AddScoped<AccountingAppSettingsResolver>();
+        services.AddScoped<AccountingConnectionService>();
         // Per-lease carried-over balance from before the landlord migrated onto Rental Command.
         services.AddScoped<IOpeningBalanceService, OpeningBalanceService>();
 
