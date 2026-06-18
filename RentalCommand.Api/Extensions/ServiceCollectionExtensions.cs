@@ -75,6 +75,9 @@ public static class ServiceCollectionExtensions
         // AddAccountingProviders is shared with the Engine so the pull worker resolves the same
         // provider/resolver/import-engine the API uses for import-on-connect.
         services.AddScoped<AccountingImportService>();
+        // Phase 3 — the ONE provider-agnostic token refresh+persist service, shared by the import path's
+        // refresh-on-401 and the Engine's AccountingTokenRefreshWorker.
+        services.AddScoped<AccountingTokenService>();
         services.AddAccountingProviders();
         // Per-lease carried-over balance from before the landlord migrated onto Rental Command.
         services.AddScoped<IOpeningBalanceService, OpeningBalanceService>();
