@@ -1,7 +1,9 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
 
@@ -28,13 +30,16 @@ public class AccountingIntegrationsController : ManagementControllerBase
 {
     private readonly AccountingConnectionService _service;
     private readonly ILogger<AccountingIntegrationsController> _logger;
+    private readonly AppUrls _appUrls;
 
     public AccountingIntegrationsController(
         AccountingConnectionService service,
-        ILogger<AccountingIntegrationsController> logger)
+        ILogger<AccountingIntegrationsController> logger,
+        IOptions<AppUrls> appUrls)
     {
         _service = service;
         _logger = logger;
+        _appUrls = appUrls.Value;
     }
 
     /// <summary>One status card per available provider (connected or not) for the settings shell.</summary>
@@ -241,7 +246,15 @@ public class AccountingIntegrationsController : ManagementControllerBase
     private string BuildCallbackUrl() =>
         $"{Request.Scheme}://{Request.Host}{Request.PathBase}/api/v1/integrations/accounting/callback";
 
-    /// <summary>302 to the web settings accounting section with a single result hint query param.</summary>
-    private RedirectResult RedirectToSettings(string key, string value) =>
-        Redirect($"/settings?{key}={value}#accounting");
+    /// <summary>
+    /// 302 to the web "Connect your accounting" settings page with a single result hint query param.
+    /// In production the web app and API share an origin, so <see cref="AppUrls.WebBaseUrl"/> is empty
+    /// and the redirect stays relative. In local dev the API and web are different origins, so the
+    /// configured web base URL is prefixed (otherwise the relative path would land on the API host).
+    /// </summary>
+    private RedirectResult RedirectToSettings(string key, string value)
+    {
+        var webBase = (_appUrls.WebBaseUrl ?? string.Empty).TrimEnd('/');
+        return Redirect($"{webBase}/settings/accounting?{key}={value}");
+    }
 }

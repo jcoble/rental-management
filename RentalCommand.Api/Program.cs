@@ -64,6 +64,8 @@ builder.Services.Configure<RentalCommand.Core.Configuration.ScreeningConfig>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.ScreeningConfig.SectionName));
 builder.Services.Configure<RentalCommand.Core.Configuration.QuickBooksOptions>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.QuickBooksOptions.SectionName));
+builder.Services.Configure<RentalCommand.Core.Configuration.AppUrls>(
+    builder.Configuration.GetSection(RentalCommand.Core.Configuration.AppUrls.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
