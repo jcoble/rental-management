@@ -444,6 +444,8 @@ public sealed class QuickBooksAccountingProvider : IAccountingProvider
             TxnDateUtc: GetDate(e, "TxnDate"),
             ReferenceNumber: GetStringOrNull(e, "DocNumber"),
             UpdatedAtUtc: updated,
+            // The provider knows which list it pulled this from — "Purchase" or "Bill".
+            SourceKind: sourceType,
             MetadataJson: e.GetRawText()), updated);
     }
 

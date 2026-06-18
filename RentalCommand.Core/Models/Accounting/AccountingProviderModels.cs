@@ -167,7 +167,13 @@ public sealed record ExtPaymentDto(
     IReadOnlyList<string>? InvoiceExternalIds,
     string? MetadataJson);
 
-/// <summary>An external money-out transaction — QBO Purchase/Bill (maps → RC <c>Expense</c>).</summary>
+/// <summary>An external money-out transaction (maps → RC <c>Expense</c>).</summary>
+/// <param name="SourceKind">
+/// Neutral discriminator for the external object kind the PROVIDER pulled this from — the provider
+/// knows whether it was a QBO Purchase vs Bill (or a Xero Bank Transaction vs Bill), so the generic
+/// import service reads this instead of sniffing provider-shaped JSON. Use the <c>ExternalKind</c>
+/// vocabulary values ("Purchase" | "Bill").
+/// </param>
 public sealed record ExtExpenseDto(
     string ExternalId,
     string? VendorExternalId,
@@ -177,6 +183,7 @@ public sealed record ExtExpenseDto(
     DateTime TxnDateUtc,
     string? ReferenceNumber,
     DateTime? UpdatedAtUtc,
+    string SourceKind,
     string? MetadataJson);
 
 // --- Push docs (Rental Command → accounting) ------------------------------------
