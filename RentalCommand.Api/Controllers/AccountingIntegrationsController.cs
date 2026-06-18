@@ -1,9 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
-using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Models.Accounting;
 
@@ -30,16 +28,16 @@ public class AccountingIntegrationsController : ManagementControllerBase
 {
     private readonly AccountingConnectionService _service;
     private readonly ILogger<AccountingIntegrationsController> _logger;
-    private readonly AppUrls _appUrls;
+    private readonly IConfiguration _configuration;
 
     public AccountingIntegrationsController(
         AccountingConnectionService service,
         ILogger<AccountingIntegrationsController> logger,
-        IOptions<AppUrls> appUrls)
+        IConfiguration configuration)
     {
         _service = service;
         _logger = logger;
-        _appUrls = appUrls.Value;
+        _configuration = configuration;
     }
 
     /// <summary>One status card per available provider (connected or not) for the settings shell.</summary>
@@ -248,13 +246,15 @@ public class AccountingIntegrationsController : ManagementControllerBase
 
     /// <summary>
     /// 302 to the web "Connect your accounting" settings page with a single result hint query param.
-    /// In production the web app and API share an origin, so <see cref="AppUrls.WebBaseUrl"/> is empty
-    /// and the redirect stays relative. In local dev the API and web are different origins, so the
-    /// configured web base URL is prefixed (otherwise the relative path would land on the API host).
+    /// The OAuth callback carries no auth and may be hit cross-origin (in local dev the API and web
+    /// are different origins), so we redirect to the absolute web base URL rather than a relative path
+    /// that would resolve against the API host. Reuses the existing <c>App:WebBaseUrl</c> config the
+    /// email-verify and e-sign links already use (same key + dev fallback), so prod inherits the
+    /// correct web origin automatically.
     /// </summary>
     private RedirectResult RedirectToSettings(string key, string value)
     {
-        var webBase = (_appUrls.WebBaseUrl ?? string.Empty).TrimEnd('/');
+        var webBase = _configuration["App:WebBaseUrl"] ?? "https://localhost:5667";
         return Redirect($"{webBase}/settings/accounting?{key}={value}");
     }
 }
