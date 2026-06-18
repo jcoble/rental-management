@@ -1,9 +1,24 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     // Firebase (FCM push) — reads google-services.json at build time.
     id("com.google.gms.google-services")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// Release/upload signing config is read from android/key.properties (gitignored,
+// never committed). When the file is absent (e.g. a fresh clone or CI without the
+// secret) the release build falls back to debug signing so `flutter run --release`
+// still works locally — but the Play Store upload AAB must be produced on a machine
+// that has key.properties + upload-keystore.jks present.
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+val hasReleaseSigning = keystorePropertiesFile.exists()
+if (hasReleaseSigning) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -34,11 +49,29 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        // The `upload` config signs the Play Store AAB with our upload key.
+        // Only registered when key.properties is present (see hasReleaseSigning above).
+        if (hasReleaseSigning) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Sign with the upload key when key.properties is present (the only way the
+            // Play Store AAB should be built); otherwise fall back to debug keys so a
+            // local `flutter run --release` without the secret still works.
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
