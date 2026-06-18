@@ -128,6 +128,18 @@ builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<INoticeDraftService, NoticeDraftService>();
 builder.Services.AddScoped<INoticeDraftGenerationService, NoticeDraftGenerationService>();
 
+// Accounting-integration pull worker dependencies (provider-agnostic). The Engine does not call
+// AddDomainServices(), so the import engine + provider resolver/settings + the provider set are
+// registered explicitly here; AddAccountingProviders() (shared with the API) also binds QuickBooks
+// creds + registers each IAccountingProvider via AddHttpClient. IDataProtection is configured above
+// with the same SetApplicationName/keys path as the API, so tokens encrypted by the API decrypt here.
+builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingProviderResolver>();
+builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingAppSettingsResolver>();
+builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingImportService>();
+// Shared token refresh+persist service — used by the import path's refresh-on-401 AND the token-refresh worker.
+builder.Services.AddScoped<RentalCommand.Api.Services.Domain.AccountingTokenService>();
+builder.Services.AddAccountingProviders();
+
 // Engine resilience — persists worker heartbeats; consumed by the watchdog + health check.
 // Scoped (it opens its own scope per call to isolate DB access).
 builder.Services.AddScoped<EngineStatusReporter>();
@@ -142,6 +154,10 @@ builder.Services.AddHostedService<LateFeeWorker>();
 builder.Services.AddHostedService<LeaseExpiryReminderWorker>();
 builder.Services.AddHostedService<DailyBriefingDeliveryWorker>();
 builder.Services.AddHostedService<NoticeDraftWorker>();
+// Continuous accounting pull: imports each Connected + PullEnabled connection's deltas into the domain.
+builder.Services.AddHostedService<AccountingPullWorker>();
+// Proactive token refresh: rotates access tokens before expiry so the continuous pull never dies on a stale token.
+builder.Services.AddHostedService<AccountingTokenRefreshWorker>();
 
 // Watcher: monitors the advisory lock connection; triggers graceful shutdown if a newer Engine takes over.
 builder.Services.AddHostedService<AdvisoryLockWatcherService>();
