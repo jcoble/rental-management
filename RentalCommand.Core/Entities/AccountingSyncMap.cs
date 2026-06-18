@@ -46,6 +46,14 @@ public class AccountingSyncMap : IPortfolioScoped
     public string? LastError { get; set; }
     public DateTime? LastAttemptAt { get; set; }
 
+    /// <summary>
+    /// The raw external transaction payload (jsonb), stashed at first sight so a confirm-driven retry
+    /// can re-resolve a parked (<c>NeedsReview</c>/<c>Unmatched</c>) row into a real RC row WITHOUT a
+    /// fresh provider pull. Null for <c>Imported</c> rows once consumed is acceptable but we keep it for
+    /// audit/debug. Provider-neutral: it is whatever the provider put in the DTO's <c>MetadataJson</c>.
+    /// </summary>
+    public string? MetadataJson { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; }
 

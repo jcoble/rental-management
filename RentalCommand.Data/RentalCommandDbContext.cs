@@ -416,6 +416,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.LocalEntityType).HasMaxLength(40);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(20);
             entity.Property(e => e.LastError).HasMaxLength(2000);
+            // Raw external payload stashed for a confirm-driven retry (Postgres jsonb; mapped to TEXT on SQLite).
+            entity.Property(e => e.MetadataJson).HasColumnType("jsonb");
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.AccountingConnectionId);
             // The idempotency ledger key (AC-5): one row per external txn per direction.
