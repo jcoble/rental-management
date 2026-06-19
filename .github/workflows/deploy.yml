@@ -176,6 +176,7 @@ jobs:
              echo 'IMAGE_TAG=$TAG' >> .env.tmp
              mv .env.tmp .env
              chmod 600 .env
+             docker image prune -af >/dev/null 2>&1 || true   # free disk BEFORE pulling: clears old *tagged* builds (api:<sha> etc.) that pile up each deploy; the '-f' below only clears dangling, so the 38G box used to fill and the pull failed with 'no space left on device' (2026-06-18). Running images stay (in use) = 1-version rollback kept.
              docker compose -f deploy/docker-compose.prod.yml --env-file .env pull api engine web
              docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d
              docker image prune -f >/dev/null 2>&1 || true
