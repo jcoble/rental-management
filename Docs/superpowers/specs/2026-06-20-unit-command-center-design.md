@@ -41,9 +41,9 @@ The app is **operation-centric**: rent, leases, maintenance, documents, and expe
 
 Matches `rental-command-unit-command-center.png`:
 
-1. **Header — unit health summary.** Property + unit number + current state; chips for rent state, open repairs, lease-ends-in, docs-needing-review, current tenant. Primary actions: **Scan / Upload** (visually prominent — core product strength) and a **New** quick-action menu (post payment / add expense / create work order / upload document). No explicit "Change Stage" button in v1 (see §5).
-2. **Lifecycle rail** — the 9 stages with the current one highlighted, prior ones marked done, plus a **next-best-action** line. Derived, read-only (§5).
-3. **Work tabs** — Overview · Lease · Rent · Maintenance · Documents · Expenses · Timeline (§6). Each scoped to this unit.
+1. **Header — unit health summary.** Property + unit number + current state; chips for rent state, open repairs, lease-ends-in, docs-needing-review, current tenant. Primary action: **Scan / Upload** (visually prominent — core product strength). Domain work (post payment, add expense, create work order, …) is NOT launched from the header — it happens **inline in the relevant tab** (§7). No explicit "Change Stage" button in v1 (see §5).
+2. **Lifecycle rail** — a **clickable workflow stepper** of the 9 stages (current highlighted, prior done, future upcoming) with a **next-best-action** line; clicking a stage jumps to its tab. Derived, read-only (§5). Direct analog of EdiPlatform's order workflow stepper (`WorkflowStep.svelte`).
+3. **Work tabs** — Overview · Lease · Rent · Maintenance · Documents · Expenses · Timeline (§6). Each is a genuine **inline workspace** — you do the work right there (view + inline edit/create), scoped to this unit, not a launchpad (§7).
 4. **Persistent timeline right-rail** — recent unit history, visible across tabs; reuse `ActivityFeed` (§11).
 
 ## 5. Lifecycle rail — derived stage
@@ -79,7 +79,7 @@ This is a best-effort heuristic; edge cases resolve to the nearest sensible stag
 
 ## 6. Tabs (shows / actions / data source)
 
-Each tab reuses an **existing filtered list endpoint** for its content; the only new endpoint is the dashboard aggregate (§8). All actions open in the **Command Drawer** (§7), not modals.
+Each tab reuses an **existing filtered list endpoint** for its content; the only new endpoint is the dashboard aggregate (§8). All actions happen **inline in the tab** — view + an edit-mode toggle on cards, and inline create forms — built with the **same inline-form components the rest of the app already uses**, matching EdiPlatform's order-detail tabs (§7). No modals, no drawers.
 
 - **Overview** — snapshot (beds/baths/market rent), current tenant + lease summary, rent state, open repairs, docs/AI awaiting review, next actions, recent activity. *Source:* dashboard aggregate.
 - **Lease** — current lease (status, dates, rent, deposit, renewal terms) + signed lease & related docs. *Actions:* upload/extract lease, generate & send renewal, mark signed. *Source:* the unit's current lease (`GET /leases/{id}`); reuse existing lease detail components.
@@ -89,9 +89,18 @@ Each tab reuses an **existing filtered list endpoint** for its content; the only
 - **Expenses** — all unit-relevant expenses (incl. non-maintenance: appliances, permits, unit-specific costs). *Actions:* create expense, attach receipt, link to a work order. *Source:* expenses where `UnitId = unit` OR `WorkOrderId ∈` the unit's work orders (requires §9).
 - **Timeline** — deep, filterable full history (the right-rail is the always-on summary; this tab is the archive). *Source:* §11.
 
-## 7. Command Drawer pattern
+## 7. Inline tab forms (existing-system + EdiPlatform order-detail pattern)
 
-Adopt a reusable right-side **Command Drawer** (reuse `web/src/lib/components/ui/drawer/*`) for the unit page's actions — scan review, post payment, create work order, add expense, etc. — with unit context preloaded. This replaces modals **for the new unit-page actions only**; do not rip out modals elsewhere. The drawer always shows context (unit, what will be created/updated) and confirms with an explicit primary action.
+Work happens **inline in the tab** — never in a drawer or modal. Forms on the tabs are **inline forms built with the same form components/conventions the rest of Rental Command already uses** (the create/edit forms on the current lease / work-order / payment / expense pages), and they match **EdiPlatform's order-detail tab forms**:
+
+- The page = **header → contextual banners → lifecycle stepper (the rail) → sticky tab bar → active tab content**.
+- Each tab renders **lists + expandable cards**; a card has a **view mode** and an **edit mode** toggled by an Edit button on the same card (`editing = !editing`), saving in place.
+- **Create** is an **inline form** within the tab (e.g. the Rent tab shows an inline "post payment" form below the payments list; Maintenance shows an inline "new ticket" form), reusing the app's existing form fields/validation — not a popped surface.
+- Eager client validation + the app's existing server-validation/error display; on success, resync via the app's normal invalidation (TanStack Query / `invalidateAll`).
+- Svelte 5 runes (`$state`/`$derived`/`$effect`).
+- Reference: EdiPlatform `ediplatform-web/src/lib/components/order-workspace/*` + `customer/orders/[id]/+page.svelte`; plus Rental Command's own existing detail/edit forms for component parity.
+
+**Do NOT** build a command-drawer host or route tab actions through `ui/drawer`. (`ui/drawer` may remain in use elsewhere in the app; unit-page work is inline.)
 
 ## 8. Backend — `GET /api/v1/units/{id}/dashboard`
 
@@ -156,7 +165,7 @@ This is a fixed, small number of queries regardless of data size (not N+1). The 
 
 ## 12. Reuse inventory
 
-- **Components:** `ActivityFeed.svelte`, `WorkOrderTimeline.svelte`, `StatusBadge.svelte` (`web/src/lib/components/shared/`); `ui/drawer/*`, `ui/tabs/*`; the `DataGrid` used on existing list pages; `AppShell.svelte` sidebar.
+- **Components:** `ActivityFeed.svelte`, `WorkOrderTimeline.svelte`, `StatusBadge.svelte` (`web/src/lib/components/shared/`); `ui/tabs/*`; the existing **inline create/edit form** components used on the current lease/work-order/payment/expense pages; the `DataGrid` used on existing list pages; `AppShell.svelte` sidebar. **Inline-workspace reference:** EdiPlatform `order-workspace/*` + `customer/orders/[id]/+page.svelte`. (`ui/drawer` is NOT used for unit-page actions.)
 - **Scan/draft-confirm:** `/scan/[draftId]`, `/scan/batch/[id]` + extraction-review UI.
 - **API client:** `web/src/lib/api/client.ts` (`fetchApi`/`api`) — bearer + refresh-on-401.
 - **Backend pattern:** Portfolio dashboard service/DTO; `AuthenticatedPortfolioControllerBase`; enums serialize as **strings** (`JsonStringEnumConverter`) — keep new DTO enums string-valued.
