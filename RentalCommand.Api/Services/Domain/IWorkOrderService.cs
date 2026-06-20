@@ -9,7 +9,7 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public interface IWorkOrderService
 {
-    Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? vendorId, ListQuery query, CancellationToken ct = default);
+    Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? vendorId, ListQuery query, CancellationToken ct = default);
 
     /// <summary>
     /// Work-order detail including the status <see cref="WorkOrderDetailResponse.Timeline"/>

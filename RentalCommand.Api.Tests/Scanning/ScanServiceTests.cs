@@ -776,7 +776,7 @@ public class ScanServiceTests : IDisposable
             return Task.FromResult(_response);
         }
 
-        public Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? vendorId, ListQuery query, CancellationToken ct = default)
+        public Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? vendorId, ListQuery query, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<WorkOrderDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)

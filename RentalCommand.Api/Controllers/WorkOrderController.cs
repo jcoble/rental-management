@@ -33,9 +33,9 @@ public class WorkOrderController : AuthenticatedPortfolioControllerBase
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<WorkOrderResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<WorkOrderResponse>>> List(
-        [FromQuery] ListQuery query, [FromQuery] int? propertyId, [FromQuery] int? vendorId, CancellationToken ct)
+        [FromQuery] ListQuery query, [FromQuery] int? propertyId, [FromQuery] int? unitId, [FromQuery] int? vendorId, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), propertyId, vendorId, query, ct);
+        var items = await _service.ListAsync(GetPortfolioId(), propertyId, unitId, vendorId, query, ct);
         return Ok(items);
     }
 
