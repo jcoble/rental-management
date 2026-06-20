@@ -71,6 +71,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<StripeWebhookEvent> StripeWebhookEvents => Set<StripeWebhookEvent>();
     public DbSet<AutopayEnrollment> AutopayEnrollments => Set<AutopayEnrollment>();
 
+    // Mortgages / debt service (true cash-flow + year-end picture)
+    public DbSet<Loan> Loans => Set<Loan>();
+    public DbSet<LoanPayment> LoanPayments => Set<LoanPayment>();
+
     // Engine resilience — worker heartbeats written by each background worker every poll cycle
     public DbSet<EngineWorkerHeartbeat> EngineWorkerHeartbeats => Set<EngineWorkerHeartbeat>();
 
@@ -812,6 +816,56 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.ExpenseId);
         });
 
+        modelBuilder.Entity<Loan>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Lender).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.OriginalAmount).HasPrecision(18, 2);
+            entity.Property(e => e.CurrentBalance).HasPrecision(18, 2);
+            entity.Property(e => e.AnnualInterestRatePct).HasPrecision(9, 4);
+            entity.Property(e => e.MonthlyPrincipalInterest).HasPrecision(18, 2);
+            entity.Property(e => e.MonthlyEscrow).HasPrecision(18, 2);
+            entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.Property(e => e.Status).HasConversion<int>();
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.PropertyId);
+            entity.HasIndex(e => e.Status);
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<LoanPayment>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.PeriodKey).IsRequired().HasMaxLength(7);
+            entity.Property(e => e.InterestAmount).HasPrecision(18, 2);
+            entity.Property(e => e.PrincipalAmount).HasPrecision(18, 2);
+            entity.Property(e => e.EscrowAmount).HasPrecision(18, 2);
+            entity.Property(e => e.TotalAmount).HasPrecision(18, 2);
+            entity.Property(e => e.BalanceAfter).HasPrecision(18, 2);
+            entity.Property(e => e.Status).HasConversion<int>();
+            // Idempotency: at most one amortization row per (loan, period). The DebtServiceWorker's
+            // own AnyAsync check is the primary guard; this unique index is the race backstop.
+            entity.HasIndex(e => new { e.LoanId, e.PeriodKey }).IsUnique();
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.LoanId);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Loan)
+                .WithMany(l => l.Payments)
+                .HasForeignKey(e => e.LoanId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
         modelBuilder.Entity<Vendor>(entity =>
         {
             entity.HasKey(e => e.Id);
@@ -1335,6 +1389,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<OpeningBalance>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<SecurityDepositHolding>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
         modelBuilder.Entity<SignatureRequest>().HasQueryFilter(e => e.Lease!.DeletedAt == null);
+
+        // Dependent of Loan (Loan has its own `DeletedAt == null`). The amortization rows disappear
+        // when the loan is soft-deleted, so a deleted loan's interest never leaks into a report.
+        modelBuilder.Entity<LoanPayment>().HasQueryFilter(e => e.Loan!.DeletedAt == null);
 
         // Dependents of Portfolio (Portfolio has `DeletedAt == null`).
         modelBuilder.Entity<Appointment>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
