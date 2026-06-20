@@ -3,27 +3,15 @@
 	import { money } from './money';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import {
-		ScanLine,
-		Plus,
-		ChevronDown,
-		Wrench,
-		Receipt,
-		DollarSign,
-		FileUp,
-		CircleAlert,
-	} from '@lucide/svelte';
-	import type { UnitDrawerAction } from './drawer-actions';
+	import { ScanLine, CircleAlert } from '@lucide/svelte';
 
 	let {
 		dashboard,
 		onScan,
-		onAction,
 	}: {
 		dashboard: UnitDashboard;
+		/** Scan / Upload — routes into the scan → draft → confirm flow. Domain work happens inline in tabs. */
 		onScan: () => void;
-		onAction: (action: UnitDrawerAction) => void;
 	} = $props();
 
 	const header = $derived(dashboard.header);
@@ -66,37 +54,13 @@
 			</p>
 		</div>
 
-		<!-- Primary actions: Scan/Upload is visually prominent (core product strength) + a New menu. -->
+		<!-- Primary action: Scan/Upload is visually prominent (core product strength). Domain work (post
+		     payment, add expense, create work order) happens inline in the relevant tab, not here. -->
 		<div class="flex shrink-0 items-center gap-2">
 			<Button onclick={onScan} class="gap-2" data-testid="unit-scan-button">
 				<ScanLine class="h-4 w-4" />
 				Scan / Upload
 			</Button>
-			<DropdownMenu.Root>
-				<DropdownMenu.Trigger>
-					{#snippet child({ props })}
-						<Button {...props} variant="outline" class="gap-1.5" data-testid="unit-new-menu">
-							<Plus class="h-4 w-4" />
-							New
-							<ChevronDown class="h-4 w-4" />
-						</Button>
-					{/snippet}
-				</DropdownMenu.Trigger>
-				<DropdownMenu.Content align="end" class="w-52">
-					<DropdownMenu.Item onSelect={() => onAction('post-payment')} data-testid="unit-new-payment">
-						<DollarSign class="mr-2 h-4 w-4" /> Post payment
-					</DropdownMenu.Item>
-					<DropdownMenu.Item onSelect={() => onAction('add-expense')} data-testid="unit-new-expense">
-						<Receipt class="mr-2 h-4 w-4" /> Add expense
-					</DropdownMenu.Item>
-					<DropdownMenu.Item onSelect={() => onAction('create-work-order')} data-testid="unit-new-work-order">
-						<Wrench class="mr-2 h-4 w-4" /> Create work order
-					</DropdownMenu.Item>
-					<DropdownMenu.Item onSelect={() => onAction('upload-document')} data-testid="unit-new-document">
-						<FileUp class="mr-2 h-4 w-4" /> Upload document
-					</DropdownMenu.Item>
-				</DropdownMenu.Content>
-			</DropdownMenu.Root>
 		</div>
 	</div>
 
