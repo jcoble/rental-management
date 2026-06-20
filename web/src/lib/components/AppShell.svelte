@@ -118,6 +118,7 @@
 			icon: Briefcase,
 			items: [
 				{ href: '/properties', label: 'Properties', icon: Building, roles: ['Admin', 'Manager', 'Agent'] },
+				{ href: '/units', label: 'Units', icon: Home, roles: ['Admin', 'Manager', 'Agent'] },
 				{ href: '/tenants', label: 'Tenants', icon: Users, roles: ['Admin', 'Manager', 'Agent'] },
 				{ href: '/leases', label: 'Leases', icon: FileText, roles: ['Admin', 'Manager', 'Agent'] },
 				{ href: '/applications', label: 'Applications', icon: ClipboardList, roles: ['Admin', 'Manager', 'Agent'] }
@@ -180,6 +181,7 @@
 		'/accounting': 'account_balance_wallet',
 		'/reports': 'summarize',
 		'/properties': 'apartment',
+		'/units': 'home',
 		'/tenants': 'group',
 		'/leases': 'description',
 		'/applications': 'assignment',
