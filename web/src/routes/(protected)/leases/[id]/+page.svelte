@@ -660,7 +660,7 @@
 								{/if}
 								{#if lease.propertyName}
 									<span aria-hidden="true">·</span>
-									<span><a href="/properties/{lease.propertyId}" class="underline-offset-4 hover:underline">{lease.propertyName}</a>{#if lease.unitNumber}, Unit {lease.unitNumber}{/if}</span>
+									<span><a href="/properties/{lease.propertyId}" class="underline-offset-4 hover:underline">{lease.propertyName}</a>{#if lease.unitNumber}, <a href="/units/{lease.unitId}?tab=lease" class="underline-offset-4 hover:underline" data-testid="lease-detail-unit-link">Unit {lease.unitNumber}</a>{/if}</span>
 								{/if}
 							</div>
 						</div>

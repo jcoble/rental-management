@@ -24,7 +24,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { AlertCircle, Building2, Pencil, Plus, Save, Trash2, X, MapPin, Info } from '@lucide/svelte';
+	import { AlertCircle, Building2, Pencil, Plus, Save, Trash2, X, MapPin, Info, ArrowRight } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -318,6 +318,14 @@
 
 {#snippet unitActionsCell(u: Unit)}
 	<div class="flex items-center justify-end gap-1" onclick={(e) => e.stopPropagation()} role="none">
+		<a
+			href="/units/{u.id}"
+			data-testid="unit-open"
+			class="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+			aria-label="Open unit"
+		>
+			<ArrowRight class="h-3.5 w-3.5" />
+		</a>
 		<button
 			type="button"
 			data-testid="unit-edit"
@@ -545,7 +553,7 @@
 				loading={unitsQuery.isLoading}
 				emptyMessage="No units on this property yet."
 				getRowKey={(u) => u.id}
-				onRowClick={(u) => openEditUnit(u)}
+				onRowClick={(u) => goto(`/units/${u.id}`)}
 				pageSize={20}
 				data-testid="property-units-grid"
 			>
