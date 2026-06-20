@@ -1,0 +1,19 @@
+using RentalCommand.Api.DTOs;
+
+namespace RentalCommand.Api.Services.Domain;
+
+/// <summary>
+/// Portfolio-scoped CRUD for per-property loans (mortgages) plus read access to a loan's generated
+/// amortization schedule. Every inbound property reference is validated in-portfolio (IDOR guard).
+/// </summary>
+public interface ILoanService
+{
+    Task<IReadOnlyList<LoanResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default);
+    Task<LoanResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
+    Task<LoanResponse?> CreateAsync(int portfolioId, CreateLoanRequest request, CancellationToken ct = default);
+    Task<LoanResponse?> UpdateAsync(int portfolioId, int id, UpdateLoanRequest request, CancellationToken ct = default);
+    Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
+
+    /// <summary>The loan's amortization rows (oldest first), or null when the loan is out of scope.</summary>
+    Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(int portfolioId, int loanId, CancellationToken ct = default);
+}
