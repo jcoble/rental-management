@@ -967,6 +967,9 @@ public class ScanServiceTests : IDisposable
         public Task<IReadOnlyList<UnitResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
+        public Task<IReadOnlyList<UnitHealthResponse>> ListWithHealthAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
         public Task<UnitResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
