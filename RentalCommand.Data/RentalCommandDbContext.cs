@@ -730,6 +730,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         {
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.AmountPaid).HasPrecision(18, 2);
             entity.Property(e => e.Method).HasMaxLength(100);
             entity.Property(e => e.ExternalReference).HasMaxLength(200);
             entity.Property(e => e.Notes).HasMaxLength(2000);
