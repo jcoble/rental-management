@@ -32,6 +32,20 @@ public class UnitController : AuthenticatedPortfolioControllerBase
         return Ok(items);
     }
 
+    /// <summary>
+    /// Units with cheap health badges for the <c>/units</c> page (spec section 10): status, open-WO count,
+    /// days-until-lease-end, a unit-document count, and a simplified stage label. One projection query —
+    /// the list never calls the per-unit dashboard per row.
+    /// </summary>
+    [HttpGet("list-with-health")]
+    [ProducesResponseType(typeof(IReadOnlyList<UnitHealthResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<UnitHealthResponse>>> ListWithHealth(
+        [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
+    {
+        var items = await _service.ListWithHealthAsync(GetPortfolioId(), propertyId, query, ct);
+        return Ok(items);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(UnitResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
