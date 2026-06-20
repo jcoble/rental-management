@@ -15,10 +15,12 @@ namespace RentalCommand.Api.Controllers;
 public class UnitController : AuthenticatedPortfolioControllerBase
 {
     private readonly IUnitService _service;
+    private readonly IUnitDashboardService _dashboard;
 
-    public UnitController(IUnitService service)
+    public UnitController(IUnitService service, IUnitDashboardService dashboard)
     {
         _service = service;
+        _dashboard = dashboard;
     }
 
     [HttpGet]
@@ -37,6 +39,33 @@ public class UnitController : AuthenticatedPortfolioControllerBase
     {
         var item = await _service.GetAsync(GetPortfolioId(), id, ct);
         return item == null ? NotFound(new { error = "Unit not found" }) : Ok(item);
+    }
+
+    /// <summary>
+    /// At-a-glance Unit Command Center aggregate (header chips, current lease/tenant, derived lifecycle
+    /// stage + next-best-action, capped overview, recent timeline). Portfolio-scoped; 404 when the unit
+    /// is not in the caller's portfolio. Per-tab heavy data loads separately via the filtered endpoints.
+    /// </summary>
+    [HttpGet("{id:int}/dashboard")]
+    [ProducesResponseType(typeof(UnitDashboardResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<UnitDashboardResponse>> Dashboard(int id, CancellationToken ct)
+    {
+        var dashboard = await _dashboard.GetDashboardAsync(GetPortfolioId(), id, ct);
+        return dashboard == null ? NotFound(new { error = "Unit not found" }) : Ok(dashboard);
+    }
+
+    /// <summary>
+    /// The unit's full history (deep timeline tab): a bounded <c>AuditLog</c> union over the unit and its
+    /// children, newest first, paged via <c>?skip&amp;take</c>. Out-of-scope units return an empty list.
+    /// </summary>
+    [HttpGet("{id:int}/timeline")]
+    [ProducesResponseType(typeof(IReadOnlyList<AuditEntryResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IReadOnlyList<AuditEntryResponse>>> Timeline(
+        int id, [FromQuery] ListQuery query, CancellationToken ct)
+    {
+        var items = await _dashboard.GetTimelineAsync(GetPortfolioId(), id, query.NormalizedSkip, query.NormalizedTake, ct);
+        return Ok(items);
     }
 
     [HttpPost]
