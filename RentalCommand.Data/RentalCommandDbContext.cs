@@ -71,9 +71,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<StripeWebhookEvent> StripeWebhookEvents => Set<StripeWebhookEvent>();
     public DbSet<AutopayEnrollment> AutopayEnrollments => Set<AutopayEnrollment>();
 
-    // Mortgages / debt service (true cash-flow + year-end picture)
+    // Mortgages / debt service + recurring costs (true cash-flow + year-end picture)
     public DbSet<Loan> Loans => Set<Loan>();
     public DbSet<LoanPayment> LoanPayments => Set<LoanPayment>();
+    public DbSet<RecurringExpense> RecurringExpenses => Set<RecurringExpense>();
 
     // Engine resilience — worker heartbeats written by each background worker every poll cycle
     public DbSet<EngineWorkerHeartbeat> EngineWorkerHeartbeats => Set<EngineWorkerHeartbeat>();
@@ -869,6 +870,33 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(l => l.Payments)
                 .HasForeignKey(e => e.LoanId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<RecurringExpense>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Description).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.Amount).HasPrecision(18, 2);
+            entity.Property(e => e.Category).HasConversion<int>();
+            entity.Property(e => e.Frequency).HasConversion<int>();
+            entity.Property(e => e.Notes).HasMaxLength(2000);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.PropertyId);
+            // The worker scans active, due templates across all portfolios — index the due predicate.
+            entity.HasIndex(e => new { e.Active, e.NextRunDate });
+            entity.HasQueryFilter(e => e.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.Unit)
+                .WithMany()
+                .HasForeignKey(e => e.UnitId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<Vendor>(entity =>

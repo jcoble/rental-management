@@ -1,0 +1,53 @@
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
+
+namespace RentalCommand.Core.Entities;
+
+/// <summary>
+/// A standing cost entered once (insurance, property tax, HOA, management fee, …) that the Engine
+/// materializes into <see cref="Expense"/> rows on a schedule, so it flows into every report without
+/// re-entry (spec §8). Idempotency is by schedule advancement: when <see cref="NextRunDate"/> arrives
+/// the worker creates the period's expense and rolls <see cref="NextRunDate"/> forward, so a re-run
+/// never double-creates the same period.
+/// </summary>
+public class RecurringExpense : IAuditable, IPortfolioScoped
+{
+    public int Id { get; set; }
+    public int PortfolioId { get; set; }
+
+    /// <summary>Property this cost belongs to (optional; null = portfolio-level).</summary>
+    public int? PropertyId { get; set; }
+
+    /// <summary>Unit this cost belongs to (optional).</summary>
+    public int? UnitId { get; set; }
+
+    /// <summary>Schedule E category stamped on the generated expense rows.</summary>
+    public ScheduleECategory Category { get; set; } = ScheduleECategory.Other;
+
+    /// <summary>Short description stamped on the generated expense rows.</summary>
+    public string Description { get; set; } = string.Empty;
+
+    public decimal Amount { get; set; }
+
+    public RecurringExpenseFrequency Frequency { get; set; } = RecurringExpenseFrequency.Monthly;
+
+    /// <summary>First date the cost applies; the schedule is anchored here.</summary>
+    public DateTime StartDate { get; set; }
+
+    /// <summary>Next date an expense should be materialized (advances by <see cref="Frequency"/>).</summary>
+    public DateTime NextRunDate { get; set; }
+
+    public bool Active { get; set; } = true;
+
+    public string? Notes { get; set; }
+
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+
+    /// <summary>Soft-delete marker; null means active.</summary>
+    public DateTime? DeletedAt { get; set; }
+
+    public Portfolio? Portfolio { get; set; }
+    public Property? Property { get; set; }
+    public Unit? Unit { get; set; }
+}
