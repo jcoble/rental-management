@@ -8,6 +8,7 @@ public class Expense : IAuditable, IPortfolioScoped
     public int Id { get; set; }
     public int PortfolioId { get; set; }
     public int? PropertyId { get; set; }
+    public int? UnitId { get; set; }
     public int? VendorId { get; set; }
     public int? WorkOrderId { get; set; }
     public ScheduleECategory Category { get; set; } = ScheduleECategory.Other;
@@ -49,6 +50,7 @@ public class Expense : IAuditable, IPortfolioScoped
 
     public Portfolio? Portfolio { get; set; }
     public Property? Property { get; set; }
+    public Unit? Unit { get; set; }
     public Vendor? Vendor { get; set; }
     public WorkOrder? WorkOrder { get; set; }
 
