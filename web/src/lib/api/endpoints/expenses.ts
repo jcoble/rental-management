@@ -3,9 +3,9 @@ import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
 
 export const expenses = {
-	list: (portfolioId: number, params?: ListParams & { propertyId?: number }) => {
-		const { propertyId, ...list } = params ?? {};
-		return api.get<Expense[]>(`/expenses${buildListQuery(list, { portfolioId, propertyId })}`);
+	list: (portfolioId: number, params?: ListParams & { propertyId?: number; unitId?: number; workOrderId?: number }) => {
+		const { propertyId, unitId, workOrderId, ...list } = params ?? {};
+		return api.get<Expense[]>(`/expenses${buildListQuery(list, { portfolioId, propertyId, unitId, workOrderId })}`);
 	},
 	get: (id: number) => api.get<Expense>(`/expenses/${id}`),
 	create: (data: Record<string, unknown>) => api.post<Expense>('/expenses', data),

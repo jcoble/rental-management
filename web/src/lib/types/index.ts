@@ -315,6 +315,7 @@ export interface Expense {
 	id: number;
 	portfolioId: number;
 	propertyId?: number;
+	unitId?: number;
 	vendorId?: number;
 	workOrderId?: number;
 	category: string;
@@ -330,6 +331,7 @@ export interface Expense {
 	notes?: string;
 	receiptData?: string;
 	propertyName?: string;
+	unitNumber?: string;
 	vendorName?: string;
 	workOrderTitle?: string;
 	createdAt: string;
