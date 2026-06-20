@@ -11,6 +11,17 @@ public class Payment : IAuditable, IPortfolioScoped
     public PaymentType PaymentType { get; set; } = PaymentType.Rent;
     public PaymentStatus Status { get; set; } = PaymentStatus.Scheduled;
     public decimal Amount { get; set; }
+
+    /// <summary>
+    /// Cash actually collected against this charge, when it differs from <see cref="Amount"/>. Only
+    /// meaningful for a <see cref="PaymentStatus.Partial"/> payment, where it is the amount paid so far
+    /// (strictly between 0 and <see cref="Amount"/>); the unpaid remainder (<c>Amount − AmountPaid</c>)
+    /// is what is still owed. A <see cref="PaymentStatus.Paid"/> payment leaves this null and is treated
+    /// as fully collected (the whole <see cref="Amount"/>); Scheduled/Late/Waived/etc. leave it null.
+    /// Receivables/collected aggregations read it so a Partial row contributes its real split.
+    /// </summary>
+    public decimal? AmountPaid { get; set; }
+
     public DateTime DueDate { get; set; }
     public DateTime? PaidDate { get; set; }
     public string? Method { get; set; }
