@@ -10,6 +10,7 @@ public class ExpenseResponse
     public int Id { get; set; }
     public int PortfolioId { get; set; }
     public int? PropertyId { get; set; }
+    public int? UnitId { get; set; }
     public int? VendorId { get; set; }
     public int? WorkOrderId { get; set; }
     public ScheduleECategory Category { get; set; }
@@ -48,6 +49,9 @@ public class ExpenseResponse
     /// <summary>Name of the linked property, when assigned. Projected from the navigation (single GET).</summary>
     public string? PropertyName { get; set; }
 
+    /// <summary>Unit number of the linked unit, when assigned. Projected from the navigation (single GET).</summary>
+    public string? UnitNumber { get; set; }
+
     /// <summary>Name of the linked vendor, when assigned. Projected from the navigation (single GET).</summary>
     public string? VendorName { get; set; }
 
@@ -71,6 +75,7 @@ public class ExpenseResponse
         Id = e.Id,
         PortfolioId = e.PortfolioId,
         PropertyId = e.PropertyId,
+        UnitId = e.UnitId,
         VendorId = e.VendorId,
         WorkOrderId = e.WorkOrderId,
         Category = e.Category,
@@ -90,8 +95,9 @@ public class ExpenseResponse
         PaymentMethod = e.PaymentMethod,
         CardLast4 = e.CardLast4,
         DocumentKind = e.DocumentKind,
-        // Populated only when the caller eager-loads the Property/Vendor navigations (single GET).
+        // Populated only when the caller eager-loads the Property/Unit/Vendor navigations (single GET).
         PropertyName = e.Property?.Name,
+        UnitNumber = e.Unit?.UnitNumber,
         VendorName = e.Vendor?.Name,
     };
 }
@@ -119,6 +125,10 @@ public class CreateExpenseRequest
 {
     [Range(1, int.MaxValue)]
     public int? PropertyId { get; set; }
+
+    /// <summary>Optional unit this expense belongs to (e.g. a unit-specific appliance or permit cost).</summary>
+    [Range(1, int.MaxValue)]
+    public int? UnitId { get; set; }
 
     [Range(1, int.MaxValue)]
     public int? VendorId { get; set; }
@@ -192,6 +202,10 @@ public class UpdateExpenseRequest
 {
     [Range(1, int.MaxValue)]
     public int? PropertyId { get; set; }
+
+    /// <summary>Optional unit this expense belongs to (e.g. a unit-specific appliance or permit cost).</summary>
+    [Range(1, int.MaxValue)]
+    public int? UnitId { get; set; }
 
     [Range(1, int.MaxValue)]
     public int? VendorId { get; set; }
