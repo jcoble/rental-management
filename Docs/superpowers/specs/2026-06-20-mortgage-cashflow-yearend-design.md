@@ -201,7 +201,38 @@ Every aggregation/grouping/filter/join/sort/page is **DB-side**, one EF-translat
 
 ## 17. Non-goals / future
 
-- Cost-seg / bonus depreciation, commercial 39-yr, mid-month convention precision (override covers edge cases for v1).
+- Cost-seg / bonus depreciation, commercial 39-yr (the manual override covers these for v1).
 - Blanket-loan cross-property allocation (enter as one loan for now).
 - Bank-feed import / auto-reconciliation of debt-service payments to bank transactions.
-- The legacy manual `MortgageInterest` / `Depreciation` expense categories remain but defer to the modeled loan/basis when present (avoid double-count).
+- The legacy manual `MortgageInterest` / `Depreciation` expense categories remain but defer to the modeled loan/basis when present (avoid double-count — see §18).
+
+## 18. Financial-review corrections (AUTHORITATIVE — override §§4–16 where they conflict)
+
+An independent financial-correctness review confirmed the **architecture is sound** (the cash-flow vs. taxable-income divide, escrow no-double-count, deposit fix, and the amortization split when the payment is the true P&I are all correct). It caught defects in the cents-level mechanics that would otherwise put a wrong number on his tax return. **Apply ALL of these.**
+
+**Data-model additions (§4):**
+- **Actual cash received (partial payments).** Income must sum **cash received, not amount due.** `Payment` has only `Amount` (= amount *due*); a `Partial` row's `Amount` overstates cash, and the existing reports drop `Partial` rows entirely (understating). Add/confirm a real **`AmountPaid` (decimal)** on `Payment` (= `Amount` when `Paid`; = the partial cash when `Partial`), populate it, and **sum `AmountPaid` WHERE `Status IN (Paid, Partial)`** everywhere income is computed (§7/§9/§10). (A partial amount-paid field may already exist on `feat/scan-front-door` — reconcile, don't duplicate.) Never sum `Amount` for income.
+- **`Property.AccumulatedDepreciation` (decimal, default 0)** — persist it; the cumulative-≤-basis cap (§6) and future sale-year recapture both need it.
+
+**§5 amortization (3 fixes):**
+- **Maturity stop.** `DebtServiceWorker` must STOP once `periodIndex >= Loan.TermMonths` (counted from `StartDate`). Final scheduled month: force-close (principal = remaining balance, balanceAfter = 0, `PaidOff`); if a balance remains at term, stop + flag "balance remaining at maturity." Never generate month `TermMonths+1` (a payment a few cents low otherwise amortizes forever and over-counts interest).
+- **Negative-amortization guard.** If `interestAmount >= MonthlyPrincipalInterest`: set `principalAmount = 0` (interest-only that period, balance unchanged), flag "payment doesn't cover interest." `principalAmount` may never be < 0; `CurrentBalance` may never grow. Reject/flag at loan entry if `MonthlyPrincipalInterest < firstMonthInterest`.
+- **Immutable schedule.** Each period's opening balance comes from the **prior `LoanPayment.BalanceAfter`** (or is derived from OriginalAmount/rate/term), NOT from the live, user-editable `Loan.CurrentBalance`. Keep `CurrentBalance` a derived cache so edits/re-runs can't silently change a filed interest figure.
+
+**§6 depreciation (2 fixes):**
+- **Per-property,** not portfolio-summed: compute from each property's own basis/in-service, place on that property's Schedule-E block, sum for the portfolio total (must foot with per-property income/expense).
+- **In-service-year proration = IRS mid-month approximation:** `monthsInService (in-service year) = (whole months strictly AFTER the in-service month) + 0.5`. Label that first-year figure "estimate (IRS mid-month) — confirm with accountant." Enforce cumulative ≤ building basis via `AccumulatedDepreciation`.
+
+**§7 income:** sum `AmountPaid`, `Status IN (Paid, Partial)`, types `Rent + LateFee`; **include tenant utility reimbursements as taxable income** (with their offsetting deductible cost). Exclude `SecurityDeposit`.
+
+**§9 cash flow (critical — the owner's DB-side rule):** `ReportsService.GetCashFlowAsync` (L517–542) currently `.ToListAsync()`s then groups/sums **in memory** — that violates the hard rule and must be **REWRITTEN (not "extended")** to push the range filter + `GroupBy(month)` + `Sum` into SQL. Copy the already-correct DB-side pattern from `ScheduleEService`. Escrow exclusion must be **category-specific:** drop `Taxes` from cash-flow opex only if the property's loan `EscrowCoversTaxes`, and `Insurance` only if `EscrowCoversInsurance`.
+
+**§10 Schedule-E:** deterministic legacy double-count exclusion (not "ignore or warn"): when a `Loan` exists for a property, EXCLUDE category `MortgageInterest` from that property's deductible; when computed depreciation applies, EXCLUDE category `Depreciation`. Depreciation per-property (above).
+
+**New labeled non-goals — surface these in the UI so he never trusts a wrong number:**
+- **Mid-year purchase/sale (disposition):** sale-year half-month depreciation, gain/loss, and §1250 recapture are NOT computed — label any sale-year figure "property sold — recapture not computed."
+- **Capex vs. repairs:** a large improvement entered under `Repairs` over-deducts. Add a `CapitalImprovement` flag or a guidance note (IRS $2,500 de-minimis); don't silently expense improvements.
+- **Passive-loss limitation (Form 8582 / $25k allowance):** a negative `taxableIncome` may not be a usable loss — label it "before passive-loss limitation; deductible loss may be limited — see accountant."
+- **Owner-occupied / mixed-use:** no expense/depreciation allocation — note it where a property is partly owner-occupied.
+
+**Acceptance additions (§16):** worker stops at maturity and never neg-amortizes; income uses `AmountPaid` incl. partials; `GetCashFlowAsync` is verified DB-side by generated SQL (the in-memory version is gone); depreciation is per-property with mid-month first year and the accumulated cap; legacy `MortgageInterest`/`Depreciation` categories are excluded when modeled equivalents exist.
