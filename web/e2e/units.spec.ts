@@ -2,8 +2,9 @@
  * Unit Command Center smoke — run against the LIVE local dev stack (seeded data).
  *
  * Covers spec section 13 acceptance criteria #1 at the UI level: the /units list renders,
- * opening a unit shows the header (health chips), the derived lifecycle rail, the seven
- * work tabs (and a tab switch works), and the persistent timeline rail.
+ * opening a unit shows the header (health chips), the derived clickable lifecycle stepper,
+ * the seven work tabs (and a tab switch works), the persistent timeline rail, and that
+ * domain work is INLINE in the tab (an inline create form reveals — no drawer/modal).
  *
  * NOTE: this file was authored by the build agent but NOT executed — running it needs the
  * live API + web + a seeded DB, which were reserved during authoring. Run with:
@@ -76,5 +77,26 @@ test.describe('Unit Command Center', () => {
 
 		await page.goto(`/units/${unitId}?tab=maintenance`);
 		await expect(page.getByTestId('unit-maintenance-tab')).toBeVisible({ timeout: 15_000 });
+	});
+
+	test('inline work: stepper navigates and the create form is inline (no drawer)', async ({ page }) => {
+		await login(page);
+		await page.goto('/units');
+		const firstRow = page.locator('[data-testid^="unit-row-"]').first();
+		await expect(firstRow).toBeVisible({ timeout: 15_000 });
+		await firstRow.click();
+		await expect(page.getByTestId('unit-page')).toBeVisible({ timeout: 15_000 });
+
+		// The lifecycle stepper is clickable: clicking the Active stage jumps to the Rent tab.
+		await page.getByTestId('lifecycle-stage-Active').click();
+		await expect(page.getByTestId('unit-rent-tab')).toBeVisible({ timeout: 10_000 });
+		await expect(page).toHaveURL(/tab=rent/);
+
+		// Open the Expenses tab and reveal the INLINE add-expense form on the page (not a drawer/modal).
+		await page.getByTestId('tab-expenses').click();
+		await expect(page.getByTestId('unit-expenses-tab')).toBeVisible({ timeout: 10_000 });
+		await page.getByTestId('expenses-create').click();
+		await expect(page.getByTestId('expenses-create-form')).toBeVisible();
+		await expect(page.getByTestId('expenses-description-input')).toBeVisible();
 	});
 });

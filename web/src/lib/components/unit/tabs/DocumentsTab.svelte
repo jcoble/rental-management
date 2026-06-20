@@ -4,15 +4,14 @@
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { FileText, ScanLine, Image as ImageIcon } from '@lucide/svelte';
-	import type { UnitDrawerAction } from '../drawer-actions';
 
 	let {
 		docs,
-		onAction,
+		onScan,
 	}: {
 		/** The unit's document set (files on the unit + its lease/payment/work-order/inspection children). */
 		docs: UnitDocumentSummary[];
-		onAction: (action: UnitDrawerAction) => void;
+		onScan: () => void;
 	} = $props();
 
 	// Group by the child entity type the file is attached to (e.g. Lease, WorkOrder), so the user sees
@@ -34,7 +33,7 @@
 		<p class="text-sm text-muted-foreground">
 			Documents on this unit and its lease, work orders, payments, and inspections.
 		</p>
-		<Button class="gap-2" onclick={() => onAction('scan')} data-testid="documents-scan">
+		<Button class="gap-2" onclick={onScan} data-testid="documents-scan">
 			<ScanLine class="h-4 w-4" /> Scan / upload
 		</Button>
 	</div>

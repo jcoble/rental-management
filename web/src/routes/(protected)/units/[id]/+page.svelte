@@ -7,7 +7,6 @@
 	import UnitHeader from '$lib/components/unit/UnitHeader.svelte';
 	import LifecycleRail from '$lib/components/unit/LifecycleRail.svelte';
 	import UnitTimelineRail from '$lib/components/unit/UnitTimelineRail.svelte';
-	import UnitCommandDrawer from '$lib/components/unit/UnitCommandDrawer.svelte';
 	import OverviewTab from '$lib/components/unit/tabs/OverviewTab.svelte';
 	import LeaseTab from '$lib/components/unit/tabs/LeaseTab.svelte';
 	import RentTab from '$lib/components/unit/tabs/RentTab.svelte';
@@ -15,7 +14,6 @@
 	import DocumentsTab from '$lib/components/unit/tabs/DocumentsTab.svelte';
 	import ExpensesTab from '$lib/components/unit/tabs/ExpensesTab.svelte';
 	import TimelineTab from '$lib/components/unit/tabs/TimelineTab.svelte';
-	import type { UnitDrawerAction } from '$lib/components/unit/drawer-actions';
 	import { ArrowLeft } from '@lucide/svelte';
 
 	const id = $derived(Number(page.params.id));
@@ -41,13 +39,9 @@
 
 	const dashboard = $derived(dashboardQuery.data);
 
-	// --- Command Drawer ---
-	let drawerOpen = $state(false);
-	let drawerAction = $state<UnitDrawerAction | null>(null);
-
-	function openDrawer(action: UnitDrawerAction) {
-		drawerAction = action;
-		drawerOpen = true;
+	// Scan / Upload routes into the existing scan → draft → confirm flow. Domain work is inline in tabs.
+	function goScan() {
+		goto('/scan');
 	}
 </script>
 
@@ -71,8 +65,8 @@
 		</div>
 	{:else}
 		<div class="space-y-4">
-			<UnitHeader {dashboard} onScan={() => openDrawer('scan')} onAction={openDrawer} />
-			<LifecycleRail stage={dashboard.lifecycleStage} nextBestAction={dashboard.nextBestAction} />
+			<UnitHeader {dashboard} onScan={goScan} />
+			<LifecycleRail stage={dashboard.lifecycleStage} nextBestAction={dashboard.nextBestAction} onStageClick={setTab} />
 
 			<div class="grid gap-4 lg:grid-cols-[1fr_320px]">
 				<!-- Work tabs -->
@@ -92,19 +86,19 @@
 							<OverviewTab {dashboard} onOpenTab={setTab} />
 						</Tabs.Content>
 						<Tabs.Content value="lease" class="mt-4">
-							<LeaseTab {dashboard} onAction={openDrawer} />
+							<LeaseTab {dashboard} onScan={goScan} />
 						</Tabs.Content>
 						<Tabs.Content value="rent" class="mt-4">
-							<RentTab {dashboard} onAction={openDrawer} />
+							<RentTab {dashboard} onScan={goScan} />
 						</Tabs.Content>
 						<Tabs.Content value="maintenance" class="mt-4">
-							<MaintenanceTab unitId={id} onAction={openDrawer} />
+							<MaintenanceTab {dashboard} onScan={goScan} />
 						</Tabs.Content>
 						<Tabs.Content value="documents" class="mt-4">
-							<DocumentsTab docs={dashboard.overview.pendingDocs} onAction={openDrawer} />
+							<DocumentsTab docs={dashboard.overview.pendingDocs} onScan={goScan} />
 						</Tabs.Content>
 						<Tabs.Content value="expenses" class="mt-4">
-							<ExpensesTab unitId={id} onAction={openDrawer} />
+							<ExpensesTab {dashboard} onScan={goScan} />
 						</Tabs.Content>
 						<Tabs.Content value="timeline" class="mt-4">
 							<TimelineTab unitId={id} />
@@ -118,7 +112,5 @@
 				</div>
 			</div>
 		</div>
-
-		<UnitCommandDrawer bind:open={drawerOpen} action={drawerAction} {dashboard} />
 	{/if}
 </div>

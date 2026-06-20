@@ -1,29 +1,35 @@
 <script lang="ts">
-	import { createQuery } from '@tanstack/svelte-query';
+	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import type { WorkOrder, Expense } from '$lib/types';
+	import type { UnitDashboard, WorkOrder } from '$lib/types';
 	import { workOrders as workOrdersApi } from '$lib/api/endpoints/workOrders';
 	import { expenses as expensesApi } from '$lib/api/endpoints/expenses';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { workOrderSchema, parseForm } from '$lib/schemas';
+	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { money } from '../money';
 	import { formatDateOnly } from '$lib/utils/date';
-	import { DataGrid } from '$lib/components/data-grid';
-	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Wrench, Receipt, Plus } from '@lucide/svelte';
-	import type { UnitDrawerAction } from '../drawer-actions';
+	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
+	import { Wrench, Receipt, Plus, X, ExternalLink, ChevronDown, ChevronRight } from '@lucide/svelte';
 
 	let {
-		unitId,
-		onAction,
+		dashboard,
+		onScan,
 	}: {
-		unitId: number;
-		onAction: (action: UnitDrawerAction) => void;
+		dashboard: UnitDashboard;
+		onScan: () => void;
 	} = $props();
 
+	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const unitId = $derived(dashboard.unit.id);
+	const propertyId = $derived(dashboard.unit.propertyId);
+
+	const WO_PRIORITIES = ['Low', 'Normal', 'High', 'Emergency'];
 
 	// Work orders for this unit (DB-side ?unitId= filter).
 	const workOrdersQuery = createQuery(() => ({
@@ -43,42 +49,156 @@
 	const workOrderList = $derived(workOrdersQuery.data ?? []);
 	const workOrderReceipts = $derived((expensesQuery.data ?? []).filter((e) => e.workOrderId != null));
 
-	const columns: ColumnDef<WorkOrder>[] = [
-		{ key: 'title', title: 'Work order', sortable: true, mobileRole: 'title' },
-		{ key: 'priority', title: 'Priority', mobileRole: 'meta', cell: priorityCell },
-		{ key: 'status', title: 'Status', mobileRole: 'badge', cell: statusCell },
-		{ key: 'requestedAt', title: 'Requested', format: 'date', sortable: true, mobileRole: 'meta' },
-		{ key: 'actualCost', title: 'Cost', format: 'currency', mobileRole: 'metric', accessor: (w) => w.actualCost ?? w.estimatedCost ?? 0 },
-	];
-</script>
+	let expandedId = $state<number | null>(null);
+	function toggleExpand(id: number) {
+		expandedId = expandedId === id ? null : id;
+	}
 
-{#snippet statusCell(w: WorkOrder)}
-	<StatusBadge status={w.status} />
-{/snippet}
-{#snippet priorityCell(w: WorkOrder)}
-	<StatusBadge status={w.priority} />
-{/snippet}
+	function invalidate() {
+		queryClient.invalidateQueries({ queryKey: ['unit-work-orders', portfolioId, unitId] });
+		queryClient.invalidateQueries({ queryKey: ['work-orders', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['unit-dashboard', unitId] });
+		queryClient.invalidateQueries({ queryKey: ['unit-timeline', unitId] });
+	}
+
+	// ── Inline "new work order" form (reuses workOrderSchema + the app's form conventions) ──
+	const emptyCreate = () => ({ title: '', description: '', priority: 'Normal', category: 'General' });
+	let showCreate = $state(false);
+	let createForm = $state(emptyCreate());
+	let createErrors = $state<Record<string, string>>({});
+
+	function openCreate() {
+		createForm = emptyCreate();
+		createErrors = {};
+		showCreate = true;
+	}
+	function closeCreate() {
+		showCreate = false;
+		createErrors = {};
+	}
+
+	const createMut = createMutation(() => ({
+		mutationFn: (data: Record<string, unknown>) => workOrdersApi.create(data),
+		onSuccess: () => {
+			showSuccess('Work order created.');
+			closeCreate();
+			invalidate();
+		},
+		onError: (e) => showError(apiErrorMessage(e)),
+	}));
+
+	function submitCreate() {
+		// The unit fixes the property + unit; validate the user-entered fields against the app schema.
+		const result = parseForm(workOrderSchema, {
+			...createForm,
+			propertyId: String(propertyId),
+			unitId: String(unitId),
+		});
+		if (result.errors) {
+			createErrors = result.errors;
+			return;
+		}
+		createErrors = {};
+		// result.data already carries propertyId + unitId (validated by the schema); add scope + defaults.
+		createMut.mutate({
+			portfolioId,
+			status: 'New',
+			requestedAt: new Date().toISOString(),
+			...result.data,
+		});
+	}
+</script>
 
 <div class="space-y-4" data-testid="unit-maintenance-tab">
 	<div class="flex flex-wrap justify-end gap-2">
-		<Button class="gap-2" onclick={() => onAction('create-work-order')} data-testid="maintenance-create">
-			<Plus class="h-4 w-4" /> New work order
+		<Button class="gap-2" onclick={() => (showCreate ? closeCreate() : openCreate())} data-testid="maintenance-create">
+			{#if showCreate}<X class="h-4 w-4" /> Cancel{:else}<Plus class="h-4 w-4" /> New work order{/if}
 		</Button>
 	</div>
 
-	<DataGrid
-		data={workOrderList}
-		{columns}
-		loading={workOrdersQuery.isLoading}
-		emptyMessage="No work orders"
-		emptyDescription="Create a ticket when something needs fixing, or scan a vendor invoice."
-		emptyIcon={Wrench}
-		onRowClick={(w) => goto('/work-orders/' + w.id)}
-		getRowKey={(w) => w.id}
-		data-testid="maintenance-work-orders"
-	/>
+	<!-- Inline new-ticket form. -->
+	{#if showCreate}
+		<div class="rounded-xl border border-border bg-muted/20 p-4" data-testid="maintenance-create-form">
+			<h3 class="mb-3 text-sm font-semibold">New work order</h3>
+			<div class="space-y-3">
+				<div>
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-title">Title</label>
+					<Input id="wo-title" data-testid="maintenance-title-input" bind:value={createForm.title} placeholder="Issue title" />
+					{#if createErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="maintenance-title-error">{createErrors.title}</p>{/if}
+				</div>
+				<div>
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-desc">Description</label>
+					<textarea id="wo-desc" data-testid="maintenance-description-input" bind:value={createForm.description} rows={3} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="What needs fixing?"></textarea>
+					{#if createErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="maintenance-description-error">{createErrors.description}</p>{/if}
+				</div>
+				<div class="grid grid-cols-2 gap-3">
+					<div>
+						<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-priority">Priority</label>
+						<Select.Root type="single" bind:value={createForm.priority}>
+							<Select.Trigger id="wo-priority" class="w-full" data-testid="maintenance-priority-input">{createForm.priority}</Select.Trigger>
+							<Select.Content>
+								{#each WO_PRIORITIES as p}<Select.Item value={p} label={p}>{p}</Select.Item>{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+					<div>
+						<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-cat">Category</label>
+						<Input id="wo-cat" data-testid="maintenance-category-input" bind:value={createForm.category} placeholder="Category" />
+						{#if createErrors.category}<p class="mt-1 text-xs text-destructive" data-testid="maintenance-category-error">{createErrors.category}</p>{/if}
+					</div>
+				</div>
+			</div>
+			<div class="mt-3 flex justify-end gap-2">
+				<Button variant="outline" size="sm" onclick={closeCreate}>Cancel</Button>
+				<Button size="sm" disabled={createMut.isPending} onclick={submitCreate} data-testid="maintenance-create-submit">
+					{createMut.isPending ? 'Creating…' : 'Create'}
+				</Button>
+			</div>
+		</div>
+	{/if}
+
+	<!-- Work orders as expandable cards; the full edit/assign/close lives on the WO detail page. -->
+	{#if workOrdersQuery.isLoading}
+		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">Loading work orders…</p>
+	{:else if workOrderList.length === 0}
+		<DetailCard title="No work orders" icon={Wrench} accent="muted" testid="maintenance-empty">
+			<p class="text-sm text-muted-foreground">Create a ticket when something needs fixing, or scan a vendor invoice.</p>
+		</DetailCard>
+	{:else}
+		<ul class="space-y-2" data-testid="maintenance-work-orders">
+			{#each workOrderList as w (w.id)}
+				<li class="rounded-xl border bg-card" data-testid="maintenance-wo-{w.id}">
+					<button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left" onclick={() => toggleExpand(w.id)}>
+						<span class="flex min-w-0 items-center gap-2 text-sm">
+							{#if expandedId === w.id}<ChevronDown class="h-4 w-4 shrink-0 text-muted-foreground" />{:else}<ChevronRight class="h-4 w-4 shrink-0 text-muted-foreground" />{/if}
+							<span class="truncate font-medium">{w.title}</span>
+						</span>
+						<span class="flex shrink-0 items-center gap-2"><StatusBadge status={w.priority} /><StatusBadge status={w.status} /></span>
+					</button>
+					{#if expandedId === w.id}
+						<div class="border-t p-3">
+							<p class="text-sm text-muted-foreground">{w.description}</p>
+							<dl class="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+								<div><dt class="text-muted-foreground">Category</dt><dd>{w.category}</dd></div>
+								<div><dt class="text-muted-foreground">Requested</dt><dd>{formatDateOnly(w.requestedAt)}</dd></div>
+								<div><dt class="text-muted-foreground">Cost</dt><dd>{money(w.actualCost ?? w.estimatedCost ?? 0)}</dd></div>
+							</dl>
+							<div class="mt-3 flex justify-end">
+								<Button variant="outline" size="sm" class="gap-1" onclick={() => goto('/work-orders/' + w.id)} data-testid="maintenance-open-{w.id}">
+									Open work order <ExternalLink class="h-3 w-3" />
+								</Button>
+							</div>
+						</div>
+					{/if}
+				</li>
+			{/each}
+		</ul>
+	{/if}
 
 	<DetailCard title="Receipts on these jobs" icon={Receipt} accent="muted" testid="maintenance-receipts">
+		{#snippet actions()}
+			<button type="button" class="text-xs text-primary hover:underline" onclick={onScan} data-testid="maintenance-scan-receipt">Scan receipt</button>
+		{/snippet}
 		{#if workOrderReceipts.length === 0}
 			<p class="text-sm text-muted-foreground">No work-order receipts yet. Snap a receipt to link it to a job.</p>
 		{:else}

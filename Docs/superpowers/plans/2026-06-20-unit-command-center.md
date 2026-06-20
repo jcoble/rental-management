@@ -152,7 +152,7 @@ public sealed record LeaseSnapshot(LeaseStatus Status, DateTime? StartDate, Date
 **Interfaces — Consumes:** A3 dashboard. **Produces:** the page shell + a `?tab=` query param contract for deep links.
 
 - [x] **Step 1:** Loader fetches the dashboard aggregate; handle loading/error per the codebase's TanStack Query conventions; invalidate on the relevant SignalR events — the unit-* query-key prefixes were added to the realtime invalidate map so Unit/Lease/Payment/Expense/WorkOrder/Inspection/Appointment events refresh the page.
-- [x] **Step 2:** `UnitHeader.svelte` — health chips (rent state, open repairs, lease-ends-in, docs-needing-review, tenant) + **Scan/Upload** (prominent) + a **New** quick-action menu (post payment / add expense / create work order / upload doc), all wired to the real Command Drawer (D1).
+- [x] **Step 2:** `UnitHeader.svelte` — health chips (rent state, open repairs, lease-ends-in, docs-needing-review, tenant) + a prominent **Scan/Upload** button (routes to `/scan`). **[Reworked]** The "New" quick-action menu was removed per the spec §4 update — domain work happens **inline in the relevant tab**, not from a header menu.
 - [x] **Step 3:** Tabs (reuse `ui/tabs`) with the 7 tabs; the active tab is driven by `?tab=` (default `overview`), synced back to the URL on switch. Persistent `UnitTimelineRail` to the right across tabs.
 - [x] **Step 4:** `pnpm -C web build` — succeeds (the `/units/[id]` route compiled). Live load against the running app deferred to the user (shared-infra constraint).
 - [x] **Step 5:** Commit: `feat(web): /units/[id] Command Center shell (header + tabs + timeline rail)`.
@@ -164,9 +164,9 @@ public sealed record LeaseSnapshot(LeaseStatus Status, DateTime? StartDate, Date
 
 **Interfaces — Consumes:** `lifecycleStage` + `nextBestAction` from the dashboard.
 
-- [x] **Step 1:** Render the 9 ordered stages with prior = done, current = highlighted, future = upcoming; show the `nextBestAction` line; the action label links to `nextBestAction.href`.
+- [x] **Step 1:** Render the 9 ordered stages with prior = done, current = highlighted, future = upcoming; show the `nextBestAction` line; the action label links to `nextBestAction.href`. **[Reworked]** Per spec §4, the rail is now a **clickable workflow stepper** (analog of EdiPlatform `WorkflowStep.svelte`) — each stage is a button that jumps to the tab where that stage's work happens.
 - [x] **Step 2:** `pnpm -C web build` — succeeds. The highlighted stage is data-driven from the dashboard's `lifecycleStage` (resolver covered by unit tests); live per-unit visual check deferred to the user.
-- [x] **Step 3:** Commit: `feat(web): unit lifecycle rail (derived stage + next best action)`.
+- [x] **Step 3:** Commit: `feat(web): unit lifecycle rail (derived stage + next best action)` (clickable-stepper rework in `feat(web): inline unit tabs + clickable stepper (drop command drawer)`).
 
 ---
 
@@ -177,6 +177,15 @@ public sealed record LeaseSnapshot(LeaseStatus Status, DateTime? StartDate, Date
 > **Phase C note:** the seven tabs were built together and shipped in one commit
 > (`feat(web): unit work tabs (...)`) because the page imports all of them — committing one
 > tab at a time would not leave the tree buildable. All build + svelte-check clean.
+>
+> **[Reworked — spec §6/§7 update, drop the Command Drawer]** The tabs were reworked to the
+> **inline** pattern: lists + on-card view↔edit toggles and **inline create forms** within
+> the tab, built with the app's OWN form conventions (`InlineField` + `parseForm` + the
+> existing `paymentSchema`/`workOrderSchema`/`expenseSchema` + `createMutation`), matching
+> EdiPlatform's order-detail tabs. No drawer, no modals. Rent/Maintenance/Expenses got inline
+> create forms; Rent + Expenses got expandable cards with on-card edit; Lease stays a view
+> card + "Open lease" (the full editor) + scan; Documents/Overview scan → `/scan`. Shipped in
+> `feat(web): inline unit tabs + clickable stepper (drop command drawer)`.
 
 ### Task C1: Overview tab
 - **Files:** Create `web/src/lib/components/unit/tabs/OverviewTab.svelte`.
@@ -184,15 +193,15 @@ public sealed record LeaseSnapshot(LeaseStatus Status, DateTime? StartDate, Date
 
 ### Task C2: Lease tab
 - **Files:** Create `…/tabs/LeaseTab.svelte`.
-- [x] Show the unit's current lease summary + a link to the full lease page; the scan-lease action opens in the Command Drawer. (Renewal/mark-signed are surfaced via the lease page; the drawer hosts scan/upload in v1.) [x] Build. [x] Committed.
+- [x] Show the unit's current lease summary + a link to the full lease page (the existing lease editor); the **inline** scan-lease action routes to `/scan`. (Renewal/mark-signed are surfaced via the lease page.) [x] Build. [x] Committed (+ inline rework).
 
 ### Task C3: Rent tab
 - **Files:** Create `…/tabs/RentTab.svelte`.
-- [x] Payments for the unit's current lease via the existing payments endpoint (`?leaseId=`, DB-side). Shows the ledger + outstanding balance; post-payment + scan actions → drawer. (Multi-lease units show the current lease's ledger in v1; noted for the user.) [x] Build. [x] Committed.
+- [x] Payments for the unit's current lease via the existing payments endpoint (`?leaseId=`, DB-side). Shows the ledger + outstanding balance; **inline** post-payment form (reuses `paymentSchema`) + expandable payment cards with on-card view/edit; scan → `/scan`. (Multi-lease units show the current lease's ledger in v1; noted for the user.) [x] Build. [x] Committed (+ inline rework).
 
 ### Task C4: Maintenance tab
 - **Files:** Create `…/tabs/MaintenanceTab.svelte`.
-- [x] Work orders via the new `?unitId=` filter (added to the WO list endpoint); shows the **expenses tied to those work orders**. Create-work-order + scan → drawer. [x] Build. [x] Committed.
+- [x] Work orders via the new `?unitId=` filter (added to the WO list endpoint); shows the **expenses tied to those work orders**. **Inline** new-work-order form (reuses `workOrderSchema`); WO cards expand with an "Open work order" link to the full detail page for assign/close; scan → `/scan`. [x] Build. [x] Committed (+ inline rework).
 
 ### Task C5: Documents tab
 - **Files:** Create `…/tabs/DocumentsTab.svelte`.
@@ -200,7 +209,7 @@ public sealed record LeaseSnapshot(LeaseStatus Status, DateTime? StartDate, Date
 
 ### Task C6: Expenses tab
 - **Files:** Create `…/tabs/ExpensesTab.svelte`.
-- [x] Expenses where `UnitId = unit` OR `WorkOrderId ∈` the unit's WOs (server-side correlated filter). Add-expense in the drawer sets `UnitId`. [x] Build. [x] Committed.
+- [x] Expenses where `UnitId = unit` OR `WorkOrderId ∈` the unit's WOs (server-side correlated filter). **Inline** add-expense form (reuses `expenseSchema`, sets `UnitId`) + expandable expense cards with on-card view/edit. [x] Build. [x] Committed (+ inline rework).
 
 ### Task C7: Timeline tab
 - **Files:** Create `…/tabs/TimelineTab.svelte`.
@@ -208,11 +217,16 @@ public sealed record LeaseSnapshot(LeaseStatus Status, DateTime? StartDate, Date
 
 ---
 
-## Phase D — Command Drawer, deep links, smoke test
+## Phase D — Inline tab actions, deep links, smoke test
 
-### Task D1: Command Drawer host + action forms
-- **Files:** Create `web/src/lib/components/unit/UnitCommandDrawer.svelte` (reuse `ui/drawer`); host the action forms (post payment, create work order, add expense, scan review) with unit context preloaded.
-- [x] Wire the header **New** menu + tab actions to open the relevant drawer slot (rail next-best-action deep-links to the relevant tab). Real forms (post payment / add expense / create work order / scan) with unit context preloaded; modals elsewhere untouched. [x] Build. [x] Commit `feat(web): unit Command Drawer (drawer-first actions)`.
+### Task D1: ~~Command Drawer host~~ → REMOVED (inline tab actions, spec §7 update)
+- **[Task removed]** The spec was updated to **drop the Command Drawer** — domain work happens
+  **inline in each tab** (see the Phase C rework note). `UnitCommandDrawer.svelte` and
+  `drawer-actions.ts` were deleted; the header "New" menu was removed; the clickable stepper +
+  the inline tab forms (C2–C6) replace it. The original drawer was committed in
+  `feat(web): unit Command Drawer (drawer-first actions)` and then **reverted/reworked** in
+  `feat(web): inline unit tabs + clickable stepper (drop command drawer)`. No `ui/drawer` is
+  used on the unit page.
 
 ### Task D2: Deep links into the unit
 - **Files:** Modify the units grid in `web/src/routes/(protected)/properties/[id]/+page.svelte` (unit row → `/units/[id]`); add "open in unit" links from payment / work-order / lease rows and dashboard attention items → `/units/[id]?tab=<rent|maintenance|lease>`.
@@ -252,4 +266,4 @@ public sealed record LeaseSnapshot(LeaseStatus Status, DateTime? StartDate, Date
 
 ## Self-review note
 
-Plan covers every spec section: §3 nav (B1/D2), §4 anatomy (B2/B3), §5 stage (A2), §6 tabs (C1–C7), §7 drawer (D1), §8 endpoint (A3), §9 Expense.UnitId (A1), §10 list (A5/B1), §11 timeline (A4/C7). Deferred items (board, command bundles, Messages, turnover, money) are intentionally absent. Type names (`UnitDashboardResponse`, `UnitLifecycleStage`, `UnitStageInputs`, `LeaseSnapshot`) are consistent across tasks.
+Plan covers every spec section: §3 nav (B1/D2), §4 anatomy (B2/B3 — clickable stepper), §5 stage (A2), §6 tabs (C1–C7), §7 **inline tab forms** (C2–C6; the former "drawer" task D1 is removed per the spec update), §8 endpoint (A3), §9 Expense.UnitId (A1), §10 list (A5/B1), §11 timeline (A4/C7). Deferred items (board, command bundles, Messages, turnover, money) are intentionally absent. Type names (`UnitDashboardResponse`, `UnitLifecycleStage`, `UnitStageInputs`, `LeaseSnapshot`) are consistent across tasks.

@@ -6,14 +6,13 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { FileText, ExternalLink, ScanLine } from '@lucide/svelte';
-	import type { UnitDrawerAction } from '../drawer-actions';
 
 	let {
 		dashboard,
-		onAction,
+		onScan,
 	}: {
 		dashboard: UnitDashboard;
-		onAction: (action: UnitDrawerAction) => void;
+		onScan: () => void;
 	} = $props();
 
 	const lease = $derived(dashboard.currentLease);
@@ -47,7 +46,7 @@
 	{/if}
 
 	<div class="flex flex-wrap gap-2">
-		<Button variant="outline" class="gap-2" onclick={() => onAction('scan')} data-testid="lease-scan">
+		<Button variant="outline" class="gap-2" onclick={onScan} data-testid="lease-scan">
 			<ScanLine class="h-4 w-4" /> Scan / upload lease
 		</Button>
 	</div>
