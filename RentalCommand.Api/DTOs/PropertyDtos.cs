@@ -32,6 +32,22 @@ public class PropertyResponse
     public int? YearBuilt { get; set; }
     public decimal? ManagementFeePercent { get; set; }
     public string? Notes { get; set; }
+
+    /// <summary>Acquisition cost used as the depreciation basis (null when not tracking depreciation).</summary>
+    public decimal? PurchasePrice { get; set; }
+
+    /// <summary>Portion of the purchase price allocated to land (not depreciable).</summary>
+    public decimal? LandValue { get; set; }
+
+    /// <summary>Date placed in service (drives first-year mid-month depreciation proration).</summary>
+    public DateTime? InServiceDate { get; set; }
+
+    /// <summary>Manual annual depreciation override; wins over the computed figure when set.</summary>
+    public decimal? ManualAnnualDepreciation { get; set; }
+
+    /// <summary>Cumulative depreciation taken to date (caps the computed annual figure at basis).</summary>
+    public decimal AccumulatedDepreciation { get; set; }
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 
@@ -62,6 +78,11 @@ public class PropertyResponse
         YearBuilt = e.YearBuilt,
         ManagementFeePercent = e.ManagementFeePercent,
         Notes = e.Notes,
+        PurchasePrice = e.PurchasePrice,
+        LandValue = e.LandValue,
+        InServiceDate = e.InServiceDate,
+        ManualAnnualDepreciation = e.ManualAnnualDepreciation,
+        AccumulatedDepreciation = e.AccumulatedDepreciation,
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
         UnitCount = unitCount,
@@ -112,6 +133,19 @@ public class CreatePropertyRequest
 
     [MaxLength(2000)]
     public string? Notes { get; set; }
+
+    // Depreciation basis (optional; see DepreciationCalculator). AccumulatedDepreciation is maintained
+    // by the system, not set here.
+    [Range(0, 999_999_999)]
+    public decimal? PurchasePrice { get; set; }
+
+    [Range(0, 999_999_999)]
+    public decimal? LandValue { get; set; }
+
+    public DateTime? InServiceDate { get; set; }
+
+    [Range(0, 999_999_999)]
+    public decimal? ManualAnnualDepreciation { get; set; }
 }
 
 public class UpdatePropertyRequest
@@ -152,4 +186,16 @@ public class UpdatePropertyRequest
 
     [MaxLength(2000)]
     public string? Notes { get; set; }
+
+    // Depreciation basis (optional). AccumulatedDepreciation is system-maintained, not set here.
+    [Range(0, 999_999_999)]
+    public decimal? PurchasePrice { get; set; }
+
+    [Range(0, 999_999_999)]
+    public decimal? LandValue { get; set; }
+
+    public DateTime? InServiceDate { get; set; }
+
+    [Range(0, 999_999_999)]
+    public decimal? ManualAnnualDepreciation { get; set; }
 }

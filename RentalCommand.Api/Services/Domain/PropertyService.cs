@@ -124,6 +124,10 @@ public class PropertyService : IPropertyService
             YearBuilt = request.YearBuilt,
             ManagementFeePercent = request.ManagementFeePercent,
             Notes = request.Notes,
+            PurchasePrice = request.PurchasePrice,
+            LandValue = request.LandValue,
+            InServiceDate = request.InServiceDate.ToUtc(),
+            ManualAnnualDepreciation = request.ManualAnnualDepreciation,
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -175,6 +179,10 @@ public class PropertyService : IPropertyService
         if (request.YearBuilt.HasValue) entity.YearBuilt = request.YearBuilt;
         if (request.ManagementFeePercent.HasValue) entity.ManagementFeePercent = request.ManagementFeePercent;
         if (request.Notes != null) entity.Notes = request.Notes;
+        if (request.PurchasePrice.HasValue) entity.PurchasePrice = request.PurchasePrice;
+        if (request.LandValue.HasValue) entity.LandValue = request.LandValue;
+        if (request.InServiceDate.HasValue) entity.InServiceDate = request.InServiceDate.ToUtc();
+        if (request.ManualAnnualDepreciation.HasValue) entity.ManualAnnualDepreciation = request.ManualAnnualDepreciation;
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);

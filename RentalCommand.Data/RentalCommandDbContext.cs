@@ -616,6 +616,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.State).IsRequired().HasMaxLength(100);
             entity.Property(e => e.PostalCode).IsRequired().HasMaxLength(20);
             entity.Property(e => e.ManagementFeePercent).HasPrecision(18, 2);
+            entity.Property(e => e.PurchasePrice).HasPrecision(18, 2);
+            entity.Property(e => e.LandValue).HasPrecision(18, 2);
+            entity.Property(e => e.ManualAnnualDepreciation).HasPrecision(18, 2);
+            entity.Property(e => e.AccumulatedDepreciation).HasPrecision(18, 2);
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.Property(e => e.PropertyType).HasConversion<int>();
             entity.Property(e => e.Status).HasConversion<int>();
