@@ -15,7 +15,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/recurring-maintenance")]
 [Produces("application/json")]
-public class RecurringMaintenanceController : AuthenticatedPortfolioControllerBase
+public class RecurringMaintenanceController : ManagementControllerBase
 {
     private readonly IRecurringMaintenanceTaskService _service;
 

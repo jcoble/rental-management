@@ -140,6 +140,55 @@ public class ScanIdResult
 // Authed (landlord) shapes
 // ---------------------------------------------------------------------------
 
+/// <summary>
+/// Body for an authed, portfolio-scoped application create — used by the scan-IN confirm path when a
+/// landlord scans a completed paper rental application. Same applicant shape as
+/// <see cref="SubmitApplicationRequest"/>, minus the public-form FCRA consent (the landlord is keying a
+/// paper application, not the applicant consenting in-app). PortfolioId is taken from the caller's JWT.
+/// </summary>
+public class CreateApplicationRequest
+{
+    public int? PropertyId { get; set; }
+    public int? UnitId { get; set; }
+
+    [Required]
+    [MaxLength(100)]
+    public string FirstName { get; set; } = string.Empty;
+
+    [Required]
+    [MaxLength(100)]
+    public string LastName { get; set; } = string.Empty;
+
+    [MaxLength(200)]
+    public string? Email { get; set; }
+
+    [MaxLength(50)]
+    public string? Phone { get; set; }
+
+    public DateTime? DateOfBirth { get; set; }
+
+    [MaxLength(500)]
+    public string? CurrentAddress { get; set; }
+
+    [MaxLength(200)]
+    public string? Employer { get; set; }
+
+    [Range(0, 100_000_000)]
+    public decimal? MonthlyIncome { get; set; }
+
+    public DateTime? DesiredMoveInDate { get; set; }
+
+    [MaxLength(2000)]
+    public string? Notes { get; set; }
+
+    /// <summary>
+    /// Optional extraction provenance from the scan (the per-field {value, confidence} JSON) so the
+    /// landlord can see which fields were machine-extracted. Stored as-is.
+    /// </summary>
+    [MaxLength(8000)]
+    public string? IdExtractedFields { get; set; }
+}
+
 /// <summary>Wire shape returned for a <see cref="RentalApplication"/> to the landlord.</summary>
 public class ApplicationResponse
 {

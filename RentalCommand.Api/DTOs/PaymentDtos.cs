@@ -13,6 +13,13 @@ public class PaymentResponse
     public PaymentType PaymentType { get; set; }
     public PaymentStatus Status { get; set; }
     public decimal Amount { get; set; }
+
+    /// <summary>
+    /// Cash collected so far when the payment is <see cref="PaymentStatus.Partial"/> (strictly between
+    /// 0 and <see cref="Amount"/>); null otherwise. A Paid payment is fully collected (<see cref="Amount"/>).
+    /// </summary>
+    public decimal? AmountPaid { get; set; }
+
     public DateTime DueDate { get; set; }
     public DateTime? PaidDate { get; set; }
     public string? Method { get; set; }
@@ -53,6 +60,7 @@ public class PaymentResponse
         PaymentType = e.PaymentType,
         Status = e.Status,
         Amount = e.Amount,
+        AmountPaid = e.AmountPaid,
         DueDate = e.DueDate,
         PaidDate = e.PaidDate,
         Method = e.Method,
@@ -78,11 +86,21 @@ public class CreatePaymentRequest
     [Range(1, int.MaxValue)]
     public int LeaseId { get; set; }
 
+    [EnumDataType(typeof(PaymentType))]
     public PaymentType PaymentType { get; set; } = PaymentType.Rent;
+
+    [EnumDataType(typeof(PaymentStatus))]
     public PaymentStatus Status { get; set; } = PaymentStatus.Scheduled;
 
     [Range(0.01, 99999999)]
     public decimal Amount { get; set; }
+
+    /// <summary>
+    /// For a <see cref="PaymentStatus.Partial"/> payment, the cash collected so far. Must be strictly
+    /// between 0 and <see cref="Amount"/> (validated in the service). Ignored/cleared for other statuses.
+    /// </summary>
+    [Range(0, 99999999)]
+    public decimal? AmountPaid { get; set; }
 
     [Required]
     public DateTime DueDate { get; set; }
@@ -123,11 +141,21 @@ public class UpdatePaymentRequest
     [Range(1, int.MaxValue)]
     public int? LeaseId { get; set; }
 
+    [EnumDataType(typeof(PaymentType))]
     public PaymentType? PaymentType { get; set; }
+
+    [EnumDataType(typeof(PaymentStatus))]
     public PaymentStatus? Status { get; set; }
 
     [Range(0.01, 99999999)]
     public decimal? Amount { get; set; }
+
+    /// <summary>
+    /// For a <see cref="PaymentStatus.Partial"/> payment, the cash collected so far (strictly between 0
+    /// and the payment's Amount; validated in the service). Set to 0 to clear it back to "nothing collected".
+    /// </summary>
+    [Range(0, 99999999)]
+    public decimal? AmountPaid { get; set; }
 
     public DateTime? DueDate { get; set; }
     public DateTime? PaidDate { get; set; }

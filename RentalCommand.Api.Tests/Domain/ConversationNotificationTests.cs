@@ -1,5 +1,7 @@
 using FluentAssertions;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.Extensions.Logging.Abstractions;
+using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -18,7 +20,9 @@ public class ConversationNotificationTests : IDisposable
     public async Task TenantStartAsync_CreatesTenantMessageNotificationsForStaffOnly()
     {
         var tenant = SeedTenantWithStaffAndTenantUsers();
-        var sut = new ConversationService(_ctx.Db, new NoopDataUpdateService());
+        var sut = new ConversationService(
+            _ctx.Db, new NoopDataUpdateService(), new NoopFairHousingReviewService(),
+            NullLogger<ConversationService>.Instance);
 
         var result = await sut.TenantStartAsync(1, tenant.Id, "Sink leak", "Water under the cabinet");
 
@@ -124,5 +128,13 @@ public class ConversationNotificationTests : IDisposable
 
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
             => Task.CompletedTask;
+    }
+
+    // These tests exercise the TENANT send path (TenantStartAsync), which is not Fair-Housing gated,
+    // so a no-op reviewer (review-unavailable shape) is sufficient and never blocks.
+    private sealed class NoopFairHousingReviewService : IFairHousingReviewService
+    {
+        public Task<FairHousingReviewResult> ReviewAsync(string text, CancellationToken ct = default)
+            => Task.FromResult(new FairHousingReviewResult { Reviewed = false, Compliant = false });
     }
 }

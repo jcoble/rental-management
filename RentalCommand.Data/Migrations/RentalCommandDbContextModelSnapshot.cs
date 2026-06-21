@@ -1850,6 +1850,10 @@ namespace RentalCommand.Data.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
+                    b.Property<decimal?>("AmountPaid")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
+
                     b.Property<string>("BankName")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");

@@ -109,23 +109,27 @@ public class DashboardService : IDashboardService
             .Select(g => new
             {
                 // Overdue: still owed (Scheduled/Partial/Late) and past its due date (Late is overdue
-                // regardless of clock skew).
+                // regardless of clock skew). A Partial owes only its unpaid remainder; others owe in full.
                 Overdue = g.Sum(p =>
                     (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
                     && (p.Status == PaymentStatus.Late || p.DueDate < now)
-                        ? p.Amount : 0m),
-                // Billed this month (a due date in the current month that we still expect).
+                        ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount)
+                        : 0m),
+                // Billed this month (a due date in the current month that we still expect). This is the
+                // full charge that was billed, regardless of how much has been collected against it.
                 DueThisMonth = g.Sum(p =>
                     p.DueDate >= monthStart && p.DueDate < nextMonthStart && p.Status != PaymentStatus.Waived
                         ? p.Amount : 0m),
-                // Collected rent this month, based on when it was actually paid.
+                // Collected rent this month, based on when it was actually paid: Paid contributes the
+                // full Amount, a Partial contributes only the collected AmountPaid.
                 PaidThisMonth = g.Sum(p =>
-                    p.Status == PaymentStatus.Paid
+                    (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial)
                     && p.PaymentType == PaymentType.Rent
                     && p.PaidDate != null
                     && p.PaidDate >= monthStart
                     && p.PaidDate < nextMonthStart
-                        ? p.Amount : 0m),
+                        ? (p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount)
+                        : 0m),
             })
             .FirstOrDefaultAsync(ct);
 

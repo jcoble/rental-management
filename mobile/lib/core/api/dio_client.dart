@@ -21,7 +21,9 @@ Dio _buildDio() {
   final dio = Dio(
     BaseOptions(
       baseUrl: kApiBaseUrl,
-      connectTimeout: const Duration(seconds: 15),
+      // Fail fast when the device is offline so the UI drops into its
+      // error + Retry state promptly instead of spinning on a dead socket.
+      connectTimeout: const Duration(seconds: 8),
       receiveTimeout: const Duration(seconds: 20),
       sendTimeout: const Duration(seconds: 20),
       headers: {

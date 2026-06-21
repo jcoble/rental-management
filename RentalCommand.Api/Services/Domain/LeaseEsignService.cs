@@ -50,6 +50,21 @@ public sealed class LeaseEsignService : ILeaseEsignService
             return SendForSignatureResult.NotFound();
         }
 
+        // Precondition: never re-send a lease that is already executed. A completed signature (Signed, or a
+        // stored signed document) or an already-Active lease must not be silently reverted to
+        // PendingSignature — that would orphan the executed envelope/PDF and reopen a closed contract. A
+        // still-pending request (PendingSignature / EsignStatus.Sent) or a declined one MAY be (re)sent, so
+        // only the finalized states are blocked.
+        if (lease.EsignStatus == EsignStatus.Signed
+            || lease.SignedDocumentStoredFileId.HasValue
+            || lease.Status == LeaseStatus.Active)
+        {
+            _logger.LogInformation(
+                "Send-for-signature refused for lease {LeaseId}: already finalized (status {Status}, esign {Esign}, hasSignedDoc {HasDoc}).",
+                leaseId, lease.Status, lease.EsignStatus, lease.SignedDocumentStoredFileId.HasValue);
+            return SendForSignatureResult.AlreadyFinalized();
+        }
+
         // Sandbox is intentionally NOT short-circuited here. A demo account must still be able to
         // exercise the full send → sign → executed-PDF flow; the outbox dispatcher redirects the
         // signing email to the portfolio owner's own inbox (tagged [Sandbox]) so nothing reaches a

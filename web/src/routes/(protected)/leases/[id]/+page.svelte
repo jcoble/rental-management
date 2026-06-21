@@ -152,8 +152,9 @@
 
 	function submitOpeningBalance() {
 		const errors: { amount?: string; asOfDate?: string } = {};
-		const magnitude = Number(openingAmount);
-		if (!openingAmount.trim() || Number.isNaN(magnitude) || magnitude < 0) {
+		const rawAmount = String(openingAmount ?? '').trim();
+		const magnitude = Number(rawAmount);
+		if (!rawAmount || Number.isNaN(magnitude) || magnitude < 0) {
 			errors.amount = 'Enter an amount of 0 or more.';
 		}
 		if (!openingAsOfDate) {

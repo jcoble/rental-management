@@ -32,7 +32,7 @@
 -->
 
 <script lang="ts" generics="T extends object">
-	import type { Snippet } from 'svelte';
+	import { untrack, type Snippet } from 'svelte';
 	import type { ColumnDef, MobileColumnRole, SortDirection } from './types.js';
 	import { cn } from '$lib/utils.js';
 	import { Loader2, ChevronUp, ChevronDown, ChevronsUpDown, ChevronLeft, ChevronRight } from '@lucide/svelte';
@@ -57,7 +57,12 @@
 		/** Stable key extractor (falls back to item.id then index). */
 		getRowKey?: (item: T) => string | number;
 		// ── Pagination ────────────────────────────────────────────────────────────
-		/** 1-based current page. Controlled externally only when `serverSide=true`. */
+		/**
+		 * 1-based current page. When `serverSide=true` it's the controlled value (parent feeds the
+		 * matching page of data). In client-side mode it seeds the initial page once on mount (so a
+		 * URL-persisted `?page=` is restored) and stays in sync as the user pages — pair it with
+		 * `onPageChange` to mirror page changes into the URL.
+		 */
 		page?: number;
 		/** Rows per page (client-side) or page size hint (server-side). */
 		pageSize?: number;
@@ -69,10 +74,18 @@
 		 * user navigates.
 		 */
 		serverSide?: boolean;
+		/** Called when the current page changes (server-side AND client-side modes). */
 		onPageChange?: (page: number) => void;
 		/** Sort field, using the API convention of a leading '-' for descending. */
 		sort?: string;
-		/** Called when a sortable header changes in server-side mode. */
+		/**
+		 * Client-side mode only: seed the initial sort (API convention, e.g. `-name`) once on mount.
+		 * Used by pages that persist sort in the URL so a reload/Back restores it; `onSortChange` then
+		 * reports subsequent header toggles back so the page can mirror them into the URL. Ignored when
+		 * `serverSide` (there `sort` is the controlled value).
+		 */
+		initialSort?: string;
+		/** Called when a sortable header changes (server-side AND client-side modes). */
 		onSortChange?: (sort?: string) => void;
 		// ── Slots ─────────────────────────────────────────────────────────────────
 		toolbar?: Snippet;
@@ -101,6 +114,7 @@
 		serverSide = false,
 		onPageChange,
 		sort,
+		initialSort,
 		onSortChange,
 		toolbar,
 		class: className,
@@ -108,18 +122,30 @@
 	}: Props = $props();
 
 	// ── Sort state ────────────────────────────────────────────────────────────────
-	let sortKey = $state<string | null>(null);
-	let sortDir = $state<SortDirection>('none');
+	// Parse an API-convention sort string ("-name" desc / "name" asc / "" none) into key + direction.
+	function parseSort(s: string | undefined): { key: string | null; dir: SortDirection } {
+		if (!s) return { key: null, dir: 'none' };
+		return s.startsWith('-') ? { key: s.slice(1), dir: 'desc' } : { key: s, dir: 'asc' };
+	}
+	// Serialize key + direction back to the API convention (undefined when unsorted).
+	function serializeSort(key: string | null, dir: SortDirection): string | undefined {
+		if (dir === 'none' || key == null) return undefined;
+		return `${dir === 'desc' ? '-' : ''}${key}`;
+	}
+
+	// Seed once from the controlled `sort` (server-side) or `initialSort` (client-side persisted state).
+	// Server-side stays controlled via the $effect below; client-side owns its state after the seed so
+	// header toggles work locally while `onSortChange` reports them up for URL persistence. `untrack`
+	// makes the one-time read explicit (these props are reactive; we only want their initial value here).
+	const seededSort = untrack(() => parseSort(serverSide ? sort : initialSort));
+	let sortKey = $state<string | null>(seededSort.key);
+	let sortDir = $state<SortDirection>(seededSort.dir);
 
 	$effect(() => {
 		if (!serverSide) return;
-		if (!sort) {
-			sortKey = null;
-			sortDir = 'none';
-			return;
-		}
-		sortKey = sort.startsWith('-') ? sort.slice(1) : sort;
-		sortDir = sort.startsWith('-') ? 'desc' : 'asc';
+		const parsed = parseSort(sort);
+		sortKey = parsed.key;
+		sortDir = parsed.dir;
 	});
 
 	function toggleSort(col: ColumnDef<T>) {
@@ -131,13 +157,11 @@
 			sortKey = col.key;
 			sortDir = 'asc';
 		}
-		if (serverSide) {
-			page = 1;
-			onPageChange?.(1);
-			onSortChange?.(sortDir === 'none' || sortKey == null ? undefined : `${sortDir === 'desc' ? '-' : ''}${sortKey}`);
-		} else {
-			clientPage = 1;
-		}
+		// Reset to the first page on a new sort (both modes) and report sort + page up so a parent can
+		// persist them in the URL. Server-side the parent re-fetches; client-side the grid re-slices.
+		page = 1;
+		onPageChange?.(1);
+		onSortChange?.(serializeSort(sortKey, sortDir));
 	}
 
 	// ── Column ordering: pinned action columns first ──────────────────────────────
@@ -242,13 +266,13 @@
 		return String(a).localeCompare(String(b), undefined, { sensitivity: 'base' });
 	}
 
-	// ── Client-side page state ────────────────────────────────────────────────────
-	let clientPage = $state(1);
-
-	// Sync clientPage from the controlled `page` prop on server-side mode
-	$effect(() => {
-		if (serverSide) clientPage = page;
-	});
+	// ── Page state ──────────────────────────────────────────────────────────────────
+	// `page` (the $bindable prop) is the single source of truth for the current 1-based page in BOTH
+	// modes: server-side the parent feeds the matching slice; client-side the grid slices `sortedData`
+	// by it below. Driving off the prop (rather than a private copy) means a parent that resets it on a
+	// filter change — `page = 1` / `bind:page` — propagates, while user paging writes it back through
+	// `goToPage` and reports via `onPageChange` so it can be persisted in the URL.
+	const clientPage = $derived(page);
 
 	// ── Derived data (sort + slice) ───────────────────────────────────────────────
 	const sortedData = $derived.by(() => {
@@ -277,29 +301,17 @@
 
 	const showPagination = $derived(pageCount > 1);
 
-	const rangeStart = $derived(
-		serverSide
-			? (page - 1) * pageSize + 1
-			: (clientPage - 1) * pageSize + 1
-	);
-	const rangeEnd = $derived(
-		serverSide
-			? Math.min(page * pageSize, effectiveTotalCount)
-			: Math.min(clientPage * pageSize, effectiveTotalCount)
-	);
+	const rangeStart = $derived((page - 1) * pageSize + 1);
+	const rangeEnd = $derived(Math.min(page * pageSize, effectiveTotalCount));
 
 	// ── Pagination navigation ─────────────────────────────────────────────────────
 	function goToPage(p: number) {
 		const clamped = Math.min(Math.max(p, 1), pageCount);
-		if (serverSide) {
-			page = clamped;
-			onPageChange?.(clamped);
-		} else {
-			clientPage = clamped;
-		}
+		page = clamped;
+		onPageChange?.(clamped);
 	}
 
-	const currentPage = $derived(serverSide ? page : clientPage);
+	const currentPage = $derived(page);
 
 	// ── Row key helper ────────────────────────────────────────────────────────────
 	function rowKey(item: T, index: number): string | number {

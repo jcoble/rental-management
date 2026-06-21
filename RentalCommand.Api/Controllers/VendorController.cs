@@ -11,7 +11,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/vendors")]
 [Produces("application/json")]
-public class VendorController : AuthenticatedPortfolioControllerBase
+public class VendorController : ManagementControllerBase
 {
     private readonly IVendorService _service;
     private readonly IVendorDispatchService _dispatch;

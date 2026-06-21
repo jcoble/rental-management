@@ -35,6 +35,12 @@ export interface StandardError {
 	isRetryable?: boolean;
 }
 
+/** A single phrase flagged by the Fair Housing review gate, surfaced on a 422. */
+export interface FairHousingConcern {
+	phrase: string;
+	concern: string;
+}
+
 export class ApiError extends Error {
 	constructor(
 		public status: number,
@@ -44,10 +50,30 @@ export class ApiError extends Error {
 		public errors?: StandardError[],
 		public details?: string[],
 		/** ASP.NET ValidationProblemDetails: { "Field": ["message"] } */
-		public validationErrors?: Record<string, string[]>
+		public validationErrors?: Record<string, string[]>,
+		/**
+		 * Arbitrary ProblemDetails extension members (anything beyond the standard
+		 * type/title/status/detail keys). Lets a soft content gate carry structured
+		 * data — e.g. the Fair Housing review's `fairHousingConcerns` array on a 422.
+		 */
+		public extensions?: Record<string, unknown>
 	) {
 		super(message);
 		this.name = 'ApiError';
+	}
+
+	/**
+	 * The Fair Housing review concerns from a 422 content-gate response, if present.
+	 * `undefined` when the error is anything else, so callers can branch on it.
+	 */
+	get fairHousingConcerns(): FairHousingConcern[] | undefined {
+		const raw = this.extensions?.['fairHousingConcerns'];
+		if (!Array.isArray(raw)) return undefined;
+		const concerns = raw
+			.filter((c): c is Record<string, unknown> => !!c && typeof c === 'object')
+			.map((c) => ({ phrase: String(c.phrase ?? ''), concern: String(c.concern ?? '') }))
+			.filter((c) => c.phrase || c.concern);
+		return concerns.length > 0 ? concerns : undefined;
 	}
 }
 
@@ -154,9 +180,21 @@ function buildErrorFromBody(response: Response, errorData: unknown): ApiError {
 	const message =
 		primaryError?.message ??
 		(typeof body.error === 'string' ? body.error : null) ??
+		// ProblemDetails.detail carries the specific, user-facing reason (e.g. a domain validation
+		// message like "A partial payment requires…"); prefer it over the generic `title`.
+		(typeof body.detail === 'string' ? body.detail : null) ??
 		(typeof body.title === 'string' ? body.title : null) ??
 		(typeof body.message === 'string' ? body.message : null) ??
 		fallbackHttpErrorMessage(response);
+
+	// Carry through any ProblemDetails extension members (everything outside the standard
+	// type/title/status/detail/instance keys) so soft content gates can ship structured data —
+	// e.g. the Fair Housing review's `fairHousingConcerns` array on a 422.
+	const standardKeys = new Set(['type', 'title', 'status', 'detail', 'instance']);
+	const extensions: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(body)) {
+		if (!standardKeys.has(key)) extensions[key] = value;
+	}
 
 	return new ApiError(
 		response.status,
@@ -165,7 +203,8 @@ function buildErrorFromBody(response: Response, errorData: unknown): ApiError {
 		primaryError,
 		errors,
 		Array.isArray(body.details) ? (body.details as string[]) : undefined,
-		validationErrors
+		validationErrors,
+		Object.keys(extensions).length > 0 ? extensions : undefined
 	);
 }
 

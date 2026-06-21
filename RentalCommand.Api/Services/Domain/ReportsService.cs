@@ -402,24 +402,35 @@ public class ReportsService : IReportsService
         var asOf = DateTime.UtcNow;
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
-        // Outstanding = payments still owed (Scheduled/Partial/Late) whose due date is in the past.
+        // Owed-and-overdue, using the SAME predicate as AccountingService.GetPastDueAsync / the Money
+        // pages so the delinquency report and those pages agree: still owed (Scheduled/Partial/Late) AND
+        // either explicitly Late or with a DueDate before now. (Previously this used `DueDate < asOf`
+        // only, which dropped a Late payment whose DueDate hadn't passed — diverging from the Money pages.)
         var owed = _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId &&
                         (p.Status == PaymentStatus.Scheduled ||
                          p.Status == PaymentStatus.Partial ||
                          p.Status == PaymentStatus.Late) &&
-                        p.DueDate < asOf);
+                        (p.Status == PaymentStatus.Late || p.DueDate < asOf));
 
         if (propertyFilter is not null)
             owed = owed.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));
 
-        var overdue = await owed
-            .Select(p => new
+        // Aging by DueDate, computed SQL-side: each bucket is a conditional SUM gated on the DueDate's
+        // age via fixed cutoff dates, and the owed amount is Partial-aware (a Partial owes only its
+        // unpaid remainder; Scheduled/Late owe in full). One grouped round-trip per behind lease — no
+        // payment rows are pulled back to bucket/total in memory. Cutoffs mirror AddToBucket's age
+        // boundaries (0-30 / 31-60 / 61-90 / 90+); a Late payment whose DueDate is in the future ages to
+        // 0 days (DueDate >= current cutoff) and lands in Current, matching AgeInDays' floor-at-0.
+        var current = asOf.AddDays(-30);   // DueDate >= this  → 0-30 days
+        var d60 = asOf.AddDays(-60);       // [d60, current)   → 31-60
+        var d90 = asOf.AddDays(-90);       // [d90, d60)       → 61-90; < d90 → 90+
+
+        var grouped = await owed
+            .GroupBy(p => new
             {
                 p.LeaseId,
-                p.Amount,
-                p.DueDate,
                 p.Lease!.LeaseNumber,
                 p.Lease!.PropertyId,
                 PropertyName = p.Lease!.Property!.Name,
@@ -428,37 +439,45 @@ public class ReportsService : IReportsService
                 TenantFirst = p.Lease!.Tenant!.FirstName,
                 TenantLast = p.Lease!.Tenant!.LastName,
             })
+            .Select(g => new
+            {
+                g.Key,
+                Current = g.Sum(p => p.DueDate >= current
+                    ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) : 0m),
+                Days31To60 = g.Sum(p => p.DueDate < current && p.DueDate >= d60
+                    ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) : 0m),
+                Days61To90 = g.Sum(p => p.DueDate < d60 && p.DueDate >= d90
+                    ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) : 0m),
+                Over90 = g.Sum(p => p.DueDate < d90
+                    ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) : 0m),
+                OldestDueDate = g.Min(p => p.DueDate),
+            })
             .ToListAsync(ct);
 
-        var rows = overdue
-            .GroupBy(p => p.LeaseId)
+        var rows = grouped
             .Select(g =>
             {
-                var first = g.First();
-                var buckets = new DelinquencyBuckets();
-                var oldestDays = 0;
-
-                foreach (var p in g)
+                var buckets = new DelinquencyBuckets
                 {
-                    var days = AgeInDays(p.DueDate, asOf);
-                    if (days > oldestDays) oldestDays = days;
-                    AddToBucket(buckets, days, p.Amount);
-                }
-
-                var total = buckets.Current + buckets.Days31To60 + buckets.Days61To90 + buckets.Over90;
-
+                    Current = g.Current,
+                    Days31To60 = g.Days31To60,
+                    Days61To90 = g.Days61To90,
+                    Over90 = g.Over90,
+                };
                 return new DelinquencyRow
                 {
-                    LeaseId = first.LeaseId,
-                    LeaseNumber = first.LeaseNumber,
-                    PropertyId = first.PropertyId,
-                    PropertyName = first.PropertyName,
-                    UnitNumber = first.UnitNumber,
-                    TenantId = first.TenantId,
-                    TenantName = $"{first.TenantFirst} {first.TenantLast}".Trim(),
+                    LeaseId = g.Key.LeaseId,
+                    LeaseNumber = g.Key.LeaseNumber,
+                    PropertyId = g.Key.PropertyId,
+                    PropertyName = g.Key.PropertyName,
+                    UnitNumber = g.Key.UnitNumber,
+                    TenantId = g.Key.TenantId,
+                    TenantName = $"{g.Key.TenantFirst} {g.Key.TenantLast}".Trim(),
                     Buckets = buckets,
-                    Total = total,
-                    OldestOverdueDays = oldestDays,
+                    Total = buckets.Current + buckets.Days31To60 + buckets.Days61To90 + buckets.Over90,
+                    // Oldest age from the single per-lease Min(DueDate) — derived from an aggregate, not
+                    // by scanning rows.
+                    OldestOverdueDays = AgeInDays(g.OldestDueDate, asOf),
                 };
             })
             .OrderByDescending(r => r.OldestOverdueDays)
@@ -505,41 +524,47 @@ public class ReportsService : IReportsService
         var (from, to) = ResolveRange(query);
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
-        // Money in: paid payments, cash dated on PaidDate (falling back to DueDate). Keyed to a property
-        // via the lease so a property filter applies.
+        // Money in: collected cash dated on PaidDate (falling back to DueDate), in range. "Collected"
+        // matches the Money pages: a Paid payment contributes its full Amount, a Partial contributes its
+        // collected AmountPaid. Keyed to a property via the lease so a property filter applies. The date
+        // range is pushed into the WHERE and the monthly buckets are produced by a GROUP BY on the
+        // (year, month) of the cash date with conditional SUMs — one grouped round-trip, no rows loaded.
         var incomeQuery = _db.Payments
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid);
+            .Where(p => p.PortfolioId == portfolioId &&
+                        (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
+                        (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to);
 
         if (propertyFilter is not null)
             incomeQuery = incomeQuery.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));
 
-        var incomeRows = await incomeQuery
-            .Select(p => new { p.Amount, When = p.PaidDate ?? p.DueDate })
-            .ToListAsync(ct);
+        var incomeByMonth = (await incomeQuery
+            .GroupBy(p => new { (p.PaidDate ?? p.DueDate).Year, (p.PaidDate ?? p.DueDate).Month })
+            .Select(g => new
+            {
+                g.Key.Year,
+                g.Key.Month,
+                Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount),
+            })
+            .ToListAsync(ct))
+            .ToDictionary(r => $"{r.Year:D4}-{r.Month:D2}", r => r.Total);
 
-        // Money out: expenses, cash dated on PaidAt (falling back to IncurredAt). A property filter only
-        // matches expenses tied to a property; unassigned expenses are excluded when a filter is set.
+        // Money out: expenses, cash dated on PaidAt (falling back to IncurredAt), in range. A property
+        // filter only matches expenses tied to a property; unassigned expenses are excluded when a filter
+        // is set. Same DB-side date-filter + monthly GROUP BY as the income stream.
         var expenseQuery = _db.Expenses
             .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId);
+            .Where(e => e.PortfolioId == portfolioId &&
+                        (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to);
 
         if (propertyFilter is not null)
             expenseQuery = expenseQuery.Where(e => e.PropertyId != null && propertyFilter.Contains(e.PropertyId.Value));
 
-        var expenseRows = await expenseQuery
-            .Select(e => new { e.Amount, When = e.PaidAt ?? e.IncurredAt })
-            .ToListAsync(ct);
-
-        var incomeInRange = incomeRows.Where(r => r.When >= from && r.When <= to).ToList();
-        var expenseInRange = expenseRows.Where(r => r.When >= from && r.When <= to).ToList();
-
-        var incomeByMonth = incomeInRange
-            .GroupBy(r => MonthKey(r.When))
-            .ToDictionary(g => g.Key, g => g.Sum(r => r.Amount));
-        var expenseByMonth = expenseInRange
-            .GroupBy(r => MonthKey(r.When))
-            .ToDictionary(g => g.Key, g => g.Sum(r => r.Amount));
+        var expenseByMonth = (await expenseQuery
+            .GroupBy(e => new { (e.PaidAt ?? e.IncurredAt).Year, (e.PaidAt ?? e.IncurredAt).Month })
+            .Select(g => new { g.Key.Year, g.Key.Month, Total = g.Sum(e => e.Amount) })
+            .ToListAsync(ct))
+            .ToDictionary(r => $"{r.Year:D4}-{r.Month:D2}", r => r.Total);
 
         var months = EnumerateMonths(from, to)
             .Select(m =>
@@ -570,8 +595,6 @@ public class ReportsService : IReportsService
             TotalNet = months.Sum(m => m.Net),
         };
     }
-
-    private static string MonthKey(DateTime when) => $"{when.Year:D4}-{when.Month:D2}";
 
     /// <summary>Yields the (year, month) of every calendar month the [from, to] range touches, inclusive.</summary>
     internal static IEnumerable<(int Year, int Month)> EnumerateMonths(DateTime from, DateTime to)
