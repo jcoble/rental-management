@@ -86,6 +86,12 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     /// </summary>
     public DbSet<AccountingTransactionView> AccountingTransactionViews => Set<AccountingTransactionView>();
 
+    // --- Accounting-integration backbone (provider-agnostic; QuickBooks is provider #1) ---
+    public DbSet<AccountingConnection> AccountingConnections => Set<AccountingConnection>();
+    public DbSet<OAuthState> OAuthStates => Set<OAuthState>();
+    public DbSet<AccountingEntityMapping> AccountingEntityMappings => Set<AccountingEntityMapping>();
+    public DbSet<AccountingSyncMap> AccountingSyncMaps => Set<AccountingSyncMap>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         // Configures the ASP.NET Identity schema (AspNetUsers/Roles/etc.) with int keys.
@@ -341,6 +347,95 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.MatchedExpenseId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        // --- Accounting-integration backbone (provider-agnostic; QuickBooks is provider #1) ---
+        modelBuilder.Entity<AccountingConnection>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Provider).HasConversion<int>();
+            entity.Property(e => e.Status).HasConversion<int>();
+            entity.Property(e => e.ExternalAccountId).HasMaxLength(200);
+            entity.Property(e => e.CompanyName).HasMaxLength(200);
+            // OAuth tokens at rest: encrypted cipher text only (AC-4), sized like the BankConnection columns.
+            entity.Property(e => e.AccessTokenCipherText).HasMaxLength(4000);
+            entity.Property(e => e.RefreshTokenCipherText).HasMaxLength(4000);
+            entity.Property(e => e.LastPulledAtJson).HasColumnType("jsonb");
+            entity.Property(e => e.LastError).HasMaxLength(2000);
+            entity.HasIndex(e => e.PortfolioId);
+            // One row per portfolio per provider.
+            entity.HasIndex(e => new { e.PortfolioId, e.Provider }).IsUnique();
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<OAuthState>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Provider).HasConversion<int>();
+            entity.Property(e => e.StateToken).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.RedirectUri).IsRequired().HasMaxLength(2048);
+            entity.Property(e => e.CodeVerifier).HasMaxLength(256);
+            // Single-use lookup key — unique so a replayed state can never match two rows.
+            entity.HasIndex(e => e.StateToken).IsUnique();
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.ExpiresAt);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AccountingEntityMapping>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.LocalEntityType).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.LocalEnumValue).HasMaxLength(80);
+            entity.Property(e => e.ExternalType).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.ExternalId).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.ExternalDisplayName).HasMaxLength(300);
+            entity.Property(e => e.Confidence).HasPrecision(5, 4);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.AccountingConnectionId);
+            // One mapping per external entity per connection (confirmed or suggested).
+            entity.HasIndex(e => new { e.PortfolioId, e.AccountingConnectionId, e.ExternalType, e.ExternalId })
+                .IsUnique();
+            entity.HasOne(e => e.AccountingConnection)
+                .WithMany()
+                .HasForeignKey(e => e.AccountingConnectionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AccountingSyncMap>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Direction).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.ExternalType).IsRequired().HasMaxLength(40);
+            entity.Property(e => e.ExternalId).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.LocalEntityType).HasMaxLength(40);
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(20);
+            entity.Property(e => e.LastError).HasMaxLength(2000);
+            // Raw external payload stashed for a confirm-driven retry (Postgres jsonb; mapped to TEXT on SQLite).
+            entity.Property(e => e.MetadataJson).HasColumnType("jsonb");
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.AccountingConnectionId);
+            // The idempotency ledger key (AC-5): one row per external txn per direction.
+            entity.HasIndex(e => new { e.PortfolioId, e.AccountingConnectionId, e.Direction, e.ExternalType, e.ExternalId })
+                .IsUnique();
+            entity.HasOne(e => e.AccountingConnection)
+                .WithMany()
+                .HasForeignKey(e => e.AccountingConnectionId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<NoticeDraft>(entity =>
@@ -1435,8 +1530,12 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
         modelBuilder.Entity<LoanPayment>().HasQueryFilter(e => e.Loan!.DeletedAt == null);
 
         // Dependents of Portfolio (Portfolio has `DeletedAt == null`).
+        modelBuilder.Entity<AccountingConnection>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<AccountingEntityMapping>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<AccountingSyncMap>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<Appointment>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<BankConnection>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+        modelBuilder.Entity<OAuthState>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<BankTransaction>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<Conversation>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
         modelBuilder.Entity<DeviceToken>().HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
