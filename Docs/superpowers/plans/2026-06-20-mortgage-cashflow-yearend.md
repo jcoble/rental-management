@@ -19,42 +19,58 @@
 
 ---
 
-## Phase A — Data model + workers
+## Phase A — Data model + workers  ✅ COMPLETE (commits d8b8d78 → 33664ed)
 
-### Task A1: `Loan` + `LoanPayment` entities + migration
-**Files:** Create `RentalCommand.Core/Entities/Loan.cs`, `LoanPayment.cs`, `RentalCommand.Core/Enums/LoanStatus.cs`; modify `RentalCommandDbContext.cs`; generate migration.
-- [ ] Create entities exactly per spec §4 (Loan: per-Property FK, P&I, escrow fields, balance, status; LoanPayment: split amounts, PeriodKey, BalanceAfter). `LoanStatus { Active, PaidOff, Closed }`.
-- [ ] Configure FKs + indexes (Loan.PropertyId; LoanPayment.LoanId; unique (LoanId, PeriodKey) for idempotency).
-- [ ] `dotnet ef migrations add AddLoans`; review SQL.
-- [ ] `dotnet build RentalCommand.sln`. [ ] Commit `feat(api): Loan + LoanPayment entities`.
+### Task A1: `Loan` + `LoanPayment` entities + migration ✅
+**Files:** `RentalCommand.Core/Entities/Loan.cs`, `LoanPayment.cs`, `RentalCommand.Core/Enums/LoanStatus.cs` + `LoanPaymentStatus.cs`; `RentalCommandDbContext.cs`; migration `AddLoans`.
+- [x] Entities per spec §4 + §18: Loan (per-Property FK, P&I, escrow + `EscrowCoversTaxes/Insurance`, `CurrentBalance` documented as a **derived cache**, status, soft delete); LoanPayment (interest/principal/escrow/total split, `PeriodKey`, `BalanceAfter`, `PaymentDoesNotCoverInterest` neg-am flag). `LoanStatus { Active, PaidOff, Closed }`.
+- [x] FKs + unique `(LoanId, PeriodKey)` idempotency index; soft-delete query filter (LoanPayment filters via `Loan.DeletedAt`). Enums stored as int (matches Payment/Expense); JSON serializes as strings.
+- [x] `dotnet ef migrations add AddLoans` (reviewed; not applied to shared DB). Build + commit.
 
-### Task A2: Amortization split + `DebtServiceWorker` (UNIT-TESTED)
-**Files:** Create `RentalCommand.Core/Services/AmortizationCalculator.cs` (pure); `RentalCommand.Engine/Workers/DebtServiceWorker.cs`; tests `RentalCommand.*Tests/AmortizationCalculatorTests.cs`.
-**Interfaces — Produces:** `static LoanPaymentSplit AmortizationCalculator.Split(decimal balance, decimal annualRatePct, decimal monthlyPI, decimal monthlyEscrow)` → `{ Interest, Principal, Escrow, Total, BalanceAfter, PaidOff }`.
-- [ ] **Write failing tests** encoding spec §5: e.g. balance 200000, rate 6%, P&I 1199.10 → interest 1000.00, principal 199.10, balanceAfter 199800.90; final-payment guard (principal ≥ balance → balanceAfter 0, PaidOff true); payment < interest → principal 0 (no negative amortization for v1, flag), balance unchanged or grows by deficit per reviewer guidance.
-- [ ] Run tests → FAIL.
-- [ ] Implement `Split` per §5 (decimal, round cents, final-payment guard, no negative balance).
-- [ ] Run tests → PASS.
-- [ ] Implement `DebtServiceWorker` mirroring `RentChargeWorker` (monthly, idempotent by (LoanId, PeriodKey), creates `LoanPayment` via `Split`, updates `Loan.CurrentBalance`/`Status`).
-- [ ] `dotnet build`. [ ] Commit `feat(engine): amortization split + monthly debt-service worker`.
+### Task A2: Amortization split + `DebtServiceWorker` (UNIT-TESTED) ✅
+**Files:** `RentalCommand.Core/Services/AmortizationCalculator.cs` (pure); `RentalCommand.Engine/Services/{IDebtServiceService,DebtServiceService}.cs` + `Workers/DebtServiceWorker.cs`; tests `RentalCommand.Core.Tests/AmortizationCalculatorTests.cs` (13) + `RentalCommand.Engine.Tests/Automation/DebtServiceServiceTests.cs` (5).
+**Produces:** `AmortizationCalculator.Split(openingBalance, annualRatePct, monthlyPI, monthlyEscrow)` → `{ OpeningBalance, Interest, Principal, Escrow, Total, BalanceAfter, PaidOff, DoesNotCoverInterest }`; plus `BuildSchedule(...)` for the immutable chain.
+- [x] §5 split with the §18 fixes (TDD red→green): final-payment close; **negative-amortization guard** (P&I ≤ interest → principal 0, balance never grows, flagged). All decimal/cents.
+- [x] `BuildSchedule` chains each period from the prior `BalanceAfter` (**immutable opening balance**) and stops at the earlier of payoff or term (**maturity stop**) — never a period past `TermMonths`.
+- [x] `DebtServiceService` mirrors `RentChargeService`: hourly worker, idempotent by `(LoanId, PeriodKey)` (unique index backstop), catches up missed months chaining from the prior row (not the live `CurrentBalance`), honors the maturity stop, updates the cached balance/status (PaidOff). Build + commit.
 
-### Task A3: Property basis fields (depreciation inputs) + migration
-**Files:** Modify `Property.cs` (+ `PurchasePrice`, `LandValue`, `InServiceDate`, `ManualAnnualDepreciation` per §4); Property DTOs; migration.
-- [ ] Add fields + thread through Property create/update DTOs/service. [ ] `dotnet ef migrations add AddPropertyBasis`; review SQL. [ ] `dotnet build`. [ ] Commit `feat(api): property cost-basis fields for depreciation`.
+### Task A3: Property basis fields (depreciation inputs) + migration ✅
+**Files:** `Property.cs` (+ `PurchasePrice`, `LandValue`, `InServiceDate`, `ManualAnnualDepreciation`, **`AccumulatedDepreciation` default 0** per §4/§18); Property DTOs + `PropertyService`; migration `AddPropertyBasis`.
+- [x] Fields threaded through Property response/create/update DTOs + service; `AccumulatedDepreciation` is read-only on the wire (system-maintained). Migration backfills 0 accumulated. Build + commit.
 
-### Task A4: Depreciation calculator (UNIT-TESTED)
-**Files:** Create `RentalCommand.Core/Services/DepreciationCalculator.cs` (pure); tests.
-**Interfaces — Produces:** `static decimal DepreciationCalculator.AnnualForYear(PropertyBasis basis, int year)`.
-- [ ] **Write failing tests** encoding §6: building basis = purchase − land; ÷ 27.5; partial-year proration by months in service; manual override wins; cap at building basis (cumulative); 0 before in-service / after fully depreciated. (e.g. purchase 300k, land 60k → building 240k; full-year 8727.27; in-service July → 6 months → 4363.64.)
-- [ ] Run → FAIL. [ ] Implement per §6 (decimal, round cents). [ ] Run → PASS. [ ] `dotnet build`. [ ] Commit `feat(api): straight-line depreciation calculator (27.5yr, override)`.
+### Task A4: Depreciation calculator (UNIT-TESTED) ✅
+**Files:** `RentalCommand.Core/Services/DepreciationCalculator.cs` (pure); tests `RentalCommand.Core.Tests/DepreciationCalculatorTests.cs` (13).
+**Produces:** `DepreciationCalculator.AnnualForYear(PropertyDepreciationBasis basis, int year)` → `{ Amount, IsFirstYearEstimate }`.
+- [x] §6 + §18 (TDD red→green): building basis = purchase − land; ÷ 27.5; **in-service year = IRS mid-month** (`monthsAfterInServiceMonth + 0.5`), flagged as first-year estimate; manual override wins; **cumulative cap at building basis via `AccumulatedDepreciation`**; 0 before in-service / once fully depreciated. Worked examples pinned: full year 8,727.27; **July → 4,000.00** (mid-month 5.5mo, NOT the old §6 6-month 4,363.64); Jan → 8,363.64; Dec → 363.64. Build + commit.
 
-### Task A5: `RecurringExpense` + worker + migration
-**Files:** Create `RecurringExpense.cs` (+ frequency enum); `RecurringExpenseWorker.cs`; migration.
-- [ ] Entity per §4; worker mirrors `RentChargeWorker` (idempotent per template+period → materializes `Expense` rows with correct Category/Property/Unit/IncurredAt; advances NextRunDate). [ ] `dotnet ef migrations add AddRecurringExpenses`; review SQL. [ ] `dotnet build`. [ ] Commit `feat(engine): recurring expenses (enter once, materialize monthly)`.
+### Task A5: `RecurringExpense` + worker + migration ✅
+**Files:** `RecurringExpense.cs` + `Enums/RecurringExpenseFrequency.cs` `{ Monthly, Quarterly, Annual }`; `RentalCommand.Engine/Services/{IRecurringExpenseGenerationService,RecurringExpenseGenerationService}.cs` + `Workers/RecurringExpenseWorker.cs`; migration `AddRecurringExpenses`; tests `RentalCommand.Engine.Tests/Automation/RecurringExpenseGenerationServiceTests.cs` (5).
+- [x] Entity per §4; worker mirrors `RecurringMaintenanceService`'s idempotent pattern — idempotency by **schedule advancement** (one expense per template per period; inserts + NextRunDate advance commit in one transaction). Catches up missed periods (one dated `Expense` each, correct Category/Property/Unit/IncurredAt), capped at 36 to avoid flooding. Build + commit.
+
+### Task A6 (added): Payment.AmountPaid (actual cash received) ✅
+**Files:** `Payment.cs` (+ `AmountPaid` decimal?); `RentalCommandDbContext.cs`; migration `AddPaymentAmountPaid`.
+- [x] §18: income must sum cash received, not amount due. Field + EF config + migration are **byte-identical to `feat/scan-front-door`** (same column/type/nullability + verbatim XML-doc) so the branches reconcile (not duplicate); the population (`PaymentService.NormalizeAmountPaid`) + DTO/aggregation plumbing live on scan-front-door and arrive at merge. Report queries read it via the canonical `Partial ? AmountPaid : Amount` idiom.
+
+### Task A7 (added): Loan + RecurringExpense CRUD ✅
+**Files:** `Api/DTOs/{LoanDtos,RecurringExpenseDtos}.cs`; `Api/Services/Domain/{I,}LoanService.cs`, `{I,}RecurringExpenseService.cs`; `Api/Controllers/{Loan,RecurringExpense}Controller.cs`; DI in `ServiceCollectionExtensions.cs`; tests `LoanServiceTests` (6) + `RecurringExpenseServiceTests` (5).
+- [x] Full CRUD under `/api/v1/loans` (+ `{id}/payments` amortization read) and `/api/v1/recurring-expenses`, portfolio-scoped, in-portfolio FK IDOR guards, soft-delete. Build + commit.
 
 ---
 
 ## Phase B — Computations & reports (DB-side)
+
+> **§18 deltas binding on all of Phase B (override §§7–10 where they conflict):**
+> - **Income = actual cash received:** sum `AmountPaid` for `Status IN (Paid, Partial)` via the canonical
+>   `Partial ? (AmountPaid ?? 0) : Amount` idiom (a `Paid` row's `AmountPaid` is null → its full `Amount`);
+>   types `Rent + LateFee`; exclude `SecurityDeposit`. Never sum `Amount` for income.
+> - **B2 `GetCashFlowAsync` is REWRITTEN, not extended:** the L503–572 in-memory `.ToListAsync()` + GroupBy/Sum
+>   is replaced by SQL `GroupBy(month)` + `Sum` (copy `ScheduleEService`'s DB-side pattern). The old in-memory
+>   version must be **gone**. Escrow exclusion is **category-specific**: drop `Taxes` only if `EscrowCoversTaxes`,
+>   `Insurance` only if `EscrowCoversInsurance`.
+> - **B3 depreciation is per-property** (from each property's own basis/in-service, placed on that property's
+>   block, summed for the portfolio total) using the A4 calculator; deterministic legacy double-count exclusion
+>   (Loan exists → exclude category `MortgageInterest`; computed depreciation applies → exclude `Depreciation`).
+> - **B4** surfaces the §18 "see your accountant" labels (mid-year sale, capex-vs-repairs, passive-loss).
 
 ### Task B1: Deposit-as-income fix
 **Files:** Modify `RentalCommand.Api/Services/Domain/ReportsService.cs` (cash-flow query ~L532–539) + the money-snapshot / owner-statement / year-end income queries.
