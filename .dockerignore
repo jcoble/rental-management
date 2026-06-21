@@ -1,0 +1,42 @@
+# Keep the Docker build context small. The API/Engine images use a NARROW context
+# (publish/<app>); only the Web image uses the repo root, and Dockerfile.web copies just web/.
+# Before this file existed the whole repo (mobile/, output/, Docs, bin/obj, node_modules…) was
+# sent to the daemon on every web build.
+
+# Git
+.git
+.gitignore
+
+# Build outputs
+**/bin
+**/obj
+**/out
+# Runner-published .NET output (the API/Engine images take publish/<app> as their own context).
+**/publish
+
+# Node / frontend deps (the web image runs its own pnpm install)
+**/node_modules
+
+# Heavy trees not needed by ANY image build
+mobile
+Docs
+output
+uploads
+samples
+
+# Test results & projects
+**/TestResults
+**/*.Tests
+
+# Dockerfiles / compose are passed via -f; not needed inside the context
+**/docker-compose*.yml
+**/Dockerfile*
+
+# Docs / editor / local dev / secrets
+*.md
+!README.md
+**/*.user
+**/.env*
+**/appsettings.Development.json
+**/appsettings.Local.json
+**/secrets.json

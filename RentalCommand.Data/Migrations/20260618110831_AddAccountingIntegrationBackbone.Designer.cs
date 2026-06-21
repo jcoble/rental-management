@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using RentalCommand.Data;
@@ -11,9 +12,11 @@ using RentalCommand.Data;
 namespace RentalCommand.Data.Migrations
 {
     [DbContext(typeof(RentalCommandDbContext))]
-    partial class RentalCommandDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260618110831_AddAccountingIntegrationBackbone")]
+    partial class AddAccountingIntegrationBackbone
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -341,9 +344,6 @@ namespace RentalCommand.Data.Migrations
                     b.Property<string>("LocalEntityType")
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)");
-
-                    b.Property<string>("MetadataJson")
-                        .HasColumnType("jsonb");
 
                     b.Property<int>("PortfolioId")
                         .HasColumnType("integer");
@@ -1177,9 +1177,6 @@ namespace RentalCommand.Data.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
-                    b.Property<int?>("UnitId")
-                        .HasColumnType("integer");
-
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1196,8 +1193,6 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PropertyId");
 
                     b.HasIndex("Status");
-
-                    b.HasIndex("UnitId");
 
                     b.HasIndex("VendorId");
 
@@ -1536,153 +1531,6 @@ namespace RentalCommand.Data.Migrations
 
                             t.HasCheckConstraint("CK_Lease_StartBeforeEnd", "\"StartDate\" < \"EndDate\"");
                         });
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.Loan", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<decimal>("AnnualInterestRatePct")
-                        .HasPrecision(9, 4)
-                        .HasColumnType("numeric(9,4)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal>("CurrentBalance")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<int>("DayOfMonthDue")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("EscrowCoversInsurance")
-                        .HasColumnType("boolean");
-
-                    b.Property<bool>("EscrowCoversTaxes")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Lender")
-                        .IsRequired()
-                        .HasMaxLength(200)
-                        .HasColumnType("character varying(200)");
-
-                    b.Property<decimal>("MonthlyEscrow")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("MonthlyPrincipalInterest")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<string>("Notes")
-                        .HasMaxLength(2000)
-                        .HasColumnType("character varying(2000)");
-
-                    b.Property<decimal>("OriginalAmount")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<int>("PortfolioId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("PropertyId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("StartDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("TermMonths")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("PortfolioId");
-
-                    b.HasIndex("PropertyId");
-
-                    b.HasIndex("Status");
-
-                    b.ToTable("Loans");
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.LoanPayment", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<decimal>("BalanceAfter")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime>("DueDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal>("EscrowAmount")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal>("InterestAmount")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<int>("LoanId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime?>("PaidDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("PaymentDoesNotCoverInterest")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("PeriodKey")
-                        .IsRequired()
-                        .HasMaxLength(7)
-                        .HasColumnType("character varying(7)");
-
-                    b.Property<int>("PortfolioId")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("PrincipalAmount")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("integer");
-
-                    b.Property<decimal>("TotalAmount")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("LoanId");
-
-                    b.HasIndex("PortfolioId");
-
-                    b.HasIndex("LoanId", "PeriodKey")
-                        .IsUnique();
-
-                    b.ToTable("LoanPayments");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.NoticeDraft", b =>
@@ -2552,10 +2400,6 @@ namespace RentalCommand.Data.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
-                    b.Property<decimal>("AccumulatedDepreciation")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
                     b.Property<string>("AddressLine1")
                         .IsRequired()
                         .HasMaxLength(250)
@@ -2576,18 +2420,7 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime?>("DeletedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<DateTime?>("InServiceDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<decimal?>("LandValue")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
                     b.Property<decimal?>("ManagementFeePercent")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<decimal?>("ManualAnnualDepreciation")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
@@ -2616,10 +2449,6 @@ namespace RentalCommand.Data.Migrations
 
                     b.Property<int>("PropertyType")
                         .HasColumnType("integer");
-
-                    b.Property<decimal?>("PurchasePrice")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
 
                     b.Property<string>("State")
                         .IsRequired()
@@ -2693,73 +2522,6 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("Status");
 
                     b.ToTable("QueuedJobs");
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.RecurringExpense", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<bool>("Active")
-                        .HasColumnType("boolean");
-
-                    b.Property<decimal>("Amount")
-                        .HasPrecision(18, 2)
-                        .HasColumnType("numeric(18,2)");
-
-                    b.Property<int>("Category")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("DeletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Description")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("character varying(500)");
-
-                    b.Property<int>("Frequency")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("NextRunDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Notes")
-                        .HasMaxLength(2000)
-                        .HasColumnType("character varying(2000)");
-
-                    b.Property<int>("PortfolioId")
-                        .HasColumnType("integer");
-
-                    b.Property<int?>("PropertyId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("StartDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int?>("UnitId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("PortfolioId");
-
-                    b.HasIndex("PropertyId");
-
-                    b.HasIndex("UnitId");
-
-                    b.HasIndex("Active", "NextRunDate");
-
-                    b.ToTable("RecurringExpenses");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.RecurringMaintenanceTask", b =>
@@ -4333,11 +4095,6 @@ namespace RentalCommand.Data.Migrations
                         .HasForeignKey("PropertyId")
                         .OnDelete(DeleteBehavior.SetNull);
 
-                    b.HasOne("RentalCommand.Core.Entities.Unit", "Unit")
-                        .WithMany()
-                        .HasForeignKey("UnitId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("RentalCommand.Core.Entities.Vendor", "Vendor")
                         .WithMany("Expenses")
                         .HasForeignKey("VendorId")
@@ -4351,8 +4108,6 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Portfolio");
 
                     b.Navigation("Property");
-
-                    b.Navigation("Unit");
 
                     b.Navigation("Vendor");
 
@@ -4482,44 +4237,6 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Tenant");
 
                     b.Navigation("Unit");
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.Loan", b =>
-                {
-                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
-                        .WithMany()
-                        .HasForeignKey("PortfolioId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("RentalCommand.Core.Entities.Property", "Property")
-                        .WithMany()
-                        .HasForeignKey("PropertyId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Portfolio");
-
-                    b.Navigation("Property");
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.LoanPayment", b =>
-                {
-                    b.HasOne("RentalCommand.Core.Entities.Loan", "Loan")
-                        .WithMany("Payments")
-                        .HasForeignKey("LoanId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
-                        .WithMany()
-                        .HasForeignKey("PortfolioId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Loan");
-
-                    b.Navigation("Portfolio");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.NoticeDraft", b =>
@@ -4750,31 +4467,6 @@ namespace RentalCommand.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Portfolio");
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.RecurringExpense", b =>
-                {
-                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
-                        .WithMany()
-                        .HasForeignKey("PortfolioId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("RentalCommand.Core.Entities.Property", "Property")
-                        .WithMany()
-                        .HasForeignKey("PropertyId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.HasOne("RentalCommand.Core.Entities.Unit", "Unit")
-                        .WithMany()
-                        .HasForeignKey("UnitId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("Portfolio");
-
-                    b.Navigation("Property");
-
-                    b.Navigation("Unit");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.RecurringMaintenanceTask", b =>
@@ -5204,11 +4896,6 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Payments");
 
                     b.Navigation("WorkOrders");
-                });
-
-            modelBuilder.Entity("RentalCommand.Core.Entities.Loan", b =>
-                {
-                    b.Navigation("Payments");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.Owner", b =>
