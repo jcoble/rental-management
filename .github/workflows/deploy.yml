@@ -64,6 +64,23 @@ jobs:
         id: meta
         run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
+      # Keep the shared build box off 100% disk, which silently drops the self-hosted runner
+      # offline mid-build (it can't even write a log line) -- happened 2026-06-21, 72/75G full.
+      # Dangling volumes are pure waste on a build box (no app runs here) and were the biggest
+      # creep, so ALWAYS clear them. Only sacrifice the warm image/layer cache when disk is
+      # genuinely low, so normal builds keep their fast incremental cache.
+      - name: Reclaim build-box disk
+        run: |
+          echo "before: $(df -h / | awk 'NR==2{print $4" free / "$2" ("$5" used)"}')"
+          docker volume prune -f >/dev/null 2>&1 || true
+          avail_kb=$(df -P / | awk 'NR==2{print $4}')
+          if [ "${avail_kb:-0}" -lt 15000000 ]; then
+            echo "low disk (<15G free) -- pruning old tagged images + build cache too"
+            docker image prune -af --filter 'until=24h' >/dev/null 2>&1 || true
+            docker builder prune -af >/dev/null 2>&1 || true
+          fi
+          echo "after:  $(df -h / | awk 'NR==2{print $4" free / "$2" ("$5" used)"}')"
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
