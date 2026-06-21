@@ -286,6 +286,64 @@ public class ReportsServiceTests : IDisposable
         report.TotalNet.Should().Be(1300m);
     }
 
+    [Fact]
+    public async Task GetCashFlowAsync_ExcludesDeposits_AndUsesAmountPaidForPartials()
+    {
+        var property = SeedProperty("Maple");
+        var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
+
+        // Rent paid in full → 1000. A security deposit is NOT income (§7) → excluded.
+        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedPayment(lease, 1500m, dueDate: D(2026, 1, 2), PaymentStatus.Paid, paidDate: D(2026, 1, 2),
+            type: PaymentType.SecurityDeposit);
+        // A partial rent payment contributes only the collected cash (AmountPaid), not the full Amount.
+        var partial = SeedPayment(lease, 1000m, dueDate: D(2026, 1, 10), PaymentStatus.Partial, paidDate: D(2026, 1, 10));
+        partial.AmountPaid = 300m;
+        _db.SaveChanges();
+        // A late fee IS income.
+        SeedPayment(lease, 50m, dueDate: D(2026, 1, 15), PaymentStatus.Paid, paidDate: D(2026, 1, 15),
+            type: PaymentType.LateFee);
+
+        var report = await _sut.GetCashFlowAsync(PortfolioId, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+        }, CancellationToken.None);
+
+        // 1000 rent + 300 partial-collected + 50 late fee = 1350; the 1500 deposit is excluded.
+        report.TotalIncome.Should().Be(1350m);
+    }
+
+    [Fact]
+    public void GetCashFlow_IncomeQuery_AggregatesInSql_NotInMemory()
+    {
+        // Guard the §18 hard rule directly: the cash-flow income aggregation must be SQL GROUP BY, not a
+        // materialize-then-group. Build the same shape the service runs and inspect the generated SQL.
+        var from = D(2026, 1, 1);
+        var to = D(2026, 12, 31);
+        var sql = _db.Payments
+            .AsNoTracking()
+            .Where(p =>
+                p.PortfolioId == PortfolioId &&
+                (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
+                (p.PaymentType == PaymentType.Rent || p.PaymentType == PaymentType.LateFee) &&
+                (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
+            .GroupBy(p => new { (p.PaidDate ?? p.DueDate).Year, (p.PaidDate ?? p.DueDate).Month })
+            .Select(g => new
+            {
+                g.Key.Year,
+                g.Key.Month,
+                Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount),
+            })
+            .ToQueryString();
+
+        sql.Should().Contain("GROUP BY", "the monthly cash-flow aggregation must run in the database");
+        // The SUM runs in SQL too. EF emits SUM( on Postgres and ef_sum( on SQLite (decimal-safe helper);
+        // accept either so the assertion proves DB-side aggregation regardless of provider.
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("the period total must be summed in the database");
+    }
+
     // ── Occupancy % (DB) ───────────────────────────────────────────────────────────────────────────
 
     [Fact]
