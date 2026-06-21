@@ -377,12 +377,19 @@ export const recurringExpenseSchema = z.object({
 });
 
 // Property depreciation basis (optional inline fields on the property edit form).
-export const propertyBasisSchema = z.object({
-	purchasePrice: optionalNonNegative('Purchase price'),
-	landValue: optionalNonNegative('Land value'),
-	inServiceDate: optionalText,
-	manualAnnualDepreciation: optionalNonNegative('Manual depreciation'),
-});
+export const propertyBasisSchema = z
+	.object({
+		purchasePrice: optionalNonNegative('Purchase price'),
+		landValue: optionalNonNegative('Land value'),
+		inServiceDate: optionalText,
+		manualAnnualDepreciation: optionalNonNegative('Manual depreciation'),
+	})
+	// Land is not depreciable, so the building basis is purchase − land. Land exceeding the purchase
+	// price makes the basis negative (silently floored to 0 → $0 depreciation), so reject it up front.
+	.refine((d) => d.purchasePrice == null || d.landValue == null || d.landValue <= d.purchasePrice, {
+		path: ['landValue'],
+		message: 'Land value cannot exceed the purchase price',
+	});
 
 export const appointmentSchema = z.object({
 	title: required('Title'),

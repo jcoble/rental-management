@@ -76,7 +76,9 @@
 	}
 
 	const createMut = createMutation(() => ({
-		mutationFn: (data: Record<string, unknown>) => recurringExpenses.create({ propertyId, ...data }),
+		// Spread `data` first, then pin `propertyId` so the real id wins: the form schema carries a
+		// null `propertyId`, which would otherwise clobber the prop and save the expense unassigned.
+		mutationFn: (data: Record<string, unknown>) => recurringExpenses.create({ ...data, propertyId }),
 		onSuccess: () => {
 			showSuccess('Recurring expense added.');
 			closeForm();
