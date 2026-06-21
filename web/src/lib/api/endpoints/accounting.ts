@@ -2,11 +2,13 @@ import type {
 	AccountingReports,
 	AccountingSummary,
 	AccountingTransaction,
+	CashFlowSummary,
 	MoneySnapshotResponse,
 	OwnerStatementReport,
 	OwnerStatementSummary,
 	PastDueResponse,
-	ScheduleEReport
+	ScheduleEReport,
+	YearEndView
 } from '$lib/types';
 import { api, refreshToken } from '../client';
 import { CLIENT_API_BASE_URL } from '$lib/config';
@@ -88,6 +90,16 @@ export const accounting = {
 
 	// GET /api/v1/accounting/schedule-e?year=YYYY
 	scheduleE: (year: number) => api.get<ScheduleEReport>(`/accounting/schedule-e?year=${year}`),
+
+	// GET /api/v1/accounting/cash-flow?from=&to= — true cash flow (rent − opex − debt service),
+	// escrow-aware, per property + portfolio. Omitting the range defaults to the current year-to-date.
+	cashFlow: (params?: { from?: string; to?: string }) =>
+		api.get<CashFlowSummary>(`/accounting/cash-flow${buildListQuery(undefined, { from: params?.from, to: params?.to })}`),
+
+	// GET /api/v1/accounting/year-end?year=YYYY — the three-block view (cash flow vs taxable income +
+	// rent roll). Omitting the year defaults to the previous calendar year (the year you file for).
+	yearEnd: (year?: number) =>
+		api.get<YearEndView>(`/accounting/year-end${year != null ? `?year=${year}` : ''}`),
 
 	// GET /api/v1/accounting/owner-statements?year=YYYY
 	ownerStatements: (year: number) =>

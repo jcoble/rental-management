@@ -1,0 +1,198 @@
+<script lang="ts">
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { recurringExpenses, type RecurringExpense } from '$lib/api/endpoints/recurring-expenses';
+	import { recurringExpenseSchema, parseForm } from '$lib/schemas';
+	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { DataGrid } from '$lib/components/data-grid';
+	import type { ColumnDef } from '$lib/components/data-grid/types';
+	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { Button } from '$lib/components/ui/button';
+	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
+
+	let { propertyId }: { propertyId: number } = $props();
+
+	const queryClient = useQueryClient();
+
+	const query = createQuery(() => ({
+		queryKey: ['recurring-expenses', propertyId],
+		queryFn: () => recurringExpenses.list({ propertyId }),
+		enabled: !isNaN(propertyId) && propertyId > 0
+	}));
+	const list = $derived(query.data ?? []);
+
+	const CATEGORIES = ['Advertising', 'AutoTravel', 'CleaningMaintenance', 'Commissions', 'Insurance', 'LegalProfessional', 'ManagementFees', 'MortgageInterest', 'Repairs', 'Supplies', 'Taxes', 'Utilities', 'Depreciation', 'Other'];
+	const categoryOptions = CATEGORIES.map((value) => ({ value, label: value }));
+	const frequencyOptions = [
+		{ value: 'Monthly', label: 'Monthly' },
+		{ value: 'Quarterly', label: 'Quarterly' },
+		{ value: 'Annual', label: 'Annual' }
+	];
+
+	const emptyForm = {
+		category: 'Insurance',
+		description: '',
+		amount: '',
+		frequency: 'Monthly',
+		startDate: '',
+		notes: ''
+	};
+
+	let showForm = $state(false);
+	let editingId = $state<number | null>(null);
+	let form = $state({ ...emptyForm });
+	let formErrors = $state<Record<string, string>>({});
+
+	function openAdd() {
+		editingId = null;
+		form = { ...emptyForm };
+		formErrors = {};
+		showForm = true;
+	}
+
+	function openEdit(t: RecurringExpense) {
+		editingId = t.id;
+		form = {
+			category: t.category,
+			description: t.description,
+			amount: String(t.amount),
+			frequency: t.frequency,
+			startDate: t.startDate ? t.startDate.slice(0, 10) : '',
+			notes: t.notes ?? ''
+		};
+		formErrors = {};
+		showForm = true;
+	}
+
+	function closeForm() {
+		showForm = false;
+		editingId = null;
+		formErrors = {};
+	}
+
+	function invalidate() {
+		queryClient.invalidateQueries({ queryKey: ['recurring-expenses', propertyId] });
+	}
+
+	const createMut = createMutation(() => ({
+		mutationFn: (data: Record<string, unknown>) => recurringExpenses.create({ propertyId, ...data }),
+		onSuccess: () => {
+			showSuccess('Recurring expense added.');
+			closeForm();
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	const updateMut = createMutation(() => ({
+		mutationFn: ({ id, data }: { id: number; data: Record<string, unknown> }) => recurringExpenses.update(id, data),
+		onSuccess: () => {
+			showSuccess('Recurring expense updated.');
+			closeForm();
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	let deleteTarget = $state<RecurringExpense | null>(null);
+	const deleteMut = createMutation(() => ({
+		mutationFn: (id: number) => recurringExpenses.remove(id),
+		onSuccess: () => {
+			showSuccess('Recurring expense removed.');
+			deleteTarget = null;
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	function submit() {
+		const result = parseForm(recurringExpenseSchema, form);
+		if (result.errors) {
+			formErrors = result.errors;
+			return;
+		}
+		formErrors = {};
+		if (editingId != null) {
+			updateMut.mutate({ id: editingId, data: result.data });
+		} else {
+			createMut.mutate(result.data);
+		}
+	}
+
+	const columns: ColumnDef<RecurringExpense>[] = [
+		{ key: 'description', title: 'Description', sortable: true, mobileRole: 'title' },
+		{ key: 'category', title: 'Category', sortable: true, mobileRole: 'subtitle' },
+		{ key: 'amount', title: 'Amount', format: 'currency', sortable: true, mobileRole: 'metric' },
+		{ key: 'frequency', title: 'Frequency', mobileRole: 'meta' },
+		{ key: 'nextRunDate', title: 'Next run', format: 'date', sortable: true, mobileRole: 'meta' },
+		{ key: 'actions', title: '', align: 'right', width: '5rem', mobileRole: 'hidden', cell: actionsCell }
+	];
+</script>
+
+{#snippet actionsCell(t: RecurringExpense)}
+	<div class="flex items-center justify-end gap-1">
+		<Button variant="ghost" size="sm" class="h-7 w-7 p-0" onclick={(e) => { e.stopPropagation(); openEdit(t); }} aria-label="Edit recurring expense">
+			<Pencil class="h-4 w-4" />
+		</Button>
+		<Button variant="ghost" size="sm" class="h-7 w-7 p-0 text-destructive" onclick={(e) => { e.stopPropagation(); deleteTarget = t; }} aria-label="Delete recurring expense">
+			<Trash2 class="h-4 w-4" />
+		</Button>
+	</div>
+{/snippet}
+
+<div class="mb-6" data-testid="property-detail-recurring-expenses">
+	<h2 class="mb-1 text-lg font-semibold">Recurring expenses</h2>
+	<p class="mb-3 text-sm text-muted-foreground">Enter a standing cost once (insurance, taxes, HOA) and it's booked automatically each period.</p>
+	<DataGrid
+		data={list}
+		{columns}
+		loading={query.isLoading}
+		emptyMessage="No recurring expenses yet."
+		getRowKey={(t) => t.id}
+		onRowClick={(t) => openEdit(t)}
+		pageSize={10}
+		data-testid="property-recurring-expenses-grid"
+	>
+		{#snippet toolbar()}
+			<div class="flex flex-1"></div>
+			<Button class="gap-2 shrink-0" onclick={openAdd} data-testid="recurring-expense-add-button">
+				<Plus class="h-4 w-4" />
+				Add Recurring Expense
+			</Button>
+		{/snippet}
+	</DataGrid>
+</div>
+
+<Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
+	<Dialog.Content class="max-w-sm">
+		<Dialog.Header>
+			<Dialog.Title>{editingId == null ? 'Add Recurring Expense' : 'Edit Recurring Expense'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="grid gap-3" data-testid="recurring-expense-form">
+			<InlineField label="Description" bind:value={form.description} editing type="text" error={formErrors.description} testid="recurring-expense-description" />
+			<InlineField label="Category" bind:value={form.category} editing type="select" options={categoryOptions} error={formErrors.category} testid="recurring-expense-category" />
+			<div class="grid grid-cols-2 gap-3">
+				<InlineField label="Amount" bind:value={form.amount} editing type="number" error={formErrors.amount} testid="recurring-expense-amount" />
+				<InlineField label="Frequency" bind:value={form.frequency} editing type="select" options={frequencyOptions} error={formErrors.frequency} testid="recurring-expense-frequency" />
+			</div>
+			<InlineField label="Start date" bind:value={form.startDate} editing type="date" error={formErrors.startDate} testid="recurring-expense-start" />
+		</div>
+		<div class="mt-4 flex justify-end gap-2">
+			<Button variant="outline" onclick={closeForm}>Cancel</Button>
+			<Button onclick={submit} disabled={createMut.isPending || updateMut.isPending} data-testid="recurring-expense-save-button">
+				{(createMut.isPending || updateMut.isPending) ? 'Saving…' : editingId == null ? 'Add' : 'Save'}
+			</Button>
+		</div>
+	</Dialog.Content>
+</Dialog.Root>
+
+<ConfirmDialog
+	open={deleteTarget !== null}
+	title="Remove recurring expense"
+	message={deleteTarget ? `Remove "${deleteTarget.description}"? Already-generated expenses are kept.` : ''}
+	busy={deleteMut.isPending}
+	testid="recurring-expense-delete-confirm"
+	onconfirm={() => deleteTarget && deleteMut.mutate(deleteTarget.id)}
+	oncancel={() => (deleteTarget = null)}
+/>

@@ -316,6 +316,48 @@ export const recurringMaintenanceSchema = z.object({
 	isActive: z.boolean(),
 });
 
+// Per-property loan (mortgage). Amounts map to the server's [Range] validators; escrow may be 0.
+export const loanSchema = z.object({
+	lender: required('Lender'),
+	// originalAmount: server [Range(0, …)] — can be 0 for an already-paid-off loan being recorded.
+	originalAmount: nonNegativeNumeric('Original amount'),
+	currentBalance: optionalNonNegative('Current balance'),
+	// annualInterestRatePct: server [Range(0, 100)].
+	annualInterestRatePct: nonNegativeNumeric('Interest rate').refine((v) => v <= 100, 'Rate must be 0–100'),
+	// termMonths: server [Range(1, 1200)].
+	termMonths: numericString('Term (months)').refine((v) => v >= 1 && v <= 1200, 'Term must be 1–1200 months'),
+	startDate: required('Start date'),
+	// dayOfMonthDue: server [Range(1, 31)].
+	dayOfMonthDue: numericString('Day due').refine((v) => v >= 1 && v <= 31, 'Day must be 1–31'),
+	monthlyPrincipalInterest: nonNegativeNumeric('Monthly P&I'),
+	monthlyEscrow: nonNegativeNumeric('Monthly escrow'),
+	escrowCoversTaxes: z.boolean(),
+	escrowCoversInsurance: z.boolean(),
+	status: z.string(),
+	notes: optionalText,
+});
+
+// Recurring-expense template (insurance/tax/HOA entered once → materialized monthly).
+export const recurringExpenseSchema = z.object({
+	propertyId: idString,
+	unitId: idString,
+	category: z.string(),
+	description: required('Description'),
+	// amount: server [Range(0.01, …)] — must be > 0.
+	amount: positiveNumeric('Amount'),
+	frequency: z.string(),
+	startDate: required('Start date'),
+	notes: optionalText,
+});
+
+// Property depreciation basis (optional inline fields on the property edit form).
+export const propertyBasisSchema = z.object({
+	purchasePrice: optionalNonNegative('Purchase price'),
+	landValue: optionalNonNegative('Land value'),
+	inServiceDate: optionalText,
+	manualAnnualDepreciation: optionalNonNegative('Manual depreciation'),
+});
+
 export const appointmentSchema = z.object({
 	title: required('Title'),
 	type: z.string(),
