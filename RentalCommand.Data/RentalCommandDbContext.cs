@@ -786,6 +786,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.PropertyId);
+            entity.HasIndex(e => e.UnitId);
             entity.HasIndex(e => e.VendorId);
             entity.HasIndex(e => e.WorkOrderId);
             entity.HasIndex(e => e.Status);
@@ -797,6 +798,12 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasOne(e => e.Property)
                 .WithMany(p => p.Expenses)
                 .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.SetNull);
+            // Optional link to the specific unit a (possibly non-maintenance) expense belongs to.
+            // Units have no inverse Expenses collection; scope is enforced through the owning property.
+            entity.HasOne(e => e.Unit)
+                .WithMany()
+                .HasForeignKey(e => e.UnitId)
                 .OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(e => e.Vendor)
                 .WithMany(v => v.Expenses)

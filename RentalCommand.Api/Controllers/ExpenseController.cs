@@ -8,7 +8,7 @@ namespace RentalCommand.Api.Controllers;
 
 /// <summary>
 /// CRUD for expenses within the caller's portfolio. Scope comes from the JWT <c>portfolioId</c> claim;
-/// list supports <c>?propertyId&amp;skip&amp;take&amp;search&amp;sort</c>. Removal is a soft-delete.
+/// list supports <c>?propertyId&amp;unitId&amp;workOrderId&amp;skip&amp;take&amp;search&amp;sort</c>. Removal is a soft-delete.
 /// </summary>
 [ApiController]
 [Route("api/v1/expenses")]
@@ -29,9 +29,13 @@ public class ExpenseController : AuthenticatedPortfolioControllerBase
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<ExpenseResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<ExpenseResponse>>> List(
-        [FromQuery] ListQuery query, [FromQuery] int? propertyId, CancellationToken ct)
+        [FromQuery] ListQuery query,
+        [FromQuery] int? propertyId,
+        [FromQuery] int? unitId,
+        [FromQuery] int? workOrderId,
+        CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), propertyId, query, ct);
+        var items = await _service.ListAsync(GetPortfolioId(), propertyId, unitId, workOrderId, query, ct);
         return Ok(items);
     }
 
@@ -51,7 +55,7 @@ public class ExpenseController : AuthenticatedPortfolioControllerBase
     {
         var created = await _service.CreateAsync(GetPortfolioId(), request, ct);
         return created == null
-            ? NotFound(new { error = "Referenced property, vendor, or work order not found in this portfolio" })
+            ? NotFound(new { error = "Referenced property, unit, vendor, or work order not found in this portfolio" })
             : CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 

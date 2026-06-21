@@ -271,8 +271,9 @@ test.describe('Owners + Vendors', () => {
 
 	test('vendors grid shows 6 seeded vendors', async ({ page }) => {
 		await login(page);
-		await page.goto('/owners');
-		await expect(page.getByTestId('owners-page')).toBeVisible();
+		// Vendors live on their own page (/vendors) — they were split out of /owners.
+		await page.goto('/vendors');
+		await expect(page.getByTestId('vendors-page')).toBeVisible();
 
 		await expect(page.getByTestId('vendors-list')).toBeVisible();
 		await expect(page.getByTestId('vendor-row').first()).toBeVisible({ timeout: 15_000 });
@@ -284,27 +285,24 @@ test.describe('Owners + Vendors', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Analytics
+// Analytics (legacy route)
 // ---------------------------------------------------------------------------
-test.describe('Analytics', () => {
-	test('KPI cards are populated with non-zero values', async ({ page }) => {
+// The standalone /analytics Insights page was merged into the Dashboard (IA Wave 1):
+// /analytics now 307-redirects to '/'. This test keeps the legacy bookmark/link path
+// covered — it should land on the dashboard with its KPIs populated, not 404.
+test.describe('Analytics (legacy → dashboard)', () => {
+	test('/analytics redirects to the dashboard with populated KPIs', async ({ page }) => {
 		await login(page);
 		await page.goto('/analytics');
-		await expect(page.getByTestId('analytics-page')).toBeVisible();
 
-		// Wait for data (not loading skeleton, not error, not empty)
-		await expect(page.getByTestId('analytics-kpi-row')).toBeVisible({ timeout: 20_000 });
+		// The redirect drops us on the dashboard ('/'), not a standalone /analytics page.
+		await expect(page).toHaveURL(/\/$|\/\?/);
+		await expect(page).not.toHaveURL(/\/analytics/);
 
-		// Occupancy KPI should be visible
-		await expect(page.getByTestId('kpi-occupancy')).toBeVisible();
-
-		// Collection rate KPI should be visible
-		await expect(page.getByTestId('kpi-collection')).toBeVisible();
-
-		// The row should NOT show the loading state
-		await expect(page.getByTestId('analytics-loading')).not.toBeVisible();
-		await expect(page.getByTestId('analytics-error')).not.toBeVisible();
-		await expect(page.getByTestId('analytics-empty')).not.toBeVisible();
+		// Dashboard hero renders once the dashboard data load resolves, and its KPI money
+		// values use .tabular-nums — assert both so we know we landed on a populated dashboard.
+		await expect(page.getByTestId('dashboard-hero')).toBeVisible({ timeout: 20_000 });
+		await expect(page.locator('.tabular-nums').first()).toBeVisible({ timeout: 15_000 });
 	});
 });
 

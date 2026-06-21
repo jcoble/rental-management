@@ -184,7 +184,7 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
             Status = WorkOrderStatus.New,
         });
 
-        var list = await _workOrders.ListAsync(PortfolioId, propertyId: null, vendorId: null, new ListQuery());
+        var list = await _workOrders.ListAsync(PortfolioId, propertyId: null, unitId: null, vendorId: null, new ListQuery());
 
         list.Should().ContainSingle();
         list[0].PropertyName.Should().Be("Pine Hollow");

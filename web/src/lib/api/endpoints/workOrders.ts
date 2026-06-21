@@ -3,9 +3,9 @@ import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
 
 export const workOrders = {
-	list: (portfolioId: number, params?: ListParams & { propertyId?: number; vendorId?: number }) => {
-		const { propertyId, vendorId, ...list } = params ?? {};
-		return api.get<WorkOrder[]>(`/work-orders${buildListQuery(list, { portfolioId, propertyId, vendorId })}`);
+	list: (portfolioId: number, params?: ListParams & { propertyId?: number; unitId?: number; vendorId?: number }) => {
+		const { propertyId, unitId, vendorId, ...list } = params ?? {};
+		return api.get<WorkOrder[]>(`/work-orders${buildListQuery(list, { portfolioId, propertyId, unitId, vendorId })}`);
 	},
 	// Detail includes a `timeline` of status-change events (oldest→newest).
 	get: (id: number) => api.get<WorkOrderDetail>(`/work-orders/${id}`),

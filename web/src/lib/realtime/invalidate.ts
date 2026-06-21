@@ -28,18 +28,18 @@ import {
  */
 const entityQueryKeys: Record<string, string[][]> = {
 	Property: [['properties'], ['units'], ['dashboard']],
-	Unit: [['units'], ['units-for-lease'], ['properties'], ['dashboard']],
-	Tenant: [['tenants'], ['dashboard']],
-	Lease: [['leases'], ['units-for-lease'], ['dashboard']],
+	Unit: [['units'], ['units-for-lease'], ['properties'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
+	Tenant: [['tenants'], ['dashboard'], ['unit-dashboard']],
+	Lease: [['leases'], ['units-for-lease'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
 	// Payment/Expense both feed the accounting `/summary` rollup (collected /
 	// outstanding / overdue / total expenses), keyed `['accounting-summary', …]`
 	// on the accounting page. The earlier `payment-summary` / `expense-summary`
 	// keys matched no query, so the summary cards stayed stale on realtime events.
-	Payment: [['payments'], ['accounting-summary'], ['dashboard']],
-	Expense: [['expenses'], ['accounting-summary'], ['dashboard']],
-	WorkOrder: [['work-orders'], ['dashboard']],
-	Inspection: [['inspections'], ['dashboard']],
-	Appointment: [['appointments'], ['dashboard']],
+	Payment: [['payments'], ['accounting-summary'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
+	Expense: [['expenses'], ['accounting-summary'], ['dashboard'], ['unit-expenses'], ['unit-dashboard'], ['unit-timeline']],
+	WorkOrder: [['work-orders'], ['dashboard'], ['unit-work-orders'], ['unit-dashboard'], ['unit-timeline']],
+	Inspection: [['inspections'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
+	Appointment: [['appointments'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
 	Vendor: [['vendors']],
 	OwnerEntity: [['owners'], ['dashboard']],
 	Portfolio: [['portfolio'], ['portfolios'], ['dashboard']],

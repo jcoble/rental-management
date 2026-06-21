@@ -330,7 +330,7 @@
 						<span data-testid="work-order-detail-property">{wo.propertyName}</span>
 					{/if}
 					{#if wo.unitNumber}
-						<span data-testid="work-order-detail-unit">Unit {wo.unitNumber}</span>
+						<a href="/units/{wo.unitId}?tab=maintenance" class="underline-offset-4 hover:underline" data-testid="work-order-detail-unit">Unit {wo.unitNumber}</a>
 					{/if}
 					{#if wo.vendorName}
 						<span data-testid="work-order-detail-vendor">{wo.vendorName}</span>

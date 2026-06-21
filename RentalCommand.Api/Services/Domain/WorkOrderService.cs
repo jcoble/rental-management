@@ -30,7 +30,7 @@ public class WorkOrderService : IWorkOrderService
         _logger = logger;
     }
 
-    public async Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? vendorId, ListQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? vendorId, ListQuery query, CancellationToken ct = default)
     {
         var q = _db.WorkOrders
             .AsNoTracking()
@@ -39,6 +39,11 @@ public class WorkOrderService : IWorkOrderService
         if (propertyId.HasValue)
         {
             q = q.Where(w => w.PropertyId == propertyId.Value);
+        }
+
+        if (unitId.HasValue)
+        {
+            q = q.Where(w => w.UnitId == unitId.Value);
         }
 
         if (vendorId.HasValue)

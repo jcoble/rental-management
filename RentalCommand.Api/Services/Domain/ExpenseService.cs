@@ -20,7 +20,7 @@ public class ExpenseService : IExpenseService
         _dataUpdate = dataUpdate;
     }
 
-    public async Task<IReadOnlyList<ExpenseResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+    public async Task<IReadOnlyList<ExpenseResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? workOrderId, ListQuery query, CancellationToken ct = default)
     {
         var q = _db.Expenses
             .AsNoTracking()
@@ -29,6 +29,21 @@ public class ExpenseService : IExpenseService
         if (propertyId.HasValue)
         {
             q = q.Where(e => e.PropertyId == propertyId.Value);
+        }
+
+        if (unitId.HasValue)
+        {
+            // The unit's expenses: directly tied to the unit OR tied to one of the unit's work orders.
+            // The work-order set is a correlated subquery so this stays a single SQL statement (no N+1).
+            var uid = unitId.Value;
+            q = q.Where(e =>
+                e.UnitId == uid ||
+                (e.WorkOrderId != null && _db.WorkOrders.Any(w => w.Id == e.WorkOrderId && w.UnitId == uid)));
+        }
+
+        if (workOrderId.HasValue)
+        {
+            q = q.Where(e => e.WorkOrderId == workOrderId.Value);
         }
 
         if (!string.IsNullOrWhiteSpace(query.Search))
@@ -89,6 +104,7 @@ public class ExpenseService : IExpenseService
             .AsNoTracking()
             .Include(e => e.LineItems)
             .Include(e => e.Property)
+            .Include(e => e.Unit)
             .Include(e => e.Vendor)
             .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
 
@@ -123,9 +139,15 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseResponse?> CreateAsync(int portfolioId, CreateExpenseRequest request, CancellationToken ct = default)
     {
-        // Verify any supplied property/vendor/work-order references belong to the caller's portfolio (no cross-tenant linking).
+        // Verify any supplied property/unit/vendor/work-order references belong to the caller's portfolio (no cross-tenant linking).
         if (request.PropertyId.HasValue &&
             !await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId.Value, ct))
+        {
+            return null;
+        }
+
+        if (request.UnitId.HasValue &&
+            !await _db.EnsureUnitInPortfolioAsync(portfolioId, request.UnitId.Value, request.PropertyId, ct))
         {
             return null;
         }
@@ -147,6 +169,7 @@ public class ExpenseService : IExpenseService
         {
             PortfolioId = portfolioId,
             PropertyId = request.PropertyId,
+            UnitId = request.UnitId,
             VendorId = request.VendorId,
             WorkOrderId = request.WorkOrderId,
             Category = request.Category,
@@ -199,9 +222,15 @@ public class ExpenseService : IExpenseService
             return null;
         }
 
-        // Verify any supplied property/vendor/work-order references belong to the caller's portfolio (no cross-tenant linking).
+        // Verify any supplied property/unit/vendor/work-order references belong to the caller's portfolio (no cross-tenant linking).
         if (request.PropertyId.HasValue &&
             !await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId.Value, ct))
+        {
+            return null;
+        }
+
+        if (request.UnitId.HasValue &&
+            !await _db.EnsureUnitInPortfolioAsync(portfolioId, request.UnitId.Value, request.PropertyId, ct))
         {
             return null;
         }
@@ -219,6 +248,7 @@ public class ExpenseService : IExpenseService
         }
 
         if (request.PropertyId.HasValue) entity.PropertyId = request.PropertyId;
+        if (request.UnitId.HasValue) entity.UnitId = request.UnitId;
         if (request.VendorId.HasValue) entity.VendorId = request.VendorId;
         if (request.WorkOrderId.HasValue) entity.WorkOrderId = request.WorkOrderId;
         if (request.Category.HasValue) entity.Category = request.Category.Value;
