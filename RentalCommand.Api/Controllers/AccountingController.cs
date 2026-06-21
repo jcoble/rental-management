@@ -48,6 +48,20 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
         return Ok(result);
     }
 
+    /// <summary>
+    /// The year-end view (spec §11/§18): cash flow vs taxable income as distinct numbers, with
+    /// depreciation + debt service present, the rent roll, and the "see your accountant" caveats.
+    /// Defaults to the previous calendar year (the year you file for) when omitted.
+    /// </summary>
+    [HttpGet("year-end")]
+    [ProducesResponseType(typeof(YearEndViewResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<YearEndViewResponse>> YearEnd([FromQuery] int? year, CancellationToken ct)
+    {
+        var reportYear = year ?? DateTime.UtcNow.Year - 1;
+        var result = await _reports.GetYearEndAsync(GetPortfolioId(), reportYear, ct);
+        return Ok(result);
+    }
+
     /// <summary>Expense totals by Schedule E category plus collected/outstanding/overdue payment rollups.</summary>
     [HttpGet("summary")]
     [ProducesResponseType(typeof(AccountingSummaryResponse), StatusCodes.Status200OK)]
