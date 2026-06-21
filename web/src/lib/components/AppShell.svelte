@@ -50,6 +50,7 @@
 	import PortfolioSelector from '$lib/components/shared/PortfolioSelector.svelte';
 	import NotificationBell from '$lib/components/notifications/NotificationBell.svelte';
 	import MaterialSymbol from '$lib/components/m3/MaterialSymbol.svelte';
+	import CommandCenterNav from '$lib/components/CommandCenterNav.svelte';
 	import { clearAuthState } from '$lib/stores/auth.svelte';
 	import { hasRole, isPortalUser, isStaff } from '$lib/types/user';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -240,6 +241,10 @@
 
 	// Pinned single links (Dashboard, Scan / Add) above the groups.
 	let visiblePinned = $derived.by(() => pinnedNavItems.filter(itemVisible));
+
+	// Command Center (the per-unit drill-down) is surfaced as its own pinned entry below Scan / Add;
+	// staff-only, gated to the same roles as the Units nav item.
+	let canSeeCommandCenter = $derived(hasRole(currentUser, 'Admin', 'Manager', 'Agent'));
 
 	// Bottom-rail standalone links (Assistant, Help).
 	let visibleBottomRail = $derived.by(() => bottomRailItems.filter(itemVisible));
@@ -563,6 +568,9 @@
 				{#each visiblePinned as item}
 					{@render navLinkCollapsed(item)}
 				{/each}
+				{#if canSeeCommandCenter}
+					<CommandCenterNav collapsed onNavigate={handleNavClick} />
+				{/if}
 				{#each visibleGroups as group}
 					{#each group.items as item}
 						{@render navLinkCollapsed(item)}
@@ -582,6 +590,9 @@
 				{#each visiblePinned as item}
 					{@render navLink(item)}
 				{/each}
+				{#if canSeeCommandCenter}
+					<CommandCenterNav onNavigate={handleNavClick} />
+				{/if}
 				<div class="my-2"></div>
 				{#each visibleGroups as group}
 					{@render navGroup(group)}
