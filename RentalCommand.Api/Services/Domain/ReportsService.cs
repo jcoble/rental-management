@@ -591,6 +591,154 @@ public class ReportsService : IReportsService
         }
     }
 
+    // ── True cash flow (rent − opex − debt service), escrow-aware, DB-side (§9/§18) ─────────────────
+
+    public async Task<CashFlowSummaryResponse> GetTrueCashFlowAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
+    {
+        var (from, to) = ResolveRange(query);
+        var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
+
+        // Properties in scope (name + the escrow-cover flags rolled up from active loans, SQL-side).
+        var propertyQuery = _db.Properties
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId);
+        if (propertyFilter is not null)
+            propertyQuery = propertyQuery.Where(p => propertyFilter.Contains(p.Id));
+
+        var properties = await propertyQuery
+            .OrderBy(p => p.Name)
+            .Select(p => new
+            {
+                p.Id,
+                p.Name,
+                // A property's taxes/insurance are escrow-funded if ANY active loan escrows them.
+                EscrowCoversTaxes = _db.Loans.Any(l => l.PropertyId == p.Id && l.Status == LoanStatus.Active && l.EscrowCoversTaxes),
+                EscrowCoversInsurance = _db.Loans.Any(l => l.PropertyId == p.Id && l.Status == LoanStatus.Active && l.EscrowCoversInsurance),
+            })
+            .ToListAsync(ct);
+
+        var incomeByProperty = await IncomeByPropertyAsync(portfolioId, from, to, propertyFilter, ct);
+        var debtServiceByProperty = await DebtServiceByPropertyAsync(portfolioId, from, to, propertyFilter, ct);
+
+        // Operating expenses grouped by (property, category) SQL-side; the escrow exclusion is applied
+        // per property/category during reshape (a filter over pre-aggregated rows, never an in-memory SUM).
+        var opexQuery = _db.Expenses
+            .AsNoTracking()
+            .Where(e =>
+                e.PortfolioId == portfolioId &&
+                e.PropertyId != null &&
+                (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to);
+        if (propertyFilter is not null)
+            opexQuery = opexQuery.Where(e => propertyFilter.Contains(e.PropertyId!.Value));
+
+        var opexByPropertyCategory = await opexQuery
+            .GroupBy(e => new { PropertyId = e.PropertyId!.Value, e.Category })
+            .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
+            .ToListAsync(ct);
+
+        var rows = new List<PropertyCashFlow>(properties.Count);
+        foreach (var prop in properties)
+        {
+            var income = incomeByProperty.GetValueOrDefault(prop.Id, 0m);
+
+            // Sum this property's opex, excluding the categories its loan escrows (their cash is inside
+            // debt service — escrow no-double-count, §9). The exclusion is category-specific.
+            var opex = opexByPropertyCategory
+                .Where(r => r.PropertyId == prop.Id)
+                .Where(r => !IsEscrowFunded(r.Category, prop.EscrowCoversTaxes, prop.EscrowCoversInsurance))
+                .Sum(r => r.Total);
+
+            var debtService = debtServiceByProperty.GetValueOrDefault(prop.Id, 0m);
+            var noi = income - opex;
+
+            // Skip properties with no cash-flow activity to keep the view tight.
+            if (income == 0m && opex == 0m && debtService == 0m)
+                continue;
+
+            rows.Add(new PropertyCashFlow
+            {
+                PropertyId = prop.Id,
+                PropertyName = prop.Name,
+                Income = income,
+                OperatingExpenses = opex,
+                Noi = noi,
+                DebtService = debtService,
+                CashFlow = noi - debtService,
+            });
+        }
+
+        return new CashFlowSummaryResponse
+        {
+            From = from,
+            To = to,
+            Properties = rows,
+            TotalIncome = rows.Sum(r => r.Income),
+            TotalOperatingExpenses = rows.Sum(r => r.OperatingExpenses),
+            TotalNoi = rows.Sum(r => r.Noi),
+            TotalDebtService = rows.Sum(r => r.DebtService),
+            TotalCashFlow = rows.Sum(r => r.CashFlow),
+        };
+    }
+
+    /// <summary>True when an expense category's cash is funded by loan escrow (so it is excluded from
+    /// cash-flow opex to avoid double-counting), given the property's escrow-cover flags.</summary>
+    private static bool IsEscrowFunded(ScheduleECategory category, bool escrowCoversTaxes, bool escrowCoversInsurance) =>
+        (category == ScheduleECategory.Taxes && escrowCoversTaxes) ||
+        (category == ScheduleECategory.Insurance && escrowCoversInsurance);
+
+    /// <summary>
+    /// Income (actual cash received) per property for the range, SQL-side: Rent + LateFee that is Paid
+    /// (full Amount) or Partial (collected AmountPaid); deposits excluded (§7/§18). Keyed by property
+    /// via the lease.
+    /// </summary>
+    private async Task<Dictionary<int, decimal>> IncomeByPropertyAsync(
+        int portfolioId, DateTime from, DateTime to, HashSet<int>? propertyFilter, CancellationToken ct)
+    {
+        var q = _db.Payments
+            .AsNoTracking()
+            .Where(p =>
+                p.PortfolioId == portfolioId &&
+                (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
+                (p.PaymentType == PaymentType.Rent || p.PaymentType == PaymentType.LateFee) &&
+                p.Lease != null &&
+                (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to);
+        if (propertyFilter is not null)
+            q = q.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));
+
+        return (await q
+            .GroupBy(p => p.Lease!.PropertyId)
+            .Select(g => new
+            {
+                PropertyId = g.Key,
+                Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount),
+            })
+            .ToListAsync(ct))
+            .ToDictionary(r => r.PropertyId, r => r.Total);
+    }
+
+    /// <summary>
+    /// Full debt service (Σ LoanPayment.TotalAmount) per property for the range, SQL-side, keyed by the
+    /// loan's property. Soft-deleted loans/payments are excluded by the global query filters.
+    /// </summary>
+    private async Task<Dictionary<int, decimal>> DebtServiceByPropertyAsync(
+        int portfolioId, DateTime from, DateTime to, HashSet<int>? propertyFilter, CancellationToken ct)
+    {
+        var q = _db.LoanPayments
+            .AsNoTracking()
+            .Where(lp =>
+                lp.PortfolioId == portfolioId &&
+                lp.Loan != null &&
+                lp.DueDate >= from && lp.DueDate <= to);
+        if (propertyFilter is not null)
+            q = q.Where(lp => propertyFilter.Contains(lp.Loan!.PropertyId));
+
+        return (await q
+            .GroupBy(lp => lp.Loan!.PropertyId)
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(lp => lp.TotalAmount) })
+            .ToListAsync(ct))
+            .ToDictionary(r => r.PropertyId, r => r.Total);
+    }
+
     // ── General Ledger (running balance) ───────────────────────────────────────────────────────────
 
     public async Task<GeneralLedgerResponse> GetGeneralLedgerAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)

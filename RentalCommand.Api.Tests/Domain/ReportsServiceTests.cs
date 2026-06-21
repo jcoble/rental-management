@@ -344,6 +344,72 @@ public class ReportsServiceTests : IDisposable
             .Should().BeTrue("the period total must be summed in the database");
     }
 
+    // ── True cash flow (§9/§18, DB) ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetTrueCashFlowAsync_WorkedExample_EscrowNotDoubleCounted_NoDeposits()
+    {
+        var property = SeedProperty("Maple");
+        var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
+
+        // Income: 1000 rent (paid) + 200 partial-collected + 50 late fee = 1250. Deposit excluded.
+        SeedPayment(lease, 1000m, dueDate: D(2026, 3, 1), PaymentStatus.Paid, paidDate: D(2026, 3, 2));
+        var partial = SeedPayment(lease, 1000m, dueDate: D(2026, 3, 10), PaymentStatus.Partial, paidDate: D(2026, 3, 10));
+        partial.AmountPaid = 200m;
+        SeedPayment(lease, 50m, dueDate: D(2026, 3, 12), PaymentStatus.Paid, paidDate: D(2026, 3, 12), type: PaymentType.LateFee);
+        SeedPayment(lease, 1500m, dueDate: D(2026, 3, 1), PaymentStatus.Paid, paidDate: D(2026, 3, 1), type: PaymentType.SecurityDeposit);
+        _db.SaveChanges();
+
+        // Expenses: 300 repairs (counts) + 240 taxes (escrow-funded → EXCLUDED from cash-flow opex).
+        SeedExpense(property.Id, 300m, paidAt: D(2026, 3, 15), category: ScheduleECategory.Repairs);
+        SeedExpense(property.Id, 240m, paidAt: D(2026, 3, 18), category: ScheduleECategory.Taxes);
+
+        // A loan that escrows taxes; one payment in the period: 800 P&I + 240 escrow = 1040 debt service.
+        var loan = SeedLoan(property.Id, escrowCoversTaxes: true, monthlyEscrow: 240m);
+        SeedLoanPayment(loan, "2026-03", dueDate: D(2026, 3, 1), interest: 500m, principal: 300m, escrow: 240m, total: 1040m, balanceAfter: 199_700m);
+
+        var report = await _sut.GetTrueCashFlowAsync(PortfolioId, new ReportRangeQuery
+        {
+            From = D(2026, 3, 1),
+            To = D(2026, 3, 31),
+        }, CancellationToken.None);
+
+        report.Properties.Should().HaveCount(1);
+        var p = report.Properties[0];
+        p.Income.Should().Be(1250m);                 // rent + partial-collected + late fee, no deposit
+        p.OperatingExpenses.Should().Be(300m);       // taxes excluded (escrow-funded) → only repairs
+        p.Noi.Should().Be(950m);                     // 1250 − 300
+        p.DebtService.Should().Be(1040m);            // full P&I + escrow
+        p.CashFlow.Should().Be(-90m);                // 950 − 1040
+
+        report.TotalCashFlow.Should().Be(-90m);
+    }
+
+    [Fact]
+    public async Task GetTrueCashFlowAsync_NonEscrowLoan_KeepsTaxesInOpex()
+    {
+        var property = SeedProperty("Maple");
+        var lease = SeedLease(property, SeedUnit("1"), SeedTenant("Ann", "Acre"), rent: 1000m);
+        SeedPayment(lease, 1000m, dueDate: D(2026, 3, 1), PaymentStatus.Paid, paidDate: D(2026, 3, 2));
+
+        SeedExpense(property.Id, 240m, paidAt: D(2026, 3, 18), category: ScheduleECategory.Taxes);
+
+        // Loan does NOT escrow taxes → taxes stay in operating expenses.
+        var loan = SeedLoan(property.Id, escrowCoversTaxes: false, monthlyEscrow: 0m);
+        SeedLoanPayment(loan, "2026-03", dueDate: D(2026, 3, 1), interest: 500m, principal: 300m, escrow: 0m, total: 800m, balanceAfter: 199_700m);
+
+        var report = await _sut.GetTrueCashFlowAsync(PortfolioId, new ReportRangeQuery
+        {
+            From = D(2026, 3, 1),
+            To = D(2026, 3, 31),
+        }, CancellationToken.None);
+
+        var p = report.Properties[0];
+        p.OperatingExpenses.Should().Be(240m);       // taxes kept (not escrow-funded)
+        p.DebtService.Should().Be(800m);
+        p.CashFlow.Should().Be(1000m - 240m - 800m); // -40
+    }
+
     // ── Occupancy % (DB) ───────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -601,14 +667,15 @@ public class ReportsServiceTests : IDisposable
         return payment;
     }
 
-    private Expense SeedExpense(int propertyId, decimal amount, DateTime paidAt)
+    private Expense SeedExpense(int propertyId, decimal amount, DateTime paidAt,
+        ScheduleECategory category = ScheduleECategory.Repairs)
     {
         var expense = new Expense
         {
             PortfolioId = PortfolioId,
             PropertyId = propertyId,
-            Category = ScheduleECategory.Repairs,
-            Description = "Repair",
+            Category = category,
+            Description = category.ToString(),
             Status = ExpenseStatus.Paid,
             Amount = amount,
             IncurredAt = paidAt,
@@ -619,6 +686,56 @@ public class ReportsServiceTests : IDisposable
         _db.Expenses.Add(expense);
         _db.SaveChanges();
         return expense;
+    }
+
+    private Loan SeedLoan(int propertyId, bool escrowCoversTaxes = false, bool escrowCoversInsurance = false,
+        decimal monthlyEscrow = 0m, LoanStatus status = LoanStatus.Active)
+    {
+        var now = DateTime.UtcNow;
+        var loan = new Loan
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+            Lender = "Test Bank",
+            OriginalAmount = 200_000m,
+            CurrentBalance = 200_000m,
+            AnnualInterestRatePct = 6m,
+            TermMonths = 360,
+            StartDate = D(2026, 1, 1),
+            DayOfMonthDue = 1,
+            MonthlyPrincipalInterest = 800m,
+            MonthlyEscrow = monthlyEscrow,
+            EscrowCoversTaxes = escrowCoversTaxes,
+            EscrowCoversInsurance = escrowCoversInsurance,
+            Status = status,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Loans.Add(loan);
+        _db.SaveChanges();
+        return loan;
+    }
+
+    private LoanPayment SeedLoanPayment(Loan loan, string periodKey, DateTime dueDate,
+        decimal interest, decimal principal, decimal escrow, decimal total, decimal balanceAfter)
+    {
+        var payment = new LoanPayment
+        {
+            PortfolioId = PortfolioId,
+            LoanId = loan.Id,
+            PeriodKey = periodKey,
+            DueDate = dueDate,
+            InterestAmount = interest,
+            PrincipalAmount = principal,
+            EscrowAmount = escrow,
+            TotalAmount = total,
+            BalanceAfter = balanceAfter,
+            Status = LoanPaymentStatus.Scheduled,
+            CreatedAt = DateTime.UtcNow,
+        };
+        _db.LoanPayments.Add(payment);
+        _db.SaveChanges();
+        return payment;
     }
 }
 
