@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import 'guided_rental_flow.dart';
 import 'scan_capture.dart';
 import 'scan_models.dart';
 import 'scan_repository.dart';
@@ -181,12 +182,18 @@ class ScanListScreen extends ConsumerWidget {
                           return _DraftTile(
                             draft: draft,
                             onTap: () async {
-                              await Navigator.of(context).push(
-                                MaterialPageRoute<void>(
-                                  builder: (_) =>
-                                      ScanReviewScreen(draftId: draft.id),
-                                ),
-                              );
+                              // Lease drafts open the guided New-rental flow;
+                              // everything else uses the standard review screen.
+                              if (draft.isLease) {
+                                await GuidedRentalFlow.open(context, draft.id);
+                              } else {
+                                await Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) =>
+                                        ScanReviewScreen(draftId: draft.id),
+                                  ),
+                                );
+                              }
                               ref.invalidate(_scanListProvider(status));
                             },
                           );

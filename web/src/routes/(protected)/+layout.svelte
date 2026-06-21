@@ -20,7 +20,7 @@
 	// store defaults to a deterministic placeholder during SSR + first client render so markup
 	// agrees, and the real persisted id is applied here on the client.
 	$effect(() => {
-		initPortfolio();
+		initPortfolio(data.user?.portfolioId ?? undefined);
 	});
 
 	// Bridge SignalR data-update events to TanStack Query invalidation (wired once).

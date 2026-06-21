@@ -43,6 +43,10 @@
 	let search = $state(readGridParam(page.url.searchParams, 'q'));
 	let typeFilter = $state(readGridParam(page.url.searchParams, 'type'));
 	let statusFilter = $state(readGridParam(page.url.searchParams, 'status'));
+	// List grid sort persisted in the URL (seeds the client-side DataGrid, mirrored back via onSortChange).
+	// The list view fetches a single window of PAGE_SIZE rows server-side via `skip`, so the grid never
+	// shows more than one client page — there's no page position to persist here, only sort.
+	let gridSort = $state(readGridParam(page.url.searchParams, 'sort'));
 	let skip = $state(0);
 	const debouncedSearch = debounced(() => search, 300);
 	$effect(() => {
@@ -52,7 +56,7 @@
 		skip = 0;
 	});
 	$effect(() => {
-		syncGridUrl({ view, q: search, type: typeFilter, status: statusFilter }, { view: 'calendar' });
+		syncGridUrl({ view, q: search, type: typeFilter, status: statusFilter, sort: gridSort }, { view: 'calendar' });
 	});
 
 	// List view is paged/searched server-side; the calendar needs a fuller window
@@ -323,6 +327,8 @@
 			onRowClick={(a) => goto('/appointments/' + a.id)}
 			bind:page={gridPage}
 			pageSize={PAGE_SIZE}
+			initialSort={gridSort}
+			onSortChange={(s) => (gridSort = s ?? '')}
 			data-testid="appointments-list"
 		>
 			{#snippet toolbar()}

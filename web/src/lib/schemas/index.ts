@@ -135,6 +135,7 @@ const optionalNonNegative = (label: string) =>
 export const propertySchema = z.object({
 	name: required('Name'),
 	type: z.string(),
+	status: z.string(),
 	addressLine1: required('Address'),
 	addressLine2: optionalText,
 	city: required('City'),
@@ -184,18 +185,43 @@ export const leaseSchema = z.object({
 	notes: optionalText,
 });
 
-export const paymentSchema = z.object({
-	leaseId: numericString('Lease'),
-	// amount: server [Range(0.01, 99999999)] — must be > 0
-	amount: positiveNumeric('Amount'),
-	dueDate: required('Due date'),
-	paymentType: z.string(),
-	status: z.string(),
-	paidDate: optionalText,
-	method: optionalText,
-	externalReference: optionalText,
-	notes: optionalText,
-});
+export const paymentSchema = z
+	.object({
+		leaseId: numericString('Lease'),
+		// amount: server [Range(0.01, 99999999)] — must be > 0
+		amount: positiveNumeric('Amount'),
+		// amountPaid: only meaningful when status === 'Partial'. '' → null; otherwise coerced to a
+		// number. The cross-field invariant (0 < amountPaid < amount when Partial) is enforced below in
+		// .superRefine, mirroring PaymentService.NormalizeAmountPaid on the server (a bad value 400s).
+		amountPaid: optionalNonNegative('Amount paid'),
+		dueDate: required('Due date'),
+		paymentType: z.string(),
+		status: z.string(),
+		paidDate: optionalText,
+		method: optionalText,
+		externalReference: optionalText,
+		notes: optionalText,
+	})
+	.superRefine((val, ctx) => {
+		// Partial-payment split: the server requires an Amount paid strictly between 0 and the full
+		// Amount. Surface that inline (keyed to `amountPaid`) so the user fixes it before submit rather
+		// than bouncing off a 400. For any non-Partial status amountPaid is irrelevant (it's dropped on
+		// submit), so we don't validate it.
+		if (val.status !== 'Partial') return;
+		const paid = val.amountPaid;
+		if (paid == null) {
+			ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['amountPaid'], message: 'Amount paid is required for a partial payment' });
+			return;
+		}
+		if (paid <= 0) {
+			ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['amountPaid'], message: 'Amount paid must be greater than zero' });
+			return;
+		}
+		// `amount` may be NaN if its own field failed; only compare once it's a real number.
+		if (!Number.isNaN(val.amount) && paid >= val.amount) {
+			ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['amountPaid'], message: 'Amount paid must be less than the full amount' });
+		}
+	});
 
 export const expenseSchema = z.object({
 	description: required('Description'),

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
+import '../places/address_autocomplete_field.dart';
 import 'properties_repository.dart';
 import 'property_detail_screen.dart';
 
@@ -379,6 +380,12 @@ class _AddPropertySheetState extends ConsumerState<_AddPropertySheet> {
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
+    // The Places-backed address field is a plain TextField (no Form validator),
+    // so enforce the required-address rule here to match the other fields.
+    if (_addressCtrl.text.trim().isEmpty) {
+      setState(() => _error = 'Address is required');
+      return;
+    }
 
     setState(() {
       _saving = true;
@@ -459,13 +466,16 @@ class _AddPropertySheetState extends ConsumerState<_AddPropertySheet> {
               ),
               const SizedBox(height: 12),
 
-              // Address
-              TextFormField(
+              // Address — Places-backed (existing server-side proxy). Picking a
+              // suggestion fills city/state/zip; manual entry always works.
+              AddressAutocompleteField(
                 controller: _addressCtrl,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(labelText: 'Address'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Address is required' : null,
+                label: 'Address',
+                onResolved: (a) {
+                  if (a.city.isNotEmpty) _cityCtrl.text = a.city;
+                  if (a.state.isNotEmpty) _stateCtrl.text = a.state;
+                  if (a.zip.isNotEmpty) _zipCtrl.text = a.zip;
+                },
               ),
               const SizedBox(height: 12),
 

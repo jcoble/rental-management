@@ -89,7 +89,10 @@ public class CreateAppointmentRequest
     [EmailAddress]
     public string? ProspectEmail { get; set; }
 
+    [EnumDataType(typeof(AppointmentType))]
     public AppointmentType Type { get; set; } = AppointmentType.Showing;
+
+    [EnumDataType(typeof(AppointmentStatus))]
     public AppointmentStatus Status { get; set; } = AppointmentStatus.Scheduled;
 
     [Required]
@@ -128,7 +131,10 @@ public class UpdateAppointmentRequest
     [EmailAddress]
     public string? ProspectEmail { get; set; }
 
+    [EnumDataType(typeof(AppointmentType))]
     public AppointmentType? Type { get; set; }
+
+    [EnumDataType(typeof(AppointmentStatus))]
     public AppointmentStatus? Status { get; set; }
 
     public DateTime? ScheduledStart { get; set; }

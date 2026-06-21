@@ -191,9 +191,14 @@
 	{:else}
 		<div class="space-y-2">
 			<FileDrop onselected={handleFile} />
-			<button type="button" class="text-xs text-muted-foreground underline-offset-4 hover:underline" onclick={reset} data-testid="lease-photo-prefill-back">
-				Never mind, I'll type it in
-			</button>
+			<div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+				<button type="button" class="text-xs text-muted-foreground underline-offset-4 hover:underline" onclick={reset} data-testid="lease-photo-prefill-back">
+					Never mind, I'll type it in
+				</button>
+				<a href="/scan/new-rental" class="text-xs text-muted-foreground underline-offset-4 hover:underline" data-testid="lease-prefill-full-flow">
+					or set up the whole rental from the lease →
+				</a>
+			</div>
 		</div>
 	{/if}
 </div>

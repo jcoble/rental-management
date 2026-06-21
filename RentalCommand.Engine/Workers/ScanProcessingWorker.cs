@@ -37,7 +37,9 @@ public class ScanProcessingWorker : EngineWorkerBase
             ? new ExtractionSchema(WorkOrderExtractionSchema.Instructions, WorkOrderExtractionSchema.Fields)
             : IsLeaseTarget(targetEntityType)
                 ? new ExtractionSchema(LeaseExtractionSchema.Instructions, LeaseExtractionSchema.Fields)
-                : new ExtractionSchema(ReceiptExtractionSchema.Instructions, ReceiptExtractionSchema.Fields);
+                : IsApplicationTarget(targetEntityType)
+                    ? new ExtractionSchema(ApplicationExtractionSchema.Instructions, ApplicationExtractionSchema.Fields)
+                    : new ExtractionSchema(ReceiptExtractionSchema.Instructions, ReceiptExtractionSchema.Fields);
 
     /// <summary>
     /// A lease import is requested either by the explicit upload target "Lease", or by a document the
@@ -47,6 +49,14 @@ public class ScanProcessingWorker : EngineWorkerBase
     private static bool IsLeaseTarget(string? targetEntityType) =>
         string.Equals(targetEntityType, "Lease", StringComparison.OrdinalIgnoreCase)
         || string.Equals(targetEntityType, "LeaseAgreement", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// An application import is requested by the explicit upload target "Application" (a landlord scanning
+    /// a completed paper rental application). It picks the application extraction schema and confirms as an
+    /// Application — the scan-IN counterpart of the public apply form.
+    /// </summary>
+    private static bool IsApplicationTarget(string? targetEntityType) =>
+        string.Equals(targetEntityType, "Application", StringComparison.OrdinalIgnoreCase);
 
     protected override async Task<int> ExecuteCycleAsync(IServiceProvider scoped, CancellationToken ct)
     {
@@ -146,6 +156,12 @@ public class ScanProcessingWorker : EngineWorkerBase
                     // A lease PDF was uploaded with the Lease target (the "import your PDF leases" path):
                     // it was extracted with the lease schema, so confirm it as a Lease.
                     draft.TargetEntityType = "Lease";
+                }
+                else if (IsApplicationTarget(draft.TargetEntityType))
+                {
+                    // A completed rental application was uploaded with the Application target: it was
+                    // extracted with the application schema, so confirm it as an Application.
+                    draft.TargetEntityType = "Application";
                 }
                 else
                 {

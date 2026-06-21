@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -145,6 +146,21 @@ public class TenantService : ITenantService
         if (entity == null)
         {
             return false;
+        }
+
+        // Block the soft-delete while the tenant still holds an Active lease. Otherwise the lease keeps
+        // occupying its unit but 404s in the UI — Include(Tenant) inner-joins through the tenant's
+        // soft-delete query filter, so the orphaned lease becomes invisible yet stays Active. Same
+        // ActiveLeaseCount predicate the read model uses; evaluated SQL-side as an EXISTS (the global
+        // query filter already excludes soft-deleted leases).
+        var hasActiveLease = await _db.Leases
+            .AnyAsync(l => l.TenantId == id
+                && l.PortfolioId == portfolioId
+                && l.Status == LeaseStatus.Active, ct);
+        if (hasActiveLease)
+        {
+            throw new DomainValidationException(
+                "This tenant has an active lease; end or reassign it first.");
         }
 
         entity.DeletedAt = DateTime.UtcNow;

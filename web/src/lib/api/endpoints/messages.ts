@@ -39,6 +39,12 @@ export interface StartConversationRequest {
 	subject: string;
 	body: string;
 	channels: string[];
+	/**
+	 * Set true to send even when the Fair Housing review flags the message copy (the landlord
+	 * reviewed the concerns and is overriding). Omitted/false → flagged copy is blocked with a 422
+	 * carrying `fairHousingConcerns`.
+	 */
+	acknowledgedFairHousingReview?: boolean;
 }
 
 export interface SendMessageRequest {

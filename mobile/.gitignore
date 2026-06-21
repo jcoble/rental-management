@@ -43,3 +43,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android release signing secrets — NEVER commit these.
+# Losing upload-keystore.jks complicates Play Store updates; keep a secure backup
+# OFF the repo. key.properties holds the keystore passwords in plaintext.
+android/key.properties
+android/upload-keystore.jks
+**/*.jks
+**/*.keystore
+**/key.properties

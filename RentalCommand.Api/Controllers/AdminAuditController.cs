@@ -20,7 +20,7 @@ namespace RentalCommand.Api.Controllers;
 [Route("api/v1/admin/audit")]
 [Authorize(Roles = "Admin")]
 [Produces("application/json")]
-public class AdminAuditController : AuthenticatedPortfolioControllerBase
+public class AdminAuditController : ManagementControllerBase
 {
     private readonly IAuditQueryService _service;
 

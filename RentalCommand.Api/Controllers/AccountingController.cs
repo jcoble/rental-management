@@ -12,7 +12,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/accounting")]
 [Produces("application/json")]
-public class AccountingController : AuthenticatedPortfolioControllerBase
+public class AccountingController : ManagementControllerBase
 {
     private readonly IAccountingService _service;
     private readonly IScheduleEService _scheduleE;

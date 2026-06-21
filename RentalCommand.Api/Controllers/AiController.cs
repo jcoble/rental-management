@@ -13,7 +13,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/ai")]
 [Produces("application/json")]
-public class AiController : AuthenticatedPortfolioControllerBase
+public class AiController : ManagementControllerBase
 {
     private readonly IDailyBriefingService _briefing;
     private readonly IPortfolioQaService _qa;

@@ -12,8 +12,8 @@ namespace RentalCommand.Api.Scanning;
 /// OpenAI Chat Completions API implementation of <see cref="ILlmProvider"/>. Routes born-digital
 /// PDFs through text-only extraction (cheaper, more accurate) and images through a vision
 /// image_url block. Forces a function-call response so the model returns structured JSON plus a
-/// self-reported 0–1 confidence per field. Scanned PDFs that yield no extractable text are sent
-/// with a plain-text notice (OpenAI Chat Completions does not accept PDF binaries via image_url).
+/// self-reported 0–1 confidence per field. Scanned/image PDFs that yield no extractable text are sent
+/// as a "file" content part so the vision model reads their text + page images (image_url rejects PDFs).
 /// Falls back to a deterministic no-op (no network call, all confidence 0) when no API key is
 /// configured, so the app runs offline.
 /// </summary>
@@ -103,10 +103,20 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         }
         else if (isPdf)
         {
-            // Scanned PDF: OpenAI Chat Completions does not accept PDF binaries via image_url.
-            // Send a best-effort notice; the model can still extract from context/grounding.
-            userContent = "The attached document is a scanned PDF with no extractable text. " +
-                          "Please extract whatever fields you can from the available context.";
+            // Scanned/image PDF (e.g. a multi-photo lease stitched into one PDF): no extractable text,
+            // so hand the PDF itself to the model as a "file" content part. On vision models (gpt-4o and
+            // later, incl. gpt-5.4-*) the API extracts BOTH the text and the page images from it — an
+            // image_url block does NOT accept PDF binaries, but a "file" block does.
+            var pdfDataUri = $"data:application/pdf;base64,{Convert.ToBase64String(documentBytes)}";
+            userContent = new object[]
+            {
+                new { type = "text", text = "Extract the fields from the attached document (it may be a multi-page photographed scan)." },
+                new
+                {
+                    type = "file",
+                    file = new { filename = "document.pdf", file_data = pdfDataUri }
+                }
+            };
         }
         else
         {

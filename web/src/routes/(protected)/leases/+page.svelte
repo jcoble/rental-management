@@ -15,10 +15,9 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
 	import { Plus, FileText } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
@@ -27,15 +26,32 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const LEASE_STATUSES = ['Draft', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
 
-	// Search / status persisted in the URL so they survive navigating away and back. Paging is handled
-	// client-side by the DataGrid over the fetched list (matching the tenants/properties grids); the
-	// list endpoint returns no total count, so server-side paging isn't wired here.
-	let search = $state(readGridParam(page.url.searchParams, 'q'));
-	let statusFilter = $state(readGridParam(page.url.searchParams, 'status'));
+	// Search / status / sort / page persisted in the URL so they survive navigating away and back. Paging
+	// and sorting are handled client-side by the DataGrid over the fetched list (matching the
+	// tenants/properties grids); the list endpoint returns no total count, so server-side paging isn't
+	// wired here. Sort/page seed the grid (initialSort / page) and are mirrored back via
+	// onSortChange / bind:page.
+	const initialParams = page.url.searchParams;
+	let search = $state(readGridParam(initialParams, 'q'));
+	let statusFilter = $state(readGridParam(initialParams, 'status'));
+	let gridSort = $state(readGridParam(initialParams, 'sort'));
+	let gridPage = $state(readGridParam(initialParams, 'page', 1));
 	const debouncedSearch = debounced(() => search, 300);
 
+	// Reset to page 1 when a filter/search changes — but not on initial mount.
+	let filterResetPrimed = false;
 	$effect(() => {
-		syncGridUrl({ q: search, status: statusFilter });
+		search;
+		statusFilter;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
+	});
+
+	$effect(() => {
+		syncGridUrl({ q: search, status: statusFilter, sort: gridSort, page: gridPage }, { page: 1 });
 	});
 
 	const leasesQuery = createQuery(() => ({
@@ -61,7 +77,7 @@
 
 	const empty = {
 		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', startDate: '', endDate: '',
-		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1', status: 'Draft',
+		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1', status: 'Draft', notes: '',
 	};
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
@@ -130,6 +146,7 @@
 			lateFeeAmount: String(l.lateFeeAmount),
 			rentDueDay: String(l.rentDueDay),
 			status: l.status,
+			notes: l.notes ?? '',
 		};
 		formPropertyId = String(l.propertyId);
 		formErrors = {};
@@ -253,6 +270,9 @@
 		onRowClick={(lease) => goto('/leases/' + lease.id)}
 		getRowKey={(l) => l.id}
 		data-testid="leases-list"
+		initialSort={gridSort}
+		bind:page={gridPage}
+		onSortChange={(s) => (gridSort = s ?? '')}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 flex-wrap items-center gap-2">
@@ -287,83 +307,53 @@
 		<Dialog.Header>
 			<Dialog.Title>{editingId == null ? 'New Lease' : 'Edit Lease'}</Dialog.Title>
 		</Dialog.Header>
-		<div class="grid gap-3 md:grid-cols-3" data-testid="lease-form">
-			<div class="md:col-span-3">
-				<Input data-testid="lease-number-input" bind:value={form.leaseNumber} placeholder="Lease number" />
-				{#if formErrors.leaseNumber}<p class="mt-1 text-xs text-destructive" data-testid="lease-number-error">{formErrors.leaseNumber}</p>{/if}
+		<div class="space-y-3" data-testid="lease-form">
+			<!-- Property / unit / tenant pickers stay in the page; the term fields come from the shared component. -->
+			<div class="grid gap-3 md:grid-cols-3">
+				<div>
+					<Select.Root type="single" bind:value={form.propertyId}>
+						<Select.Trigger class="w-full" data-testid="lease-property-input">
+							{selectedPropertyLabel ? selectedPropertyLabel : 'Select property'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="Select property">Select property</Select.Item>
+							{#each propertiesQuery.data || [] as property}
+								<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					{#if formErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="lease-property-error">{formErrors.propertyId}</p>{/if}
+				</div>
+				<div>
+					<Select.Root type="single" bind:value={form.unitId} disabled={!form.propertyId}>
+						<Select.Trigger class="w-full" data-testid="lease-unit-input" disabled={!form.propertyId}>
+							{selectedUnitLabel ? selectedUnitLabel : 'Select unit'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="Select unit">Select unit</Select.Item>
+							{#each unitsForPropertyQuery.data || [] as unit}
+								<Select.Item value={String(unit.id)} label="Unit {unit.unitNumber} ({unit.status})">Unit {unit.unitNumber} ({unit.status})</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					{#if formErrors.unitId}<p class="mt-1 text-xs text-destructive" data-testid="lease-unit-error">{formErrors.unitId}</p>{/if}
+				</div>
+				<div>
+					<Select.Root type="single" bind:value={form.tenantId}>
+						<Select.Trigger class="w-full" data-testid="lease-tenant-input">
+							{selectedTenantLabel ? selectedTenantLabel : 'Select tenant'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="Select tenant">Select tenant</Select.Item>
+							{#each tenantsQuery.data || [] as tenant}
+								<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					{#if formErrors.tenantId}<p class="mt-1 text-xs text-destructive" data-testid="lease-tenant-error">{formErrors.tenantId}</p>{/if}
+				</div>
 			</div>
-			<div>
-				<Select.Root type="single" bind:value={form.propertyId}>
-					<Select.Trigger class="w-full" data-testid="lease-property-input">
-						{selectedPropertyLabel ? selectedPropertyLabel : 'Select property'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="Select property">Select property</Select.Item>
-						{#each propertiesQuery.data || [] as property}
-							<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				{#if formErrors.propertyId}<p class="mt-1 text-xs text-destructive" data-testid="lease-property-error">{formErrors.propertyId}</p>{/if}
-			</div>
-			<div>
-				<Select.Root type="single" bind:value={form.unitId} disabled={!form.propertyId}>
-					<Select.Trigger class="w-full" data-testid="lease-unit-input" disabled={!form.propertyId}>
-						{selectedUnitLabel ? selectedUnitLabel : 'Select unit'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="Select unit">Select unit</Select.Item>
-						{#each unitsForPropertyQuery.data || [] as unit}
-							<Select.Item value={String(unit.id)} label="Unit {unit.unitNumber} ({unit.status})">Unit {unit.unitNumber} ({unit.status})</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				{#if formErrors.unitId}<p class="mt-1 text-xs text-destructive" data-testid="lease-unit-error">{formErrors.unitId}</p>{/if}
-			</div>
-			<div>
-				<Select.Root type="single" bind:value={form.tenantId}>
-					<Select.Trigger class="w-full" data-testid="lease-tenant-input">
-						{selectedTenantLabel ? selectedTenantLabel : 'Select tenant'}
-					</Select.Trigger>
-					<Select.Content>
-						<Select.Item value="" label="Select tenant">Select tenant</Select.Item>
-						{#each tenantsQuery.data || [] as tenant}
-							<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-				{#if formErrors.tenantId}<p class="mt-1 text-xs text-destructive" data-testid="lease-tenant-error">{formErrors.tenantId}</p>{/if}
-			</div>
-			<div>
-				<DatePicker testid="lease-start-input" bind:value={form.startDate} placeholder="Start date" max={form.endDate || undefined} />
-				{#if formErrors.startDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-start-error">{formErrors.startDate}</p>{/if}
-			</div>
-			<div>
-				<DatePicker testid="lease-end-input" bind:value={form.endDate} placeholder="End date" min={form.startDate || undefined} />
-				{#if formErrors.endDate}<p class="mt-1 text-xs text-destructive" data-testid="lease-end-error">{formErrors.endDate}</p>{/if}
-			</div>
-			<Select.Root type="single" bind:value={form.status}>
-				<Select.Trigger class="w-full" data-testid="lease-status-input">
-					{form.status ? form.status : 'Select status'}
-				</Select.Trigger>
-				<Select.Content>
-					{#each LEASE_STATUSES as s}
-						<Select.Item value={s} label={s}>{s}</Select.Item>
-					{/each}
-				</Select.Content>
-			</Select.Root>
-			<div>
-				<Input data-testid="lease-rent-input" bind:value={form.monthlyRent} placeholder="Monthly rent" />
-				{#if formErrors.monthlyRent}<p class="mt-1 text-xs text-destructive" data-testid="lease-rent-error">{formErrors.monthlyRent}</p>{/if}
-			</div>
-			<div>
-				<Input data-testid="lease-deposit-input" bind:value={form.securityDeposit} placeholder="Security deposit" />
-				{#if formErrors.securityDeposit}<p class="mt-1 text-xs text-destructive" data-testid="lease-deposit-error">{formErrors.securityDeposit}</p>{/if}
-			</div>
-			<div class="grid grid-cols-2 gap-2">
-				<Input data-testid="lease-late-fee-input" bind:value={form.lateFeeAmount} placeholder="Late fee" />
-				<Input data-testid="lease-due-day-input" bind:value={form.rentDueDay} placeholder="Due day" />
-			</div>
+			<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} />
 		</div>
 		<Dialog.Footer>
 			<Button data-testid="lease-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>

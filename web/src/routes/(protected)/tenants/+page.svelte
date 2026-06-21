@@ -10,7 +10,7 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
+	import TenantFields from '$lib/components/forms/TenantFields.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import { page } from '$app/state';
@@ -20,10 +20,26 @@
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 
-	// Search persisted in the URL so it survives navigating away and back.
-	let search = $state(readGridParam(page.url.searchParams, 'q'));
+	// Search/sort/page persisted in the URL so they survive navigating away and back. Sort/page seed the
+	// client-side DataGrid (initialSort / page) and are mirrored back via its onSortChange/bind:page.
+	const initialParams = page.url.searchParams;
+	let search = $state(readGridParam(initialParams, 'q'));
+	let gridSort = $state(readGridParam(initialParams, 'sort'));
+	let gridPage = $state(readGridParam(initialParams, 'page', 1));
+
+	// Reset to page 1 when the search changes — but not on initial mount, so a restored ?page= loads as-is.
+	let filterResetPrimed = false;
 	$effect(() => {
-		syncGridUrl({ q: search });
+		search;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
+	});
+
+	$effect(() => {
+		syncGridUrl({ q: search, sort: gridSort, page: gridPage }, { page: 1 });
 	});
 
 	const tenantsQuery = createQuery(() => ({
@@ -211,6 +227,9 @@
 		getRowKey={(t) => t.id}
 		getRowTestId={() => 'tenant-row'}
 		data-testid="tenants-list"
+		initialSort={gridSort}
+		bind:page={gridPage}
+		onSortChange={(s) => (gridSort = s ?? '')}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 items-center gap-2">
@@ -232,21 +251,8 @@
 		<Dialog.Header>
 			<Dialog.Title>{editingId == null ? 'New Tenant' : 'Edit Tenant'}</Dialog.Title>
 		</Dialog.Header>
-		<div class="grid gap-3 md:grid-cols-2" data-testid="tenant-form">
-			<div>
-				<Input data-testid="tenant-first-name-input" bind:value={form.firstName} placeholder="First name" />
-				{#if formErrors.firstName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-first-name-error">{formErrors.firstName}</p>{/if}
-			</div>
-			<div>
-				<Input data-testid="tenant-last-name-input" bind:value={form.lastName} placeholder="Last name" />
-				{#if formErrors.lastName}<p class="mt-1 text-xs text-destructive" data-testid="tenant-last-name-error">{formErrors.lastName}</p>{/if}
-			</div>
-			<div>
-				<Input data-testid="tenant-email-input" bind:value={form.email} placeholder="Email" />
-				{#if formErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="tenant-email-error">{formErrors.email}</p>{/if}
-			</div>
-			<Input data-testid="tenant-phone-input" bind:value={form.phone} placeholder="Phone" />
-			<Input data-testid="tenant-emergency-input" bind:value={form.emergencyContact} class="md:col-span-2" placeholder="Emergency contact" />
+		<div data-testid="tenant-form">
+			<TenantFields bind:form errors={formErrors} />
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button data-testid="tenant-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
