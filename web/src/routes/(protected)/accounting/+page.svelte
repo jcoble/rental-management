@@ -825,6 +825,10 @@
 				<p class="text-sm text-muted-foreground">Ledger, property profit and loss, Schedule E totals, and 1099 review.</p>
 			</div>
 			<div class="flex flex-wrap items-center justify-end gap-2">
+				<Button variant="outline" size="sm" href="/accounting/year-end" data-testid="accounting-report-year-end-link">
+					<FileBarChart class="h-4 w-4" />
+					Year-end view
+				</Button>
 				<Button variant="outline" size="sm" onclick={() => downloadScheduleECsv(reportYear)} data-testid="accounting-report-schedule-e-export">
 					<Download class="h-4 w-4" />
 					Schedule E CSV
