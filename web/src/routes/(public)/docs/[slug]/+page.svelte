@@ -19,23 +19,39 @@
 		currentCategory?.articles[0] ? `/docs/${currentCategory.articles[0].slug}` : '/docs'
 	);
 
-	// Scroll-spy: highlight the heading currently in view within the "On this page" rail.
+	// Scroll-spy: highlight the section currently at the top of the reader. The docs
+	// scroll inside the marketing shell's own scroll container (html/body are
+	// overflow:hidden), so an IntersectionObserver against the viewport misfired —
+	// track the actual scroll container and pick the last heading scrolled past.
 	let activeId = $state('');
 	$effect(() => {
 		const ids = toc.map((t) => t.id); // re-runs when navigating to another article
-		const headings = ids
-			.map((id) => document.getElementById(id))
-			.filter((el): el is HTMLElement => el != null);
-		if (headings.length === 0) return;
+		if (ids.length === 0) return;
+		const scroller: HTMLElement | Window =
+			(document.querySelector('.marketing-shell') as HTMLElement | null) ?? window;
 
-		const observer = new IntersectionObserver(
-			(entries) => {
-				for (const entry of entries) if (entry.isIntersecting) activeId = entry.target.id;
-			},
-			{ rootMargin: '0px 0px -75% 0px', threshold: 0 }
-		);
-		headings.forEach((h) => observer.observe(h));
-		return () => observer.disconnect();
+		const update = () => {
+			const threshold = 120; // a touch below the 64px sticky nav
+			let current = ids[0];
+			for (const id of ids) {
+				const el = document.getElementById(id);
+				if (!el) continue;
+				if (el.getBoundingClientRect().top - threshold <= 0) current = id;
+				else break;
+			}
+			activeId = current;
+		};
+
+		let raf = 0;
+		const onScroll = () => {
+			if (!raf) raf = requestAnimationFrame(() => { raf = 0; update(); });
+		};
+		scroller.addEventListener('scroll', onScroll, { passive: true });
+		update();
+		return () => {
+			scroller.removeEventListener('scroll', onScroll);
+			if (raf) cancelAnimationFrame(raf);
+		};
 	});
 </script>
 
