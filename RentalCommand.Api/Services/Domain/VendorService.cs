@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -135,6 +136,24 @@ public class VendorService : IVendorService
         if (entity == null)
         {
             return false;
+        }
+
+        // Block the soft-delete while the vendor is still attached to a live work order. A work order
+        // keeps its VendorId column on a vendor soft-delete, so the order would render an empty vendor
+        // name and lose its assignee silently. Only NON-terminal orders count (a Completed/Cancelled/
+        // Archived order is historical — keeping the vendor link there is fine). Evaluated SQL-side as a
+        // single COUNT; mirrors the active-lease guard on tenant delete.
+        var openWorkOrderCount = await _db.WorkOrders
+            .CountAsync(w => w.VendorId == id
+                && w.PortfolioId == portfolioId
+                && w.Status != WorkOrderStatus.Completed
+                && w.Status != WorkOrderStatus.Cancelled
+                && w.Status != WorkOrderStatus.Archived, ct);
+        if (openWorkOrderCount > 0)
+        {
+            var plural = openWorkOrderCount == 1 ? "work order" : "work orders";
+            throw new DomainValidationException(
+                $"This vendor is assigned to {openWorkOrderCount} open {plural}; reassign or close them first.");
         }
 
         entity.DeletedAt = DateTime.UtcNow;

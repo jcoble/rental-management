@@ -191,13 +191,17 @@ public class NoticeDraftService : INoticeDraftService
         var channels = NormalizeChannels(request.Channels);
         if (channels.Count == 0) channels = ["Portal"];
 
+        // Approving a notice IS a send → flows through the same Fair Housing gate as a direct message.
+        // A flagged draft throws FairHousingBlockedException (→ 422) unless the landlord acknowledged
+        // the review; the draft stays in "Draft" so they can revise and re-approve.
         var conversation = await _conversations.StartAsync(
             portfolioId,
             draft.TenantId,
             draft.Subject,
             draft.Body,
             channels,
-            ct);
+            acknowledgedFairHousingReview: request.AcknowledgedFairHousingReview,
+            ct: ct);
         if (conversation == null) return null;
 
         draft.Status = "Approved";

@@ -398,8 +398,8 @@
 					{@const snap = snapshotQuery.data}
 					<div class="grid gap-4 sm:grid-cols-3">
 						<div class="m3-tonal-card m3-tonal-card--mint rounded-lg border p-4" data-testid="dashboard-money-collected">
-							<div class="flex items-center gap-2 text-sm font-medium text-success">
-								<HandCoins class="h-4 w-4" /> Collected
+							<div class="flex items-center gap-2 text-sm font-medium text-success" title="All payments received — rent, deposits, and fees">
+								<HandCoins class="h-4 w-4" /> Total Collected
 							</div>
 							<p class="mt-1 font-mono tabular-nums text-3xl font-bold text-foreground" data-testid="dashboard-money-collected-amount">{money(snap.collected)}</p>
 							<p class="mt-1.5 text-sm leading-snug text-muted-foreground">{snap.explanations.collected}</p>

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -9,11 +10,91 @@ import 'core/theme/app_theme.dart';
 import 'core/voice/voice_command_controller.dart';
 
 void main() {
+  // Replace Flutter's default red/grey "error box" with a friendly card so a
+  // screen that fails to build degrades gracefully instead of flashing a raw
+  // error. Self-contained (own Directionality + colors) because the failing
+  // widget may sit above the MaterialApp, where no Theme is in scope.
+  ErrorWidget.builder = (FlutterErrorDetails details) =>
+      _FriendlyErrorWidget(details: details);
+
   // Allow the mkcert self-signed certificate in debug builds so that both the
   // Dio REST client and the SignalR WebSocket upgrade accept the local dev API.
   installDebugCertBypass();
 
   runApp(const ProviderScope(child: _AppStartup()));
+}
+
+/// On-theme fallback shown by [ErrorWidget.builder] when a widget fails to
+/// build. Renders an icon + "Couldn't load this screen"; in debug builds it
+/// also surfaces the exception text to aid diagnosis. In release/profile the
+/// detail is hidden so users never see a raw stack trace.
+class _FriendlyErrorWidget extends StatelessWidget {
+  const _FriendlyErrorWidget({required this.details});
+
+  final FlutterErrorDetails details;
+
+  @override
+  Widget build(BuildContext context) {
+    // Rental Command's dark palette (violet seed #A36BFF). Hard-coded rather
+    // than read from Theme.of(context): this widget can be inserted into the
+    // tree before/above MaterialApp, so an inherited theme is not guaranteed.
+    const surface = Color(0xFF141218);
+    const onSurface = Color(0xFFE6E0E9);
+    const onSurfaceVariant = Color(0xFFCAC4D0);
+    const errorColor = Color(0xFFF2B8B5);
+
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Material(
+        color: surface,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.error_outline_rounded,
+                  size: 44,
+                  color: errorColor,
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  "Couldn't load this screen",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: onSurface,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Something went wrong. Try going back and opening it again.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: onSurfaceVariant, fontSize: 14),
+                ),
+                if (kDebugMode) ...[
+                  const SizedBox(height: 16),
+                  Text(
+                    details.exceptionAsString(),
+                    textAlign: TextAlign.center,
+                    maxLines: 6,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: onSurfaceVariant,
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Bootstraps the app by restoring any persisted auth session before rendering

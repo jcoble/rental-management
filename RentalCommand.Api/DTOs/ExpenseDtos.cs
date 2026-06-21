@@ -136,12 +136,14 @@ public class CreateExpenseRequest
     [Range(1, int.MaxValue)]
     public int? WorkOrderId { get; set; }
 
+    [EnumDataType(typeof(ScheduleECategory))]
     public ScheduleECategory Category { get; set; } = ScheduleECategory.Other;
 
     [Required]
     [MaxLength(500)]
     public string Description { get; set; } = string.Empty;
 
+    [EnumDataType(typeof(ExpenseStatus))]
     public ExpenseStatus Status { get; set; } = ExpenseStatus.Pending;
 
     [Range(0.01, 99999999)]
@@ -213,11 +215,13 @@ public class UpdateExpenseRequest
     [Range(1, int.MaxValue)]
     public int? WorkOrderId { get; set; }
 
+    [EnumDataType(typeof(ScheduleECategory))]
     public ScheduleECategory? Category { get; set; }
 
     [MaxLength(500)]
     public string? Description { get; set; }
 
+    [EnumDataType(typeof(ExpenseStatus))]
     public ExpenseStatus? Status { get; set; }
 
     [Range(0.01, 99999999)]

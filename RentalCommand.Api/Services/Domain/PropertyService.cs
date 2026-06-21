@@ -107,12 +107,23 @@ public class PropertyService : IPropertyService
             return null;
         }
 
+        // When no owner is supplied, link the property to the portfolio's primary (self) owner so it shows up
+        // in the owners report. If the portfolio has no primary owner yet, leave it null rather than failing.
+        var ownerEntityId = request.OwnerEntityId;
+        if (!ownerEntityId.HasValue)
+        {
+            ownerEntityId = await _db.OwnerEntities
+                .Where(oe => oe.PortfolioId == portfolioId && oe.IsPrimary)
+                .Select(oe => (int?)oe.Id)
+                .FirstOrDefaultAsync(ct);
+        }
+
         var now = DateTime.UtcNow;
         var entity = new Property
         {
             PortfolioId = portfolioId,
             OwnerId = request.OwnerId,
-            OwnerEntityId = request.OwnerEntityId,
+            OwnerEntityId = ownerEntityId,
             Name = request.Name,
             PropertyType = request.PropertyType,
             Status = request.Status,

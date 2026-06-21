@@ -26,9 +26,17 @@ public interface IConversationService
     /// Open a new topic thread with a tenant and send the first (landlord) message, fanning out to
     /// email/SMS for the requested channels the tenant has contact info for. Returns null when the
     /// tenant is not in the portfolio (controller maps to 404).
+    /// <para>
+    /// Before sending, the subject+body are screened by the Fair Housing review. If it flags concerns
+    /// and <paramref name="acknowledgedFairHousingReview"/> is false, the send is blocked with a
+    /// <see cref="RentalCommand.Core.FairHousingBlockedException"/> (→ 422). When the flag is true the
+    /// block is overridden and the override is logged. If the review is unavailable/errors, the send
+    /// proceeds (fail-open).
+    /// </para>
     /// </summary>
     Task<ConversationDetail?> StartAsync(
-        int portfolioId, int tenantId, string subject, string body, List<string> channels, CancellationToken ct = default);
+        int portfolioId, int tenantId, string subject, string body, List<string> channels,
+        bool acknowledgedFairHousingReview = false, CancellationToken ct = default);
 
     /// <summary>
     /// Append a landlord message to an existing conversation, bumping the tenant's unread count and

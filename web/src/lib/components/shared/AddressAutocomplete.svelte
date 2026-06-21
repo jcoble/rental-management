@@ -58,8 +58,11 @@
 		secondary: string;
 	}
 
-	// Process-wide gate: once the server tells us there's no key (or a call errors),
-	// every instance stops calling and stays a plain input for the rest of the session.
+	// Process-wide gate: only an explicit {enabled:false} from the server (no Places key
+	// configured) flips this. Once set, every instance stops calling and stays a plain input
+	// for the rest of the session. Transient errors (non-OK status / network throw) do NOT
+	// set it — they just close the dropdown for that one query so a flaky response can't
+	// permanently kill autocomplete.
 	let placesDisabled = $state(false);
 
 	let suggestions = $state<Suggestion[]>([]);
@@ -116,7 +119,11 @@
 				`/api/v1/places/autocomplete?q=${encodeURIComponent(q)}&session=${sessionToken}`
 			);
 			if (!res.ok) {
-				placesDisabled = true;
+				// Transient server hiccup (5xx, rate-limit, a momentary proxy error) — close the
+				// dropdown for THIS query but do NOT latch the feature off for the whole session.
+				// The ONLY signal that disables autocomplete process-wide is an explicit
+				// {enabled:false} (no key configured), handled just below. Latching here meant a
+				// single flaky response killed autocomplete on every field until a page reload.
 				closeDropdown();
 				return;
 			}

@@ -27,11 +27,27 @@
 
 	const OWNER_ENTITY_TYPES: OwnerEntityType[] = ['Person', 'LLC', 'Trust'];
 
-	// Search persisted in the URL so it survives navigating away and back.
-	let ownerSearch = $state(readGridParam(page.url.searchParams, 'q'));
+	// Search / sort / page persisted in the URL so they survive navigating away and back. Sort/page seed
+	// the client-side DataGrid (initialSort / page) and are mirrored back via onSortChange / bind:page.
+	const initialParams = page.url.searchParams;
+	let ownerSearch = $state(readGridParam(initialParams, 'q'));
+	let gridSort = $state(readGridParam(initialParams, 'sort'));
+	let gridPage = $state(readGridParam(initialParams, 'page', 1));
 	const debouncedOwnerSearch = debounced(() => ownerSearch, 300);
+
+	// Reset to page 1 when the search changes — but not on initial mount.
+	let filterResetPrimed = false;
 	$effect(() => {
-		syncGridUrl({ q: ownerSearch });
+		ownerSearch;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
+	});
+
+	$effect(() => {
+		syncGridUrl({ q: ownerSearch, sort: gridSort, page: gridPage }, { page: 1 });
 	});
 
 	const ownersQuery = createQuery(() => ({
@@ -199,6 +215,9 @@
 		getRowTestId={() => 'owner-row'}
 		onRowClick={(o) => goto(`/owners/${o.id}`)}
 		data-testid="owners-list"
+		initialSort={gridSort}
+		bind:page={gridPage}
+		onSortChange={(s) => (gridSort = s ?? '')}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 items-center gap-2">

@@ -13,7 +13,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/import")]
 [Produces("application/json")]
-public class ImportController : AuthenticatedPortfolioControllerBase
+public class ImportController : ManagementControllerBase
 {
     private readonly ICsvImportService _import;
 

@@ -46,6 +46,14 @@ public class GenerateNoticeDraftsRequest
 public class ApproveNoticeDraftRequest
 {
     public List<string> Channels { get; set; } = ["Portal", "Email", "Sms"];
+
+    /// <summary>
+    /// Set true to send even when the Fair Housing review flags the notice copy. The landlord has
+    /// reviewed the concerns and is consciously overriding the block (e.g. a false positive). The
+    /// override is logged server-side. Default false → a flagged notice is blocked with a 422 carrying
+    /// the concerns.
+    /// </summary>
+    public bool AcknowledgedFairHousingReview { get; set; }
 }
 
 public class UpdateNoticeDraftRequest

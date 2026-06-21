@@ -74,6 +74,13 @@ public class StartConversationRequest : IValidatableObject
     /// <summary>One or more of "Portal", "Email", "Sms" (case-insensitive).</summary>
     public List<string> Channels { get; set; } = [];
 
+    /// <summary>
+    /// Set true to send even when the Fair Housing review flags the message copy. The landlord has
+    /// reviewed the concerns and is consciously overriding the block. The override is logged server-side.
+    /// Default false → flagged copy is blocked with a 422 carrying the concerns.
+    /// </summary>
+    public bool AcknowledgedFairHousingReview { get; set; }
+
     public IEnumerable<ValidationResult> Validate(ValidationContext validationContext) =>
         ConversationChannelValidation.Validate(Channels);
 }

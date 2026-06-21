@@ -27,6 +27,7 @@ resulting record lines up sensibly.
 | `10-insurance-premium` | Dwelling-policy premium notice | Receipt / Bill | **Expense** (insurance) |
 | `11-rent-check-marcus-williams` | Rent check — Marcus Williams, $1,500 | Rent Check / Payment | **Payment** (rent) |
 | `12-rent-check-priya-patel` | Rent check — Priya Patel, $1,375 | Rent Check / Payment | **Payment** (rent) |
+| `13-lease-sunset-ridge.txt` | Residential lease (Property + Unit + Tenant + Lease) — text source, render to PNG/PDF later via `generate.py` | Lease | Front-door "New rental from your lease" flow — Property «Sunset Ridge Apartments, 482 Sunset Ridge Drive», Unit «12B», Tenant «Daniel R. Fletcher», Lease «$1,575/mo, Jul 1 2026 – Jun 30 2027» |
 
 ## How to use them
 

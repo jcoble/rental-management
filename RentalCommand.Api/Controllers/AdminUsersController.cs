@@ -20,7 +20,7 @@ namespace RentalCommand.Api.Controllers;
 [Route("api/v1/admin/users")]
 [Produces("application/json")]
 [Authorize(Roles = "Admin")]
-public class AdminUsersController : AuthenticatedPortfolioControllerBase
+public class AdminUsersController : ManagementControllerBase
 {
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly RentalCommandDbContext _db;
