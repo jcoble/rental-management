@@ -103,6 +103,13 @@ export interface Property {
 	yearBuilt?: number;
 	managementFeePercent?: number;
 	notes?: string;
+	// Depreciation basis (year-end tax picture). Land is not depreciable.
+	purchasePrice?: number | null;
+	landValue?: number | null;
+	inServiceDate?: string | null;
+	manualAnnualDepreciation?: number | null;
+	/** Cumulative depreciation taken to date (read-only; system-maintained). */
+	accumulatedDepreciation?: number;
 	ownerName?: string;
 	unitCount?: number;
 	occupiedUnits?: number;
@@ -266,6 +273,12 @@ export interface ScheduleEPropertyReport {
 	expensesByCategory: ScheduleECategoryAmount[];
 	totalExpenses: number;
 	netIncome: number;
+	/** Mortgage interest deducted (from the loan split; principal excluded). */
+	mortgageInterest: number;
+	/** Computed straight-line depreciation deducted. */
+	depreciation: number;
+	/** True when the depreciation figure is the first-year IRS mid-month estimate. */
+	depreciationIsFirstYearEstimate: boolean;
 }
 
 export interface ScheduleEReport {
@@ -274,6 +287,50 @@ export interface ScheduleEReport {
 	totalRentalIncome: number;
 	totalExpenses: number;
 	netIncome: number;
+}
+
+/** One property's true cash flow for a period (rent − opex − debt service). */
+export interface PropertyCashFlow {
+	propertyId: number;
+	propertyName: string;
+	income: number;
+	operatingExpenses: number;
+	noi: number;
+	debtService: number;
+	cashFlow: number;
+}
+
+/** Per-property + portfolio true cash flow for a period. */
+export interface CashFlowSummary {
+	from: string;
+	to: string;
+	properties: PropertyCashFlow[];
+	totalIncome: number;
+	totalOperatingExpenses: number;
+	totalNoi: number;
+	totalDebtService: number;
+	totalCashFlow: number;
+}
+
+/** One rent-roll row in the year-end view. */
+export interface YearEndRentRollRow {
+	propertyName: string;
+	unitNumber: string;
+	tenantName: string;
+	monthlyRent: number;
+	leaseStart: string;
+	leaseEnd: string;
+	leaseStatus: string;
+	pastDueBalance: number;
+}
+
+/** The year-end three-block view: cash flow vs taxable income + rent roll + accountant caveats. */
+export interface YearEndView {
+	year: number;
+	cashFlow: CashFlowSummary;
+	scheduleE: ScheduleEReport;
+	rentRoll: YearEndRentRollRow[];
+	accountantNotes: string[];
 }
 
 // ---

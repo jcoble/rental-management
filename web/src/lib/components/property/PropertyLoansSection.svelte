@@ -1,0 +1,306 @@
+<script lang="ts">
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { loans, type Loan } from '$lib/api/endpoints/loans';
+	import { loanSchema, parseForm } from '$lib/schemas';
+	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { DataGrid } from '$lib/components/data-grid';
+	import type { ColumnDef } from '$lib/components/data-grid/types';
+	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { Button } from '$lib/components/ui/button';
+	import { Plus, Pencil, Trash2, AlertTriangle, ChevronDown, ChevronRight } from '@lucide/svelte';
+
+	let { propertyId }: { propertyId: number } = $props();
+
+	const queryClient = useQueryClient();
+
+	const loansQuery = createQuery(() => ({
+		queryKey: ['loans', propertyId],
+		queryFn: () => loans.list({ propertyId }),
+		enabled: !isNaN(propertyId) && propertyId > 0
+	}));
+
+	const loansList = $derived(loansQuery.data ?? []);
+
+	function fmtCurrency(value: number): string {
+		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
+	}
+	function fmtDate(value: string): string {
+		const d = new Date(value);
+		return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+	}
+
+	const statusOptions = [
+		{ value: 'Active', label: 'Active' },
+		{ value: 'PaidOff', label: 'Paid off' },
+		{ value: 'Closed', label: 'Closed' }
+	];
+
+	const emptyLoan = {
+		lender: '',
+		originalAmount: '',
+		currentBalance: '',
+		annualInterestRatePct: '',
+		termMonths: '360',
+		startDate: '',
+		dayOfMonthDue: '1',
+		monthlyPrincipalInterest: '',
+		monthlyEscrow: '0',
+		escrowCoversTaxes: false,
+		escrowCoversInsurance: false,
+		status: 'Active',
+		notes: ''
+	};
+
+	let showForm = $state(false);
+	let editingLoanId = $state<number | null>(null);
+	let form = $state({ ...emptyLoan });
+	let formErrors = $state<Record<string, string>>({});
+
+	function openAdd() {
+		editingLoanId = null;
+		form = { ...emptyLoan };
+		formErrors = {};
+		showForm = true;
+	}
+
+	function openEdit(l: Loan) {
+		editingLoanId = l.id;
+		form = {
+			lender: l.lender,
+			originalAmount: String(l.originalAmount),
+			currentBalance: String(l.currentBalance),
+			annualInterestRatePct: String(l.annualInterestRatePct),
+			termMonths: String(l.termMonths),
+			startDate: l.startDate ? l.startDate.slice(0, 10) : '',
+			dayOfMonthDue: String(l.dayOfMonthDue),
+			monthlyPrincipalInterest: String(l.monthlyPrincipalInterest),
+			monthlyEscrow: String(l.monthlyEscrow),
+			escrowCoversTaxes: l.escrowCoversTaxes,
+			escrowCoversInsurance: l.escrowCoversInsurance,
+			status: l.status,
+			notes: l.notes ?? ''
+		};
+		formErrors = {};
+		showForm = true;
+	}
+
+	function closeForm() {
+		showForm = false;
+		editingLoanId = null;
+		formErrors = {};
+	}
+
+	function invalidate() {
+		queryClient.invalidateQueries({ queryKey: ['loans', propertyId] });
+	}
+
+	const createMut = createMutation(() => ({
+		mutationFn: (data: Record<string, unknown>) => loans.create({ propertyId, ...data }),
+		onSuccess: () => {
+			showSuccess('Loan added.');
+			closeForm();
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	const updateMut = createMutation(() => ({
+		mutationFn: ({ id, data }: { id: number; data: Record<string, unknown> }) => loans.update(id, data),
+		onSuccess: () => {
+			showSuccess('Loan updated.');
+			closeForm();
+			invalidate();
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	let deleteTarget = $state<Loan | null>(null);
+	const deleteMut = createMutation(() => ({
+		mutationFn: (id: number) => loans.remove(id),
+		onSuccess: () => {
+			showSuccess('Loan removed.');
+			deleteTarget = null;
+			invalidate();
+			if (expandedLoanId != null) expandedLoanId = null;
+		},
+		onError: (err) => showError(apiErrorMessage(err))
+	}));
+
+	function submit() {
+		// The escrow-cover flags are booleans the schema passes through; checkbox state lives in `form`.
+		const result = parseForm(loanSchema, form);
+		if (result.errors) {
+			formErrors = result.errors;
+			return;
+		}
+		formErrors = {};
+		const data = { ...result.data, escrowCoversTaxes: form.escrowCoversTaxes, escrowCoversInsurance: form.escrowCoversInsurance };
+		if (editingLoanId != null) {
+			updateMut.mutate({ id: editingLoanId, data });
+		} else {
+			createMut.mutate(data);
+		}
+	}
+
+	const columns: ColumnDef<Loan>[] = [
+		{ key: 'lender', title: 'Lender', sortable: true, mobileRole: 'title' },
+		{ key: 'currentBalance', title: 'Balance', format: 'currency', sortable: true, mobileRole: 'metric' },
+		{ key: 'annualInterestRatePct', title: 'Rate %', format: 'number', sortable: true, mobileRole: 'meta' },
+		{ key: 'monthlyPrincipalInterest', title: 'P&I', format: 'currency', sortable: true, mobileRole: 'meta' },
+		{ key: 'monthlyEscrow', title: 'Escrow', format: 'currency', mobileRole: 'meta' },
+		{ key: 'status', title: 'Status', mobileRole: 'badge' },
+		{ key: 'actions', title: '', align: 'right', width: '8rem', mobileRole: 'hidden', cell: actionsCell }
+	];
+
+	// ── Amortization schedule (read-only history), shown inline when a loan is expanded ──
+	let expandedLoanId = $state<number | null>(null);
+	const scheduleQuery = createQuery(() => ({
+		queryKey: ['loan-payments', expandedLoanId],
+		queryFn: () => loans.payments(expandedLoanId as number),
+		enabled: expandedLoanId != null
+	}));
+	const scheduleRows = $derived(scheduleQuery.data ?? []);
+
+	function toggleSchedule(id: number) {
+		expandedLoanId = expandedLoanId === id ? null : id;
+	}
+</script>
+
+{#snippet actionsCell(loan: Loan)}
+	<div class="flex items-center justify-end gap-1">
+		<Button variant="ghost" size="sm" class="h-7 gap-1 px-2" onclick={(e) => { e.stopPropagation(); toggleSchedule(loan.id); }} data-testid={`loan-schedule-toggle-${loan.id}`}>
+			{#if expandedLoanId === loan.id}<ChevronDown class="h-4 w-4" />{:else}<ChevronRight class="h-4 w-4" />{/if}
+			<span class="hidden sm:inline">Schedule</span>
+		</Button>
+		<Button variant="ghost" size="sm" class="h-7 w-7 p-0" onclick={(e) => { e.stopPropagation(); openEdit(loan); }} aria-label="Edit loan">
+			<Pencil class="h-4 w-4" />
+		</Button>
+		<Button variant="ghost" size="sm" class="h-7 w-7 p-0 text-destructive" onclick={(e) => { e.stopPropagation(); deleteTarget = loan; }} aria-label="Delete loan">
+			<Trash2 class="h-4 w-4" />
+		</Button>
+	</div>
+{/snippet}
+
+<div class="mb-6" data-testid="property-detail-loans">
+	<h2 class="mb-3 text-lg font-semibold">Mortgage / Loans</h2>
+	<DataGrid
+		data={loansList}
+		{columns}
+		loading={loansQuery.isLoading}
+		emptyMessage="No loans on this property yet."
+		getRowKey={(l) => l.id}
+		pageSize={10}
+		data-testid="property-loans-grid"
+	>
+		{#snippet toolbar()}
+			<div class="flex flex-1"></div>
+			<Button class="gap-2 shrink-0" onclick={openAdd} data-testid="loan-add-button">
+				<Plus class="h-4 w-4" />
+				Add Loan
+			</Button>
+		{/snippet}
+	</DataGrid>
+
+	<!-- Amortization schedule for the expanded loan -->
+	{#if expandedLoanId != null}
+		<div class="mt-3 rounded-lg border border-border bg-muted/30 p-4" data-testid="loan-amortization-schedule">
+			<h3 class="mb-2 text-sm font-semibold">Amortization schedule</h3>
+			{#if scheduleQuery.isLoading}
+				<p class="text-sm text-muted-foreground">Loading…</p>
+			{:else if scheduleRows.length === 0}
+				<p class="text-sm text-muted-foreground">No payments generated yet. The debt-service worker fills this in monthly.</p>
+			{:else}
+				<div class="overflow-x-auto">
+					<table class="w-full text-sm tabular-nums">
+						<thead>
+							<tr class="text-left text-xs uppercase tracking-wide text-muted-foreground">
+								<th class="py-1 pr-3">Period</th>
+								<th class="py-1 pr-3">Due</th>
+								<th class="py-1 pr-3 text-right">Interest</th>
+								<th class="py-1 pr-3 text-right">Principal</th>
+								<th class="py-1 pr-3 text-right">Escrow</th>
+								<th class="py-1 pr-3 text-right">Total</th>
+								<th class="py-1 pr-3 text-right">Balance</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each scheduleRows as row (row.id)}
+								<tr class="border-t border-border/60">
+									<td class="py-1 pr-3">{row.periodKey}</td>
+									<td class="py-1 pr-3">{fmtDate(row.dueDate)}</td>
+									<td class="py-1 pr-3 text-right">{fmtCurrency(row.interestAmount)}</td>
+									<td class="py-1 pr-3 text-right">{fmtCurrency(row.principalAmount)}</td>
+									<td class="py-1 pr-3 text-right">{fmtCurrency(row.escrowAmount)}</td>
+									<td class="py-1 pr-3 text-right font-medium">{fmtCurrency(row.totalAmount)}</td>
+									<td class="py-1 pr-3 text-right">{fmtCurrency(row.balanceAfter)}</td>
+								</tr>
+								{#if row.paymentDoesNotCoverInterest}
+									<tr>
+										<td colspan="7" class="pb-1 text-xs text-amber-600">
+											<AlertTriangle class="mr-1 inline h-3 w-3" />Payment didn't cover interest this period.
+										</td>
+									</tr>
+								{/if}
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		</div>
+	{/if}
+</div>
+
+<!-- Loan add/edit dialog -->
+<Dialog.Root open={showForm} onOpenChange={(v) => { if (!v) closeForm(); }}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>{editingLoanId == null ? 'Add Loan' : 'Edit Loan'}</Dialog.Title>
+		</Dialog.Header>
+		<div class="grid max-h-[60vh] gap-3 overflow-y-auto px-1" data-testid="loan-form">
+			<InlineField label="Lender" bind:value={form.lender} editing type="text" error={formErrors.lender} testid="loan-lender" />
+			<div class="grid grid-cols-2 gap-3">
+				<InlineField label="Original amount" bind:value={form.originalAmount} editing type="number" error={formErrors.originalAmount} testid="loan-original-amount" />
+				<InlineField label="Current balance" bind:value={form.currentBalance} editing type="number" placeholder="Defaults to original" error={formErrors.currentBalance} testid="loan-current-balance" />
+			</div>
+			<div class="grid grid-cols-2 gap-3">
+				<InlineField label="Interest rate %" bind:value={form.annualInterestRatePct} editing type="number" error={formErrors.annualInterestRatePct} testid="loan-rate" />
+				<InlineField label="Term (months)" bind:value={form.termMonths} editing type="number" error={formErrors.termMonths} testid="loan-term" />
+			</div>
+			<div class="grid grid-cols-2 gap-3">
+				<InlineField label="Start date" bind:value={form.startDate} editing type="date" error={formErrors.startDate} testid="loan-start-date" />
+				<InlineField label="Day of month due" bind:value={form.dayOfMonthDue} editing type="number" error={formErrors.dayOfMonthDue} testid="loan-day-due" />
+			</div>
+			<div class="grid grid-cols-2 gap-3">
+				<InlineField label="Monthly P&I" bind:value={form.monthlyPrincipalInterest} editing type="number" error={formErrors.monthlyPrincipalInterest} testid="loan-pi" />
+				<InlineField label="Monthly escrow" bind:value={form.monthlyEscrow} editing type="number" error={formErrors.monthlyEscrow} testid="loan-escrow" />
+			</div>
+			<label class="flex items-center gap-2 text-sm">
+				<input type="checkbox" bind:checked={form.escrowCoversTaxes} data-testid="loan-escrow-taxes" />
+				Escrow covers property taxes
+			</label>
+			<label class="flex items-center gap-2 text-sm">
+				<input type="checkbox" bind:checked={form.escrowCoversInsurance} data-testid="loan-escrow-insurance" />
+				Escrow covers insurance
+			</label>
+			<InlineField label="Status" bind:value={form.status} editing type="select" options={statusOptions} testid="loan-status" />
+		</div>
+		<div class="mt-4 flex justify-end gap-2">
+			<Button variant="outline" onclick={closeForm}>Cancel</Button>
+			<Button onclick={submit} disabled={createMut.isPending || updateMut.isPending} data-testid="loan-save-button">
+				{(createMut.isPending || updateMut.isPending) ? 'Saving…' : editingLoanId == null ? 'Add Loan' : 'Save Loan'}
+			</Button>
+		</div>
+	</Dialog.Content>
+</Dialog.Root>
+
+<ConfirmDialog
+	open={deleteTarget !== null}
+	title="Remove loan"
+	message={deleteTarget ? `Remove the loan from "${deleteTarget.lender}"? This removes its amortization history.` : ''}
+	busy={deleteMut.isPending}
+	testid="loan-delete-confirm"
+	onconfirm={() => deleteTarget && deleteMut.mutate(deleteTarget.id)}
+	oncancel={() => (deleteTarget = null)}
+/>

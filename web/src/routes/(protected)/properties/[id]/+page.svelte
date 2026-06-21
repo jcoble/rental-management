@@ -7,7 +7,9 @@
 	import { leases } from '$lib/api/endpoints/leases';
 	import type { Lease, Property, Unit } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { propertySchema, unitSchema, parseForm } from '$lib/schemas';
+	import { propertySchema, propertyBasisSchema, unitSchema, parseForm } from '$lib/schemas';
+	import PropertyLoansSection from '$lib/components/property/PropertyLoansSection.svelte';
+	import PropertyRecurringExpensesSection from '$lib/components/property/PropertyRecurringExpensesSection.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
@@ -70,11 +72,19 @@
 	});
 
 	// ── Inline property edit ──────────────────────────────────────────────────
-	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '' };
+	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '', purchasePrice: '', landValue: '', inServiceDate: '', manualAnnualDepreciation: '' };
 	let editingProperty = $state(false);
 	let propertyForm = $state({ ...emptyProperty });
 	let propertyFormErrors = $state<Record<string, string>>({});
 	let showDeletePropertyConfirm = $state(false);
+
+	function fmtMoney(value: number): string {
+		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
+	}
+	function fmtDateOnly(value: string): string {
+		const d = new Date(value);
+		return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+	}
 
 	const propertyTypes = ['SingleFamily', 'MultiFamily', 'Condo', 'Townhome', 'Commercial', 'MixedUse'];
 	const propertyTypeOptions = $derived(propertyTypes.map((value) => ({ value, label: value })));
@@ -94,6 +104,10 @@
 			state: property.state,
 			postalCode: property.postalCode,
 			ownerEntityId: property.ownerEntityId != null ? String(property.ownerEntityId) : '',
+			purchasePrice: property.purchasePrice != null ? String(property.purchasePrice) : '',
+			landValue: property.landValue != null ? String(property.landValue) : '',
+			inServiceDate: property.inServiceDate ? property.inServiceDate.slice(0, 10) : '',
+			manualAnnualDepreciation: property.manualAnnualDepreciation != null ? String(property.manualAnnualDepreciation) : '',
 		};
 		propertyFormErrors = {};
 		editingProperty = true;
@@ -106,12 +120,13 @@
 
 	function submitProperty() {
 		const result = parseForm(propertySchema, propertyForm);
-		if (result.errors) {
-			propertyFormErrors = result.errors;
+		const basis = parseForm(propertyBasisSchema, propertyForm);
+		if (result.errors || basis.errors) {
+			propertyFormErrors = { ...(result.errors ?? {}), ...(basis.errors ?? {}) };
 			return;
 		}
 		propertyFormErrors = {};
-		savePropertyMutation.mutate({ id, data: { portfolioId, ...result.data } });
+		savePropertyMutation.mutate({ id, data: { portfolioId, ...result.data, ...basis.data } });
 	}
 
 	const savePropertyMutation = createMutation(() => ({
@@ -534,6 +549,20 @@
 					</div>
 				{/if}
 			</DetailCard>
+
+			<!-- Cost basis (depreciation): the inputs the year-end tax picture needs. Land is not depreciable. -->
+			<DetailCard title="Cost basis (depreciation)" icon={Info} accent="muted" testid="property-detail-basis-card" class="lg:col-span-2" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
+				<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? fmtMoney(property.purchasePrice) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.purchasePrice} testid="property-basis-purchase-price" />
+				<InlineField label="Land value" bind:value={propertyForm.landValue} display={property.landValue != null ? fmtMoney(property.landValue) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.landValue} testid="property-basis-land-value" />
+				<InlineField label="In-service date" bind:value={propertyForm.inServiceDate} display={property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—'} editing={editingProperty} type="date" error={propertyFormErrors.inServiceDate} testid="property-basis-in-service" />
+				<InlineField label="Manual annual depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={property.manualAnnualDepreciation != null ? fmtMoney(property.manualAnnualDepreciation) : 'Auto (straight-line)'} editing={editingProperty} type="number" error={propertyFormErrors.manualAnnualDepreciation} testid="property-basis-manual-depr" />
+				{#if !editingProperty && (property.accumulatedDepreciation ?? 0) > 0}
+					<div class="sm:col-span-2 lg:col-span-4">
+						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Accumulated depreciation to date</dt>
+						<dd class="mt-1 text-sm tabular-nums text-foreground">{fmtMoney(property.accumulatedDepreciation ?? 0)}</dd>
+					</div>
+				{/if}
+			</DetailCard>
 		</div>
 
 		<!-- Units section -->
@@ -558,6 +587,12 @@
 				{/snippet}
 			</DataGrid>
 		</div>
+
+		<!-- Mortgage / Loans section (+ inline amortization schedule) -->
+		<PropertyLoansSection propertyId={id} />
+
+		<!-- Recurring expenses section -->
+		<PropertyRecurringExpensesSection propertyId={id} />
 
 		<!-- Leases section -->
 		<div data-testid="property-detail-leases">
