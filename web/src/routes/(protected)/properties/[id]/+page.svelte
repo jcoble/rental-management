@@ -73,7 +73,7 @@
 	});
 
 	// ── Inline property edit ──────────────────────────────────────────────────
-	const emptyProperty = { name: '', type: 'MultiFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '', purchasePrice: '', landValue: '', inServiceDate: '', manualAnnualDepreciation: '' };
+	const emptyProperty = { name: '', type: 'MultiFamily', status: 'Active', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '', purchasePrice: '', landValue: '', inServiceDate: '', manualAnnualDepreciation: '' };
 	let editingProperty = $state(false);
 	let propertyForm = $state({ ...emptyProperty });
 	let propertyFormErrors = $state<Record<string, string>>({});
@@ -89,6 +89,8 @@
 
 	const propertyTypes = ['SingleFamily', 'MultiFamily', 'Condo', 'Townhome', 'Commercial', 'MixedUse'];
 	const propertyTypeOptions = $derived(propertyTypes.map((value) => ({ value, label: value })));
+	const propertyStatuses = ['Active', 'UnderMaintenance', 'Inactive'];
+	const propertyStatusOptions = $derived(propertyStatuses.map((value) => ({ value, label: value })));
 	const ownerOptions = $derived([
 		{ value: '', label: 'No owner assigned' },
 		...(ownersQuery.data ?? []).map((o) => ({ value: String(o.id), label: o.name })),
@@ -99,6 +101,7 @@
 		propertyForm = {
 			name: property.name,
 			type: property.type ?? 'MultiFamily',
+			status: property.status ?? 'Active',
 			addressLine1: property.addressLine1,
 			addressLine2: property.addressLine2 ?? '',
 			city: property.city,
@@ -519,6 +522,7 @@
 			<DetailCard title="Identity" icon={Building2} accent="primary" testid="property-detail-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Name" bind:value={propertyForm.name} display={property.name} editing={editingProperty} error={propertyFormErrors.name} testid="property-detail-name-field" />
 				<InlineField label="Type" bind:value={propertyForm.type} display={property.type} editing={editingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" />
+				<InlineField label="Status" bind:value={propertyForm.status} display={property.status} editing={editingProperty} type="select" options={propertyStatusOptions} error={propertyFormErrors.status} testid="property-detail-status" />
 				<InlineField label="Owner" bind:value={propertyForm.ownerEntityId} display={property.ownerName ?? 'No owner assigned'} editing={editingProperty} type="select" options={ownerOptions} testid="property-detail-owner" class="sm:col-span-2" />
 			</DetailCard>
 
