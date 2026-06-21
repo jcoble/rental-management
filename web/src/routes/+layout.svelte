@@ -16,7 +16,6 @@
 	// imported files containing a top-level :root{} block.
 	import '$lib/styles/m3-theme.css';
 	import '$lib/styles/m3-base.css';
-	import { onNavigate } from '$app/navigation';
 	import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from '$lib/components/ui/sonner';
@@ -45,19 +44,10 @@
 		}
 	});
 
-	// M3-style page transitions via the View Transitions API (Chromium/Safari;
-	// no-ops elsewhere). The m3-vt-* keyframes in app.css do the fade-through —
-	// guarded by prefers-reduced-motion.
-	onNavigate((navigation) => {
-		if (!document.startViewTransition) return;
-		if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-		return new Promise((resolve) => {
-			document.startViewTransition(async () => {
-				resolve();
-				await navigation.complete;
-			});
-		});
-	});
+	// Page transitions intentionally disabled. The View Transitions cross-fade captured the whole
+	// `root` — including the persistent shell/sidebar — and drifted the incoming page up 12px on every
+	// navigation AND every URL-changing tab switch, which read as a flicker/jerk on partial loads.
+	// Plain instant swaps look clean; re-introduce only as a scoped (content-only) transition if ever.
 
 	// Seed the runes auth store from server-provided session data. Re-runs when
 	// the server data changes (e.g. after login/logout navigations).
