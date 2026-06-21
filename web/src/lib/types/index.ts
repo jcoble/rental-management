@@ -132,6 +132,122 @@ export interface Unit {
 	updatedAt: string;
 }
 
+/** A units-list row with cheap health badges (GET /units/list-with-health). */
+export interface UnitHealth {
+	id: number;
+	propertyId: number;
+	propertyName: string;
+	unitNumber: string;
+	status: UnitStatus;
+	marketRent: number;
+	openWorkOrderCount: number;
+	leaseEndsInDays?: number;
+	docsNeedingReviewCount: number;
+	/** Simplified list badge (Active/Renewal/Move-Out/Lease/Vacant/Turnover); not the full 9-stage label. */
+	simpleStage: string;
+	testId?: string;
+}
+
+/** The nine derived lifecycle stages a unit moves through (computed server-side, read-only). */
+export type UnitLifecycleStage =
+	| 'Ready'
+	| 'Listed'
+	| 'Applicant'
+	| 'Lease'
+	| 'MoveIn'
+	| 'Active'
+	| 'Renewal'
+	| 'MoveOut'
+	| 'Turnover';
+
+export interface UnitNextBestAction {
+	label: string;
+	href: string;
+}
+
+export interface UnitDashboardHeader {
+	/** One-word rent state: Overdue / Due / Current / NoLease. */
+	rentState: string;
+	outstandingRentBalance: number;
+	openWorkOrderCount: number;
+	leaseEndsInDays?: number;
+	docsNeedingReviewCount: number;
+	currentTenantName?: string;
+}
+
+export interface UnitLeaseSummary {
+	id: number;
+	leaseNumber: string;
+	status: string;
+	startDate: string;
+	endDate: string;
+	monthlyRent: number;
+	securityDeposit: number;
+}
+
+export interface UnitTenantSummary {
+	id: number;
+	name: string;
+	email?: string;
+	phone?: string;
+}
+
+export interface UnitPaymentSummary {
+	id: number;
+	leaseId: number;
+	type: string;
+	status: string;
+	amount: number;
+	dueDate: string;
+	paidDate?: string;
+}
+
+export interface UnitWorkOrderSummary {
+	id: number;
+	title: string;
+	status: string;
+	priority: string;
+	requestedAt: string;
+}
+
+export interface UnitDocumentSummary {
+	id: number;
+	fileName: string;
+	contentType: string;
+	entityType?: string;
+	entityId?: number;
+	uploadedAt: string;
+}
+
+export interface UnitAppointmentSummary {
+	id: number;
+	title: string;
+	type: string;
+	status: string;
+	scheduledStart: string;
+	assignedTo?: string;
+}
+
+export interface UnitDashboardOverview {
+	recentPayments: UnitPaymentSummary[];
+	openWorkOrders: UnitWorkOrderSummary[];
+	pendingDocs: UnitDocumentSummary[];
+	upcomingAppointments: UnitAppointmentSummary[];
+}
+
+/** The Unit Command Center at-a-glance aggregate (GET /units/{id}/dashboard). */
+export interface UnitDashboard {
+	unit: Unit;
+	propertyName: string;
+	lifecycleStage: UnitLifecycleStage;
+	nextBestAction: UnitNextBestAction;
+	header: UnitDashboardHeader;
+	currentLease?: UnitLeaseSummary;
+	currentTenant?: UnitTenantSummary;
+	overview: UnitDashboardOverview;
+	recentTimeline: AuditEntry[];
+}
+
 export interface Tenant {
 	id: number;
 	portfolioId: number;
@@ -206,6 +322,7 @@ export interface Expense {
 	id: number;
 	portfolioId: number;
 	propertyId?: number;
+	unitId?: number;
 	vendorId?: number;
 	workOrderId?: number;
 	category: string;
@@ -221,6 +338,7 @@ export interface Expense {
 	notes?: string;
 	receiptData?: string;
 	propertyName?: string;
+	unitNumber?: string;
 	vendorName?: string;
 	workOrderTitle?: string;
 	createdAt: string;

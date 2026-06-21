@@ -765,7 +765,7 @@
 		</div>
 		<div class="mb-4 flex items-center gap-3">
 			<h1 class="text-xl font-bold">Review Scan #{data.id}</h1>
-			<Badge variant="outline" class={statusBadgeClass(data.status)}>
+			<Badge variant="outline" class={statusBadgeClass(data.status)} data-testid="scan-status-badge" data-status={data.status}>
 				{statusLabel(data.status)}
 			</Badge>
 		</div>

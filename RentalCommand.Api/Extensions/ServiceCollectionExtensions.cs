@@ -94,6 +94,9 @@ public static class ServiceCollectionExtensions
         // Aggregated read-only KPI rollup for the web dashboard.
         services.AddScoped<IDashboardService, DashboardService>();
 
+        // Unit Command Center aggregate (per-unit dashboard + timeline union).
+        services.AddScoped<IUnitDashboardService, UnitDashboardService>();
+
         // Portfolio analytics overview (occupancy, rent collection, trend, work orders, lease expiry).
         services.AddScoped<IAnalyticsService, AnalyticsService>();
 
