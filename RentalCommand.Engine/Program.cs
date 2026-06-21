@@ -127,6 +127,12 @@ builder.Services.AddScoped<INotificationSettingsService, NotificationSettingsSer
 // Reuses the Api's NoticeDraftService (LLM copy + de-dup idempotency) — the same code the manual
 // "Generate" button runs. ConversationService is its constructor dependency (only used by the
 // approve path, which the worker never invokes; the Engine already provides IDataUpdateService).
+// ConversationService's own constructor needs IFairHousingReviewService, so the Engine MUST register
+// it too. Development host builds validate the whole DI graph on Build(), so a missing registration
+// here crashes the entire Engine on boot — killing every worker (outbox/scan dispatch, debt service,
+// late-fee sweep, notices), not just the notice path. FairHousingReviewService's only dependency is
+// ILlmProvider, which the Engine already registers for scan extraction, so this adds no further graph.
+builder.Services.AddScoped<IFairHousingReviewService, FairHousingReviewService>();
 builder.Services.AddScoped<IConversationService, ConversationService>();
 builder.Services.AddScoped<INoticeDraftService, NoticeDraftService>();
 builder.Services.AddScoped<INoticeDraftGenerationService, NoticeDraftGenerationService>();
