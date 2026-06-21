@@ -204,8 +204,25 @@ public sealed class NotificationSettingsService : INotificationSettingsService
             UpdatedAt = DateTime.UtcNow,
         };
         _db.NotificationSettings.Add(row);
-        await _db.SaveChangesAsync(ct);
-        return row;
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+            return row;
+        }
+        catch (DbUpdateException)
+        {
+            // Get-or-create race: the Engine boots ~6 workers that each call this for the same
+            // portfolio in parallel (separate scoped DbContexts), so several SELECT no row, then all
+            // INSERT — the unique IX_NotificationSettings_PortfolioId rejects every loser with 23505.
+            // Detach our failed insert and return the row the winner committed. If no row turns up the
+            // failure wasn't this race, so rethrow rather than swallow a real error.
+            _db.Entry(row).State = EntityState.Detached;
+            var winner = await _db.NotificationSettings
+                .SingleOrDefaultAsync(s => s.PortfolioId == portfolioId, ct);
+            if (winner is not null)
+                return winner;
+            throw;
+        }
     }
 
     // -------------------------------------------------------------------------------------------
