@@ -68,6 +68,10 @@
 	let sessionToken = newToken();
 	let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 	let seq = 0; // guards against out-of-order responses
+	// Whether the input currently holds focus. A debounced fetch is async, so a response can
+	// land AFTER the user has tabbed/clicked to another field; without this guard it would
+	// re-open the dropdown over the form (and, e.g., intercept a Save click just below it).
+	let isFocused = $state(false);
 
 	const listboxId = `addr-listbox-${Math.random().toString(36).slice(2, 8)}`;
 	const canAutocomplete = $derived(enabled && !placesDisabled && !disabled);
@@ -123,6 +127,12 @@
 				return;
 			}
 			if (mySeq !== seq) return; // a newer keystroke superseded this response
+			// The input may have lost focus while this request was in flight (the user moved on
+			// to the next field). Don't pop the dropdown back open over the form in that case.
+			if (!isFocused) {
+				closeDropdown();
+				return;
+			}
 			suggestions = data.suggestions ?? [];
 			activeIndex = -1;
 			open = suggestions.length > 0;
@@ -188,15 +198,20 @@
 		await tick();
 	}
 
+	function onFocusIn() {
+		isFocused = true;
+	}
+
 	function onFocusOut(e: FocusEvent) {
 		// Close only when focus leaves the whole component (so clicking an item works).
 		const next = e.relatedTarget as Node | null;
 		if (next && (e.currentTarget as HTMLElement).contains(next)) return;
+		isFocused = false;
 		closeDropdown();
 	}
 </script>
 
-<div class="relative" onfocusout={onFocusOut}>
+<div class="relative" onfocusin={onFocusIn} onfocusout={onFocusOut}>
 	<input
 		type="text"
 		class={cn(inputClass, className)}
