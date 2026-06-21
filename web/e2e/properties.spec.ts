@@ -30,6 +30,10 @@ test.describe('Properties', () => {
 		await page.getByTestId('property-create-button').click();
 		await page.getByTestId('property-name-input').fill(name);
 		await page.getByTestId('property-address-input').fill('123 Test Street');
+		// If a Google Places key is configured the address field shows a suggestions dropdown.
+		// Dismiss it (Escape) so its overlay can't sit over the Save button below; the app also
+		// guards against a late suggestion response re-opening it once focus leaves this field.
+		await page.getByTestId('property-address-input').press('Escape');
 		await page.getByTestId('property-city-input').fill('Austin');
 		// State is now a searchable StateSelect combobox: open, filter, pick the option.
 		await page.getByTestId('property-state-input').click();
