@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Services;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -21,20 +22,26 @@ public class ScheduleEService : IScheduleEService
     public async Task<ScheduleEReport> GetReportAsync(int portfolioId, int year, CancellationToken ct = default)
     {
         // ── Income ──────────────────────────────────────────────────────────────────────────────
-        // Qualifying rent payments: PaymentType == Rent, Status == Paid, PaidDate in the target year.
-        // Grouped by PropertyId via Payment → Lease → Property and summed SQL-side (one row per
-        // property), not by grouping materialized rows. Payments with no lease/property bucket to the
-        // synthetic "Unassigned" id via the COALESCE-equivalent grouping key.
+        // Taxable rental income = ACTUAL CASH RECEIVED (§7/§18): Rent + LateFee + tenant Utility
+        // reimbursements, Paid (full Amount) or Partial (collected AmountPaid), PaidDate in the year.
+        // Security deposits are a liability and are excluded. Grouped by PropertyId via Payment → Lease
+        // → Property and summed SQL-side (one row per property); no SUM runs in memory.
         var incomeByProperty = (await _db.Payments
             .AsNoTracking()
             .Where(p =>
                 p.PortfolioId == portfolioId &&
-                p.PaymentType == PaymentType.Rent &&
-                p.Status == PaymentStatus.Paid &&
+                (p.PaymentType == PaymentType.Rent ||
+                 p.PaymentType == PaymentType.LateFee ||
+                 p.PaymentType == PaymentType.Utility) &&
+                (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
                 p.PaidDate != null &&
                 p.PaidDate.Value.Year == year)
             .GroupBy(p => p.Lease != null ? p.Lease.PropertyId : UnassignedPropertyId)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) })
+            .Select(g => new
+            {
+                PropertyId = g.Key,
+                Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount),
+            })
             .ToListAsync(ct))
             .ToDictionary(g => g.PropertyId, g => g.Total);
 
@@ -58,10 +65,61 @@ public class ScheduleEService : IScheduleEService
                 g => g.Key,
                 g => g.ToDictionary(r => r.Category, r => r.Total));
 
+        // ── Mortgage interest (from the loan split; principal is NEVER deductible) ─────────────────
+        // Σ LoanPayment.InterestAmount for the year, per property (via the loan). Summed SQL-side.
+        var interestByProperty = (await _db.LoanPayments
+            .AsNoTracking()
+            .Where(lp =>
+                lp.PortfolioId == portfolioId &&
+                lp.Loan != null &&
+                lp.DueDate.Year == year)
+            .GroupBy(lp => lp.Loan!.PropertyId)
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(lp => lp.InterestAmount) })
+            .ToListAsync(ct))
+            .ToDictionary(r => r.PropertyId, r => r.Total);
+
+        // Properties that have ANY loan (active or not) — their legacy manual MortgageInterest expense
+        // category is excluded to avoid double-counting once the loan models the interest.
+        var propertiesWithLoan = (await _db.Loans
+            .AsNoTracking()
+            .Where(l => l.PortfolioId == portfolioId)
+            .Select(l => l.PropertyId)
+            .Distinct()
+            .ToListAsync(ct))
+            .ToHashSet();
+
+        // ── Depreciation (computed per property from its own basis; §6/§18) ────────────────────────
+        var propertyBases = await _db.Properties
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId)
+            .Select(p => new
+            {
+                p.Id,
+                p.PurchasePrice,
+                p.LandValue,
+                p.InServiceDate,
+                p.ManualAnnualDepreciation,
+                p.AccumulatedDepreciation,
+            })
+            .ToListAsync(ct);
+
+        var depreciationByProperty = new Dictionary<int, DepreciationResult>();
+        foreach (var b in propertyBases)
+        {
+            var result = DepreciationCalculator.AnnualForYear(
+                new PropertyDepreciationBasis(b.PurchasePrice, b.LandValue, b.InServiceDate, b.ManualAnnualDepreciation, b.AccumulatedDepreciation),
+                year);
+            if (result.Amount > 0m)
+                depreciationByProperty[b.Id] = result;
+        }
+
         // ── Property names ────────────────────────────────────────────────────────────────────────
-        // Collect all property ids that appear in income or expenses (excluding the synthetic 0).
+        // Collect all property ids that appear in income, expenses, modeled interest, or depreciation
+        // (excluding the synthetic 0) — a property with only a loan or only depreciation must still show.
         var realPropertyIds = incomeByProperty.Keys
             .Concat(expensesByProperty.Keys)
+            .Concat(interestByProperty.Keys)
+            .Concat(depreciationByProperty.Keys)
             .Where(id => id != UnassignedPropertyId)
             .Distinct()
             .ToHashSet();
@@ -93,18 +151,34 @@ public class ScheduleEService : IScheduleEService
             var income = incomeByProperty.GetValueOrDefault(propertyId, 0m);
             var catMap = expensesByProperty.GetValueOrDefault(propertyId);
 
-            // Build category list in enum-declared order; omit zero amounts.
+            var modeledInterest = interestByProperty.GetValueOrDefault(propertyId, 0m);
+            var hasLoan = propertiesWithLoan.Contains(propertyId);
+            var depreciation = depreciationByProperty.TryGetValue(propertyId, out var depr) ? depr.Amount : 0m;
+            var depreciationIsEstimate = depr.IsFirstYearEstimate && depreciation > 0m;
+
+            // Build category list in enum-declared order; omit zero amounts. Deterministic legacy
+            // double-count exclusion (§10/§18): when a loan exists for the property, drop the manual
+            // MortgageInterest category (the modeled interest replaces it); when computed depreciation
+            // applies, drop the manual Depreciation category.
             var categories = new List<ScheduleECategoryAmount>();
-            if (catMap != null)
+            foreach (ScheduleECategory cat in Enum.GetValues<ScheduleECategory>())
             {
-                foreach (ScheduleECategory cat in Enum.GetValues<ScheduleECategory>())
-                {
-                    if (catMap.TryGetValue(cat, out var amount) && amount != 0m)
-                    {
-                        categories.Add(new ScheduleECategoryAmount(cat.ToString(), amount));
-                    }
-                }
+                if (cat == ScheduleECategory.MortgageInterest && hasLoan)
+                    continue;
+                if (cat == ScheduleECategory.Depreciation && depreciation > 0m)
+                    continue;
+
+                if (catMap != null && catMap.TryGetValue(cat, out var amount) && amount != 0m)
+                    categories.Add(new ScheduleECategoryAmount(cat.ToString(), amount));
             }
+
+            // Fold the modeled deductions into the category breakdown (so the CSV/packet show them and
+            // the totals net correctly): mortgage interest from the loan split (principal excluded) and
+            // the computed depreciation.
+            if (modeledInterest != 0m)
+                categories.Add(new ScheduleECategoryAmount(ScheduleECategory.MortgageInterest.ToString(), modeledInterest));
+            if (depreciation != 0m)
+                categories.Add(new ScheduleECategoryAmount(ScheduleECategory.Depreciation.ToString(), depreciation));
 
             var propertyTotalExpenses = categories.Sum(c => c.Amount);
 
@@ -114,7 +188,10 @@ public class ScheduleEService : IScheduleEService
                 RentalIncome: income,
                 ExpensesByCategory: categories,
                 TotalExpenses: propertyTotalExpenses,
-                NetIncome: income - propertyTotalExpenses));
+                NetIncome: income - propertyTotalExpenses,
+                MortgageInterest: modeledInterest,
+                Depreciation: depreciation,
+                DepreciationIsFirstYearEstimate: depreciationIsEstimate));
         }
 
         // Sort properties by name; "Unassigned" naturally sorts last if names are real.
