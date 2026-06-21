@@ -12,7 +12,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/portfolio")]
 [Produces("application/json")]
-public class SandboxController : AuthenticatedPortfolioControllerBase
+public class SandboxController : ManagementControllerBase
 {
     private readonly ISandboxService _sandbox;
 

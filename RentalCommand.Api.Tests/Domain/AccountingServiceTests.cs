@@ -136,7 +136,7 @@ public class AccountingServiceTests : IDisposable
         snapshot.Explanations.Collected.Should().Contain("collected").And.Contain("$1,200");
         snapshot.Explanations.Spent.Should().Contain("spent");
         snapshot.Explanations.Net.Should().Contain("keeping");
-        snapshot.Explanations.PastDue.Should().Contain("1 tenant").And.Contain("behind");
+        snapshot.Explanations.PastDue.Should().Contain("1 rental").And.Contain("behind");
     }
 
     // Regression for TSK-268: the dashboard "tenants behind" KPI and the "Who's behind" list must

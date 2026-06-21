@@ -76,15 +76,23 @@ public class AccountingService : IAccountingService
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Collected = g.Sum(p => p.Status == PaymentStatus.Paid ? p.Amount : 0m),
-                // Owed = Scheduled/Partial/Late (Waived/Failed/Refunded are not money to collect).
+                // Collected: Paid contributes its full Amount; a Partial contributes only what's been
+                // paid so far (AmountPaid). Both summed SQL-side.
+                Collected = g.Sum(p =>
+                    p.Status == PaymentStatus.Paid ? p.Amount
+                    : p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m)
+                    : 0m),
+                // Owed = Scheduled/Partial/Late (Waived/Failed/Refunded are not money to collect). A
+                // Partial only owes its unpaid remainder (Amount − AmountPaid); Scheduled/Late owe in full.
                 Outstanding = g.Sum(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
-                        ? p.Amount : 0m),
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late) ? p.Amount
+                    : p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m)
+                    : 0m),
                 Overdue = g.Sum(p =>
                     (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
                     && (p.Status == PaymentStatus.Late || p.DueDate < now)
-                        ? p.Amount : 0m),
+                        ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount)
+                        : 0m),
                 OverdueCount = g.Count(p =>
                     (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
                     && (p.Status == PaymentStatus.Late || p.DueDate < now)),
@@ -125,19 +133,28 @@ public class AccountingService : IAccountingService
         var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var last30Start = now.AddDays(-30);
 
-        // Money in: payments actually collected. Use PaidDate when present (that's when the cash
-        // landed), falling back to DueDate. Bank deposits not yet matched to a payment also count as
-        // money in, so the snapshot reflects real cash movement. Both period figures (month-to-date and
-        // trailing 30 days) are computed SQL-side as conditional SUMs in one grouped round-trip per
-        // source — no rows are loaded into memory.
+        // Money in: payments actually collected. "Collected" means Status == Paid AND a real PaidDate
+        // (the date the cash landed) — a row marked Paid but lacking a PaidDate is not yet collected and
+        // must NOT count, otherwise scheduled/expected rent would inflate money-in by its due date. This
+        // matches the DashboardService "PaidThisMonth" KPI (Paid + PaidDate in period) so the two figures
+        // can't disagree. Bank deposits not yet matched to a payment also count as money in, so the
+        // snapshot reflects real cash movement. Both period figures (month-to-date and trailing 30 days)
+        // are computed SQL-side as conditional SUMs in one grouped round-trip per source — no rows are
+        // loaded into memory.
+        // A Partial payment's collected cash also lands on its PaidDate, so it counts as money-in for the
+        // period — contributing its AmountPaid (not its full Amount). Paid contributes the full Amount.
         var paymentsCollected = await _db.Payments
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
+            .Where(p => p.PortfolioId == portfolioId
+                && (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial)
+                && p.PaidDate != null)
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Mtd = g.Sum(p => (p.PaidDate ?? p.DueDate) >= monthStart ? p.Amount : 0m),
-                Last30 = g.Sum(p => (p.PaidDate ?? p.DueDate) >= last30Start ? p.Amount : 0m),
+                Mtd = g.Sum(p => p.PaidDate >= monthStart
+                    ? (p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) : 0m),
+                Last30 = g.Sum(p => p.PaidDate >= last30Start
+                    ? (p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) : 0m),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -308,7 +325,10 @@ public class AccountingService : IAccountingService
             .Select(g => new PastDueLeaseGroup
             {
                 LeaseId = g.Key,
-                PastDueAmount = g.Sum(p => p.Amount),
+                // A Partial past-due payment only owes its unpaid remainder (Amount − AmountPaid);
+                // Scheduled/Late owe in full. Summed SQL-side.
+                PastDueAmount = g.Sum(p =>
+                    p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount),
                 OverduePaymentCount = g.Count(),
                 OldestDueDate = g.Min(p => p.DueDate),
             });
@@ -329,8 +349,8 @@ public class AccountingService : IAccountingService
             : $"You spent {Money(-net)} more than you collected this month, after {Money(spent)} of expenses.";
 
         var pastDueExplanation = pastDueCount == 0
-            ? "Everyone is caught up — no tenants are behind right now."
-            : $"{pastDueCount} tenant{(pastDueCount == 1 ? " is" : "s are")} behind, owing {Money(pastDueAmount)} in total.";
+            ? "Everyone is caught up — no rentals are behind right now."
+            : $"{pastDueCount} rental{(pastDueCount == 1 ? " is" : "s are")} behind, owing {Money(pastDueAmount)} in total.";
 
         return new MoneySnapshotExplanations
         {
@@ -818,6 +838,7 @@ public class AccountingService : IAccountingService
             {
                 p.Id,
                 p.Amount,
+                p.AmountPaid,
                 p.DueDate,
                 p.PaidDate,
                 p.PaymentType,
@@ -876,7 +897,11 @@ public class AccountingService : IAccountingService
                 Type = "Payment",
                 Id = p.Id,
                 Description = p.PaymentType.ToString(),
-                Amount = p.Status == PaymentStatus.Paid ? p.Amount : 0m,
+                // Cash hitting the ledger: full Amount when Paid, the collected portion when Partial,
+                // nothing for an uncollected charge. (Per-row display; the headline totals are DB-side.)
+                Amount = p.Status == PaymentStatus.Paid ? p.Amount
+                    : p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m)
+                    : 0m,
                 PropertyId = p.PropertyId,
                 PropertyName = p.PropertyName,
                 Counterparty = FullName(p.TenantFirstName, p.TenantLastName),
@@ -927,9 +952,12 @@ public class AccountingService : IAccountingService
         // materialized ledger rows): paid income, total expenses, and the owed-and-overdue subset.
         var paidIncomeByProperty = (await _db.Payments
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid && p.Lease != null)
+            .Where(p => p.PortfolioId == portfolioId && p.Lease != null &&
+                        (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial))
             .GroupBy(p => p.Lease!.PropertyId)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) })
+            // Paid contributes full Amount; Partial contributes only the collected AmountPaid.
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p =>
+                p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) })
             .ToListAsync(ct))
             .ToDictionary(g => g.PropertyId, g => g.Total);
 
@@ -947,7 +975,9 @@ public class AccountingService : IAccountingService
                         (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late) &&
                         (p.Status == PaymentStatus.Late || p.DueDate < generatedAt))
             .GroupBy(p => p.Lease!.PropertyId)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount), Count = g.Count() })
+            // A Partial owes only its unpaid remainder; Scheduled/Late owe in full.
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p =>
+                p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount), Count = g.Count() })
             .ToListAsync(ct))
             .ToDictionary(g => g.PropertyId, g => new { g.Total, g.Count });
 
@@ -1028,10 +1058,12 @@ public class AccountingService : IAccountingService
 
         // Portfolio totals computed SQL-side (SUM aggregates), not by re-summing the materialized
         // ledger rows in memory.
+        // Collected income: Paid contributes its full Amount, Partial contributes its AmountPaid.
         var paidPaymentTotal = await _db.Payments
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
-            .SumAsync(p => (decimal?)p.Amount, ct) ?? 0m;
+            .Where(p => p.PortfolioId == portfolioId &&
+                        (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial))
+            .SumAsync(p => (decimal?)(p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount), ct) ?? 0m;
 
         var unmatchedDepositTotal = await _db.BankTransactions
             .AsNoTracking()
@@ -1089,28 +1121,34 @@ public class AccountingService : IAccountingService
         var scheduleE = await _scheduleE.GetReportAsync(portfolioId, year, ct);
 
         // ── Per-property P&L for the year ─────────────────────────────────────────────────────────
-        // Income: Paid Rent payments whose PaidDate falls in the year, keyed by property via Lease.
-        // Grouped + summed SQL-side (one row per property), never by grouping materialized rows.
+        // Income: Rent cash received (Paid full Amount + Partial AmountPaid) whose PaidDate falls in the
+        // year, keyed by property via Lease — matching the Schedule E rental-income definition so the
+        // packet reconciles with it. Grouped + summed SQL-side (one row per property), never by grouping
+        // materialized rows.
         var incomeByProperty = (await _db.Payments
             .AsNoTracking()
             .Where(p =>
                 p.PortfolioId == portfolioId &&
                 p.PaymentType == PaymentType.Rent &&
-                p.Status == PaymentStatus.Paid &&
+                (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
                 p.PaidDate != null &&
                 p.PaidDate.Value.Year == year &&
                 p.Lease != null)
             .GroupBy(p => p.Lease!.PropertyId)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) })
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p =>
+                p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) })
             .ToListAsync(ct))
             .ToDictionary(g => g.PropertyId, g => g.Total);
 
         // Expenses for the year, keyed by property + Schedule E category — grouped on both keys
-        // SQL-side. The result (one row per property/category pair) is reshaped into the nested map
-        // in memory, but no SUM is computed in memory.
+        // SQL-side. Cash basis (matching the cash-basis income above and the packet's monthly cash-flow
+        // block below): only Paid expenses count, dated by PaidAt (falling back to IncurredAt) — the same
+        // COALESCE(PaidAt, IncurredAt) convention used elsewhere. The result (one row per
+        // property/category pair) is reshaped into the nested map in memory, but no SUM is computed in
+        // memory.
         var expenseCategoryTotals = await _db.Expenses
             .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId && e.IncurredAt.Year == year && e.PropertyId != null)
+            .Where(e => e.PortfolioId == portfolioId && e.Status == ExpenseStatus.Paid && (e.PaidAt ?? e.IncurredAt).Year == year && e.PropertyId != null)
             .GroupBy(e => new { PropertyId = e.PropertyId!.Value, e.Category })
             .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct);
@@ -1168,10 +1206,13 @@ public class AccountingService : IAccountingService
         // so the whole payment history is never loaded just to bucket one year in memory.
         var moneyInByMonth = (await _db.Payments
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid &&
+            .Where(p => p.PortfolioId == portfolioId &&
+                        (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
                         (p.PaidDate ?? p.DueDate).Year == year)
             .GroupBy(p => (p.PaidDate ?? p.DueDate).Month)
-            .Select(g => new { Month = g.Key, Total = g.Sum(p => p.Amount) })
+            // Paid contributes full Amount; Partial contributes the collected AmountPaid.
+            .Select(g => new { Month = g.Key, Total = g.Sum(p =>
+                p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) })
             .ToListAsync(ct))
             .ToDictionary(g => g.Month, g => g.Total);
 
@@ -1239,7 +1280,9 @@ public class AccountingService : IAccountingService
                              p.Status == PaymentStatus.Late) &&
                             (p.Status == PaymentStatus.Late || p.DueDate < now))
                 .GroupBy(p => p.LeaseId)
-                .Select(g => new { LeaseId = g.Key, Total = g.Sum(p => p.Amount) })
+                // A Partial owes only its unpaid remainder; Scheduled/Late owe in full.
+                .Select(g => new { LeaseId = g.Key, Total = g.Sum(p =>
+                    p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) })
                 .ToListAsync(ct))
             .ToDictionary(g => g.LeaseId, g => g.Total);
 

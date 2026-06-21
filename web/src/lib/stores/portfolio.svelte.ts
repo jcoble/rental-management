@@ -29,16 +29,25 @@ export function getCurrentPortfolioId(): number {
 }
 
 /**
- * Client-only: reconcile the in-memory selection with the persisted localStorage
- * value. Idempotent; safe to call on every navigation. No-ops on the server (the
- * store keeps its deterministic default there).
+ * Client-only: reconcile the in-memory selection with the persisted localStorage value, falling
+ * back to the authenticated user's real portfolio id when there is no stored selection yet — so a
+ * brand-new account whose active portfolio isn't 1 doesn't get stuck on the SSR placeholder (which
+ * made the scan duplicate-guard and list queries target the wrong portfolio). Idempotent; safe to
+ * call on every navigation. No-ops on the server (the store keeps its deterministic default there).
  */
-export function initPortfolio(): void {
+export function initPortfolio(fallbackPortfolioId?: number): void {
 	if (!browser) return;
 	const stored = localStorage.getItem(STORAGE_KEY);
 	const parsed = stored ? parseInt(stored, 10) : NaN;
 	if (Number.isInteger(parsed) && parsed > 0) {
 		_portfolioId = parsed;
+		return;
+	}
+	// No valid stored selection yet: seed from the authenticated user's real portfolio so queries
+	// and the scan duplicate-guard target the right portfolio. Persist it so the choice sticks.
+	if (typeof fallbackPortfolioId === 'number' && Number.isInteger(fallbackPortfolioId) && fallbackPortfolioId > 0) {
+		_portfolioId = fallbackPortfolioId;
+		localStorage.setItem(STORAGE_KEY, String(fallbackPortfolioId));
 	}
 }
 

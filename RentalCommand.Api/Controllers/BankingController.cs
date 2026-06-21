@@ -14,7 +14,7 @@ namespace RentalCommand.Api.Controllers;
 [Route("api/v1/banking")]
 [Produces("application/json")]
 [Authorize(Roles = "Admin,Manager")]
-public class BankingController : AuthenticatedPortfolioControllerBase
+public class BankingController : ManagementControllerBase
 {
     private readonly IBankingService _service;
 

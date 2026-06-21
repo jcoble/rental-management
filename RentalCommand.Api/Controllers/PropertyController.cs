@@ -11,7 +11,7 @@ namespace RentalCommand.Api.Controllers;
 [ApiController]
 [Route("api/v1/properties")]
 [Produces("application/json")]
-public class PropertyController : AuthenticatedPortfolioControllerBase
+public class PropertyController : ManagementControllerBase
 {
     private readonly IPropertyService _service;
 

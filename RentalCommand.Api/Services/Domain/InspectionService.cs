@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -202,6 +203,19 @@ public class InspectionService : IInspectionService
             !await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
         {
             return null;
+        }
+
+        // Completing an inspection is NOT a plain status edit: it must spawn a work order per failed item,
+        // stamp CompletedAt, and generate the PDF report — all of which live in CompleteAsync behind the
+        // no-checklist / all-pending guards. Block a generic PATCH from flipping a not-yet-completed
+        // inspection straight to Completed (which would skip every one of those). Re-sending Completed on
+        // an already-completed inspection is a harmless no-op and stays allowed, so editing notes/outcome
+        // on a completed inspection still works.
+        if (request.Status is InspectionStatus.Completed && entity.Status != InspectionStatus.Completed)
+        {
+            throw new DomainValidationException(
+                "Use the Complete action to finish an inspection so its checklist is verified, "
+                    + "failed items become work orders, and the report is generated.");
         }
 
         if (request.UnitId.HasValue) entity.UnitId = request.UnitId;

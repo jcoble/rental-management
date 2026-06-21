@@ -187,7 +187,7 @@
 						data-testid="vendors-1099-warning"
 					>
 						<AlertTriangle class="h-4 w-4 shrink-0" />
-						<span>{vendorsNeedingW9} vendor{vendorsNeedingW9 === 1 ? '' : 's'} still need a W-9.</span>
+						<span>{vendorsNeedingW9} vendor{vendorsNeedingW9 === 1 ? '' : 's'} still {vendorsNeedingW9 === 1 ? 'needs' : 'need'} a W-9.</span>
 					</div>
 				{/if}
 				<div class="overflow-x-auto">
@@ -224,12 +224,22 @@
 											>
 												On file
 											</span>
-										{:else}
+										{:else if v.needsW9}
+											<!-- Only 1099-eligible vendors without a W-9 are "Missing" — this is exactly what the
+											     header count tallies (needsW9 = is1099Eligible && !w9OnFile), so the badge count and
+											     the headline agree. A vendor that isn't 1099-eligible isn't flagged as missing. -->
 											<span
 												class="m3-tone-chip m3-tone--warning inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium"
 												data-testid="vendor-1099-w9-{v.vendorId}"
 											>
 												Missing
+											</span>
+										{:else}
+											<span
+												class="inline-flex items-center text-xs text-muted-foreground"
+												data-testid="vendor-1099-w9-{v.vendorId}"
+											>
+												Not required
 											</span>
 										{/if}
 									</td>

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -32,12 +33,51 @@ public class PaymentService : IPaymentService
         paymentType = p.PaymentType.ToString(),
         status = p.Status.ToString(),
         amount = p.Amount,
+        amountPaid = p.AmountPaid,
         dueDate = p.DueDate,
         paidDate = p.PaidDate,
         method = p.Method,
         externalReference = p.ExternalReference,
         leaseId = p.LeaseId,
     });
+
+    /// <summary>
+    /// Normalizes <see cref="Payment.AmountPaid"/> for the payment's final <paramref name="status"/> +
+    /// <paramref name="amount"/>, and validates the partial-payment invariant, throwing
+    /// <see cref="DomainValidationException"/> (400) on a bad request:
+    /// <list type="bullet">
+    ///   <item><b>Partial</b> — requires a supplied AmountPaid strictly between 0 and Amount (the
+    ///   unpaid remainder <c>Amount − AmountPaid</c> is what stays owed).</item>
+    ///   <item><b>Paid</b> — fully collected; AmountPaid is left null and aggregations treat the whole
+    ///   Amount as collected. A supplied value above Amount is still rejected.</item>
+    ///   <item><b>Anything else</b> (Scheduled/Late/Waived/Failed/Refunded) — AmountPaid is cleared to
+    ///   null; nothing is collected yet.</item>
+    /// </list>
+    /// </summary>
+    private static decimal? NormalizeAmountPaid(PaymentStatus status, decimal amount, decimal? amountPaid)
+    {
+        // A collected amount can never exceed the charge, whatever the status.
+        if (amountPaid.HasValue && amountPaid.Value > amount)
+        {
+            throw new DomainValidationException(
+                "Amount paid cannot be greater than the payment amount.");
+        }
+
+        if (status == PaymentStatus.Partial)
+        {
+            if (!amountPaid.HasValue || amountPaid.Value <= 0m || amountPaid.Value >= amount)
+            {
+                throw new DomainValidationException(
+                    "A partial payment requires an amount paid greater than 0 and less than the full amount.");
+            }
+
+            return amountPaid.Value;
+        }
+
+        // Paid is treated as fully collected (whole Amount) with AmountPaid left null; every other
+        // status has nothing collected. Either way the partial split column is cleared.
+        return null;
+    }
 
     public async Task<IReadOnlyList<PaymentResponse>> ListAsync(int portfolioId, int? leaseId, ListQuery query, CancellationToken ct = default)
     {
@@ -116,8 +156,15 @@ public class PaymentService : IPaymentService
             PaymentType = request.PaymentType,
             Status = request.Status,
             Amount = request.Amount,
+            // Partial-aware split: validated + normalized for the final status/amount (Partial keeps the
+            // collected-so-far; Paid/everything-else clears to null).
+            AmountPaid = NormalizeAmountPaid(request.Status, request.Amount, request.AmountPaid),
             DueDate = request.DueDate.ToUtc(),
-            PaidDate = request.PaidDate.ToUtc(),
+            // A payment created as Paid must carry a PaidDate or it's invisible to the income/collected
+            // aggregations (which require PaidDate != null). Prefer DueDate so income lands in the right period.
+            PaidDate = request.Status == PaymentStatus.Paid
+                ? (request.PaidDate.ToUtc() ?? request.DueDate.ToUtc())
+                : request.PaidDate.ToUtc(),
             Method = request.Method,
             ExternalReference = request.ExternalReference,
             Notes = request.Notes,
@@ -171,6 +218,21 @@ public class PaymentService : IPaymentService
         if (request.Method != null) entity.Method = request.Method;
         if (request.ExternalReference != null) entity.ExternalReference = request.ExternalReference;
         if (request.Notes != null) entity.Notes = request.Notes;
+
+        // Partial-aware split, validated against the payment's resulting status + amount. A supplied
+        // AmountPaid wins; otherwise the existing value is re-normalized (so changing the status away from
+        // Partial clears a stale collected-so-far, and changing it TO Partial requires a value).
+        entity.AmountPaid = NormalizeAmountPaid(
+            entity.Status, entity.Amount,
+            request.AmountPaid ?? entity.AmountPaid);
+
+        // A payment that ends up Paid without a PaidDate is invisible to income/collected reports.
+        // Default it (preferring DueDate so income lands in the right period) — covers transitions TO Paid.
+        if (entity.Status == PaymentStatus.Paid && entity.PaidDate is null)
+        {
+            entity.PaidDate = request.PaidDate.ToUtc() ?? entity.DueDate;
+        }
+
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
@@ -205,6 +267,8 @@ public class PaymentService : IPaymentService
         var before = Snapshot(entity);
 
         entity.Status = PaymentStatus.Paid;
+        // Marking paid means fully collected: clear any partial split so the whole Amount counts as collected.
+        entity.AmountPaid = null;
         entity.PaidDate = request.PaidDate?.ToUtc() ?? DateTime.UtcNow;
         if (request.Method != null) entity.Method = request.Method;
         if (request.ExternalReference != null) entity.ExternalReference = request.ExternalReference;
