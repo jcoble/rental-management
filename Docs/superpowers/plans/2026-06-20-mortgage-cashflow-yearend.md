@@ -72,60 +72,67 @@
 >   (Loan exists → exclude category `MortgageInterest`; computed depreciation applies → exclude `Depreciation`).
 > - **B4** surfaces the §18 "see your accountant" labels (mid-year sale, capex-vs-repairs, passive-loss).
 
-### Task B1: Deposit-as-income fix
-**Files:** Modify `RentalCommand.Api/Services/Domain/ReportsService.cs` (cash-flow query ~L532–539) + the money-snapshot / owner-statement / year-end income queries.
-- [ ] In every income sum, add a DB-side `WHERE Payment.PaymentType IN (Rent, LateFee)` (per §7; exclude `SecurityDeposit`). Confirm via generated SQL it's a filter, not a post-filter. Leave the security-deposit register untouched.
-- [ ] `dotnet build`; verify the cash-flow query SQL excludes deposits. [ ] Commit `fix(api): exclude security deposits from income (they're a liability)`.
+### Task B1: Deposit-as-income fix ✅
+**Files:** `RentalCommand.Api/Services/Domain/ReportsService.cs` (the cash-flow query) + tests.
+- [x] Done as part of the B2 rewrite: the cash-flow income sum now filters `PaymentType IN (Rent, LateFee)`, `Status IN (Paid, Partial)`, sums the `Partial ? (AmountPaid ?? 0) : Amount` idiom, and excludes `SecurityDeposit` — all SQL-side. Verified by a generated-SQL test (GROUP BY + SUM in the DB) + a worked example (deposit excluded, partial uses AmountPaid, late fee included). **Scope note:** the AccountingService / DashboardService / OwnerStatementService income sums are already AmountPaid-correct on `feat/scan-front-door`; re-editing them here would duplicate that work and conflict at merge, so they were intentionally left to that branch (reconcile, not duplicate). The general ledger legitimately lists all cash movements (deposits included) and is untouched. The security-deposit register is unaffected.
 
-### Task B2: True cash-flow computation + endpoint (UNIT-TESTED logic)
-**Files:** Modify `ReportsService` (extend cash flow) + a `CashFlowResult` DTO; controller endpoint (extend `/reports/cash-flow` or add `/accounting/cash-flow?propertyId&from&to`); tests for the aggregation shape on a seeded worked example.
-**Interfaces — Produces:** per property + portfolio: `{ income, operatingExpenses, noi, debtService, cashFlow }` by period.
-- [ ] Implement per §9 **DB-side**: income (Rent+LateFee, paid/partial, no deposits); operating expenses EXCLUDING escrow-funded Taxes/Insurance when the property's active loan escrows them; NOI; debtService = Σ LoanPayment.TotalAmount; cashFlow = NOI − debtService. Keep it `IQueryable` (`GroupBy`/`Sum` in SQL).
-- [ ] Test on a seeded worked example (rent, a few expenses, one loan with escrow) asserting income/opex/NOI/debtService/cashFlow and that escrowed taxes aren't double-counted and deposits/depreciation are absent.
-- [ ] `dotnet build`; **read the generated SQL** — confirm no whole-table pull / N+1. [ ] Commit `feat(api): true cash flow (rent − opex − debt service), escrow-aware, DB-side`.
+### Task B2: True cash-flow computation + endpoint (UNIT-TESTED) ✅
+**Files:** `ReportsService.GetCashFlowAsync` (REWRITTEN) + `GetTrueCashFlowAsync`; `Api/DTOs/CashFlowDtos.cs`; `GET /accounting/cash-flow`; tests in `ReportsServiceTests`.
+- [x] `GetCashFlowAsync` REWRITTEN DB-side (range filter + `GroupBy(month)` + `Sum` as one EF query; the old in-memory `.ToListAsync()` + GroupBy is gone — confirmed by a `ToQueryString()` assertion).
+- [x] `GetTrueCashFlowAsync` per §9/§18 DB-side: income (AmountPaid idiom, no deposits); opex EXCLUDING escrow-funded categories **category-specifically** (Taxes only if `EscrowCoversTaxes`, Insurance only if `EscrowCoversInsurance`, rolled up from active loans SQL-side); NOI; debtService = Σ LoanPayment.TotalAmount; cashFlow = NOI − debtService. Depreciation excluded. Shared `IncomeByPropertyAsync` / `DebtServiceByPropertyAsync` helpers.
+- [x] Tests: worked examples (escrow taxes excluded vs. kept on a non-escrow loan, deposits excluded, partials via AmountPaid, NOI/cashFlow). Build + commit.
 
-### Task B3: Schedule-E completion (UNIT-TESTED logic)
-**Files:** Modify the Schedule-E computation in `ReportsService`/Accounting; tests.
-- [ ] Implement per §10: rentalIncome (no deposits) − deductible expenses by category (INCLUDING taxes/insurance even if escrowed) − mortgage **interest** (Σ LoanPayment.InterestAmount; principal excluded) − depreciation (Σ A4). When a Loan exists for a property, ignore legacy manual `MortgageInterest` expenses for that property (avoid double-count); same for `Depreciation` vs computed.
-- [ ] Test a worked example: assert interest (not principal) deducted, depreciation deducted, deposits excluded, no double-count.
-- [ ] `dotnet build`; check SQL. [ ] Commit `feat(api): Schedule-E with mortgage interest + depreciation, principal excluded`.
+### Task B3: Schedule-E completion (UNIT-TESTED) ✅
+**Files:** `ScheduleEService.GetReportAsync` (extended); `Api/DTOs/ScheduleEDtos.cs` (+ MortgageInterest / Depreciation / first-year-estimate fields); tests in `ScheduleEServiceTests`.
+- [x] Income = actual cash received (Rent + LateFee + Utility reimbursements, AmountPaid idiom, no deposits). Mortgage **interest** = Σ LoanPayment.InterestAmount/yr per property (principal excluded). **Depreciation per property** from each property's own basis (A4 calculator, mid-month first year flagged), summed for the portfolio total. Deterministic legacy double-count exclusion (loan present → drop manual `MortgageInterest`; computed depreciation → drop manual `Depreciation`); the modeled lines are folded into ExpensesByCategory so the CSV/packet show them and totals net.
+- [x] Tests: interest-not-principal, computed depreciation, deposits excluded, no double-count, partial-via-AmountPaid. The existing year-end packet tests still pass. Build + commit.
 
-### Task B4: Year-end view endpoint
-**Files:** Extend `/accounting/year-end-packet` (or add `/accounting/year-end`) + DTO.
-- [ ] Per property + portfolio total, return the three blocks of §11: cash-flow block (B2), tax/Schedule-E block (B3, incl. depreciation), rent roll. Reuse existing rent-roll/packet logic. Keep DB-side.
-- [ ] `dotnet build`; smoke the endpoint shape; read SQL. [ ] Commit `feat(api): year-end view — cash flow vs taxable income + rent roll`.
+### Task B4: Year-end view endpoint ✅
+**Files:** `ReportsService.GetYearEndAsync`; `Api/DTOs/YearEndViewDtos.cs`; `GET /accounting/year-end`; test in `ReportsServiceTests`.
+- [x] Composes the three §11 blocks per property + portfolio: cash-flow (B2), tax/Schedule-E (B3, incl. depreciation), rent roll (DB-side; a Partial owes only Amount − AmountPaid). Surfaces the §18 "see your accountant" caveats (first-year mid-month estimate, passive-loss limitation, capex-vs-repairs, mid-year disposition / §1250 recapture, owner-occupied/mixed-use). Test asserts cash flow ≠ taxable income. Build + commit.
 
 ---
 
-## Phase C — Web (inline forms, app's existing components)
+## Phase C — Web (inline forms, app's existing components) ✅ COMPLETE
 
-> Reuse the app's existing inline create/edit form components (how lease/work-order/expense forms are built). No new modal/drawer framework. Build + manually verify each; commit per task.
+> Reused the app's existing inline patterns (DataGrid + Dialog + `InlineField` + Zod schema + TanStack Query). No new modal/drawer framework. `pnpm -C web build` passes.
 
-### Task C1: Mortgage section on Property detail
-- **Files:** add a Loan section to `web/src/routes/(protected)/properties/[id]/+page.svelte` (or a child component) + `web/src/lib/api/loans.ts`.
-- [ ] Inline add/edit loan (lender, balance, rate, term, P&I, escrow, escrow-covers flags) + a read-only amortization schedule (LoanPayment history). [ ] `pnpm -C web build`. [ ] Commit `feat(web): per-property mortgage section + amortization schedule`.
+### Task C1: Mortgage section on Property detail ✅
+- **Files:** `web/src/lib/components/property/PropertyLoansSection.svelte` + `web/src/lib/api/endpoints/loans.ts`, wired into the Property detail page.
+- [x] Inline add/edit loan (lender, amounts, rate, term, P&I, escrow + escrow-covers flags, status) + an expandable read-only amortization schedule (LoanPayment history) that flags any period whose payment didn't cover interest. Build + commit.
 
-### Task C2: Property basis fields (depreciation) — inline
-- **Files:** add inline fields to the Property detail form (purchase price, land value, in-service date, optional manual depreciation).
-- [ ] [ ] `pnpm -C web build`. [ ] Commit `feat(web): property cost-basis fields`.
+### Task C2: Property basis fields (depreciation) — inline ✅
+- [x] Inline basis fields (purchase price, land value, in-service date, optional manual depreciation) on the property edit form via `propertyBasisSchema`, saved alongside the property; accumulated depreciation shown read-only. Build + commit.
 
-### Task C3: Recurring expenses — inline
-- **Files:** a "Recurring expenses" inline section (Property or Money area) + `recurring-expenses.ts` client.
-- [ ] Inline add/edit (category, amount, frequency, start). [ ] `pnpm -C web build`. [ ] Commit `feat(web): recurring expenses`.
+### Task C3: Recurring expenses — inline ✅
+- **Files:** `web/src/lib/components/property/PropertyRecurringExpensesSection.svelte` + `web/src/lib/api/endpoints/recurring-expenses.ts`.
+- [x] Inline add/edit (category, amount, frequency, start) on the Property detail page. Build + commit.
 
-### Task C4: Year-end / cash-flow view
-- **Files:** a view in the Money/Reports area consuming B4 + B2.
-- [ ] Property selector + portfolio total + period (year/month) + export; render the three blocks with **cash flow and taxable income as clearly distinct numbers** (depreciation + debt service visible). [ ] `pnpm -C web build`. [ ] Commit `feat(web): year-end / cash-flow view (cash flow vs taxable income)`.
+### Task C4: Year-end / cash-flow view ✅
+- **Files:** `web/src/routes/(protected)/accounting/year-end/+page.svelte` (linked from the accounting Reports tab) + `accounting.cashFlow` / `accounting.yearEnd` clients.
+- [x] Tax-year + property selector + portfolio/per-property totals + export (reuses the year-end packet PDF); the three blocks render with **cash flow and taxable income as two distinct headline numbers** (depreciation + debt service visible), and the §18 "see your accountant" caveats as a labeled panel. Build + commit.
 
-### Task C5: Smoke + phase review
-- [ ] One UI smoke that loads the year-end view and asserts the cash-flow + tax blocks render. [ ] Per-phase self-review vs spec §16 acceptance criteria (esp. **read the generated SQL** for the report queries). [ ] Commit `test(web): year-end view smoke + phase review`.
+### Task C5: Smoke + phase review ✅
+- [x] `web/e2e/year-end.spec.ts`: the year-end view renders both headline numbers + all three blocks (survives a year switch); reachable from the Reports tab; property detail shows the mortgage + recurring-expense sections + basis card. Specs compile/list clean; **not executed here against shared infra** (Father's-Day demo safety) — they run in CI / local dev.
 
 ---
 
-## Verification (spec §16)
+## Verification (spec §16) ✅
 
-A1–A2 loans + amortization worker (split correct, balance amortizes, final payment zeroes/PaidOff). B1 deposits excluded (DB-side). B2 cash flow correct + escrow not double-counted + no deposits/depreciation. B3 Schedule-E has interest+depreciation, excludes principal. A4 depreciation correct + override + capped. B4/C4 year-end shows cash flow vs taxable income distinctly. All report queries DB-side — **confirmed by reading generated SQL.** IDOR enforced everywhere.
+- **§16.1** Loan create + `DebtServiceWorker` split/amortize/payoff — `DebtServiceServiceTests` (5) + `AmortizationCalculatorTests` (13): split correct, balance amortizes from the immutable prior balance, maturity stop, neg-am guard, final payment zeroes + `PaidOff`.
+- **§16.2** Cash flow = income − opex − debt service, **excludes deposits + depreciation**, escrow **not double-counted** — `ReportsServiceTests.GetTrueCashFlow…` on worked examples.
+- **§16.3** Schedule-E has mortgage **interest** + **depreciation**, **excludes principal + deposits** — `ScheduleEServiceTests`.
+- **§16.4** Depreciation straight-line + mid-month first year + manual override + accumulated cap — `DepreciationCalculatorTests` (13).
+- **§16.5** Deposit-as-income fix is DB-side (a `PaymentType` filter in SQL); deposit register unaffected.
+- **§16.6** Recurring expenses materialize once per period (idempotent) — `RecurringExpenseGenerationServiceTests` (5).
+- **§16.7** Year-end shows cash flow vs taxable income as **distinct numbers** + rent roll — `GetYearEndAsync` test + the web view.
+- **§16.8** Every report query is **DB-side — confirmed by reading the generated SQL** (`GetCashFlow_IncomeQuery_AggregatesInSql_NotInMemory` asserts GROUP BY + SUM; all report queries do `GroupBy`/`Sum` before `ToListAsync`, the old in-memory `GetCashFlowAsync` is gone). §18 worker stops at maturity + never neg-amortizes; income uses AmountPaid incl. partials; per-property depreciation with the accumulated cap; legacy `MortgageInterest`/`Depreciation` excluded when modeled.
+- **§16.9** Portfolio scoping / IDOR on loans, payments (schedule read), recurring expenses, and all FK refs — `LoanServiceTests` + `RecurringExpenseServiceTests`.
+
+**Test totals:** Core 26, Engine (financial) 12, Api (financial domain) 57 = 95 green. Full solution + `pnpm -C web build` clean.
 
 ## Self-review note
 
-Covers spec §4 (A1/A3/A5), §5 (A2), §6 (A4), §7 (B1), §8 (A5), §9 (B2), §10 (B3), §11 (B4/C4), §12 (A2), §13 (controllers across A/B), §14 (C1–C4), §15 (DB-side throughout). The financial cores (§5/§6/§9/§10) are unit-tested. NOTE: incorporate the financial-correctness reviewer's findings before/while building Phase B.
+Covers spec §4 (A1/A3/A5/A6), §5 (A2), §6 (A4), §7 (B1), §8 (A6), §9 (B2), §10 (B3), §11 (B4/C4), §12 (A2), §13 (A7 + B controllers), §14 (C1–C4), §15 (DB-side throughout), §18 (woven through A2/A4/A5/B1–B4). Financial cores (§5/§6/§9/§10) unit-tested.
+
+**Merge coordination:** `AddPaymentAmountPaid` duplicates the same-named migration on `feat/scan-front-door` (intentional — the column/config/migration are byte-identical so the branches reconcile); dedupe / regenerate the model snapshot on whichever merges second. `feat/scan-front-door` also carries the `Payment.AmountPaid` population + DTO/aggregation plumbing. The sibling `tsk-387` adds `Expense.UnitId`; expect a model-snapshot conflict at merge (regenerate after rebase).
