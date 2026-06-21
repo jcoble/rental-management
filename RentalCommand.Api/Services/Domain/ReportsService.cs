@@ -505,53 +505,61 @@ public class ReportsService : IReportsService
         var (from, to) = ResolveRange(query);
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
-        // Money in: paid payments, cash dated on PaidDate (falling back to DueDate). Keyed to a property
-        // via the lease so a property filter applies.
+        // Money in: income is ACTUAL CASH RECEIVED — Rent + LateFee that is Paid (full Amount) or
+        // Partial (the collected AmountPaid). Security deposits are a liability, never income (§7/§18).
+        // Cash is dated on PaidDate (falling back to DueDate). The range filter + monthly GROUP BY + SUM
+        // all run SQL-side (this query was previously materialized + grouped in memory — a hard-rule
+        // violation that §18 required rewriting; it is now one EF-translated aggregate).
         var incomeQuery = _db.Payments
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid);
+            .Where(p =>
+                p.PortfolioId == portfolioId &&
+                (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
+                (p.PaymentType == PaymentType.Rent || p.PaymentType == PaymentType.LateFee) &&
+                (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to);
 
         if (propertyFilter is not null)
             incomeQuery = incomeQuery.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));
 
-        var incomeRows = await incomeQuery
-            .Select(p => new { p.Amount, When = p.PaidDate ?? p.DueDate })
-            .ToListAsync(ct);
+        var incomeByMonth = (await incomeQuery
+            .GroupBy(p => new { (p.PaidDate ?? p.DueDate).Year, (p.PaidDate ?? p.DueDate).Month })
+            .Select(g => new
+            {
+                g.Key.Year,
+                g.Key.Month,
+                Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount),
+            })
+            .ToListAsync(ct))
+            .ToDictionary(r => (r.Year, r.Month), r => r.Total);
 
         // Money out: expenses, cash dated on PaidAt (falling back to IncurredAt). A property filter only
         // matches expenses tied to a property; unassigned expenses are excluded when a filter is set.
+        // Range filter + monthly GROUP BY + SUM all run SQL-side.
         var expenseQuery = _db.Expenses
             .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId);
+            .Where(e =>
+                e.PortfolioId == portfolioId &&
+                (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to);
 
         if (propertyFilter is not null)
             expenseQuery = expenseQuery.Where(e => e.PropertyId != null && propertyFilter.Contains(e.PropertyId.Value));
 
-        var expenseRows = await expenseQuery
-            .Select(e => new { e.Amount, When = e.PaidAt ?? e.IncurredAt })
-            .ToListAsync(ct);
-
-        var incomeInRange = incomeRows.Where(r => r.When >= from && r.When <= to).ToList();
-        var expenseInRange = expenseRows.Where(r => r.When >= from && r.When <= to).ToList();
-
-        var incomeByMonth = incomeInRange
-            .GroupBy(r => MonthKey(r.When))
-            .ToDictionary(g => g.Key, g => g.Sum(r => r.Amount));
-        var expenseByMonth = expenseInRange
-            .GroupBy(r => MonthKey(r.When))
-            .ToDictionary(g => g.Key, g => g.Sum(r => r.Amount));
+        var expenseByMonth = (await expenseQuery
+            .GroupBy(e => new { (e.PaidAt ?? e.IncurredAt).Year, (e.PaidAt ?? e.IncurredAt).Month })
+            .Select(g => new { g.Key.Year, g.Key.Month, Total = g.Sum(e => e.Amount) })
+            .ToListAsync(ct))
+            .ToDictionary(r => (r.Year, r.Month), r => r.Total);
 
         var months = EnumerateMonths(from, to)
             .Select(m =>
             {
-                var key = $"{m.Year:D4}-{m.Month:D2}";
-                var income = incomeByMonth.GetValueOrDefault(key, 0m);
-                var expense = expenseByMonth.GetValueOrDefault(key, 0m);
+                var income = incomeByMonth.GetValueOrDefault((m.Year, m.Month), 0m);
+                var expense = expenseByMonth.GetValueOrDefault((m.Year, m.Month), 0m);
                 return new CashFlowMonth
                 {
                     Year = m.Year,
                     Month = m.Month,
-                    MonthKey = key,
+                    MonthKey = $"{m.Year:D4}-{m.Month:D2}",
                     Label = $"{CultureInfo.InvariantCulture.DateTimeFormat.GetAbbreviatedMonthName(m.Month)} {m.Year}",
                     Income = income,
                     Expense = expense,
@@ -570,8 +578,6 @@ public class ReportsService : IReportsService
             TotalNet = months.Sum(m => m.Net),
         };
     }
-
-    private static string MonthKey(DateTime when) => $"{when.Year:D4}-{when.Month:D2}";
 
     /// <summary>Yields the (year, month) of every calendar month the [from, to] range touches, inclusive.</summary>
     internal static IEnumerable<(int Year, int Month)> EnumerateMonths(DateTime from, DateTime to)
