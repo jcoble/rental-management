@@ -38,6 +38,13 @@ public interface IReportsService
     /// </summary>
     Task<CashFlowSummaryResponse> GetTrueCashFlowAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
 
+    /// <summary>
+    /// The year-end three-block view for a tax year (spec §11/§18): cash flow vs taxable income as
+    /// distinct numbers, with depreciation + debt service present, plus the rent roll and the
+    /// "see your accountant" caveats.
+    /// </summary>
+    Task<YearEndViewResponse> GetYearEndAsync(int portfolioId, int year, CancellationToken ct = default);
+
     /// <summary>Every payment and expense over the range in date order with a running balance.</summary>
     Task<GeneralLedgerResponse> GetGeneralLedgerAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
 

@@ -19,11 +19,13 @@ public class ReportsService : IReportsService
 
     private readonly RentalCommandDbContext _db;
     private readonly IOwnerStatementService _ownerStatements;
+    private readonly IScheduleEService _scheduleE;
 
-    public ReportsService(RentalCommandDbContext db, IOwnerStatementService ownerStatements)
+    public ReportsService(RentalCommandDbContext db, IOwnerStatementService ownerStatements, IScheduleEService scheduleE)
     {
         _db = db;
         _ownerStatements = ownerStatements;
+        _scheduleE = scheduleE;
     }
 
     // ── Catalog ──────────────────────────────────────────────────────────────────────────────────
@@ -737,6 +739,122 @@ public class ReportsService : IReportsService
             .Select(g => new { PropertyId = g.Key, Total = g.Sum(lp => lp.TotalAmount) })
             .ToListAsync(ct))
             .ToDictionary(r => r.PropertyId, r => r.Total);
+    }
+
+    // ── Year-end view: cash flow vs taxable income + rent roll (§11/§18) ────────────────────────────
+
+    public async Task<YearEndViewResponse> GetYearEndAsync(int portfolioId, int year, CancellationToken ct = default)
+    {
+        var yearRange = new ReportRangeQuery
+        {
+            From = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            To = new DateTime(year, 12, 31, 23, 59, 59, DateTimeKind.Utc),
+        };
+
+        // Block 1: true cash flow (rent − opex − debt service, escrow-aware, no depreciation).
+        var cashFlow = await GetTrueCashFlowAsync(portfolioId, yearRange, ct);
+
+        // Block 2: taxable income / Schedule E (interest + depreciation in, principal + deposits out).
+        var scheduleE = await _scheduleE.GetReportAsync(portfolioId, year, ct);
+
+        // Block 3: rent roll — current leases with their past-due balance (DB-side, no N+1).
+        var rentRoll = await BuildRentRollAsync(portfolioId, ct);
+
+        // §18 "see your accountant" caveats — surfaced so the owner never trusts a number the model
+        // does not compute. Conditional on what the data suggests, so they are actionable not noise.
+        var notes = new List<string>();
+
+        if (scheduleE.Properties.Any(p => p.DepreciationIsFirstYearEstimate))
+            notes.Add("A property's first-year depreciation uses the IRS mid-month estimate — confirm the placed-in-service convention with your accountant.");
+
+        if (scheduleE.NetIncome < 0m)
+            notes.Add("Taxable income is negative — this is before the passive-loss limitation (Form 8582 / the $25k allowance); your deductible loss may be limited. See your accountant.");
+
+        // Large amounts booked to Repairs may actually be capital improvements (which must be
+        // depreciated, not expensed). Flag when any single property's repairs look large.
+        var hasLargeRepairs = scheduleE.Properties
+            .SelectMany(p => p.ExpensesByCategory)
+            .Any(c => c.Category == ScheduleECategory.Repairs.ToString() && c.Amount >= 2_500m);
+        if (hasLargeRepairs)
+            notes.Add("Large amounts booked to Repairs may be capital improvements (IRS $2,500 de-minimis) that must be depreciated, not expensed. Review with your accountant.");
+
+        notes.Add("Mid-year purchase or sale of a property (disposition: sale-year depreciation, gain/loss, and §1250 recapture) is NOT computed here.");
+        notes.Add("Owner-occupied / mixed-use properties are not allocated — expenses and depreciation assume 100% rental use.");
+
+        return new YearEndViewResponse
+        {
+            Year = year,
+            CashFlow = cashFlow,
+            ScheduleE = scheduleE,
+            RentRoll = rentRoll,
+            AccountantNotes = notes,
+        };
+    }
+
+    /// <summary>
+    /// Rent roll: current leases (active or under notice) with each lease's past-due balance, computed
+    /// DB-side (the owed-and-overdue sum is grouped in SQL; no rows are pulled back to total in memory).
+    /// </summary>
+    private async Task<IReadOnlyList<YearEndRentRollRow>> BuildRentRollAsync(int portfolioId, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+
+        var leases = await _db.Leases
+            .AsNoTracking()
+            .Where(l => l.PortfolioId == portfolioId &&
+                        (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven))
+            .Select(l => new
+            {
+                l.Id,
+                PropertyName = l.Property!.Name,
+                UnitNumber = l.Unit!.UnitNumber,
+                TenantFirstName = l.Tenant!.FirstName,
+                TenantLastName = l.Tenant!.LastName,
+                l.MonthlyRent,
+                l.StartDate,
+                l.EndDate,
+                l.Status,
+            })
+            .ToListAsync(ct);
+
+        var leaseIds = leases.Select(l => l.Id).ToHashSet();
+
+        // Past-due balance per lease: owed (Scheduled/Partial/Late) and overdue (Late, or due in the
+        // past). A Partial owes only its unpaid remainder (Amount − AmountPaid). Grouped + summed SQL-side.
+        var pastDueByLease = (await _db.Payments
+                .AsNoTracking()
+                .Where(p => p.PortfolioId == portfolioId &&
+                            leaseIds.Contains(p.LeaseId) &&
+                            (p.Status == PaymentStatus.Scheduled ||
+                             p.Status == PaymentStatus.Partial ||
+                             p.Status == PaymentStatus.Late) &&
+                            (p.Status == PaymentStatus.Late || p.DueDate < now))
+                .GroupBy(p => p.LeaseId)
+                .Select(g => new
+                {
+                    LeaseId = g.Key,
+                    Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.Amount - (p.AmountPaid ?? 0m)) : p.Amount),
+                })
+                .ToListAsync(ct))
+            .ToDictionary(g => g.LeaseId, g => g.Total);
+
+        return leases
+            .Select(l => new YearEndRentRollRow
+            {
+                PropertyName = l.PropertyName,
+                UnitNumber = l.UnitNumber,
+                TenantName = string.IsNullOrWhiteSpace($"{l.TenantFirstName} {l.TenantLastName}".Trim())
+                    ? "Tenant"
+                    : $"{l.TenantFirstName} {l.TenantLastName}".Trim(),
+                MonthlyRent = l.MonthlyRent,
+                LeaseStart = l.StartDate,
+                LeaseEnd = l.EndDate,
+                LeaseStatus = l.Status.ToString(),
+                PastDueBalance = pastDueByLease.GetValueOrDefault(l.Id, 0m),
+            })
+            .OrderBy(r => r.PropertyName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(r => r.UnitNumber, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     // ── General Ledger (running balance) ───────────────────────────────────────────────────────────

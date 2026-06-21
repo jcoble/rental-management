@@ -46,7 +46,7 @@ public class ReportsServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new ReportsService(_db, new OwnerStatementService(_db));
+        _sut = new ReportsService(_db, new OwnerStatementService(_db), new ScheduleEService(_db));
     }
 
     public void Dispose()
@@ -408,6 +408,57 @@ public class ReportsServiceTests : IDisposable
         p.OperatingExpenses.Should().Be(240m);       // taxes kept (not escrow-funded)
         p.DebtService.Should().Be(800m);
         p.CashFlow.Should().Be(1000m - 240m - 800m); // -40
+    }
+
+    // ── Year-end view (§11/§18, DB) ──────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetYearEndAsync_ReturnsThreeBlocks_CashFlowDistinctFromTaxableIncome()
+    {
+        var property = SeedProperty("Maple");
+        // Depreciation basis → a non-cash deduction that makes taxable income differ from cash flow.
+        property.PurchasePrice = 300_000m;
+        property.LandValue = 60_000m;
+        property.InServiceDate = D(2020, 1, 1);
+        var unit = SeedUnit("1", property.Id, UnitStatus.Occupied);
+        var lease = SeedLease(property, unit, SeedTenant("Ann", "Acre"), rent: 1_000m,
+            start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.Active);
+        _db.SaveChanges();
+
+        // 12,000 rent collected in 2025.
+        for (var m = 1; m <= 12; m++)
+            SeedPayment(lease, 1_000m, dueDate: D(2025, m, 1), PaymentStatus.Paid, paidDate: D(2025, m, 1));
+
+        // A loan: one payment → debt service 700 (interest 500 + principal 200).
+        var loan = SeedLoan(property.Id, escrowCoversTaxes: false);
+        SeedLoanPayment(loan, "2025-01", dueDate: D(2025, 1, 1), interest: 500m, principal: 200m, escrow: 0m, total: 700m, balanceAfter: 199_800m);
+
+        var view = await _sut.GetYearEndAsync(PortfolioId, 2025, CancellationToken.None);
+
+        view.Year.Should().Be(2025);
+
+        // Block 1: cash flow present (income 12,000, debt service 700, no depreciation).
+        view.CashFlow.Properties.Should().ContainSingle();
+        view.CashFlow.Properties[0].Income.Should().Be(12_000m);
+        view.CashFlow.Properties[0].DebtService.Should().Be(700m);
+        var cashFlow = view.CashFlow.TotalCashFlow;
+
+        // Block 2: taxable income present, with depreciation (8,727.27) + interest (500), principal out.
+        view.ScheduleE.Properties.Should().ContainSingle();
+        view.ScheduleE.Properties[0].Depreciation.Should().Be(8_727.27m);
+        view.ScheduleE.Properties[0].MortgageInterest.Should().Be(500m);
+        var taxableIncome = view.ScheduleE.NetIncome;
+
+        // The two key numbers are DISTINCT (depreciation + the cash/tax divide separate them).
+        cashFlow.Should().NotBe(taxableIncome);
+
+        // Block 3: rent roll present.
+        view.RentRoll.Should().ContainSingle();
+        view.RentRoll[0].MonthlyRent.Should().Be(1_000m);
+
+        // §18 caveats are surfaced (always-on disposition + mixed-use notes at minimum).
+        view.AccountantNotes.Should().NotBeEmpty();
+        view.AccountantNotes.Should().Contain(n => n.Contains("recapture", StringComparison.OrdinalIgnoreCase));
     }
 
     // ── Occupancy % (DB) ───────────────────────────────────────────────────────────────────────────
