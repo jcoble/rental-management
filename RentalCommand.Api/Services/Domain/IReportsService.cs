@@ -31,6 +31,13 @@ public interface IReportsService
     /// <summary>Income vs. expense by month over the range, with per-month net and grand totals.</summary>
     Task<CashFlowResponse> GetCashFlowAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
 
+    /// <summary>
+    /// True cash flow per property + portfolio for the range (spec §9/§18): rent in − operating
+    /// expenses (escrow-funded taxes/insurance excluded) − full debt service. Excludes deposits and
+    /// non-cash depreciation; shows NOI and after-debt cash flow as distinct lines.
+    /// </summary>
+    Task<CashFlowSummaryResponse> GetTrueCashFlowAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
+
     /// <summary>Every payment and expense over the range in date order with a running balance.</summary>
     Task<GeneralLedgerResponse> GetGeneralLedgerAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);
 

@@ -18,17 +18,34 @@ public class AccountingController : AuthenticatedPortfolioControllerBase
     private readonly IScheduleEService _scheduleE;
     private readonly IOwnerStatementService _ownerStatements;
     private readonly IOwnerStatementEmailService _ownerStatementEmail;
+    private readonly IReportsService _reports;
 
     public AccountingController(
         IAccountingService service,
         IScheduleEService scheduleE,
         IOwnerStatementService ownerStatements,
-        IOwnerStatementEmailService ownerStatementEmail)
+        IOwnerStatementEmailService ownerStatementEmail,
+        IReportsService reports)
     {
         _service = service;
         _scheduleE = scheduleE;
         _ownerStatements = ownerStatements;
         _ownerStatementEmail = ownerStatementEmail;
+        _reports = reports;
+    }
+
+    /// <summary>
+    /// True cash flow per property + portfolio for the range (spec §9/§18): rent in − operating
+    /// expenses (escrow-funded taxes/insurance excluded) − full debt service, with NOI and after-debt
+    /// cash flow as distinct lines. Excludes deposits and non-cash depreciation. Defaults to the
+    /// current year-to-date when the range is omitted.
+    /// </summary>
+    [HttpGet("cash-flow")]
+    [ProducesResponseType(typeof(CashFlowSummaryResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<CashFlowSummaryResponse>> CashFlow([FromQuery] ReportRangeQuery query, CancellationToken ct)
+    {
+        var result = await _reports.GetTrueCashFlowAsync(GetPortfolioId(), query, ct);
+        return Ok(result);
     }
 
     /// <summary>Expense totals by Schedule E category plus collected/outstanding/overdue payment rollups.</summary>
