@@ -43,6 +43,7 @@ fi
 WEB_HOST="${WEB_HOST:-$([ "$LAN_DEV" = "1" ] && echo "0.0.0.0" || echo "localhost")}"
 WEB_PUBLIC_HOST="${WEB_PUBLIC_HOST:-$([ "$LAN_DEV" = "1" ] && echo "${LAN_IP:-localhost}" || echo "localhost")}"
 WEB_URL="${WEB_URL:-https://$WEB_PUBLIC_HOST:$WEB_PORT}"
+export App__WebBaseUrl="${App__WebBaseUrl:-$WEB_URL}"
 
 CONN_STR="Host=localhost;Port=$PG_PORT;Database=$PG_DB;Username=$PG_USER;Password=$PG_PASSWORD"
 
