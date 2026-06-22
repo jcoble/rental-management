@@ -857,6 +857,33 @@ Evidence:
 
 Status: Pass for the core Admin Team controls covered above. Role-denied, stale-session, duplicate email, tenant-linked team member, and service-error variants remain open.
 
+### Public Docs, Application, And Signing
+
+Acceptance criteria:
+- Public `/docs` loads anonymously, supports search with count text, no-results state, start-here navigation, article breadcrumb/back, article table of contents, previous/next links, and missing-article state.
+- Public `/apply/[token]` handles invalid tokens, loads the valid portfolio context, exposes property/unit selection, validates required applicant fields/consent, validates email format, accepts a synthetic camera-style image upload for extraction, keeps manual correction possible, and submits an application.
+- Public `/sign/[token]` handles invalid tokens, expired tokens, active package load, PDF open/download, typed signature, drawn signature, clear behavior, ESIGN consent gating, decline modal cancel/confirm, and terminal signed/declined states.
+- Expired pending signing links must reject both the signing package and direct document URL.
+- Browser pass must stay on local app/API routes, use only synthetic local documents/images, and avoid outbound email/SMS/provider actions.
+
+Bug RC-UI-031:
+- Repro: Seed a pending signer with `ExpiresAtUtc` in the past, then request `GET /api/v1/sign/{token}` and `GET /api/v1/sign/{token}/document`.
+- Observed: before this fix, both endpoints returned 200 for an expired-but-unacted signer, so the public page could render an active signing package and direct PDF link after expiry.
+- Root cause: `NativeSigningService.GetPackageAsync` and `GetDocumentAsync` resolve tokens with `requireActive:false`; expiry was only checked in the `requireActive` block used by sign/decline mutations.
+- Fix: `ResolveAsync` now rejects expired non-terminal signer/request pairs before the `requireActive` branch, while preserving already signed/declined/voided terminal reads for read-only terminal states.
+- Regression: `NativeEsignTests.GetPackage_ExpiredPendingToken_IsRejected` and `NativeEsignTests.GetDocument_ExpiredPendingToken_IsRejected`.
+
+Evidence:
+- Docs proof on `https://localhost:5807/docs` loaded 20 visible category/article link entries, showed `9 of 30 articles match "lease"`, showed no-results for `zz-no-doc-match-397`, opened `/docs/welcome`, rendered a 3-item table of contents and previous/next navigation, returned to `/docs`, and showed `Article not found` for `/docs/not-a-real-article-397`.
+- Public application proof showed invalid token copy, loaded `Apply to Nora Vale`, exposed the property/unit selectors, and showed required-field/consent validation plus invalid-email validation.
+- Uploaded synthetic image `tmp/tsk397-public-application-id.png` through the same `accept="image/*"` scan input used for camera capture; `/api/v1/public/applications/{token}/scan-id` returned 200 and the UI reported that it filled first name, last name, date of birth, and current address.
+- Completed the application with corrected synthetic applicant data; `/api/v1/public/applications/{token}` returned 201 and the page showed `Application submitted!`.
+- Signing API proof after the fix returned `410 application/json` for both the expired package and expired document URL, while the active document URL returned `200 application/pdf` with the seeded local PDF.
+- Browser signing proof showed invalid-link copy, expired-link copy, active package header for `PublicSign Resident`, PDF open/download affordance, initial disabled submit, drawn-signature enablement after consent, disabled submit after Clear, typed-name signing success (`Signed - all done`), decline dialog Escape cancel, reason entry, and terminal declined state.
+- Browser page errors and unexpected console warnings/errors were zero for the final public-flow proof.
+
+Status: Pass for the public docs, public application, and native public signing controls covered above. Duplicate-application handling, provider-backed email delivery, and staff-side send/resend signing workflows remain open.
+
 ## Route Inventory For Continued Pass
 
 Core route map to exercise next:
@@ -867,7 +894,7 @@ Core route map to exercise next:
 - Inbox/comms: `/messages`, `/notices`.
 - Money/reports: `/accounting`, `/accounting/expenses/[id]`, `/accounting/payments/[id]`, `/accounting/past-due`, `/accounting/year-end`, `/deposits`, `/deposits/[id]`, `/reports`, `/reports/[report]`, `/tax`.
 - Settings/admin/support: `/settings`, `/settings/security`, `/settings/accounting`, `/audit`, `/admin/users`, `/admin/audit`, `/superadmin/engine`, `/ai`, `/docs`.
-- Portal/public: `/portal/*`, `/apply/[token]`, `/public/sign/[token]`.
+- Portal/public: `/portal/*`, `/apply/[token]`, `/sign/[token]`.
 
 ## Deferred External Integrations
 
@@ -928,6 +955,8 @@ Core route map to exercise next:
 - `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings after the Admin Team page contract/type fix.
 - Browser activity/admin proof on `https://localhost:5807`: `/audit` refresh, unmatched search, Created + Payment filters, payment row deep link, missing-blob payment detail, `/admin/audit` no-results/filter/disclosure/IP/raw JSON, and filtered CSV export passed with no console/page errors and no `/payment-file/1` request after the fix.
 - Browser Admin Team proof on `https://localhost:5807`: `/admin/users` loaded through `/api/v1/admin/users/page?take=20&sort=-createdAt`, created `tsk397.team.paged.1782150198228@example.local`, showed the correct generated-password email and guarded close/Escape states, changed role Agent to Manager, deactivated/reactivated the row, and finished with console/page errors at zero.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~NativeEsignTests.GetPackage_ExpiredPendingToken_IsRejected|FullyQualifiedName~NativeEsignTests.GetDocument_ExpiredPendingToken_IsRejected" --logger "console;verbosity=normal"`: 2 passed.
+- Browser public proof on `https://localhost:5807`: `/docs` search/no-results/article/navigation/404, invalid and valid `/apply/[token]`, synthetic camera-style image scan, application validation/success, invalid/expired `/sign/[token]`, expired document 410, active PDF 200, typed/drawn/clear signature, sign terminal, decline modal Escape/reason/terminal, and zero unexpected console/page errors passed.
 - Browser property-label proof on `https://localhost:5807`: `/properties`, type filter, New Property modal, and property detail use landlord-facing labels while preserving API enum values.
 - Browser FileDrop proof on `https://localhost:5807/scan`: dragged unsupported CSV emitted a rejection warning, did not render as the selected file, and did not trigger `POST /api/v1/scans`.
 - Browser properties grid proof on `https://localhost:5807`: initial load and Name sort used `/api/v1/properties/page?take=20...`; no `/api/v1/properties?take=500` grid fetch occurred.
@@ -947,7 +976,7 @@ Core route map to exercise next:
 
 ## Open While In Progress
 
-- This is not yet a claim that every button/modal/grid/state in the product has been exercised. Continue real-user flow through dashboard cards/actions, settings/security account/session variants, settings/accounting connected-provider states, platform Engine health, docs/help, assistant delivery variants, portal, banking connection review states, scan batch/retry/reject variants, tenant-notice draft/send states, row delete confirmations, and remaining CRUD unhappy/edge states.
+- This is not yet a claim that every button/modal/grid/state in the product has been exercised. Continue real-user flow through dashboard cards/actions, settings/security account/session variants, settings/accounting connected-provider states, platform Engine health, in-app help variants, assistant delivery variants, portal, banking connection review states, scan batch/retry/reject variants, tenant-notice draft/send states, row delete confirmations, and remaining CRUD unhappy/edge states.
 - Plaid and QuickBooks remain deferred until sandbox credentials are available.
 - Continue static DB-side sweep outside the repaired report/accounting/banking controller/service scope; no endpoint should be marked production-scale until generated SQL is confirmed for filtering, sorting, paging, grouping, and aggregation. Read-only follow-up found additional high-confidence DB-side risks in lease ledger, unit timeline, daily briefing, inspection completion, unpaged document/deposit/opening-balance/conversation/portal lists, and broad `take:100/500` grid screens. Lease ledger, unit timeline, daily briefing, inspection completion, Command Center unit search, the scan draft grid, staff messages grid, staff messages unread count, staff messages compose tenant picker, Admin Team, and the properties/tenants/leases/units/maintenance/appointments/vendors/owners/applications/deposits/recurring-maintenance primary grids are now fixed with focused regressions; other unpaged/capped lists and shared-grid risks remain open.
 - Tenant-notice draft review/approve/send still needs an eligible synthetic notice condition and provider-safe channel setup.
@@ -963,7 +992,7 @@ The current pass is not a complete every-control inventory. The next new-user pa
 - Portal routes `/portal`, `/portal/messages`, `/portal/maintenance`, `/portal/payments`, `/portal/notifications`, `/portal/appointments`, and `/portal/lease`: dashboard links, compose/reply/cancel/delete, Enter vs Shift+Enter, unread invalidation, maintenance request create with photo preview/remove/failure, detail/timeline, Stripe unavailable, checkout success/cancel params, autopay on/off, notification action links/read state, appointment real workflow or placeholder defect, pagination, empty/loading/error states, and optimistic-update failures.
 - `/settings/accounting`: connected-provider toggle/submit/reset/copy actions, confirmations, persistence after reload, provider-unconfigured states, review queue controls, and stale-session failure behavior. `/settings/security` still needs Google-only/no-local-password and stale-session variants; local password-change controls are browser-proven.
 - `/admin/users` and `/superadmin/engine`: Admin Team core list/create/generated-password/role/status controls are browser-proven; remaining Admin Team variants include role-denied, stale-session, duplicate email, tenant-linked member, service-error, and larger-page pagination. Engine health refresh/reindex actions, exports where present, no-results states, and loading/error states remain open. `/audit` and `/admin/audit` core filters/refresh/no-results/detail/export controls are browser-proven; role-denied/error variants remain open.
-- `/docs`, public `/apply/[token]`, and public `/sign/[token]`: docs search/results/no results/articles/navigation/404, valid/invalid/expired public application states, scan success/failure/no extracted fields, duplicate application, valid/invalid/expired signing envelopes, PDF open/download, typed/drawn signature, clear, decline modal, terminal states, and provider gates.
+- `/docs`, public `/apply/[token]`, and public `/sign/[token]`: docs search/no-results/article/navigation/404, valid/invalid application links, required/invalid-email validation, synthetic image scan success, application submit success, valid/invalid/expired signing links, expired direct document rejection, active PDF open/download, typed/drawn signature, clear, decline modal, and signed/declined terminal states are browser-proven. Remaining variants include duplicate applications, public application scan failure/no extracted fields, staff-side signing send/resend, provider-backed delivery, larger signing envelopes with multiple signers, and stale/reused token reload states after terminal actions.
 - App shell/navigation: staff versus portal role menus, collapsible groups, collapsed rail, mobile drawer/overlay, command-center search/no matches, header badges, account menu/logout, theme toggle, and role-hidden route gates.
 - Shared controls in composed routes: data grids, pagination, search inputs, confirm dialogs, app-shell navigation, command-center navigation, notification bell/list interactions, keyboard/focus/escape behavior, and select-all/bulk states. FileDrop unsupported-file rejection is fixed and browser-proven for drag/drop on `/scan`; upload failure states still need route-specific coverage.
 - `/activity/*` and `/analytics/*`: route-level matrix with evidence for each visible control cluster and empty/error/loading state.
