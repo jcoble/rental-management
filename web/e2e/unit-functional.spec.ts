@@ -268,6 +268,11 @@ test.describe('Unit Command Center — functional', () => {
 
 			await expect(page.getByTestId('maintenance-title-error')).toBeVisible();
 			await expect(page.getByTestId('maintenance-description-error')).toBeVisible();
+
+			await page.getByTestId('maintenance-title-input').fill(unique('CC Fixed Faucet'));
+			await page.getByTestId('maintenance-description-input').fill('Tenant reports a slow drip.');
+			await expect(page.getByTestId('maintenance-title-error')).toBeHidden();
+			await expect(page.getByTestId('maintenance-description-error')).toBeHidden();
 			await expect(page.getByTestId('maintenance-create-form')).toBeVisible();
 		});
 	});
@@ -290,7 +295,7 @@ test.describe('Unit Command Center — functional', () => {
 			await page.getByTestId('expenses-description-input').fill(desc);
 			await page.getByTestId('expenses-amount-input').fill(amount);
 			await page.getByTestId('expenses-date-input').fill('2026-01-20');
-			await selectOption(page, 'expenses-category-input', 'Repairs');
+			await selectOption(page, 'expenses-category-input', 'Repairs & maintenance');
 			await selectOption(page, 'expenses-status-input', 'Approved');
 			await page.getByTestId('expenses-create-submit').click();
 
@@ -334,7 +339,30 @@ test.describe('Unit Command Center — functional', () => {
 
 			await expect(page.getByTestId('expenses-description-error')).toBeVisible();
 			await expect(page.getByTestId('expenses-amount-error')).toBeVisible();
+
+			await page.getByTestId('expenses-description-input').fill(unique('CC Corrected receipt'));
+			await page.getByTestId('expenses-amount-input').fill('42.50');
+			await expect(page.getByTestId('expenses-description-error')).toBeHidden();
+			await expect(page.getByTestId('expenses-amount-error')).toBeHidden();
 			await expect(page.getByTestId('expenses-create-form')).toBeVisible();
+		});
+
+		test('scan receipt opens the scan flow with unit context', async ({ page, request }) => {
+			const token = await apiToken(request);
+			const { unit } = await findLeasedUnit(request, token);
+			await login(page);
+			await openUnitTab(page, unit.id, 'expenses', 'unit-expenses-tab');
+
+			await page.getByTestId('expenses-scan').click();
+			await expect(page.getByTestId('scan-page')).toBeVisible({ timeout: 10_000 });
+			await expect(page.getByTestId('scan-doc-type-Expense')).toHaveAttribute('aria-pressed', 'true');
+
+			const url = new URL(page.url());
+			expect(url.pathname).toBe('/scan');
+			expect(url.searchParams.get('type')).toBe('Expense');
+			expect(url.searchParams.get('propertyId')).toBe(String(unit.propertyId));
+			expect(url.searchParams.get('unitId')).toBe(String(unit.id));
+			expect(url.searchParams.get('returnTo')).toBe(`/units/${unit.id}?tab=expenses`);
 		});
 
 		test('edits an expense amount + category on the card', async ({ page, request }) => {
@@ -372,7 +400,7 @@ test.describe('Unit Command Center — functional', () => {
 			await page.getByTestId('expenses-edit-description-input').fill(newDesc);
 			await page.getByTestId('expenses-edit-amount-input').fill('275.50');
 			await page.getByTestId('expenses-edit-date-input').fill('2026-03-03');
-			await selectOption(page, 'expenses-edit-category-input', 'CleaningMaintenance');
+			await selectOption(page, 'expenses-edit-category-input', 'Cleaning & maintenance');
 			await selectOption(page, 'expenses-edit-status-input', 'Approved');
 			await page.getByTestId('expenses-edit-save').click();
 

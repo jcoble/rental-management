@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { untrack } from 'svelte';
 	import type { UnitDashboard, WorkOrder, Expense } from '$lib/types';
+	import type { ScanContext } from '$lib/scan/scan-context';
 	import { workOrders as workOrdersApi } from '$lib/api/endpoints/workOrders';
 	import { expenses as expensesApi } from '$lib/api/endpoints/expenses';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -22,7 +23,7 @@
 		onScan,
 	}: {
 		dashboard: UnitDashboard;
-		onScan: () => void;
+		onScan: (context?: Partial<ScanContext>) => void;
 	} = $props();
 
 	const queryClient = useQueryClient();
@@ -134,6 +135,13 @@
 	let createForm = $state(emptyCreate());
 	let createErrors = $state<Record<string, string>>({});
 
+	function clearCreateError(field: string) {
+		if (!createErrors[field]) return;
+		const next = { ...createErrors };
+		delete next[field];
+		createErrors = next;
+	}
+
 	function openCreate() {
 		createForm = emptyCreate();
 		createErrors = {};
@@ -190,12 +198,12 @@
 			<div class="space-y-3">
 				<div>
 					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-title">Title</label>
-					<Input id="wo-title" data-testid="maintenance-title-input" bind:value={createForm.title} placeholder="Issue title" />
+					<Input id="wo-title" data-testid="maintenance-title-input" bind:value={createForm.title} oninput={() => clearCreateError('title')} placeholder="Issue title" />
 					{#if createErrors.title}<p class="mt-1 text-xs text-destructive" data-testid="maintenance-title-error">{createErrors.title}</p>{/if}
 				</div>
 				<div>
 					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-desc">Description</label>
-					<textarea id="wo-desc" data-testid="maintenance-description-input" bind:value={createForm.description} rows={3} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="What needs fixing?"></textarea>
+					<textarea id="wo-desc" data-testid="maintenance-description-input" bind:value={createForm.description} oninput={() => clearCreateError('description')} rows={3} class="w-full rounded border border-border bg-background px-3 py-2 text-sm" placeholder="What needs fixing?"></textarea>
 					{#if createErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="maintenance-description-error">{createErrors.description}</p>{/if}
 				</div>
 				<div class="grid grid-cols-2 gap-3">
@@ -210,7 +218,7 @@
 					</div>
 					<div>
 						<label class="mb-1 block text-xs font-medium text-muted-foreground" for="wo-cat">Category</label>
-						<Input id="wo-cat" data-testid="maintenance-category-input" bind:value={createForm.category} placeholder="Category" />
+						<Input id="wo-cat" data-testid="maintenance-category-input" bind:value={createForm.category} oninput={() => clearCreateError('category')} placeholder="Category" />
 						{#if createErrors.category}<p class="mt-1 text-xs text-destructive" data-testid="maintenance-category-error">{createErrors.category}</p>{/if}
 					</div>
 				</div>
@@ -271,7 +279,16 @@
 
 	<DetailCard title="Receipts on these jobs" icon={Receipt} accent="muted" testid="maintenance-receipts">
 		{#snippet actions()}
-			<button type="button" class="text-xs text-primary hover:underline" onclick={onScan} data-testid="maintenance-scan-receipt">Scan receipt</button>
+			<button
+				type="button"
+				class="text-xs text-primary hover:underline"
+				onclick={() => onScan({
+					type: 'Expense',
+					workOrderId: expandedId ?? (workOrderList.length === 1 ? workOrderList[0]?.id : undefined),
+					returnTo: `/units/${unitId}?tab=maintenance`
+				})}
+				data-testid="maintenance-scan-receipt"
+			>Scan receipt</button>
 		{/snippet}
 		{#if workOrderReceipts.length === 0}
 			<p class="text-sm text-muted-foreground">No work-order receipts yet. Snap a receipt to link it to a job.</p>

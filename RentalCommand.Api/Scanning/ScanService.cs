@@ -327,6 +327,8 @@ public sealed class ScanService : IScanService
         // the expense is left unlinked (we never fabricate a property).
         bool isPaid;
         int? propertyId = null;
+        int? unitId = null;
+        int? workOrderId = null;
         try
         {
             using var overrideDoc = JsonDocument.Parse(string.IsNullOrWhiteSpace(overridesJson) ? "{}" : overridesJson);
@@ -347,6 +349,10 @@ public sealed class ScanService : IScanService
 
             if (TryGetOverrideInt(overrideRoot, out var pid, "propertyId", "property_id") && pid > 0)
                 propertyId = pid;
+            if (TryGetOverrideInt(overrideRoot, out var uid, "unitId", "unit_id") && uid > 0)
+                unitId = uid;
+            if (TryGetOverrideInt(overrideRoot, out var wid, "workOrderId", "work_order_id") && wid > 0)
+                workOrderId = wid;
         }
         catch
         {
@@ -371,6 +377,8 @@ public sealed class ScanService : IScanService
         var request = new CreateExpenseRequest
         {
             PropertyId  = propertyId, // null when no property context; ExpenseService validates in-portfolio.
+            UnitId      = unitId,
+            WorkOrderId = workOrderId,
             VendorId    = matchedVendorId,
             Category    = dto.Category ?? ScheduleECategory.Other,
             Description = string.IsNullOrWhiteSpace(dto.VendorName) ? "Scanned receipt" : dto.VendorName!,

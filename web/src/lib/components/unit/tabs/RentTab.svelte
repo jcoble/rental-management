@@ -189,7 +189,7 @@
 					{#if showCreate}<X class="h-4 w-4" /> Cancel{:else}<Plus class="h-4 w-4" /> Post payment{/if}
 				</Button>
 			{/if}
-			<Button variant="outline" class="gap-2" onclick={onScan} data-testid="rent-scan">
+			<Button variant="outline" class="gap-2" onclick={() => onScan()} data-testid="rent-scan">
 				<ScanLine class="h-4 w-4" /> Scan receipt
 			</Button>
 		</div>
