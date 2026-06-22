@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -26,4 +27,33 @@ internal static class StoredFileQueries
                         f.DeletedAt == null)
             .OrderByDescending(f => f.UploadedAt)
             .FirstOrDefaultAsync(ct);
+
+    /// <summary>
+    /// The latest attached file only when the backing blob can be opened. Detail DTOs use this before
+    /// advertising a preview/download control, matching the serving endpoint's user-facing availability.
+    /// </summary>
+    public static async Task<StoredFile?> FindLatestAvailableEntityFileAsync(
+        this RentalCommandDbContext db,
+        IFileStorage files,
+        int portfolioId,
+        string entityType,
+        int entityId,
+        CancellationToken ct)
+    {
+        var storedFile = await db.FindLatestEntityFileAsync(portfolioId, entityType, entityId, ct);
+        if (storedFile is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            await using var stream = await files.DownloadAsync(storedFile.FilePath, ct);
+            return storedFile;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
 }

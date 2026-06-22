@@ -299,7 +299,7 @@ public class LeaseService : ILeaseService
         }
 
         var response = LeaseResponse.FromEntity(entity, includeNavigations: true);
-        var scan = await _db.FindLatestEntityFileAsync(portfolioId, "Lease", id, ct);
+        var scan = await _db.FindLatestAvailableEntityFileAsync(_storage, portfolioId, EntityType, id, ct);
         if (scan is not null)
         {
             response.HasScan = true;
