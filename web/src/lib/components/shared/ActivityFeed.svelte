@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import type { AuditEntry } from '$lib/types';
+	import { formatAuditChangeValue } from '$lib/utils/status-labels';
 	import { formatRelative } from '$lib/utils/date';
 	import { Plus, Pencil, Trash2, CheckCircle, XCircle, Zap, ChevronRight, ArrowRight } from '@lucide/svelte';
 
@@ -97,9 +98,9 @@
 							<div class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
 								<dt class="font-medium text-foreground">{change.field}</dt>
 								<dd class="flex items-center gap-1.5 text-muted-foreground">
-									<span class="line-through opacity-70">{change.oldValue}</span>
+									<span class="line-through opacity-70">{formatAuditChangeValue(change.field, change.oldValue)}</span>
 									<ArrowRight class="h-3 w-3 shrink-0" />
-									<span class="font-medium text-foreground">{change.newValue}</span>
+									<span class="font-medium text-foreground">{formatAuditChangeValue(change.field, change.newValue)}</span>
 								</dd>
 							</div>
 						{/each}

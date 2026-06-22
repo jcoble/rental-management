@@ -14,20 +14,25 @@
 	import DocumentsTab from '$lib/components/unit/tabs/DocumentsTab.svelte';
 	import ExpensesTab from '$lib/components/unit/tabs/ExpensesTab.svelte';
 	import TimelineTab from '$lib/components/unit/tabs/TimelineTab.svelte';
+	import { resolveUnitTab } from '$lib/components/unit/unit-tabs';
 	import { ArrowLeft } from '@lucide/svelte';
 
 	const id = $derived(Number(page.params.id));
 
-	const TABS = ['overview', 'lease', 'rent', 'maintenance', 'documents', 'expenses', 'timeline'];
-
 	// Active tab is driven by ?tab= (default overview) so deep links land on the right tab.
-	let activeTab = $state(TABS.includes(page.url.searchParams.get('tab') ?? '') ? page.url.searchParams.get('tab')! : 'overview');
+	let activeTab = $state(resolveUnitTab(page.url.searchParams.get('tab')));
+
+	$effect(() => {
+		const tabFromUrl = resolveUnitTab(page.url.searchParams.get('tab'));
+		if (tabFromUrl !== activeTab) activeTab = tabFromUrl;
+	});
 
 	// Keep the URL in sync when the user switches tabs (replace, no history spam), so a refresh/back stays put.
 	function setTab(tab: string) {
-		activeTab = tab;
+		const nextTab = resolveUnitTab(tab);
+		activeTab = nextTab;
 		const url = new URL(page.url);
-		url.searchParams.set('tab', tab);
+		url.searchParams.set('tab', nextTab);
 		goto(url, { replaceState: true, keepFocus: true, noScroll: true });
 	}
 
