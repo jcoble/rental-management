@@ -1,9 +1,11 @@
 using System.Security.Claims;
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
@@ -24,6 +26,7 @@ public class ScanBatchControllerTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
+    private readonly List<string> _executedSql = [];
 
     public ScanBatchControllerTests()
     {
@@ -32,6 +35,7 @@ public class ScanBatchControllerTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
             .Options;
 
         _db = new RentalCommandTestDbContext(options);
@@ -170,6 +174,36 @@ public class ScanBatchControllerTests : IDisposable
         confirmed.Tenant.Should().Be("Marcus Williams");
         confirmed.Unit.Should().Be("20");
         confirmed.Term.Should().Be("2026-01-01 – 2026-12-31");
+    }
+
+    [Fact]
+    public async Task GetBatch_ComputesCountsWithGroupedSql()
+    {
+        var batch = SeedBatch(PortfolioId, fileCount: 5);
+        SeedDraft(batch.Id, "Pending");
+        SeedDraft(batch.Id, "Processing");
+        SeedDraft(batch.Id, "Reviewing");
+        SeedDraft(batch.Id, "Confirmed");
+        SeedDraft(batch.Id, "Failed");
+
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        _executedSql.Clear();
+        var result = await controller.GetBatch(batch.Id, CancellationToken.None);
+
+        var detail = result.Result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<ScanBatchDetailResponse>().Subject;
+        detail.Counts.Total.Should().Be(5);
+        detail.Counts.Pending.Should().Be(2);
+        detail.Counts.Reviewing.Should().Be(1);
+        detail.Counts.Confirmed.Should().Be(1);
+        detail.Counts.Failed.Should().Be(1);
+
+        _executedSql.Should().Contain(sql =>
+            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("\"Status\"", StringComparison.Ordinal)
+            && sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase),
+            "batch detail counts must be rolled up by the database, not by folding materialized draft rows");
     }
 
     // -------------------------------------------------------------------------
@@ -324,5 +358,27 @@ public class ScanBatchControllerTests : IDisposable
 
         public Task<bool> RejectDraftAsync(int portfolioId, int draftId, int userId, string? reason, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for batch tests.");
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
     }
 }
