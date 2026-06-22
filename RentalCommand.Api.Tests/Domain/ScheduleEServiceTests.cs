@@ -1,6 +1,8 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -20,6 +22,7 @@ public class ScheduleEServiceTests : IDisposable
     private const int Year = 2025;
 
     private readonly SqliteConnection _conn;
+    private readonly List<string> _commands = [];
     private readonly RentalCommandDbContext _db;
     private readonly ScheduleEService _sut;
 
@@ -30,6 +33,7 @@ public class ScheduleEServiceTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new ScheduleERecordingCommandInterceptor(_commands))
             .Options;
 
         _db = new ReportsServiceTestDbContext(options); // reuses the SQLite-compatible context
@@ -177,7 +181,41 @@ public class ScheduleEServiceTests : IDisposable
         _db.Payments.Add(new Payment { PortfolioId = PortfolioId, LeaseId = lease.Id, PaymentType = PaymentType.Rent, Status = PaymentStatus.Partial, Amount = 1_000m, AmountPaid = 250m, DueDate = D(Year, 2, 1), PaidDate = D(Year, 2, 1), CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow });
         _db.SaveChanges();
 
+        _commands.Clear();
+
         var report = await _sut.GetReportAsync(PortfolioId, Year, CancellationToken.None);
         report.Properties.Single().RentalIncome.Should().Be(1_250m);
+
+        var sql = string.Join("\n---\n", _commands);
+        sql.Should().Contain("GROUP BY", "Schedule E income and category totals must be grouped in SQL");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("Schedule E raw money totals must be summed in SQL");
+
+        var orderedPropertySql = _commands.FirstOrDefault(command =>
+            command.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
+        orderedPropertySql.Should().NotBeNull("Schedule E property ordering must come from SQL before DTO shaping");
+    }
+}
+
+internal sealed class ScheduleERecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+{
+    public override InterceptionResult<DbDataReader> ReaderExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result)
+    {
+        commands.Add(command.CommandText);
+        return base.ReaderExecuting(command, eventData, result);
+    }
+
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        commands.Add(command.CommandText);
+        return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
     }
 }
