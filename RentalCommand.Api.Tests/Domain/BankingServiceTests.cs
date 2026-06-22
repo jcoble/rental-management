@@ -1,5 +1,7 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Options;
 using Moq;
 using RentalCommand.Api.DTOs;
@@ -393,6 +395,40 @@ public class BankingServiceTests : IDisposable
 
         summary.UnmatchedCount.Should().Be(1);
         summary.SuggestedMatchCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ReviewQueue_PrefiltersPaymentSuggestionCandidatesInSql()
+    {
+        var executedSql = new List<string>();
+        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        var sut = CreateServiceFor(ctx);
+        var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
+        var payment = SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-target");
+        SeedRentPaymentInto(ctx, "Old", "Candidate", 1400m, postedAt.AddMonths(-6), "L-old");
+        SeedRentPaymentInto(ctx, "Wrong", "Amount", 1999m, postedAt, "L-wrong");
+
+        await sut.ImportAsync(1, BankImport("queue-prefilter", postedAt, "Emily Chen", 1400m));
+        executedSql.Clear();
+
+        var queue = await sut.GetReviewQueueAsync(1);
+
+        var item = queue.Items.Should().ContainSingle().Subject;
+        item.Transaction.SuggestedMatch.Should().NotBeNull();
+        item.Transaction.SuggestedMatch!.EntityType.Should().Be("Payment");
+        item.Transaction.SuggestedMatch.EntityId.Should().Be(payment.Id);
+
+        var paymentCandidateSql = executedSql
+            .Where(sql => sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        paymentCandidateSql.Should().Contain(sql =>
+            sql.Contains("@minAmount", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("@maxAmount", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("COALESCE", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains(">=", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("<", StringComparison.OrdinalIgnoreCase),
+            "bank suggestion candidates must be narrowed by amount and date in SQL before scoring");
     }
 
     [Fact]
@@ -795,4 +831,26 @@ public class BankingServiceTests : IDisposable
                 ClientId = "client-id",
                 Secret = "secret",
             }));
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
 }
