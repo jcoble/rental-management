@@ -8,6 +8,11 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { money } from '../money';
 	import { formatDateOnly } from '$lib/utils/date';
+	import {
+		EXPENSE_CATEGORIES,
+		EXPENSE_CATEGORY_OPTIONS,
+		formatExpenseCategory
+	} from '$lib/accounting/expense-categories';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -28,12 +33,6 @@
 	const unitId = $derived(dashboard.unit.id);
 	const propertyId = $derived(dashboard.unit.propertyId);
 
-	// Schedule E categories — the exact values the API accepts (mirrors the accounting page).
-	const EXPENSE_CATEGORIES = [
-		'Advertising', 'AutoTravel', 'CleaningMaintenance', 'Commissions', 'Insurance',
-		'LegalProfessional', 'ManagementFees', 'MortgageInterest', 'Repairs', 'Supplies',
-		'Taxes', 'Utilities', 'Depreciation', 'Other',
-	];
 	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
 	const EXPENSE_PAGE_SIZE = 20;
 	const today = () => new Date().toISOString().slice(0, 10);
@@ -236,9 +235,9 @@
 				<div>
 					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-cat">Category</label>
 					<Select.Root type="single" bind:value={createForm.category}>
-						<Select.Trigger id="exp-cat" class="w-full" data-testid="expenses-category-input">{createForm.category}</Select.Trigger>
+						<Select.Trigger id="exp-cat" class="w-full" data-testid="expenses-category-input">{formatExpenseCategory(createForm.category)}</Select.Trigger>
 						<Select.Content>
-							{#each EXPENSE_CATEGORIES as c}<Select.Item value={c} label={c}>{c}</Select.Item>{/each}
+							{#each EXPENSE_CATEGORY_OPTIONS as option}<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>{/each}
 						</Select.Content>
 					</Select.Root>
 				</div>
@@ -275,7 +274,7 @@
 						<span class="flex min-w-0 items-center gap-2 text-sm">
 							{#if expandedId === e.id}<ChevronDown class="h-4 w-4 shrink-0 text-muted-foreground" />{:else}<ChevronRight class="h-4 w-4 shrink-0 text-muted-foreground" />{/if}
 							<span class="truncate font-medium">{e.description}</span>
-							<span class="shrink-0 text-muted-foreground">· {e.category}</span>
+							<span class="shrink-0 text-muted-foreground">· {formatExpenseCategory(e.category)}</span>
 						</span>
 						<span class="flex shrink-0 items-center gap-2"><StatusBadge status={e.status} /><span class="font-semibold">{money(e.amount)}</span></span>
 					</button>
@@ -286,7 +285,7 @@
 									<InlineField label="Description" bind:value={editForm.description} editing type="text" error={editErrors.description} testid="expenses-edit-description" class="sm:col-span-2" />
 									<InlineField label="Amount" bind:value={editForm.amount} editing type="number" error={editErrors.amount} testid="expenses-edit-amount" />
 									<InlineField label="Incurred" bind:value={editForm.incurredAt} editing type="date" error={editErrors.incurredAt} testid="expenses-edit-date" />
-									<InlineField label="Category" bind:value={editForm.category} editing type="select" options={EXPENSE_CATEGORIES.map((c) => ({ value: c, label: c }))} testid="expenses-edit-category" />
+									<InlineField label="Category" bind:value={editForm.category} editing type="select" options={EXPENSE_CATEGORY_OPTIONS} testid="expenses-edit-category" />
 									<InlineField label="Status" bind:value={editForm.status} editing type="select" options={EXPENSE_STATUSES.map((s) => ({ value: s, label: s }))} testid="expenses-edit-status" />
 								</div>
 								<div class="mt-3 flex justify-end gap-2">
@@ -299,7 +298,7 @@
 								<dl class="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
 									<div><dt class="text-muted-foreground">Amount</dt><dd class="font-medium">{money(e.amount)}</dd></div>
 									<div><dt class="text-muted-foreground">Incurred</dt><dd>{formatDateOnly(e.incurredAt)}</dd></div>
-									<div><dt class="text-muted-foreground">Category</dt><dd>{e.category}</dd></div>
+									<div><dt class="text-muted-foreground">Category</dt><dd>{formatExpenseCategory(e.category)}</dd></div>
 									<div><dt class="text-muted-foreground">Status</dt><dd><StatusBadge status={e.status} /></dd></div>
 									{#if e.workOrderId}<div><dt class="text-muted-foreground">Work order</dt><dd>#{e.workOrderId}</dd></div>{/if}
 								</dl>
