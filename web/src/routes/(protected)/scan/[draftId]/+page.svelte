@@ -8,6 +8,7 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
+	import { applyScanContextOverrides, parseScanContext } from '$lib/scan/scan-context';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
@@ -90,6 +91,7 @@
 	const queryClient = useQueryClient();
 
 	const draftId = $derived(parseInt(page.params.draftId ?? '0', 10));
+	const scanContext = $derived(parseScanContext(page.url.searchParams));
 
 	const draftQuery = createQuery(() => ({
 		queryKey: ['scan', draftId],
@@ -417,8 +419,21 @@
 				isPaidInitialized = true;
 			}
 			if ((data.targetEntityType === 'WorkOrder' || data.targetEntityType === 'Expense') && selectedPropertyId === NO_PROPERTY) {
-				const propertyField = data.fields.find((f) => f.name === 'property_id' || f.name === 'propertyId');
-				if (propertyField?.value) selectedPropertyId = propertyField.value;
+				const contextPropertyId = scanContext.propertyId ? String(scanContext.propertyId) : '';
+				if (contextPropertyId) {
+					if (propertiesQuery.data?.some((p) => String(p.id) === contextPropertyId)) {
+						selectedPropertyId = contextPropertyId;
+					}
+				} else {
+					const propertyField = data.fields.find((f) => f.name === 'property_id' || f.name === 'propertyId');
+					if (propertyField?.value) selectedPropertyId = propertyField.value;
+				}
+			}
+			if (data.targetEntityType === 'Payment' && !selectedLeaseId && scanContext.leaseId) {
+				const contextLeaseId = String(scanContext.leaseId);
+				if (leasesQuery.data?.some((l) => String(l.id) === contextLeaseId)) {
+					selectedLeaseId = contextLeaseId;
+				}
 			}
 			// Lease drafts: seed the property/unit pickers + the create-new fields. Tenant stays on
 			// "create new" unless the user picks.
@@ -753,10 +768,12 @@
 		if (isPayment) {
 			// Payment drafts require leaseId; omit the paid/unpaid toggle (a received check is always paid)
 			overrides['leaseId'] = selectedLeaseId ? Number(selectedLeaseId) : null;
+			applyScanContextOverrides(overrides, scanContext, 'Payment');
 		} else if (isWorkOrder) {
 			if (selectedPropertyId && selectedPropertyId !== NO_PROPERTY) {
 				overrides['propertyId'] = Number(selectedPropertyId);
 			}
+			applyScanContextOverrides(overrides, scanContext, 'WorkOrder');
 		} else {
 			// Expense drafts: always include the paid/unpaid toggle decision
 			overrides['is_paid'] = isPaid;
@@ -764,6 +781,7 @@
 			if (selectedPropertyId && selectedPropertyId !== NO_PROPERTY) {
 				overrides['propertyId'] = Number(selectedPropertyId);
 			}
+			applyScanContextOverrides(overrides, scanContext, 'Expense');
 			// Include the (possibly edited) line items so corrections survive into the expense.
 			// Numbers are parsed to clean values (null when blank); fully-empty rows are dropped so a
 			// stray "Add line item" the user never filled doesn't persist a blank row. An empty array

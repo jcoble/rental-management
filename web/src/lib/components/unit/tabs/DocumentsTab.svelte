@@ -33,7 +33,7 @@
 		<p class="text-sm text-muted-foreground">
 			Documents on this unit and its lease, work orders, payments, and inspections.
 		</p>
-		<Button class="gap-2" onclick={onScan} data-testid="documents-scan">
+		<Button class="gap-2" onclick={() => onScan()} data-testid="documents-scan">
 			<ScanLine class="h-4 w-4" /> Scan / upload
 		</Button>
 	</div>

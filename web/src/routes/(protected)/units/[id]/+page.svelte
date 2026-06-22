@@ -15,6 +15,7 @@
 	import ExpensesTab from '$lib/components/unit/tabs/ExpensesTab.svelte';
 	import TimelineTab from '$lib/components/unit/tabs/TimelineTab.svelte';
 	import { resolveUnitTab } from '$lib/components/unit/unit-tabs';
+	import { scanHref, type ScanContext } from '$lib/scan/scan-context';
 	import { ArrowLeft } from '@lucide/svelte';
 
 	const id = $derived(Number(page.params.id));
@@ -44,9 +45,21 @@
 
 	const dashboard = $derived(dashboardQuery.data);
 
-	// Scan / Upload routes into the existing scan → draft → confirm flow. Domain work is inline in tabs.
-	function goScan() {
-		goto('/scan');
+	// Scan / Upload routes into the existing scan -> draft -> confirm flow while preserving
+	// the unit context the user started from.
+	function goScan(context: Partial<ScanContext> = {}) {
+		if (!dashboard) {
+			goto('/scan');
+			return;
+		}
+		const unit = dashboard.unit;
+		goto(scanHref({
+			...context,
+			type: context.type ?? 'Expense',
+			propertyId: context.propertyId ?? unit.propertyId,
+			unitId: context.unitId ?? unit.id,
+			returnTo: context.returnTo ?? `/units/${unit.id}?tab=${activeTab}`
+		}));
 	}
 </script>
 
@@ -70,7 +83,7 @@
 		</div>
 	{:else}
 		<div class="space-y-4">
-			<UnitHeader {dashboard} onScan={goScan} />
+			<UnitHeader {dashboard} onScan={() => goScan()} />
 			<LifecycleRail stage={dashboard.lifecycleStage} nextBestAction={dashboard.nextBestAction} onStageClick={setTab} />
 
 			<div class="grid gap-4 lg:grid-cols-[1fr_320px]">
@@ -91,16 +104,16 @@
 							<OverviewTab {dashboard} onOpenTab={setTab} />
 						</Tabs.Content>
 						<Tabs.Content value="lease" class="mt-4">
-							<LeaseTab {dashboard} onScan={goScan} />
+							<LeaseTab {dashboard} onScan={() => goScan({ type: 'Lease', returnTo: `/units/${dashboard.unit.id}?tab=lease` })} />
 						</Tabs.Content>
 						<Tabs.Content value="rent" class="mt-4">
-							<RentTab {dashboard} onScan={goScan} />
+							<RentTab {dashboard} onScan={() => goScan({ type: 'Payment', leaseId: dashboard.currentLease?.id, returnTo: `/units/${dashboard.unit.id}?tab=rent` })} />
 						</Tabs.Content>
 						<Tabs.Content value="maintenance" class="mt-4">
 							<MaintenanceTab {dashboard} onScan={goScan} />
 						</Tabs.Content>
 						<Tabs.Content value="documents" class="mt-4">
-							<DocumentsTab docs={dashboard.overview.pendingDocs} onScan={goScan} />
+							<DocumentsTab docs={dashboard.overview.pendingDocs} onScan={() => goScan({ returnTo: `/units/${dashboard.unit.id}?tab=documents` })} />
 						</Tabs.Content>
 						<Tabs.Content value="expenses" class="mt-4">
 							<ExpensesTab {dashboard} onScan={goScan} />
