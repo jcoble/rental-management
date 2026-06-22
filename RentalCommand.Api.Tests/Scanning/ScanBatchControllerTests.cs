@@ -222,6 +222,88 @@ public class ScanBatchControllerTests : IDisposable
         detail.Drafts.Should().ContainSingle().Which.Unit.Should().Be("1A");
     }
 
+    [Fact]
+    public async Task Get_IncludesFailureReasonForFailedDraft()
+    {
+        var batch = SeedBatch(PortfolioId, fileCount: 1);
+        var draft = SeedDraft(batch.Id, "Failed",
+            targetEntityType: "Expense",
+            failureReason: "extraction interrupted (timeout or shutdown)");
+
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        var result = await controller.Get(draft.Id, CancellationToken.None);
+
+        var response = result.Result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<ScanDraftResponse>().Subject;
+        response.Status.Should().Be("Failed");
+        response.FailureReason.Should().Be("extraction interrupted (timeout or shutdown)");
+    }
+
+    [Fact]
+    public async Task Retry_FailedDraft_RequeuesAndClearsStaleExtractionData()
+    {
+        var batch = SeedBatch(PortfolioId, fileCount: 1);
+        var draft = SeedDraft(batch.Id, "Failed",
+            extractedFields: """{"tenant_name":{"value":"Avery Ellis","confidence":0.9}}""",
+            failureReason: "extraction interrupted (timeout or shutdown)");
+        draft.ModelId = "claude-cli:sonnet";
+        draft.TokensUsed = 1234;
+        draft.CostUsd = 0.0123m;
+        draft.ReviewedAt = DateTime.UtcNow;
+        draft.ReviewedBy = "7";
+        draft.ConfirmedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        var result = await controller.Retry(draft.Id, CancellationToken.None);
+
+        result.Should().BeOfType<OkResult>();
+
+        _db.ChangeTracker.Clear();
+        var reloaded = await _db.ScanDrafts.SingleAsync(d => d.Id == draft.Id);
+        reloaded.Status.Should().Be("Pending");
+        reloaded.ExtractedFields.Should().BeNull();
+        reloaded.FailureReason.Should().BeNull();
+        reloaded.ModelId.Should().BeNull();
+        reloaded.TokensUsed.Should().BeNull();
+        reloaded.CostUsd.Should().BeNull();
+        reloaded.ReviewedAt.Should().BeNull();
+        reloaded.ReviewedBy.Should().BeNull();
+        reloaded.ConfirmedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Retry_NonFailedDraft_ReturnsBadRequest()
+    {
+        var batch = SeedBatch(PortfolioId, fileCount: 1);
+        var draft = SeedDraft(batch.Id, "Reviewing");
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        var result = await controller.Retry(draft.Id, CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        _db.ChangeTracker.Clear();
+        (await _db.ScanDrafts.SingleAsync(d => d.Id == draft.Id)).Status.Should().Be("Reviewing");
+    }
+
+    [Fact]
+    public async Task Retry_CrossPortfolioDraft_ReturnsNotFound()
+    {
+        const int otherPortfolioId = 99;
+        SeedPortfolio(otherPortfolioId);
+        var foreignBatch = SeedBatch(otherPortfolioId, fileCount: 1);
+        var foreignDraft = SeedDraft(foreignBatch.Id, "Failed", portfolioId: otherPortfolioId);
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        var result = await controller.Retry(foreignDraft.Id, CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+        _db.ChangeTracker.Clear();
+        (await _db.ScanDrafts.SingleAsync(d => d.Id == foreignDraft.Id)).Status.Should().Be("Failed");
+    }
+
     // -------------------------------------------------------------------------
     // IDOR: a batch (and its drafts) in another portfolio is not readable.
     // -------------------------------------------------------------------------
@@ -318,16 +400,23 @@ public class ScanBatchControllerTests : IDisposable
         return batch;
     }
 
-    private ScanDraft SeedDraft(int batchId, string status, string? extractedFields = null, int? portfolioId = null)
+    private ScanDraft SeedDraft(
+        int batchId,
+        string status,
+        string? extractedFields = null,
+        int? portfolioId = null,
+        string targetEntityType = "Lease",
+        string? failureReason = null)
     {
         var draft = new ScanDraft
         {
             PortfolioId = portfolioId ?? PortfolioId,
             BatchId = batchId,
             FilePath = $"uploads/{Guid.NewGuid():N}.pdf",
-            TargetEntityType = "Lease",
+            TargetEntityType = targetEntityType,
             Status = status,
             ExtractedFields = extractedFields,
+            FailureReason = failureReason,
             CreatedAt = DateTime.UtcNow,
         };
         _db.ScanDrafts.Add(draft);

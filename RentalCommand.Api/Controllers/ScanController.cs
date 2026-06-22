@@ -265,7 +265,8 @@ public class ScanController : ManagementControllerBase
                 d.Id, d.Status, d.TargetEntityType, $"/api/v1/scans/{d.Id}/file",
                 tenant, unit, term,
                 d.Status == "Confirmed" ? linkedFile?.EntityId : null,
-                d.CreatedAt);
+                d.CreatedAt,
+                d.FailureReason);
         }).ToList();
 
         return Ok(new ScanBatchDetailResponse(
@@ -446,6 +447,42 @@ public class ScanController : ManagementControllerBase
             linkedFiles.TryGetValue(d.FilePath, out var linkedFile);
             return ScanDraftResponse.FromEntity(d, linkedFile?.EntityType, linkedFile?.EntityId);
         }).ToList());
+    }
+
+    // -------------------------------------------------------------------------
+    // POST /api/v1/scans/{id}/retry  — requeue a failed draft for extraction
+    // -------------------------------------------------------------------------
+
+    [HttpPost("{id:int}/retry")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Retry(int id, CancellationToken ct)
+    {
+        var portfolioId = GetPortfolioId();
+
+        var updated = await _db.ScanDrafts
+            .Where(d => d.Id == id && d.PortfolioId == portfolioId && d.Status == "Failed")
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(d => d.Status, "Pending")
+                .SetProperty(d => d.ExtractedFields, (string?)null)
+                .SetProperty(d => d.ModelId, (string?)null)
+                .SetProperty(d => d.TokensUsed, (int?)null)
+                .SetProperty(d => d.CostUsd, (decimal?)null)
+                .SetProperty(d => d.FailureReason, (string?)null)
+                .SetProperty(d => d.ReviewedAt, (DateTime?)null)
+                .SetProperty(d => d.ReviewedBy, (string?)null)
+                .SetProperty(d => d.ConfirmedAt, (DateTime?)null), ct);
+
+        if (updated == 1)
+            return Ok();
+
+        var exists = await _db.ScanDrafts
+            .AnyAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
+
+        return exists
+            ? BadRequest(new { error = "Only failed scan drafts can be retried." })
+            : NotFound(new { error = "Scan draft not found" });
     }
 
     // -------------------------------------------------------------------------
