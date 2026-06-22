@@ -722,6 +722,42 @@ Evidence:
 
 Status: Pass after fix for property enum labeling across the covered property/onboarding surfaces.
 
+### Spreadsheet Import
+
+Acceptance criteria:
+- Entity cards for Tenants, Properties, and Units select the correct import type and show the expected columns.
+- Template download produces an authenticated CSV download for the selected entity.
+- Unsupported drag/drop files are rejected client-side without starting an import request or setting selected-file state.
+- CSV click upload runs a dry-run preview immediately, shows valid and invalid rows, and allows only valid rows to be committed.
+- Partial commits create valid rows, skip invalid rows, and keep row-level errors visible.
+- Result links route to the destination list, `Import another file` clears selected/result state, and switching entity clears stale preview/result/file state.
+- Console warnings/errors remain zero during the workflow.
+
+Bug RC-UI-026:
+- Repro: Import one valid property row and one invalid property row from `/import`.
+- Observed: The result summary rendered `Created 1 propertie.`
+- Fix: Import entity metadata now carries explicit singular/plural record labels instead of stripping a trailing `s` from the destination list label.
+- Regression: `web/e2e/import.spec.ts`.
+
+Bug RC-UI-027:
+- Repro: Preview a CSV with exactly one valid unit row.
+- Observed: The summary rendered `1 of 1 row look good.`
+- Fix: The preview summary now uses explicit `looks`/`look` grammar based on the row count.
+- Regression: `web/e2e/import.spec.ts`.
+
+Evidence:
+- Browser proof on `https://localhost:5807/import` as Nora Vale downloaded `tenant-import-template.csv`.
+- Dropping `not-a-spreadsheet.txt` showed `Please choose a CSV file (a spreadsheet saved as ".csv").`, left no selected-file card, and did not add any `/api/v1/import` request.
+- Tenant mixed CSV preview showed `1 of 2 rows look good`, a valid row, and row-level `FirstName` validation for the invalid row; switching to Properties cleared the stale file and preview.
+- Property mixed CSV committed one valid property and skipped one invalid `type` row; result summary rendered `Created 1 property. 1 row skipped`, and `View properties` routed to `/properties`.
+- Unit CSV for that imported property previewed `1 of 1 row looks good` and committed `Created 1 unit`.
+- Switching from the Unit result to Tenants cleared stale result/file state; a final valid tenant import rendered `Created 1 tenant`; `Import another file` returned to the empty dropzone.
+- `rtk env PW_BASE_URL=https://localhost:5807 PW_EMAIL=tsk397.full.1782131040@example.local PW_PASSWORD='AuditPass!23' pnpm --dir web exec playwright test e2e/import.spec.ts --project=chromium --reporter=list`: 1 passed.
+- `rtk pnpm --dir web test:unit`: 84 passed.
+- `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings.
+
+Status: Pass after fixes for the covered spreadsheet import workflow.
+
 ## Route Inventory For Continued Pass
 
 Core route map to exercise next:
@@ -782,6 +818,9 @@ Core route map to exercise next:
 - `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~PaymentServiceTests|FullyQualifiedName~ExpenseServiceTests|FullyQualifiedName~WorkOrderServiceListTests" --logger "console;verbosity=normal"`: 18 passed.
 - `rtk node --test --experimental-strip-types web/src/lib/api/endpoints/expense-list-path.test.ts`: 2 passed.
 - `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings after the FileDrop/properties/tenants/leases/units/maintenance/appointments/vendors/owners/applications/deposits/recurring-maintenance/scan/messages UI changes.
+- `rtk env PW_BASE_URL=https://localhost:5807 PW_EMAIL=tsk397.full.1782131040@example.local PW_PASSWORD='AuditPass!23' pnpm --dir web exec playwright test e2e/import.spec.ts --project=chromium --reporter=list`: 1 passed.
+- `rtk pnpm --dir web test:unit`: 84 passed.
+- `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings after the import-page copy fixes.
 - Browser property-label proof on `https://localhost:5807`: `/properties`, type filter, New Property modal, and property detail use landlord-facing labels while preserving API enum values.
 - Browser FileDrop proof on `https://localhost:5807/scan`: dragged unsupported CSV emitted a rejection warning, did not render as the selected file, and did not trigger `POST /api/v1/scans`.
 - Browser properties grid proof on `https://localhost:5807`: initial load and Name sort used `/api/v1/properties/page?take=20...`; no `/api/v1/properties?take=500` grid fetch occurred.
@@ -817,7 +856,6 @@ The current pass is not a complete every-control inventory. The next new-user pa
 - Portal routes `/portal`, `/portal/messages`, `/portal/maintenance`, `/portal/payments`, `/portal/notifications`, `/portal/appointments`, and `/portal/lease`: dashboard links, compose/reply/cancel/delete, Enter vs Shift+Enter, unread invalidation, maintenance request create with photo preview/remove/failure, detail/timeline, Stripe unavailable, checkout success/cancel params, autopay on/off, notification action links/read state, appointment real workflow or placeholder defect, pagination, empty/loading/error states, and optimistic-update failures.
 - `/settings/security` and `/settings/accounting`: every toggle/submit/reset/copy action, confirmations, persistence after reload, provider-unconfigured states, review queue controls, and stale-session failure behavior.
 - `/admin/users`, `/admin/audit`, and `/superadmin/engine`: advanced filters, date ranges, row actions, role/status toggles, generated-password/copy escapes, refresh/reindex actions, exports, no-results states, and loading/error states.
-- `/import`: entity cards, template download, CSV drop/click, non-CSV rejection, dry-run preview, invalid rows, import-valid, result links, import another, and stale preview/file/result clearing when switching entity.
 - `/docs`, public `/apply/[token]`, and public `/sign/[token]`: docs search/results/no results/articles/navigation/404, valid/invalid/expired public application states, scan success/failure/no extracted fields, duplicate application, valid/invalid/expired signing envelopes, PDF open/download, typed/drawn signature, clear, decline modal, terminal states, and provider gates.
 - App shell/navigation: staff versus portal role menus, collapsible groups, collapsed rail, mobile drawer/overlay, command-center search/no matches, header badges, account menu/logout, theme toggle, and role-hidden route gates.
 - Shared controls in composed routes: data grids, pagination, search inputs, confirm dialogs, app-shell navigation, command-center navigation, notification bell/list interactions, keyboard/focus/escape behavior, and select-all/bulk states. FileDrop unsupported-file rejection is fixed and browser-proven for drag/drop on `/scan`; upload failure states still need route-specific coverage.
