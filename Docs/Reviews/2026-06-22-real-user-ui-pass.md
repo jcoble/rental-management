@@ -1121,3 +1121,110 @@ Additional lease-detail evidence:
 - Ledger tab: `Set opening balance` modal saved synthetic balance `$225.30` with note `TSK397 pass3 starting balance`; after API restart with the fix, browser proof showed charged `$225.30`, balance `$225.30`, and explanation `Opening balance carried over from before Rental Command — $225.30 as of Jan 1, 2026.`
 
 Status: Pass for fresh-user PDF scan-first creation of the initial rental spine, lease agreement generation/download, and opening-balance happy path after `TSK397-B021` fix. Camera-image lease, batch/retry/reject, and onboarding scan-first discoverability remain open in this pass.
+
+## Pass 4 Fresh-User Image-First Continuation
+
+Date: 2026-06-22
+Branch: `tsk-397-full-ui-pass-4`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-4`
+
+Local stack:
+- Web: `https://localhost:5837`
+- API: `https://localhost:5836` (`http://localhost:5835`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass4-db`, database `rentalcommand_tsk397_pass4`, host port `5758`
+- Assistant provider: `claude-cli`, model `sonnet`, `Assistant__ImageDetail=low`, `Assistant__UseImageOcr=false`
+- Safe wrapper: `scripts/qa/start-scan-audit-local.sh`; demo data disabled.
+
+Synthetic account:
+- Mina Alvarez Pass 4, `tsk397.pass4.20260622160800@example.local`
+- Chose "Set up my real portfolio" from `/choose-setup`; DB proof before scan showed zero properties, units, tenants, leases, and scan drafts.
+
+Baseline artifacts:
+- `scripts/qa/inventory-web-surfaces.mjs` regenerated `output/qa/web-surface-inventory.{json,md}` with 85 classified routes and no unclassified routes.
+- `scripts/qa/generate-production-scale-scan-fixtures.py` regenerated 480 sanitized PDFs/JPEGs under `output/qa/production-scale-scans`.
+- Baseline checks: `rtk pnpm --dir web test:unit` passed 85/85; `rtk pnpm --dir web check` passed with the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+
+### Camera-Image Scan-First Lease Spine
+
+Acceptance criteria:
+- A brand-new verified live user can create the first rental spine from a camera-style lease image, not only a born-digital PDF.
+- The shared scan engine processes the uploaded image through the same extraction flow used by mobile camera capture.
+- User-reviewed edits persist across property, unit, tenant, and lease creation.
+- The resulting lease exposes the scanned source document and accepts downstream agreement, ledger, document, lifecycle, and history actions without breaking the page.
+
+Evidence:
+- `/onboarding` still landed on the manual property step; scan-first remains discoverable from the sidebar `/scan`, not primary onboarding.
+- `/scan` empty state showed `New rental from your lease`, `Bulk import leases`, document type controls, upload dropzone, voice note, status tabs, and no drafts.
+- Uploaded `output/qa/production-scale-scans/01-leases-camera/lease-002-2b.jpg` through `/scan/new-rental`.
+- Engine proof: `claude-cli extraction: VISION read (application/pdf, no extractable text)` and `Scan extraction succeeded for draft 1 (model claude-cli:sonnet): 14 field(s) with a value -> Lease, Reviewing`.
+- Browser proof:
+  - Step 1 populated Riverside Flats, 1188 Maple Ave, Columbus, OH 43201, Type Single-family.
+  - Step 2 populated Unit 2B and rent `$1200.00`; beds/baths were added manually because the fixture omitted them.
+  - Step 3 populated tenant Blake Hayes; email, phone, and emergency contact were manually supplied.
+  - Step 4 populated lease `QA-2026-002-2B`, Feb 1 2026 to Feb 1 2027, rent/deposit `$1200.00`, due day `1`, status Active.
+  - Step 5 review listed Property/Unit/Tenant/Lease; `Confirm & create` navigated to `/leases/1`.
+- DB proof: lease `QA-2026-002-2B`, rent `1200.00`, property Riverside Flats, unit 2B, beds/baths `2/1`, tenant Blake Hayes email `blake.hayes.tsk397@example.local`.
+- Source document proof: `/lease-file/1` rendered the generated camera-image content; lease overview later rendered an image preview and `Open full size`.
+
+Status: Pass for image-first creation of the initial property/unit/tenant/lease spine. The upload path stores the camera image through the lease-file proxy as a normalized scan file; continue watching wording/preview consistency when more camera sources are tested.
+
+### Lease Detail Continuation
+
+Acceptance criteria:
+- Active lease agreement actions show safe states and download generated PDFs.
+- Ledger opening-balance cents remain correctly formatted.
+- Lease document upload/download works for camera-style JPEG attachments.
+- Lifecycle actions require confirmation and render user-facing status labels in header, cards, and audit history.
+- Edit mode must expose editable fields no matter which tab the user started from.
+- Destructive actions can be opened to their confirmation dialog and cancelled without mutation.
+
+Evidence:
+- Agreement tab blocked active-lease send-for-signature with explanatory copy, generated a lease agreement, and downloaded `.playwright-cli/lease-agreement-1.pdf` (`81K`).
+- Ledger `Set opening balance` saved `$300.15`; summary cards, entry text, and the "Why this is here" popover all rendered `$300.15`.
+- Uploaded `output/qa/production-scale-scans/01-leases-camera/lease-003-3c.jpg` from lease Documents; detail listed `lease-003-3c.jpg`, `lease-1-agreement.pdf`, and the original scan. Downloaded document remained a real JPEG (`1800x2400`, 145.1K).
+- Document delete opened a confirmation and was cancelled.
+- Give Notice required a dialog with optional move-out date; Set Active required a separate confirmation. Both actions saved and refreshed the lease.
+- Lease Delete opened `Delete lease QA-2026-002-2B? This cannot be undone.` and was cancelled.
+
+New pass-4 findings:
+- `TSK397-B022` — Lease History says "Every recorded change to this lease", but opening-balance save, agreement generation, and document upload did not appear in the lease history. Only direct lease updates were visible. This remains open because the intended cross-entity history scope needs a product decision.
+- `TSK397-B023` — Give Notice and History diff leaked raw `NoticeGiven` enum text. Fix: shared status label helper formats status badges, inline fields, select labels, and audit status diffs as user-facing labels. Regressions: `web/src/lib/utils/status-labels.test.ts`; browser proof showed `Notice given -> Active` in the expanded audit diff.
+- `TSK397-B024` — Pressing `Edit` while on the History tab switched the page into edit mode but left History visible, so no editable fields appeared until the user manually changed tabs. Fix: lease edit now moves to Overview before entering edit mode. Regression: `web/src/lib/leases/lease-detail-state.test.ts`; browser proof from History showed Overview selected with editable fields visible.
+
+Verification after fixes:
+- `rtk pnpm --dir web test:unit -- status-labels lease-detail-state` passed 91/91.
+- `rtk pnpm --dir web check` passed with the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+- Browser reload on `/leases/1` showed the lease header and overview status as `Active`, History expanded row as `Notice given -> Active`, and Edit-from-History landing on Overview with editable fields visible.
+
+Status: Pass after fixes for the covered lease-detail workflows. Lease-related child history scope remains open as `TSK397-B022`.
+
+### Unit Command Center Start
+
+Acceptance criteria:
+- Lease detail links land on the correct unit workspace tab and preserve deep links across reloads.
+- The unit workspace supports normal property-manager actions from the lease, rent, and maintenance tabs without leaving the user at a dead end.
+- Payment and work-order creation expose validation before save, persist the intended record, and reflect the result in unit header chips, tab content, and recent activity.
+
+Evidence:
+- Navigated from lease overview to Unit 2B at `/units/1?tab=lease`; Lease tab showed current lease `QA-2026-002-2B`, tenant Blake Hayes, rent `$1200.00`, `Open lease`, and `Scan/upload lease`.
+- Header chips updated from the live unit state: rent current, `0/1 open repairs` after the work order was added, lease ends in 224 days, 3 docs, and Blake Hayes.
+- Rent tab:
+  - Empty state rendered outstanding balance `$0.00` and no payments.
+  - `Post payment` opened the form; empty submit produced `Amount is required`.
+  - Saved synthetic rent payment `$300.15`, date 2026-06-22, status Paid, type Rent.
+  - The row appeared as `Jun 22, 2026 · Rent`, `Paid`, `$300.15`; recent activity linked to `/accounting/payments/1`.
+  - Inline payment detail expanded and edit mode saved harmless method `Cash`.
+- Maintenance tab:
+  - Empty state rendered no work orders and no receipts.
+  - `New work order` opened the form; empty submit produced `Title is required` and `Description is required`.
+  - Created `Bathroom sink drain leak` with synthetic P-trap description, Normal priority, New status, General category.
+  - Unit header updated to `1 open repair`; Maintenance tab row expanded with description/category/requested/cost and `Open work order`, which navigated to `/maintenance/1`.
+
+New pass-4 findings:
+- `TSK397-B025` — Same-route Unit Command Center deep links changed the URL but not the visible tab. Repro: from `/units/1?tab=lease`, click the `Rent on track` overview link; URL became `?tab=rent` while the Lease tab remained selected. Fix: shared `resolveUnitTab` helper initializes and reacts to `page.url.searchParams.get('tab')`, and tab changes normalize arbitrary values before writing the URL. Regression: `web/src/lib/components/unit/unit-tabs.test.ts`; browser proof showed `/units/1?tab=rent` selecting the Rent tab after reload and same-route navigation.
+
+Verification after Unit Command Center fix:
+- `rtk pnpm --dir web test:unit -- unit-tabs status-labels lease-detail-state` passed 93/93.
+- `rtk pnpm --dir web check` passed with the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+
+Status: Pass for the covered lease, rent, and maintenance unit workflows after the tab-sync fix. Remaining unit tabs still need the continuation pass: work-order detail actions, Documents, Expenses, Timeline, and lifecycle actions beyond opening/cancelling destructive confirmations.
