@@ -470,9 +470,28 @@ public class ReportsService : IReportsService
                     ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) : 0m),
                 Over90 = g.Sum(p => p.DueDate < d90
                     ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) : 0m),
+                Total = g.Sum(p => p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount),
                 OldestDueDate = g.Min(p => p.DueDate),
             })
+            .OrderBy(g => g.OldestDueDate)
+            .ThenByDescending(g => g.Total)
             .ToListAsync(ct);
+
+        var totals = await owed
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Current = g.Sum(p => p.DueDate >= current
+                    ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) : 0m),
+                Days31To60 = g.Sum(p => p.DueDate < current && p.DueDate >= d60
+                    ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) : 0m),
+                Days61To90 = g.Sum(p => p.DueDate < d60 && p.DueDate >= d90
+                    ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) : 0m),
+                Over90 = g.Sum(p => p.DueDate < d90
+                    ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) : 0m),
+                TotalOutstanding = g.Sum(p => p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount),
+            })
+            .SingleOrDefaultAsync(ct);
 
         var rows = grouped
             .Select(g =>
@@ -494,30 +513,28 @@ public class ReportsService : IReportsService
                     TenantId = g.Key.TenantId,
                     TenantName = $"{g.Key.TenantFirst} {g.Key.TenantLast}".Trim(),
                     Buckets = buckets,
-                    Total = buckets.Current + buckets.Days31To60 + buckets.Days61To90 + buckets.Over90,
+                    Total = g.Total,
                     // Oldest age from the single per-lease Min(DueDate) — derived from an aggregate, not
                     // by scanning rows.
                     OldestOverdueDays = AgeInDays(g.OldestDueDate, asOf),
                 };
             })
-            .OrderByDescending(r => r.OldestOverdueDays)
-            .ThenByDescending(r => r.Total)
             .ToList();
 
-        var totals = new DelinquencyBuckets
+        var totalBuckets = new DelinquencyBuckets
         {
-            Current = rows.Sum(r => r.Buckets.Current),
-            Days31To60 = rows.Sum(r => r.Buckets.Days31To60),
-            Days61To90 = rows.Sum(r => r.Buckets.Days61To90),
-            Over90 = rows.Sum(r => r.Buckets.Over90),
+            Current = totals?.Current ?? 0m,
+            Days31To60 = totals?.Days31To60 ?? 0m,
+            Days61To90 = totals?.Days61To90 ?? 0m,
+            Over90 = totals?.Over90 ?? 0m,
         };
 
         return new DelinquencyResponse
         {
             AsOf = asOf,
             Rows = rows,
-            Totals = totals,
-            TotalOutstanding = rows.Sum(r => r.Total),
+            Totals = totalBuckets,
+            TotalOutstanding = totals?.TotalOutstanding ?? 0m,
         };
     }
 
@@ -589,6 +606,12 @@ public class ReportsService : IReportsService
             .ToListAsync(ct))
             .ToDictionary(r => (r.Year, r.Month), r => r.Total);
 
+        var totalIncome = await incomeQuery
+            .SumAsync(p => (decimal?)(p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount), ct) ?? 0m;
+
+        var totalExpense = await expenseQuery
+            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
+
         var months = EnumerateMonths(from, to)
             .Select(m =>
             {
@@ -612,9 +635,9 @@ public class ReportsService : IReportsService
             From = from,
             To = to,
             Months = months,
-            TotalIncome = months.Sum(m => m.Income),
-            TotalExpense = months.Sum(m => m.Expense),
-            TotalNet = months.Sum(m => m.Net),
+            TotalIncome = totalIncome,
+            TotalExpense = totalExpense,
+            TotalNet = totalIncome - totalExpense,
         };
     }
 
@@ -1395,19 +1418,31 @@ public class ReportsService : IReportsService
             })
             .ToListAsync(ct);
 
-        var open = rows.Count(r => r.Status is WorkOrderStatus.New or WorkOrderStatus.Scheduled
-            or WorkOrderStatus.InProgress or WorkOrderStatus.WaitingParts or WorkOrderStatus.OnHold);
-        var completed = rows.Count(r => r.Status == WorkOrderStatus.Completed);
+        var summary = await q
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                TotalCount = g.Count(),
+                OpenCount = g.Count(w =>
+                    w.Status == WorkOrderStatus.New ||
+                    w.Status == WorkOrderStatus.Scheduled ||
+                    w.Status == WorkOrderStatus.InProgress ||
+                    w.Status == WorkOrderStatus.WaitingParts ||
+                    w.Status == WorkOrderStatus.OnHold),
+                CompletedCount = g.Count(w => w.Status == WorkOrderStatus.Completed),
+                TotalActualCost = g.Sum(w => w.ActualCost) ?? 0m,
+            })
+            .SingleOrDefaultAsync(ct);
 
         return new WorkOrderReportResponse
         {
             From = from,
             To = to,
             Rows = rows,
-            TotalCount = rows.Count,
-            OpenCount = open,
-            CompletedCount = completed,
-            TotalActualCost = rows.Sum(r => r.ActualCost ?? 0m),
+            TotalCount = summary?.TotalCount ?? 0,
+            OpenCount = summary?.OpenCount ?? 0,
+            CompletedCount = summary?.CompletedCount ?? 0,
+            TotalActualCost = summary?.TotalActualCost ?? 0m,
         };
     }
 

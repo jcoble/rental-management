@@ -164,6 +164,41 @@ public class ReportsServiceTests : IDisposable
         report.TotalOutstanding.Should().Be(1750m);
     }
 
+    [Fact]
+    public async Task GetDelinquencyAsync_OrdersAndTotalsInSql()
+    {
+        var now = DateTime.UtcNow;
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+        var older = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+        var newer = SeedLease(maple, SeedUnit("2", maple.Id), SeedTenant("Bea", "Birch"), rent: 900m);
+        var excluded = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Cal", "Cedar"), rent: 800m);
+
+        SeedPayment(older, 1000m, dueDate: now.AddDays(-75), PaymentStatus.Late);
+        SeedPayment(newer, 900m, dueDate: now.AddDays(-10), PaymentStatus.Scheduled);
+        SeedPayment(excluded, 800m, dueDate: now.AddDays(-120), PaymentStatus.Late);
+
+        _executedSql.Clear();
+
+        var report = await _sut.GetDelinquencyAsync(PortfolioId, new ReportRangeQuery
+        {
+            PropertyIds = [maple.Id],
+        }, CancellationToken.None);
+
+        report.Rows.Should().HaveCount(2);
+        report.Rows[0].LeaseId.Should().Be(older.Id);
+        report.Rows[1].LeaseId.Should().Be(newer.Id);
+        report.TotalOutstanding.Should().Be(1900m);
+        report.Totals.Current.Should().Be(900m);
+        report.Totals.Days61To90.Should().Be(1000m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        sql.Should().Contain("GROUP BY", "delinquency buckets must be grouped per lease in SQL");
+        sql.Should().Contain("ORDER BY", "delinquency row ordering must run in SQL");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("bucket and total amounts must be summed in SQL");
+    }
+
     // ── General Ledger running balance (DB) ────────────────────────────────────────────────────────
 
     [Fact]
@@ -423,6 +458,37 @@ public class ReportsServiceTests : IDisposable
         // accept either so the assertion proves DB-side aggregation regardless of provider.
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("the period total must be summed in the database");
+    }
+
+    [Fact]
+    public async Task GetCashFlowAsync_TotalsAreSummedInSql()
+    {
+        var property = SeedProperty("Maple");
+        var lease = SeedLease(property, SeedUnit("1", property.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+
+        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedPayment(lease, 500m, dueDate: D(2026, 2, 1), PaymentStatus.Paid, paidDate: D(2026, 2, 5));
+        SeedExpense(property.Id, 250m, paidAt: D(2026, 1, 20));
+
+        _executedSql.Clear();
+
+        var report = await _sut.GetCashFlowAsync(PortfolioId, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 2, 28),
+            PropertyIds = [property.Id],
+        }, CancellationToken.None);
+
+        report.TotalIncome.Should().Be(1500m);
+        report.TotalExpense.Should().Be(250m);
+        report.TotalNet.Should().Be(1250m);
+
+        var totalSql = _executedSql
+            .Where(sql => sql.Contains("SUM", StringComparison.OrdinalIgnoreCase) &&
+                          !sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        totalSql.Should().NotBeEmpty("cash-flow grand totals must be summed in SQL, not from month DTOs");
     }
 
     // ── Property P&L Summary (DB) ─────────────────────────────────────────────────────────────────
@@ -718,6 +784,39 @@ public class ReportsServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetWorkOrdersAsync_CountsAndSumsInSql()
+    {
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+
+        SeedWorkOrder(maple, "Leaking sink", D(2026, 1, 5), WorkOrderStatus.New, actualCost: 125.50m);
+        SeedWorkOrder(maple, "Replace lock", D(2026, 1, 10), WorkOrderStatus.Completed, actualCost: 300m);
+        SeedWorkOrder(oak, "Oak repair", D(2026, 1, 8), WorkOrderStatus.Completed, actualCost: 999m);
+        SeedWorkOrder(maple, "Old request", D(2025, 12, 25), WorkOrderStatus.InProgress, actualCost: 50m);
+
+        _executedSql.Clear();
+
+        var report = await _sut.GetWorkOrdersAsync(PortfolioId, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+            PropertyIds = [maple.Id],
+        }, CancellationToken.None);
+
+        report.Rows.Should().HaveCount(2);
+        report.TotalCount.Should().Be(2);
+        report.OpenCount.Should().Be(1);
+        report.CompletedCount.Should().Be(1);
+        report.TotalActualCost.Should().Be(425.50m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        sql.Should().Contain("ORDER BY", "work-order row sorting must run in SQL");
+        sql.Should().Contain("COUNT", "summary counts must be computed in SQL");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("actual-cost rollup must be summed in SQL");
+    }
+
+    [Fact]
     public void GetCatalog_GroupsReportsByCategory_WithKeysTitlesEndpointsAndParams()
     {
         var catalog = _sut.GetCatalog();
@@ -859,6 +958,32 @@ public class ReportsServiceTests : IDisposable
         _db.Expenses.Add(expense);
         _db.SaveChanges();
         return expense;
+    }
+
+    private WorkOrder SeedWorkOrder(
+        Property property,
+        string title,
+        DateTime requestedAt,
+        WorkOrderStatus status,
+        decimal? actualCost = null)
+    {
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            Title = title,
+            Description = title,
+            Category = "General",
+            Priority = WorkOrderPriority.Normal,
+            Status = status,
+            RequestedAt = requestedAt,
+            CompletedAt = status == WorkOrderStatus.Completed ? requestedAt.AddDays(1) : null,
+            ActualCost = actualCost,
+            UpdatedAt = requestedAt,
+        };
+        _db.WorkOrders.Add(workOrder);
+        _db.SaveChanges();
+        return workOrder;
     }
 
     private Loan SeedLoan(int propertyId, bool escrowCoversTaxes = false, bool escrowCoversInsurance = false,
