@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { leases } from '$lib/api/endpoints/leases';
+	import { tabForLeaseEdit } from '$lib/leases/lease-detail-state';
 	import { canSendLeaseForSignature, signableStateMessage } from '$lib/leases/lease-esign';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
@@ -16,6 +17,7 @@
 	import { leaseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
@@ -406,6 +408,7 @@
 		};
 		formPropertyId = String(lease.propertyId);
 		formErrors = {};
+		activeTab = tabForLeaseEdit(activeTab);
 		editing = true;
 	}
 	function cancelEditing() {
@@ -428,7 +431,7 @@
 	}
 
 	// Select options for inline FK/enum fields
-	const statusOptions = $derived(LEASE_STATUSES.map((value) => ({ value, label: value })));
+	const statusOptions = $derived(LEASE_STATUSES.map((value) => ({ value, label: formatStatusLabel(value) })));
 	const propertyOptions = $derived([
 		{ value: '', label: 'Select property' },
 		...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
@@ -699,7 +702,7 @@
 						     and is optional/clearable, so it gets its own editable date field. -->
 						{@render dateField({ label: 'Move-In', value: form.moveInDate, setValue: (v) => (form.moveInDate = v), display: formatDate(lease.moveInDate), error: formErrors.moveInDate, testid: 'lease-detail-move-in' })}
 						<InlineField label="Rent Due Day" bind:value={form.rentDueDay} display={`Day ${lease.rentDueDay}`} {editing} type="number" error={formErrors.rentDueDay} testid="lease-detail-due-day" />
-						<InlineField label="Status" bind:value={form.status} display={lease.status} {editing} type="select" options={statusOptions} error={formErrors.status} testid="lease-detail-status" />
+						<InlineField label="Status" bind:value={form.status} display={formatStatusLabel(lease.status)} {editing} type="select" options={statusOptions} error={formErrors.status} testid="lease-detail-status" />
 						{#if !editing && lease.moveOutDate}
 							<div>
 								<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-Out</dt>

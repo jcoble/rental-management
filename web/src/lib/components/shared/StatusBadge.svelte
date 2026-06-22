@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { cn } from '$lib/utils.js';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 
 	/**
 	 * Default semantic color map keyed by status string.
@@ -40,7 +41,7 @@
 		// Informational / in-progress
 		Pending: { class: TONE.info },
 		Scheduled: { class: TONE.info },
-		InProgress: { label: 'In Progress', class: TONE.info },
+		InProgress: { label: 'In progress', class: TONE.info },
 		Open: { class: TONE.info },
 		Reviewing: { class: TONE.info },
 		Returned: { class: TONE.info },
@@ -57,8 +58,9 @@
 		Partial: { class: TONE.warning },
 		Late: { class: TONE.warning },
 		Waived: { class: TONE.warning },
-		OnHold: { label: 'On Hold', class: TONE.warning },
-		PendingSignature: { label: 'Pending Signature', class: TONE.warning },
+		NoticeGiven: { label: 'Notice given', class: TONE.warning },
+		OnHold: { label: 'On hold', class: TONE.warning },
+		PendingSignature: { label: 'Pending signature', class: TONE.warning },
 		Expired: { class: TONE.warning },
 		// Negative / alert
 		Overdue: { class: TONE.error },
@@ -89,7 +91,7 @@
 
 	const effectiveMap = $derived({ ...DEFAULT_MAP, ...(map ?? {}) });
 	const entry = $derived(effectiveMap[status]);
-	const label = $derived(entry?.label ?? status);
+	const label = $derived(entry?.label ?? formatStatusLabel(status));
 	const colorClass = $derived(entry?.class ?? TONE.neutral);
 </script>
 
