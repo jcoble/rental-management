@@ -55,10 +55,13 @@ public class AccountingController : ManagementControllerBase
     /// </summary>
     [HttpGet("year-end")]
     [ProducesResponseType(typeof(YearEndViewResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<YearEndViewResponse>> YearEnd([FromQuery] int? year, CancellationToken ct)
+    public async Task<ActionResult<YearEndViewResponse>> YearEnd(
+        [FromQuery] int? year,
+        [FromQuery] int? propertyId,
+        CancellationToken ct)
     {
         var reportYear = year ?? DateTime.UtcNow.Year - 1;
-        var result = await _reports.GetYearEndAsync(GetPortfolioId(), reportYear, ct);
+        var result = await _reports.GetYearEndAsync(GetPortfolioId(), reportYear, propertyId, ct);
         return Ok(result);
     }
 
@@ -123,10 +126,13 @@ public class AccountingController : ManagementControllerBase
     /// </summary>
     [HttpGet("schedule-e")]
     [ProducesResponseType(typeof(ScheduleEReport), StatusCodes.Status200OK)]
-    public async Task<ActionResult<ScheduleEReport>> ScheduleE([FromQuery] int? year, CancellationToken ct)
+    public async Task<ActionResult<ScheduleEReport>> ScheduleE(
+        [FromQuery] int? year,
+        [FromQuery] int? propertyId,
+        CancellationToken ct)
     {
         var reportYear = year ?? DateTime.UtcNow.Year;
-        var report = await _scheduleE.GetReportAsync(GetPortfolioId(), reportYear, ct);
+        var report = await _scheduleE.GetReportAsync(GetPortfolioId(), reportYear, propertyId, ct);
         return Ok(report);
     }
 
@@ -141,7 +147,7 @@ public class AccountingController : ManagementControllerBase
     public async Task<IActionResult> ScheduleEExport([FromQuery] int? year, CancellationToken ct)
     {
         var reportYear = year ?? DateTime.UtcNow.Year;
-        var report = await _scheduleE.GetReportAsync(GetPortfolioId(), reportYear, ct);
+        var report = await _scheduleE.GetReportAsync(GetPortfolioId(), reportYear, ct: ct);
 
         var csv = BuildCsv(report);
         var bytes = Encoding.UTF8.GetBytes(csv);

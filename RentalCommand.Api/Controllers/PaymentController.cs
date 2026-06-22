@@ -39,6 +39,15 @@ public class PaymentController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(PaymentListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PaymentListResponse>> ListPage(
+        [FromQuery] ListQuery query, [FromQuery] int? leaseId, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), leaseId, query, ct);
+        return Ok(page);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(PaymentResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -82,6 +91,18 @@ public class PaymentController : ManagementControllerBase
     {
         var updated = await _service.MarkPaidAsync(GetPortfolioId(), id, request ?? new MarkPaidRequest(), ct);
         return updated == null ? NotFound(new { error = "Payment not found" }) : Ok(updated);
+    }
+
+    [HttpPost("leases/{leaseId:int}/past-due/mark-paid")]
+    [ProducesResponseType(typeof(MarkLeasePastDuePaidResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<MarkLeasePastDuePaidResponse>> MarkLeasePastDuePaid(
+        int leaseId,
+        [FromBody] MarkPaidRequest? request,
+        CancellationToken ct)
+    {
+        var result = await _service.MarkLeasePastDuePaidAsync(GetPortfolioId(), leaseId, request ?? new MarkPaidRequest(), ct);
+        return result == null ? NotFound(new { error = "Lease not found" }) : Ok(result);
     }
 
     [HttpDelete("{id:int}")]

@@ -42,6 +42,16 @@ public class TenantResponse
     };
 }
 
+public class TenantListResponse
+{
+    public IReadOnlyList<TenantResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
+public class TenantListQuery : ListQuery;
+
 public class CreateTenantRequest
 {
     [Required]

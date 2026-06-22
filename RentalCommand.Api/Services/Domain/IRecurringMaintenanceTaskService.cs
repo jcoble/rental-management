@@ -12,6 +12,7 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IRecurringMaintenanceTaskService
 {
     Task<IReadOnlyList<RecurringMaintenanceTaskResponse>> ListAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default);
+    Task<RecurringMaintenanceTaskListResponse> ListPageAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default);
     Task<RecurringMaintenanceTaskResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
     Task<RecurringMaintenanceTaskResponse?> CreateAsync(int portfolioId, CreateRecurringMaintenanceTaskRequest request, CancellationToken ct = default);
     Task<RecurringMaintenanceTaskResponse?> UpdateAsync(int portfolioId, int id, UpdateRecurringMaintenanceTaskRequest request, CancellationToken ct = default);

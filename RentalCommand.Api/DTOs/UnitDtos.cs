@@ -73,6 +73,19 @@ public class UnitHealthResponse
     public string TestId => $"unit-{Id}";
 }
 
+public class UnitHealthListResponse
+{
+    public IReadOnlyList<UnitHealthResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
+public class UnitHealthListQuery : ListQuery
+{
+    public int? PropertyId { get; set; }
+}
+
 public class CreateUnitRequest
 {
     [Required]

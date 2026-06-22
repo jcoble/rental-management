@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
+	import { untrack } from 'svelte';
 	import type { UnitDashboard, Payment } from '$lib/types';
 	import { payments as paymentsApi } from '$lib/api/endpoints/payments';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -28,21 +29,56 @@
 
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived', 'Failed', 'Refunded'];
+	const PAYMENT_PAGE_SIZE = 20;
 	const today = () => new Date().toISOString().slice(0, 10);
 
 	// Payments for the unit's current lease (the dominant case). The filter is DB-side (?leaseId=).
+	let paymentPage = $state(1);
+	let paymentItems = $state<Payment[]>([]);
 	const paymentsQuery = createQuery(() => ({
-		queryKey: ['payments', portfolioId, { leaseId }],
+		queryKey: ['payments', portfolioId, { leaseId }, paymentPage, PAYMENT_PAGE_SIZE],
 		enabled: !!leaseId && portfolioId > 0,
-		queryFn: () => paymentsApi.list(portfolioId, { leaseId, take: 500 }),
+		queryFn: () => paymentsApi.listPage(portfolioId, {
+			leaseId,
+			skip: (paymentPage - 1) * PAYMENT_PAGE_SIZE,
+			take: PAYMENT_PAGE_SIZE,
+			sort: 'dueDate',
+		}),
 	}));
 
-	const list = $derived(paymentsQuery.data ?? []);
+	$effect(() => {
+		void leaseId;
+		paymentPage = 1;
+		paymentItems = [];
+	});
+
+	$effect(() => {
+		const page = paymentsQuery.data;
+		if (!page) return;
+		if (page.skip === 0) {
+			paymentItems = page.items;
+			return;
+		}
+		const currentItems = untrack(() => paymentItems);
+		const seen = new Set(currentItems.map((p) => p.id));
+		paymentItems = [...currentItems, ...page.items.filter((p) => !seen.has(p.id))];
+	});
+
+	const list = $derived(paymentItems);
+	const totalPayments = $derived(paymentsQuery.data?.totalCount ?? paymentItems.length);
+	const hasMorePayments = $derived(paymentItems.length < totalPayments);
 
 	function invalidate() {
+		paymentItems = [];
+		paymentPage = 1;
 		queryClient.invalidateQueries({ queryKey: ['payments', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['unit-dashboard', dashboard.unit.id] });
 		queryClient.invalidateQueries({ queryKey: ['unit-timeline', dashboard.unit.id] });
+	}
+
+	function loadMorePayments() {
+		if (paymentsQuery.isFetching || !hasMorePayments) return;
+		paymentPage += 1;
 	}
 
 	// ── Inline "post payment" create form (reuses the app's paymentSchema + form conventions) ──
@@ -259,5 +295,12 @@
 				</li>
 			{/each}
 		</ul>
+		{#if hasMorePayments}
+			<div class="flex justify-center">
+				<Button variant="outline" size="sm" onclick={loadMorePayments} disabled={paymentsQuery.isFetching} data-testid="rent-load-more">
+					{paymentsQuery.isFetching ? 'Loading…' : 'Load more'}
+				</Button>
+			</div>
+		{/if}
 	{/if}
 </div>

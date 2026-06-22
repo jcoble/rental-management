@@ -792,9 +792,17 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(4000)
                         .HasColumnType("character varying(4000)");
 
+                    b.Property<string>("ExternalAccountIdHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<string>("ExternalItemIdCipherText")
                         .HasMaxLength(4000)
                         .HasColumnType("character varying(4000)");
+
+                    b.Property<string>("ExternalItemIdHash")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
 
                     b.Property<string>("InstitutionName")
                         .IsRequired()
@@ -829,6 +837,8 @@ namespace RentalCommand.Data.Migrations
                     b.HasIndex("PortfolioId");
 
                     b.HasIndex("Status");
+
+                    b.HasIndex("PortfolioId", "Provider", "ExternalItemIdHash", "ExternalAccountIdHash");
 
                     b.ToTable("BankConnections");
                 });
@@ -3218,6 +3228,10 @@ namespace RentalCommand.Data.Migrations
                     b.Property<string>("DeductionsJson")
                         .IsRequired()
                         .HasColumnType("jsonb");
+
+                    b.Property<decimal>("DeductionsTotal")
+                        .HasPrecision(18, 2)
+                        .HasColumnType("numeric(18,2)");
 
                     b.Property<DateTime>("HeldAt")
                         .HasColumnType("timestamp with time zone");

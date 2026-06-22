@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveStateCode } from './resolve-state.ts';
+import { commitStateInput, resolveStateCode } from './resolve-state.ts';
 import { US_STATES, US_TERRITORIES } from '../../data/us-states.ts';
 
 const items = US_STATES.map((s) => ({ value: s.code, label: `${s.name} (${s.code})` }));
@@ -86,4 +86,11 @@ test('territories resolve when included ("Guam" -> GU)', () => {
 
 test('typed text equal to the current label is a no-op (stays selected)', () => {
 	assert.equal(resolveStateCode({ typed: 'Ohio (OH)', items, currentValue: 'OH' }), 'OH');
+});
+
+test('typed state text in a closed combobox commits to code and display label', () => {
+	assert.deepEqual(commitStateInput({ typed: 'OH', items, currentValue: '' }), {
+		value: 'OH',
+		label: 'Ohio (OH)'
+	});
 });

@@ -102,6 +102,14 @@ public class ExpenseResponse
     };
 }
 
+public class ExpenseListResponse
+{
+    public IReadOnlyList<ExpenseResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
 /// <summary>One typed line item returned on an <see cref="ExpenseResponse"/>.</summary>
 public class ExpenseLineItemResponse
 {

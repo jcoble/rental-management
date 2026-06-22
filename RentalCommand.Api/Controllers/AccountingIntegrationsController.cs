@@ -187,14 +187,19 @@ public class AccountingIntegrationsController : ManagementControllerBase
     [HttpGet("{provider}/mappings")]
     [ProducesResponseType(typeof(IReadOnlyList<AccountingMappingResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<IReadOnlyList<AccountingMappingResponse>>> Mappings(string provider, CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<AccountingMappingResponse>>> Mappings(
+        string provider,
+        [FromQuery] bool? confirmed,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 50,
+        CancellationToken ct = default)
     {
         if (!TryParseProvider(provider, out var parsed))
         {
             return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
         }
 
-        return Ok(await _service.GetMappingsAsync(GetPortfolioId(), parsed, ct));
+        return Ok(await _service.GetMappingsAsync(GetPortfolioId(), parsed, confirmed, skip, take, ct));
     }
 
     /// <summary>
@@ -227,14 +232,18 @@ public class AccountingIntegrationsController : ManagementControllerBase
     [HttpGet("{provider}/review-queue")]
     [ProducesResponseType(typeof(IReadOnlyList<AccountingReviewItemResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<ActionResult<IReadOnlyList<AccountingReviewItemResponse>>> ReviewQueue(string provider, CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<AccountingReviewItemResponse>>> ReviewQueue(
+        string provider,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 50,
+        CancellationToken ct = default)
     {
         if (!TryParseProvider(provider, out var parsed))
         {
             return BadRequest(new { error = $"Unknown accounting provider '{provider}'." });
         }
 
-        return Ok(await _service.GetReviewQueueAsync(GetPortfolioId(), parsed, ct));
+        return Ok(await _service.GetReviewQueueAsync(GetPortfolioId(), parsed, skip, take, ct));
     }
 
     private static bool TryParseProvider(string provider, out AccountingProvider parsed) =>

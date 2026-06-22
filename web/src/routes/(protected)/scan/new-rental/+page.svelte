@@ -17,7 +17,7 @@
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
 	import { propertySchema, unitSchema, tenantSchema, leaseSchema, parseForm } from '$lib/schemas';
 	import { toLeasePrefill, type PrefillConfidence } from '$lib/scan/lease-prefill';
-	import { findNewRentalExistingUnitId, seedNewRentalLateFeeAmount } from '$lib/scan/new-rental-state';
+	import { createNewRentalPropertyForm, findNewRentalExistingUnitId, seedNewRentalLateFeeAmount } from '$lib/scan/new-rental-state';
 	import { stitchImagesToPdf } from '$lib/scan/stitch-pdf';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 
@@ -35,7 +35,7 @@
 	const TOTAL = STEP_LABELS.length;
 
 	// ----- the four step forms (string-bound, schema-validated) -----
-	let propertyForm = $state({ name: '', type: 'SingleFamily', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '' });
+	let propertyForm = $state(createNewRentalPropertyForm());
 	let unitForm = $state({ unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' });
 	let tenantForm = $state({ firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' });
 	let leaseForm = $state({ leaseNumber: '', startDate: '', endDate: '', monthlyRent: '', securityDeposit: '', lateFeeAmount: '', rentDueDay: '1', status: 'Active', notes: '' });
@@ -257,6 +257,9 @@
 		// tenant: always create/match by name from the tenant step (no tenant linking in this flow yet)
 		const fullName = `${tenantForm.firstName} ${tenantForm.lastName}`.trim();
 		if (fullName) o.tenantName = fullName;
+		if (tenantForm.email.trim()) o.tenantEmail = tenantForm.email.trim();
+		if (tenantForm.phone.trim()) o.tenantPhone = tenantForm.phone.trim();
+		if (tenantForm.emergencyContact.trim()) o.tenantEmergencyContact = tenantForm.emergencyContact.trim();
 		// lease terms
 		o.leaseNumber = leaseForm.leaseNumber.trim();
 		o.startDate = leaseForm.startDate;

@@ -119,7 +119,7 @@ public class NotificationService : INotificationService
             Type = "System",
             Title = request.Title.Trim(),
             Message = request.Message.Trim(),
-            Severity = string.IsNullOrWhiteSpace(request.Severity) ? "Info" : request.Severity.Trim(),
+            Severity = NormalizeSeverity(request.Severity),
             ActionUrl = string.IsNullOrWhiteSpace(request.ActionUrl) ? null : request.ActionUrl.Trim(),
             CreatedAt = DateTime.UtcNow,
         };
@@ -128,6 +128,23 @@ public class NotificationService : INotificationService
         await _db.SaveChangesAsync(ct);
 
         return NotificationResponse.FromEntity(notification);
+    }
+
+    private static string NormalizeSeverity(string? severity)
+    {
+        if (string.IsNullOrWhiteSpace(severity))
+        {
+            return "Info";
+        }
+
+        return severity.Trim().ToLowerInvariant() switch
+        {
+            "success" => "Success",
+            "warning" => "Warning",
+            "error" => "Error",
+            "critical" => "Critical",
+            _ => "Info",
+        };
     }
 
     public async Task<NotificationEmailResponse> GetNotificationEmailAsync(int portfolioId, CancellationToken ct = default)

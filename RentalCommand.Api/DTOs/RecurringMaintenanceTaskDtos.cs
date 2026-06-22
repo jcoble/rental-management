@@ -12,6 +12,7 @@ public class RecurringMaintenanceTaskResponse
     public int PropertyId { get; set; }
     public int? UnitId { get; set; }
     public int? VendorId { get; set; }
+    public string? PropertyName { get; set; }
     public string Title { get; set; } = string.Empty;
     public string? Description { get; set; }
     public string? Category { get; set; }
@@ -33,6 +34,7 @@ public class RecurringMaintenanceTaskResponse
         PropertyId = e.PropertyId,
         UnitId = e.UnitId,
         VendorId = e.VendorId,
+        PropertyName = e.Property?.Name,
         Title = e.Title,
         Description = e.Description,
         Category = e.Category,
@@ -44,6 +46,14 @@ public class RecurringMaintenanceTaskResponse
         CreatedAt = e.CreatedAt,
         UpdatedAt = e.UpdatedAt,
     };
+}
+
+public class RecurringMaintenanceTaskListResponse
+{
+    public IReadOnlyList<RecurringMaintenanceTaskResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
 }
 
 public class CreateRecurringMaintenanceTaskRequest

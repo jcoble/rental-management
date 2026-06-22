@@ -159,6 +159,35 @@ public class ScanServiceTests : IDisposable
         _audit.Calls[0].operation.Should().Be(AuditLogOperation.Created);
     }
 
+    [Fact]
+    public async Task ConfirmAndCreateAsync_ReviewingExpenseDraft_WithExistingVendorName_LinksVendor()
+    {
+        const string extractedJson =
+            """{"vendor_name":{"value":"clearline plumbing","confidence":0.92},"amount":{"value":"286.45","confidence":0.9},"transaction_date":{"value":"2026-06-22","confidence":0.9},"document_kind":{"value":"Receipt","confidence":0.9}}""";
+
+        var now = DateTime.UtcNow;
+        var vendor = new Vendor
+        {
+            PortfolioId = PortfolioId,
+            Name = "Clearline Plumbing",
+            ServiceType = "Plumbing",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Vendors.Add(vendor);
+        await _db.SaveChangesAsync();
+
+        var draft = SeedDraft("Reviewing", extractedJson);
+        SeedStoredFile(draft.FilePath);
+        _expenses.SetupResponse(new ExpenseResponse { Id = 100, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _expenses.LastRequest.Should().NotBeNull();
+        _expenses.LastRequest!.VendorId.Should().Be(vendor.Id);
+    }
+
     // -------------------------------------------------------------------------
     // Confirm: overrides win
     // -------------------------------------------------------------------------
@@ -427,6 +456,79 @@ public class ScanServiceTests : IDisposable
         // No new tenant was created — the existing one was matched.
         _tenants.LastRequest.Should().BeNull();
         (await _db.Tenants.CountAsync(t => t.PortfolioId == PortfolioId)).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LeaseDraftWithTenantContactOverrides_PersistsCreatedTenantContact()
+    {
+        const string extractedJson =
+            """{"tenant_name":{"value":"Maria Chen","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"start_date":{"value":"2026-06-01","confidence":0.9},"end_date":{"value":"2027-05-31","confidence":0.9},"monthly_rent":{"value":"1500.00","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _leases.SetupResponse(new LeaseResponse { Id = 324, PortfolioId = PortfolioId });
+
+        var overrides = """
+            {
+                "tenantEmail": "maria.chen@example.local",
+                "tenantPhone": "555-010-3970",
+                "tenantEmergencyContact": "Sam Chen 555-010-3971"
+            }
+            """;
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: overrides);
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _tenants.LastRequest.Should().NotBeNull();
+        _tenants.LastRequest!.Email.Should().Be("maria.chen@example.local");
+        _tenants.LastRequest.Phone.Should().Be("555-010-3970");
+        _tenants.LastRequest.EmergencyContact.Should().Be("Sam Chen 555-010-3971");
+
+        var createdTenant = await _db.Tenants.SingleAsync(t => t.PortfolioId == PortfolioId);
+        createdTenant.Email.Should().Be("maria.chen@example.local");
+        createdTenant.Phone.Should().Be("555-010-3970");
+        createdTenant.EmergencyContact.Should().Be("Sam Chen 555-010-3971");
+        _leases.LastRequest!.TenantId.Should().Be(createdTenant.Id);
+    }
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LeaseDraftWithNullUnitOverride_CreatesReviewerEditedUnit()
+    {
+        const string extractedJson =
+            """{"tenant_name":{"value":"Lena Park","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"unit_number":{"value":"1","confidence":0.85},"start_date":{"value":"2026-06-01","confidence":0.9},"end_date":{"value":"2027-05-31","confidence":0.9},"monthly_rent":{"value":"1500.00","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _leases.SetupResponse(new LeaseResponse { Id = 325, PortfolioId = PortfolioId });
+
+        var overrides = """
+            {
+                "propertyId": 10,
+                "unitId": null,
+                "unitNumber": "5C",
+                "unitBedrooms": 2,
+                "unitBathrooms": 1.5,
+                "tenantName": "Lena Park",
+                "tenantEmail": "lena.park@example.local",
+                "tenantPhone": "555-010-3972",
+                "tenantEmergencyContact": "Noah Park 555-010-3973",
+                "leaseNumber": "L-5C-2026-06"
+            }
+            """;
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: overrides);
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        var reviewerUnit = await _db.Units.SingleAsync(u => u.UnitNumber == "5C");
+        reviewerUnit.PropertyId.Should().Be(10);
+        reviewerUnit.Bedrooms.Should().Be(2m);
+        reviewerUnit.Bathrooms.Should().Be(1.5m);
+        _leases.LastRequest.Should().NotBeNull();
+        _leases.LastRequest!.UnitId.Should().Be(reviewerUnit.Id);
+        _leases.LastRequest.UnitId.Should().NotBe(20);
+        _leases.LastRequest.LeaseNumber.Should().Be("L-5C-2026-06");
+        _tenants.LastRequest!.Email.Should().Be("lena.park@example.local");
     }
 
     [Fact]
@@ -759,6 +861,16 @@ public class ScanServiceTests : IDisposable
         public Task<IReadOnlyList<ExpenseResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? workOrderId, ListQuery query, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
+        public Task<ExpenseListResponse> ListPageAsync(
+            int portfolioId,
+            int? propertyId,
+            int? unitId,
+            int? workOrderId,
+            bool workOrderLinkedOnly,
+            ListQuery query,
+            CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
         public Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
@@ -801,6 +913,9 @@ public class ScanServiceTests : IDisposable
         public Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? vendorId, ListQuery query, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
+        public Task<WorkOrderListResponse> ListPageAsync(int portfolioId, WorkOrderListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
         public Task<WorkOrderDetailResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
@@ -833,6 +948,9 @@ public class ScanServiceTests : IDisposable
         public Task<IReadOnlyList<LeaseResponse>> ListAsync(int portfolioId, int? tenantId, int? propertyId, ListQuery query, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
+        public Task<LeaseListResponse> ListPageAsync(int portfolioId, LeaseListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
         public Task<LeaseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
@@ -846,6 +964,9 @@ public class ScanServiceTests : IDisposable
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<LeaseDocumentResponse?> GenerateDocumentAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<LeaseDocumentStatusResponse?> GetDocumentStatusAsync(int portfolioId, int id, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<(Stream Stream, string FileName, string ContentType)?> GetDocumentAsync(int portfolioId, int id, CancellationToken ct = default)
@@ -875,6 +996,7 @@ public class ScanServiceTests : IDisposable
                 LastName = request.LastName,
                 Email = request.Email,
                 Phone = request.Phone,
+                EmergencyContact = request.EmergencyContact,
                 Notes = request.Notes,
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -885,6 +1007,9 @@ public class ScanServiceTests : IDisposable
         }
 
         public Task<IReadOnlyList<TenantResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<TenantListResponse> ListPageAsync(int portfolioId, TenantListQuery query, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<TenantResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
@@ -937,6 +1062,9 @@ public class ScanServiceTests : IDisposable
         }
 
         public Task<IReadOnlyList<PropertyResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<PropertyListResponse> ListPageAsync(int portfolioId, PropertyListQuery query, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<PropertyResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
@@ -995,6 +1123,9 @@ public class ScanServiceTests : IDisposable
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<IReadOnlyList<UnitHealthResponse>> ListWithHealthAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<UnitHealthListResponse> ListWithHealthPageAsync(int portfolioId, UnitHealthListQuery query, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<UnitResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)

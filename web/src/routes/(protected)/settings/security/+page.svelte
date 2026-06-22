@@ -182,17 +182,28 @@
 					<label for="confirmPassword" class="mb-1.5 block text-sm font-medium text-foreground">
 						Confirm new password
 					</label>
-					<Input
-						id="confirmPassword"
-						name="confirmPassword"
-						type={showConfirm ? 'text' : 'password'}
-						autocomplete="new-password"
-						bind:value={confirmPassword}
-						required
-						placeholder="Re-enter new password"
-						class="h-11"
-						data-testid="security-confirm-password"
-					/>
+					<div class="relative">
+						<Input
+							id="confirmPassword"
+							name="confirmPassword"
+							type={showConfirm ? 'text' : 'password'}
+							autocomplete="new-password"
+							bind:value={confirmPassword}
+							required
+							placeholder="Re-enter new password"
+							class="h-11 pr-10"
+							data-testid="security-confirm-password"
+						/>
+						<button
+							type="button"
+							class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+							aria-label={showConfirm ? 'Hide confirmation password' : 'Show confirmation password'}
+							onclick={() => (showConfirm = !showConfirm)}
+							data-testid="security-toggle-confirm-password"
+						>
+							{#if showConfirm}<EyeOff class="h-4 w-4" />{:else}<Eye class="h-4 w-4" />{/if}
+						</button>
+					</div>
 					{#if confirmPassword.length > 0 && !passwordsMatch}
 						<p class="mt-1 text-xs text-destructive" data-testid="security-confirm-mismatch">
 							Passwords do not match.

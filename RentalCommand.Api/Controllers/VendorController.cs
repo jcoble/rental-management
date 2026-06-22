@@ -30,6 +30,14 @@ public class VendorController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(VendorListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<VendorListResponse>> ListPage([FromQuery] ListQuery query, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        return Ok(page);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(VendorResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

@@ -141,7 +141,7 @@ public class ScheduleEServiceTests : IDisposable
         _db.LoanPayments.Add(new LoanPayment { PortfolioId = PortfolioId, LoanId = loan.Id, PeriodKey = $"{Year}-02", DueDate = D(Year, 2, 1), InterestAmount = 590m, PrincipalAmount = 110m, EscrowAmount = 0m, TotalAmount = 700m, BalanceAfter = 99_790m, Status = LoanPaymentStatus.Scheduled, CreatedAt = DateTime.UtcNow });
         _db.SaveChanges();
 
-        var report = await _sut.GetReportAsync(PortfolioId, Year, CancellationToken.None);
+        var report = await _sut.GetReportAsync(PortfolioId, Year, ct: CancellationToken.None);
 
         report.Properties.Should().HaveCount(1);
         var p = report.Properties[0];
@@ -183,7 +183,7 @@ public class ScheduleEServiceTests : IDisposable
 
         _commands.Clear();
 
-        var report = await _sut.GetReportAsync(PortfolioId, Year, CancellationToken.None);
+        var report = await _sut.GetReportAsync(PortfolioId, Year, ct: CancellationToken.None);
         report.Properties.Single().RentalIncome.Should().Be(1_250m);
 
         var sql = string.Join("\n---\n", _commands);

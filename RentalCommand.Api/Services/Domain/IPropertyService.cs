@@ -10,6 +10,7 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IPropertyService
 {
     Task<IReadOnlyList<PropertyResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
+    Task<PropertyListResponse> ListPageAsync(int portfolioId, PropertyListQuery query, CancellationToken ct = default);
     Task<PropertyResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
     Task<PropertyResponse?> CreateAsync(int portfolioId, CreatePropertyRequest request, CancellationToken ct = default);
     Task<PropertyResponse?> UpdateAsync(int portfolioId, int id, UpdatePropertyRequest request, CancellationToken ct = default);

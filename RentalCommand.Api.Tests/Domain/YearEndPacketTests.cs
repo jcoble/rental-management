@@ -1,7 +1,9 @@
 using System.Text;
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -20,6 +22,7 @@ public class YearEndPacketTests : IDisposable
     private const int Year = 2025;
 
     private readonly SqliteConnection _conn;
+    private readonly List<string> _commands = [];
     private readonly RentalCommandDbContext _db;
     private readonly ScheduleEService _scheduleE;
     private readonly AccountingService _sut;
@@ -34,6 +37,7 @@ public class YearEndPacketTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new YearEndPacketRecordingCommandInterceptor(_commands))
             .Options;
 
         _db = new AccountingServiceTestDbContext(options);
@@ -87,8 +91,10 @@ public class YearEndPacketTests : IDisposable
     {
         SeedYear(Year);
 
+        _commands.Clear();
+
         var packet = await _sut.GetYearEndPacketDataAsync(PortfolioId, Year, CancellationToken.None);
-        var scheduleE = await _scheduleE.GetReportAsync(PortfolioId, Year, CancellationToken.None);
+        var scheduleE = await _scheduleE.GetReportAsync(PortfolioId, Year, ct: CancellationToken.None);
 
         // The packet must embed the exact same Schedule E numbers the standalone report/CSV produces.
         packet.ScheduleE.Year.Should().Be(scheduleE.Year);
@@ -130,6 +136,12 @@ public class YearEndPacketTests : IDisposable
         row.MonthlyRent.Should().Be(1_200m);
         row.PastDueBalance.Should().Be(1_200m);
         row.LeaseStatus.Should().Be("Active");
+
+        var sql = string.Join("\n---\n", _commands);
+        sql.Should().Contain("EXISTS", "year-end packet P&L property filtering must happen in SQL");
+        sql.Should().Contain("ORDER BY", "year-end packet rent-roll ordering must happen in SQL");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("year-end packet money and past-due totals must be summed in SQL");
     }
 
     /// <summary>
@@ -245,5 +257,27 @@ public class YearEndPacketTests : IDisposable
             UpdatedAt = anchor,
         });
         _db.SaveChanges();
+    }
+}
+
+internal sealed class YearEndPacketRecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+{
+    public override InterceptionResult<DbDataReader> ReaderExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result)
+    {
+        commands.Add(command.CommandText);
+        return base.ReaderExecuting(command, eventData, result);
+    }
+
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        commands.Add(command.CommandText);
+        return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
     }
 }

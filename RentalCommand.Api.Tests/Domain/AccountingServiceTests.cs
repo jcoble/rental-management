@@ -138,8 +138,8 @@ public class AccountingServiceTests : IDisposable
         snapshot.PeriodStart.Should().Be(monthStart);
 
         snapshot.Explanations.Collected.Should().Contain("collected").And.Contain("$1,200");
-        snapshot.Explanations.Spent.Should().Contain("spent");
-        snapshot.Explanations.Net.Should().Contain("keeping");
+        snapshot.Explanations.Spent.Should().Contain("spent").And.Contain("$456.88");
+        snapshot.Explanations.Net.Should().Contain("keeping").And.Contain("$743.12");
         snapshot.Explanations.PastDue.Should().Contain("1 rental").And.Contain("behind");
     }
 
@@ -217,6 +217,8 @@ public class AccountingServiceTests : IDisposable
         });
         _db.SaveChanges();
 
+        _commands.Clear();
+
         var snapshot = await _sut.GetSnapshotAsync(PortfolioId, CancellationToken.None);
         var pastDue = await _sut.GetPastDueAsync(PortfolioId, CancellationToken.None);
 
@@ -236,6 +238,12 @@ public class AccountingServiceTests : IDisposable
 
         // Ordered by who's waited longest (oldest due date first) → Lease A leads.
         pastDue.Items.First().LeaseId.Should().Be(leaseA.Id);
+
+        var sql = string.Join("\n---\n", _commands);
+        sql.Should().Contain("COUNT", "past-due tenant counts must be aggregated in SQL");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("past-due balances must be summed in SQL");
+        sql.Should().Contain("GROUP BY", "the SQL aggregate should be over the per-lease past-due grouping");
     }
 
     [Fact]

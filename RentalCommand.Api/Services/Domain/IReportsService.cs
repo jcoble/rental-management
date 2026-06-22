@@ -43,7 +43,7 @@ public interface IReportsService
     /// distinct numbers, with depreciation + debt service present, plus the rent roll and the
     /// "see your accountant" caveats.
     /// </summary>
-    Task<YearEndViewResponse> GetYearEndAsync(int portfolioId, int year, CancellationToken ct = default);
+    Task<YearEndViewResponse> GetYearEndAsync(int portfolioId, int year, int? propertyId = null, CancellationToken ct = default);
 
     /// <summary>Every payment and expense over the range in date order with a running balance.</summary>
     Task<GeneralLedgerResponse> GetGeneralLedgerAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default);

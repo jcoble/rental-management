@@ -1,6 +1,8 @@
 using FluentAssertions;
+using System.Data.Common;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
@@ -19,6 +21,7 @@ public class PaymentServiceTests : IDisposable
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
     private readonly PaymentService _sut;
+    private readonly List<string> _commands = [];
 
     public PaymentServiceTests()
     {
@@ -27,6 +30,7 @@ public class PaymentServiceTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new RecordingCommandInterceptor(_commands))
             .Options;
 
         _db = new PaymentServiceTestDbContext(options);
@@ -42,6 +46,38 @@ public class PaymentServiceTests : IDisposable
     {
         _db.Dispose();
         _conn.Dispose();
+    }
+
+    [Fact]
+    public async Task ListPageAsync_ReturnsSqlCountAndRequestedWindow()
+    {
+        var now = DateTime.UtcNow;
+        SeedPayment(LeaseId, "Rent A", now.AddDays(-4), 100m);
+        SeedPayment(LeaseId, "Rent B", now.AddDays(-3), 200m);
+        SeedPayment(LeaseId, "Rent C", now.AddDays(-2), 300m);
+        SeedPayment(LeaseId, "Rent D", now.AddDays(-1), 400m);
+        SeedPayment(OtherLeaseId, "Other lease", now, 500m);
+
+        _commands.Clear();
+        var page = await _sut.ListPageAsync(PortfolioId, LeaseId, new ListQuery
+        {
+            Sort = "dueDate",
+            Skip = 1,
+            Take = 2,
+        });
+
+        page.TotalCount.Should().Be(4);
+        page.Skip.Should().Be(1);
+        page.Take.Should().Be(2);
+        page.Items.Select(p => p.ExternalReference).Should().Equal("Rent B", "Rent C");
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -188,6 +224,46 @@ public class PaymentServiceTests : IDisposable
         fromDb.Notes.Should().Be("Original note");
     }
 
+    [Fact]
+    public async Task MarkLeasePastDuePaidAsync_MarksOnlyPastDueRowsForThatLease()
+    {
+        var now = DateTime.UtcNow;
+        var paidDate = now.Date.AddHours(14);
+        var eligibleScheduled = SeedPayment(LeaseId, PaymentStatus.Scheduled, now.AddDays(-10), 1200m);
+        var eligiblePartial = SeedPayment(LeaseId, PaymentStatus.Partial, now.AddDays(-3), 1200m, amountPaid: 300m);
+        var eligibleLate = SeedPayment(LeaseId, PaymentStatus.Late, now.AddDays(5), 1200m);
+        var alreadyPaid = SeedPayment(LeaseId, PaymentStatus.Paid, now.AddDays(-8), 1200m);
+        var futureScheduled = SeedPayment(LeaseId, PaymentStatus.Scheduled, now.AddDays(5), 1200m);
+        var otherLeaseLate = SeedPayment(OtherLeaseId, PaymentStatus.Late, now.AddDays(-10), 1300m);
+        await _db.SaveChangesAsync();
+
+        var result = await _sut.MarkLeasePastDuePaidAsync(PortfolioId, LeaseId, new MarkPaidRequest
+        {
+            PaidDate = paidDate,
+            Method = "ACH",
+            Notes = "Settled from past-due action",
+        });
+
+        result.Should().NotBeNull();
+        result!.LeaseId.Should().Be(LeaseId);
+        result.MarkedPaidCount.Should().Be(3);
+        result.PaymentIds.Should().BeEquivalentTo([eligibleScheduled.Id, eligiblePartial.Id, eligibleLate.Id]);
+
+        var payments = await _db.Payments.AsNoTracking().ToDictionaryAsync(p => p.Id);
+        foreach (var id in result.PaymentIds)
+        {
+            payments[id].Status.Should().Be(PaymentStatus.Paid);
+            payments[id].PaidDate.Should().Be(paidDate);
+            payments[id].AmountPaid.Should().BeNull();
+            payments[id].Method.Should().Be("ACH");
+            payments[id].Notes.Should().Be("Settled from past-due action");
+        }
+
+        payments[alreadyPaid.Id].Status.Should().Be(PaymentStatus.Paid);
+        payments[futureScheduled.Id].Status.Should().Be(PaymentStatus.Scheduled);
+        payments[otherLeaseLate.Id].Status.Should().Be(PaymentStatus.Late);
+    }
+
     private void SeedPortfolioAndLease()
     {
         var now = DateTime.UtcNow;
@@ -267,6 +343,47 @@ public class PaymentServiceTests : IDisposable
         _db.SaveChanges();
     }
 
+    private void SeedPayment(int leaseId, string reference, DateTime dueDate, decimal amount)
+    {
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            LeaseId = leaseId,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = amount,
+            DueDate = dueDate,
+            ExternalReference = reference,
+            CreatedAt = dueDate,
+            UpdatedAt = dueDate,
+        });
+        _db.SaveChanges();
+    }
+
+    private Payment SeedPayment(
+        int leaseId,
+        PaymentStatus status,
+        DateTime dueDate,
+        decimal amount,
+        decimal? amountPaid = null)
+    {
+        var payment = new Payment
+        {
+            PortfolioId = PortfolioId,
+            LeaseId = leaseId,
+            PaymentType = PaymentType.Rent,
+            Status = status,
+            Amount = amount,
+            AmountPaid = amountPaid,
+            DueDate = dueDate,
+            PaidDate = status == PaymentStatus.Paid ? dueDate : null,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Payments.Add(payment);
+        return payment;
+    }
+
     private sealed class NoopDataUpdateService : IDataUpdateService
     {
         public Task BroadcastEntityUpdateAsync(int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default)
@@ -274,6 +391,28 @@ public class PaymentServiceTests : IDisposable
 
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
             => Task.CompletedTask;
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
     }
 }
 

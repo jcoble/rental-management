@@ -83,6 +83,21 @@ public class LeaseResponse
     }
 }
 
+public class LeaseListResponse
+{
+    public IReadOnlyList<LeaseResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
+public class LeaseListQuery : ListQuery
+{
+    public int? TenantId { get; set; }
+    public int? PropertyId { get; set; }
+    public LeaseStatus? Status { get; set; }
+}
+
 /// <summary>
 /// Tenant-facing ledger for a single lease: every charge and payment, newest first, each carrying a
 /// plain-English <see cref="LedgerTransactionResponse.Explanation"/> ("why") so a tenant can see
@@ -122,6 +137,19 @@ public sealed record LeaseDocumentResponse(
     long FileSize,
     string DownloadUrl,
     DateTime GeneratedAt);
+
+/// <summary>
+/// Lightweight status for the generated lease-agreement document. Used by the UI to decide whether
+/// to show Download without probing the blob endpoint and producing an expected 404.
+/// </summary>
+public sealed record LeaseDocumentStatusResponse(
+    int LeaseId,
+    bool HasDocument,
+    int? StoredFileId,
+    string? FileName,
+    long? FileSize,
+    string? DownloadUrl,
+    DateTime? GeneratedAt);
 
 /// <summary>
 /// Body for <c>POST /leases/{id}/send-for-signature</c>. Both fields are optional; when omitted the

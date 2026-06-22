@@ -15,6 +15,14 @@ public interface IExpenseService
     /// unit's work orders — computed DB-side via a single correlated query (no per-row follow-ups).
     /// </summary>
     Task<IReadOnlyList<ExpenseResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? workOrderId, ListQuery query, CancellationToken ct = default);
+    Task<ExpenseListResponse> ListPageAsync(
+        int portfolioId,
+        int? propertyId,
+        int? unitId,
+        int? workOrderId,
+        bool workOrderLinkedOnly,
+        ListQuery query,
+        CancellationToken ct = default);
     Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
     Task<ExpenseResponse?> CreateAsync(int portfolioId, CreateExpenseRequest request, CancellationToken ct = default);
     Task<ExpenseResponse?> UpdateAsync(int portfolioId, int id, UpdateExpenseRequest request, CancellationToken ct = default);

@@ -1,6 +1,8 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Domain;
@@ -23,8 +25,14 @@ namespace RentalCommand.Api.Tests.Domain;
 /// </summary>
 public class AccountingConnectionServiceTests : IDisposable
 {
-    private readonly SqliteTestContext _ctx = new();
+    private readonly List<string> _commands = new();
+    private readonly SqliteTestContext _ctx;
     private readonly IDataProtectionProvider _dp = new EphemeralDataProtectionProvider();
+
+    public AccountingConnectionServiceTests()
+    {
+        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+    }
 
     public void Dispose() => _ctx.Dispose();
 
@@ -87,6 +95,90 @@ public class AccountingConnectionServiceTests : IDisposable
         afterDisconnect.RefreshTokenCipherText.Should().BeNull();
     }
 
+    [Fact]
+    public async Task GetMappingsAsync_FiltersAndPagesConfirmedMappingsInSql()
+    {
+        var now = DateTime.UtcNow;
+        var conn = new AccountingConnection
+        {
+            PortfolioId = 1,
+            Provider = AccountingProvider.QuickBooks,
+            Status = AccountingConnectionStatus.Connected,
+            ExternalAccountId = "realm-123",
+            PullEnabled = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.AccountingConnections.Add(conn);
+        await _ctx.Db.SaveChangesAsync();
+
+        _ctx.Db.AccountingEntityMappings.AddRange(
+            Mapping(conn, "QBC-1", confirmedAt: null, now),
+            Mapping(conn, "QBC-2", confirmedAt: null, now.AddMinutes(1)),
+            Mapping(conn, "QBC-3", confirmedAt: null, now.AddMinutes(2)),
+            Mapping(conn, "QBC-CONFIRMED", confirmedAt: now, now.AddMinutes(3)));
+        await _ctx.Db.SaveChangesAsync();
+
+        var sut = CreateService(new FakeAccountingProvider(
+            AccountingProvider.QuickBooks,
+            new AccountingTokenResult("a", "r", DateTime.UtcNow.AddHours(1), "realm-123", "Acme Books")));
+
+        _commands.Clear();
+        var unconfirmed = await sut.GetMappingsAsync(
+            1, AccountingProvider.QuickBooks, confirmed: false, skip: 0, take: 2, CancellationToken.None);
+
+        unconfirmed.Should().HaveCount(2);
+        unconfirmed.Should().OnlyContain(m => !m.Confirmed);
+        unconfirmed.Select(m => m.ExternalId).Should().NotContain("QBC-CONFIRMED");
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"AccountingEntityMappings\"", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("\"ConfirmedAt\"", StringComparison.OrdinalIgnoreCase)
+            && (sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)
+                || sql.Contains("FETCH", StringComparison.OrdinalIgnoreCase)),
+            "mapping review must filter and page in SQL before materialization");
+    }
+
+    [Fact]
+    public async Task GetReviewQueueAsync_PagesParkedRowsInSql()
+    {
+        var now = DateTime.UtcNow;
+        var conn = new AccountingConnection
+        {
+            PortfolioId = 1,
+            Provider = AccountingProvider.QuickBooks,
+            Status = AccountingConnectionStatus.Connected,
+            ExternalAccountId = "realm-123",
+            PullEnabled = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.AccountingConnections.Add(conn);
+        await _ctx.Db.SaveChangesAsync();
+
+        _ctx.Db.AccountingSyncMaps.AddRange(
+            Parked(conn, "QBP-1", LedgerStatus.Unmatched, now),
+            Parked(conn, "QBP-2", LedgerStatus.NeedsReview, now.AddMinutes(1)),
+            Parked(conn, "QBP-IMPORTED", LedgerStatus.Imported, now.AddMinutes(2)));
+        await _ctx.Db.SaveChangesAsync();
+
+        var sut = CreateService(new FakeAccountingProvider(
+            AccountingProvider.QuickBooks,
+            new AccountingTokenResult("a", "r", DateTime.UtcNow.AddHours(1), "realm-123", "Acme Books")));
+
+        _commands.Clear();
+        var queue = await sut.GetReviewQueueAsync(
+            1, AccountingProvider.QuickBooks, skip: 0, take: 1, CancellationToken.None);
+
+        queue.Should().HaveCount(1);
+        queue[0].ExternalId.Should().Be("QBP-2");
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"AccountingSyncMaps\"", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("\"Status\"", StringComparison.OrdinalIgnoreCase)
+            && (sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase)
+                || sql.Contains("FETCH", StringComparison.OrdinalIgnoreCase)),
+            "review queue must filter and page in SQL before materialization");
+    }
+
     private AccountingConnectionService CreateService(params IAccountingProvider[] providers)
     {
         var qbOptions = Options.Create(new QuickBooksOptions
@@ -105,6 +197,63 @@ public class AccountingConnectionServiceTests : IDisposable
         return new AccountingConnectionService(
             _ctx.Db, _dp, providerResolver, settingsResolver, importService,
             NullLogger<AccountingConnectionService>.Instance);
+    }
+
+    private static AccountingEntityMapping Mapping(
+        AccountingConnection conn,
+        string externalId,
+        DateTime? confirmedAt,
+        DateTime updatedAt) => new()
+        {
+            PortfolioId = conn.PortfolioId,
+            AccountingConnectionId = conn.Id,
+            ExternalType = ExternalKind.Customer,
+            ExternalId = externalId,
+            ExternalDisplayName = externalId,
+            LocalEntityType = LocalEntityKind.Tenant,
+            LocalEntityId = 10,
+            Confidence = 1.0m,
+            ConfirmedAt = confirmedAt,
+            CreatedAt = updatedAt,
+            UpdatedAt = updatedAt,
+        };
+
+    private static AccountingSyncMap Parked(
+        AccountingConnection conn,
+        string externalId,
+        string status,
+        DateTime updatedAt) => new()
+        {
+            PortfolioId = conn.PortfolioId,
+            AccountingConnectionId = conn.Id,
+            Direction = LedgerDirection.Import,
+            ExternalType = ExternalKind.Payment,
+            ExternalId = externalId,
+            Status = status,
+            CreatedAt = updatedAt,
+            UpdatedAt = updatedAt,
+        };
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
     }
 
     /// <summary>Minimal fake provider — only the auth surface the Phase 1 connection lifecycle calls.</summary>

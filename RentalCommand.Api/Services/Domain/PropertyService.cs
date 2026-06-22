@@ -23,6 +23,12 @@ public class PropertyService : IPropertyService
 
     public async Task<IReadOnlyList<PropertyResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, ToPropertyListQuery(query), ct);
+        return page.Items;
+    }
+
+    public async Task<PropertyListResponse> ListPageAsync(int portfolioId, PropertyListQuery query, CancellationToken ct = default)
+    {
         var q = _db.Properties
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId);
@@ -37,14 +43,29 @@ public class PropertyService : IPropertyService
                 EF.Functions.ILike(p.State, $"%{term}%"));
         }
 
+        if (query.Type.HasValue)
+        {
+            q = q.Where(p => p.PropertyType == query.Type.Value);
+        }
+
+        if (query.Status.HasValue)
+        {
+            q = q.Where(p => p.Status == query.Status.Value);
+        }
+
         q = query.SortField switch
         {
             "name" => query.SortDescending ? q.OrderByDescending(p => p.Name) : q.OrderBy(p => p.Name),
             "city" => query.SortDescending ? q.OrderByDescending(p => p.City) : q.OrderBy(p => p.City),
+            "type" => query.SortDescending ? q.OrderByDescending(p => p.PropertyType) : q.OrderBy(p => p.PropertyType),
             "status" => query.SortDescending ? q.OrderByDescending(p => p.Status) : q.OrderBy(p => p.Status),
+            "unitcount" => query.SortDescending ? q.OrderByDescending(p => p.Units.Count) : q.OrderBy(p => p.Units.Count),
+            "occupiedunits" => query.SortDescending ? q.OrderByDescending(p => p.Units.Count(u => u.Status == UnitStatus.Occupied)) : q.OrderBy(p => p.Units.Count(u => u.Status == UnitStatus.Occupied)),
             "updatedat" => query.SortDescending ? q.OrderByDescending(p => p.UpdatedAt) : q.OrderBy(p => p.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(p => p.CreatedAt) : q.OrderBy(p => p.CreatedAt),
         };
+
+        var totalCount = await q.CountAsync(ct);
 
         // Unit / occupied counts are computed in SQL as correlated subqueries (p.Units.Count(...))
         // so the database does the aggregation — no Units collection is loaded into memory and
@@ -60,8 +81,22 @@ public class PropertyService : IPropertyService
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return rows.Select(r => ToResponse(r)).ToList();
+        return new PropertyListResponse
+        {
+            Items = rows.Select(r => ToResponse(r)).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
     }
+
+    private static PropertyListQuery ToPropertyListQuery(ListQuery query) => new()
+    {
+        Skip = query.Skip,
+        Take = query.Take,
+        Search = query.Search,
+        Sort = query.Sort,
+    };
 
     public async Task<PropertyResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {

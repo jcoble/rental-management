@@ -32,6 +32,15 @@ public class ApplicationsController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(ApplicationListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApplicationListResponse>> ListPage(
+        [FromQuery] string? status, [FromQuery] ListQuery query, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), status, query, ct);
+        return Ok(page);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(ApplicationResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

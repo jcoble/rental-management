@@ -125,6 +125,12 @@ public sealed record ScanDraftResponse(
 
 public sealed record ScanCreatedResponse(int DraftId, string Status, string FileUrl);
 
+public sealed record ScanDraftListResponse(
+    IReadOnlyList<ScanDraftResponse> Items,
+    int TotalCount,
+    int Skip,
+    int Take);
+
 /// <summary>Response from a bulk-scan batch upload: the created batch + the ids of its drafts.</summary>
 public sealed record ScanBatchCreatedResponse(
     int BatchId, string? Name, string TargetEntityType, string Status, int FileCount,

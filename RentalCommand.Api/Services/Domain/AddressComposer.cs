@@ -12,10 +12,54 @@ public static class AddressComposer
     public static string? Compose(string? line1, string? line2, string? city, string? state, string? postalCode)
     {
         var stateZip = string.Join(' ', new[] { state, postalCode }.Where(s => !string.IsNullOrWhiteSpace(s)));
-        var parts = new[] { line1, line2, city, stateZip }
-            .Where(s => !string.IsNullOrWhiteSpace(s))
-            .Select(s => s!.Trim());
+        var parts = new List<string>();
+
+        foreach (var part in new[] { line1, line2, city, stateZip })
+        {
+            if (string.IsNullOrWhiteSpace(part))
+                continue;
+
+            var trimmed = part.Trim();
+            if (IsCoveredByExistingPart(parts, trimmed))
+                continue;
+
+            parts.Add(trimmed);
+        }
+
         var composed = string.Join(", ", parts);
         return string.IsNullOrWhiteSpace(composed) ? null : composed;
+    }
+
+    private static bool IsCoveredByExistingPart(IReadOnlyList<string> existingParts, string candidate)
+    {
+        var normalizedCandidate = NormalizeForContainment(candidate);
+        if (normalizedCandidate.Length == 0)
+            return true;
+
+        return existingParts.Any(existing =>
+        {
+            var normalizedExisting = NormalizeForContainment(existing);
+            return ContainsTokenSequence(normalizedExisting, normalizedCandidate) ||
+                   ContainsTokenSequence(normalizedCandidate, normalizedExisting);
+        });
+    }
+
+    private static bool ContainsTokenSequence(string value, string candidate)
+    {
+        if (value.Length == 0 || candidate.Length == 0)
+            return false;
+
+        return $" {value} ".Contains($" {candidate} ", StringComparison.Ordinal);
+    }
+
+    private static string NormalizeForContainment(string value)
+    {
+        var chars = value
+            .ToLowerInvariant()
+            .Select(c => char.IsLetterOrDigit(c) ? c : ' ')
+            .ToArray();
+
+        return string.Join(' ', new string(chars)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
     }
 }

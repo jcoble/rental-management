@@ -12,5 +12,5 @@ public interface IScheduleEService
     /// Returns a per-property Schedule E report for <paramref name="year"/>. Only properties that
     /// have at least one qualifying rent payment or expense in that year are included.
     /// </summary>
-    Task<ScheduleEReport> GetReportAsync(int portfolioId, int year, CancellationToken ct = default);
+    Task<ScheduleEReport> GetReportAsync(int portfolioId, int year, int? propertyId = null, CancellationToken ct = default);
 }

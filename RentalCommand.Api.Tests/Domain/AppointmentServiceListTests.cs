@@ -1,0 +1,114 @@
+using System.Data.Common;
+using FluentAssertions;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Moq;
+using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
+using RentalCommand.TestCommon;
+
+namespace RentalCommand.Api.Tests.Domain;
+
+public class AppointmentServiceListTests : IDisposable
+{
+    private const int PortfolioId = 1;
+
+    private readonly List<string> _commands = [];
+    private readonly SqliteTestContext _ctx;
+    private readonly AppointmentService _sut;
+
+    public AppointmentServiceListTests()
+    {
+        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+        _sut = new AppointmentService(_ctx.Db, Mock.Of<IDataUpdateService>());
+    }
+
+    public void Dispose() => _ctx.Dispose();
+
+    [Fact]
+    public async Task ListPageAsync_FiltersSortsAndPagesInSql()
+    {
+        SeedAppointment("A-100", "Cedar Point Flats", AppointmentType.Showing, AppointmentStatus.Scheduled);
+        SeedAppointment("B-200", "Elm Ridge Homes", AppointmentType.Showing, AppointmentStatus.Scheduled);
+        SeedAppointment("C-300", "Harbor View Apartments", AppointmentType.Showing, AppointmentStatus.Scheduled);
+        SeedAppointment("D-400", "West Market Lofts", AppointmentType.Inspection, AppointmentStatus.Scheduled);
+        SeedAppointment("E-500", "York House", AppointmentType.Showing, AppointmentStatus.Cancelled);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new AppointmentListQuery
+        {
+            Type = AppointmentType.Showing,
+            Status = AppointmentStatus.Scheduled,
+            Sort = "propertyName",
+            Skip = 1,
+            Take = 2,
+        });
+
+        result.TotalCount.Should().Be(3);
+        result.Skip.Should().Be(1);
+        result.Take.Should().Be(2);
+        result.Items.Select(a => a.PropertyName).Should().Equal("Elm Ridge Homes", "Harbor View Apartments");
+        result.Items.Should().OnlyContain(a => a.Type == AppointmentType.Showing);
+        result.Items.Should().OnlyContain(a => a.Status == AppointmentStatus.Scheduled);
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"Appointments\"", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("Properties", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void SeedAppointment(string title, string propertyName, AppointmentType type, AppointmentStatus status)
+    {
+        var now = DateTime.UtcNow;
+        _ctx.Db.Appointments.Add(new Appointment
+        {
+            PortfolioId = PortfolioId,
+            Property = new Property
+            {
+                PortfolioId = PortfolioId,
+                Name = propertyName,
+                AddressLine1 = "100 Test Street",
+                City = "Columbus",
+                State = "OH",
+                PostalCode = "43215",
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            Title = title,
+            Type = type,
+            Status = status,
+            ScheduledStart = now.AddDays(1),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+}

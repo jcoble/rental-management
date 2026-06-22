@@ -361,6 +361,13 @@ public class ReportsServiceTests : IDisposable
         sql.Should().Contain("ORDER BY", "ledger ordering must run in SQL");
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("rent-ledger totals must be summed in SQL");
+
+        _executedSql.Should().Contain(command =>
+            command.Contains("UNION", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            (command.Contains("SUM(", StringComparison.OrdinalIgnoreCase) ||
+             command.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase)),
+            "rent-ledger running balances must be computed by the ordered activity SQL query, not by walking materialized rows");
     }
 
     // ── Cash flow by month (DB) ────────────────────────────────────────────────────────────────────
@@ -530,6 +537,11 @@ public class ReportsServiceTests : IDisposable
         sql.Should().Contain("GROUP BY", "payment and expense totals must be grouped in SQL, not after materialization");
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("payment and expense totals must be summed in SQL");
+
+        _executedSql.Should().Contain(command =>
+            command.Contains("SUM", StringComparison.OrdinalIgnoreCase) &&
+            !command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),
+            "property P&L grand totals must be summed in SQL, not from the property DTO dictionary");
     }
 
     // ── True cash flow (§9/§18, DB) ──────────────────────────────────────────────────────────────
@@ -556,6 +568,8 @@ public class ReportsServiceTests : IDisposable
         var loan = SeedLoan(property.Id, escrowCoversTaxes: true, monthlyEscrow: 240m);
         SeedLoanPayment(loan, "2026-03", dueDate: D(2026, 3, 1), interest: 500m, principal: 300m, escrow: 240m, total: 1040m, balanceAfter: 199_700m);
 
+        _executedSql.Clear();
+
         var report = await _sut.GetTrueCashFlowAsync(PortfolioId, new ReportRangeQuery
         {
             From = D(2026, 3, 1),
@@ -571,6 +585,11 @@ public class ReportsServiceTests : IDisposable
         p.CashFlow.Should().Be(-90m);                // 950 − 1040
 
         report.TotalCashFlow.Should().Be(-90m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        sql.Should().Contain("EXISTS", "escrow-funded operating-expense exclusion must run in SQL");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("true-cash-flow row values and totals must be summed in SQL");
     }
 
     [Fact]
@@ -621,7 +640,7 @@ public class ReportsServiceTests : IDisposable
         var loan = SeedLoan(property.Id, escrowCoversTaxes: false);
         SeedLoanPayment(loan, "2025-01", dueDate: D(2025, 1, 1), interest: 500m, principal: 200m, escrow: 0m, total: 700m, balanceAfter: 199_800m);
 
-        var view = await _sut.GetYearEndAsync(PortfolioId, 2025, CancellationToken.None);
+        var view = await _sut.GetYearEndAsync(PortfolioId, 2025, ct: CancellationToken.None);
 
         view.Year.Should().Be(2025);
 
@@ -649,6 +668,35 @@ public class ReportsServiceTests : IDisposable
         view.AccountantNotes.Should().Contain(n => n.Contains("recapture", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task GetYearEndAsync_PropertyFilter_ReturnsOnlyThatProperty()
+    {
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+        var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1_000m,
+            start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.Active);
+        var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2_000m,
+            start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.Active);
+
+        SeedPayment(mapleLease, 1_000m, dueDate: D(2025, 1, 1), PaymentStatus.Paid, paidDate: D(2025, 1, 5));
+        SeedPayment(oakLease, 2_000m, dueDate: D(2025, 1, 1), PaymentStatus.Paid, paidDate: D(2025, 1, 5));
+        SeedExpense(maple.Id, 250m, paidAt: D(2025, 1, 10));
+        SeedExpense(oak.Id, 700m, paidAt: D(2025, 1, 10));
+
+        var view = await _sut.GetYearEndAsync(PortfolioId, 2025, maple.Id, CancellationToken.None);
+
+        view.CashFlow.Properties.Should().ContainSingle(p => p.PropertyId == maple.Id);
+        view.CashFlow.TotalIncome.Should().Be(1_000m);
+        view.CashFlow.TotalOperatingExpenses.Should().Be(250m);
+
+        view.ScheduleE.Properties.Should().ContainSingle(p => p.PropertyId == maple.Id);
+        view.ScheduleE.TotalRentalIncome.Should().Be(1_000m);
+        view.ScheduleE.TotalExpenses.Should().Be(250m);
+
+        view.RentRoll.Should().ContainSingle(r => r.PropertyName == "Maple");
+        view.RentRoll.Should().NotContain(r => r.PropertyName == "Oak");
+    }
+
     // ── Occupancy % (DB) ───────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -663,6 +711,8 @@ public class ReportsServiceTests : IDisposable
         var oak = SeedProperty("Oak");
         SeedUnit("A", oak.Id, UnitStatus.Occupied);
 
+        _executedSql.Clear();
+
         var report = await _sut.GetOccupancyAsync(PortfolioId, new ReportRangeQuery(), CancellationToken.None);
 
         var mapleRow = report.Rows.Single(r => r.PropertyName == "Maple");
@@ -675,6 +725,11 @@ public class ReportsServiceTests : IDisposable
         report.OccupiedUnits.Should().Be(3);
         report.VacantUnits.Should().Be(2);
         report.OccupancyPercent.Should().Be(60m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        sql.Should().Contain("COUNT", "occupancy row counts must be computed in SQL");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("portfolio occupancy totals must be summed in SQL");
     }
 
     // ── Security deposit current balance (DB) ──────────────────────────────────────────────────────
@@ -696,10 +751,13 @@ public class ReportsServiceTests : IDisposable
             ReturnedAt = D(2026, 1, 1),
             ReturnedAmount = 300m,
             DeductionsJson = "[{\"Reason\":\"Cleaning\",\"Amount\":200.0,\"Notes\":null}]",
+            DeductionsTotal = 200m,
             CreatedAt = D(2025, 1, 1),
             UpdatedAt = D(2026, 1, 1),
         });
         _db.SaveChanges();
+
+        _executedSql.Clear();
 
         var report = await _sut.GetSecurityDepositRegisterAsync(PortfolioId, new ReportRangeQuery(), CancellationToken.None);
 
@@ -710,18 +768,16 @@ public class ReportsServiceTests : IDisposable
         row.CurrentBalance.Should().Be(1000m);
 
         report.TotalHeld.Should().Be(1500m);
+        report.TotalDeductions.Should().Be(200m);
+        report.TotalReturned.Should().Be(300m);
         report.TotalCurrentBalance.Should().Be(1000m);
-    }
 
-    [Fact]
-    public void ParseDeductionsTotal_HandlesNullBlankAndMalformedJson()
-    {
-        ReportsService.ParseDeductionsTotal(null).Should().Be(0m);
-        ReportsService.ParseDeductionsTotal("").Should().Be(0m);
-        ReportsService.ParseDeductionsTotal("not json").Should().Be(0m);
-        ReportsService.ParseDeductionsTotal("[{\"Reason\":\"X\",\"Amount\":50.0}]").Should().Be(50m);
-        ReportsService.ParseDeductionsTotal("[{\"Reason\":\"A\",\"Amount\":50.0},{\"Reason\":\"B\",\"Amount\":25.5}]")
-            .Should().Be(75.5m);
+        var totalSql = _executedSql
+            .Where(sql => sql.Contains("SUM", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        totalSql.Should().NotBeEmpty("security deposit register totals must be summed in SQL, not from materialized rows");
+        string.Join("\n---\n", totalSql).Should().Contain("DeductionsTotal");
     }
 
     // ── Property filter IDOR guard (DB) ────────────────────────────────────────────────────────────
@@ -761,6 +817,61 @@ public class ReportsServiceTests : IDisposable
         report.LeaseCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task RentRoll_ComputesTotalsInSql()
+    {
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+        SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+        SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2000m);
+
+        _executedSql.Clear();
+
+        var report = await _sut.GetRentRollAsync(PortfolioId, new ReportRangeQuery(), CancellationToken.None);
+
+        report.LeaseCount.Should().Be(2);
+        report.TotalMonthlyRent.Should().Be(3000m);
+        report.TotalSecurityDeposit.Should().Be(3000m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        sql.Should().Contain("COUNT", "rent-roll lease count must be aggregated in SQL, not from materialized rows");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("rent-roll money totals must be summed in SQL");
+    }
+
+    [Fact]
+    public async Task Vendor1099_FiltersAndTotalsInSql()
+    {
+        var paidEligible = SeedVendor("Clearline Plumbing", eligible: true, w9OnFile: false);
+        var paidIneligible = SeedVendor("Oak City Repairs", eligible: false, w9OnFile: false);
+        var eligibleNoPayments = SeedVendor("KeyPro Locksmith", eligible: true, w9OnFile: true);
+        SeedVendor("No Activity Cleaning", eligible: false, w9OnFile: false);
+
+        SeedVendorExpense(paidEligible, 700m, D(2026, 2, 1));
+        SeedVendorExpense(paidEligible, 99m, D(2025, 12, 31));
+        SeedVendorExpense(paidIneligible, 250m, D(2026, 3, 1));
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var report = await _sut.GetVendor1099Async(PortfolioId, 2026, CancellationToken.None);
+
+        report.Rows.Select(r => r.VendorName).Should().Equal(
+            "Clearline Plumbing",
+            "KeyPro Locksmith",
+            "Oak City Repairs");
+        report.Rows.Single(r => r.VendorName == paidEligible.Name).TotalPaid.Should().Be(700m);
+        report.Rows.Single(r => r.VendorName == paidEligible.Name).Needs1099Review.Should().BeTrue();
+        report.Rows.Single(r => r.VendorName == eligibleNoPayments.Name).TotalPaid.Should().Be(0m);
+        report.Rows.Single(r => r.VendorName == paidIneligible.Name).TotalPaid.Should().Be(250m);
+        report.TotalPaid.Should().Be(950m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        sql.Should().Contain("EXISTS", "vendors with paid expenses should be filtered in SQL");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("1099 totals must be summed in SQL");
+        sql.Should().NotContain("strftime", "the tax-year filter should be a date range, not a client/year extraction filter");
+    }
+
     // ── Lease expirations (DB) ─────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -774,6 +885,8 @@ public class ReportsServiceTests : IDisposable
         SeedLease(property, SeedUnit("2"), SeedTenant("Bob", "Birch"), rent: 1500m,
             start: now.AddMonths(-2), end: now.AddDays(200)); // outside the 90-day window
 
+        _executedSql.Clear();
+
         var report = await _sut.GetLeaseExpirationsAsync(PortfolioId, new ReportRangeQuery(), days: 90, CancellationToken.None);
 
         report.WindowDays.Should().Be(90);
@@ -781,6 +894,11 @@ public class ReportsServiceTests : IDisposable
         report.Rows[0].LeaseId.Should().Be(soon.Id);
         report.Rows[0].DaysUntilExpiry.Should().BeInRange(19, 21);
         report.TotalMonthlyRent.Should().Be(1000m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        sql.Should().Contain("COUNT", "lease-expiration totals must be counted in SQL, not from materialized rows");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("lease-expiration monthly rent total must be summed in SQL");
     }
 
     [Fact]
@@ -957,6 +1075,42 @@ public class ReportsServiceTests : IDisposable
         };
         _db.Expenses.Add(expense);
         _db.SaveChanges();
+        return expense;
+    }
+
+    private Vendor SeedVendor(string name, bool eligible, bool w9OnFile)
+    {
+        var now = DateTime.UtcNow;
+        var vendor = new Vendor
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            ServiceType = "Repairs",
+            Is1099Eligible = eligible,
+            W9OnFile = w9OnFile,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Vendors.Add(vendor);
+        return vendor;
+    }
+
+    private Expense SeedVendorExpense(Vendor vendor, decimal amount, DateTime paidAt)
+    {
+        var expense = new Expense
+        {
+            PortfolioId = PortfolioId,
+            Vendor = vendor,
+            Category = ScheduleECategory.Repairs,
+            Description = $"{vendor.Name} paid expense",
+            Status = ExpenseStatus.Paid,
+            Amount = amount,
+            IncurredAt = paidAt,
+            PaidAt = paidAt,
+            CreatedAt = paidAt,
+            UpdatedAt = paidAt,
+        };
+        _db.Expenses.Add(expense);
         return expense;
     }
 

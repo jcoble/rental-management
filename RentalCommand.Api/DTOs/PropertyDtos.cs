@@ -90,6 +90,21 @@ public class PropertyResponse
     };
 }
 
+public class PropertyListResponse
+{
+    public IReadOnlyList<PropertyResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
+public class PropertyListQuery : ListQuery
+{
+    [JsonPropertyName("type")]
+    public PropertyType? Type { get; set; }
+    public PropertyStatus? Status { get; set; }
+}
+
 public class CreatePropertyRequest
 {
     [Range(1, int.MaxValue)]

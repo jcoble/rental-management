@@ -414,6 +414,16 @@
 
 		<Dialog.Footer>
 			<Button
+				variant="outline"
+				data-testid="generated-password-manual-confirm"
+				onclick={() => {
+					passwordCopied = true;
+					showSuccess('Password marked as saved.');
+				}}
+			>
+				I saved it manually
+			</Button>
+			<Button
 				data-testid="generated-password-close"
 				disabled={!passwordCopied}
 				onclick={closePasswordDialog}

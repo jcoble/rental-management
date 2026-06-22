@@ -37,6 +37,12 @@ public class VendorService : IVendorService
 
     public async Task<IReadOnlyList<VendorResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, query, ct);
+        return page.Items;
+    }
+
+    public async Task<VendorListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+    {
         var q = _db.Vendors
             .AsNoTracking()
             .Where(v => v.PortfolioId == portfolioId);
@@ -58,12 +64,20 @@ public class VendorService : IVendorService
             _ => query.SortDescending ? q.OrderByDescending(v => v.CreatedAt) : q.OrderBy(v => v.CreatedAt),
         };
 
+        var totalCount = await q.CountAsync(ct);
+
         var items = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return items.Select(VendorResponse.FromEntity).ToList();
+        return new VendorListResponse
+        {
+            Items = items.Select(VendorResponse.FromEntity).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
     }
 
     public async Task<VendorResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)

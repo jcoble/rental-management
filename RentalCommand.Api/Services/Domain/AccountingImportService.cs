@@ -41,10 +41,6 @@ public sealed class AccountingImportService
     private const decimal AutoLinkMinConfidence = 0.80m;
     private const decimal AutoLinkRivalMargin = 0.15m;
 
-    // Account-name fragments that mean "this is a deposit/liability account" (D-9). Default money-in is
-    // Rent; only an account that clearly reads as a security deposit promotes to SecurityDeposit.
-    private static readonly string[] DepositAccountHints = { "security deposit", "deposit held", "tenant deposit" };
-
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
     private readonly AccountingProviderResolver _providerResolver;
@@ -198,27 +194,26 @@ public sealed class AccountingImportService
     /// <summary>
     /// Re-run the transaction import for the rows that were parked as <c>NeedsReview</c>/<c>Unmatched</c>
     /// for a now-confirmed mapping. Called after the landlord confirms an entity mapping so the pending
-    /// money-in/out for that external entity flows into the domain without a full re-pull. DB-side: a
-    /// single query reloads only the parked ledger rows for this connection.
+    /// money-in/out for that external entity flows into the domain without a full re-pull. DB-side:
+    /// each retry lane reloads only its relevant parked external type rows.
     /// </summary>
     public async Task<int> RetryPendingForConnectionAsync(AccountingConnection connection, CancellationToken ct)
     {
-        var parked = await _db.AccountingSyncMaps
+        var parkedQuery = _db.AccountingSyncMaps
             .Where(m => m.PortfolioId == connection.PortfolioId
                 && m.AccountingConnectionId == connection.Id
                 && m.Direction == LedgerDirection.Import
                 && (m.Status == LedgerStatus.NeedsReview || m.Status == LedgerStatus.Unmatched)
-                && m.LocalEntityId == null)
-            .ToListAsync(ct);
-        if (parked.Count == 0)
-        {
-            return 0;
-        }
+                && m.LocalEntityId == null);
 
         // Rehydrate the minimal external shape from the stored metadata so we can re-resolve. We stored
         // the raw QBO element in MetadataJson at first sight; re-decode it for the second attempt.
-        var paymentRows = parked.Where(m => m.ExternalType == ExternalKind.Payment).ToList();
-        var expenseRows = parked.Where(m => m.ExternalType is ExternalKind.Purchase or ExternalKind.Bill).ToList();
+        var paymentRows = await parkedQuery
+            .Where(m => m.ExternalType == ExternalKind.Payment)
+            .ToListAsync(ct);
+        var expenseRows = await parkedQuery
+            .Where(m => m.ExternalType == ExternalKind.Purchase || m.ExternalType == ExternalKind.Bill)
+            .ToListAsync(ct);
 
         int promoted = 0;
         if (paymentRows.Count > 0)
@@ -828,14 +823,15 @@ public sealed class AccountingImportService
         var rows = await _db.AccountingEntityMappings
             .Where(m => m.PortfolioId == conn.PortfolioId
                 && m.AccountingConnectionId == conn.Id
-                && m.ExternalType == ExternalKind.Account)
-            .Select(m => new { m.ExternalId, m.ExternalDisplayName })
+                && m.ExternalType == ExternalKind.Account
+                && m.ExternalDisplayName != null
+                && (m.ExternalDisplayName.ToLower().Contains("security deposit")
+                    || m.ExternalDisplayName.ToLower().Contains("deposit held")
+                    || m.ExternalDisplayName.ToLower().Contains("tenant deposit")))
+            .Select(m => m.ExternalId)
             .ToListAsync(ct);
 
-        return rows
-            .Where(r => IsDepositAccountName(r.ExternalDisplayName))
-            .Select(r => r.ExternalId)
-            .ToHashSet(StringComparer.Ordinal);
+        return rows.ToHashSet(StringComparer.Ordinal);
     }
 
     private async Task<Dictionary<int, int>> LoadActiveLeaseByTenantAsync(int portfolioId, CancellationToken ct)
@@ -846,12 +842,19 @@ public sealed class AccountingImportService
             .Where(l => l.PortfolioId == portfolioId
                 && l.DeletedAt == null
                 && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven))
-            .Select(l => new { l.TenantId, l.Id, l.StartDate })
+            .GroupBy(l => l.TenantId)
+            .Select(g => new
+            {
+                TenantId = g.Key,
+                LeaseId = g
+                    .OrderByDescending(l => l.StartDate)
+                    .ThenByDescending(l => l.Id)
+                    .Select(l => l.Id)
+                    .First(),
+            })
             .ToListAsync(ct);
 
-        return rows
-            .GroupBy(l => l.TenantId)
-            .ToDictionary(g => g.Key, g => g.OrderByDescending(x => x.StartDate).First().Id);
+        return rows.ToDictionary(x => x.TenantId, x => x.LeaseId);
     }
 
     // =====================================================================================
@@ -999,17 +1002,6 @@ public sealed class AccountingImportService
         // provider-shaped JSON is parsed here — the backbone stays 100% provider-agnostic (AC-1).
         return dto.DepositAccountExternalId != null
             && depositAccountIds.Contains(dto.DepositAccountExternalId);
-    }
-
-    private static bool IsDepositAccountName(string? name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return false;
-        }
-
-        var lower = name.ToLowerInvariant();
-        return DepositAccountHints.Any(h => lower.Contains(h, StringComparison.Ordinal));
     }
 
     /// <summary>Map the provider's neutral <c>SourceKind</c> to the ledger's expense external type.</summary>

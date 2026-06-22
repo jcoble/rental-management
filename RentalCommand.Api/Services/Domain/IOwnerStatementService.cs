@@ -19,4 +19,9 @@ public interface IOwnerStatementService
     /// with that owner's net distribution for <paramref name="year"/>. Used by the picker/list UI.
     /// </summary>
     Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetAsync(int portfolioId, int year, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the portfolio-level owner net distribution total for <paramref name="year"/>, summed in SQL.
+    /// </summary>
+    Task<decimal> GetTotalNetToOwnersAsync(int portfolioId, int year, CancellationToken ct = default);
 }

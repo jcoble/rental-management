@@ -7,6 +7,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { propertySchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { debounced } from '$lib/utils/debounce.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -21,9 +22,16 @@
 	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import {
+		formatPropertyStatus,
+		formatPropertyType,
+		propertyStatusOptions,
+		propertyTypeOptions
+	} from '$lib/properties/property-labels';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const PAGE_SIZE = 20;
 
 	// Second coach hop for the "add a unit" checklist step. That step lands here (the property LIST)
 	// and spotlights "open a property", but units are added on the property DETAIL page. When we arrive
@@ -38,14 +46,15 @@
 	}
 
 	// Filter/search/sort/page state persisted in the URL so it survives navigating away and back (and
-	// browser Back/Forward, which remounts and re-seeds from these params). Sort/page are seeded into the
-	// client-side DataGrid (initialSort / page) and mirrored back via its onSortChange/onPageChange.
+	// browser Back/Forward, which remounts and re-seeds from these params). The DataGrid is server-side:
+	// this state drives the API query instead of fetching a broad cap and sorting/paging in Svelte.
 	const initialParams = page.url.searchParams;
 	let search = $state(readGridParam(initialParams, 'q'));
 	let typeFilter = $state(readGridParam(initialParams, 'type'));
 	let statusFilter = $state(readGridParam(initialParams, 'status'));
 	let gridSort = $state(readGridParam(initialParams, 'sort'));
 	let gridPage = $state(readGridParam(initialParams, 'page', 1));
+	const debouncedSearch = debounced(() => search, 300);
 
 	// Reset to page 1 when a filter/search changes — but not on initial mount, so a deep-linked/restored
 	// ?page= loads as-is.
@@ -69,8 +78,25 @@
 	});
 
 	const propertiesQuery = createQuery(() => ({
-		queryKey: ['properties', portfolioId],
-		queryFn: () => properties.list(portfolioId, { take: 500 }),
+		queryKey: [
+			'properties',
+			portfolioId,
+			'page',
+			debouncedSearch.value,
+			typeFilter,
+			statusFilter,
+			gridSort,
+			gridPage,
+			PAGE_SIZE
+		],
+		queryFn: () => properties.listPage(portfolioId, {
+			search: debouncedSearch.value,
+			type: typeFilter || undefined,
+			status: statusFilter || undefined,
+			sort: gridSort || undefined,
+			skip: (gridPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+		}),
 	}));
 
 	const ownersQuery = createQuery(() => ({
@@ -78,21 +104,8 @@
 		queryFn: () => owners.list(portfolioId, { take: 200 }),
 	}));
 
-	// Client-side filter
-	const list = $derived.by(() => {
-		const all = propertiesQuery.data ?? [];
-		const q = search.trim().toLowerCase();
-		return all.filter((p) => {
-			if (typeFilter && p.type !== typeFilter) return false;
-			if (statusFilter && p.status !== statusFilter) return false;
-			if (!q) return true;
-			return (
-				p.name.toLowerCase().includes(q) ||
-				p.addressLine1.toLowerCase().includes(q) ||
-				p.city.toLowerCase().includes(q)
-			);
-		});
-	});
+	const list = $derived(propertiesQuery.data?.items ?? []);
+	const totalCount = $derived(propertiesQuery.data?.totalCount ?? 0);
 
 	const emptyProperty = { name: '', type: 'MultiFamily', status: 'Active', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '' };
 	let showForm = $state(false);
@@ -102,7 +115,7 @@
 	let deleteTarget = $state<Property | null>(null);
 
 	function invalidateList() {
-		queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['properties'] });
 	}
 
 	const savePropertyMutation = createMutation(() => ({
@@ -169,9 +182,6 @@
 		});
 	}
 
-	const propertyTypes = ['SingleFamily', 'MultiFamily', 'Condo', 'Townhome', 'Commercial', 'MixedUse'];
-	const propertyStatuses = ['Active', 'UnderMaintenance', 'Inactive'];
-
 	// DataGrid column definitions
 	const columns: ColumnDef<Property>[] = [
 		{
@@ -193,6 +203,7 @@
 			title: 'Type',
 			sortable: true,
 			mobileRole: 'meta',
+			accessor: (p) => formatPropertyType(p.type),
 		},
 		{
 			key: 'status',
@@ -279,7 +290,7 @@
 	<DataGrid
 		data={list}
 		{columns}
-		loading={propertiesQuery.isLoading}
+		loading={propertiesQuery.isLoading || propertiesQuery.isFetching}
 		emptyMessage="No rentals yet"
 		emptyDescription="A property is one building or address. Add your first to get started."
 		emptyIcon={Building}
@@ -290,32 +301,36 @@
 		getRowKey={(p) => p.id}
 		getRowTestId={() => 'property-row'}
 		data-testid="properties-list"
-		initialSort={gridSort}
-		bind:page={gridPage}
-		onSortChange={(s) => (gridSort = s ?? '')}
+		pageSize={PAGE_SIZE}
+		page={gridPage}
+		totalCount={totalCount}
+		serverSide
+		onPageChange={(page) => (gridPage = page)}
+		sort={gridSort}
+		onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 flex-wrap items-center gap-2">
 				<SearchInput bind:value={search} placeholder="Search properties…" testid="property-search" />
 				<Select.Root type="single" bind:value={typeFilter}>
 					<Select.Trigger class="h-9 w-40 text-sm" data-testid="property-type-filter">
-						{typeFilter || 'All types'}
+						{typeFilter ? formatPropertyType(typeFilter) : 'All types'}
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="" label="All types">All types</Select.Item>
-						{#each propertyTypes as pt}
-							<Select.Item value={pt} label={pt}>{pt}</Select.Item>
+						{#each propertyTypeOptions as option}
+							<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 						{/each}
 					</Select.Content>
 				</Select.Root>
 				<Select.Root type="single" bind:value={statusFilter}>
 					<Select.Trigger class="h-9 w-44 text-sm" data-testid="property-status-filter">
-						{statusFilter || 'All statuses'}
+						{statusFilter ? formatPropertyStatus(statusFilter) : 'All statuses'}
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="" label="All statuses">All statuses</Select.Item>
-						{#each propertyStatuses as ps}
-							<Select.Item value={ps} label={ps}>{ps}</Select.Item>
+						{#each propertyStatusOptions as option}
+							<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 						{/each}
 					</Select.Content>
 				</Select.Root>
@@ -339,10 +354,10 @@
 			<div>
 				<span class="mb-1 block text-xs font-medium text-muted-foreground">Status</span>
 				<Select.Root type="single" bind:value={form.status}>
-					<Select.Trigger class="w-full" data-testid="property-status-input">{form.status || 'Select status'}</Select.Trigger>
+					<Select.Trigger class="w-full" data-testid="property-status-input">{form.status ? formatPropertyStatus(form.status) : 'Select status'}</Select.Trigger>
 					<Select.Content>
-						{#each propertyStatuses as ps}
-							<Select.Item value={ps} label={ps}>{ps}</Select.Item>
+						{#each propertyStatusOptions as option}
+							<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 						{/each}
 					</Select.Content>
 				</Select.Root>
