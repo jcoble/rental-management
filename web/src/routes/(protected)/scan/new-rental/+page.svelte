@@ -17,6 +17,7 @@
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
 	import { propertySchema, unitSchema, tenantSchema, leaseSchema, parseForm } from '$lib/schemas';
 	import { toLeasePrefill, type PrefillConfidence } from '$lib/scan/lease-prefill';
+	import { findNewRentalExistingUnitId, seedNewRentalLateFeeAmount } from '$lib/scan/new-rental-state';
 	import { stitchImagesToPdf } from '$lib/scan/stitch-pdf';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 
@@ -100,6 +101,7 @@
 	}));
 
 	let seeded = $state(false);
+	let unitChoiceSeeded = $state(false);
 	$effect(() => {
 		const d = draftQuery.data;
 		if (!d || phase !== 'processing') return;
@@ -135,7 +137,7 @@
 		leaseForm.endDate = values.endDate;
 		leaseForm.monthlyRent = values.monthlyRent;
 		leaseForm.securityDeposit = values.securityDeposit;
-		leaseForm.lateFeeAmount = values.lateFee;
+		leaseForm.lateFeeAmount = seedNewRentalLateFeeAmount(values.lateFee);
 		leaseForm.rentDueDay = values.rentDueDay || '1';
 		// auto-fill badge set
 		const af = new Set<string>();
@@ -160,9 +162,23 @@
 		const prop = d.leaseProposal?.property;
 		if (prop?.action === 'link' && prop.existingId != null) propertyChoice = String(prop.existingId);
 		else propertyChoice = CREATE;
+		unitChoice = CREATE;
+		unitChoiceSeeded = false;
 		seeded = true;
 		phase = 'steps';
 		step = 0;
+	});
+
+	$effect(() => {
+		if (phase !== 'steps' || isCreatingProperty || unitChoiceSeeded || unitChoice !== CREATE) return;
+		const unitId = findNewRentalExistingUnitId(
+			unitForm.unitNumber,
+			draftQuery.data?.leaseProposal?.unit,
+			unitsQuery.data ?? []
+		);
+		if (!unitId) return;
+		unitChoice = unitId;
+		unitChoiceSeeded = true;
 	});
 
 	// ----- step navigation with per-step validation (AC-1) -----

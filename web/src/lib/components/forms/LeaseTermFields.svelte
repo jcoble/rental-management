@@ -81,6 +81,7 @@
 				<AutoFilledBadge show={filled('lateFeeAmount')} confidence={conf('lateFeeAmount')} />
 			</div>
 			<Input data-testid={`${testidPrefix}-late-fee-input`} bind:value={form.lateFeeAmount} placeholder="Late fee" />
+			{#if errors.lateFeeAmount}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-late-fee-error`}>{errors.lateFeeAmount}</p>{/if}
 		</div>
 		<div>
 			<div class="mb-1 flex items-center gap-2">
