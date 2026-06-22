@@ -1067,3 +1067,57 @@ Remaining:
 - Shared `DataGrid` defaults to client-side sort/page, and several DB-backed list screens still fetch broad capped lists before Svelte filtering/sorting. Treat these remaining screens as unresolved production-scale risks until converted to server-side paging/filtering/sorting or proven bounded by design.
 - `FileDrop` unsupported drag/drop now rejects before upload; route-specific upload failure states remain open where they depend on each page's mutation/error handling.
 - Banking/accounting match suggestions have been moved to SQL-ranked candidate queries for the audited review-queue and accounting-grid surfaces. Continue the remaining static sweep outside this repaired controller/service scope before making a full-app DB-side claim.
+
+## Pass 3 Fresh-User Full-UI Continuation
+
+Date: 2026-06-22
+Branch: `tsk-397-full-ui-pass-3`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-3`
+
+Local stack:
+- Web: `https://localhost:5827`
+- API: `https://localhost:5826` (`http://localhost:5825`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass3-db`, database `rentalcommand_tsk397_pass3`, host port `5757`
+- Assistant provider: `claude-cli`, model `sonnet`
+- Safe wrapper: `scripts/qa/start-scan-audit-local.sh`; demo data disabled and outbound email/SMS provider credentials blanked.
+
+Synthetic account:
+- Mina Alvarez, `tsk397.pass3.20260622153516@example.local`
+- Chose "Set up my real portfolio" from `/choose-setup`; DB proof before scan showed zero properties, units, tenants, leases, and scan drafts.
+
+Baseline artifacts:
+- `scripts/qa/inventory-web-surfaces.mjs` wrote `output/qa/web-surface-inventory.{json,md}` with 85 classified routes and the current acceptance matrix.
+- `scripts/qa/generate-production-scale-scan-fixtures.py` wrote 480 sanitized local scan files under `output/qa/production-scale-scans`: 40 lease PDFs, 40 lease camera JPEGs, 80 expense PDFs, 80 expense camera JPEGs, 40 payment PDFs, 40 payment camera JPEGs, 40 application PDFs, 40 application camera JPEGs, 40 work-order PDFs, and 40 work-order camera JPEGs.
+- Baseline checks: `rtk pnpm --dir web test:unit` passed 85/85; `rtk pnpm --dir web check` passed with the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+
+### Fresh Scan-First Lease Spine
+
+Acceptance criteria:
+- A brand-new verified user can choose live setup without demo data.
+- The user can reach a scan-first path from the app shell and create the first property, unit, tenant, and lease from a lease PDF without direct DB seeding.
+- Generated property/unit/tenant/lease records preserve user-reviewed edits and expose the scanned source document on the resulting lease detail.
+
+Evidence:
+- Registered through `/register`, verified via the local outbox link, logged in, chose live setup, and confirmed zero portfolio records before scanning.
+- `/onboarding` still lands on the manual property step; scan-first setup is discoverable from the sidebar `/scan`, not primary onboarding. This remains a product gap unless fixed in this pass.
+- `/scan` empty state showed no drafts, a visible `New rental from your lease` CTA, the generic scan type selector, and the `Bulk import leases` link.
+- Uploaded `output/qa/production-scale-scans/01-leases/lease-001-1a.pdf` through `/scan/new-rental`.
+- Engine proof: `claude-cli extraction: TEXT-FIRST (born-digital PDF, 442 chars of text - no PDF/vision sent)` and `Scan extraction succeeded for draft 1 ... Lease, Reviewing`.
+- Browser proof:
+  - Step 1 showed `Step 1 of 5 · Property` and populated Cedar Point Flats, 742 Evergreen St, Columbus, OH 43200.
+  - Step 2 showed Unit 1A and rent `$1125.00`; beds/baths were not present in the lease fixture and were edited to `2` / `1`.
+  - Step 3 showed tenant Avery Ellis; email/phone/emergency contact were manually entered because the fixture omitted contact fields.
+  - Step 4 showed lease `QA-2026-001-1A`, Jan 1 2026 to Jan 1 2027, rent/deposit `$1125.00`, due day `1`, status Active.
+  - Step 5 review listed one pending create operation; `Confirm & create` navigated to `/leases/1`.
+- Lease detail rendered `Cedar Point Flats · Unit 1A · Avery Ellis`, active status, overview tabs, ledger link, property/unit/tenant links, and `View scanned document (PDF)` at `/lease-file/1`.
+- DB proof: one property, one unit, one tenant, and one lease persisted with lease `QA-2026-001-1A`, monthly rent `1125.00`, unit beds/baths `2/1`, and tenant email `avery.ellis.tsk397@example.local`.
+
+New pass-3 findings:
+- `TSK397-B020` — scan-new-rental review loads broad support lists (`GET /api/v1/properties?take=200` and `GET /api/v1/tenants?take=200`) after extraction. This is better than the former `take=500` grid pattern but still violates the hard production-scale rule for unbounded support lists once portfolios grow. Needs a bounded search/page contract or a route-specific lookup strategy before claiming full DB-side compliance for this workflow.
+- `TSK397-B021` — lease ledger opening-balance explanation formatted cents-bearing amounts with a trimmed decimal (`$225.3`) while the summary cards showed `$225.30`. Repro: create an opening balance of `225.30` from `/leases/1` → Ledger. Root cause: `LedgerExplanation.Money` used `$#,0.##`, which drops insignificant trailing zeros. Fix: whole-dollar values remain compact, cent-bearing values now render with exactly two decimals. Regression: `OpeningBalanceServiceTests.GetLedgerAsync_FormatsOpeningBalanceCentsInPlainEnglishExplanation`.
+
+Additional lease-detail evidence:
+- Agreement tab: active lease blocks sending for signature with explanatory copy, `Regenerate lease agreement (PDF)` showed success toast, and `Download agreement` downloaded `.playwright-cli/lease-agreement-1.pdf` (`80.0 KB`).
+- Ledger tab: `Set opening balance` modal saved synthetic balance `$225.30` with note `TSK397 pass3 starting balance`; after API restart with the fix, browser proof showed charged `$225.30`, balance `$225.30`, and explanation `Opening balance carried over from before Rental Command — $225.30 as of Jan 1, 2026.`
+
+Status: Pass for fresh-user PDF scan-first creation of the initial rental spine, lease agreement generation/download, and opening-balance happy path after `TSK397-B021` fix. Camera-image lease, batch/retry/reject, and onboarding scan-first discoverability remain open in this pass.
