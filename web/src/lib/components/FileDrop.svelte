@@ -5,11 +5,15 @@
 	let {
 		onselected,
 		onselectedmany,
-		multiple = false
+		multiple = false,
+		title = 'Drop a receipt, invoice, or maintenance photo here',
+		helperText = 'or click to browse — PDF, JPG, PNG accepted'
 	}: {
 		onselected?: (file: File) => void;
 		onselectedmany?: (files: File[]) => void;
 		multiple?: boolean;
+		title?: string;
+		helperText?: string;
 	} = $props();
 
 	let isDragging = $state(false);
@@ -122,7 +126,7 @@
 		<svg class="mb-3 h-10 w-10 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 			<path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
 		</svg>
-			<p class="text-sm font-medium text-foreground">Drop a receipt, invoice, or maintenance photo here</p>
-		<p class="mt-1 text-xs text-muted-foreground">or click to browse — PDF, JPG, PNG accepted</p>
+		<p class="text-sm font-medium text-foreground">{title}</p>
+		<p class="mt-1 text-xs text-muted-foreground">{helperText}</p>
 	{/if}
 </div>

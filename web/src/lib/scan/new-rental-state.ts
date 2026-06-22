@@ -61,3 +61,18 @@ export function seedNewRentalLateFeeAmount(extractedLateFee: string | null | und
 	const value = (extractedLateFee ?? '').trim();
 	return value || '0';
 }
+
+export function formatNewRentalStepLabel(step: number, stepLabels: readonly string[]): string {
+	const totalSteps = stepLabels.length + 1;
+	if (step < stepLabels.length) {
+		return `Step ${step + 1} of ${totalSteps} · ${stepLabels[step]}`;
+	}
+
+	return `Step ${totalSteps} of ${totalSteps} · Review & confirm`;
+}
+
+export function formatNewRentalStepPosition(step: number, stepLabels: readonly string[]): string {
+	const totalSteps = stepLabels.length + 1;
+	const currentStep = Math.min(Math.max(step + 1, 1), totalSteps);
+	return `${currentStep}/${totalSteps}`;
+}
