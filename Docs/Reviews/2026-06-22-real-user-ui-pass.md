@@ -1228,3 +1228,100 @@ Verification after Unit Command Center fix:
 - `rtk pnpm --dir web check` passed with the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
 
 Status: Pass for the covered lease, rent, and maintenance unit workflows after the tab-sync fix. Remaining unit tabs still need the continuation pass: work-order detail actions, Documents, Expenses, Timeline, and lifecycle actions beyond opening/cancelling destructive confirmations.
+
+## Pass 5 Fresh-User Unit, Property, and Money Continuation
+
+Date: 2026-06-22
+Branch: `tsk-397-full-ui-pass-5`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-5`
+
+Local stack:
+- Web: `https://localhost:5847`
+- API: `https://localhost:5846` (`http://localhost:5845`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass5-db`, database `rentalcommand_tsk397_pass5`, host port `5760`
+- Assistant provider: `claude-cli`, model `sonnet`, `Assistant__ImageDetail=low`, `Assistant__UseImageOcr=false`
+- Safe wrapper: `scripts/qa/start-scan-audit-local.sh`; demo data disabled.
+
+Synthetic account:
+- Mina Alvarez Pass 5, `tsk397.pass5.20260622165100@example.local`
+- Registered, verified through the local outbox email link, logged in, chose "Set up my real portfolio", and confirmed zero live properties, units, tenants, leases, and scan drafts before the first scan.
+
+### Image Scan-First Lease, Property, Tenant, and Unit Corrections
+
+Acceptance criteria:
+- A new live user can create the first property/unit/tenant/lease from a camera-style lease image.
+- The resulting object pages expose enough controls to correct extraction omissions and continue normal property-manager work.
+- Related links from lease, property, tenant, and unit pages route to the intended records.
+
+Evidence:
+- Uploaded `output/qa/production-scale-scans/01-leases-camera/lease-006-2b.jpg` through `/scan/new-rental`.
+- Engine proof: `claude-cli extraction: VISION read (application/pdf, no extractable text)` and `Scan extraction succeeded for draft 1 (model claude-cli:sonnet): 14 field(s) with a value -> Lease, Reviewing`.
+- The scan draft became reviewable from `/scan` and created lease `QA-2026-006-2B` for Harbor View Homes, Unit 2B, tenant Finley Vega, rent `$1500.00`.
+- Corrected extracted omissions through normal UI:
+  - Unit beds/baths updated to `2 / 1` from the parent property Units grid.
+  - Property purchase price, land value, and in-service date updated from property Edit.
+  - Tenant email, phone, and emergency contact updated from tenant Edit.
+- Unit Command Center reflected the corrected `2 bd · 1 ba`, active lease, tenant, document count, and unit links.
+
+New pass-5 findings:
+- `TSK397-B026` — `/scan/new-rental` processing did not transition to the completed review when extraction finished. Reload returned to the upload page, while `/scan` correctly showed the draft as `Ready to review`. Recoverable, but the in-flight processing page leaves the user at a dead end.
+- `TSK397-B027` — Camera-image scan records still use PDF-facing copy in multiple places. Examples: lease "View scanned document (PDF)", lease note "Imported from scanned lease PDF", property/tenant notes "Created from scanned lease PDF". The engine log also reported the JPEG as `application/pdf`, so this needs a MIME/copy audit before declaring image parity complete.
+- `TSK397-B028` — Unit Command Center has no direct Edit unit action. Users can correct beds/baths/status only by navigating back to the parent property Units grid.
+- `TSK397-B029` — Clean live setup still lands on manual Add Property onboarding, while the flagship scan-first path is only discoverable through the sidebar Scan / Add route.
+
+Status: Pass for creating and correcting the first image-scanned rental spine, with the listed scan UX/copy gaps remaining open.
+
+### Property Loans and Recurring Expenses
+
+Acceptance criteria:
+- Property detail supports creating, editing, expanding, and safely cancelling destructive actions for mortgage/loan records.
+- Property recurring expenses support create, edit, and delete confirmation using user-facing category labels.
+
+Evidence:
+- Added and edited loan `First Local Bank` with original principal `$240,000.00`, current principal `$237,900.00`, `6.25%`, 360-month term, start date `2026-06-01`, due day `1`, monthly P&I `$1,477.29`, and escrow `$390.00`.
+- Expanded amortization schedule. Current user-facing state: `No payments generated yet. The debt-service worker fills this in monthly.`
+- Delete loan opened `Remove loan` confirmation and was cancelled.
+- Added and edited recurring expense `Property insurance premium`, category Insurance, monthly amount `$192.75`, start date `2026-07-01`.
+- Delete recurring expense opened confirmation and was cancelled.
+
+Fixed in this pass:
+- `TSK397-B030` — Recurring expense and other expense category controls leaked raw Schedule E enum tokens such as `AutoTravel`, `CleaningMaintenance`, `LegalProfessional`, and `MortgageInterest`. Fix: added shared `expense-categories.ts` labels/options and wired property recurring expenses, unit expenses, accounting grid/filter/new-expense modal, and expense detail to the same readable labels. Regression: `web/src/lib/accounting/expense-categories.test.ts`.
+
+Status: Pass after category-label fix for covered loan and recurring-expense workflows.
+
+### Unit Expense Scan and Accounting Expense Detail
+
+Acceptance criteria:
+- Unit Command Center expense scan/upload path should let a user attach a camera-style receipt, review extracted fields, assign context, and create a usable expense.
+- Accounting expense list/detail should preserve category labels, receipt preview/details, edit state, history, and destructive confirmation behavior.
+
+Evidence:
+- From Unit Command Center, `Scan / Upload` opened generic `/scan` with Receipt/Bill selected.
+- Uploaded `output/qa/production-scale-scans/02-expenses-camera/expense-032.jpg`.
+- Draft `/scan/2` initially showed Processing with an image preview, then review fields from `claude-cli:sonnet`: vendor `Apex Plumbing`, receipt `RCPT-0032`, subtotal `$77.50`, tax `$5.00`, total `$82.50`, payment method Visa, card last4 `4242`, and transaction date `2026-09-08`.
+- The scan review category dropdown already used readable labels. Because unit/property context was not retained, Harbor View Homes had to be selected manually before confirming.
+- Confirming created an expense, and expense detail rendered the scanned receipt image preview and receipt details. Edit saved updated notes and billable-to-owner state, with history updated.
+
+New pass-5 findings:
+- `TSK397-B031` — Unit Command Center `Scan / Upload` loses unit/property context and drops the user into generic `/scan`; the receipt review defaulted to `-- No property --` and required manual reassignment.
+- `TSK397-B032` — Receipt scan confirmation promoted vendor text into the description while the resulting expense still showed `No vendor` when the vendor did not already exist. This may need vendor creation/linking behavior, not just display formatting.
+- `TSK397-B033` — Receipt line-item extraction produced descriptions with blank amounts for this camera fixture, and confirmation still allowed the expense. Decide whether line items are optional hints or should block/warn when incomplete.
+
+Fixed in this pass:
+- `TSK397-B034` — Expense detail `Delete` immediately deleted the record and navigated to `/accounting` with no confirmation. Fix: expense detail now opens a shared `ConfirmDialog` with `Delete "<description>"? This cannot be undone.` and only calls the delete mutation on confirmation. Regression: `web/src/lib/accounting/expense-detail-actions.test.ts`.
+
+Browser proof after fixes:
+- Created replacement expense `Retest faucet repair parts`, amount `$82.50`, category `Repairs & maintenance`, property Harbor View Homes, date `2026-09-08`.
+- Accounting ledger rendered row category `Repairs & maintenance` and property Harbor View Homes.
+- Expense detail `/accounting/expenses/2` rendered subtitle `Repairs & maintenance · $82.5 · Pending`, category `Repairs & maintenance`, notes, and history.
+- Clicking Delete opened `Delete expense` confirmation and stayed on `/accounting/expenses/2`; Cancel closed the dialog without deleting.
+
+Verification:
+- `rtk pnpm --dir web test:unit` passed 98/98.
+- `rtk pnpm --dir web check` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+
+Status: Pass after fixes for covered accounting category labels and expense-detail delete confirmation. Unit scan context and vendor/line-item promotion remain open.
+
+### Deferred User-Reported Item
+
+- `TSK-399` — User reported that the Unit Command Center `Send renewal` link does nothing when pressed. This was captured for later and intentionally not fixed in this pass.

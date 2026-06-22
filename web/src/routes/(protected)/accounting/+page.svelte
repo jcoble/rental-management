@@ -21,6 +21,11 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import { paymentTypeLabel } from '$lib/utils/payment-labels';
+	import {
+		EXPENSE_CATEGORIES,
+		EXPENSE_CATEGORY_OPTIONS,
+		formatExpenseCategory
+	} from '$lib/accounting/expense-categories';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -55,12 +60,6 @@
 	const PAGE_SIZE = 20;
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
-	// Schedule E categories (mirrors RentalCommand.Core.Enums.ScheduleECategory — the values the API accepts).
-	const EXPENSE_CATEGORIES = [
-		'Advertising', 'AutoTravel', 'CleaningMaintenance', 'Commissions', 'Insurance',
-		'LegalProfessional', 'ManagementFees', 'MortgageInterest', 'Repairs', 'Supplies',
-		'Taxes', 'Utilities', 'Depreciation', 'Other'
-	];
 	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
 
 	// --- Ledger grid state, persisted in the URL query string -------------------
@@ -584,6 +583,7 @@
 			key: 'category',
 			title: 'Category',
 			mobileRole: 'meta',
+			accessor: (t) => t.kind === 'Expense' ? formatExpenseCategory(t.category) : t.category,
 		},
 		{
 			key: 'propertyName',
@@ -1061,12 +1061,12 @@
 					</Select.Root>
 					<Select.Root type="single" bind:value={transactionCategoryFilter}>
 						<Select.Trigger data-testid="transaction-category-filter">
-							{transactionCategoryFilter || 'All categories'}
+							{transactionCategoryFilter ? formatExpenseCategory(transactionCategoryFilter) : 'All categories'}
 						</Select.Trigger>
 						<Select.Content>
 							<Select.Item value="" label="All categories">All categories</Select.Item>
-							{#each (transactionKindFilter === 'Payment' ? PAYMENT_TYPES : transactionKindFilter === 'Expense' ? EXPENSE_CATEGORIES : transactionKindFilter === 'Bank' ? ['Deposit', 'Withdrawal'] : [...PAYMENT_TYPES, ...EXPENSE_CATEGORIES, 'Deposit', 'Withdrawal']) as c}
-								<Select.Item value={c} label={c}>{c}</Select.Item>
+							{#each (transactionKindFilter === 'Payment' ? PAYMENT_TYPES.map((value) => ({ value, label: value })) : transactionKindFilter === 'Expense' ? EXPENSE_CATEGORY_OPTIONS : transactionKindFilter === 'Bank' ? ['Deposit', 'Withdrawal'].map((value) => ({ value, label: value })) : [...PAYMENT_TYPES.map((value) => ({ value, label: value })), ...EXPENSE_CATEGORY_OPTIONS, ...['Deposit', 'Withdrawal'].map((value) => ({ value, label: value }))]) as option}
+								<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 							{/each}
 						</Select.Content>
 					</Select.Root>
@@ -1323,11 +1323,11 @@
 					<span class="mb-1 block text-xs text-muted-foreground">Category</span>
 					<Select.Root type="single" bind:value={expenseForm.category}>
 						<Select.Trigger class="w-full" data-testid="expense-category-input">
-							{expenseForm.category || 'Select category'}
+							{expenseForm.category ? formatExpenseCategory(expenseForm.category) : 'Select category'}
 						</Select.Trigger>
 						<Select.Content>
-							{#each EXPENSE_CATEGORIES as cat}
-								<Select.Item value={cat} label={cat}>{cat}</Select.Item>
+							{#each EXPENSE_CATEGORY_OPTIONS as option}
+								<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 							{/each}
 						</Select.Content>
 					</Select.Root>

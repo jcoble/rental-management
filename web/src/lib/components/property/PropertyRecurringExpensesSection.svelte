@@ -3,6 +3,10 @@
 	import { recurringExpenses, type RecurringExpense } from '$lib/api/endpoints/recurring-expenses';
 	import { recurringExpenseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import {
+		EXPENSE_CATEGORY_OPTIONS,
+		formatExpenseCategory
+	} from '$lib/accounting/expense-categories';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
@@ -22,8 +26,7 @@
 	}));
 	const list = $derived(query.data ?? []);
 
-	const CATEGORIES = ['Advertising', 'AutoTravel', 'CleaningMaintenance', 'Commissions', 'Insurance', 'LegalProfessional', 'ManagementFees', 'MortgageInterest', 'Repairs', 'Supplies', 'Taxes', 'Utilities', 'Depreciation', 'Other'];
-	const categoryOptions = CATEGORIES.map((value) => ({ value, label: value }));
+	const categoryOptions = EXPENSE_CATEGORY_OPTIONS;
 	const frequencyOptions = [
 		{ value: 'Monthly', label: 'Monthly' },
 		{ value: 'Quarterly', label: 'Quarterly' },
@@ -124,7 +127,7 @@
 
 	const columns: ColumnDef<RecurringExpense>[] = [
 		{ key: 'description', title: 'Description', sortable: true, mobileRole: 'title' },
-		{ key: 'category', title: 'Category', sortable: true, mobileRole: 'subtitle' },
+		{ key: 'category', title: 'Category', sortable: true, mobileRole: 'subtitle', accessor: (t) => formatExpenseCategory(t.category) },
 		{ key: 'amount', title: 'Amount', format: 'currency', sortable: true, mobileRole: 'metric' },
 		{ key: 'frequency', title: 'Frequency', mobileRole: 'meta' },
 		{ key: 'nextRunDate', title: 'Next run', format: 'date', sortable: true, mobileRole: 'meta' },
