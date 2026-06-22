@@ -332,7 +332,10 @@ public class ScanController : ManagementControllerBase
                 return (null, null, null);
 
             var tenant = ReadValue(root, "tenant_name") ?? ReadValue(root, "tenantName");
-            var unit = ReadValue(root, "unit_id") ?? ReadValue(root, "unitId");
+            var unit = ReadValue(root, "unit_number")
+                ?? ReadValue(root, "unitNumber")
+                ?? ReadValue(root, "unit_id")
+                ?? ReadValue(root, "unitId");
             var start = ReadValue(root, "start_date") ?? ReadValue(root, "startDate");
             var end = ReadValue(root, "end_date") ?? ReadValue(root, "endDate");
 
