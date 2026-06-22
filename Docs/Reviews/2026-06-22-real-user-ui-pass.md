@@ -3,6 +3,8 @@
 Date: 2026-06-22
 Branch: `tsk-397-real-user-ui-pass`
 Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-real-user-ui-pass`
+Continuation branch: `tsk-397-ui-inventory-continuation`
+Continuation worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-ui-inventory-continuation`
 
 ## Scope
 
@@ -758,6 +760,45 @@ Evidence:
 
 Status: Pass after fixes for the covered spreadsheet import workflow.
 
+### Settings Security
+
+Acceptance criteria:
+- Security page loads for a signed-in local-password account and the Back to settings link is available.
+- Current, new, and confirmation password visibility toggles change the input type and accessible label state.
+- Submit stays disabled until current password is present, new password satisfies the displayed policy, and confirmation matches.
+- Password policy hints and mismatch validation are visible before submit.
+- Wrong-current-password submission returns a user-facing error and does not change the password.
+- Successful password change clears all password fields and shows success.
+- The test account password is changed back and verified before continuing the audit.
+
+Evidence:
+- Browser proof on `https://localhost:5807/settings/security` as Nora Vale exercised all three show/hide toggles, weak-password rules, mismatch validation, disabled submit, wrong-current-password API error, successful change to `AuditTemp!24`, and successful change-back to `AuditPass!23`.
+- Proof script network log showed three enhanced form posts to `/settings/security?/changePassword`: wrong current, change to temporary password, and change back.
+- Final API login verification with `AuditPass!23` returned success; `restored: true`.
+- Browser page errors and console warnings/errors were zero.
+- `rtk env PW_BASE_URL=https://localhost:5807 API_BASE_URL=https://localhost:5806 PW_EMAIL=tsk397.full.1782131040@example.local PW_PASSWORD='AuditPass!23' PW_TEMP_PASSWORD='AuditTemp!24' pnpm --dir web exec node output/playwright/security-proof.mjs`: pass with `restored: true`.
+
+Status: Pass for the local-password account workflow. Google-only/no-local-password messaging and stale-session failure state remain open account/session variants.
+
+### Settings Accounting
+
+Acceptance criteria:
+- Accounting settings page loads for a signed-in account and exposes Back to settings navigation.
+- Configured-but-not-connected provider state renders the provider card, status, explanatory copy, and connect action without showing connected-only import, mapping, direction, or disconnect controls.
+- OAuth callback error return renders a user-facing toast and strips the query parameter so refresh does not repeat the toast.
+- Browser pass does not initiate external OAuth, import, disconnect, or provider mutation without sandbox authorization.
+
+Evidence:
+- API status proof for Nora Vale returned QuickBooks `configured:true`, `status:null`, `pullEnabled:true`, `pushEnabled:false`, and zero imported/review counts.
+- Playwright CLI login on `https://localhost:5807/login` reached `/settings/accounting` as Nora Vale.
+- Snapshot rendered `Connect your accounting`, Back to settings, QuickBooks status `Not connected`, explanatory provider copy, and one visible provider action: `Connect QuickBooks`.
+- The connected-only controls were not visible in this state: pull toggle, disabled push row, date range import, mappings, review queue, and disconnect.
+- Navigating to `/settings/accounting?error=access_denied` displayed `Connection cancelled - you did not grant access.` and rewrote the URL back to `/settings/accounting`.
+- Back to settings clicked through to `/settings`.
+- Browser-side requests stayed on local same-origin app/API routes; console warnings/errors remained zero.
+
+Status: Partial pass for the local unconnected accounting shell and OAuth-return error banner. The actual QuickBooks connect/reconnect/disconnect, import, direction toggles, mapping confirmation, and review-queue create-target workflows remain gated until sandbox credentials are available.
+
 ## Route Inventory For Continued Pass
 
 Core route map to exercise next:
@@ -773,7 +814,7 @@ Core route map to exercise next:
 ## Deferred External Integrations
 
 - Plaid banking: requires sandbox login/connect flow.
-- QuickBooks/accounting provider: requires sandbox credentials.
+- QuickBooks/accounting provider: unconnected settings shell is browser-proven; connected-provider workflows require sandbox credentials.
 
 ## Verification
 
@@ -821,6 +862,8 @@ Core route map to exercise next:
 - `rtk env PW_BASE_URL=https://localhost:5807 PW_EMAIL=tsk397.full.1782131040@example.local PW_PASSWORD='AuditPass!23' pnpm --dir web exec playwright test e2e/import.spec.ts --project=chromium --reporter=list`: 1 passed.
 - `rtk pnpm --dir web test:unit`: 84 passed.
 - `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings after the import-page copy fixes.
+- `rtk env PW_BASE_URL=https://localhost:5807 API_BASE_URL=https://localhost:5806 PW_EMAIL=tsk397.full.1782131040@example.local PW_PASSWORD='AuditPass!23' PW_TEMP_PASSWORD='AuditTemp!24' pnpm --dir web exec node output/playwright/security-proof.mjs`: pass with `restored: true`.
+- Browser settings-accounting proof on `https://localhost:5807`: QuickBooks configured-but-not-connected shell rendered only Back to settings and Connect QuickBooks, OAuth `access_denied` return showed a toast and stripped the query parameter, back navigation reached `/settings`, no external provider action was clicked, and console warnings/errors were zero.
 - Browser property-label proof on `https://localhost:5807`: `/properties`, type filter, New Property modal, and property detail use landlord-facing labels while preserving API enum values.
 - Browser FileDrop proof on `https://localhost:5807/scan`: dragged unsupported CSV emitted a rejection warning, did not render as the selected file, and did not trigger `POST /api/v1/scans`.
 - Browser properties grid proof on `https://localhost:5807`: initial load and Name sort used `/api/v1/properties/page?take=20...`; no `/api/v1/properties?take=500` grid fetch occurred.
@@ -840,7 +883,7 @@ Core route map to exercise next:
 
 ## Open While In Progress
 
-- This is not yet a claim that every button/modal/grid/state in the product has been exercised. Continue real-user flow through dashboard cards/actions, settings/security, settings/accounting, audit/admin, docs/help, assistant delivery variants, portal, banking connection review states, scan batch/retry/reject variants, tenant-notice draft/send states, row delete confirmations, and remaining CRUD unhappy/edge states.
+- This is not yet a claim that every button/modal/grid/state in the product has been exercised. Continue real-user flow through dashboard cards/actions, settings/security account/session variants, settings/accounting connected-provider states, audit/admin, docs/help, assistant delivery variants, portal, banking connection review states, scan batch/retry/reject variants, tenant-notice draft/send states, row delete confirmations, and remaining CRUD unhappy/edge states.
 - Plaid and QuickBooks remain deferred until sandbox credentials are available.
 - Continue static DB-side sweep outside the repaired report/accounting/banking controller/service scope; no endpoint should be marked production-scale until generated SQL is confirmed for filtering, sorting, paging, grouping, and aggregation. Read-only follow-up found additional high-confidence DB-side risks in lease ledger, unit timeline, daily briefing, inspection completion, unpaged document/deposit/opening-balance/conversation/portal lists, admin users, and broad `take:100/500` grid screens. Lease ledger, unit timeline, daily briefing, inspection completion, Command Center unit search, the scan draft grid, staff messages grid, staff messages unread count, staff messages compose tenant picker, and the properties/tenants/leases/units/maintenance/appointments/vendors/owners/applications/deposits/recurring-maintenance primary grids are now fixed with focused regressions; other unpaged/capped lists and shared-grid risks remain open.
 - Tenant-notice draft review/approve/send still needs an eligible synthetic notice condition and provider-safe channel setup.
@@ -849,12 +892,12 @@ Core route map to exercise next:
 
 The current pass is not a complete every-control inventory. The next new-user pass must explicitly cover:
 - `/scan`, `/scan/batch`, `/scan/batch/[id]`, `/scan/new-rental`, and `/scan/[draftId]`: batch creation/detail, mixed success/failure states, retry, reject, hold, bulk operations, progress/error banners, draft edit/re-open, validation failures, and destructive confirmations.
-- `/banking`, `/settings/accounting`, and `/plaid/auth`: Plaid unconfigured/configured states, disabled connect, sandbox exchange validation, manual import invalid/missing/success states, transaction status filters, match/ignore/unignore/clear/review controls, provider connect/reconnect/disconnect, OAuth return banners, pull toggles, disabled push, date range import, mapping confirm, and provider-safe review queue create-target links.
+- `/banking`, `/settings/accounting`, and `/plaid/auth`: Plaid unconfigured/configured states, disabled connect, sandbox exchange validation, manual import invalid/missing/success states, transaction status filters, match/ignore/unignore/clear/review controls, provider connect/reconnect/disconnect, pull toggles, disabled push, date range import, mapping confirm, and provider-safe review queue create-target links. `/settings/accounting` unconnected QuickBooks shell and OAuth `access_denied` return banner are browser-proven.
 - `/notices` and `/tenants/[id]` notice panels: generate drafts, filter, edit/save, fair-housing acknowledgement, suggested rewrite, channel checkboxes, approve/send, dismiss, conversation link, force renewal/move-out drafts, retry, no-channel blocking, provider-safe portal-only sends, and reload persistence.
 - `/properties`, `/properties/[id]`, `/units`, `/units/[id]`, `/tenants`, `/tenants/[id]`, `/leases`, and `/leases/[id]`: detail tabs, inline edits, contextual action menus, archive/delete/restore where available, remaining non-primary-grid search/filter/sort paths, empty states, validation, save/cancel, and success/error banners. Properties, tenants, leases, units, maintenance, recurring-maintenance, owners, applications, deposits, vendors, and appointment-list primary grids are server-side/page browser-proven.
 - `/appointments` and `/appointments/[id]`: calendar month/week/agenda date-window loading, drag-reschedule failure snapback, create-at-slot, detail edit/delete, and calendar/list cross-invalidation. The appointments list primary grid is server-side/page browser-proven.
 - Portal routes `/portal`, `/portal/messages`, `/portal/maintenance`, `/portal/payments`, `/portal/notifications`, `/portal/appointments`, and `/portal/lease`: dashboard links, compose/reply/cancel/delete, Enter vs Shift+Enter, unread invalidation, maintenance request create with photo preview/remove/failure, detail/timeline, Stripe unavailable, checkout success/cancel params, autopay on/off, notification action links/read state, appointment real workflow or placeholder defect, pagination, empty/loading/error states, and optimistic-update failures.
-- `/settings/security` and `/settings/accounting`: every toggle/submit/reset/copy action, confirmations, persistence after reload, provider-unconfigured states, review queue controls, and stale-session failure behavior.
+- `/settings/accounting`: connected-provider toggle/submit/reset/copy actions, confirmations, persistence after reload, provider-unconfigured states, review queue controls, and stale-session failure behavior. `/settings/security` still needs Google-only/no-local-password and stale-session variants; local password-change controls are browser-proven.
 - `/admin/users`, `/admin/audit`, and `/superadmin/engine`: advanced filters, date ranges, row actions, role/status toggles, generated-password/copy escapes, refresh/reindex actions, exports, no-results states, and loading/error states.
 - `/docs`, public `/apply/[token]`, and public `/sign/[token]`: docs search/results/no results/articles/navigation/404, valid/invalid/expired public application states, scan success/failure/no extracted fields, duplicate application, valid/invalid/expired signing envelopes, PDF open/download, typed/drawn signature, clear, decline modal, terminal states, and provider gates.
 - App shell/navigation: staff versus portal role menus, collapsible groups, collapsed rail, mobile drawer/overlay, command-center search/no matches, header badges, account menu/logout, theme toggle, and role-hidden route gates.
