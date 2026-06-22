@@ -1,6 +1,8 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -20,6 +22,7 @@ public class OwnerStatementServiceTests : IDisposable
     private const int Year = 2026;
 
     private readonly SqliteConnection _conn;
+    private readonly List<string> _commands = [];
     private readonly RentalCommandDbContext _db;
     private readonly OwnerStatementService _sut;
 
@@ -30,6 +33,7 @@ public class OwnerStatementServiceTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new OwnerStatementRecordingCommandInterceptor(_commands))
             .Options;
 
         _db = new OwnerStatementTestDbContext(options);
@@ -79,6 +83,8 @@ public class OwnerStatementServiceTests : IDisposable
         // A paid rent in a DIFFERENT year must be excluded entirely.
         SeedRent(leaseA, 5000m, paidInYear: true, year: Year - 1);
 
+        _commands.Clear();
+
         var report = await _sut.GetForOwnerAsync(PortfolioId, owner.Id, Year, CancellationToken.None);
 
         report.Should().NotBeNull();
@@ -100,6 +106,13 @@ public class OwnerStatementServiceTests : IDisposable
         report.TotalExpenses.Should().Be(450m);         // 300 + 150
         report.TotalManagementFee.Should().Be(240m);
         report.TotalNetToOwner.Should().Be(2610m);      // 1860 + 750
+
+        var propertyLineSql = _commands.FirstOrDefault(sql =>
+            sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("SUM", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
+
+        propertyLineSql.Should().NotBeNull("owner-statement property lines must be filtered, ordered, and aggregated in SQL");
     }
 
     [Fact]
@@ -116,6 +129,8 @@ public class OwnerStatementServiceTests : IDisposable
         SeedRent(SeedLease(p2, "L-2"), 1000m, paidInYear: true);
         SeedExpense(p2.Id, 250m);
 
+        _commands.Clear();
+
         var summaries = await _sut.ListOwnersWithNetAsync(PortfolioId, Year, CancellationToken.None);
 
         summaries.Should().HaveCount(2);
@@ -123,6 +138,14 @@ public class OwnerStatementServiceTests : IDisposable
         summaries.Single(s => s.OwnerName == "Acme Holdings").NetToOwner.Should().Be(1300m);
         // Owner2: 1000 income - 250 expenses - 0 mgmt = 750.
         summaries.Single(s => s.OwnerName == "Beta Estates").NetToOwner.Should().Be(750m);
+
+        var ownerSummarySql = _commands.FirstOrDefault(sql =>
+            sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("SUM", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
+
+        ownerSummarySql.Should().NotBeNull("owner net summaries must group and sum per owner in SQL");
     }
 
     // ── seed helpers ───────────────────────────────────────────────────────────────────────────
@@ -252,5 +275,27 @@ internal sealed class OwnerStatementTestDbContext : RentalCommandDbContext
         modelBuilder.Entity<Payment>().Property(e => e.ExtractedData).HasColumnType("TEXT");
         modelBuilder.Entity<Lease>().ToTable("Leases");
         modelBuilder.Entity<VendorRating>().ToTable("VendorRatings");
+    }
+}
+
+internal sealed class OwnerStatementRecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+{
+    public override InterceptionResult<DbDataReader> ReaderExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result)
+    {
+        commands.Add(command.CommandText);
+        return base.ReaderExecuting(command, eventData, result);
+    }
+
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        commands.Add(command.CommandText);
+        return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
     }
 }
