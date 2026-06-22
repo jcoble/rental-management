@@ -7,6 +7,7 @@
 	import { leases } from '$lib/api/endpoints/leases';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
+	import { seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
@@ -166,6 +167,20 @@
 	let newPropertyPostal = $state('');
 	let newUnitNumber = $state('');
 	let newPropertyFieldsSeeded = $state(false);
+
+	function resetLeaseReviewState() {
+		selectedLeasePropertyId = '';
+		selectedLeaseUnitId = '';
+		selectedTenantId = NO_TENANT;
+		leasePropertySeeded = false;
+		newPropertyName = '';
+		newPropertyAddress = '';
+		newPropertyCity = '';
+		newPropertyState = '';
+		newPropertyPostal = '';
+		newUnitNumber = '';
+		newPropertyFieldsSeeded = false;
+	}
 
 	// Units scoped to the chosen EXISTING property (required pick). Skipped in create-new mode (the
 	// CREATE_PROPERTY sentinel isn't a real id — the unit is created from a free-text number instead).
@@ -407,7 +422,7 @@
 			}
 			// Lease drafts: seed the property/unit pickers + the create-new fields. Tenant stays on
 			// "create new" unless the user picks.
-			if (data.targetEntityType === 'Lease') {
+			if (data.targetEntityType === 'Lease' && shouldSeedLeaseReviewState(data.status, data.fields.length)) {
 				// Seed editable new-property fields from the extracted lease fields (one-shot, so later
 				// refetches / the user's own edits aren't clobbered).
 				if (!newPropertyFieldsSeeded) {
@@ -436,7 +451,8 @@
 				}
 				if (!selectedLeaseUnitId && !isCreatingLeaseProperty) {
 					const unitField = data.fields.find((f) => f.name === 'unit_id' || f.name === 'unitId');
-					if (unitField?.value) selectedLeaseUnitId = unitField.value;
+					const seededUnitId = seedLeaseUnitId(unitField?.value, leaseProposal?.unit, isCreatingLeaseProperty);
+					if (seededUnitId) selectedLeaseUnitId = seededUnitId;
 				}
 			}
 		}
@@ -655,6 +671,21 @@
 		}
 	}));
 
+	const retryMutation = createMutation(() => ({
+		mutationFn: () => scan.retry(draftId),
+		onSuccess: () => {
+			resetLeaseReviewState();
+			queryClient.invalidateQueries({ queryKey: ['scans'] });
+			queryClient.invalidateQueries({ queryKey: ['scan', draftId] });
+			queryClient.invalidateQueries({ queryKey: ['scan-batches'] });
+			toast.success('Scan queued again');
+			draftQuery.refetch();
+		},
+		onError: (err) => {
+			toast.error(err instanceof Error ? err.message : 'Retry failed');
+		}
+	}));
+
 	function buildOverridesJson(): string {
 		// Send edited scalar fields; line items are serialized separately (added below for expenses).
 		// Map legacy snake_case names that the API still expects in camelCase;
@@ -860,10 +891,26 @@
 		{/if}
 
 		{#if data.status === 'Failed'}
-			<!-- L7: clear "couldn't read this" message; Confirm disabled, Reject available -->
-			<div class="mb-4 rounded-lg px-4 py-3 text-sm m3-error-surface" data-testid="scan-failed-banner">
-				<strong>We couldn't read this document.</strong> The computer wasn't able to pull out the details automatically.
-				You can <strong>Reject</strong> it to clear it from your list, then try scanning a clearer photo or PDF.
+			<div class="mb-4 flex flex-col gap-3 rounded-lg px-4 py-3 text-sm m3-error-surface sm:flex-row sm:items-center sm:justify-between" data-testid="scan-failed-banner">
+				<div>
+					<p><strong>We couldn't read this document.</strong> The computer wasn't able to pull out the details automatically.</p>
+					<p class="mt-1 text-xs opacity-90" data-testid="scan-failed-reason">
+						{data.failureReason || 'No detailed reason was recorded.'}
+					</p>
+				</div>
+				<div class="flex shrink-0 gap-2">
+					<Button
+						size="sm"
+						onclick={() => retryMutation.mutate()}
+						disabled={retryMutation.isPending}
+						data-testid="scan-retry-extraction"
+					>
+						{retryMutation.isPending ? 'Queuing…' : 'Try extraction again'}
+					</Button>
+					<Button size="sm" variant="outline" onclick={handleReject} disabled={rejectMutation.isPending} data-testid="scan-failed-reject">
+						Reject
+					</Button>
+				</div>
 			</div>
 		{/if}
 
@@ -957,7 +1004,15 @@
 					</div>
 				</Card.Header>
 				<Card.Content class="flex-1 overflow-y-auto p-4">
-					{#if isPayment}
+					{#if isProcessing}
+						<p class="text-sm text-muted-foreground">
+							Fields will appear once extraction completes.
+						</p>
+					{:else if data.status === 'Failed'}
+						<p class="text-sm text-muted-foreground">
+							No reviewed fields are available for this draft. Try extraction again or reject it.
+						</p>
+					{:else if isPayment}
 						<!-- Lease selector — required for Payment drafts -->
 						<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
 							<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-select">
@@ -1444,7 +1499,7 @@
 							<Button
 								data-testid="scan-confirm"
 								onclick={() => confirmMutation.mutate()}
-								disabled={confirmMutation.isPending || isProcessing || isTerminal || (isPayment && !selectedLeaseId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || applicationInvalid || amountInvalid}
+								disabled={confirmMutation.isPending || isProcessing || data.status === 'Failed' || isTerminal || (isPayment && !selectedLeaseId) || (isWorkOrder && selectedPropertyId === NO_PROPERTY) || leaseSelectionInvalid || applicationInvalid || amountInvalid}
 								class="flex-1"
 							>
 								{confirmMutation.isPending ? 'Confirming…' : isPayment ? 'Create Payment' : isWorkOrder ? 'Create Work Order' : isLease ? 'Create Lease' : isApplication ? 'Create Applicant' : 'Confirm & Create Expense'}

@@ -58,12 +58,8 @@ public class ScheduleEService : IScheduleEService
             .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct);
 
-        // Build expense map: propertyId → category → total (reshape of the pre-aggregated rows)
-        var expensesByProperty = expenseCategoryTotals
-            .GroupBy(r => r.PropertyId)
-            .ToDictionary(
-                g => g.Key,
-                g => g.ToDictionary(r => r.Category, r => r.Total));
+        var expenseTotalsByPropertyCategory = expenseCategoryTotals
+            .ToDictionary(r => (r.PropertyId, r.Category), r => r.Total);
 
         // ── Mortgage interest (from the loan split; principal is NEVER deductible) ─────────────────
         // Σ LoanPayment.InterestAmount for the year, per property (via the loan). Summed SQL-side.
@@ -117,7 +113,7 @@ public class ScheduleEService : IScheduleEService
         // Collect all property ids that appear in income, expenses, modeled interest, or depreciation
         // (excluding the synthetic 0) — a property with only a loan or only depreciation must still show.
         var realPropertyIds = incomeByProperty.Keys
-            .Concat(expensesByProperty.Keys)
+            .Concat(expenseCategoryTotals.Select(r => r.PropertyId))
             .Concat(interestByProperty.Keys)
             .Concat(depreciationByProperty.Keys)
             .Where(id => id != UnassignedPropertyId)
@@ -127,17 +123,19 @@ public class ScheduleEService : IScheduleEService
         var propertyNames = await _db.Properties
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId && realPropertyIds.Contains(p.Id))
+            .OrderBy(p => p.Name)
             .Select(p => new { p.Id, p.Name })
             .ToListAsync(ct);
 
         var nameMap = propertyNames.ToDictionary(p => p.Id, p => p.Name);
 
         // ── Assemble per-property reports ─────────────────────────────────────────────────────────
-        var allPropertyIds = realPropertyIds
-            .Concat(incomeByProperty.ContainsKey(UnassignedPropertyId) || expensesByProperty.ContainsKey(UnassignedPropertyId)
+        var allPropertyIds = propertyNames
+            .Select(p => p.Id)
+            .Concat(incomeByProperty.ContainsKey(UnassignedPropertyId) ||
+                    expenseCategoryTotals.Any(r => r.PropertyId == UnassignedPropertyId)
                 ? [UnassignedPropertyId]
                 : Array.Empty<int>())
-            .Distinct()
             .ToList();
 
         var reports = new List<ScheduleEPropertyReport>(allPropertyIds.Count);
@@ -149,7 +147,6 @@ public class ScheduleEService : IScheduleEService
                 : nameMap.GetValueOrDefault(propertyId, $"Property {propertyId}");
 
             var income = incomeByProperty.GetValueOrDefault(propertyId, 0m);
-            var catMap = expensesByProperty.GetValueOrDefault(propertyId);
 
             var modeledInterest = interestByProperty.GetValueOrDefault(propertyId, 0m);
             var hasLoan = propertiesWithLoan.Contains(propertyId);
@@ -168,7 +165,7 @@ public class ScheduleEService : IScheduleEService
                 if (cat == ScheduleECategory.Depreciation && depreciation > 0m)
                     continue;
 
-                if (catMap != null && catMap.TryGetValue(cat, out var amount) && amount != 0m)
+                if (expenseTotalsByPropertyCategory.TryGetValue((propertyId, cat), out var amount) && amount != 0m)
                     categories.Add(new ScheduleECategoryAmount(cat.ToString(), amount));
             }
 
@@ -193,9 +190,6 @@ public class ScheduleEService : IScheduleEService
                 Depreciation: depreciation,
                 DepreciationIsFirstYearEstimate: depreciationIsEstimate));
         }
-
-        // Sort properties by name; "Unassigned" naturally sorts last if names are real.
-        reports.Sort((a, b) => string.Compare(a.PropertyName, b.PropertyName, StringComparison.OrdinalIgnoreCase));
 
         var totalIncome = reports.Sum(r => r.RentalIncome);
         var totalExpenses = reports.Sum(r => r.TotalExpenses);

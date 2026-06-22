@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Core.Entities;
 using RentalCommand.Data;
 
@@ -19,15 +20,19 @@ public sealed class SqliteTestContext : IDisposable
 
     public RentalCommandDbContext Db { get; }
 
-    public SqliteTestContext()
+    public SqliteTestContext(IEnumerable<IInterceptor>? interceptors = null)
     {
         // Keep the connection open for the lifetime of the test so the in-memory DB persists.
         _conn = new SqliteConnection("DataSource=:memory:");
         _conn.Open();
 
-        var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
-            .UseSqlite(_conn)
-            .Options;
+        var optionsBuilder = new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseSqlite(_conn);
+
+        if (interceptors is not null)
+            optionsBuilder.AddInterceptors(interceptors);
+
+        var options = optionsBuilder.Options;
 
         Db = new AutomationTestDbContext(options);
         Db.Database.EnsureCreated();

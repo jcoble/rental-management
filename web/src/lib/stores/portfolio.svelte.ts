@@ -4,13 +4,12 @@
  * The selection is client state (persisted in localStorage). Two SSR-safety
  * rules apply:
  *
- *  - **Deterministic initial value (L-18).** The store initialises to the same
- *    placeholder (DEFAULT_PORTFOLIO_ID) on BOTH the server and the very first
- *    client render, so SSR markup and first-hydration markup agree. The real
- *    localStorage value is applied only AFTER hydration, via {@link initPortfolio}
- *    (called from the authenticated layout). Reading localStorage at module load
- *    would make the server (always 1) diverge from the client (the stored id) for
- *    any user whose active portfolio isn't 1.
+ *  - **Deterministic module value (L-18).** The store initialises to the same
+ *    placeholder (DEFAULT_PORTFOLIO_ID) on BOTH the server and the client module
+ *    load. The real browser value is applied only by {@link initPortfolio}
+ *    (called from the authenticated layout), never at module load. Reading
+ *    localStorage at module load would make the server (always 1) diverge from
+ *    the client (the stored id) for any user whose active portfolio isn't 1.
  *  - **Client-only writes (L-13).** This is module-scoped state; under adapter-node
  *    the server shares module scope across all concurrent requests, so a server-side
  *    write would bleed one user's selection into another's SSR render. The setter and
@@ -18,6 +17,7 @@
  */
 
 import { browser } from '$app/environment';
+import { resolveInitialPortfolioId } from './portfolio-selection';
 
 const STORAGE_KEY = 'rental:currentPortfolioId';
 const DEFAULT_PORTFOLIO_ID = 1;
@@ -29,25 +29,20 @@ export function getCurrentPortfolioId(): number {
 }
 
 /**
- * Client-only: reconcile the in-memory selection with the persisted localStorage value, falling
- * back to the authenticated user's real portfolio id when there is no stored selection yet — so a
- * brand-new account whose active portfolio isn't 1 doesn't get stuck on the SSR placeholder (which
- * made the scan duplicate-guard and list queries target the wrong portfolio). Idempotent; safe to
- * call on every navigation. No-ops on the server (the store keeps its deterministic default there).
+ * Client-only: reconcile the in-memory selection with the authenticated user's real portfolio id
+ * and persisted localStorage value. In Phase 0 the authenticated portfolio is authoritative, so a
+ * stale localhost value from another account must not make the first protected route query the SSR
+ * placeholder. Idempotent; safe to call on every navigation. No-ops on the server (the store keeps
+ * its deterministic default there).
  */
 export function initPortfolio(fallbackPortfolioId?: number): void {
 	if (!browser) return;
-	const stored = localStorage.getItem(STORAGE_KEY);
-	const parsed = stored ? parseInt(stored, 10) : NaN;
-	if (Number.isInteger(parsed) && parsed > 0) {
-		_portfolioId = parsed;
-		return;
-	}
-	// No valid stored selection yet: seed from the authenticated user's real portfolio so queries
-	// and the scan duplicate-guard target the right portfolio. Persist it so the choice sticks.
-	if (typeof fallbackPortfolioId === 'number' && Number.isInteger(fallbackPortfolioId) && fallbackPortfolioId > 0) {
-		_portfolioId = fallbackPortfolioId;
-		localStorage.setItem(STORAGE_KEY, String(fallbackPortfolioId));
+	const resolved = resolveInitialPortfolioId(localStorage.getItem(STORAGE_KEY), fallbackPortfolioId);
+	if (resolved.id !== null) {
+		_portfolioId = resolved.id;
+		if (resolved.shouldPersist) {
+			localStorage.setItem(STORAGE_KEY, String(resolved.id));
+		}
 	}
 }
 

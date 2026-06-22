@@ -102,7 +102,7 @@
 	];
 
 	function rowHref(draft: ScanBatchDraft): string | null {
-		if (draft.status === 'Reviewing') return `/scan/${draft.id}`;
+		if (draft.status === 'Reviewing' || draft.status === 'Failed') return `/scan/${draft.id}`;
 		if (draft.status === 'Confirmed' && draft.createdEntityId != null) {
 			return `/leases/${draft.createdEntityId}`;
 		}
@@ -134,7 +134,9 @@
 			View lease
 		</Button>
 	{:else if draft.status === 'Failed'}
-		<span class="text-xs text-muted-foreground" data-testid="batch-draft-failed">Couldn't read</span>
+		<Button variant="link" href="/scan/{draft.id}" class="h-auto p-0" data-testid="batch-draft-failed">
+			Retry
+		</Button>
 	{:else if draft.status === 'Rejected'}
 		<span class="text-xs text-muted-foreground" data-testid="batch-draft-skipped">Skipped</span>
 	{:else}

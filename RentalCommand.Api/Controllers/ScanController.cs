@@ -242,7 +242,13 @@ public class ScanController : ManagementControllerBase
             .ThenBy(d => d.Id)
             .ToListAsync(ct);
 
-        var counts = BuildCounts(drafts.Select(d => (d.Status, 1)));
+        var statusCounts = await _db.ScanDrafts
+            .Where(d => d.PortfolioId == portfolioId && d.BatchId == id)
+            .GroupBy(d => d.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var counts = BuildCounts(statusCounts.Select(c => (c.Status, c.Count)));
 
         // Resolve the created-entity id for any confirmed draft so the UI can link straight to the record.
         var filePaths = drafts.Select(d => d.FilePath).ToHashSet(StringComparer.Ordinal);
@@ -259,7 +265,8 @@ public class ScanController : ManagementControllerBase
                 d.Id, d.Status, d.TargetEntityType, $"/api/v1/scans/{d.Id}/file",
                 tenant, unit, term,
                 d.Status == "Confirmed" ? linkedFile?.EntityId : null,
-                d.CreatedAt);
+                d.CreatedAt,
+                d.FailureReason);
         }).ToList();
 
         return Ok(new ScanBatchDetailResponse(
@@ -326,7 +333,10 @@ public class ScanController : ManagementControllerBase
                 return (null, null, null);
 
             var tenant = ReadValue(root, "tenant_name") ?? ReadValue(root, "tenantName");
-            var unit = ReadValue(root, "unit_id") ?? ReadValue(root, "unitId");
+            var unit = ReadValue(root, "unit_number")
+                ?? ReadValue(root, "unitNumber")
+                ?? ReadValue(root, "unit_id")
+                ?? ReadValue(root, "unitId");
             var start = ReadValue(root, "start_date") ?? ReadValue(root, "startDate");
             var end = ReadValue(root, "end_date") ?? ReadValue(root, "endDate");
 
@@ -437,6 +447,42 @@ public class ScanController : ManagementControllerBase
             linkedFiles.TryGetValue(d.FilePath, out var linkedFile);
             return ScanDraftResponse.FromEntity(d, linkedFile?.EntityType, linkedFile?.EntityId);
         }).ToList());
+    }
+
+    // -------------------------------------------------------------------------
+    // POST /api/v1/scans/{id}/retry  — requeue a failed draft for extraction
+    // -------------------------------------------------------------------------
+
+    [HttpPost("{id:int}/retry")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> Retry(int id, CancellationToken ct)
+    {
+        var portfolioId = GetPortfolioId();
+
+        var updated = await _db.ScanDrafts
+            .Where(d => d.Id == id && d.PortfolioId == portfolioId && d.Status == "Failed")
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(d => d.Status, "Pending")
+                .SetProperty(d => d.ExtractedFields, (string?)null)
+                .SetProperty(d => d.ModelId, (string?)null)
+                .SetProperty(d => d.TokensUsed, (int?)null)
+                .SetProperty(d => d.CostUsd, (decimal?)null)
+                .SetProperty(d => d.FailureReason, (string?)null)
+                .SetProperty(d => d.ReviewedAt, (DateTime?)null)
+                .SetProperty(d => d.ReviewedBy, (string?)null)
+                .SetProperty(d => d.ConfirmedAt, (DateTime?)null), ct);
+
+        if (updated == 1)
+            return Ok();
+
+        var exists = await _db.ScanDrafts
+            .AnyAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
+
+        return exists
+            ? BadRequest(new { error = "Only failed scan drafts can be retried." })
+            : NotFound(new { error = "Scan draft not found" });
     }
 
     // -------------------------------------------------------------------------
