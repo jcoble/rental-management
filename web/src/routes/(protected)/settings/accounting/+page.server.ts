@@ -72,10 +72,19 @@ export interface AccountingReviewItem {
 /** A provider plus its lazily-loaded mappings + review queue (only fetched once connected). */
 export interface ProviderView {
 	status: AccountingConnectionStatus;
-	mappings: AccountingMapping[];
+	unconfirmedMappings: AccountingMapping[];
+	confirmedMappings: AccountingMapping[];
+	unconfirmedMappingsHasMore: boolean;
+	confirmedMappingsHasMore: boolean;
 	reviewQueue: AccountingReviewItem[];
+	reviewQueueHasMore: boolean;
 	loadError: string | null;
 }
+
+const MAPPING_SECTION_SIZE = 50;
+const MAPPING_FETCH_SIZE = MAPPING_SECTION_SIZE + 1;
+const REVIEW_QUEUE_SIZE = 50;
+const REVIEW_QUEUE_FETCH_SIZE = REVIEW_QUEUE_SIZE + 1;
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.accessToken) {
@@ -93,19 +102,45 @@ export const load: PageServerLoad = async ({ locals }) => {
 		statusResult.data.map(async (status): Promise<ProviderView> => {
 			const isConnected = status.status === 'Connected' || status.status === 'NeedsReconnect';
 			if (!isConnected) {
-				return { status, mappings: [], reviewQueue: [], loadError: null };
+				return {
+					status,
+					unconfirmedMappings: [],
+					confirmedMappings: [],
+					unconfirmedMappingsHasMore: false,
+					confirmedMappingsHasMore: false,
+					reviewQueue: [],
+					reviewQueueHasMore: false,
+					loadError: null
+				};
 			}
 
-			const [mappingsResult, reviewResult] = await Promise.all([
-				serverGet<AccountingMapping[]>(`${BASE}/${status.provider}/mappings`, locals.accessToken!),
-				serverGet<AccountingReviewItem[]>(`${BASE}/${status.provider}/review-queue`, locals.accessToken!)
+			const [unconfirmedResult, confirmedResult, reviewResult] = await Promise.all([
+				serverGet<AccountingMapping[]>(
+					`${BASE}/${status.provider}/mappings?confirmed=false&take=${MAPPING_FETCH_SIZE}`,
+					locals.accessToken!
+				),
+				serverGet<AccountingMapping[]>(
+					`${BASE}/${status.provider}/mappings?confirmed=true&take=${MAPPING_FETCH_SIZE}`,
+					locals.accessToken!
+				),
+				serverGet<AccountingReviewItem[]>(
+					`${BASE}/${status.provider}/review-queue?take=${REVIEW_QUEUE_FETCH_SIZE}`,
+					locals.accessToken!
+				)
 			]);
 
+			const unconfirmed = unconfirmedResult.data ?? [];
+			const confirmed = confirmedResult.data ?? [];
+			const reviewQueue = reviewResult.data ?? [];
 			return {
 				status,
-				mappings: mappingsResult.data ?? [],
-				reviewQueue: reviewResult.data ?? [],
-				loadError: mappingsResult.error ?? reviewResult.error ?? null
+				unconfirmedMappings: unconfirmed.slice(0, MAPPING_SECTION_SIZE),
+				confirmedMappings: confirmed.slice(0, MAPPING_SECTION_SIZE),
+				unconfirmedMappingsHasMore: unconfirmed.length > MAPPING_SECTION_SIZE,
+				confirmedMappingsHasMore: confirmed.length > MAPPING_SECTION_SIZE,
+				reviewQueue: reviewQueue.slice(0, REVIEW_QUEUE_SIZE),
+				reviewQueueHasMore: reviewQueue.length > REVIEW_QUEUE_SIZE,
+				loadError: unconfirmedResult.error ?? confirmedResult.error ?? reviewResult.error ?? null
 			};
 		})
 	);

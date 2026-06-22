@@ -14,10 +14,15 @@
 	let selectedPropertyId = $state<number | 'all'>('all');
 
 	const query = createQuery(() => ({
-		queryKey: ['year-end', year],
+		queryKey: ['year-end', year, selectedPropertyId],
+		queryFn: () => accounting.yearEnd(year, selectedPropertyId === 'all' ? undefined : selectedPropertyId)
+	}));
+	const optionsQuery = createQuery(() => ({
+		queryKey: ['year-end-property-options', year],
 		queryFn: () => accounting.yearEnd(year)
 	}));
 	const view = $derived(query.data);
+	const optionsView = $derived(optionsQuery.data);
 
 	function fmt(value: number): string {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
@@ -26,30 +31,17 @@
 	// Property options come from whichever properties appear in either block.
 	const propertyOptions = $derived(() => {
 		const map = new Map<number, string>();
-		for (const p of view?.cashFlow.properties ?? []) map.set(p.propertyId, p.propertyName);
-		for (const p of view?.scheduleE.properties ?? []) map.set(p.propertyId, p.propertyName);
+		for (const p of optionsView?.cashFlow.properties ?? []) map.set(p.propertyId, p.propertyName);
+		for (const p of optionsView?.scheduleE.properties ?? []) map.set(p.propertyId, p.propertyName);
 		return [...map.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
 	});
 
-	const cashRows = $derived(
-		(view?.cashFlow.properties ?? []).filter((p) => selectedPropertyId === 'all' || p.propertyId === selectedPropertyId)
-	);
-	const taxRows = $derived(
-		(view?.scheduleE.properties ?? []).filter((p) => selectedPropertyId === 'all' || p.propertyId === selectedPropertyId)
-	);
+	const cashRows = $derived(view?.cashFlow.properties ?? []);
+	const taxRows = $derived(view?.scheduleE.properties ?? []);
 	const rentRoll = $derived(view?.rentRoll ?? []);
 
-	// When a single property is selected, total just that property; else the portfolio totals.
-	const totalCashFlow = $derived(
-		selectedPropertyId === 'all'
-			? (view?.cashFlow.totalCashFlow ?? 0)
-			: cashRows.reduce((s, p) => s + p.cashFlow, 0)
-	);
-	const totalTaxable = $derived(
-		selectedPropertyId === 'all'
-			? (view?.scheduleE.netIncome ?? 0)
-			: taxRows.reduce((s, p) => s + p.netIncome, 0)
-	);
+	const totalCashFlow = $derived(view?.cashFlow.totalCashFlow ?? 0);
+	const totalTaxable = $derived(view?.scheduleE.netIncome ?? 0);
 
 	let downloading = $state(false);
 	async function exportPacket() {

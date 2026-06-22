@@ -94,6 +94,14 @@ public sealed class ApplicationService : IApplicationService
             unitId = request.UnitId;
         }
 
+        var existingOpenApplicationId = await FindOpenApplicationIdByEmailAsync(portfolioId, request.Email, ct);
+        if (existingOpenApplicationId is not null)
+        {
+            throw new DomainValidationException(
+                $"An application for {NormalizeEmailForComparison(request.Email)} already exists as application #{existingOpenApplicationId}. Review the existing application before creating another.",
+                statusCode: 409);
+        }
+
         var now = DateTime.UtcNow;
         var entity = new RentalApplication
         {
@@ -172,26 +180,12 @@ public sealed class ApplicationService : IApplicationService
             unitId = request.UnitId;
         }
 
-        var normalizedEmail = NormalizeEmailForComparison(request.Email);
-        if (normalizedEmail is not null)
+        var existingOpenApplicationId = await FindOpenApplicationIdByEmailAsync(portfolioId, request.Email, ct);
+        if (existingOpenApplicationId is not null)
         {
-            var existingOpenApplication = await _db.RentalApplications
-                .AsNoTracking()
-                .Where(a => a.PortfolioId == portfolioId
-                    && a.Email != null
-                    && (a.Status == ApplicationStatus.Submitted
-                        || a.Status == ApplicationStatus.UnderReview
-                        || a.Status == ApplicationStatus.Approved))
-                .Where(a => a.Email!.Trim().ToLower() == normalizedEmail)
-                .Select(a => new { a.Id })
-                .FirstOrDefaultAsync(ct);
-
-            if (existingOpenApplication is not null)
-            {
-                throw new DomainValidationException(
-                    $"An application for {normalizedEmail} already exists as application #{existingOpenApplication.Id}. Review the existing application before creating another.",
-                    statusCode: 409);
-            }
+            throw new DomainValidationException(
+                $"An application for {NormalizeEmailForComparison(request.Email)} already exists as application #{existingOpenApplicationId}. Review the existing application before creating another.",
+                statusCode: 409);
         }
 
         var now = DateTime.UtcNow;
@@ -243,6 +237,13 @@ public sealed class ApplicationService : IApplicationService
     public async Task<IReadOnlyList<ApplicationResponse>> ListAsync(
         int portfolioId, string? status, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, status, query, ct);
+        return page.Items;
+    }
+
+    public async Task<ApplicationListResponse> ListPageAsync(
+        int portfolioId, string? status, ListQuery query, CancellationToken ct = default)
+    {
         var q = _db.RentalApplications
             .AsNoTracking()
             .Where(a => a.PortfolioId == portfolioId);
@@ -259,34 +260,66 @@ public sealed class ApplicationService : IApplicationService
             q = q.Where(a =>
                 EF.Functions.ILike(a.FirstName, $"%{term}%") ||
                 EF.Functions.ILike(a.LastName, $"%{term}%") ||
+                EF.Functions.ILike(a.FirstName + " " + a.LastName, $"%{term}%") ||
                 (a.Email != null && EF.Functions.ILike(a.Email, $"%{term}%")) ||
                 (a.Phone != null && EF.Functions.ILike(a.Phone, $"%{term}%")));
         }
 
         q = query.SortField switch
         {
+            "name" => query.SortDescending
+                ? q.OrderByDescending(a => a.LastName).ThenByDescending(a => a.FirstName)
+                : q.OrderBy(a => a.LastName).ThenBy(a => a.FirstName),
             "lastname" => query.SortDescending ? q.OrderByDescending(a => a.LastName) : q.OrderBy(a => a.LastName),
+            "email" => query.SortDescending ? q.OrderByDescending(a => a.Email) : q.OrderBy(a => a.Email),
+            "monthlyincome" => query.SortDescending ? q.OrderByDescending(a => a.MonthlyIncome) : q.OrderBy(a => a.MonthlyIncome),
             "status" => query.SortDescending ? q.OrderByDescending(a => a.Status) : q.OrderBy(a => a.Status),
             "submittedat" => query.SortDescending ? q.OrderByDescending(a => a.SubmittedAtUtc) : q.OrderBy(a => a.SubmittedAtUtc),
+            "submittedatutc" => query.SortDescending ? q.OrderByDescending(a => a.SubmittedAtUtc) : q.OrderBy(a => a.SubmittedAtUtc),
             // Newest applications first by default — the landlord works the freshest at the top.
             _ => query.SortDescending ? q.OrderBy(a => a.SubmittedAtUtc) : q.OrderByDescending(a => a.SubmittedAtUtc),
         };
 
+        var totalCount = await q.CountAsync(ct);
+
         var items = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
+            .Select(a => new ApplicationHomeProjection
+            {
+                Application = a,
+                PropertyName = a.Property != null ? a.Property.Name : null,
+                UnitNumber = a.Unit != null ? a.Unit.UnitNumber : null,
+            })
             .ToListAsync(ct);
 
-        return items.Select(ApplicationResponse.FromEntity).ToList();
+        return new ApplicationListResponse
+        {
+            Items = items
+                .Select(i => ApplicationResponse.FromEntity(i.Application, i.PropertyName, i.UnitNumber))
+                .ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
     }
 
     public async Task<ApplicationResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.RentalApplications
+        var item = await _db.RentalApplications
             .AsNoTracking()
-            .FirstOrDefaultAsync(a => a.Id == id && a.PortfolioId == portfolioId, ct);
+            .Where(a => a.Id == id && a.PortfolioId == portfolioId)
+            .Select(a => new ApplicationHomeProjection
+            {
+                Application = a,
+                PropertyName = a.Property != null ? a.Property.Name : null,
+                UnitNumber = a.Unit != null ? a.Unit.UnitNumber : null,
+            })
+            .FirstOrDefaultAsync(ct);
 
-        return entity == null ? null : ApplicationResponse.FromEntity(entity);
+        return item == null
+            ? null
+            : ApplicationResponse.FromEntity(item.Application, item.PropertyName, item.UnitNumber);
     }
 
     public async Task<ApproveApplicationResult?> ApproveAsync(
@@ -457,6 +490,37 @@ public sealed class ApplicationService : IApplicationService
         return string.IsNullOrWhiteSpace(email) ? null : email.Trim().ToLowerInvariant();
     }
 
+    private async Task<int?> FindOpenApplicationIdByEmailAsync(
+        int portfolioId,
+        string? email,
+        CancellationToken ct)
+    {
+        var normalizedEmail = NormalizeEmailForComparison(email);
+        if (normalizedEmail is null)
+        {
+            return null;
+        }
+
+        return await _db.RentalApplications
+            .AsNoTracking()
+            .Where(a => a.PortfolioId == portfolioId
+                && a.Email != null
+                && (a.Status == ApplicationStatus.Submitted
+                    || a.Status == ApplicationStatus.UnderReview
+                    || a.Status == ApplicationStatus.Approved))
+            .Where(a => a.Email!.Trim().ToLower() == normalizedEmail)
+            .OrderBy(a => a.Id)
+            .Select(a => (int?)a.Id)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    private sealed class ApplicationHomeProjection
+    {
+        public required RentalApplication Application { get; init; }
+        public string? PropertyName { get; init; }
+        public string? UnitNumber { get; init; }
+    }
+
     /// <summary>Folds the application's non-tenant fields (income, employer, address) into the tenant note.</summary>
     private static string? BuildTenantNote(RentalApplication a)
     {
@@ -465,8 +529,15 @@ public sealed class ApplicationService : IApplicationService
             parts.Add($"Employer: {a.Employer}.");
         if (a.MonthlyIncome is > 0)
             parts.Add($"Stated monthly income: {a.MonthlyIncome:0.##}.");
-        if (!string.IsNullOrWhiteSpace(a.CurrentAddress))
-            parts.Add($"Prior address: {a.CurrentAddress}.");
+        var priorAddress = AddressComposer.Compose(
+                a.CurrentAddress,
+                a.CurrentAddressLine2,
+                a.CurrentCity,
+                a.CurrentState,
+                a.CurrentPostalCode)
+            ?? a.CurrentAddress;
+        if (!string.IsNullOrWhiteSpace(priorAddress))
+            parts.Add($"Prior address: {priorAddress}.");
         if (!string.IsNullOrWhiteSpace(a.Notes))
             parts.Add($"Applicant notes: {a.Notes}");
 

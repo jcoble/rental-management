@@ -1540,7 +1540,7 @@
 							</p>
 						{/if}
 						{#if data.status === 'Failed' && !isTerminal}
-							<p class="text-center text-xs text-muted-foreground">Couldn't read this document — enter the amount manually, or reject it.</p>
+							<p class="text-center text-xs text-muted-foreground">Couldn't read this document — try extraction again above, or reject it.</p>
 						{/if}
 						{#if data.status === 'Confirmed' && !confirmedRecord && !alreadyConfirmed}
 							<!-- Confirmed but we don't know which record to link to (no createdEntityId) — note only. -->

@@ -9,40 +9,36 @@
 	import { units as unitsApi } from '$lib/api/endpoints/units';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { page } from '$app/state';
+	import { debounced } from '$lib/utils/debounce.svelte';
 	import { Boxes, ChevronDown, ChevronRight, Search } from '@lucide/svelte';
 
 	let { collapsed = false, onNavigate }: { collapsed?: boolean; onNavigate?: () => void } = $props();
 
 	const portfolioId = $derived(getCurrentPortfolioId());
 
-	// One call carries property name + unit number (so labels aren't ambiguous "Unit 1, Unit 1…").
-	const unitsQuery = createQuery(() => ({
-		queryKey: ['command-center-units', portfolioId],
-		queryFn: () => unitsApi.listWithHealth({ take: 500 }),
-		enabled: portfolioId > 0
-	}));
-
-	const sortedUnits = $derived(
-		[...(unitsQuery.data ?? [])].sort(
-			(a, b) =>
-				a.propertyName.localeCompare(b.propertyName) ||
-				a.unitNumber.localeCompare(b.unitNumber, undefined, { numeric: true })
-		)
-	);
-
 	// Closed by default; the user opens it, picks a unit, and it collapses again on selection.
 	let open = $state(false);
 	let search = $state('');
+	const debouncedSearch = debounced(() => search, 250);
+
+	// One paged query carries property name + unit number (so labels aren't ambiguous "Unit 1, Unit 1…").
+	// It runs only while the command-center dropdown is open; search is applied server-side.
+	const unitsQuery = createQuery(() => ({
+		queryKey: ['command-center-units', portfolioId, debouncedSearch.value],
+		queryFn: () => unitsApi.listWithHealthPage({
+			search: debouncedSearch.value,
+			sort: 'propertyName',
+			take: 20
+		}),
+		enabled: portfolioId > 0 && open && !collapsed
+	}));
+
+	const matchedUnits = $derived(unitsQuery.data?.items ?? []);
+	const totalMatches = $derived(unitsQuery.data?.totalCount ?? 0);
 
 	const activeUnitId = $derived(
 		page.url.pathname.startsWith('/units/') ? Number(page.params.id) : NaN
 	);
-
-	const filtered = $derived.by(() => {
-		const q = search.trim().toLowerCase();
-		if (!q) return sortedUnits;
-		return sortedUnits.filter((u) => `${u.propertyName} ${u.unitNumber}`.toLowerCase().includes(q));
-	});
 
 	function go() {
 		// Collapse the dropdown when a unit (or "browse all") is chosen, then run the shell's nav
@@ -84,7 +80,7 @@
 
 		{#if open}
 			<div class="mb-1 ml-2 mt-0.5 space-y-0.5 border-l border-sidebar-border pl-2">
-				{#if sortedUnits.length > 6}
+				{#if totalMatches > 6 || search.trim().length > 0}
 					<div class="relative mb-1">
 						<Search
 							class="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
@@ -101,12 +97,12 @@
 				<div class="max-h-72 space-y-0.5 overflow-y-auto pr-1">
 					{#if unitsQuery.isLoading}
 						<p class="px-2 py-1.5 text-xs text-muted-foreground">Loading units…</p>
-					{:else if sortedUnits.length === 0}
-						<p class="px-2 py-1.5 text-xs text-muted-foreground">No units yet.</p>
-					{:else if filtered.length === 0}
+					{:else if totalMatches === 0 && search.trim().length > 0}
 						<p class="px-2 py-1.5 text-xs text-muted-foreground">No matches.</p>
+					{:else if totalMatches === 0}
+						<p class="px-2 py-1.5 text-xs text-muted-foreground">No units yet.</p>
 					{:else}
-						{#each filtered as u (u.id)}
+						{#each matchedUnits as u (u.id)}
 							<a
 								href="/units/{u.id}"
 								onclick={go}

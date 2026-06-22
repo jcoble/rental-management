@@ -205,9 +205,9 @@ public class AccountingService : IAccountingService
         // (= tenants behind) come from the SAME per-lease grouped query that powers the "Who's behind"
         // list (GetPastDueAsync), so this KPI can never disagree with the destination row count.
         // Both figures are derived SQL-side; no payment rows are loaded to count.
-        var pastDueGroups = await PastDueByLeaseQuery(portfolioId, now).ToListAsync(ct);
-        var pastDueAmount = pastDueGroups.Sum(g => g.PastDueAmount);
-        var pastDueCount = pastDueGroups.Count;
+        var pastDueSummary = await PastDueSummaryQuery(portfolioId, now).FirstOrDefaultAsync(ct);
+        var pastDueAmount = pastDueSummary?.TotalPastDueAmount ?? 0m;
+        var pastDueCount = pastDueSummary?.TotalCount ?? 0;
 
         var netMtd = collectedMtd - spentMtd;
         var net30 = collected30 - spent30;
@@ -236,7 +236,12 @@ public class AccountingService : IAccountingService
 
         // One grouped round-trip: per behind lease, sum the past-due amount, count its past-due
         // payments, and find the oldest past-due due date — the single source of truth for "behind".
-        var groups = await PastDueByLeaseQuery(portfolioId, now)
+        var groupedPastDue = PastDueByLeaseQuery(portfolioId, now);
+        var summary = await PastDueSummaryQuery(portfolioId, now).FirstOrDefaultAsync(ct);
+        var totalCount = summary?.TotalCount ?? 0;
+        var totalPastDueAmount = summary?.TotalPastDueAmount ?? 0m;
+
+        var groups = await groupedPastDue
             .OrderBy(g => g.OldestDueDate)
             .ToListAsync(ct);
 
@@ -297,8 +302,8 @@ public class AccountingService : IAccountingService
         return new PastDueResponse
         {
             Items = items,
-            TotalCount = items.Count,
-            TotalPastDueAmount = items.Sum(i => i.PastDueAmount),
+            TotalCount = totalCount,
+            TotalPastDueAmount = totalPastDueAmount,
         };
     }
 
@@ -333,12 +338,27 @@ public class AccountingService : IAccountingService
                 OldestDueDate = g.Min(p => p.DueDate),
             });
 
+    private IQueryable<PastDueSummary> PastDueSummaryQuery(int portfolioId, DateTime now) =>
+        PastDueByLeaseQuery(portfolioId, now)
+            .GroupBy(_ => 1)
+            .Select(g => new PastDueSummary
+            {
+                TotalCount = g.Count(),
+                TotalPastDueAmount = g.Sum(x => x.PastDueAmount),
+            });
+
     private sealed class PastDueLeaseGroup
     {
         public int LeaseId { get; set; }
         public decimal PastDueAmount { get; set; }
         public int OverduePaymentCount { get; set; }
         public DateTime OldestDueDate { get; set; }
+    }
+
+    private sealed class PastDueSummary
+    {
+        public int TotalCount { get; set; }
+        public decimal TotalPastDueAmount { get; set; }
     }
 
     private static MoneySnapshotExplanations BuildSnapshotExplanations(
@@ -408,7 +428,11 @@ public class AccountingService : IAccountingService
         };
     }
 
-    private static string Money(decimal value) => value.ToString("$#,0.##;$-#,0.##;$0");
+    private static string Money(decimal value)
+    {
+        var hasCents = decimal.Remainder(Math.Abs(value), 1m) != 0m;
+        return value.ToString(hasCents ? "$#,0.00;$-#,0.00;$0.00" : "$#,0;$-#,0;$0");
+    }
 
     public async Task<AccountingTransactionsResponse> GetTransactionsAsync(
         int portfolioId,
@@ -652,213 +676,140 @@ public class AccountingService : IAccountingService
             }
         }
 
-        // 2) For rows not already cleared, suggest a still-unmatched bank line. Bound the bank candidate
-        // lookup by the page rows' amount and date hard gates in SQL, then apply the shared name/date
-        // scoring in memory.
-        var openPaymentRows = paymentRows
-            .Where(p => !result.ContainsKey((KindPayment, p.Id)))
-            .ToList();
-        var openExpenseRows = expenseRows
-            .Where(e => !result.ContainsKey((KindExpense, e.Id)))
-            .ToList();
+        // 2) For rows not already cleared, suggest a still-unmatched bank line. Amount/date/name
+        // gates, scoring, and top-1 ranking all stay DB-side; the in-memory step only attaches the
+        // already-ranked DTO to the page row.
+        var openPaymentIds = paymentIds
+            .Where(id => !result.ContainsKey((KindPayment, id)))
+            .ToArray();
+        var openExpenseIds = expenseIds
+            .Where(id => !result.ContainsKey((KindExpense, id)))
+            .ToArray();
 
-        if (openPaymentRows.Count == 0 && openExpenseRows.Count == 0) return result;
+        if (openPaymentIds.Length == 0 && openExpenseIds.Length == 0) return result;
 
-        var unmatchedQuery = _db.BankTransactions
-            .AsNoTracking()
-            .Where(t =>
-                t.PortfolioId == portfolioId &&
-                t.MatchStatus == "Unmatched" &&
-                t.MatchedPaymentId == null &&
-                t.MatchedExpenseId == null);
-
-        var unmatched = new List<BankSuggestionCandidate>();
-
-        if (openPaymentRows.Count > 0)
+        var suggestions = await LoadSqlRankedInlineSuggestionsAsync(portfolioId, openPaymentIds, openExpenseIds, ct);
+        foreach (var suggestion in suggestions)
         {
-            var minAmount = openPaymentRows.Min(p => p.Amount) - 0.01m;
-            var maxAmount = openPaymentRows.Max(p => p.Amount) + 0.01m;
-            var minDate = openPaymentRows.Min(p => p.Date.Date).AddDays(-14);
-            var maxDateExclusive = openPaymentRows.Max(p => p.Date.Date).AddDays(15);
-
-            unmatched.AddRange(await unmatchedQuery
-                .Where(t =>
-                    t.Amount > 0m &&
-                    t.Amount >= minAmount &&
-                    t.Amount <= maxAmount &&
-                    t.PostedAt >= minDate &&
-                    t.PostedAt < maxDateExclusive)
-                .Select(t => new BankSuggestionCandidate
+            result[(suggestion.Kind, suggestion.EntityId)] = new ReconciliationState
+            {
+                Suggested = new SuggestedBankMatchResponse
                 {
-                    Id = t.Id,
-                    PostedAt = t.PostedAt,
-                    Amount = t.Amount,
-                    MerchantName = t.MerchantName,
-                    Description = t.Description,
-                    InstitutionName = t.BankConnection!.InstitutionName,
-                })
-                .ToListAsync(ct));
-        }
-
-        if (openExpenseRows.Count > 0)
-        {
-            var minAmount = openExpenseRows.Min(e => -e.Amount) - 0.01m;
-            var maxAmount = openExpenseRows.Max(e => -e.Amount) + 0.01m;
-            var minDate = openExpenseRows.Min(e => e.Date.Date).AddDays(-14);
-            var maxDateExclusive = openExpenseRows.Max(e => e.Date.Date).AddDays(15);
-
-            unmatched.AddRange(await unmatchedQuery
-                .Where(t =>
-                    t.Amount < 0m &&
-                    t.Amount >= minAmount &&
-                    t.Amount <= maxAmount &&
-                    t.PostedAt >= minDate &&
-                    t.PostedAt < maxDateExclusive)
-                .Select(t => new BankSuggestionCandidate
-                {
-                    Id = t.Id,
-                    PostedAt = t.PostedAt,
-                    Amount = t.Amount,
-                    MerchantName = t.MerchantName,
-                    Description = t.Description,
-                    InstitutionName = t.BankConnection!.InstitutionName,
-                })
-                .ToListAsync(ct));
-        }
-
-        if (unmatched.Count == 0) return result;
-
-        var deposits = unmatched.Where(c => c.Amount > 0).ToList();   // suggest against payments (income)
-        var withdrawals = unmatched.Where(c => c.Amount < 0).ToList(); // suggest against expenses
-
-        foreach (var p in openPaymentRows)
-        {
-            var suggestion = BestBankSuggestion(deposits, p.Amount, p.Date, p.Counterparty);
-            if (suggestion != null)
-                result[(KindPayment, p.Id)] = new ReconciliationState { Suggested = suggestion };
-        }
-
-        foreach (var e in openExpenseRows)
-        {
-            // Expense amounts are stored positive; the bank withdrawal is negative.
-            var suggestion = BestBankSuggestion(withdrawals, -e.Amount, e.Date, e.Counterparty);
-            if (suggestion != null)
-                result[(KindExpense, e.Id)] = new ReconciliationState { Suggested = suggestion };
+                    BankTransactionId = suggestion.BankTransactionId,
+                    Name = string.IsNullOrWhiteSpace(suggestion.Name) ? suggestion.FallbackName : suggestion.Name,
+                    Amount = suggestion.Amount,
+                    Date = suggestion.Date,
+                    Confidence = suggestion.Confidence > 0.99m ? 0.99m : suggestion.Confidence,
+                },
+            };
         }
 
         return result;
     }
 
-    /// <summary>
-    /// Pick the best open bank line for a Payment/Expense row: amount must match within a cent (hard
-    /// gate); date proximity sets the base score and a counterparty-name signal raises it. Returns the
-    /// top candidate above a confidence floor, or null. Mirrors the banking match engine so the inline
-    /// "Match?" chip agrees with the banking review queue.
-    /// </summary>
-    private static SuggestedBankMatchResponse? BestBankSuggestion(
-        IReadOnlyList<BankSuggestionCandidate> candidates,
-        decimal targetSignedAmount,
-        DateTime anchor,
-        string? counterparty)
+    private async Task<List<InlineBankSuggestionRankRow>> LoadSqlRankedInlineSuggestionsAsync(
+        int portfolioId,
+        int[] paymentIds,
+        int[] expenseIds,
+        CancellationToken ct)
     {
-        SuggestedBankMatchResponse? best = null;
-        decimal bestScore = 0m;
-
-        foreach (var c in candidates)
-        {
-            if (Math.Abs(c.Amount - targetSignedAmount) > 0.01m) continue;
-
-            var nameMatch = NameMatchStrength(c.MerchantName, c.Description, counterparty);
-            var days = Math.Abs((c.PostedAt.Date - anchor.Date).Days);
-            var maxDays = nameMatch >= 0.6m ? 14 : 7;
-            if (days > maxDays) continue;
-
-            var dateScore = days switch
+        var paymentCandidates =
+            from t in _db.BankTransactions.AsNoTracking()
+            from p in _db.Payments.AsNoTracking()
+            let anchor = p.PaidDate ?? p.DueDate
+            let bankText = ((t.MerchantName ?? "") + " " + t.Description).ToLower()
+            let tenantName = (p.Lease!.Tenant!.FirstName + " " + p.Lease!.Tenant!.LastName).Trim().ToLower()
+            let leaseNumber = p.Lease!.LeaseNumber.ToLower()
+            let propertyName = p.Lease!.Property!.Name.ToLower()
+            let hasNameMatch =
+                (tenantName != "" && bankText.Contains(tenantName)) ||
+                (leaseNumber != "" && bankText.Contains(leaseNumber)) ||
+                (propertyName != "" && bankText.Contains(propertyName))
+            let dateScore =
+                t.PostedAt >= anchor.AddDays(-1) && t.PostedAt < anchor.AddDays(2) ? 0.80m :
+                t.PostedAt >= anchor.AddDays(-2) && t.PostedAt < anchor.AddDays(3) ? 0.72m :
+                t.PostedAt >= anchor.AddDays(-4) && t.PostedAt < anchor.AddDays(5) ? 0.62m :
+                t.PostedAt >= anchor.AddDays(-7) && t.PostedAt < anchor.AddDays(8) ? 0.52m :
+                t.PostedAt >= anchor.AddDays(-14) && t.PostedAt < anchor.AddDays(15) && hasNameMatch ? 0.42m :
+                0m
+            where
+                paymentIds.Contains(p.Id) &&
+                t.PortfolioId == portfolioId &&
+                t.MatchStatus == "Unmatched" &&
+                t.MatchedPaymentId == null &&
+                t.MatchedExpenseId == null &&
+                t.Amount > 0m &&
+                p.PortfolioId == portfolioId &&
+                p.Status != PaymentStatus.Failed &&
+                p.Status != PaymentStatus.Refunded &&
+                t.Amount >= p.Amount - 0.01m &&
+                t.Amount <= p.Amount + 0.01m &&
+                t.PostedAt >= anchor.AddDays(-14) &&
+                t.PostedAt < anchor.AddDays(15) &&
+                dateScore > 0m
+            select new InlineBankSuggestionRankRow
             {
-                0 => 0.80m,
-                <= 2 => 0.72m,
-                <= 4 => 0.62m,
-                <= 7 => 0.52m,
-                _ => 0.42m,
+                Kind = KindPayment,
+                EntityId = p.Id,
+                BankTransactionId = t.Id,
+                Name = t.MerchantName,
+                FallbackName = t.BankConnection!.InstitutionName,
+                Amount = t.Amount,
+                Date = t.PostedAt,
+                Confidence = hasNameMatch ? dateScore + 0.19m : dateScore,
             };
-            var score = Math.Min(dateScore + nameMatch * 0.20m, 0.99m);
 
-            if (score > bestScore)
+        var expenseCandidates =
+            from t in _db.BankTransactions.AsNoTracking()
+            from e in _db.Expenses.AsNoTracking()
+            let anchor = e.PaidAt ?? e.IncurredAt
+            let bankText = ((t.MerchantName ?? "") + " " + t.Description).ToLower()
+            let vendorName = e.Vendor != null ? e.Vendor.Name.ToLower() : ""
+            let expenseDescription = e.Description.ToLower()
+            let hasNameMatch =
+                (vendorName != "" && bankText.Contains(vendorName)) ||
+                (expenseDescription != "" && bankText.Contains(expenseDescription))
+            let dateScore =
+                t.PostedAt >= anchor.AddDays(-1) && t.PostedAt < anchor.AddDays(2) ? 0.80m :
+                t.PostedAt >= anchor.AddDays(-2) && t.PostedAt < anchor.AddDays(3) ? 0.72m :
+                t.PostedAt >= anchor.AddDays(-4) && t.PostedAt < anchor.AddDays(5) ? 0.62m :
+                t.PostedAt >= anchor.AddDays(-7) && t.PostedAt < anchor.AddDays(8) ? 0.52m :
+                t.PostedAt >= anchor.AddDays(-14) && t.PostedAt < anchor.AddDays(15) && hasNameMatch ? 0.42m :
+                0m
+            where
+                expenseIds.Contains(e.Id) &&
+                t.PortfolioId == portfolioId &&
+                t.MatchStatus == "Unmatched" &&
+                t.MatchedPaymentId == null &&
+                t.MatchedExpenseId == null &&
+                t.Amount < 0m &&
+                e.PortfolioId == portfolioId &&
+                t.Amount >= -e.Amount - 0.01m &&
+                t.Amount <= -e.Amount + 0.01m &&
+                t.PostedAt >= anchor.AddDays(-14) &&
+                t.PostedAt < anchor.AddDays(15) &&
+                dateScore > 0m
+            select new InlineBankSuggestionRankRow
             {
-                bestScore = score;
-                best = new SuggestedBankMatchResponse
-                {
-                    BankTransactionId = c.Id,
-                    Name = string.IsNullOrWhiteSpace(c.MerchantName) ? c.InstitutionName : c.MerchantName!,
-                    Amount = c.Amount,
-                    Date = c.PostedAt,
-                    Confidence = score,
-                };
-            }
-        }
+                Kind = KindExpense,
+                EntityId = e.Id,
+                BankTransactionId = t.Id,
+                Name = t.MerchantName,
+                FallbackName = t.BankConnection!.InstitutionName,
+                Amount = t.Amount,
+                Date = t.PostedAt,
+                Confidence = hasNameMatch ? dateScore + 0.19m : dateScore,
+            };
 
-        return best;
+        return await paymentCandidates
+            .Concat(expenseCandidates)
+            .GroupBy(c => new { c.Kind, c.EntityId })
+            .Select(g => g
+                .OrderByDescending(c => c.Confidence)
+                .ThenBy(c => c.BankTransactionId)
+                .First())
+            .ToListAsync(ct);
     }
-
-    // ── Name-aware matching helpers (kept in lockstep with BankingService's match engine) ──────────
-    private static decimal NameMatchStrength(string? bankMerchant, string? bankDescription, params string?[] candidateNames)
-    {
-        var bankText = NormalizeName($"{bankMerchant} {bankDescription}");
-        if (bankText.Length == 0) return 0m;
-
-        var bankTokens = SignificantTokens(bankText);
-        if (bankTokens.Count == 0) return 0m;
-
-        var best = 0m;
-        foreach (var candidate in candidateNames)
-        {
-            var normalized = NormalizeName(candidate);
-            if (normalized.Length == 0) continue;
-
-            if (bankText.Contains(normalized, StringComparison.Ordinal) ||
-                normalized.Contains(bankText, StringComparison.Ordinal))
-            {
-                return 1m;
-            }
-
-            var candidateTokens = SignificantTokens(normalized);
-            if (candidateTokens.Count == 0) continue;
-
-            var shared = candidateTokens.Count(t => bankTokens.Contains(t));
-            if (shared == 0) continue;
-
-            var fraction = (decimal)shared / candidateTokens.Count;
-            if (fraction > best) best = fraction;
-        }
-
-        return best;
-    }
-
-    private static string NormalizeName(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
-
-        var sb = new System.Text.StringBuilder(value.Length);
-        foreach (var ch in value.Trim().ToLowerInvariant())
-        {
-            if (char.IsLetterOrDigit(ch)) sb.Append(ch);
-            else if (char.IsWhiteSpace(ch)) sb.Append(' ');
-        }
-
-        return string.Join(' ', sb.ToString().Split(' ', StringSplitOptions.RemoveEmptyEntries));
-    }
-
-    private static readonly HashSet<string> NameStopWords = new(StringComparer.Ordinal)
-    {
-        "ach", "the", "and", "llc", "inc", "co", "payment", "pmt", "deposit", "debit", "credit",
-        "transfer", "xfer", "online", "pos", "purchase", "rent", "from", "for", "ref", "id",
-    };
-
-    private static HashSet<string> SignificantTokens(string normalized) =>
-        normalized
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-            .Where(t => t.Length >= 2 && !NameStopWords.Contains(t))
-            .ToHashSet(StringComparer.Ordinal);
 
     private sealed class ReconciliationState
     {
@@ -868,14 +819,16 @@ public class AccountingService : IAccountingService
         public SuggestedBankMatchResponse? Suggested { get; set; }
     }
 
-    private sealed class BankSuggestionCandidate
+    private sealed class InlineBankSuggestionRankRow
     {
-        public int Id { get; set; }
-        public DateTime PostedAt { get; set; }
+        public string Kind { get; set; } = string.Empty;
+        public int EntityId { get; set; }
+        public int BankTransactionId { get; set; }
+        public string? Name { get; set; }
+        public string FallbackName { get; set; } = string.Empty;
         public decimal Amount { get; set; }
-        public string? MerchantName { get; set; }
-        public string Description { get; set; } = string.Empty;
-        public string InstitutionName { get; set; } = string.Empty;
+        public DateTime Date { get; set; }
+        public decimal Confidence { get; set; }
     }
 
     public async Task<AccountingReportsResponse> GetReportsAsync(int portfolioId, CancellationToken ct = default)
@@ -1224,7 +1177,7 @@ public class AccountingService : IAccountingService
             .FirstOrDefaultAsync(ct);
 
         // ── Schedule E (reused so the packet matches the existing CSV/report exactly) ─────────────
-        var scheduleE = await _scheduleE.GetReportAsync(portfolioId, year, ct);
+        var scheduleE = await _scheduleE.GetReportAsync(portfolioId, year, ct: ct);
 
         // ── Per-property P&L for the year ─────────────────────────────────────────────────────────
         // Income: Rent cash received (Paid full Amount + Partial AmountPaid) whose PaidDate falls in the
@@ -1259,15 +1212,43 @@ public class AccountingService : IAccountingService
             .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct);
 
-        var expensesByProperty = expenseCategoryTotals
-            .GroupBy(r => r.PropertyId)
-            .ToDictionary(
-                g => g.Key,
-                g => g.ToDictionary(r => r.Category, r => r.Total));
+        var expenseTotalsByProperty = (await _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId && e.Status == ExpenseStatus.Paid && (e.PaidAt ?? e.IncurredAt).Year == year && e.PropertyId != null)
+            .GroupBy(e => e.PropertyId!.Value)
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) })
+            .ToListAsync(ct))
+            .ToDictionary(g => g.PropertyId, g => g.Total);
+
+        var expensesByProperty = new Dictionary<int, Dictionary<ScheduleECategory, decimal>>();
+        foreach (var row in expenseCategoryTotals)
+        {
+            if (!expensesByProperty.TryGetValue(row.PropertyId, out var categories))
+            {
+                categories = [];
+                expensesByProperty[row.PropertyId] = categories;
+            }
+
+            categories[row.Category] = row.Total;
+        }
 
         var properties = await _db.Properties
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId)
+            .Where(p =>
+                p.PortfolioId == portfolioId &&
+                (_db.Payments.Any(pay =>
+                    pay.PortfolioId == portfolioId &&
+                    pay.PaymentType == PaymentType.Rent &&
+                    (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial) &&
+                    pay.PaidDate != null &&
+                    pay.PaidDate.Value.Year == year &&
+                    pay.Lease != null &&
+                    pay.Lease.PropertyId == p.Id) ||
+                 _db.Expenses.Any(e =>
+                    e.PortfolioId == portfolioId &&
+                    e.Status == ExpenseStatus.Paid &&
+                    (e.PaidAt ?? e.IncurredAt).Year == year &&
+                    e.PropertyId == p.Id)))
             .OrderBy(p => p.Name)
             .Select(p => new { p.Id, p.Name })
             .ToListAsync(ct);
@@ -1289,11 +1270,7 @@ public class AccountingService : IAccountingService
                 }
             }
 
-            var totalExpenses = categories.Sum(c => c.Amount);
-
-            // Skip properties with no activity this year to keep the packet tight.
-            if (income == 0m && totalExpenses == 0m)
-                continue;
+            var totalExpenses = expenseTotalsByProperty.GetValueOrDefault(prop.Id, 0m);
 
             propertyPnL.Add(new YearEndPropertyPnL
             {
@@ -1349,8 +1326,17 @@ public class AccountingService : IAccountingService
             });
         }
 
-        var cashIn = cashFlow.Sum(m => m.MoneyIn);
-        var cashOut = cashFlow.Sum(m => m.MoneyOut);
+        var cashIn = await _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId &&
+                        (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
+                        (p.PaidDate ?? p.DueDate).Year == year)
+            .SumAsync(p => (decimal?)(p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount), ct) ?? 0m;
+
+        var cashOut = await _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId && (e.PaidAt ?? e.IncurredAt).Year == year)
+            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
 
         // ── Rent roll ─────────────────────────────────────────────────────────────────────────────
         // Current leases (active or under notice). Past-due balance is owed rent/charges due in the past.
@@ -1358,6 +1344,8 @@ public class AccountingService : IAccountingService
             .AsNoTracking()
             .Where(l => l.PortfolioId == portfolioId &&
                         (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven))
+            .OrderBy(l => l.Property!.Name)
+            .ThenBy(l => l.Unit!.UnitNumber)
             .Select(l => new
             {
                 l.Id,
@@ -1372,15 +1360,14 @@ public class AccountingService : IAccountingService
             })
             .ToListAsync(ct);
 
-        var leaseIds = leases.Select(l => l.Id).ToHashSet();
-
         // Past-due balance per lease: the full owed-and-overdue predicate (including the `DueDate < now`
         // / Late check) is applied in the WHERE and the sum is grouped SQL-side — no rows are pulled
         // back to filter and total in memory.
         var pastDueByLease = (await _db.Payments
                 .AsNoTracking()
                 .Where(p => p.PortfolioId == portfolioId &&
-                            leaseIds.Contains(p.LeaseId) &&
+                            p.Lease != null &&
+                            (p.Lease.Status == LeaseStatus.Active || p.Lease.Status == LeaseStatus.NoticeGiven) &&
                             (p.Status == PaymentStatus.Scheduled ||
                              p.Status == PaymentStatus.Partial ||
                              p.Status == PaymentStatus.Late) &&
@@ -1404,8 +1391,6 @@ public class AccountingService : IAccountingService
                 LeaseStatus = l.Status.ToString(),
                 PastDueBalance = pastDueByLease.GetValueOrDefault(l.Id, 0m),
             })
-            .OrderBy(r => r.PropertyName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.UnitNumber, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         return new YearEndPacketData

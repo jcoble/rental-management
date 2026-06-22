@@ -25,6 +25,7 @@
  * so an accidental blank is the only thing an empty box could mean here.
  */
 export type ComboboxItem = { value: string; label: string };
+export type CommittedStateInput = { value: string; label: string };
 
 export function resolveStateCode({
 	typed,
@@ -70,4 +71,20 @@ export function resolveStateCode({
 
 	// No confident match: keep the prior selection (never blank a set value).
 	return currentValue;
+}
+
+export function commitStateInput({
+	typed,
+	items,
+	currentValue
+}: {
+	typed: string;
+	items: readonly ComboboxItem[];
+	currentValue: string;
+}): CommittedStateInput {
+	const value = resolveStateCode({ typed, items, currentValue });
+	return {
+		value,
+		label: items.find((i) => i.value.toUpperCase() === value.toUpperCase())?.label ?? ''
+	};
 }

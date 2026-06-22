@@ -136,6 +136,7 @@ public class ScanController : ManagementControllerBase
             payloads.Add((ms.ToArray(), file.ContentType));
         }
 
+        await using var tx = await _db.Database.BeginTransactionAsync(ct);
         var batch = new ScanBatch
         {
             PortfolioId = portfolioId,
@@ -159,8 +160,10 @@ public class ScanController : ManagementControllerBase
         }
         catch (ArgumentException ex)
         {
+            await tx.RollbackAsync(ct);
             return BadRequest(new { error = ex.Message });
         }
+        await tx.CommitAsync(ct);
 
         return CreatedAtAction(
             nameof(GetBatch),
@@ -422,31 +425,68 @@ public class ScanController : ManagementControllerBase
         [FromQuery] int take = 50,
         CancellationToken ct = default)
     {
-        var portfolioId = GetPortfolioId();
+        var page = await LoadScanDraftPageAsync(
+            GetPortfolioId(),
+            status,
+            new ListQuery { Skip = skip, Take = take },
+            ct);
+        return Ok(page.Items);
+    }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(ScanDraftListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ScanDraftListResponse>> ListPage(
+        [FromQuery] ListQuery query,
+        [FromQuery] string? status,
+        CancellationToken ct = default)
+    {
+        var page = await LoadScanDraftPageAsync(GetPortfolioId(), status, query, ct);
+        return Ok(page);
+    }
+
+    private async Task<ScanDraftListResponse> LoadScanDraftPageAsync(
+        int portfolioId,
+        string? status,
+        ListQuery listQuery,
+        CancellationToken ct)
+    {
         var query = _db.ScanDrafts
+            .AsNoTracking()
             .Where(d => d.PortfolioId == portfolioId);
 
         if (!string.IsNullOrWhiteSpace(status))
             query = query.Where(d => d.Status == status);
 
+        query = listQuery.SortField switch
+        {
+            "status" => listQuery.SortDescending ? query.OrderByDescending(d => d.Status) : query.OrderBy(d => d.Status),
+            "targetentitytype" => listQuery.SortDescending ? query.OrderByDescending(d => d.TargetEntityType) : query.OrderBy(d => d.TargetEntityType),
+            "createdat" => listQuery.SortDescending ? query.OrderByDescending(d => d.CreatedAt) : query.OrderBy(d => d.CreatedAt),
+            _ => query.OrderByDescending(d => d.CreatedAt),
+        };
+
+        var totalCount = await query.CountAsync(ct);
+
         var drafts = await query
-            .OrderByDescending(d => d.CreatedAt)
-            .Skip(skip)
-            .Take(take)
+            .Skip(listQuery.NormalizedSkip)
+            .Take(listQuery.NormalizedTake)
             .ToListAsync(ct);
 
         var filePaths = drafts.Select(d => d.FilePath).ToHashSet(StringComparer.Ordinal);
-        var linkedFiles = await _db.StoredFiles
-            .AsNoTracking()
-            .Where(f => f.PortfolioId == portfolioId && filePaths.Contains(f.FilePath))
-            .ToDictionaryAsync(f => f.FilePath, ct);
+        var linkedFiles = filePaths.Count == 0
+            ? new Dictionary<string, StoredFile>(StringComparer.Ordinal)
+            : await _db.StoredFiles
+                .AsNoTracking()
+                .Where(f => f.PortfolioId == portfolioId && filePaths.Contains(f.FilePath))
+                .ToDictionaryAsync(f => f.FilePath, ct);
 
-        return Ok(drafts.Select(d =>
+        var items = drafts.Select(d =>
         {
             linkedFiles.TryGetValue(d.FilePath, out var linkedFile);
             return ScanDraftResponse.FromEntity(d, linkedFile?.EntityType, linkedFile?.EntityId);
-        }).ToList());
+        }).ToList();
+
+        return new ScanDraftListResponse(items, totalCount, listQuery.NormalizedSkip, listQuery.NormalizedTake);
     }
 
     // -------------------------------------------------------------------------

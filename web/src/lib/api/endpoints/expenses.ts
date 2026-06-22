@@ -1,11 +1,22 @@
 import type { Expense } from '$lib/types';
 import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
+import { buildExpenseListPagePath, type ExpenseListParams } from './expense-list-path';
+
+export interface ExpenseListResponse {
+	items: Expense[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
 
 export const expenses = {
-	list: (portfolioId: number, params?: ListParams & { propertyId?: number; unitId?: number; workOrderId?: number }) => {
+	list: (portfolioId: number, params?: ExpenseListParams) => {
 		const { propertyId, unitId, workOrderId, ...list } = params ?? {};
 		return api.get<Expense[]>(`/expenses${buildListQuery(list, { portfolioId, propertyId, unitId, workOrderId })}`);
+	},
+	listPage: (portfolioId: number, params?: ExpenseListParams) => {
+		return api.get<ExpenseListResponse>(buildExpenseListPagePath(portfolioId, params));
 	},
 	get: (id: number) => api.get<Expense>(`/expenses/${id}`),
 	create: (data: Record<string, unknown>) => api.post<Expense>('/expenses', data),

@@ -94,6 +94,10 @@ export function colorForType(type: string): TypeColor {
 	return TYPE_COLORS[type as AppointmentType] ?? FALLBACK_COLOR;
 }
 
+export function labelForType(type: string | null | undefined): string {
+	return type ? colorForType(type).label : '';
+}
+
 /** Legend entries in display order. */
 export const TYPE_LEGEND: { type: AppointmentType; color: TypeColor }[] = (
 	['Showing', 'Inspection', 'MoveIn', 'MoveOut', 'MaintenanceVisit', 'OwnerMeeting'] as AppointmentType[]

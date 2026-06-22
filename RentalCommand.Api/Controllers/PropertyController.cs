@@ -28,6 +28,14 @@ public class PropertyController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(PropertyListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PropertyListResponse>> ListPage([FromQuery] PropertyListQuery query, CancellationToken ct)
+    {
+        var result = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        return Ok(result);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(PropertyResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

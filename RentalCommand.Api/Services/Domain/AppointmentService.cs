@@ -23,21 +23,34 @@ public class AppointmentService : IAppointmentService
 
     public async Task<IReadOnlyList<AppointmentResponse>> ListAsync(int portfolioId, int? propertyId, int? tenantId, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, ToAppointmentListQuery(query, propertyId, tenantId), ct);
+        return page.Items;
+    }
+
+    public async Task<AppointmentListResponse> ListPageAsync(int portfolioId, AppointmentListQuery query, CancellationToken ct = default)
+    {
         var q = _db.Appointments
             .AsNoTracking()
-            .Include(a => a.Property)
-            .Include(a => a.Unit)
-            .Include(a => a.Tenant)
             .Where(a => a.PortfolioId == portfolioId);
 
-        if (propertyId.HasValue)
+        if (query.PropertyId.HasValue)
         {
-            q = q.Where(a => a.PropertyId == propertyId.Value);
+            q = q.Where(a => a.PropertyId == query.PropertyId.Value);
         }
 
-        if (tenantId.HasValue)
+        if (query.TenantId.HasValue)
         {
-            q = q.Where(a => a.TenantId == tenantId.Value);
+            q = q.Where(a => a.TenantId == query.TenantId.Value);
+        }
+
+        if (query.Type.HasValue)
+        {
+            q = q.Where(a => a.Type == query.Type.Value);
+        }
+
+        if (query.Status.HasValue)
+        {
+            q = q.Where(a => a.Status == query.Status.Value);
         }
 
         if (!string.IsNullOrWhiteSpace(query.Search))
@@ -46,26 +59,73 @@ public class AppointmentService : IAppointmentService
             q = q.Where(a =>
                 EF.Functions.ILike(a.Title, $"%{term}%") ||
                 (a.ProspectName != null && EF.Functions.ILike(a.ProspectName, $"%{term}%")) ||
-                (a.ProspectEmail != null && EF.Functions.ILike(a.ProspectEmail, $"%{term}%")));
+                (a.ProspectEmail != null && EF.Functions.ILike(a.ProspectEmail, $"%{term}%")) ||
+                (a.AssignedTo != null && EF.Functions.ILike(a.AssignedTo, $"%{term}%")) ||
+                (a.Property != null && EF.Functions.ILike(a.Property.Name, $"%{term}%")) ||
+                (a.Unit != null && EF.Functions.ILike(a.Unit.UnitNumber, $"%{term}%")) ||
+                (a.Tenant != null && (
+                    EF.Functions.ILike(a.Tenant.FirstName, $"%{term}%") ||
+                    EF.Functions.ILike(a.Tenant.LastName, $"%{term}%"))));
         }
+
+        var totalCount = await q.CountAsync(ct);
 
         q = query.SortField switch
         {
             "title" => query.SortDescending ? q.OrderByDescending(a => a.Title) : q.OrderBy(a => a.Title),
+            "propertyname" => query.SortDescending ? q.OrderByDescending(a => a.Property!.Name) : q.OrderBy(a => a.Property!.Name),
+            "unitnumber" => query.SortDescending ? q.OrderByDescending(a => a.Unit!.UnitNumber) : q.OrderBy(a => a.Unit!.UnitNumber),
+            "tenantname" => query.SortDescending
+                ? q.OrderByDescending(a => a.Tenant!.FirstName).ThenByDescending(a => a.Tenant!.LastName)
+                : q.OrderBy(a => a.Tenant!.FirstName).ThenBy(a => a.Tenant!.LastName),
             "status" => query.SortDescending ? q.OrderByDescending(a => a.Status) : q.OrderBy(a => a.Status),
             "type" => query.SortDescending ? q.OrderByDescending(a => a.Type) : q.OrderBy(a => a.Type),
             "scheduledstart" => query.SortDescending ? q.OrderByDescending(a => a.ScheduledStart) : q.OrderBy(a => a.ScheduledStart),
+            "scheduledend" => query.SortDescending ? q.OrderByDescending(a => a.ScheduledEnd) : q.OrderBy(a => a.ScheduledEnd),
             "updatedat" => query.SortDescending ? q.OrderByDescending(a => a.UpdatedAt) : q.OrderBy(a => a.UpdatedAt),
             "createdat" => query.SortDescending ? q.OrderByDescending(a => a.CreatedAt) : q.OrderBy(a => a.CreatedAt),
             _ => query.SortDescending ? q.OrderByDescending(a => a.ScheduledStart) : q.OrderBy(a => a.ScheduledStart),
         };
 
-        var items = await q
+        var rows = await q
+            .Select(a => new AppointmentListRow(
+                a,
+                a.Property != null ? a.Property.Name : null,
+                a.Unit != null ? a.Unit.UnitNumber : null,
+                a.Tenant != null ? ((a.Tenant.FirstName + " " + a.Tenant.LastName)).Trim() : null))
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return items.Select(AppointmentResponse.FromEntity).ToList();
+        return new AppointmentListResponse
+        {
+            Items = rows.Select(ToListResponse).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    private static AppointmentListQuery ToAppointmentListQuery(ListQuery query, int? propertyId, int? tenantId) => new()
+    {
+        Skip = query.Skip,
+        Take = query.Take,
+        Search = query.Search,
+        Sort = query.Sort,
+        PropertyId = propertyId,
+        TenantId = tenantId,
+    };
+
+    private sealed record AppointmentListRow(
+        Appointment Appointment, string? PropertyName, string? UnitNumber, string? TenantName);
+
+    private static AppointmentResponse ToListResponse(AppointmentListRow row)
+    {
+        var response = AppointmentResponse.FromEntity(row.Appointment);
+        response.PropertyName = row.PropertyName;
+        response.UnitNumber = row.UnitNumber;
+        response.TenantName = row.TenantName;
+        return response;
     }
 
     public async Task<AppointmentResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)

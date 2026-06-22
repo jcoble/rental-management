@@ -23,6 +23,12 @@
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
+	import {
+		formatPropertyStatus,
+		formatPropertyType,
+		propertyStatusOptions,
+		propertyTypeOptions
+	} from '$lib/properties/property-labels';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -87,10 +93,6 @@
 		return isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 	}
 
-	const propertyTypes = ['SingleFamily', 'MultiFamily', 'Condo', 'Townhome', 'Commercial', 'MixedUse'];
-	const propertyTypeOptions = $derived(propertyTypes.map((value) => ({ value, label: value })));
-	const propertyStatuses = ['Active', 'UnderMaintenance', 'Inactive'];
-	const propertyStatusOptions = $derived(propertyStatuses.map((value) => ({ value, label: value })));
 	const ownerOptions = $derived([
 		{ value: '', label: 'No owner assigned' },
 		...(ownersQuery.data ?? []).map((o) => ({ value: String(o.id), label: o.name })),
@@ -521,8 +523,8 @@
 		<div class="mb-6 grid gap-6 lg:grid-cols-2">
 			<DetailCard title="Identity" icon={Building2} accent="primary" testid="property-detail-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Name" bind:value={propertyForm.name} display={property.name} editing={editingProperty} error={propertyFormErrors.name} testid="property-detail-name-field" />
-				<InlineField label="Type" bind:value={propertyForm.type} display={property.type} editing={editingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" />
-				<InlineField label="Status" bind:value={propertyForm.status} display={property.status} editing={editingProperty} type="select" options={propertyStatusOptions} error={propertyFormErrors.status} testid="property-detail-status" />
+				<InlineField label="Type" bind:value={propertyForm.type} display={formatPropertyType(property.type)} editing={editingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" />
+				<InlineField label="Status" bind:value={propertyForm.status} display={formatPropertyStatus(property.status)} editing={editingProperty} type="select" options={propertyStatusOptions} error={propertyFormErrors.status} testid="property-detail-status" />
 				<InlineField label="Owner" bind:value={propertyForm.ownerEntityId} display={property.ownerName ?? 'No owner assigned'} editing={editingProperty} type="select" options={ownerOptions} testid="property-detail-owner" class="sm:col-span-2" />
 			</DetailCard>
 

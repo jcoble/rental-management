@@ -29,6 +29,16 @@ public class ConversationSummary
     public string TestId => $"conversation-{Id}";
 }
 
+public class ConversationListResponse
+{
+    public IReadOnlyList<ConversationSummary> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
+public sealed record ConversationUnreadCountResponse(int Count);
+
 /// <summary>A conversation summary plus its full ordered message history (ascending by time).</summary>
 public class ConversationDetail : ConversationSummary
 {

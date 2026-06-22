@@ -98,8 +98,8 @@ export const accounting = {
 
 	// GET /api/v1/accounting/year-end?year=YYYY — the three-block view (cash flow vs taxable income +
 	// rent roll). Omitting the year defaults to the previous calendar year (the year you file for).
-	yearEnd: (year?: number) =>
-		api.get<YearEndView>(`/accounting/year-end${year != null ? `?year=${year}` : ''}`),
+	yearEnd: (year?: number, propertyId?: number) =>
+		api.get<YearEndView>(`/accounting/year-end${buildListQuery(undefined, { year, propertyId })}`),
 
 	// GET /api/v1/accounting/owner-statements?year=YYYY
 	ownerStatements: (year: number) =>

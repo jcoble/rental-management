@@ -50,17 +50,15 @@ public sealed class LeaseEsignService : ILeaseEsignService
             return SendForSignatureResult.NotFound();
         }
 
-        // Precondition: never re-send a lease that is already executed. A completed signature (Signed, or a
-        // stored signed document) or an already-Active lease must not be silently reverted to
-        // PendingSignature — that would orphan the executed envelope/PDF and reopen a closed contract. A
-        // still-pending request (PendingSignature / EsignStatus.Sent) or a declined one MAY be (re)sent, so
-        // only the finalized states are blocked.
+        // Precondition: only pre-execution leases may enter the e-sign send flow. Lifecycle states like
+        // Active or NoticeGiven must not be silently reverted to PendingSignature — that can reopen a
+        // closed/active contract or leave inconsistent move-out state behind.
         if (lease.EsignStatus == EsignStatus.Signed
             || lease.SignedDocumentStoredFileId.HasValue
-            || lease.Status == LeaseStatus.Active)
+            || (lease.Status != LeaseStatus.Draft && lease.Status != LeaseStatus.PendingSignature))
         {
             _logger.LogInformation(
-                "Send-for-signature refused for lease {LeaseId}: already finalized (status {Status}, esign {Esign}, hasSignedDoc {HasDoc}).",
+                "Send-for-signature refused for lease {LeaseId}: not in a signable state (status {Status}, esign {Esign}, hasSignedDoc {HasDoc}).",
                 leaseId, lease.Status, lease.EsignStatus, lease.SignedDocumentStoredFileId.HasValue);
             return SendForSignatureResult.AlreadyFinalized();
         }

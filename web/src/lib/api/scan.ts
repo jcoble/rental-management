@@ -1,4 +1,5 @@
 import { api } from '$lib/api/client';
+import { buildListQuery, type ListParams } from '$lib/api/list-params';
 
 // ---- TypeScript types mirroring ScanDtos.cs ----
 
@@ -72,6 +73,13 @@ export interface ScanConfirmResponse {
 	entityId?: number | null;
 }
 
+export interface ScanDraftListResponse {
+	items: ScanDraftResponse[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
 // ---- Bulk scan batches (e.g. importing many leases at once) ----
 
 /** Per-status tallies for the drafts in a batch. */
@@ -135,6 +143,11 @@ export interface UploadBatchOptions {
 export const scan = {
 	list: (status?: string): Promise<ScanDraftResponse[]> =>
 		api.get<ScanDraftResponse[]>(`/scans${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+
+	listPage: (status?: string, params?: ListParams): Promise<ScanDraftListResponse> =>
+		api.get<ScanDraftListResponse>(
+			`/scans/page${buildListQuery(params, { status: status || undefined })}`
+		),
 
 	get: (id: number): Promise<ScanDraftResponse> => api.get<ScanDraftResponse>(`/scans/${id}`),
 

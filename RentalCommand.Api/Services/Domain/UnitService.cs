@@ -61,14 +61,21 @@ public class UnitService : IUnitService
     public async Task<IReadOnlyList<UnitHealthResponse>> ListWithHealthAsync(
         int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListWithHealthPageAsync(portfolioId, ToUnitHealthListQuery(query, propertyId), ct);
+        return page.Items;
+    }
+
+    public async Task<UnitHealthListResponse> ListWithHealthPageAsync(
+        int portfolioId, UnitHealthListQuery query, CancellationToken ct = default)
+    {
         // Scope through the owning Property's portfolio; Unit has no PortfolioId of its own.
         var q = _db.Units
             .AsNoTracking()
             .Where(u => u.Property != null && u.Property.PortfolioId == portfolioId);
 
-        if (propertyId.HasValue)
+        if (query.PropertyId.HasValue)
         {
-            q = q.Where(u => u.PropertyId == propertyId.Value);
+            q = q.Where(u => u.PropertyId == query.PropertyId.Value);
         }
 
         if (!string.IsNullOrWhiteSpace(query.Search))
@@ -82,12 +89,21 @@ public class UnitService : IUnitService
         q = query.SortField switch
         {
             "unitnumber" => query.SortDescending ? q.OrderByDescending(u => u.UnitNumber) : q.OrderBy(u => u.UnitNumber),
+            "propertyname" => query.SortDescending ? q.OrderByDescending(u => u.Property!.Name) : q.OrderBy(u => u.Property!.Name),
+            "openworkordercount" => query.SortDescending ? q.OrderByDescending(u => u.WorkOrders.Count(w =>
+                w.Status != WorkOrderStatus.Completed &&
+                w.Status != WorkOrderStatus.Cancelled &&
+                w.Status != WorkOrderStatus.Archived)) : q.OrderBy(u => u.WorkOrders.Count(w =>
+                w.Status != WorkOrderStatus.Completed &&
+                w.Status != WorkOrderStatus.Cancelled &&
+                w.Status != WorkOrderStatus.Archived)),
             "marketrent" => query.SortDescending ? q.OrderByDescending(u => u.MarketRent) : q.OrderBy(u => u.MarketRent),
             "status" => query.SortDescending ? q.OrderByDescending(u => u.Status) : q.OrderBy(u => u.Status),
             "updatedat" => query.SortDescending ? q.OrderByDescending(u => u.UpdatedAt) : q.OrderBy(u => u.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(u => u.UnitNumber) : q.OrderBy(u => u.UnitNumber),
         };
 
+        var totalCount = await q.CountAsync(ct);
         var now = DateTime.UtcNow;
 
         // One projection query: the health badges are correlated subqueries (grouped counts + the active
@@ -123,22 +139,37 @@ public class UnitService : IUnitService
             })
             .ToListAsync(ct);
 
-        return rows.Select(r => new UnitHealthResponse
+        return new UnitHealthListResponse
         {
-            Id = r.Id,
-            PropertyId = r.PropertyId,
-            PropertyName = r.PropertyName,
-            UnitNumber = r.UnitNumber,
-            Status = r.Status.ToString(),
-            MarketRent = r.MarketRent,
-            OpenWorkOrderCount = r.OpenWorkOrderCount,
-            LeaseEndsInDays = r.ActiveLeaseEndDate is { } end
-                ? Math.Max(0, (int)Math.Ceiling((end - now).TotalDays))
-                : null,
-            DocsNeedingReviewCount = r.DocsCount,
-            SimpleStage = ComputeSimpleStage(r.Status, r.HasActiveLease, r.ActiveLeaseNoticeGiven, r.ActiveLeaseEndDate, r.HasDraftOrPendingLease, now),
-        }).ToList();
+            Items = rows.Select(r => new UnitHealthResponse
+            {
+                Id = r.Id,
+                PropertyId = r.PropertyId,
+                PropertyName = r.PropertyName,
+                UnitNumber = r.UnitNumber,
+                Status = r.Status.ToString(),
+                MarketRent = r.MarketRent,
+                OpenWorkOrderCount = r.OpenWorkOrderCount,
+                LeaseEndsInDays = r.ActiveLeaseEndDate is { } end
+                    ? Math.Max(0, (int)Math.Ceiling((end - now).TotalDays))
+                    : null,
+                DocsNeedingReviewCount = r.DocsCount,
+                SimpleStage = ComputeSimpleStage(r.Status, r.HasActiveLease, r.ActiveLeaseNoticeGiven, r.ActiveLeaseEndDate, r.HasDraftOrPendingLease, now),
+            }).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
     }
+
+    private static UnitHealthListQuery ToUnitHealthListQuery(ListQuery query, int? propertyId) => new()
+    {
+        Skip = query.Skip,
+        Take = query.Take,
+        Search = query.Search,
+        Sort = query.Sort,
+        PropertyId = propertyId,
+    };
 
     /// <summary>
     /// Simplified list badge (NOT the full 9-stage detail derivation): a cheap label from the unit's

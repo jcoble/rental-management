@@ -16,14 +16,29 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { Info, Plus } from '@lucide/svelte';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const PAGE_SIZE = 20;
+
+	const initialParams = page.url.searchParams;
+	let gridSort = $state(readGridParam(initialParams, 'sort'));
+	let gridPage = $state(readGridParam(initialParams, 'page', 1));
+
+	$effect(() => {
+		syncGridUrl({ sort: gridSort, page: gridPage }, { page: 1 });
+	});
 
 	// --- Queries ---
 	const depositsQuery = createQuery(() => ({
-		queryKey: ['deposits', portfolioId],
-		queryFn: () => securityDeposits.list(),
+		queryKey: ['deposits', portfolioId, 'page', gridSort, gridPage, PAGE_SIZE],
+		queryFn: () => securityDeposits.listPage({
+			sort: gridSort || undefined,
+			skip: (gridPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+		}),
 	}));
 
 	const leasesQuery = createQuery(() => ({
@@ -181,7 +196,8 @@
 		Returned: { class: 'm3-tone-chip border m3-tone--success' },
 	};
 
-	const depositsList = $derived(depositsQuery.data ?? []);
+	const depositsList = $derived(depositsQuery.data?.items ?? []);
+	const depositsTotalCount = $derived(depositsQuery.data?.totalCount ?? 0);
 
 	// --- DataGrid columns ---
 	const columns: ColumnDef<SecurityDepositHolding>[] = [
@@ -294,12 +310,19 @@
 	<DataGrid
 		data={depositsList}
 		{columns}
-		loading={depositsQuery.isLoading}
+		loading={depositsQuery.isLoading || depositsQuery.isFetching}
 		emptyMessage="No security deposits on record yet. Add a holding to get started."
 		getRowKey={(d) => d.id}
 		getRowTestId={() => 'deposit-row'}
 		onRowClick={(d) => goto(`/deposits/${d.id}`)}
 		data-testid="deposits-list"
+		pageSize={PAGE_SIZE}
+		page={gridPage}
+		totalCount={depositsTotalCount}
+		serverSide
+		onPageChange={(page) => (gridPage = page)}
+		sort={gridSort}
+		onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
 	>
 		{#snippet toolbar()}
 			<div class="flex-1"></div>

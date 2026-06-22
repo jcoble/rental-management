@@ -23,7 +23,8 @@
 		Info: { border: 'border-l-[var(--info)]', icon: Info, iconColor: 'text-[var(--info)]', bg: 'bg-[color-mix(in_srgb,var(--info)_8%,transparent)]' },
 		Success: { border: 'border-l-[var(--success)]', icon: CheckCircle2, iconColor: 'text-[var(--success)]', bg: 'bg-[color-mix(in_srgb,var(--success)_8%,transparent)]' },
 		Warning: { border: 'border-l-[var(--warning)]', icon: AlertTriangle, iconColor: 'text-[var(--warning)]', bg: 'bg-[color-mix(in_srgb,var(--warning)_8%,transparent)]' },
-		Error: { border: 'border-l-[var(--m3c-error)]', icon: XCircle, iconColor: 'text-[var(--m3c-error)]', bg: 'bg-[color-mix(in_srgb,var(--m3c-error)_8%,transparent)]' }
+		Error: { border: 'border-l-[var(--m3c-error)]', icon: XCircle, iconColor: 'text-[var(--m3c-error)]', bg: 'bg-[color-mix(in_srgb,var(--m3c-error)_8%,transparent)]' },
+		Critical: { border: 'border-l-[var(--m3c-error)]', icon: XCircle, iconColor: 'text-[var(--m3c-error)]', bg: 'bg-[color-mix(in_srgb,var(--m3c-error)_10%,transparent)]' }
 	};
 
 	const config = $derived(severityConfig[notification.severity] || severityConfig.Info);

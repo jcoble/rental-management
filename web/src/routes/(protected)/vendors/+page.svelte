@@ -21,9 +21,10 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const PAGE_SIZE = 20;
 
 	// Search / sort / page persisted in the URL so they survive navigating away and back. Sort/page seed
-	// the client-side DataGrid (initialSort / page) and are mirrored back via onSortChange / bind:page.
+	// the server-side DataGrid query so vendors are filtered/sorted/paged in SQL.
 	const initialParams = page.url.searchParams;
 	let vendorSearch = $state(readGridParam(initialParams, 'q'));
 	let gridSort = $state(readGridParam(initialParams, 'sort'));
@@ -46,8 +47,13 @@
 	});
 
 	const vendorsQuery = createQuery(() => ({
-		queryKey: ['vendors', portfolioId, debouncedVendorSearch.value],
-		queryFn: () => vendors.list(portfolioId, { search: debouncedVendorSearch.value, take: 100 }),
+		queryKey: ['vendors', portfolioId, 'page', debouncedVendorSearch.value, gridSort, gridPage, PAGE_SIZE],
+		queryFn: () => vendors.listPage(portfolioId, {
+			search: debouncedVendorSearch.value,
+			sort: gridSort || undefined,
+			skip: (gridPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+		}),
 	}));
 
 	// --- Vendor form/dialog ---
@@ -57,6 +63,7 @@
 	let vendorForm = $state({ ...emptyVendor });
 	let vendorErrors = $state<Record<string, string>>({});
 	let vendorDeleteTarget = $state<Vendor | null>(null);
+	let createParamHandled = $state(false);
 
 	function invalidateVendors() {
 		queryClient.invalidateQueries({ queryKey: ['vendors', portfolioId] });
@@ -89,6 +96,13 @@
 		vendorErrors = {};
 		showVendorForm = true;
 	}
+
+	$effect(() => {
+		if (createParamHandled || page.url.searchParams.get('create') !== '1') return;
+		createParamHandled = true;
+		openCreateVendor();
+	});
+
 	function openEditVendor(v: Vendor) {
 		editingVendorId = v.id;
 		vendorForm = { name: v.name, serviceType: v.serviceType, email: v.email ?? '', phone: v.phone ?? '', is1099Eligible: v.is1099Eligible, w9OnFile: v.w9OnFile, preferred: v.preferred };
@@ -110,7 +124,8 @@
 		saveVendorMutation.mutate({ id: editingVendorId, data: { portfolioId, ...result.data } });
 	}
 
-	const vendorsList = $derived(vendorsQuery.data ?? []);
+	const vendorsList = $derived(vendorsQuery.data?.items ?? []);
+	const vendorsTotalCount = $derived(vendorsQuery.data?.totalCount ?? 0);
 
 	// --- Vendor columns ---
 	const vendorColumns: ColumnDef<Vendor>[] = [
@@ -213,15 +228,19 @@
 	<DataGrid
 		data={vendorsList}
 		columns={vendorColumns}
-		loading={vendorsQuery.isLoading}
+		loading={vendorsQuery.isLoading || vendorsQuery.isFetching}
 		emptyMessage="No vendors found."
 		getRowKey={(v) => v.id}
 		getRowTestId={() => 'vendor-row'}
 		onRowClick={(v) => goto(`/vendors/${v.id}`)}
 		data-testid="vendors-list"
-		initialSort={gridSort}
-		bind:page={gridPage}
-		onSortChange={(s) => (gridSort = s ?? '')}
+		pageSize={PAGE_SIZE}
+		page={gridPage}
+		totalCount={vendorsTotalCount}
+		serverSide
+		onPageChange={(page) => (gridPage = page)}
+		sort={gridSort}
+		onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 items-center gap-2">

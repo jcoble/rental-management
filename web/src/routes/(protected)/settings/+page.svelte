@@ -5,9 +5,11 @@
 	import type {
 		NotificationChannelPreference,
 		NotificationChannelType,
+		NotificationSeverity,
 		SmsProviderMeta,
 	} from '$lib/api/types/notification';
-	import { getAuthState, currentUserIsAdmin } from '$lib/stores/auth.svelte';
+	import { getAuthState, currentUserIsAdmin, hasAnyRole } from '$lib/stores/auth.svelte';
+	import { notificationStore } from '$lib/stores/notifications.svelte';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { settingsSchema, parseForm } from '$lib/schemas';
@@ -48,6 +50,7 @@
 	const authState = getAuthState();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const isAdmin = $derived(currentUserIsAdmin());
+	const canBroadcast = $derived(hasAnyRole('Admin', 'Manager', 'Owner'));
 
 	// Tabbed hub: each section is one tab. The active tab is mirrored to the URL hash so a deep-link
 	// (e.g. /settings#messaging) lands on the right tab and a refresh keeps your place. WalkMeThrough
@@ -126,7 +129,11 @@
 	// Test-SMS verification state.
 	let testSmsNumber = $state('');
 	let testSmsResult = $state<{ success: boolean; message: string } | null>(null);
-	let broadcastForm = $state({
+	let broadcastForm = $state<{
+		title: string;
+		message: string;
+		severity: NotificationSeverity;
+	}>({
 		title: '',
 		message: '',
 		severity: 'Info'
@@ -547,10 +554,12 @@
 				title: broadcastForm.title.trim(),
 				message: broadcastForm.message.trim(),
 				severity: broadcastForm.severity
-			}),
+		}),
 		onSuccess: () => {
 			broadcastForm = { title: '', message: '', severity: 'Info' };
 			queryClient.invalidateQueries({ queryKey: ['notifications'] });
+			queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] });
+			void notificationStore.refresh();
 			showSuccess('Broadcast notification sent.');
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -944,52 +953,54 @@
 					</Card.Content>
 				</Card.Root>
 
-				<!-- Broadcast: a one-off announcement, not a stored setting. Lives under Notifications. -->
-				<Card.Root class="gap-0 py-0" data-testid="settings-broadcast-notification">
-					<Card.Content class="p-5">
-						<p class="text-sm font-semibold">Send an announcement</p>
-						<p class="mb-3 text-xs text-muted-foreground">
-							Send a one-time in-app announcement to every user in this portfolio. It appears in their notification bell and tenant dashboard.
-						</p>
-						<div class="grid gap-3 md:grid-cols-[1fr_160px]">
-							<div>
-								<label for="broadcast-title" class="mb-1 block text-xs text-muted-foreground">Title</label>
-								<Input id="broadcast-title" bind:value={broadcastForm.title} placeholder="Swimming pool closed today" data-testid="broadcast-title" />
+				{#if canBroadcast}
+					<!-- Broadcast: a one-off announcement, not a stored setting. Lives under Notifications. -->
+					<Card.Root class="gap-0 py-0" data-testid="settings-broadcast-notification">
+						<Card.Content class="p-5">
+							<p class="text-sm font-semibold">Send an announcement</p>
+							<p class="mb-3 text-xs text-muted-foreground">
+								Send a one-time in-app announcement to every user in this portfolio. It appears in their notification bell and tenant dashboard.
+							</p>
+							<div class="grid gap-3 md:grid-cols-[1fr_160px]">
+								<div>
+									<label for="broadcast-title" class="mb-1 block text-xs text-muted-foreground">Title</label>
+									<Input id="broadcast-title" bind:value={broadcastForm.title} placeholder="Swimming pool closed today" data-testid="broadcast-title" />
+								</div>
+								<div>
+									<label for="broadcast-severity" class="mb-1 block text-xs text-muted-foreground">Severity</label>
+									<Select.Root type="single" bind:value={broadcastForm.severity}>
+										<Select.Trigger id="broadcast-severity" class="w-full">{broadcastForm.severity}</Select.Trigger>
+										<Select.Content>
+											<Select.Item value="Info" label="Info">Info</Select.Item>
+											<Select.Item value="Warning" label="Warning">Warning</Select.Item>
+											<Select.Item value="Critical" label="Critical">Critical</Select.Item>
+										</Select.Content>
+									</Select.Root>
+								</div>
+								<div class="md:col-span-2">
+									<label for="broadcast-message" class="mb-1 block text-xs text-muted-foreground">Message</label>
+									<textarea
+										id="broadcast-message"
+										bind:value={broadcastForm.message}
+										rows={3}
+										class="w-full rounded border border-border bg-background px-3 py-2 text-sm"
+										placeholder="The swimming pool is closed for maintenance and will reopen tomorrow morning."
+										data-testid="broadcast-message"
+									></textarea>
+								</div>
+								<div class="md:col-span-2">
+									<Button
+										onclick={() => broadcastMutation.mutate()}
+										disabled={!broadcastForm.title.trim() || !broadcastForm.message.trim() || broadcastMutation.isPending}
+										data-testid="broadcast-send"
+									>
+										{broadcastMutation.isPending ? 'Sending...' : 'Send Broadcast'}
+									</Button>
+								</div>
 							</div>
-							<div>
-								<label for="broadcast-severity" class="mb-1 block text-xs text-muted-foreground">Severity</label>
-								<Select.Root type="single" bind:value={broadcastForm.severity}>
-									<Select.Trigger id="broadcast-severity" class="w-full">{broadcastForm.severity}</Select.Trigger>
-									<Select.Content>
-										<Select.Item value="Info" label="Info">Info</Select.Item>
-										<Select.Item value="Warning" label="Warning">Warning</Select.Item>
-										<Select.Item value="Critical" label="Critical">Critical</Select.Item>
-									</Select.Content>
-								</Select.Root>
-							</div>
-							<div class="md:col-span-2">
-								<label for="broadcast-message" class="mb-1 block text-xs text-muted-foreground">Message</label>
-								<textarea
-									id="broadcast-message"
-									bind:value={broadcastForm.message}
-									rows={3}
-									class="w-full rounded border border-border bg-background px-3 py-2 text-sm"
-									placeholder="The swimming pool is closed for maintenance and will reopen tomorrow morning."
-									data-testid="broadcast-message"
-								></textarea>
-							</div>
-							<div class="md:col-span-2">
-								<Button
-									onclick={() => broadcastMutation.mutate()}
-									disabled={!broadcastForm.title.trim() || !broadcastForm.message.trim() || broadcastMutation.isPending}
-									data-testid="broadcast-send"
-								>
-									{broadcastMutation.isPending ? 'Sending...' : 'Send Broadcast'}
-								</Button>
-							</div>
-						</div>
-					</Card.Content>
-				</Card.Root>
+						</Card.Content>
+					</Card.Root>
+				{/if}
 			</div>
 		</Tabs.Content>
 

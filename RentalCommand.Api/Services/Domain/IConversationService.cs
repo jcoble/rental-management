@@ -15,6 +15,8 @@ public interface IConversationService
 
     /// <summary>List the portfolio's conversations, most-recently-active first. Unread = landlord's.</summary>
     Task<IReadOnlyList<ConversationSummary>> ListAsync(int portfolioId, CancellationToken ct = default);
+    Task<ConversationListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
+    Task<int> GetUnreadCountAsync(int portfolioId, CancellationToken ct = default);
 
     /// <summary>
     /// Fetch one conversation with its full message history (ascending). Resets the landlord's unread

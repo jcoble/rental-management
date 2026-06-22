@@ -13,6 +13,7 @@
 	import AIBadge from '$lib/components/shared/AIBadge.svelte';
 	import GettingStartedCard from '$lib/components/onboarding/GettingStartedCard.svelte';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { labelForType } from './appointments/calendar-utils';
 
 	const dashboardQuery = createQuery(() => ({
 		queryKey: ['dashboard', getCurrentPortfolioId()],
@@ -28,7 +29,7 @@
 	}));
 	const messagesQuery = createQuery(() => ({
 		queryKey: ['dashboard-messages', getCurrentPortfolioId()],
-		queryFn: () => messages.list(),
+		queryFn: () => messages.listPage({ take: 5, sort: '-lastMessageAt' }),
 	}));
 	const workOrdersQuery = createQuery(() => ({
 		queryKey: ['dashboard-work-orders', getCurrentPortfolioId()],
@@ -478,7 +479,7 @@
 
 		<!-- Secondary row: Latest Messages collapses entirely when empty so it never eats prime
 		     space; Latest Work Orders then expands to fill the row. -->
-		{@const hasMessages = messagesQuery.isLoading || (messagesQuery.data?.length ?? 0) > 0}
+		{@const hasMessages = messagesQuery.isLoading || (messagesQuery.data?.items.length ?? 0) > 0}
 		<div class="m3-motion-enter mb-6 grid gap-4 {hasMessages ? 'lg:grid-cols-2' : ''}" style="--m3-motion-index: 4">
 			{#if hasMessages}
 				<Card.Root class="m3-tonal-card m3-tonal-card--violet gap-0 py-0" data-testid="dashboard-latest-messages">
@@ -497,7 +498,7 @@
 							</div>
 						{:else}
 							<div class="space-y-2">
-								{#each (messagesQuery.data ?? []).slice(0, 5) as thread}
+								{#each messagesQuery.data?.items ?? [] as thread}
 									<a href="/messages?conversation={thread.id}" class="block rounded border border-border bg-background px-3 py-2 transition-colors hover:bg-muted/40">
 										<div class="flex items-center justify-between gap-3">
 											<p class="truncate text-sm font-medium">{thread.subject}</p>
@@ -607,7 +608,7 @@
 								{#each data.upcomingAppointments as appt}
 									<div class="rounded border border-border bg-background p-2 text-sm">
 										<p>{appt.title}</p>
-										<p class="font-mono tabular-nums text-xs text-muted-foreground">{new Date(appt.scheduledStart).toLocaleString()} · {appt.type}</p>
+										<p class="font-mono tabular-nums text-xs text-muted-foreground">{new Date(appt.scheduledStart).toLocaleString()} · {labelForType(appt.type)}</p>
 									</div>
 								{/each}
 							</div>

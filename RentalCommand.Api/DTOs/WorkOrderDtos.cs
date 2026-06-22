@@ -75,6 +75,23 @@ public class WorkOrderResponse
     };
 }
 
+public class WorkOrderListResponse
+{
+    public IReadOnlyList<WorkOrderResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
+public class WorkOrderListQuery : ListQuery
+{
+    public int? PropertyId { get; set; }
+    public int? UnitId { get; set; }
+    public int? VendorId { get; set; }
+    public WorkOrderStatus? Status { get; set; }
+    public WorkOrderPriority? Priority { get; set; }
+}
+
 /// <summary>One entry in a work order's status timeline (oldest → newest in the parent list).</summary>
 public class WorkOrderStatusEventResponse
 {

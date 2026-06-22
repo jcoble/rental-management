@@ -12,10 +12,10 @@ namespace RentalCommand.Api.Services.Domain;
 public class InspectionService : IInspectionService
 {
     private const string EntityType = "Inspection";
+    private const string WorkOrderEntityType = "WorkOrder";
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
-    private readonly IWorkOrderService _workOrders;
     private readonly IFileStorage _storage;
     private readonly IInspectionReportPdfGenerator _pdf;
     private readonly ILogger<InspectionService> _logger;
@@ -23,14 +23,12 @@ public class InspectionService : IInspectionService
     public InspectionService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
-        IWorkOrderService workOrders,
         IFileStorage storage,
         IInspectionReportPdfGenerator pdf,
         ILogger<InspectionService> logger)
     {
         _db = db;
         _dataUpdate = dataUpdate;
-        _workOrders = workOrders;
         _storage = storage;
         _pdf = pdf;
         _logger = logger;
@@ -328,50 +326,30 @@ public class InspectionService : IInspectionService
         }
 
         var now = DateTime.UtcNow;
-        var createdWorkOrderIds = new List<int>();
+        var failedItems = items.Where(it => it.Result == InspectionItemResult.Fail).ToList();
+        var workOrderIdByItemId = new Dictionary<int, int>();
+        var newWorkOrderLinks = new List<(InspectionItem Item, WorkOrder WorkOrder)>();
 
         // ---- Auto-create a work order per Fail item (links SpawnedWorkOrderId + initial status event). ----
-        foreach (var item in items.Where(it => it.Result == InspectionItemResult.Fail))
+        foreach (var item in failedItems)
         {
             // Skip if this item already spawned a work order (idempotency on re-entry).
             if (item.SpawnedWorkOrderId.HasValue)
             {
-                createdWorkOrderIds.Add(item.SpawnedWorkOrderId.Value);
+                workOrderIdByItemId[item.Id] = item.SpawnedWorkOrderId.Value;
                 continue;
             }
 
-            var title = string.IsNullOrWhiteSpace(item.Label) ? "Inspection follow-up" : item.Label.Trim();
-            var area = string.IsNullOrWhiteSpace(item.Area) ? "General" : item.Area.Trim();
-            var description = string.IsNullOrWhiteSpace(item.Note)
-                ? $"Failed inspection item ({area}) from inspection #{id}."
-                : item.Note.Trim();
-
-            var wo = await _workOrders.CreateAsync(
+            var workOrder = BuildInspectionWorkOrder(
                 portfolioId,
-                new CreateWorkOrderRequest
-                {
-                    PropertyId = inspection.PropertyId,
-                    UnitId = inspection.UnitId,
-                    Title = title.Length > 200 ? title[..200] : title,
-                    Description = description.Length > 4000 ? description[..4000] : description,
-                    Category = "Inspection",
-                    Priority = WorkOrderPriority.Normal,
-                    Status = WorkOrderStatus.New,
-                    RequestedAt = now,
-                },
-                changedByUserId: userId,
-                changedByLabel: "Inspection",
-                ct);
+                inspection,
+                item,
+                now,
+                userId);
 
-            if (wo == null)
-            {
-                // A work order couldn't be created (should not happen — property is already validated).
-                _logger.LogWarning("Failed to spawn work order for inspection {InspectionId} item {ItemId}", id, item.Id);
-                continue;
-            }
-
-            item.SpawnedWorkOrderId = wo.Id;
-            createdWorkOrderIds.Add(wo.Id);
+            item.SpawnedWorkOrder = workOrder;
+            _db.WorkOrders.Add(workOrder);
+            newWorkOrderLinks.Add((item, workOrder));
         }
 
         // ---- Status + completion timestamp (saved with the spawned-WO links). ----
@@ -379,6 +357,24 @@ public class InspectionService : IInspectionService
         inspection.CompletedAt ??= now;
         inspection.UpdatedAt = now;
         await _db.SaveChangesAsync(ct);
+
+        foreach (var (item, workOrder) in newWorkOrderLinks)
+        {
+            workOrderIdByItemId[item.Id] = workOrder.Id;
+        }
+
+        var createdWorkOrderIds = failedItems
+            .Where(item => workOrderIdByItemId.ContainsKey(item.Id))
+            .Select(item => workOrderIdByItemId[item.Id])
+            .ToList();
+
+        var newWorkOrderIds = newWorkOrderLinks
+            .Select(link => link.WorkOrder.Id)
+            .ToList();
+        foreach (var workOrder in await LoadWorkOrderBroadcastsAsync(portfolioId, newWorkOrderIds, ct))
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, WorkOrderEntityType, workOrder.Id, workOrder, ct);
+        }
 
         // ---- Generate + store the PDF report (commit DB rows first, then blob). ----
         int? reportFileId = null;
@@ -414,6 +410,92 @@ public class InspectionService : IInspectionService
         var response = InspectionResponse.FromEntity(inspection);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, inspection.Id, response, ct);
         return (summary, null);
+    }
+
+    private static WorkOrder BuildInspectionWorkOrder(
+        int portfolioId,
+        Inspection inspection,
+        InspectionItem item,
+        DateTime now,
+        int changedByUserId)
+    {
+        var title = string.IsNullOrWhiteSpace(item.Label) ? "Inspection follow-up" : item.Label.Trim();
+        var area = string.IsNullOrWhiteSpace(item.Area) ? "General" : item.Area.Trim();
+        var description = string.IsNullOrWhiteSpace(item.Note)
+            ? $"Failed inspection item ({area}) from inspection #{inspection.Id}."
+            : item.Note.Trim();
+
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = portfolioId,
+            PropertyId = inspection.PropertyId,
+            UnitId = inspection.UnitId,
+            Title = title.Length > 200 ? title[..200] : title,
+            Description = description.Length > 4000 ? description[..4000] : description,
+            Category = "Inspection",
+            Priority = WorkOrderPriority.Normal,
+            Status = WorkOrderStatus.New,
+            RequestedAt = now,
+            UpdatedAt = now,
+        };
+
+        workOrder.StatusEvents.Add(new WorkOrderStatusEvent
+        {
+            PortfolioId = portfolioId,
+            FromStatus = null,
+            ToStatus = workOrder.Status,
+            Note = null,
+            ChangedByUserId = changedByUserId,
+            ChangedByLabel = "Inspection",
+            CreatedAtUtc = now,
+        });
+
+        return workOrder;
+    }
+
+    private async Task<IReadOnlyList<WorkOrderResponse>> LoadWorkOrderBroadcastsAsync(
+        int portfolioId,
+        IReadOnlyCollection<int> workOrderIds,
+        CancellationToken ct)
+    {
+        if (workOrderIds.Count == 0)
+        {
+            return [];
+        }
+
+        var rows = await _db.WorkOrders
+            .AsNoTracking()
+            .Where(w => w.PortfolioId == portfolioId && workOrderIds.Contains(w.Id))
+            .Select(w => new InspectionWorkOrderBroadcastRow(
+                w,
+                w.Property != null ? w.Property.Name : null,
+                w.Unit != null ? w.Unit.UnitNumber : null,
+                w.Vendor != null ? w.Vendor.Name : null,
+                w.Tenant != null ? ((w.Tenant.FirstName + " " + w.Tenant.LastName)).Trim() : null))
+            .ToListAsync(ct);
+
+        var responseById = rows.ToDictionary(row => row.WorkOrder.Id, ToWorkOrderBroadcast);
+        return workOrderIds
+            .Where(responseById.ContainsKey)
+            .Select(id => responseById[id])
+            .ToList();
+    }
+
+    private sealed record InspectionWorkOrderBroadcastRow(
+        WorkOrder WorkOrder,
+        string? PropertyName,
+        string? UnitNumber,
+        string? VendorName,
+        string? TenantName);
+
+    private static WorkOrderResponse ToWorkOrderBroadcast(InspectionWorkOrderBroadcastRow row)
+    {
+        var response = WorkOrderResponse.FromEntity(row.WorkOrder);
+        response.PropertyName = row.PropertyName;
+        response.UnitNumber = row.UnitNumber;
+        response.VendorName = row.VendorName;
+        response.TenantName = row.TenantName;
+        return response;
     }
 
     public async Task<(Stream Stream, string FileName, string ContentType)?> GetReportAsync(int portfolioId, int id, CancellationToken ct = default)

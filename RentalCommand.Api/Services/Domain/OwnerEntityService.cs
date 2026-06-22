@@ -22,6 +22,12 @@ public class OwnerEntityService : IOwnerEntityService
 
     public async Task<IReadOnlyList<OwnerEntityResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, query, ct);
+        return page.Items;
+    }
+
+    public async Task<OwnerEntityListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+    {
         var q = _db.OwnerEntities
             .AsNoTracking()
             .Where(o => o.PortfolioId == portfolioId);
@@ -32,6 +38,7 @@ public class OwnerEntityService : IOwnerEntityService
             q = q.Where(o =>
                 EF.Functions.ILike(o.Name, $"%{term}%") ||
                 (o.TaxId != null && EF.Functions.ILike(o.TaxId, $"%{term}%")) ||
+                (o.Email != null && EF.Functions.ILike(o.Email, $"%{term}%")) ||
                 (o.Phone != null && EF.Functions.ILike(o.Phone, $"%{term}%")));
         }
 
@@ -39,16 +46,25 @@ public class OwnerEntityService : IOwnerEntityService
         {
             "name" => query.SortDescending ? q.OrderByDescending(o => o.Name) : q.OrderBy(o => o.Name),
             "type" => query.SortDescending ? q.OrderByDescending(o => o.OwnerEntityType) : q.OrderBy(o => o.OwnerEntityType),
+            "ownerentitytype" => query.SortDescending ? q.OrderByDescending(o => o.OwnerEntityType) : q.OrderBy(o => o.OwnerEntityType),
             "updatedat" => query.SortDescending ? q.OrderByDescending(o => o.UpdatedAt) : q.OrderBy(o => o.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(o => o.CreatedAt) : q.OrderBy(o => o.CreatedAt),
         };
+
+        var totalCount = await q.CountAsync(ct);
 
         var items = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return items.Select(OwnerEntityResponse.FromEntity).ToList();
+        return new OwnerEntityListResponse
+        {
+            Items = items.Select(OwnerEntityResponse.FromEntity).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
     }
 
     public async Task<OwnerEntityResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)

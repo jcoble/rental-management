@@ -1,4 +1,5 @@
 import { api } from '../client';
+import { buildListQuery, type ListParams } from '../list-params';
 
 /** Application lifecycle status (string enum, matches the API). */
 export type ApplicationStatus =
@@ -13,11 +14,18 @@ export interface ApplicationResponse {
 	id: number;
 	propertyId: number | null;
 	unitId: number | null;
+	propertyName: string | null;
+	unitNumber: string | null;
 	firstName: string;
 	lastName: string;
 	email: string;
 	phone: string;
 	dateOfBirth: string | null;
+	currentAddressLine1: string | null;
+	currentAddressLine2: string | null;
+	currentCity: string | null;
+	currentState: string | null;
+	currentPostalCode: string | null;
 	currentAddress: string | null;
 	employer: string | null;
 	monthlyIncome: number | null;
@@ -45,9 +53,15 @@ export interface ApplicationLinkResult {
 	applyPath: string;
 }
 
-export interface ApplicationListParams {
+export interface ApplicationListParams extends ListParams {
 	status?: ApplicationStatus | '';
-	search?: string;
+}
+
+export interface ApplicationListResponse {
+	items: ApplicationResponse[];
+	totalCount: number;
+	skip: number;
+	take: number;
 }
 
 /** Outcome of a screening request. */
@@ -88,17 +102,15 @@ export interface AdverseActionNoticeResponse {
 }
 
 function buildQuery(params?: ApplicationListParams): string {
-	const query = new URLSearchParams();
-	if (params?.status) query.set('status', params.status);
-	if (params?.search && params.search.trim().length > 0) query.set('search', params.search.trim());
-	const qs = query.toString();
-	return qs ? `?${qs}` : '';
+	return buildListQuery(params, { status: params?.status || undefined });
 }
 
 /** Authed, portfolio-scoped landlord application endpoints (JWT). */
 export const applications = {
 	list: (params?: ApplicationListParams) =>
 		api.get<ApplicationResponse[]>(`/applications${buildQuery(params)}`),
+	listPage: (params?: ApplicationListParams) =>
+		api.get<ApplicationListResponse>(`/applications/page${buildQuery(params)}`),
 	get: (id: number) => api.get<ApplicationResponse>(`/applications/${id}`),
 	approve: (id: number) => api.post<ApproveApplicationResult>(`/applications/${id}/approve`),
 	decline: (id: number, reason?: string) =>

@@ -52,6 +52,7 @@ public class MoveOutStatementTests : IDisposable
             new DepositDeduction("Carpet cleaning", 150m, "Pet stains in the living room"),
             new DepositDeduction("Unpaid last month rent", 400m, null),
         });
+        deposit.DeductionsTotal = 550m;
         await _ctx.Db.SaveChangesAsync();
 
         var sut = CreateSut();

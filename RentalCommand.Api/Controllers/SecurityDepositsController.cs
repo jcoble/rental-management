@@ -30,6 +30,15 @@ public class SecurityDepositsController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(SecurityDepositListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<SecurityDepositListResponse>> ListPage(
+        [FromQuery] int? leaseId, [FromQuery] ListQuery query, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), leaseId, query, ct);
+        return Ok(page);
+    }
+
     /// <summary>Get a single deposit holding by id.</summary>
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(SecurityDepositResponse), StatusCodes.Status200OK)]

@@ -389,14 +389,11 @@
 	const unreadMessagesQuery = createQuery(() => ({
 		queryKey: ['header-unread-messages'],
 		enabled: isStaffSession && !portalUser,
-		queryFn: () => messagesApi.list(),
+		queryFn: () => messagesApi.unreadCount(),
 		staleTime: 30_000,
 		refetchInterval: 60_000
 	}));
-	let unreadMessages = $derived.by(() => {
-		const list = unreadMessagesQuery.data ?? [];
-		return list.reduce((sum, c) => sum + (c.unreadCount ?? 0), 0);
-	});
+	let unreadMessages = $derived(unreadMessagesQuery.data?.count ?? 0);
 
 	const upcomingApptsQuery = createQuery(() => ({
 		queryKey: ['header-upcoming-appointments', getCurrentPortfolioId()],

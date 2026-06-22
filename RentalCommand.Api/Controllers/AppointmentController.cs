@@ -31,6 +31,15 @@ public class AppointmentController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(AppointmentListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<AppointmentListResponse>> ListPage(
+        [FromQuery] AppointmentListQuery query, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        return Ok(page);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(AppointmentResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

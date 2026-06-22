@@ -1,6 +1,8 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.Services.Domain;
@@ -28,8 +30,14 @@ public sealed class AccountingImportServiceTests : IDisposable
     private const int PortfolioId = 1; // seeded by SqliteTestContext
     private const string Realm = "realm-acme";
 
-    private readonly SqliteTestContext _ctx = new();
+    private readonly List<string> _commands = new();
+    private readonly SqliteTestContext _ctx;
     private readonly IDataProtectionProvider _dp = new EphemeralDataProtectionProvider();
+
+    public AccountingImportServiceTests()
+    {
+        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
+    }
 
     public void Dispose() => _ctx.Dispose();
 
@@ -237,6 +245,101 @@ public sealed class AccountingImportServiceTests : IDisposable
         var promotedLedger = await _ctx.Db.AccountingSyncMaps.AsNoTracking().SingleAsync(m => m.ExternalId == "QBP-9");
         promotedLedger.Status.Should().Be(LedgerStatus.Imported);
         promotedLedger.LocalEntityId.Should().Be(payment.Id);
+
+        var retryLedgerQueries = _commands
+            .Where(sql => sql.Contains("FROM \"AccountingSyncMaps\"", StringComparison.OrdinalIgnoreCase)
+                && sql.Contains("\"ExternalType\"", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        retryLedgerQueries.Should().Contain(sql => sql.Contains("Payment", StringComparison.OrdinalIgnoreCase));
+        retryLedgerQueries.Should().Contain(sql =>
+            sql.Contains("Purchase", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("Bill", StringComparison.OrdinalIgnoreCase),
+            "retry must not load every parked row and split payment/expense rows in memory");
+    }
+
+    [Fact]
+    public async Task ImportAsync_UsesDbSideDepositNameAndLatestLeaseQueries()
+    {
+        var now = DateTime.UtcNow;
+        SeedSkeleton(now);
+        var conn = SeedConnectedConnection();
+
+        _ctx.Db.Leases.Add(new Lease
+        {
+            Id = 101, PortfolioId = PortfolioId, PropertyId = 10, UnitId = 20, TenantId = 30,
+            LeaseNumber = "L-2", Status = LeaseStatus.Active,
+            StartDate = now.AddMonths(-1), EndDate = now.AddMonths(11),
+            MonthlyRent = 1250m, RentDueDay = 1, CreatedAt = now, UpdatedAt = now,
+        });
+        _ctx.Db.AccountingEntityMappings.AddRange(
+            new AccountingEntityMapping
+            {
+                PortfolioId = PortfolioId,
+                AccountingConnectionId = conn.Id,
+                ExternalType = ExternalKind.Customer,
+                ExternalId = "QBC-DB",
+                LocalEntityType = LocalEntityKind.Tenant,
+                LocalEntityId = 30,
+                ConfirmedAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new AccountingEntityMapping
+            {
+                PortfolioId = PortfolioId,
+                AccountingConnectionId = conn.Id,
+                ExternalType = ExternalKind.Account,
+                ExternalId = "ACC-SECURITY",
+                ExternalDisplayName = "Security Deposit Liability",
+                LocalEntityType = LocalEntityKind.ScheduleECategory,
+                LocalEnumValue = ScheduleECategory.Other.ToString(),
+                ConfirmedAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new AccountingEntityMapping
+            {
+                PortfolioId = PortfolioId,
+                AccountingConnectionId = conn.Id,
+                ExternalType = ExternalKind.Account,
+                ExternalId = "ACC-OPERATING",
+                ExternalDisplayName = "Operating Income",
+                LocalEntityType = LocalEntityKind.ScheduleECategory,
+                LocalEnumValue = ScheduleECategory.Other.ToString(),
+                ConfirmedAt = now,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await _ctx.Db.SaveChangesAsync();
+
+        _commands.Clear();
+        var paidOn = new DateTime(2026, 5, 4, 0, 0, 0, DateTimeKind.Utc);
+        var sut = CreateService(new FakeAccountingProvider(AccountingProvider.QuickBooks)
+        {
+            Payments =
+            {
+                new ExtPaymentDto("QBP-DB", "QBC-DB", 1250m, paidOn, "Check", "9002", paidOn, null, "ACC-SECURITY", "{}"),
+            },
+        });
+
+        await sut.ImportAsync(conn, since: null, CancellationToken.None);
+
+        var payment = await _ctx.Db.Payments.AsNoTracking().SingleAsync(p => p.ExternalReference == "9002");
+        payment.LeaseId.Should().Be(101, "the latest active lease per tenant should be selected by the DB-side grouping query");
+        payment.PaymentType.Should().Be(PaymentType.SecurityDeposit);
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"AccountingEntityMappings\"", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("lower", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("security deposit", StringComparison.OrdinalIgnoreCase),
+            "deposit account name filtering must stay in SQL, not after materialization");
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"Leases\"", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("\"TenantId\"", StringComparison.OrdinalIgnoreCase)
+            && (sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
+                || sql.Contains("ROW_NUMBER", StringComparison.OrdinalIgnoreCase)),
+            "latest active lease per tenant must be selected by SQL ordering/windowing, not in-memory GroupBy");
     }
 
     // ----------------------------------------------------------------------------------
@@ -303,6 +406,36 @@ public sealed class AccountingImportServiceTests : IDisposable
         return new AccountingImportService(
             _ctx.Db, _dp, providerResolver, settingsResolver, tokenService,
             NullLogger<AccountingImportService>.Instance);
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(Snapshot(command));
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(Snapshot(command));
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        private static string Snapshot(DbCommand command)
+        {
+            var parameters = command.Parameters
+                .Cast<DbParameter>()
+                .Select(p => $"{p.ParameterName}={p.Value}");
+            return command.CommandText + Environment.NewLine + string.Join(Environment.NewLine, parameters);
+        }
     }
 
     /// <summary>Configurable fake provider — returns the seeded pull DTOs; push/auth are unused here.</summary>

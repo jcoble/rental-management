@@ -33,6 +33,15 @@ public class RecurringMaintenanceController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(RecurringMaintenanceTaskListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<RecurringMaintenanceTaskListResponse>> ListPage(
+        [FromQuery] ListQuery query, [FromQuery] int? propertyId, [FromQuery] bool? activeOnly, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), propertyId, activeOnly, query, ct);
+        return Ok(page);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(RecurringMaintenanceTaskResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

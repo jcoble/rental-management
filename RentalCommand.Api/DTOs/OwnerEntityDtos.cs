@@ -51,6 +51,14 @@ public class OwnerEntityResponse
     };
 }
 
+public class OwnerEntityListResponse
+{
+    public IReadOnlyList<OwnerEntityResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
 public class CreateOwnerEntityRequest
 {
     public OwnerEntityType OwnerEntityType { get; set; } = OwnerEntityType.Person;

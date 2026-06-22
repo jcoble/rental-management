@@ -10,6 +10,7 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IWorkOrderService
 {
     Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? vendorId, ListQuery query, CancellationToken ct = default);
+    Task<WorkOrderListResponse> ListPageAsync(int portfolioId, WorkOrderListQuery query, CancellationToken ct = default);
 
     /// <summary>
     /// Work-order detail including the status <see cref="WorkOrderDetailResponse.Timeline"/>

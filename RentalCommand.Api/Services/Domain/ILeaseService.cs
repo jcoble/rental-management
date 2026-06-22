@@ -12,6 +12,7 @@ namespace RentalCommand.Api.Services.Domain;
 public interface ILeaseService
 {
     Task<IReadOnlyList<LeaseResponse>> ListAsync(int portfolioId, int? tenantId, int? propertyId, ListQuery query, CancellationToken ct = default);
+    Task<LeaseListResponse> ListPageAsync(int portfolioId, LeaseListQuery query, CancellationToken ct = default);
     Task<LeaseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 
     /// <summary>
@@ -32,6 +33,12 @@ public interface ILeaseService
     /// not in the caller's portfolio.
     /// </summary>
     Task<LeaseDocumentResponse?> GenerateDocumentAsync(int portfolioId, int id, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns lightweight generated-agreement metadata for the lease. Returns null only when the lease is
+    /// not in the caller's portfolio; missing agreement is represented by <c>HasDocument=false</c>.
+    /// </summary>
+    Task<LeaseDocumentStatusResponse?> GetDocumentStatusAsync(int portfolioId, int id, CancellationToken ct = default);
 
     /// <summary>
     /// Streams the latest generated lease agreement PDF for the lease. Returns null when the lease is not

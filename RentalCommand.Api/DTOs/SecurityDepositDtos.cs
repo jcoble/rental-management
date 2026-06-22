@@ -38,7 +38,7 @@ public class SecurityDepositResponse
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
               ?? [];
 
-        var totalDeductions = deductions.Sum(d => d.Amount);
+        var totalDeductions = e.DeductionsTotal;
         var netRefund = Math.Max(0m, e.Amount - totalDeductions);
 
         return new SecurityDepositResponse
@@ -64,6 +64,14 @@ public class SecurityDepositResponse
             UpdatedAt = e.UpdatedAt,
         };
     }
+}
+
+public class SecurityDepositListResponse
+{
+    public IReadOnlyList<SecurityDepositResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
 }
 
 /// <summary>Create a new security deposit holding, optionally overriding the lease's deposit amount.</summary>

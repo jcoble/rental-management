@@ -41,6 +41,9 @@
 		type WizardStepKey,
 		type WizardStepMeta,
 	} from '$lib/onboarding/wizard-steps';
+	import { ownerEntityIdForOnboarding } from '$lib/onboarding/owner-selection';
+	import { buildOnboardingPropertyPayload } from '$lib/onboarding/property-payload';
+	import { formatPropertyType, propertyTypeOptions } from '$lib/properties/property-labels';
 	import {
 		Check,
 		ArrowLeft,
@@ -339,7 +342,6 @@
 	// Step: Property + Units. Split into sub-steps so the user sees 1–2 fields at a
 	// time instead of one dense form: address → details → units.
 	// ---------------------------------------------------------------------------
-	const PROPERTY_TYPES = ['SingleFamily', 'MultiFamily', 'Condo', 'Townhome', 'Commercial', 'MixedUse'];
 	const PROPERTY_SUBSTEPS = ['address', 'details', 'units'] as const;
 	type PropertySubstep = (typeof PROPERTY_SUBSTEPS)[number];
 	let propertySub = $state<PropertySubstep>('address');
@@ -404,10 +406,14 @@
 	}
 
 	function submitProperty() {
-		const propResult = parseForm(propertySchema, {
-			...propertyForm,
-			ownerEntityId: createdOwner ? String(createdOwner.id) : '',
-		});
+		const propResult = parseForm(
+			propertySchema,
+			buildOnboardingPropertyPayload({
+				propertyForm,
+				createdOwner,
+				existingOwners: ownersQuery.data ?? []
+			})
+		);
 		if (propResult.errors) {
 			propertyErrors = propResult.errors;
 			propertySub = 'address';
@@ -1012,10 +1018,10 @@
 									<div>
 										<span class="mb-1 block text-xs font-medium text-muted-foreground">What kind of property is it?</span>
 										<Select.Root type="single" bind:value={propertyForm.type}>
-											<Select.Trigger class="w-full" data-testid="onboarding-property-type">{propertyForm.type}</Select.Trigger>
+											<Select.Trigger class="w-full" data-testid="onboarding-property-type">{formatPropertyType(propertyForm.type)}</Select.Trigger>
 											<Select.Content>
-												{#each PROPERTY_TYPES as t}
-													<Select.Item value={t} label={t}>{t}</Select.Item>
+												{#each propertyTypeOptions as option}
+													<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 												{/each}
 											</Select.Content>
 										</Select.Root>

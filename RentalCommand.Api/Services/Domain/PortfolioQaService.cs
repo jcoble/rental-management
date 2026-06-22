@@ -806,7 +806,7 @@ public class PortfolioQaService : IPortfolioQaService
 
     private async Task<string> ListPropertiesAsync(int portfolioId, CancellationToken ct)
     {
-        var properties = await _db.Properties
+        var propertiesQuery = _db.Properties
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId)
             .Select(p => new
@@ -817,16 +817,29 @@ public class PortfolioQaService : IPortfolioQaService
                 totalUnits   = p.Units.Count,
                 occupiedUnits = p.Units.Count(u => u.Status == UnitStatus.Occupied),
                 vacantUnits  = p.Units.Count(u => u.Status == UnitStatus.Vacant),
+            });
+
+        var totals = await propertiesQuery
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Count         = g.Count(),
+                TotalUnits    = g.Sum(p => p.totalUnits),
+                TotalOccupied = g.Sum(p => p.occupiedUnits),
+                TotalVacant   = g.Sum(p => p.vacantUnits),
             })
+            .FirstOrDefaultAsync(ct);
+
+        var properties = await propertiesQuery
             .OrderBy(p => p.name)
             .ToListAsync(ct);
 
         var result = new
         {
-            count          = properties.Count,
-            totalUnits     = properties.Sum(p => p.totalUnits),
-            totalOccupied  = properties.Sum(p => p.occupiedUnits),
-            totalVacant    = properties.Sum(p => p.vacantUnits),
+            count          = totals?.Count ?? 0,
+            totalUnits     = totals?.TotalUnits ?? 0,
+            totalOccupied  = totals?.TotalOccupied ?? 0,
+            totalVacant    = totals?.TotalVacant ?? 0,
             properties,
         };
         return JsonSerializer.Serialize(result, _json);
@@ -851,11 +864,18 @@ public class PortfolioQaService : IPortfolioQaService
         const int maxRows = 50;
         var cutoff = DateTime.UtcNow.AddDays(-withinDays);
 
+        var expensesQuery = _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId && e.IncurredAt >= cutoff);
+
+        var total = await expensesQuery
+            .GroupBy(_ => 1)
+            .Select(g => (decimal?)g.Sum(e => e.Amount))
+            .FirstOrDefaultAsync(ct) ?? 0m;
+
         // Order by the real DateTime column in SQL, then format strings in memory
         // (Npgsql can't translate DateTime.ToString(format) / enum.ToString()).
-        var entities = await _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId && e.IncurredAt >= cutoff)
+        var entities = await expensesQuery
             .Include(e => e.Property)
             .Include(e => e.Vendor)
             .OrderByDescending(e => e.IncurredAt)
@@ -878,7 +898,7 @@ public class PortfolioQaService : IPortfolioQaService
             withinDays,
             count     = rows.Count,
             truncated,
-            total     = rows.Sum(e => e.amount),
+            total,
             expenses  = rows,
         };
         return JsonSerializer.Serialize(result, _json);
@@ -903,14 +923,21 @@ public class PortfolioQaService : IPortfolioQaService
         const int maxRows = 50;
         var cutoff = DateTime.UtcNow.AddDays(-withinDays);
 
-        // Order by the real DateTime column in SQL, then format in memory
-        // (Npgsql can't translate DateTime.ToString(format) / enum.ToString()).
-        var entities = await _db.Payments
+        var paymentsQuery = _db.Payments
             .AsNoTracking()
             .Where(p =>
                 p.PortfolioId == portfolioId &&
                 p.PaidDate.HasValue &&
-                p.PaidDate.Value >= cutoff)
+                p.PaidDate.Value >= cutoff);
+
+        var total = await paymentsQuery
+            .GroupBy(_ => 1)
+            .Select(g => (decimal?)g.Sum(p => p.Amount))
+            .FirstOrDefaultAsync(ct) ?? 0m;
+
+        // Order by the real DateTime column in SQL, then format in memory
+        // (Npgsql can't translate DateTime.ToString(format) / enum.ToString()).
+        var entities = await paymentsQuery
             .Include(p => p.Lease)
                 .ThenInclude(l => l!.Tenant)
             .Include(p => p.Lease)
@@ -931,7 +958,7 @@ public class PortfolioQaService : IPortfolioQaService
             paymentType  = p.PaymentType.ToString(),
             status       = p.Status.ToString(),
         }).ToList();
-        var result = new { withinDays, count = rows.Count, truncated, total = rows.Sum(p => p.amount), payments = rows };
+        var result = new { withinDays, count = rows.Count, truncated, total, payments = rows };
         return JsonSerializer.Serialize(result, _json);
     }
 
@@ -954,8 +981,9 @@ public class PortfolioQaService : IPortfolioQaService
         var now    = DateTime.UtcNow;
         var cutoff = now.AddDays(withinDays);
 
-        // Appointments within window (not Cancelled/NoShow).
-        var appointments = await _db.Appointments
+        // Appointments and inspections are merged, sorted, and capped in SQL; only enum/date
+        // formatting happens after materialization.
+        var appointmentsQuery = _db.Appointments
             .AsNoTracking()
             .Where(a =>
                 a.PortfolioId == portfolioId &&
@@ -963,23 +991,19 @@ public class PortfolioQaService : IPortfolioQaService
                 a.ScheduledStart <= cutoff &&
                 a.Status != AppointmentStatus.Cancelled &&
                 a.Status != AppointmentStatus.NoShow)
-            .Include(a => a.Property)
-            .Include(a => a.Unit)
-            .Select(a => new
+            .Select(a => new UpcomingEventRow
             {
                 kind         = "Appointment",
                 title        = a.Title,
-                type         = a.Type.ToString(),
-                scheduledAt  = a.ScheduledStart.ToString("yyyy-MM-dd HH:mm"),
                 propertyName = a.Property != null ? a.Property.Name : null as string,
                 unitNumber   = a.Unit != null ? a.Unit.UnitNumber : null as string,
-                status       = a.Status.ToString(),
+                typeCode     = (int)a.Type,
+                statusCode   = (int)a.Status,
+                scheduledAt  = a.ScheduledStart,
                 sortKey      = a.ScheduledStart,
-            })
-            .ToListAsync(ct);
+            });
 
-        // Inspections within window (not Cancelled/Archived).
-        var inspections = await _db.Inspections
+        var inspectionsQuery = _db.Inspections
             .AsNoTracking()
             .Where(i =>
                 i.PortfolioId == portfolioId &&
@@ -987,38 +1011,40 @@ public class PortfolioQaService : IPortfolioQaService
                 i.ScheduledFor <= cutoff &&
                 i.Status != InspectionStatus.Cancelled &&
                 i.Status != InspectionStatus.Archived)
-            .Include(i => i.Property)
-            .Include(i => i.Unit)
-            .Select(i => new
+            .Select(i => new UpcomingEventRow
             {
                 kind         = "Inspection",
-                title        = i.Type.ToString() + " Inspection",
-                type         = i.Type.ToString(),
-                scheduledAt  = i.ScheduledFor.ToString("yyyy-MM-dd HH:mm"),
+                title        = null,
                 propertyName = i.Property != null ? i.Property.Name : null as string,
                 unitNumber   = i.Unit != null ? i.Unit.UnitNumber : null as string,
-                status       = i.Status.ToString(),
+                typeCode     = (int)i.Type,
+                statusCode   = (int)i.Status,
+                scheduledAt  = i.ScheduledFor,
                 sortKey      = i.ScheduledFor,
-            })
-            .ToListAsync(ct);
+            });
 
-        var events = appointments
-            .Select(a => new
-            {
-                a.kind, a.title, a.type, a.scheduledAt,
-                a.propertyName, a.unitNumber, a.status, a.sortKey,
-            })
-            .Concat(inspections.Select(i => new
-            {
-                i.kind, i.title, i.type, i.scheduledAt,
-                i.propertyName, i.unitNumber, i.status, i.sortKey,
-            }))
+        var eventRows = await appointmentsQuery
+            .Concat(inspectionsQuery)
             .OrderBy(e => e.sortKey)
             .Take(50)
+            .ToListAsync(ct);
+
+        var events = eventRows
             .Select(e => new
             {
-                e.kind, e.title, e.type, e.scheduledAt,
-                e.propertyName, e.unitNumber, e.status,
+                e.kind,
+                title = e.kind == "Inspection"
+                    ? $"{((InspectionType)e.typeCode).ToString()} Inspection"
+                    : e.title,
+                type = e.kind == "Inspection"
+                    ? ((InspectionType)e.typeCode).ToString()
+                    : ((AppointmentType)e.typeCode).ToString(),
+                scheduledAt = e.scheduledAt.ToString("yyyy-MM-dd HH:mm"),
+                e.propertyName,
+                e.unitNumber,
+                status = e.kind == "Inspection"
+                    ? ((InspectionStatus)e.statusCode).ToString()
+                    : ((AppointmentStatus)e.statusCode).ToString(),
             })
             .ToList();
 
@@ -1050,5 +1076,17 @@ public class PortfolioQaService : IPortfolioQaService
         var rows = vendors.Take(maxRows).ToList();
         var result = new { count = rows.Count, truncated, vendors = rows };
         return JsonSerializer.Serialize(result, _json);
+    }
+
+    private sealed class UpcomingEventRow
+    {
+        public required string kind { get; init; }
+        public string? title { get; init; }
+        public string? propertyName { get; init; }
+        public string? unitNumber { get; init; }
+        public int typeCode { get; init; }
+        public int statusCode { get; init; }
+        public DateTime scheduledAt { get; init; }
+        public DateTime sortKey { get; init; }
     }
 }

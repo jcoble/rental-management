@@ -95,6 +95,27 @@ public sealed class LeaseEsignServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SendForSignature_NoticeGivenLease_ReturnsAlreadyFinalized_AndDoesNotChangeLease()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.NoticeGiven);
+        lease.MoveOutDate = new DateTime(2026, 7, 15, 0, 0, 0, DateTimeKind.Utc);
+        await _db.SaveChangesAsync();
+        var provider = new FakeEsignProvider { Configured = true, EnvelopeId = "sig_notice_1" };
+        var sut = CreateService(provider);
+
+        var result = await sut.SendForSignatureAsync(PortfolioId, lease.Id, new SendForSignatureRequest(), changedByUserId: 7, ipAddress: "127.0.0.1");
+
+        result.Outcome.Should().Be(SendForSignatureOutcome.AlreadyFinalized);
+        provider.SendCalls.Should().Be(0);
+
+        var reloaded = await _db.Leases.AsNoTracking().FirstAsync(l => l.Id == lease.Id);
+        reloaded.Status.Should().Be(LeaseStatus.NoticeGiven);
+        reloaded.EsignStatus.Should().Be(EsignStatus.None);
+        reloaded.EsignEnvelopeId.Should().BeNull();
+        reloaded.MoveOutDate.Should().Be(lease.MoveOutDate);
+    }
+
+    [Fact]
     public async Task SendForSignature_TenantHasNoEmail_ReturnsMissingSigner()
     {
         var lease = SeedLeaseWithGraph(LeaseStatus.Draft, tenantEmail: null);
