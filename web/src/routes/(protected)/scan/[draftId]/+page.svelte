@@ -7,7 +7,7 @@
 	import { leases } from '$lib/api/endpoints/leases';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
-	import { shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
+	import { seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
@@ -451,7 +451,8 @@
 				}
 				if (!selectedLeaseUnitId && !isCreatingLeaseProperty) {
 					const unitField = data.fields.find((f) => f.name === 'unit_id' || f.name === 'unitId');
-					if (unitField?.value) selectedLeaseUnitId = unitField.value;
+					const seededUnitId = seedLeaseUnitId(unitField?.value, leaseProposal?.unit, isCreatingLeaseProperty);
+					if (seededUnitId) selectedLeaseUnitId = seededUnitId;
 				}
 			}
 		}

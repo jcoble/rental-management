@@ -6,6 +6,7 @@ using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -480,6 +481,25 @@ public class ScanServiceTests : IDisposable
         _tenants.LastRequest.Should().BeNull();
     }
 
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LeaseDomainValidation_ReturnsSpecificUserMessage()
+    {
+        const string error =
+            "This unit already has an active lease (QA-2026-006-2B) overlapping these dates.";
+        const string extractedJson =
+            """{"tenant_name":{"value":"Riley Patel","confidence":0.9},"property_id":{"value":"10","confidence":0.9},"unit_id":{"value":"20","confidence":0.85},"lease_number":{"value":"L-2026-8","confidence":0.8},"start_date":{"value":"2026-02-01","confidence":0.9},"end_date":{"value":"2027-02-01","confidence":0.9},"monthly_rent":{"value":"1200.00","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _leases.ThrowOnCreate(new DomainValidationException(error));
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Be(error);
+    }
+
     // -------------------------------------------------------------------------
     // Scan-import bootstrap (the load-bearing invariant): scanning a lease into an EMPTY
     // portfolio creates Property → Unit → Tenant → Lease from the document; a SECOND scan
@@ -794,14 +814,19 @@ public class ScanServiceTests : IDisposable
     private sealed class RecordingLeaseService : ILeaseService
     {
         private LeaseResponse? _response = new() { Id = 0, PortfolioId = PortfolioId };
+        private Exception? _createException;
 
         public CreateLeaseRequest? LastRequest { get; private set; }
 
         public void SetupResponse(LeaseResponse? response) => _response = response;
 
+        public void ThrowOnCreate(Exception exception) => _createException = exception;
+
         public Task<LeaseResponse?> CreateAsync(int portfolioId, CreateLeaseRequest request, CancellationToken ct = default)
         {
             LastRequest = request;
+            if (_createException is not null)
+                throw _createException;
             return Task.FromResult(_response);
         }
 
