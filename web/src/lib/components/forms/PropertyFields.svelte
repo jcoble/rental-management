@@ -11,6 +11,7 @@
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
 	import AutoFilledBadge from './AutoFilledBadge.svelte';
 	import { STEP_FIELD_TO_EXTRACTION } from '$lib/scan/lease-prefill';
+	import { formatPropertyType, propertyTypeOptions } from '$lib/properties/property-labels';
 
 	let {
 		form = $bindable(),
@@ -26,7 +27,6 @@
 		testidPrefix?: string;
 	} = $props();
 
-	const PROPERTY_TYPES = ['SingleFamily', 'MultiFamily', 'Condo', 'Townhouse', 'Commercial', 'Other'];
 	const filled = (key: string) => !!autoFilled?.has(key);
 	const conf = (key: string) => confidence?.[STEP_FIELD_TO_EXTRACTION[key] ?? ''];
 </script>
@@ -90,10 +90,10 @@
 	<div class="md:col-span-2">
 		<span class="mb-1 block text-xs font-medium text-muted-foreground">Type</span>
 		<Select.Root type="single" bind:value={form.type}>
-			<Select.Trigger class="w-full" data-testid={`${testidPrefix}-type-input`}>{form.type || 'Select type'}</Select.Trigger>
+			<Select.Trigger class="w-full" data-testid={`${testidPrefix}-type-input`}>{form.type ? formatPropertyType(form.type) : 'Select type'}</Select.Trigger>
 			<Select.Content>
-				{#each PROPERTY_TYPES as t}
-					<Select.Item value={t} label={t}>{t}</Select.Item>
+				{#each propertyTypeOptions as option}
+					<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
 				{/each}
 			</Select.Content>
 		</Select.Root>

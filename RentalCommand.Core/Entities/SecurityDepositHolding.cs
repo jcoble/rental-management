@@ -13,6 +13,7 @@ public class SecurityDepositHolding
     public DateTime? ReturnedAt { get; set; }
     public decimal? ReturnedAmount { get; set; }
     public string DeductionsJson { get; set; } = "[]";   // jsonb: [{ reason, amount, notes? }]
+    public decimal DeductionsTotal { get; set; }
     public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

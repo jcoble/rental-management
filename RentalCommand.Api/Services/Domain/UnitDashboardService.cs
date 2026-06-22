@@ -324,38 +324,35 @@ public class UnitDashboardService : IUnitDashboardService
         skip = skip < 0 ? 0 : skip;
         take = take <= 0 ? RecentTimelineTake : Math.Min(take, 200);
 
-        // Collect the unit's child ids with a few indexed selects (spec section 11), then ONE AuditLog
-        // query filtered by the OR/IN set. A fixed, small number of queries regardless of data size.
-        var leaseIds = await _db.Leases.AsNoTracking()
+        // Keep child scopes as IQueryable subqueries so the paged AuditLogs query does the filtering in
+        // SQL. Do not materialize the child ids first; a heavily used unit can have unbounded payments,
+        // work orders, inspections, appointments, and expenses.
+        var leaseIds = _db.Leases.AsNoTracking()
             .Where(l => l.UnitId == unitId && l.PortfolioId == portfolioId)
-            .Select(l => l.Id).ToListAsync(ct);
+            .Select(l => l.Id);
 
-        var paymentIds = leaseIds.Count == 0
-            ? new List<int>()
-            : await _db.Payments.AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId && leaseIds.Contains(p.LeaseId))
-                .Select(p => p.Id).ToListAsync(ct);
+        var paymentIds = _db.Payments.AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId && leaseIds.Contains(p.LeaseId))
+            .Select(p => p.Id);
 
-        // Work-order / inspection / appointment ids (all carry UnitId) gathered together.
-        var workOrderIds = await _db.WorkOrders.AsNoTracking()
+        var workOrderIds = _db.WorkOrders.AsNoTracking()
             .Where(w => w.UnitId == unitId && w.PortfolioId == portfolioId)
-            .Select(w => w.Id).ToListAsync(ct);
+            .Select(w => w.Id);
 
-        var inspectionIds = await _db.Inspections.AsNoTracking()
+        var inspectionIds = _db.Inspections.AsNoTracking()
             .Where(i => i.UnitId == unitId && i.PortfolioId == portfolioId)
-            .Select(i => i.Id).ToListAsync(ct);
+            .Select(i => i.Id);
 
-        var appointmentIds = await _db.Appointments.AsNoTracking()
+        var appointmentIds = _db.Appointments.AsNoTracking()
             .Where(a => a.UnitId == unitId && a.PortfolioId == portfolioId)
-            .Select(a => a.Id).ToListAsync(ct);
+            .Select(a => a.Id);
 
-        // Expense ids: directly tied to the unit OR to one of its work orders.
-        var expenseIds = await _db.Expenses.AsNoTracking()
+        var expenseIds = _db.Expenses.AsNoTracking()
             .Where(e => e.PortfolioId == portfolioId
                 && (e.UnitId == unitId || (e.WorkOrderId != null && workOrderIds.Contains(e.WorkOrderId.Value))))
-            .Select(e => e.Id).ToListAsync(ct);
+            .Select(e => e.Id);
 
-        // ONE audit query with the OR/IN filter from spec section 11, newest first, paged.
+        // ONE audit query with translated OR/IN subqueries, newest first, paged.
         var rows = await _db.AuditLogs
             .AsNoTracking()
             .Where(a => a.PortfolioId == portfolioId && (

@@ -1,6 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { localInputToOffsetIso } from './date.ts';
+import { formatDateOnly, localInputToOffsetIso } from './date.ts';
+
+test('formatDateOnly preserves UTC-midnight calendar dates', () => {
+	assert.equal(formatDateOnly('2026-09-22T00:00:00Z'), 'Sep 22, 2026');
+	assert.equal(formatDateOnly('2026-09-22'), 'Sep 22, 2026');
+});
 
 // The work-order schedule FROZEN contract: a `datetime-local` wall-clock value must serialize to an
 // offset-bearing ISO string that denotes the SAME instant as the local wall-clock time. Round-tripping

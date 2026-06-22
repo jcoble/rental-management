@@ -81,9 +81,34 @@ public class PaymentService : IPaymentService
 
     public async Task<IReadOnlyList<PaymentResponse>> ListAsync(int portfolioId, int? leaseId, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, leaseId, query, ct);
+        return page.Items;
+    }
+
+    public async Task<PaymentListResponse> ListPageAsync(int portfolioId, int? leaseId, ListQuery query, CancellationToken ct = default)
+    {
+        var filtered = BuildListQuery(portfolioId, leaseId, query);
+        var totalCount = await filtered.CountAsync(ct);
+
+        var items = await ApplySort(filtered, query)
+            .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToListAsync(ct);
+
+        return new PaymentListResponse
+        {
+            Items = items.Select(PaymentResponse.FromEntity).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    private IQueryable<Payment> BuildListQuery(int portfolioId, int? leaseId, ListQuery query)
+    {
         var q = _db.Payments
             .AsNoTracking()
-            .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
             .Where(p => p.PortfolioId == portfolioId);
 
         if (leaseId.HasValue)
@@ -99,7 +124,11 @@ public class PaymentService : IPaymentService
                 (p.ExternalReference != null && EF.Functions.ILike(p.ExternalReference, $"%{term}%")));
         }
 
-        q = query.SortField switch
+        return q;
+    }
+
+    private static IQueryable<Payment> ApplySort(IQueryable<Payment> q, ListQuery query) =>
+        query.SortField switch
         {
             "amount" => query.SortDescending ? q.OrderByDescending(p => p.Amount) : q.OrderBy(p => p.Amount),
             "duedate" => query.SortDescending ? q.OrderByDescending(p => p.DueDate) : q.OrderBy(p => p.DueDate),
@@ -108,14 +137,6 @@ public class PaymentService : IPaymentService
             "updatedat" => query.SortDescending ? q.OrderByDescending(p => p.UpdatedAt) : q.OrderBy(p => p.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(p => p.CreatedAt) : q.OrderBy(p => p.CreatedAt),
         };
-
-        var items = await q
-            .Skip(query.NormalizedSkip)
-            .Take(query.NormalizedTake)
-            .ToListAsync(ct);
-
-        return items.Select(PaymentResponse.FromEntity).ToList();
-    }
 
     public async Task<PaymentResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
@@ -284,6 +305,73 @@ public class PaymentService : IPaymentService
         var response = PaymentResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
+    }
+
+    public async Task<MarkLeasePastDuePaidResponse?> MarkLeasePastDuePaidAsync(
+        int portfolioId,
+        int leaseId,
+        MarkPaidRequest request,
+        CancellationToken ct = default)
+    {
+        var leaseExists = await _db.Leases
+            .AsNoTracking()
+            .AnyAsync(l => l.Id == leaseId && l.PortfolioId == portfolioId, ct);
+        if (!leaseExists)
+            return null;
+
+        var now = DateTime.UtcNow;
+        var paidDate = request.PaidDate?.ToUtc() ?? now;
+
+        var entities = await _db.Payments
+            .Where(p =>
+                p.PortfolioId == portfolioId &&
+                p.LeaseId == leaseId &&
+                (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late) &&
+                (p.Status == PaymentStatus.Late || p.DueDate < now))
+            .OrderBy(p => p.DueDate)
+            .ThenBy(p => p.Id)
+            .ToListAsync(ct);
+
+        if (entities.Count == 0)
+        {
+            return new MarkLeasePastDuePaidResponse
+            {
+                LeaseId = leaseId,
+                MarkedPaidCount = 0,
+                PaymentIds = [],
+            };
+        }
+
+        var before = entities.ToDictionary(p => p.Id, Snapshot);
+
+        foreach (var entity in entities)
+        {
+            entity.Status = PaymentStatus.Paid;
+            entity.AmountPaid = null;
+            entity.PaidDate = paidDate;
+            if (request.Method != null) entity.Method = request.Method;
+            if (request.ExternalReference != null) entity.ExternalReference = request.ExternalReference;
+            if (request.Notes != null) entity.Notes = request.Notes;
+            entity.UpdatedAt = now;
+        }
+
+        await _db.SaveChangesAsync(ct);
+
+        foreach (var entity in entities)
+        {
+            await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
+                oldValues: before[entity.Id], newValues: Snapshot(entity),
+                changeReason: $"Payment #{entity.Id} marked paid from past-due lease action (${entity.Amount:0.##})", ct: ct);
+
+            await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, PaymentResponse.FromEntity(entity), ct);
+        }
+
+        return new MarkLeasePastDuePaidResponse
+        {
+            LeaseId = leaseId,
+            MarkedPaidCount = entities.Count,
+            PaymentIds = entities.Select(p => p.Id).ToList(),
+        };
     }
 
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)

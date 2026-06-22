@@ -24,11 +24,12 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const PAGE_SIZE = 20;
 
 	const OWNER_ENTITY_TYPES: OwnerEntityType[] = ['Person', 'LLC', 'Trust'];
 
 	// Search / sort / page persisted in the URL so they survive navigating away and back. Sort/page seed
-	// the client-side DataGrid (initialSort / page) and are mirrored back via onSortChange / bind:page.
+	// the server-side DataGrid query so owners are filtered/sorted/paged in SQL.
 	const initialParams = page.url.searchParams;
 	let ownerSearch = $state(readGridParam(initialParams, 'q'));
 	let gridSort = $state(readGridParam(initialParams, 'sort'));
@@ -51,8 +52,13 @@
 	});
 
 	const ownersQuery = createQuery(() => ({
-		queryKey: ['owners', portfolioId, debouncedOwnerSearch.value],
-		queryFn: () => owners.list(portfolioId, { search: debouncedOwnerSearch.value, take: 100 }),
+		queryKey: ['owners', portfolioId, 'page', debouncedOwnerSearch.value, gridSort, gridPage, PAGE_SIZE],
+		queryFn: () => owners.listPage(portfolioId, {
+			search: debouncedOwnerSearch.value,
+			sort: gridSort || undefined,
+			skip: (gridPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+		}),
 	}));
 
 	// --- Owner form/dialog ---
@@ -127,7 +133,8 @@
 		saveOwnerMutation.mutate({ id: editingOwnerId, data: { portfolioId, ...result.data } });
 	}
 
-	const ownersList = $derived(ownersQuery.data ?? []);
+	const ownersList = $derived(ownersQuery.data?.items ?? []);
+	const ownersTotalCount = $derived(ownersQuery.data?.totalCount ?? 0);
 
 	// --- Owner columns ---
 	const ownerColumns: ColumnDef<Owner>[] = [
@@ -209,15 +216,19 @@
 	<DataGrid
 		data={ownersList}
 		columns={ownerColumns}
-		loading={ownersQuery.isLoading}
+		loading={ownersQuery.isLoading || ownersQuery.isFetching}
 		emptyMessage="No owners found."
 		getRowKey={(o) => o.id}
 		getRowTestId={() => 'owner-row'}
 		onRowClick={(o) => goto(`/owners/${o.id}`)}
 		data-testid="owners-list"
-		initialSort={gridSort}
-		bind:page={gridPage}
-		onSortChange={(s) => (gridSort = s ?? '')}
+		pageSize={PAGE_SIZE}
+		page={gridPage}
+		totalCount={ownersTotalCount}
+		serverSide
+		onPageChange={(page) => (gridPage = page)}
+		sort={gridSort}
+		onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 items-center gap-2">

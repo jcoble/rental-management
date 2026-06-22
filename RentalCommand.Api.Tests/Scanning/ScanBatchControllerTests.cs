@@ -116,6 +116,23 @@ public class ScanBatchControllerTests : IDisposable
         (await _db.ScanBatches.CountAsync()).Should().Be(0);
     }
 
+    [Fact]
+    public async Task UploadBatch_WhenDraftCreationFails_RollsBackBatchAndDraftRows()
+    {
+        var controller = CreateController(new FailingSecondDraftScanService(_db));
+        var files = new List<IFormFile>
+        {
+            FakeFile("lease-1.pdf", [1, 2, 3]),
+            FakeFile("lease-2.pdf", [4, 5, 6]),
+        };
+
+        var result = await controller.UploadBatch(files, targetEntityType: "Lease", name: "Bad batch", CancellationToken.None);
+
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+        (await _db.ScanBatches.CountAsync()).Should().Be(0);
+        (await _db.ScanDrafts.CountAsync()).Should().Be(0);
+    }
+
     // -------------------------------------------------------------------------
     // Batch list/detail: correct rollup counts
     // -------------------------------------------------------------------------
@@ -146,6 +163,42 @@ public class ScanBatchControllerTests : IDisposable
         summary.Counts.Rejected.Should().Be(1);
         // One draft is still Pending/Reviewing -> batch is not Completed.
         summary.Status.Should().Be(nameof(ScanBatchStatus.Reviewing));
+    }
+
+    [Fact]
+    public async Task ListPage_ReturnsSqlCountAndRequestedWindow()
+    {
+        var batch = SeedBatch(PortfolioId, fileCount: 4);
+        SeedDraft(batch.Id, "Reviewing", targetEntityType: "Application");
+        SeedDraft(batch.Id, "Reviewing", targetEntityType: "Expense");
+        SeedDraft(batch.Id, "Reviewing", targetEntityType: "Lease");
+        SeedDraft(batch.Id, "Reviewing", targetEntityType: "Payment");
+        SeedDraft(batch.Id, "Failed", targetEntityType: "WorkOrder");
+
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        _executedSql.Clear();
+        var result = await controller.ListPage(
+            new ListQuery { Sort = "targetEntityType", Skip = 1, Take = 2 },
+            status: "Reviewing",
+            CancellationToken.None);
+
+        var page = result.Result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<ScanDraftListResponse>().Subject;
+
+        page.TotalCount.Should().Be(4);
+        page.Skip.Should().Be(1);
+        page.Take.Should().Be(2);
+        page.Items.Select(d => d.TargetEntityType).Should().Equal("Expense", "Lease");
+        page.Items.Should().OnlyContain(d => d.Status == "Reviewing");
+
+        _executedSql.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"ScanDrafts\"", StringComparison.OrdinalIgnoreCase));
+        _executedSql.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -438,6 +491,54 @@ public class ScanBatchControllerTests : IDisposable
         public async Task<ScanDraft> CreateBatchDraftAsync(
             int portfolioId, int batchId, byte[] fileBytes, string contentType, string targetEntityType, CancellationToken ct = default)
         {
+            var draft = new ScanDraft
+            {
+                PortfolioId = portfolioId,
+                BatchId = batchId,
+                FilePath = $"uploads/{Guid.NewGuid():N}",
+                TargetEntityType = targetEntityType,
+                Status = "Pending",
+                CreatedAt = DateTime.UtcNow,
+            };
+            _db.ScanDrafts.Add(draft);
+            await _db.SaveChangesAsync(ct);
+            return draft;
+        }
+
+        public Task<ScanDraft> CreateDraftAsync(int portfolioId, byte[] fileBytes, string contentType, string targetEntityType, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for batch tests.");
+
+        public Task<ScanConfirmResult> ConfirmAndCreateAsync(int portfolioId, int draftId, int userId, string overridesJson, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for batch tests.");
+
+        public Task<LeaseImportProposal?> BuildLeaseProposalAsync(int portfolioId, int draftId, string overridesJson, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for batch tests.");
+
+        public Task<bool> RejectDraftAsync(int portfolioId, int draftId, int userId, string? reason, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for batch tests.");
+    }
+
+    private sealed class FailingSecondDraftScanService : IScanService
+    {
+        private readonly RentalCommandDbContext _db;
+        private int _calls;
+
+        public FailingSecondDraftScanService(RentalCommandDbContext db) => _db = db;
+
+        public async Task<ScanDraft> CreateBatchDraftAsync(
+            int portfolioId,
+            int batchId,
+            byte[] fileBytes,
+            string contentType,
+            string targetEntityType,
+            CancellationToken ct = default)
+        {
+            _calls++;
+            if (_calls == 2)
+            {
+                throw new ArgumentException("Second draft failed validation.");
+            }
+
             var draft = new ScanDraft
             {
                 PortfolioId = portfolioId,

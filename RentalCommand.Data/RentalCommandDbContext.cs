@@ -302,10 +302,13 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.AccountSubtype).HasMaxLength(80);
             entity.Property(e => e.ExternalItemIdCipherText).HasMaxLength(4000);
             entity.Property(e => e.ExternalAccountIdCipherText).HasMaxLength(4000);
+            entity.Property(e => e.ExternalItemIdHash).HasMaxLength(64);
+            entity.Property(e => e.ExternalAccountIdHash).HasMaxLength(64);
             entity.Property(e => e.ExternalAccessTokenCipherText).HasMaxLength(4000);
             entity.Property(e => e.SyncCursorCipherText).HasMaxLength(4000);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(40);
             entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => new { e.PortfolioId, e.Provider, e.ExternalItemIdHash, e.ExternalAccountIdHash });
             entity.HasIndex(e => e.Status);
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
@@ -1389,6 +1392,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50).HasConversion<string>();
             entity.Property(e => e.Amount).HasPrecision(18, 2);
             entity.Property(e => e.ReturnedAmount).HasPrecision(18, 2);
+            entity.Property(e => e.DeductionsTotal).HasPrecision(18, 2);
             entity.Property(e => e.DeductionsJson).IsRequired().HasColumnType("jsonb");
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.HasIndex(e => e.PortfolioId);

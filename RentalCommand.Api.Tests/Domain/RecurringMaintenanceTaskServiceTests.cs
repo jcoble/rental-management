@@ -1,5 +1,7 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -19,11 +21,13 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
 {
     private const int PortfolioId = 1;
 
-    private readonly SqliteTestContext _ctx = new();
+    private readonly List<string> _commands = [];
+    private readonly SqliteTestContext _ctx;
     private readonly RecurringMaintenanceTaskService _sut;
 
     public RecurringMaintenanceTaskServiceTests()
     {
+        _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
         _sut = new RecurringMaintenanceTaskService(_ctx.Db, Mock.Of<IDataUpdateService>());
     }
 
@@ -139,6 +143,38 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         active[0].Title.Should().Be("Active one");
     }
 
+    [Fact]
+    public async Task ListPageAsync_ReturnsSqlCountAndRequestedWindow()
+    {
+        var property = SeedProperty();
+        SeedTask(property.Id, title: "Alpha filters");
+        SeedTask(property.Id, title: "Bravo filters");
+        SeedTask(property.Id, title: "Cedar filters");
+        SeedTask(property.Id, title: "Delta filters");
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, propertyId: null, activeOnly: null, new ListQuery
+        {
+            Sort = "title",
+            Skip = 1,
+            Take = 2,
+        });
+
+        result.TotalCount.Should().Be(4);
+        result.Skip.Should().Be(1);
+        result.Take.Should().Be(2);
+        result.Items.Select(t => t.Title).Should().Equal("Bravo filters", "Cedar filters");
+        result.Items.Should().OnlyContain(t => t.PropertyName == "Test Property");
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"RecurringMaintenanceTasks\"", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
 
@@ -194,5 +230,27 @@ public class RecurringMaintenanceTaskServiceTests : IDisposable
         _ctx.Db.RecurringMaintenanceTasks.Add(task);
         _ctx.Db.SaveChanges();
         return task;
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
     }
 }

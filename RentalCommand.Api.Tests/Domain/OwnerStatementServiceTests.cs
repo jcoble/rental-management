@@ -113,6 +113,12 @@ public class OwnerStatementServiceTests : IDisposable
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
 
         propertyLineSql.Should().NotBeNull("owner-statement property lines must be filtered, ordered, and aggregated in SQL");
+
+        _commands.Should().Contain(sql =>
+                sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
+                sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+                sql.Contains("SUM", StringComparison.OrdinalIgnoreCase),
+            "owner-statement report totals must be grouped and summed in SQL, not by summing the property DTOs");
     }
 
     [Fact]
@@ -146,6 +152,32 @@ public class OwnerStatementServiceTests : IDisposable
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
 
         ownerSummarySql.Should().NotBeNull("owner net summaries must group and sum per owner in SQL");
+    }
+
+    [Fact]
+    public async Task GetTotalNetToOwnersAsync_SumsPortfolioNetDbSide()
+    {
+        var owner1 = SeedOwner("Acme Holdings");
+        var owner2 = SeedOwner("Beta Estates");
+
+        var p1 = SeedProperty(owner1.Id, "Maple Duplex", managementFeePercent: 10m);
+        SeedRent(SeedLease(p1, "L-1"), 2000m, paidInYear: true);
+        SeedExpense(p1.Id, 500m);
+
+        var p2 = SeedProperty(owner2.Id, "Oak Cottage", managementFeePercent: 0m);
+        SeedRent(SeedLease(p2, "L-2"), 1000m, paidInYear: true);
+        SeedExpense(p2.Id, 250m);
+
+        _commands.Clear();
+
+        var total = await _sut.GetTotalNetToOwnersAsync(PortfolioId, Year, CancellationToken.None);
+
+        total.Should().Be(2050m);
+        _commands.Should().Contain(command =>
+            command.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("SUM", StringComparison.OrdinalIgnoreCase) &&
+            command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),
+            "portfolio-level owner distributions must be summed in SQL, not from owner summary DTOs");
     }
 
     // ── seed helpers ───────────────────────────────────────────────────────────────────────────

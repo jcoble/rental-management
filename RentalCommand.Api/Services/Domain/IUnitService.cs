@@ -18,6 +18,7 @@ public interface IUnitService
     /// a per-unit dashboard call per row.
     /// </summary>
     Task<IReadOnlyList<UnitHealthResponse>> ListWithHealthAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default);
+    Task<UnitHealthListResponse> ListWithHealthPageAsync(int portfolioId, UnitHealthListQuery query, CancellationToken ct = default);
 
     Task<UnitResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 

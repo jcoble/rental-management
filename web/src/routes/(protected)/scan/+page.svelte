@@ -12,13 +12,38 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import { Mic, Square, Layers } from '@lucide/svelte';
+	import { page } from '$app/state';
+	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
 	const queryClient = useQueryClient();
+	const PAGE_SIZE = 20;
 
 	// Filter state
 	const FILTER_TABS = ['All', 'Pending', 'Reviewing', 'Confirmed'] as const;
 	type FilterTab = (typeof FILTER_TABS)[number];
-	let activeFilter = $state<FilterTab>('All');
+	const initialParams = page.url.searchParams;
+	const initialStatus = readGridParam(initialParams, 'status');
+	let activeFilter = $state<FilterTab>(FILTER_TABS.includes(initialStatus as FilterTab) ? initialStatus as FilterTab : 'All');
+	let gridSort = $state(readGridParam(initialParams, 'sort'));
+	let gridPage = $state(readGridParam(initialParams, 'page', 1));
+
+	let filterResetPrimed = false;
+	$effect(() => {
+		activeFilter;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
+	});
+
+	$effect(() => {
+		syncGridUrl({
+			status: activeFilter === 'All' ? '' : activeFilter,
+			sort: gridSort,
+			page: gridPage,
+		}, { page: 1 });
+	});
 
 	// Document type the scan should become: 'Expense' (receipt/bill) or
 	// 'Payment' (rent check). Drives the LLM extraction + confirm flow.
@@ -36,8 +61,12 @@
 	let voiceChunks: Blob[] = [];
 
 	const scansQuery = createQuery(() => ({
-		queryKey: ['scans', activeFilter],
-		queryFn: () => scan.list(activeFilter === 'All' ? undefined : activeFilter)
+		queryKey: ['scans', activeFilter, 'page', gridSort, gridPage, PAGE_SIZE],
+		queryFn: () => scan.listPage(activeFilter === 'All' ? undefined : activeFilter, {
+			sort: gridSort || undefined,
+			skip: (gridPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+		})
 	}));
 
 	// Recent bulk-import batches (lease imports). Shown as quick links back into review.
@@ -120,12 +149,14 @@
 		{
 			key: 'status',
 			title: 'Status',
+			sortable: true,
 			mobileRole: 'badge',
 			cell: statusCellSnippet,
 		},
 		{
 			key: 'targetEntityType',
 			title: 'Type',
+			sortable: true,
 			mobileRole: 'subtitle',
 			accessor: (d) => d.targetEntityType,
 		},
@@ -146,7 +177,8 @@
 		},
 	];
 
-	const draftsList = $derived((scansQuery.data ?? []) as ScanDraftResponse[]);
+	const draftsList = $derived((scansQuery.data?.items ?? []) as ScanDraftResponse[]);
+	const draftsTotalCount = $derived(scansQuery.data?.totalCount ?? 0);
 
 	// Where a CONFIRMED draft's created record lives (Payment/Expense/WorkOrder/Lease). Mirrors the
 	// review page's linkedRecordHref. Returns null when there is no created record to link to (the
@@ -331,12 +363,19 @@
 			<DataGrid
 				data={draftsList}
 				{columns}
-				loading={scansQuery.isLoading}
+				loading={scansQuery.isLoading || scansQuery.isFetching}
 				emptyMessage="No scan drafts found."
 				onRowClick={(draft) => goto(rowHref(draft))}
 				getRowKey={(draft) => draft.id}
 				getRowTestId={() => 'scan-row'}
 				data-testid="scans-list"
+				pageSize={PAGE_SIZE}
+				page={gridPage}
+				totalCount={draftsTotalCount}
+				serverSide
+				onPageChange={(page) => (gridPage = page)}
+				sort={gridSort}
+				onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
 			/>
 		</Tabs.Content>
 	</Tabs.Root>

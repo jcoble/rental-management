@@ -288,6 +288,14 @@ public sealed class AccountingTransactionsViewTests : IAsyncLifetime
         SeedBankTransaction(
             db, _portfolioId,
             description: "ACH CREDIT",
+            merchantName: "Wrong Tenant",
+            amount: 1200m,
+            postedAt: date,
+            category: "Deposit",
+            matchStatus: "Unmatched");
+        var namedBankLine = SeedBankTransaction(
+            db, _portfolioId,
+            description: "ACH CREDIT",
             merchantName: "Maria Tenant",
             amount: 1200m,
             postedAt: date,
@@ -301,6 +309,14 @@ public sealed class AccountingTransactionsViewTests : IAsyncLifetime
             postedAt: date.AddMonths(-6),
             category: "Deposit",
             matchStatus: "Unmatched");
+        SeedBankTransaction(
+            db, _portfolioId,
+            description: "WRONG AMOUNT",
+            merchantName: "Maria Tenant",
+            amount: 999.99m,
+            postedAt: date,
+            category: "Deposit",
+            matchStatus: "Unmatched");
         commands.Clear();
 
         var page = await NewService(db).GetTransactionsAsync(
@@ -308,19 +324,23 @@ public sealed class AccountingTransactionsViewTests : IAsyncLifetime
             new AccountingTransactionsQuery { Kind = "Payment", Take = 20 },
             CancellationToken.None);
 
-        page.Items.Single(t => t.Kind == "Payment" && t.Id == paymentId)
-            .SuggestedBankMatch.Should().NotBeNull();
+        var suggestion = page.Items.Single(t => t.Kind == "Payment" && t.Id == paymentId)
+            .SuggestedBankMatch;
+        suggestion.Should().NotBeNull();
+        suggestion!.BankTransactionId.Should().Be(namedBankLine.Id);
 
         var bankCandidateSql = commands
             .Where(sql => sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         bankCandidateSql.Should().Contain(sql =>
+            sql.Contains("CASE", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ROW_NUMBER", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("\"Amount\" >=", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("\"Amount\" <=", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("\"PostedAt\" >=", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("\"PostedAt\" <", StringComparison.OrdinalIgnoreCase),
-            "inline reconciliation suggestions must bound open bank candidates in SQL before scoring");
+            "inline reconciliation suggestions must bound, score, and rank open bank candidates in SQL before materialization");
     }
 
     // ─────────────────────────────────────────────────────────────────────────────────────────────

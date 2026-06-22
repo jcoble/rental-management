@@ -26,9 +26,11 @@
 	import { Input } from '$lib/components/ui/input';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import { formatDateOnly } from '$lib/utils/date';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const PAGE_SIZE = 20;
 
 	const INTERVALS = ['Weekly', 'Monthly', 'Quarterly', 'SemiAnnually', 'Annually'] as const;
 	const PRIORITIES = ['Low', 'Normal', 'High', 'Emergency'] as const;
@@ -45,18 +47,34 @@
 	// Search + the active-only toggle persisted in the URL so they survive navigating away and back.
 	let search = $state(readGridParam(page.url.searchParams, 'q'));
 	let activeOnly = $state(page.url.searchParams.get('active') === '1');
+	let gridSort = $state(readGridParam(page.url.searchParams, 'sort'));
+	let gridPage = $state(readGridParam(page.url.searchParams, 'page', 1));
 	const debouncedSearch = debounced(() => search, 300);
+
+	let filterResetPrimed = false;
 	$effect(() => {
-		syncGridUrl({ q: search, active: activeOnly ? '1' : '' });
+		search;
+		activeOnly;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
+	});
+
+	$effect(() => {
+		syncGridUrl({ q: search, active: activeOnly ? '1' : '', sort: gridSort, page: gridPage }, { page: 1 });
 	});
 
 	const tasksQuery = createQuery(() => ({
-		queryKey: ['recurring-maintenance', portfolioId, debouncedSearch.value, activeOnly],
+		queryKey: ['recurring-maintenance', portfolioId, 'page', debouncedSearch.value, activeOnly, gridSort, gridPage, PAGE_SIZE],
 		queryFn: () =>
-			recurringMaintenance.list({
+			recurringMaintenance.listPage({
 				search: debouncedSearch.value,
 				activeOnly: activeOnly || undefined,
-				take: 200,
+				sort: gridSort || undefined,
+				skip: (gridPage - 1) * PAGE_SIZE,
+				take: PAGE_SIZE,
 			}),
 		enabled: portfolioId > 0,
 	}));
@@ -74,15 +92,16 @@
 	}));
 
 	const propertyName = (id: number) =>
-		(propertiesQuery.data ?? []).find((p) => p.id === id)?.name ?? `Property #${id}`;
+		tasksQuery.data?.items.find((t) => t.propertyId === id)?.propertyName ??
+		(propertiesQuery.data ?? []).find((p) => p.id === id)?.name ??
+		`Property #${id}`;
 
 	function formatNextDue(value: string): string {
-		const d = new Date(value);
-		if (Number.isNaN(d.getTime())) return '—';
-		return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+		return formatDateOnly(value) || '—';
 	}
 
-	const tasks = $derived(tasksQuery.data ?? []);
+	const tasks = $derived(tasksQuery.data?.items ?? []);
+	const tasksTotalCount = $derived(tasksQuery.data?.totalCount ?? 0);
 
 	// ── Form / dialog ──────────────────────────────────────────────────────────
 	const emptyForm = {
@@ -215,13 +234,14 @@
 		{
 			key: 'property',
 			title: 'Property',
+			sortable: true,
 			mobileRole: 'subtitle',
-			accessor: (t) => propertyName(t.propertyId),
+			accessor: (t) => t.propertyName ?? propertyName(t.propertyId),
 		},
-		{ key: 'recurrenceInterval', title: 'Schedule', mobileRole: 'meta', cell: scheduleCell },
-		{ key: 'nextDueDate', title: 'Next', mobileRole: 'meta', cell: nextDueCell },
-		{ key: 'priority', title: 'Priority', mobileRole: 'badge', cell: priorityCell },
-		{ key: 'isActive', title: 'Active', align: 'center', mobileRole: 'badge', cell: activeCell },
+		{ key: 'recurrenceInterval', title: 'Schedule', sortable: true, mobileRole: 'meta', cell: scheduleCell },
+		{ key: 'nextDueDate', title: 'Next', sortable: true, mobileRole: 'meta', cell: nextDueCell },
+		{ key: 'priority', title: 'Priority', sortable: true, mobileRole: 'badge', cell: priorityCell },
+		{ key: 'isActive', title: 'Active', sortable: true, align: 'center', mobileRole: 'badge', cell: activeCell },
 		{ key: 'actions', title: '', align: 'right', mobileRole: 'hidden', cell: actionsCell },
 	];
 </script>
@@ -307,6 +327,13 @@
 		onRowClick={(t) => openEdit(t)}
 		getRowKey={(t) => t.id}
 		data-testid="recurring-tasks-list"
+		pageSize={PAGE_SIZE}
+		page={gridPage}
+		totalCount={tasksTotalCount}
+		serverSide
+		onPageChange={(page) => (gridPage = page)}
+		sort={gridSort}
+		onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 items-center gap-2 min-w-0">

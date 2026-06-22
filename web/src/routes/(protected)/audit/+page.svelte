@@ -6,6 +6,7 @@
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
+	import { overfetchPage } from '$lib/audit/pagination';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
@@ -19,6 +20,7 @@
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 50;
+	const REQUEST_SIZE = PAGE_SIZE + 1;
 
 	const OPERATIONS = ['Created', 'Updated', 'Deleted', 'Approved', 'Rejected'] as const;
 
@@ -59,7 +61,7 @@
 				operation: operationFilter || undefined,
 				entityType: entityTypeFilter || undefined,
 				skip,
-				take: PAGE_SIZE,
+				take: REQUEST_SIZE,
 				sort: '-timestamp',
 			}),
 	}));
@@ -68,7 +70,8 @@
 		queryClient.invalidateQueries({ queryKey: ['audit', portfolioId] });
 	}
 
-	const entries = $derived(auditQuery.data ?? []);
+	const pageWindow = $derived(overfetchPage(auditQuery.data ?? [], PAGE_SIZE));
+	const entries = $derived(pageWindow.items);
 
 	// --- Display helpers ---
 
@@ -256,7 +259,13 @@
 
 		<!-- Pagination -->
 		<Card.Footer class="border-t border-border px-3 py-2">
-			<Pagination bind:skip take={PAGE_SIZE} count={entries.length} testid="audit-pagination" />
+			<Pagination
+				bind:skip
+				take={PAGE_SIZE}
+				count={entries.length}
+				hasNext={pageWindow.hasNext}
+				testid="audit-pagination"
+			/>
 		</Card.Footer>
 	</Card.Root>
 </div>

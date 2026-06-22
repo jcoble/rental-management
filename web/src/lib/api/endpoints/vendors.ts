@@ -2,9 +2,18 @@ import type { Vendor, VendorRating, VendorScorecard } from '$lib/types';
 import { api } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
 
+export interface VendorListResponse {
+	items: Vendor[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
 export const vendors = {
 	list: (portfolioId: number, params?: ListParams) =>
 		api.get<Vendor[]>(`/vendors${buildListQuery(params, { portfolioId })}`),
+	listPage: (portfolioId: number, params?: ListParams) =>
+		api.get<VendorListResponse>(`/vendors/page${buildListQuery(params, { portfolioId })}`),
 	get: (id: number) => api.get<Vendor>(`/vendors/${id}`),
 	create: (data: Record<string, unknown>) => api.post<Vendor>('/vendors', data),
 	update: (id: number, data: Record<string, unknown>) => api.patch<Vendor>(`/vendors/${id}`, data),

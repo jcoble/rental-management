@@ -69,17 +69,8 @@ public class NoticeDraftService : INoticeDraftService
         var forced = requestedType != null;
 
         bool WantsType(string type) => requestedType == null || string.Equals(requestedType, type, StringComparison.OrdinalIgnoreCase);
-
-        var leaseQuery = _db.Leases
-            .Include(l => l.Tenant)
-            .Include(l => l.Property)
-            .Include(l => l.Unit)
-            .Where(l => l.PortfolioId == portfolioId && l.Status == LeaseStatus.Active);
-        if (tenantId.HasValue)
-        {
-            leaseQuery = leaseQuery.Where(l => l.TenantId == tenantId.Value);
-        }
-        var leases = await leaseQuery.ToListAsync(ct);
+        var wantsRenewal = WantsType("RenewalOffer");
+        var wantsMoveOut = WantsType("MoveOutReminder");
 
         // Pre-load the existing open ("Draft") notices for this portfolio ONCE as a
         // (leaseId, noticeType) set, so the per-lease / per-payment idempotency check below is an
@@ -98,23 +89,45 @@ public class NoticeDraftService : INoticeDraftService
             .Select(d => (d.LeaseId, d.NoticeType))
             .ToHashSet();
 
-        foreach (var lease in leases)
+        if (wantsRenewal || wantsMoveOut)
         {
-            if (lease.Tenant == null) continue;
-
-            var daysToEnd = (lease.EndDate.Date - today).Days;
-            if (WantsType("RenewalOffer")
-                && (forced || (daysToEnd >= 0 && daysToEnd <= 75))
-                && !DraftExists(existingDrafts, lease.Id, "RenewalOffer", created))
+            var leaseQuery = _db.Leases
+                .Include(l => l.Tenant)
+                .Include(l => l.Property)
+                .Include(l => l.Unit)
+                .Where(l => l.PortfolioId == portfolioId && l.Status == LeaseStatus.Active);
+            if (tenantId.HasValue)
             {
-                created.Add(await BuildRenewalDraftAsync(portfolioId, lease, daysToEnd, now, ct));
+                leaseQuery = leaseQuery.Where(l => l.TenantId == tenantId.Value);
             }
 
-            if (WantsType("MoveOutReminder")
-                && (forced || (daysToEnd >= 0 && daysToEnd <= 30))
-                && !DraftExists(existingDrafts, lease.Id, "MoveOutReminder", created))
+            if (!forced)
             {
-                created.Add(await BuildMoveOutDraftAsync(portfolioId, lease, daysToEnd, now, ct));
+                var maxDays = wantsRenewal ? 75 : 30;
+                var windowEndExclusive = today.AddDays(maxDays + 1);
+                leaseQuery = leaseQuery.Where(l => l.EndDate >= today && l.EndDate < windowEndExclusive);
+            }
+
+            var leases = await leaseQuery.ToListAsync(ct);
+
+            foreach (var lease in leases)
+            {
+                if (lease.Tenant == null) continue;
+
+                var daysToEnd = (lease.EndDate.Date - today).Days;
+                if (wantsRenewal
+                    && (forced || (daysToEnd >= 0 && daysToEnd <= 75))
+                    && !DraftExists(existingDrafts, lease.Id, "RenewalOffer", created))
+                {
+                    created.Add(await BuildRenewalDraftAsync(portfolioId, lease, daysToEnd, now, ct));
+                }
+
+                if (wantsMoveOut
+                    && (forced || (daysToEnd >= 0 && daysToEnd <= 30))
+                    && !DraftExists(existingDrafts, lease.Id, "MoveOutReminder", created))
+                {
+                    created.Add(await BuildMoveOutDraftAsync(portfolioId, lease, daysToEnd, now, ct));
+                }
             }
         }
 

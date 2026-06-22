@@ -24,6 +24,12 @@ public class TenantService : ITenantService
 
     public async Task<IReadOnlyList<TenantResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, ToTenantListQuery(query), ct);
+        return page.Items;
+    }
+
+    public async Task<TenantListResponse> ListPageAsync(int portfolioId, TenantListQuery query, CancellationToken ct = default)
+    {
         var q = _db.Tenants
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId);
@@ -34,18 +40,25 @@ public class TenantService : ITenantService
             q = q.Where(t =>
                 EF.Functions.ILike(t.FirstName, $"%{term}%") ||
                 EF.Functions.ILike(t.LastName, $"%{term}%") ||
+                EF.Functions.ILike(t.FirstName + " " + t.LastName, $"%{term}%") ||
                 (t.Email != null && EF.Functions.ILike(t.Email, $"%{term}%")) ||
                 (t.Phone != null && EF.Functions.ILike(t.Phone, $"%{term}%")));
         }
 
         q = query.SortField switch
         {
+            "name" => query.SortDescending ? q.OrderByDescending(t => t.LastName).ThenByDescending(t => t.FirstName) : q.OrderBy(t => t.LastName).ThenBy(t => t.FirstName),
             "firstname" => query.SortDescending ? q.OrderByDescending(t => t.FirstName) : q.OrderBy(t => t.FirstName),
             "lastname" => query.SortDescending ? q.OrderByDescending(t => t.LastName) : q.OrderBy(t => t.LastName),
             "email" => query.SortDescending ? q.OrderByDescending(t => t.Email) : q.OrderBy(t => t.Email),
+            "phone" => query.SortDescending ? q.OrderByDescending(t => t.Phone) : q.OrderBy(t => t.Phone),
+            "activeleasecount" => query.SortDescending ? q.OrderByDescending(t => t.Leases.Count(l => l.Status == LeaseStatus.Active)).ThenBy(t => t.LastName).ThenBy(t => t.FirstName) : q.OrderBy(t => t.Leases.Count(l => l.Status == LeaseStatus.Active)).ThenBy(t => t.LastName).ThenBy(t => t.FirstName),
+            "createdat" => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
             "updatedat" => query.SortDescending ? q.OrderByDescending(t => t.UpdatedAt) : q.OrderBy(t => t.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
         };
+
+        var totalCount = await q.CountAsync(ct);
 
         // Project the active-lease count as a correlated subquery in the SAME page query (EF-translated),
         // so the count comes back per-row from Postgres — never load-then-count in C#.
@@ -59,13 +72,27 @@ public class TenantService : ITenantService
             })
             .ToListAsync(ct);
 
-        return rows.Select(r =>
+        return new TenantListResponse
         {
-            var response = TenantResponse.FromEntity(r.Entity);
-            response.ActiveLeaseCount = r.ActiveLeaseCount;
-            return response;
-        }).ToList();
+            Items = rows.Select(r =>
+            {
+                var response = TenantResponse.FromEntity(r.Entity);
+                response.ActiveLeaseCount = r.ActiveLeaseCount;
+                return response;
+            }).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
     }
+
+    private static TenantListQuery ToTenantListQuery(ListQuery query) => new()
+    {
+        Skip = query.Skip,
+        Take = query.Take,
+        Search = query.Search,
+        Sort = query.Sort,
+    };
 
     public async Task<TenantResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {

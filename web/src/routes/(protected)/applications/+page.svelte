@@ -7,6 +7,7 @@
 		type ApplicationStatus,
 	} from '$lib/api/endpoints/applications';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
+	import { debounced } from '$lib/utils/debounce.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
@@ -18,11 +19,13 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
+	const PAGE_SIZE = 20;
+
 	// Search + status filter + sort + page persisted in the URL so they survive navigating away and back.
-	// Sort/page seed the client-side DataGrid (initialSort / page) and are mirrored back via
-	// onSortChange / bind:page.
+	// Sort/page seed the server-side DataGrid query so applications are filtered/sorted/paged in SQL.
 	const initialParams = page.url.searchParams;
 	let search = $state(readGridParam(initialParams, 'q'));
+	const debouncedSearch = debounced(() => search, 300);
 
 	// shadcn Select binds a string; bits-ui treats '' as "no selection", so the "all" sentinel stands
 	// in for "no status filter". `statusFilter` (below) maps it back to '' for the query.
@@ -66,24 +69,19 @@
 		STATUS_OPTIONS.find((o) => o.value === statusValue)?.label ?? 'All statuses'
 	);
 
-	// Status filter goes to the server; free-text search is filtered client-side
-	// so it works across name/email/phone without extra round-trips.
 	const applicationsQuery = createQuery(() => ({
-		queryKey: ['applications', statusFilter],
-		queryFn: () => applications.list({ status: statusFilter || undefined }),
+		queryKey: ['applications', 'page', statusFilter, debouncedSearch.value, gridSort, gridPage, PAGE_SIZE],
+		queryFn: () => applications.listPage({
+			status: statusFilter || undefined,
+			search: debouncedSearch.value,
+			sort: gridSort || undefined,
+			skip: (gridPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+		}),
 	}));
 
-	const list = $derived.by(() => {
-		const all = applicationsQuery.data ?? [];
-		if (!search.trim()) return all;
-		const q = search.trim().toLowerCase();
-		return all.filter(
-			(a) =>
-				`${a.firstName} ${a.lastName}`.toLowerCase().includes(q) ||
-				(a.email ?? '').toLowerCase().includes(q) ||
-				(a.phone ?? '').toLowerCase().includes(q)
-		);
-	});
+	const list = $derived(applicationsQuery.data?.items ?? []);
+	const totalCount = $derived(applicationsQuery.data?.totalCount ?? 0);
 
 	// ── Application link ──────────────────────────────────────────────────────────
 	let showLinkDialog = $state(false);
@@ -176,15 +174,19 @@
 	<DataGrid
 		data={list}
 		{columns}
-		loading={applicationsQuery.isLoading}
+		loading={applicationsQuery.isLoading || applicationsQuery.isFetching}
 		emptyMessage="No applications yet. Share your application link to get started."
 		onRowClick={(a) => goto(`/applications/${a.id}`)}
 		getRowKey={(a) => a.id}
 		getRowTestId={() => 'application-row'}
 		data-testid="applications-list"
-		initialSort={gridSort}
-		bind:page={gridPage}
-		onSortChange={(s) => (gridSort = s ?? '')}
+		pageSize={PAGE_SIZE}
+		page={gridPage}
+		totalCount={totalCount}
+		serverSide
+		onPageChange={(page) => (gridPage = page)}
+		sort={gridSort}
+		onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 flex-wrap items-center gap-2">

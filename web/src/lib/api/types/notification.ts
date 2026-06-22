@@ -1,4 +1,4 @@
-export type NotificationSeverity = 'Info' | 'Success' | 'Warning' | 'Error';
+export type NotificationSeverity = 'Info' | 'Success' | 'Warning' | 'Error' | 'Critical';
 
 export interface NotificationItem {
 	id: number;

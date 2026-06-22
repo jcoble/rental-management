@@ -6,6 +6,7 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { tenantSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { debounced } from '$lib/utils/debounce.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -19,13 +20,15 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const PAGE_SIZE = 20;
 
-	// Search/sort/page persisted in the URL so they survive navigating away and back. Sort/page seed the
-	// client-side DataGrid (initialSort / page) and are mirrored back via its onSortChange/bind:page.
+	// Search/sort/page persisted in the URL so they survive navigating away and back. The DataGrid is
+	// server-side here: search/sort/page drive the API query instead of fetching a capped list first.
 	const initialParams = page.url.searchParams;
 	let search = $state(readGridParam(initialParams, 'q'));
 	let gridSort = $state(readGridParam(initialParams, 'sort'));
 	let gridPage = $state(readGridParam(initialParams, 'page', 1));
+	const debouncedSearch = debounced(() => search, 300);
 
 	// Reset to page 1 when the search changes — but not on initial mount, so a restored ?page= loads as-is.
 	let filterResetPrimed = false;
@@ -43,21 +46,17 @@
 	});
 
 	const tenantsQuery = createQuery(() => ({
-		queryKey: ['tenants', portfolioId],
-		queryFn: () => tenants.list(portfolioId, { take: 500 }),
+		queryKey: ['tenants', portfolioId, 'page', debouncedSearch.value, gridSort, gridPage, PAGE_SIZE],
+		queryFn: () => tenants.listPage(portfolioId, {
+			search: debouncedSearch.value,
+			sort: gridSort || undefined,
+			skip: (gridPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+		}),
 	}));
 
-	// Client-side filter by name / email
-	const list = $derived.by(() => {
-		const all = tenantsQuery.data ?? [];
-		if (!search.trim()) return all;
-		const q = search.trim().toLowerCase();
-		return all.filter(
-			(t) =>
-				`${t.firstName} ${t.lastName}`.toLowerCase().includes(q) ||
-				(t.email ?? '').toLowerCase().includes(q)
-		);
-	});
+	const list = $derived(tenantsQuery.data?.items ?? []);
+	const totalCount = $derived(tenantsQuery.data?.totalCount ?? 0);
 
 	const empty = { firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' };
 	let showForm = $state(false);
@@ -65,6 +64,7 @@
 	let form = $state({ ...empty });
 	let formErrors = $state<Record<string, string>>({});
 	let deleteTarget = $state<Tenant | null>(null);
+	let createParamHandled = $state(false);
 
 	function invalidate() {
 		queryClient.invalidateQueries({ queryKey: ['tenants', portfolioId] });
@@ -97,6 +97,13 @@
 		formErrors = {};
 		showForm = true;
 	}
+
+	$effect(() => {
+		if (createParamHandled || page.url.searchParams.get('create') !== '1') return;
+		createParamHandled = true;
+		openCreate();
+	});
+
 	function openEdit(t: Tenant) {
 		editingId = t.id;
 		form = {
@@ -216,7 +223,7 @@
 	<DataGrid
 		data={list}
 		{columns}
-		loading={tenantsQuery.isLoading}
+		loading={tenantsQuery.isLoading || tenantsQuery.isFetching}
 		emptyMessage="No tenants yet"
 		emptyDescription="Tenants are the people who rent from you. Add your first to start tracking leases and rent."
 		emptyIcon={Users}
@@ -227,9 +234,13 @@
 		getRowKey={(t) => t.id}
 		getRowTestId={() => 'tenant-row'}
 		data-testid="tenants-list"
-		initialSort={gridSort}
-		bind:page={gridPage}
-		onSortChange={(s) => (gridSort = s ?? '')}
+		pageSize={PAGE_SIZE}
+		page={gridPage}
+		totalCount={totalCount}
+		serverSide
+		onPageChange={(page) => (gridPage = page)}
+		sort={gridSort}
+		onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 items-center gap-2">

@@ -12,6 +12,8 @@ public class BankConnection
     public string? AccountSubtype { get; set; }
     public string? ExternalItemIdCipherText { get; set; }
     public string? ExternalAccountIdCipherText { get; set; }
+    public string? ExternalItemIdHash { get; set; }
+    public string? ExternalAccountIdHash { get; set; }
     public string? ExternalAccessTokenCipherText { get; set; }
     public string? SyncCursorCipherText { get; set; }
     /// <summary>

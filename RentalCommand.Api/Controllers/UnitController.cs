@@ -46,6 +46,15 @@ public class UnitController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("list-with-health/page")]
+    [ProducesResponseType(typeof(UnitHealthListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<UnitHealthListResponse>> ListWithHealthPage(
+        [FromQuery] UnitHealthListQuery query, CancellationToken ct)
+    {
+        var page = await _service.ListWithHealthPageAsync(GetPortfolioId(), query, ct);
+        return Ok(page);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(UnitResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

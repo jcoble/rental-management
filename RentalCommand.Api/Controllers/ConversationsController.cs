@@ -30,6 +30,22 @@ public class ConversationsController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(ConversationListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ConversationListResponse>> ListPage([FromQuery] ListQuery query, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        return Ok(page);
+    }
+
+    [HttpGet("unread-count")]
+    [ProducesResponseType(typeof(ConversationUnreadCountResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ConversationUnreadCountResponse>> UnreadCount(CancellationToken ct)
+    {
+        var count = await _service.GetUnreadCountAsync(GetPortfolioId(), ct);
+        return Ok(new ConversationUnreadCountResponse(count));
+    }
+
     /// <summary>Fetch a conversation with its full message history; resets the landlord's unread count.</summary>
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(ConversationDetail), StatusCodes.Status200OK)]

@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Enums;
@@ -14,8 +13,6 @@ public class ReportsService : IReportsService
     private const decimal Vendor1099Threshold = 600m;
 
     private const int DefaultExpirationWindowDays = 90;
-
-    private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     private readonly RentalCommandDbContext _db;
     private readonly IOwnerStatementService _ownerStatements;
@@ -217,6 +214,16 @@ public class ReportsService : IReportsService
         if (propertyFilter is not null)
             q = q.Where(l => propertyFilter.Contains(l.PropertyId));
 
+        var totals = await q
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                LeaseCount = g.Count(),
+                TotalMonthlyRent = g.Sum(l => l.MonthlyRent),
+                TotalSecurityDeposit = g.Sum(l => l.SecurityDeposit),
+            })
+            .SingleOrDefaultAsync(ct);
+
         var rows = await q
             .OrderBy(l => l.Property!.Name)
             .ThenBy(l => l.Unit!.UnitNumber)
@@ -243,9 +250,9 @@ public class ReportsService : IReportsService
         {
             GeneratedAt = DateTime.UtcNow,
             Rows = rows,
-            LeaseCount = rows.Count,
-            TotalMonthlyRent = rows.Sum(r => r.MonthlyRent),
-            TotalSecurityDeposit = rows.Sum(r => r.SecurityDeposit),
+            LeaseCount = totals?.LeaseCount ?? 0,
+            TotalMonthlyRent = totals?.TotalMonthlyRent ?? 0m,
+            TotalSecurityDeposit = totals?.TotalSecurityDeposit ?? 0m,
         };
     }
 
@@ -314,6 +321,26 @@ public class ReportsService : IReportsService
         var activityQuery = chargeEntries.Concat(receiptEntries);
 
         var activityRows = await activityQuery
+            .Select(r => new RentLedgerQueryRow
+            {
+                LeaseId = r.LeaseId,
+                LeaseNumber = r.LeaseNumber,
+                PropertyId = r.PropertyId,
+                PropertyName = r.PropertyName,
+                UnitNumber = r.UnitNumber,
+                TenantName = r.TenantName,
+                PaymentId = r.PaymentId,
+                Date = r.Date,
+                EntryKind = r.EntryKind,
+                Amount = r.Amount,
+                PaymentType = r.PaymentType,
+                RunningBalance = activityQuery
+                    .Where(x => x.LeaseId == r.LeaseId &&
+                                (x.Date < r.Date ||
+                                 (x.Date == r.Date && x.EntryKind < r.EntryKind) ||
+                                 (x.Date == r.Date && x.EntryKind == r.EntryKind && x.PaymentId <= r.PaymentId)))
+                    .Sum(x => (decimal?)(x.EntryKind == chargeEntryKind ? x.Amount : -x.Amount)) ?? 0m,
+            })
             .OrderBy(r => r.PropertyName.ToLower())
             .ThenBy(r => r.PropertyName)
             .ThenBy(r => r.UnitNumber.ToLower())
@@ -344,64 +371,50 @@ public class ReportsService : IReportsService
             .SingleOrDefaultAsync(ct);
 
         var ledgerLeases = new List<RentLedgerLease>();
+        RentLedgerLease? currentLease = null;
+        List<RentLedgerEntry>? currentEntries = null;
 
-        foreach (var lease in activityRows.GroupBy(r => new
+        foreach (var e in activityRows)
         {
-            r.LeaseId,
-            r.LeaseNumber,
-            r.PropertyId,
-            r.PropertyName,
-            r.UnitNumber,
-            r.TenantName,
-        }))
-        {
-            var rows = new List<RentLedgerEntry>();
-            var balance = 0m;
-
-            foreach (var e in lease)
+            if (currentLease is null || currentLease.LeaseId != e.LeaseId)
             {
-                if (e.EntryKind == chargeEntryKind)
+                currentEntries = [];
+                var totals = totalsByLease[e.LeaseId];
+                currentLease = new RentLedgerLease
                 {
-                    balance += e.Amount;
-                    rows.Add(new RentLedgerEntry
-                    {
-                        Date = e.Date,
-                        Type = "Charge",
-                        Description = $"{e.PaymentType} due",
-                        Charge = e.Amount,
-                        Payment = 0m,
-                        Balance = balance,
-                    });
-                }
-                else
-                {
-                    balance -= e.Amount;
-                    rows.Add(new RentLedgerEntry
-                    {
-                        Date = e.Date,
-                        Type = "Payment",
-                        Description = $"{e.PaymentType} payment received",
-                        Charge = 0m,
-                        Payment = e.Amount,
-                        Balance = balance,
-                    });
-                }
+                    LeaseId = e.LeaseId,
+                    LeaseNumber = e.LeaseNumber,
+                    PropertyId = e.PropertyId,
+                    PropertyName = e.PropertyName,
+                    UnitNumber = e.UnitNumber,
+                    TenantName = e.TenantName,
+                    Entries = currentEntries,
+                    TotalCharged = totals.TotalCharged,
+                    TotalPaid = totals.TotalPaid,
+                    Balance = totals.TotalCharged - totals.TotalPaid,
+                };
+                ledgerLeases.Add(currentLease);
             }
 
-            var totals = totalsByLease[lease.Key.LeaseId];
-            ledgerLeases.Add(new RentLedgerLease
-            {
-                LeaseId = lease.Key.LeaseId,
-                LeaseNumber = lease.Key.LeaseNumber,
-                PropertyId = lease.Key.PropertyId,
-                PropertyName = lease.Key.PropertyName,
-                UnitNumber = lease.Key.UnitNumber,
-                TenantName = lease.Key.TenantName,
-                Entries = rows,
-                TotalCharged = totals.TotalCharged,
-                TotalPaid = totals.TotalPaid,
-                Balance = totals.TotalCharged - totals.TotalPaid,
-            });
+            currentEntries!.Add(e.EntryKind == chargeEntryKind
+                ? new RentLedgerEntry
+                {
+                    Date = e.Date,
+                    Type = "Charge",
+                    Description = $"{e.PaymentType} due",
+                    Charge = e.Amount,
+                    Payment = 0m,
+                    Balance = e.RunningBalance,
+                }
+                : new RentLedgerEntry
+                {
+                    Date = e.Date,
+                    Type = "Payment",
+                    Description = $"{e.PaymentType} payment received",
+                    Charge = 0m,
+                    Payment = e.Amount,
+                    Balance = e.RunningBalance,
+                });
         }
 
         return new RentLedgerResponse
@@ -660,165 +673,108 @@ public class ReportsService : IReportsService
         var (from, to) = ResolveRange(query);
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
-        // Properties in scope (name + the escrow-cover flags rolled up from active loans, SQL-side).
         var propertyQuery = _db.Properties
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId);
         if (propertyFilter is not null)
             propertyQuery = propertyQuery.Where(p => propertyFilter.Contains(p.Id));
 
-        var properties = await propertyQuery
-            .OrderBy(p => p.Name)
+        var rowQuery = propertyQuery
             .Select(p => new
             {
                 p.Id,
                 p.Name,
-                // A property's taxes/insurance are escrow-funded if ANY active loan escrows them.
-                EscrowCoversTaxes = _db.Loans.Any(l => l.PropertyId == p.Id && l.Status == LoanStatus.Active && l.EscrowCoversTaxes),
-                EscrowCoversInsurance = _db.Loans.Any(l => l.PropertyId == p.Id && l.Status == LoanStatus.Active && l.EscrowCoversInsurance),
+                Income = _db.Payments
+                    .Where(pay =>
+                        pay.PortfolioId == portfolioId &&
+                        (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial) &&
+                        (pay.PaymentType == PaymentType.Rent || pay.PaymentType == PaymentType.LateFee) &&
+                        pay.Lease != null &&
+                        pay.Lease.PropertyId == p.Id &&
+                        (pay.PaidDate ?? pay.DueDate) >= from && (pay.PaidDate ?? pay.DueDate) <= to)
+                    .Sum(pay => (decimal?)(pay.Status == PaymentStatus.Partial ? (pay.AmountPaid ?? 0m) : pay.Amount)) ?? 0m,
+                OperatingExpenses = _db.Expenses
+                    .Where(e =>
+                        e.PortfolioId == portfolioId &&
+                        e.PropertyId == p.Id &&
+                        (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to &&
+                        !_db.Loans.Any(l =>
+                            l.PropertyId == p.Id &&
+                            l.Status == LoanStatus.Active &&
+                            ((e.Category == ScheduleECategory.Taxes && l.EscrowCoversTaxes) ||
+                             (e.Category == ScheduleECategory.Insurance && l.EscrowCoversInsurance))))
+                    .Sum(e => (decimal?)e.Amount) ?? 0m,
+                DebtService = _db.LoanPayments
+                    .Where(lp =>
+                        lp.PortfolioId == portfolioId &&
+                        lp.Loan != null &&
+                        lp.Loan.PropertyId == p.Id &&
+                        lp.DueDate >= from && lp.DueDate <= to)
+                    .Sum(lp => (decimal?)lp.TotalAmount) ?? 0m,
+            })
+            .Where(r => r.Income != 0m || r.OperatingExpenses != 0m || r.DebtService != 0m);
+
+        var rows = await rowQuery
+            .OrderBy(r => r.Name)
+            .Select(r => new PropertyCashFlow
+            {
+                PropertyId = r.Id,
+                PropertyName = r.Name,
+                Income = r.Income,
+                OperatingExpenses = r.OperatingExpenses,
+                Noi = r.Income - r.OperatingExpenses,
+                DebtService = r.DebtService,
+                CashFlow = r.Income - r.OperatingExpenses - r.DebtService,
             })
             .ToListAsync(ct);
 
-        var incomeByProperty = await IncomeByPropertyAsync(portfolioId, from, to, propertyFilter, ct);
-        var debtServiceByProperty = await DebtServiceByPropertyAsync(portfolioId, from, to, propertyFilter, ct);
-
-        // Operating expenses grouped by (property, category) SQL-side; the escrow exclusion is applied
-        // per property/category during reshape (a filter over pre-aggregated rows, never an in-memory SUM).
-        var opexQuery = _db.Expenses
-            .AsNoTracking()
-            .Where(e =>
-                e.PortfolioId == portfolioId &&
-                e.PropertyId != null &&
-                (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to);
-        if (propertyFilter is not null)
-            opexQuery = opexQuery.Where(e => propertyFilter.Contains(e.PropertyId!.Value));
-
-        var opexByPropertyCategory = await opexQuery
-            .GroupBy(e => new { PropertyId = e.PropertyId!.Value, e.Category })
-            .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
-            .ToListAsync(ct);
-
-        var rows = new List<PropertyCashFlow>(properties.Count);
-        foreach (var prop in properties)
-        {
-            var income = incomeByProperty.GetValueOrDefault(prop.Id, 0m);
-
-            // Sum this property's opex, excluding the categories its loan escrows (their cash is inside
-            // debt service — escrow no-double-count, §9). The exclusion is category-specific.
-            var opex = opexByPropertyCategory
-                .Where(r => r.PropertyId == prop.Id)
-                .Where(r => !IsEscrowFunded(r.Category, prop.EscrowCoversTaxes, prop.EscrowCoversInsurance))
-                .Sum(r => r.Total);
-
-            var debtService = debtServiceByProperty.GetValueOrDefault(prop.Id, 0m);
-            var noi = income - opex;
-
-            // Skip properties with no cash-flow activity to keep the view tight.
-            if (income == 0m && opex == 0m && debtService == 0m)
-                continue;
-
-            rows.Add(new PropertyCashFlow
+        var totals = await rowQuery
+            .GroupBy(_ => 1)
+            .Select(g => new
             {
-                PropertyId = prop.Id,
-                PropertyName = prop.Name,
-                Income = income,
-                OperatingExpenses = opex,
-                Noi = noi,
-                DebtService = debtService,
-                CashFlow = noi - debtService,
-            });
-        }
+                TotalIncome = g.Sum(r => r.Income),
+                TotalOperatingExpenses = g.Sum(r => r.OperatingExpenses),
+                TotalDebtService = g.Sum(r => r.DebtService),
+            })
+            .SingleOrDefaultAsync(ct);
+
+        var totalIncome = totals?.TotalIncome ?? 0m;
+        var totalOperatingExpenses = totals?.TotalOperatingExpenses ?? 0m;
+        var totalDebtService = totals?.TotalDebtService ?? 0m;
+        var totalNoi = totalIncome - totalOperatingExpenses;
 
         return new CashFlowSummaryResponse
         {
             From = from,
             To = to,
             Properties = rows,
-            TotalIncome = rows.Sum(r => r.Income),
-            TotalOperatingExpenses = rows.Sum(r => r.OperatingExpenses),
-            TotalNoi = rows.Sum(r => r.Noi),
-            TotalDebtService = rows.Sum(r => r.DebtService),
-            TotalCashFlow = rows.Sum(r => r.CashFlow),
+            TotalIncome = totalIncome,
+            TotalOperatingExpenses = totalOperatingExpenses,
+            TotalNoi = totalNoi,
+            TotalDebtService = totalDebtService,
+            TotalCashFlow = totalNoi - totalDebtService,
         };
-    }
-
-    /// <summary>True when an expense category's cash is funded by loan escrow (so it is excluded from
-    /// cash-flow opex to avoid double-counting), given the property's escrow-cover flags.</summary>
-    private static bool IsEscrowFunded(ScheduleECategory category, bool escrowCoversTaxes, bool escrowCoversInsurance) =>
-        (category == ScheduleECategory.Taxes && escrowCoversTaxes) ||
-        (category == ScheduleECategory.Insurance && escrowCoversInsurance);
-
-    /// <summary>
-    /// Income (actual cash received) per property for the range, SQL-side: Rent + LateFee that is Paid
-    /// (full Amount) or Partial (collected AmountPaid); deposits excluded (§7/§18). Keyed by property
-    /// via the lease.
-    /// </summary>
-    private async Task<Dictionary<int, decimal>> IncomeByPropertyAsync(
-        int portfolioId, DateTime from, DateTime to, HashSet<int>? propertyFilter, CancellationToken ct)
-    {
-        var q = _db.Payments
-            .AsNoTracking()
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
-                (p.PaymentType == PaymentType.Rent || p.PaymentType == PaymentType.LateFee) &&
-                p.Lease != null &&
-                (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to);
-        if (propertyFilter is not null)
-            q = q.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));
-
-        return (await q
-            .GroupBy(p => p.Lease!.PropertyId)
-            .Select(g => new
-            {
-                PropertyId = g.Key,
-                Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount),
-            })
-            .ToListAsync(ct))
-            .ToDictionary(r => r.PropertyId, r => r.Total);
-    }
-
-    /// <summary>
-    /// Full debt service (Σ LoanPayment.TotalAmount) per property for the range, SQL-side, keyed by the
-    /// loan's property. Soft-deleted loans/payments are excluded by the global query filters.
-    /// </summary>
-    private async Task<Dictionary<int, decimal>> DebtServiceByPropertyAsync(
-        int portfolioId, DateTime from, DateTime to, HashSet<int>? propertyFilter, CancellationToken ct)
-    {
-        var q = _db.LoanPayments
-            .AsNoTracking()
-            .Where(lp =>
-                lp.PortfolioId == portfolioId &&
-                lp.Loan != null &&
-                lp.DueDate >= from && lp.DueDate <= to);
-        if (propertyFilter is not null)
-            q = q.Where(lp => propertyFilter.Contains(lp.Loan!.PropertyId));
-
-        return (await q
-            .GroupBy(lp => lp.Loan!.PropertyId)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(lp => lp.TotalAmount) })
-            .ToListAsync(ct))
-            .ToDictionary(r => r.PropertyId, r => r.Total);
     }
 
     // ── Year-end view: cash flow vs taxable income + rent roll (§11/§18) ────────────────────────────
 
-    public async Task<YearEndViewResponse> GetYearEndAsync(int portfolioId, int year, CancellationToken ct = default)
+    public async Task<YearEndViewResponse> GetYearEndAsync(int portfolioId, int year, int? propertyId = null, CancellationToken ct = default)
     {
         var yearRange = new ReportRangeQuery
         {
             From = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             To = new DateTime(year, 12, 31, 23, 59, 59, DateTimeKind.Utc),
+            PropertyIds = propertyId.HasValue ? [propertyId.Value] : null,
         };
 
         // Block 1: true cash flow (rent − opex − debt service, escrow-aware, no depreciation).
         var cashFlow = await GetTrueCashFlowAsync(portfolioId, yearRange, ct);
 
         // Block 2: taxable income / Schedule E (interest + depreciation in, principal + deposits out).
-        var scheduleE = await _scheduleE.GetReportAsync(portfolioId, year, ct);
+        var scheduleE = await _scheduleE.GetReportAsync(portfolioId, year, propertyId, ct);
 
         // Block 3: rent roll — current leases with their past-due balance (DB-side, no N+1).
-        var rentRoll = await BuildRentRollAsync(portfolioId, ct);
+        var rentRoll = await BuildRentRollAsync(portfolioId, propertyId, ct);
 
         // §18 "see your accountant" caveats — surfaced so the owner never trusts a number the model
         // does not compute. Conditional on what the data suggests, so they are actionable not noise.
@@ -855,14 +811,20 @@ public class ReportsService : IReportsService
     /// Rent roll: current leases (active or under notice) with each lease's past-due balance, computed
     /// DB-side (the owed-and-overdue sum is grouped in SQL; no rows are pulled back to total in memory).
     /// </summary>
-    private async Task<IReadOnlyList<YearEndRentRollRow>> BuildRentRollAsync(int portfolioId, CancellationToken ct)
+    private async Task<IReadOnlyList<YearEndRentRollRow>> BuildRentRollAsync(int portfolioId, int? propertyId, CancellationToken ct)
     {
         var now = DateTime.UtcNow;
 
-        var leases = await _db.Leases
+        var leaseQuery = _db.Leases
             .AsNoTracking()
             .Where(l => l.PortfolioId == portfolioId &&
-                        (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven))
+                        (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven));
+        if (propertyId.HasValue)
+            leaseQuery = leaseQuery.Where(l => l.PropertyId == propertyId.Value);
+
+        var leases = await leaseQuery
+            .OrderBy(l => l.Property!.Name)
+            .ThenBy(l => l.Unit!.UnitNumber)
             .Select(l => new
             {
                 l.Id,
@@ -877,25 +839,31 @@ public class ReportsService : IReportsService
             })
             .ToListAsync(ct);
 
-        var leaseIds = leases.Select(l => l.Id).ToHashSet();
+        if (leases.Count == 0)
+            return [];
 
         // Past-due balance per lease: owed (Scheduled/Partial/Late) and overdue (Late, or due in the
         // past). A Partial owes only its unpaid remainder (Amount − AmountPaid). Grouped + summed SQL-side.
-        var pastDueByLease = (await _db.Payments
-                .AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId &&
-                            leaseIds.Contains(p.LeaseId) &&
-                            (p.Status == PaymentStatus.Scheduled ||
-                             p.Status == PaymentStatus.Partial ||
-                             p.Status == PaymentStatus.Late) &&
-                            (p.Status == PaymentStatus.Late || p.DueDate < now))
-                .GroupBy(p => p.LeaseId)
-                .Select(g => new
-                {
-                    LeaseId = g.Key,
-                    Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.Amount - (p.AmountPaid ?? 0m)) : p.Amount),
-                })
-                .ToListAsync(ct))
+        var pastDueQuery = _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId &&
+                        p.Lease != null &&
+                        (p.Lease.Status == LeaseStatus.Active || p.Lease.Status == LeaseStatus.NoticeGiven) &&
+                        (p.Status == PaymentStatus.Scheduled ||
+                         p.Status == PaymentStatus.Partial ||
+                         p.Status == PaymentStatus.Late) &&
+                        (p.Status == PaymentStatus.Late || p.DueDate < now));
+        if (propertyId.HasValue)
+            pastDueQuery = pastDueQuery.Where(p => p.Lease!.PropertyId == propertyId.Value);
+
+        var pastDueByLease = (await pastDueQuery
+            .GroupBy(p => p.LeaseId)
+            .Select(g => new
+            {
+                LeaseId = g.Key,
+                Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.Amount - (p.AmountPaid ?? 0m)) : p.Amount),
+            })
+            .ToListAsync(ct))
             .ToDictionary(g => g.LeaseId, g => g.Total);
 
         return leases
@@ -912,8 +880,6 @@ public class ReportsService : IReportsService
                 LeaseStatus = l.Status.ToString(),
                 PastDueBalance = pastDueByLease.GetValueOrDefault(l.Id, 0m),
             })
-            .OrderBy(r => r.PropertyName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.UnitNumber, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
@@ -1056,6 +1022,24 @@ public class ReportsService : IReportsService
                 .ToListAsync(ct))
             .ToDictionary(r => r.PropertyId, r => r.Total);
 
+        var totalIncome = inScope.Length == 0
+            ? 0m
+            : await _db.Payments
+                .AsNoTracking()
+                .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
+                .Where(p => inScope.Contains(p.Lease!.PropertyId))
+                .Where(p => (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
+                .SumAsync(p => (decimal?)p.Amount, ct) ?? 0m;
+
+        var totalExpense = inScope.Length == 0
+            ? 0m
+            : await _db.Expenses
+                .AsNoTracking()
+                .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
+                .Where(e => inScope.Contains(e.PropertyId!.Value))
+                .Where(e => (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to)
+                .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
+
         var rows = properties
             .Select(p =>
             {
@@ -1077,9 +1061,9 @@ public class ReportsService : IReportsService
             From = from,
             To = to,
             Rows = rows,
-            TotalIncome = incomeByProperty.Values.Sum(),
-            TotalExpense = expenseByProperty.Values.Sum(),
-            TotalNet = incomeByProperty.Values.Sum() - expenseByProperty.Values.Sum(),
+            TotalIncome = totalIncome,
+            TotalExpense = totalExpense,
+            TotalNet = totalIncome - totalExpense,
         };
     }
 
@@ -1122,8 +1106,17 @@ public class ReportsService : IReportsService
             })
             .ToList();
 
-        var totalUnits = occRows.Sum(r => r.TotalUnits);
-        var occupiedUnits = occRows.Sum(r => r.OccupiedUnits);
+        var totals = await propertyQuery
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                TotalUnits = g.Sum(p => p.Units.Count),
+                OccupiedUnits = g.Sum(p => p.Units.Count(u => u.Status == UnitStatus.Occupied)),
+            })
+            .SingleOrDefaultAsync(ct);
+
+        var totalUnits = totals?.TotalUnits ?? 0;
+        var occupiedUnits = totals?.OccupiedUnits ?? 0;
 
         return new OccupancyResponse
         {
@@ -1157,6 +1150,15 @@ public class ReportsService : IReportsService
 
         if (propertyFilter is not null)
             q = q.Where(l => propertyFilter.Contains(l.PropertyId));
+
+        var summary = await q
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                LeaseCount = g.Count(),
+                TotalMonthlyRent = g.Sum(l => l.MonthlyRent),
+            })
+            .FirstOrDefaultAsync(ct);
 
         var leases = await q
             .OrderBy(l => l.EndDate)
@@ -1199,8 +1201,8 @@ public class ReportsService : IReportsService
             AsOf = asOf,
             WindowDays = window,
             Rows = rows,
-            LeaseCount = rows.Count,
-            TotalMonthlyRent = rows.Sum(r => r.MonthlyRent),
+            LeaseCount = summary?.LeaseCount ?? 0,
+            TotalMonthlyRent = summary?.TotalMonthlyRent ?? 0m,
         };
     }
 
@@ -1217,6 +1219,7 @@ public class ReportsService : IReportsService
         public int EntryKind { get; set; }
         public decimal Amount { get; set; }
         public PaymentType PaymentType { get; set; }
+        public decimal RunningBalance { get; set; }
     }
 
     // ── Security Deposit Register ──────────────────────────────────────────────────────────────────
@@ -1232,9 +1235,7 @@ public class ReportsService : IReportsService
         if (propertyFilter is not null)
             q = q.Where(h => propertyFilter.Contains(h.Lease!.PropertyId));
 
-        var holdings = await q
-            .OrderBy(h => h.Lease!.Property!.Name)
-            .ThenBy(h => h.Lease!.Unit!.UnitNumber)
+        var rowsQuery = q
             .Select(h => new
             {
                 h.Id,
@@ -1246,68 +1247,59 @@ public class ReportsService : IReportsService
                 TenantFirst = h.Lease!.Tenant!.FirstName,
                 TenantLast = h.Lease!.Tenant!.LastName,
                 h.Amount,
-                h.DeductionsJson,
+                h.DeductionsTotal,
                 h.ReturnedAmount,
                 h.Status,
                 h.HeldAt,
                 h.ReturnedAt,
+                CurrentBalance = h.Amount - h.DeductionsTotal - (h.ReturnedAmount ?? 0m) < 0m
+                    ? 0m
+                    : h.Amount - h.DeductionsTotal - (h.ReturnedAmount ?? 0m),
+            });
+
+        var rows = await rowsQuery
+            .OrderBy(h => h.PropertyName)
+            .ThenBy(h => h.UnitNumber)
+            .Select(h => new SecurityDepositRegisterRow
+            {
+                DepositId = h.Id,
+                LeaseId = h.LeaseId,
+                LeaseNumber = h.LeaseNumber,
+                PropertyId = h.PropertyId,
+                PropertyName = h.PropertyName,
+                UnitNumber = h.UnitNumber,
+                TenantName = (h.TenantFirst + " " + h.TenantLast).Trim(),
+                Held = h.Amount,
+                Deductions = h.DeductionsTotal,
+                Returned = h.ReturnedAmount ?? 0m,
+                CurrentBalance = h.CurrentBalance,
+                Status = h.Status,
+                StatusName = h.Status.ToString(),
+                HeldAt = h.HeldAt,
+                ReturnedAt = h.ReturnedAt,
             })
             .ToListAsync(ct);
 
-        var rows = holdings
-            .Select(h =>
+        var totals = await rowsQuery
+            .GroupBy(_ => 1)
+            .Select(g => new
             {
-                var deductions = ParseDeductionsTotal(h.DeductionsJson);
-                var returned = h.ReturnedAmount ?? 0m;
-                var current = Math.Max(0m, h.Amount - deductions - returned);
-
-                return new SecurityDepositRegisterRow
-                {
-                    DepositId = h.Id,
-                    LeaseId = h.LeaseId,
-                    LeaseNumber = h.LeaseNumber,
-                    PropertyId = h.PropertyId,
-                    PropertyName = h.PropertyName,
-                    UnitNumber = h.UnitNumber,
-                    TenantName = $"{h.TenantFirst} {h.TenantLast}".Trim(),
-                    Held = h.Amount,
-                    Deductions = deductions,
-                    Returned = returned,
-                    CurrentBalance = current,
-                    Status = h.Status,
-                    StatusName = h.Status.ToString(),
-                    HeldAt = h.HeldAt,
-                    ReturnedAt = h.ReturnedAt,
-                };
+                TotalHeld = g.Sum(x => x.Amount),
+                TotalDeductions = g.Sum(x => x.DeductionsTotal),
+                TotalReturned = g.Sum(x => x.ReturnedAmount ?? 0m),
+                TotalCurrentBalance = g.Sum(x => x.CurrentBalance),
             })
-            .ToList();
+            .FirstOrDefaultAsync(ct);
 
         return new SecurityDepositRegisterResponse
         {
             GeneratedAt = DateTime.UtcNow,
             Rows = rows,
-            TotalHeld = rows.Sum(r => r.Held),
-            TotalDeductions = rows.Sum(r => r.Deductions),
-            TotalReturned = rows.Sum(r => r.Returned),
-            TotalCurrentBalance = rows.Sum(r => r.CurrentBalance),
+            TotalHeld = totals?.TotalHeld ?? 0m,
+            TotalDeductions = totals?.TotalDeductions ?? 0m,
+            TotalReturned = totals?.TotalReturned ?? 0m,
+            TotalCurrentBalance = totals?.TotalCurrentBalance ?? 0m,
         };
-    }
-
-    /// <summary>Sums the deduction amounts in a holding's DeductionsJson; returns 0 on null/blank/malformed JSON.</summary>
-    internal static decimal ParseDeductionsTotal(string? deductionsJson)
-    {
-        if (string.IsNullOrWhiteSpace(deductionsJson))
-            return 0m;
-
-        try
-        {
-            var deductions = JsonSerializer.Deserialize<List<DepositDeduction>>(deductionsJson, JsonOpts);
-            return deductions?.Sum(d => d.Amount) ?? 0m;
-        }
-        catch (JsonException)
-        {
-            return 0m;
-        }
     }
 
     // ── Vendor 1099 & Payments ─────────────────────────────────────────────────────────────────────
@@ -1316,9 +1308,13 @@ public class ReportsService : IReportsService
     {
         // Total paid per vendor = expenses to that vendor whose PaidAt falls in the year. Mirrors the
         // accounting reports' 1099 logic but scoped to a single tax year (the 1099 reporting period).
-        var vendors = await _db.Vendors
+        var yearStart = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var yearEnd = yearStart.AddYears(1);
+
+        var vendorRowsQuery = _db.Vendors
             .AsNoTracking()
-            .Where(v => v.PortfolioId == portfolioId)
+            .Where(v => v.PortfolioId == portfolioId &&
+                        (v.Is1099Eligible || v.Expenses.Any(e => e.PaidAt >= yearStart && e.PaidAt < yearEnd)))
             .OrderBy(v => v.Name)
             .Select(v => new
             {
@@ -1328,13 +1324,11 @@ public class ReportsService : IReportsService
                 v.Is1099Eligible,
                 v.W9OnFile,
                 TotalPaid = v.Expenses
-                    .Where(e => e.PaidAt != null && e.PaidAt!.Value.Year == year)
+                    .Where(e => e.PaidAt >= yearStart && e.PaidAt < yearEnd)
                     .Sum(e => (decimal?)e.Amount) ?? 0m,
-            })
-            .ToListAsync(ct);
+            });
 
-        var rows = vendors
-            .Where(v => v.Is1099Eligible || v.TotalPaid > 0m)
+        var rows = await vendorRowsQuery
             .Select(v => new Vendor1099Row
             {
                 VendorId = v.Id,
@@ -1346,13 +1340,18 @@ public class ReportsService : IReportsService
                 NeedsW9 = v.Is1099Eligible && !v.W9OnFile,
                 Needs1099Review = v.Is1099Eligible && v.TotalPaid >= Vendor1099Threshold,
             })
-            .ToList();
+            .ToListAsync(ct);
+
+        var totalPaid = await vendorRowsQuery
+            .GroupBy(_ => 1)
+            .Select(g => g.Sum(v => v.TotalPaid))
+            .FirstOrDefaultAsync(ct);
 
         return new Vendor1099Response
         {
             Year = year,
             Rows = rows,
-            TotalPaid = rows.Sum(r => r.TotalPaid),
+            TotalPaid = totalPaid,
             Threshold = Vendor1099Threshold,
         };
     }
@@ -1378,7 +1377,7 @@ public class ReportsService : IReportsService
         {
             Year = year,
             Rows = rows,
-            TotalNetToOwners = rows.Sum(r => r.NetToOwner),
+            TotalNetToOwners = await _ownerStatements.GetTotalNetToOwnersAsync(portfolioId, year, ct),
         };
     }
 

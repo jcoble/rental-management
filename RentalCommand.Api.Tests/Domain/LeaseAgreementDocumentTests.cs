@@ -118,11 +118,50 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     }
 
     [Fact]
+    public async Task GetDocumentStatusAsync_NoGeneratedDocument_ReturnsMissingStatus()
+    {
+        var lease = SeedLeaseWithGraph();
+
+        var status = await _sut.GetDocumentStatusAsync(PortfolioId, lease.Id);
+
+        status.Should().NotBeNull();
+        status!.LeaseId.Should().Be(lease.Id);
+        status.HasDocument.Should().BeFalse();
+        status.StoredFileId.Should().BeNull();
+        status.DownloadUrl.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetDocumentStatusAsync_AfterGenerate_ReturnsLatestDocumentMetadata()
+    {
+        var lease = SeedLeaseWithGraph();
+        var doc = await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
+
+        var status = await _sut.GetDocumentStatusAsync(PortfolioId, lease.Id);
+
+        status.Should().NotBeNull();
+        status!.HasDocument.Should().BeTrue();
+        status.StoredFileId.Should().Be(doc!.StoredFileId);
+        status.FileName.Should().Be(doc.FileName);
+        status.FileSize.Should().Be(doc.FileSize);
+        status.DownloadUrl.Should().Be($"/api/v1/leases/{lease.Id}/document");
+        status.GeneratedAt.Should().Be(doc.GeneratedAt);
+    }
+
+    [Fact]
     public async Task GenerateDocumentAsync_LeaseNotInPortfolio_ReturnsNull()
     {
         var doc = await _sut.GenerateDocumentAsync(PortfolioId, id: 99999);
 
         doc.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetDocumentStatusAsync_LeaseNotInPortfolio_ReturnsNull()
+    {
+        var status = await _sut.GetDocumentStatusAsync(PortfolioId, id: 99999);
+
+        status.Should().BeNull();
     }
 
     // ---- State-specific clauses (StateLeaseRules) ----

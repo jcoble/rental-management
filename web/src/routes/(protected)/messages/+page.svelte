@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
-	import { tick } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import { messages, type ConversationSummary, type ConversationMessage } from '$lib/api/endpoints/messages';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
@@ -19,6 +19,7 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const CONVERSATION_PAGE_SIZE = 20;
 
 	// --- Selected thread --------------------------------------------------------
 	let selectedId = $state<number | null>(null);
@@ -30,12 +31,42 @@
 	});
 
 	// --- Conversation list (left pane) -----------------------------------------
+	let conversationPage = $state(1);
+	let conversationItems = $state<ConversationSummary[]>([]);
 	const conversationsQuery = createQuery(() => ({
-		queryKey: ['conversations'],
-		queryFn: () => messages.list(),
+		queryKey: ['conversations', 'page', conversationPage, CONVERSATION_PAGE_SIZE],
+		queryFn: () => messages.listPage({
+			skip: (conversationPage - 1) * CONVERSATION_PAGE_SIZE,
+			take: CONVERSATION_PAGE_SIZE,
+		}),
 	}));
 
-	const conversations = $derived(conversationsQuery.data ?? []);
+	$effect(() => {
+		const page = conversationsQuery.data;
+		if (!page) return;
+		if (page.skip === 0) {
+			conversationItems = page.items;
+			return;
+		}
+		const currentItems = untrack(() => conversationItems);
+		const seen = new Set(currentItems.map((c) => c.id));
+		conversationItems = [...currentItems, ...page.items.filter((c) => !seen.has(c.id))];
+	});
+
+	const conversations = $derived(conversationItems);
+	const conversationTotalCount = $derived(conversationsQuery.data?.totalCount ?? conversationItems.length);
+	const hasMoreConversations = $derived(conversationItems.length < conversationTotalCount);
+
+	function refreshConversationList() {
+		conversationItems = [];
+		conversationPage = 1;
+		queryClient.invalidateQueries({ queryKey: ['conversations'] });
+	}
+
+	function loadMoreConversations() {
+		if (conversationsQuery.isFetching || !hasMoreConversations) return;
+		conversationPage += 1;
+	}
 
 	// --- Selected conversation (right pane) ------------------------------------
 	const conversationQuery = createQuery(() => ({
@@ -53,6 +84,10 @@
 		const data = conversationQuery.data;
 		if (data && data.id !== lastMarkedReadId) {
 			lastMarkedReadId = data.id;
+			const currentItems = untrack(() => conversationItems);
+			conversationItems = currentItems.map((c) =>
+				c.id === data.id ? { ...c, unreadCount: 0 } : c
+			);
 			queryClient.invalidateQueries({ queryKey: ['conversations'] });
 		}
 	});
@@ -65,12 +100,7 @@
 		selectedId = null;
 	}
 
-	// --- Portfolio + tenants (for compose) -------------------------------------
-	const tenantsQuery = createQuery(() => ({
-		queryKey: ['tenants', portfolioId],
-		queryFn: () => tenants.list(portfolioId, { take: 500 }),
-	}));
-
+	// --- Portfolio + tenant search (for compose) -------------------------------
 	const portfolioQuery = createQuery(() => ({
 		queryKey: ['portfolio', portfolioId],
 		queryFn: () => portfolios.get(portfolioId),
@@ -88,8 +118,23 @@
 		}
 	});
 
+	let composeOpen = $state(false);
+	const composeEmpty = { tenantId: '', subject: '', body: '' };
+	let composeForm = $state({ ...composeEmpty });
+	let composeChannels = $state({ portal: true, email: false, sms: false });
+	let tenantSearch = $state('');
+	const tenantsQuery = createQuery(() => ({
+		queryKey: ['tenants', 'conversation-compose', portfolioId, tenantSearch],
+		enabled: composeOpen,
+		queryFn: () => tenants.listPage(portfolioId, {
+			take: 20,
+			search: tenantSearch,
+			sort: 'name',
+		}),
+	}));
+
 	const tenantOptions = $derived(
-		(tenantsQuery.data ?? []).map((t) => ({
+		(tenantsQuery.data?.items ?? []).map((t) => ({
 			id: t.id,
 			name: t.fullName ?? `${t.firstName} ${t.lastName}`,
 		}))
@@ -144,7 +189,7 @@
 			// Seed the detail cache with the server's fresh thread, then refresh the list.
 			queryClient.setQueryData(['conversation', updated.id], updated);
 			queryClient.invalidateQueries({ queryKey: ['conversation', updated.id] });
-			queryClient.invalidateQueries({ queryKey: ['conversations'] });
+			refreshConversationList();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
@@ -163,11 +208,6 @@
 	}
 
 	// --- New conversation dialog -----------------------------------------------
-	let composeOpen = $state(false);
-	const composeEmpty = { tenantId: '', subject: '', body: '' };
-	let composeForm = $state({ ...composeEmpty });
-	let composeChannels = $state({ portal: true, email: false, sms: false });
-
 	const selectedTenantName = $derived(
 		tenantOptions.find((t) => String(t.id) === composeForm.tenantId)?.name ?? null
 	);
@@ -184,6 +224,7 @@
 
 	function openCompose() {
 		composeForm = { ...composeEmpty };
+		tenantSearch = '';
 		composeChannels = { portal: true, email: messagingDefaults.email, sms: messagingDefaults.sms };
 		composeOpen = true;
 	}
@@ -191,6 +232,7 @@
 	function closeCompose() {
 		composeOpen = false;
 		composeForm = { ...composeEmpty };
+		tenantSearch = '';
 	}
 
 	// Fair Housing review gate: a 422 from POST /conversations means the copy was flagged. We show the
@@ -211,7 +253,7 @@
 		onSuccess: (created) => {
 			fhReviewOpen = false;
 			queryClient.setQueryData(['conversation', created.id], created);
-			queryClient.invalidateQueries({ queryKey: ['conversations'] });
+			refreshConversationList();
 			closeCompose();
 			openConversation(created.id);
 		},
@@ -316,6 +358,19 @@
 							{@render conversationRow(c)}
 						{/each}
 					</ul>
+					{#if hasMoreConversations}
+						<div class="border-t border-border/60 p-3">
+							<Button
+								variant="outline"
+								class="w-full"
+								data-testid="conversation-load-more"
+								onclick={loadMoreConversations}
+								disabled={conversationsQuery.isFetching}
+							>
+								{conversationsQuery.isFetching ? 'Loading…' : 'Load more'}
+							</Button>
+						</div>
+					{/if}
 				{/if}
 			</div>
 		</aside>
@@ -494,12 +549,22 @@
 			<!-- Recipient -->
 			<div class="space-y-1">
 				<span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">To</span>
+				<Input
+					data-testid="conversation-compose-tenant-search"
+					bind:value={tenantSearch}
+					placeholder="Search tenants"
+					autocomplete="off"
+				/>
 				<Select.Root type="single" bind:value={composeForm.tenantId}>
 					<Select.Trigger class="w-full" data-testid="conversation-compose-tenant">
 						{selectedTenantName ?? 'Choose a tenant…'}
 					</Select.Trigger>
 					<Select.Content>
-						{#if tenantOptions.length === 0}
+						{#if tenantsQuery.isLoading}
+							<Select.Item value="" label="Searching" disabled>Searching…</Select.Item>
+						{:else if tenantsQuery.isError}
+							<Select.Item value="" label="Could not load tenants" disabled>Could not load tenants</Select.Item>
+						{:else if tenantOptions.length === 0}
 							<Select.Item value="" label="No tenants" disabled>No tenants found</Select.Item>
 						{:else}
 							{#each tenantOptions as t}

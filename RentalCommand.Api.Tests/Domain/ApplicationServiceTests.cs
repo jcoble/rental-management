@@ -1,6 +1,8 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -24,6 +26,7 @@ public class ApplicationServiceTests : IDisposable
     private const string Token = "good-token-abc";
 
     private readonly SqliteConnection _conn;
+    private readonly List<string> _commands = [];
     private readonly RentalCommandDbContext _db;
     private readonly RecordingAuditService _audit = new();
     private readonly ApplicationService _sut;
@@ -35,6 +38,7 @@ public class ApplicationServiceTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new RecordingCommandInterceptor(_commands))
             .Options;
 
         _db = new ApplicationTestDbContext(options);
@@ -73,6 +77,36 @@ public class ApplicationServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_ReturnsSqlCountAndRequestedWindow()
+    {
+        SeedApplication("Ada", "Alpha", ApplicationStatus.Submitted);
+        SeedApplication("Bea", "Bravo", ApplicationStatus.Submitted);
+        SeedApplication("Cora", "Cedar", ApplicationStatus.Submitted);
+        SeedApplication("Dee", "Delta", ApplicationStatus.Approved);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, "Submitted", new ListQuery
+        {
+            Sort = "lastName",
+            Skip = 1,
+            Take = 2,
+        });
+
+        result.TotalCount.Should().Be(3);
+        result.Skip.Should().Be(1);
+        result.Take.Should().Be(2);
+        result.Items.Select(a => a.LastName).Should().Equal("Bravo", "Cedar");
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"RentalApplications\"", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task SubmitAsync_GoodToken_CreatesApplicationInTokensPortfolio()
     {
         var request = new SubmitApplicationRequest
@@ -96,6 +130,38 @@ public class ApplicationServiceTests : IDisposable
         saved.ConsentGiven.Should().BeTrue();
         saved.ConsentAtUtc.Should().NotBeNull();
         saved.ConsentIpAddress.Should().Be("203.0.113.7");
+    }
+
+    [Fact]
+    public async Task SubmitAsync_DuplicateOpenApplicationEmail_ThrowsConflictAndCreatesNothing()
+    {
+        _db.RentalApplications.Add(new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Dana",
+            LastName = "Lopez",
+            Email = "Dana@Example.com",
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await _db.SaveChangesAsync();
+
+        var request = new SubmitApplicationRequest
+        {
+            FirstName = "Dana",
+            LastName = "Lopez",
+            Email = " dana@example.com ",
+            ConsentGiven = true,
+        };
+
+        var act = () => _sut.SubmitAsync(Token, request, "203.0.113.7");
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Message.Should().Contain("application #1");
+        (await _db.RentalApplications.CountAsync()).Should().Be(1);
     }
 
     [Fact]
@@ -166,6 +232,11 @@ public class ApplicationServiceTests : IDisposable
             Phone = "555-0100",
             Employer = "Acme Co",
             MonthlyIncome = 5200m,
+            CurrentAddressLine2 = "Apt 3",
+            CurrentCity = "Columbus",
+            CurrentState = "OH",
+            CurrentPostalCode = "43215",
+            CurrentAddress = "44 Cedar Bend Apt 3, Columbus, OH 43215",
             ConsentGiven = true,
             ConsentAtUtc = DateTime.UtcNow,
             Status = ApplicationStatus.Submitted,
@@ -189,6 +260,8 @@ public class ApplicationServiceTests : IDisposable
         tenant.LastName.Should().Be("Lopez");
         tenant.Email.Should().Be("dana@example.com");
         tenant.Notes.Should().Contain("Acme Co");
+        tenant.Notes.Should().Contain("Prior address: 44 Cedar Bend Apt 3, Columbus, OH 43215.");
+        tenant.Notes.Should().NotContain("43215, Apt 3");
 
         var reloaded = await _db.RentalApplications.SingleAsync(a => a.Id == app.Id);
         reloaded.Status.Should().Be(ApplicationStatus.Approved);
@@ -197,6 +270,86 @@ public class ApplicationServiceTests : IDisposable
         // The PII-touching approval is audited (a Tenant was created).
         _audit.Calls.Should().Contain(c => c.entityType == "Tenant" && c.entityId == tenant.Id
             && c.operation == AuditLogOperation.Created);
+    }
+
+    [Fact]
+    public async Task SubmitAsync_FullScannedAddress_DoesNotDuplicateStructuredParts()
+    {
+        var request = new SubmitApplicationRequest
+        {
+            FirstName = "Jordan",
+            LastName = "Ellis",
+            CurrentAddressLine1 = "44 Cedar Bend Apt 3, Columbus, OH 43215",
+            CurrentAddressLine2 = "Apt 3",
+            CurrentCity = "Columbus",
+            CurrentState = "OH",
+            CurrentPostalCode = "43215",
+            ConsentGiven = true,
+        };
+
+        var result = await _sut.SubmitAsync(Token, request, "203.0.113.7");
+
+        result.Should().NotBeNull();
+        var saved = await _db.RentalApplications.SingleAsync();
+        saved.CurrentAddress.Should().Be("44 Cedar Bend Apt 3, Columbus, OH 43215");
+    }
+
+    [Fact]
+    public async Task ListAndGetAsync_ReturnRequestedHomeNamesWithApplication()
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Maple Grove Duplex",
+            AddressLine1 = "1100 Maple Ave",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Properties.Add(property);
+        await _db.SaveChangesAsync();
+
+        var unit = new Unit
+        {
+            PropertyId = property.Id,
+            UnitNumber = "B",
+            Bedrooms = 2,
+            Bathrooms = 1,
+            MarketRent = 1450m,
+            Status = UnitStatus.Vacant,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Units.Add(unit);
+        await _db.SaveChangesAsync();
+
+        var app = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            FirstName = "Jordan",
+            LastName = "Ellis",
+            Status = ApplicationStatus.Submitted,
+            ConsentGiven = true,
+            SubmittedAtUtc = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.RentalApplications.Add(app);
+        await _db.SaveChangesAsync();
+
+        var list = await _sut.ListAsync(PortfolioId, status: null, new ListQuery());
+        var detail = await _sut.GetAsync(PortfolioId, app.Id);
+
+        list.Should().ContainSingle();
+        list[0].PropertyName.Should().Be("Maple Grove Duplex");
+        list[0].UnitNumber.Should().Be("B");
+        detail.Should().NotBeNull();
+        detail!.PropertyName.Should().Be("Maple Grove Duplex");
+        detail.UnitNumber.Should().Be("B");
     }
 
     [Fact]
@@ -298,6 +451,24 @@ public class ApplicationServiceTests : IDisposable
         portfolio.PublicApplicationToken.Should().Be(result.Token);
     }
 
+    private void SeedApplication(string firstName, string lastName, ApplicationStatus status)
+    {
+        _db.RentalApplications.Add(new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = firstName,
+            LastName = lastName,
+            Email = $"{firstName}.{lastName}@example.local".ToLowerInvariant(),
+            Phone = "555-0100",
+            MonthlyIncome = 4_000m,
+            Status = status,
+            SubmittedAtUtc = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
+    }
+
     private sealed class RecordingAuditService : IAuditTrailService
     {
         public List<(int portfolioId, string entityType, int entityId, AuditLogOperation operation)> Calls { get; } = [];
@@ -310,6 +481,28 @@ public class ApplicationServiceTests : IDisposable
         {
             Calls.Add((portfolioId, entityType, entityId, operation));
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
 }

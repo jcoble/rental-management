@@ -11,6 +11,7 @@
 	import RangeDatePicker from '$lib/components/shared/RangeDatePicker.svelte';
 	import { showSuccess, showError } from '$lib/utils/toast';
 	import { formatRelative } from '$lib/utils/date';
+	import { accountingReviewCreateTarget } from '$lib/accounting/review-create-target';
 	import {
 		ArrowLeft,
 		BadgeDollarSign,
@@ -128,9 +129,6 @@
 				return type;
 		}
 	}
-
-	const unconfirmedMappings = (m: AccountingMapping[]) => m.filter((x) => !x.confirmed);
-	const confirmedMappings = (m: AccountingMapping[]) => m.filter((x) => x.confirmed);
 
 	// "system auto-link" vs "you confirmed it": the backend marks an auto-link with confirmedAt set
 	// but no confirming user; a landlord confirm carries the user. We can't see the user id in the
@@ -466,15 +464,18 @@
 							{#if view.loadError}
 								<p class="text-xs text-muted-foreground">Couldn't load matches: {view.loadError}</p>
 							{/if}
-							{#if unconfirmedMappings(view.mappings).length > 0}
+							{#if view.unconfirmedMappings.length > 0}
 								<div class="space-y-2" data-testid={`accounting-mappings-${s.provider}`}>
 									<p class="text-sm font-semibold">Confirm what matches what</p>
 									<p class="text-xs text-muted-foreground">
 										We found these likely matches from your books. Confirm the ones that look right —
 										nothing links until you say so.
 									</p>
+									{#if view.unconfirmedMappingsHasMore}
+										<p class="text-xs text-muted-foreground">Showing the 50 most recent suggested matches.</p>
+									{/if}
 									<div class="space-y-2">
-										{#each unconfirmedMappings(view.mappings) as m (m.id)}
+										{#each view.unconfirmedMappings as m (m.id)}
 											<div
 												class="flex flex-col gap-2 rounded-md border border-border p-3 sm:flex-row sm:items-center sm:justify-between"
 												data-testid={`accounting-mapping-${m.id}`}
@@ -543,13 +544,13 @@
 								</div>
 							{/if}
 
-							{#if confirmedMappings(view.mappings).length > 0}
+							{#if view.confirmedMappings.length > 0}
 								<details class="rounded-md border border-border" data-testid={`accounting-confirmed-mappings-${s.provider}`}>
 									<summary class="cursor-pointer px-3 py-2 text-sm font-medium">
-										Confirmed matches ({confirmedMappings(view.mappings).length})
+										Confirmed matches ({view.confirmedMappings.length}{view.confirmedMappingsHasMore ? '+' : ''})
 									</summary>
 									<div class="space-y-1.5 border-t border-border p-3">
-										{#each confirmedMappings(view.mappings) as m (m.id)}
+										{#each view.confirmedMappings as m (m.id)}
 											<div class="flex items-center justify-between gap-2 text-sm">
 												<span class="min-w-0 truncate">
 													<span class="font-medium">{m.externalDisplayName ?? m.externalId}</span>
@@ -571,10 +572,14 @@
 									</p>
 									<p class="text-xs text-muted-foreground">
 										These came in but we couldn't tell where they belong. Confirm a match above, or
-										create the missing tenant/vendor — none of these were dropped.
+										add the missing tenant or vendor where that applies — none of these were dropped.
 									</p>
+									{#if view.reviewQueueHasMore}
+										<p class="text-xs text-muted-foreground">Showing the 50 most recent items that need review.</p>
+									{/if}
 									<div class="space-y-2">
 										{#each view.reviewQueue as item (item.id)}
+											{@const createTarget = accountingReviewCreateTarget(item)}
 											<div
 												class="flex flex-col gap-1 rounded-md border border-border bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between"
 												data-testid={`accounting-review-item-${item.id}`}
@@ -593,14 +598,15 @@
 															Unmatched: { label: 'Unmatched', class: 'bg-muted text-muted-foreground border-border' }
 														}}
 													/>
-													<!-- "Create the missing entity" is a thin stub for now; the item is never lost. -->
-													<a
-														href={`/tenants?create=1`}
-														class="text-xs font-medium text-primary hover:underline"
-														data-testid={`accounting-review-create-${item.id}`}
-													>
-														Create it
-													</a>
+													{#if createTarget}
+														<a
+															href={createTarget.href}
+															class="text-xs font-medium text-primary hover:underline"
+															data-testid={`accounting-review-create-${item.id}`}
+														>
+															{createTarget.label}
+														</a>
+													{/if}
 												</div>
 											</div>
 										{/each}

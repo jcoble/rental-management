@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
-	import type { UnitDashboard, WorkOrder } from '$lib/types';
+	import { untrack } from 'svelte';
+	import type { UnitDashboard, WorkOrder, Expense } from '$lib/types';
 	import { workOrders as workOrdersApi } from '$lib/api/endpoints/workOrders';
 	import { expenses as expensesApi } from '$lib/api/endpoints/expenses';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -30,24 +31,75 @@
 	const propertyId = $derived(dashboard.unit.propertyId);
 
 	const WO_PRIORITIES = ['Low', 'Normal', 'High', 'Emergency'];
+	const TAB_PAGE_SIZE = 20;
 
 	// Work orders for this unit (DB-side ?unitId= filter).
+	let workOrderPage = $state(1);
+	let workOrderItems = $state<WorkOrder[]>([]);
 	const workOrdersQuery = createQuery(() => ({
-		queryKey: ['unit-work-orders', portfolioId, unitId],
+		queryKey: ['unit-work-orders', portfolioId, unitId, workOrderPage, TAB_PAGE_SIZE],
 		enabled: portfolioId > 0 && unitId > 0,
-		queryFn: () => workOrdersApi.list(portfolioId, { unitId, take: 500 }),
+		queryFn: () => workOrdersApi.listPage(portfolioId, {
+			unitId,
+			skip: (workOrderPage - 1) * TAB_PAGE_SIZE,
+			take: TAB_PAGE_SIZE,
+			sort: '-requestedAt',
+		}),
 	}));
 
-	// Expenses tied to this unit OR its work orders (DB-side correlated filter). We surface the
-	// work-order-linked ones here as "receipts on these jobs"; the Expenses tab shows the full set.
+	// Expenses tied to this unit's work orders only; the Expenses tab shows the full unit set.
+	let receiptPage = $state(1);
+	let receiptItems = $state<Expense[]>([]);
 	const expensesQuery = createQuery(() => ({
-		queryKey: ['unit-expenses', portfolioId, unitId],
+		queryKey: ['unit-work-order-receipts', portfolioId, unitId, receiptPage, TAB_PAGE_SIZE],
 		enabled: portfolioId > 0 && unitId > 0,
-		queryFn: () => expensesApi.list(portfolioId, { unitId, take: 500 }),
+		queryFn: () => expensesApi.listPage(portfolioId, {
+			unitId,
+			workOrderLinkedOnly: true,
+			skip: (receiptPage - 1) * TAB_PAGE_SIZE,
+			take: TAB_PAGE_SIZE,
+			sort: '-incurredAt',
+		}),
 	}));
 
-	const workOrderList = $derived(workOrdersQuery.data ?? []);
-	const workOrderReceipts = $derived((expensesQuery.data ?? []).filter((e) => e.workOrderId != null));
+	$effect(() => {
+		void unitId;
+		workOrderPage = 1;
+		receiptPage = 1;
+		workOrderItems = [];
+		receiptItems = [];
+	});
+
+	$effect(() => {
+		const page = workOrdersQuery.data;
+		if (!page) return;
+		if (page.skip === 0) {
+			workOrderItems = page.items;
+			return;
+		}
+		const currentItems = untrack(() => workOrderItems);
+		const seen = new Set(currentItems.map((w) => w.id));
+		workOrderItems = [...currentItems, ...page.items.filter((w) => !seen.has(w.id))];
+	});
+
+	$effect(() => {
+		const page = expensesQuery.data;
+		if (!page) return;
+		if (page.skip === 0) {
+			receiptItems = page.items;
+			return;
+		}
+		const currentItems = untrack(() => receiptItems);
+		const seen = new Set(currentItems.map((e) => e.id));
+		receiptItems = [...currentItems, ...page.items.filter((e) => !seen.has(e.id))];
+	});
+
+	const workOrderList = $derived(workOrderItems);
+	const workOrderReceipts = $derived(receiptItems);
+	const totalWorkOrders = $derived(workOrdersQuery.data?.totalCount ?? workOrderItems.length);
+	const totalReceipts = $derived(expensesQuery.data?.totalCount ?? receiptItems.length);
+	const hasMoreWorkOrders = $derived(workOrderItems.length < totalWorkOrders);
+	const hasMoreReceipts = $derived(receiptItems.length < totalReceipts);
 
 	let expandedId = $state<number | null>(null);
 	function toggleExpand(id: number) {
@@ -55,10 +107,25 @@
 	}
 
 	function invalidate() {
+		workOrderItems = [];
+		receiptItems = [];
+		workOrderPage = 1;
+		receiptPage = 1;
 		queryClient.invalidateQueries({ queryKey: ['unit-work-orders', portfolioId, unitId] });
+		queryClient.invalidateQueries({ queryKey: ['unit-work-order-receipts', portfolioId, unitId] });
 		queryClient.invalidateQueries({ queryKey: ['work-orders', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['unit-dashboard', unitId] });
 		queryClient.invalidateQueries({ queryKey: ['unit-timeline', unitId] });
+	}
+
+	function loadMoreWorkOrders() {
+		if (workOrdersQuery.isFetching || !hasMoreWorkOrders) return;
+		workOrderPage += 1;
+	}
+
+	function loadMoreReceipts() {
+		if (expensesQuery.isFetching || !hasMoreReceipts) return;
+		receiptPage += 1;
 	}
 
 	// ── Inline "new work order" form (reuses workOrderSchema + the app's form conventions) ──
@@ -193,6 +260,13 @@
 				</li>
 			{/each}
 		</ul>
+		{#if hasMoreWorkOrders}
+			<div class="flex justify-center">
+				<Button variant="outline" size="sm" onclick={loadMoreWorkOrders} disabled={workOrdersQuery.isFetching} data-testid="maintenance-load-more">
+					{workOrdersQuery.isFetching ? 'Loading…' : 'Load more'}
+				</Button>
+			</div>
+		{/if}
 	{/if}
 
 	<DetailCard title="Receipts on these jobs" icon={Receipt} accent="muted" testid="maintenance-receipts">
@@ -210,6 +284,13 @@
 					</li>
 				{/each}
 			</ul>
+			{#if hasMoreReceipts}
+				<div class="mt-3 flex justify-center">
+					<Button variant="outline" size="sm" onclick={loadMoreReceipts} disabled={expensesQuery.isFetching} data-testid="maintenance-receipts-load-more">
+						{expensesQuery.isFetching ? 'Loading…' : 'Load more'}
+					</Button>
+				</div>
+			{/if}
 		{/if}
 	</DetailCard>
 </div>

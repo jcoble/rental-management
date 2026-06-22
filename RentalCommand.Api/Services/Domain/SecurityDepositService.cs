@@ -51,6 +51,12 @@ public class SecurityDepositService : ISecurityDepositService
 
     public async Task<IReadOnlyList<SecurityDepositResponse>> ListAsync(int portfolioId, int? leaseId, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, leaseId, new ListQuery(), ct);
+        return page.Items;
+    }
+
+    public async Task<SecurityDepositListResponse> ListPageAsync(int portfolioId, int? leaseId, ListQuery query, CancellationToken ct = default)
+    {
         var q = _db.SecurityDepositHoldings
             .AsNoTracking()
             .Include(h => h.Lease)!.ThenInclude(l => l!.Tenant)
@@ -59,8 +65,30 @@ public class SecurityDepositService : ISecurityDepositService
         if (leaseId.HasValue)
             q = q.Where(h => h.LeaseId == leaseId.Value);
 
-        var items = await q.OrderByDescending(h => h.CreatedAt).ToListAsync(ct);
-        return items.Select(SecurityDepositResponse.FromEntity).ToList();
+        q = query.SortField switch
+        {
+            "lease" => query.SortDescending ? q.OrderByDescending(h => h.Lease!.LeaseNumber) : q.OrderBy(h => h.Lease!.LeaseNumber),
+            "leasenumber" => query.SortDescending ? q.OrderByDescending(h => h.Lease!.LeaseNumber) : q.OrderBy(h => h.Lease!.LeaseNumber),
+            "amount" => query.SortDescending ? q.OrderByDescending(h => h.Amount) : q.OrderBy(h => h.Amount),
+            "heldat" => query.SortDescending ? q.OrderByDescending(h => h.HeldAt) : q.OrderBy(h => h.HeldAt),
+            "createdat" => query.SortDescending ? q.OrderByDescending(h => h.CreatedAt) : q.OrderBy(h => h.CreatedAt),
+            _ => query.SortDescending ? q.OrderBy(h => h.CreatedAt) : q.OrderByDescending(h => h.CreatedAt),
+        };
+
+        var totalCount = await q.CountAsync(ct);
+
+        var items = await q
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToListAsync(ct);
+
+        return new SecurityDepositListResponse
+        {
+            Items = items.Select(SecurityDepositResponse.FromEntity).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
     }
 
     public async Task<SecurityDepositResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
@@ -136,18 +164,19 @@ public class SecurityDepositService : ISecurityDepositService
             : JsonSerializer.Deserialize<List<DepositDeduction>>(entity.DeductionsJson, _jsonOptions) ?? [];
 
         var deductionsBefore = entity.DeductionsJson;
-        var totalBefore = deductions.Sum(d => d.Amount);
+        var totalBefore = entity.DeductionsTotal;
 
         deductions.Add(new DepositDeduction(request.Reason, request.Amount, request.Notes));
 
         entity.DeductionsJson = JsonSerializer.Serialize(deductions);
+        entity.DeductionsTotal = deductions.Sum(d => d.Amount);
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
 
         await LogDepositAsync(portfolioId, entity.Id, AuditLogOperation.Updated,
             oldValues: JsonSerializer.Serialize(new { deductions = deductionsBefore, totalDeductions = totalBefore }),
-            newValues: JsonSerializer.Serialize(new { deductions = entity.DeductionsJson, totalDeductions = deductions.Sum(d => d.Amount) }),
+            newValues: JsonSerializer.Serialize(new { deductions = entity.DeductionsJson, totalDeductions = entity.DeductionsTotal }),
             changeReason: $"Deposit deduction added: {request.Reason} (${request.Amount:0.##})", ct);
 
         return SecurityDepositResponse.FromEntity(entity);
@@ -166,11 +195,7 @@ public class SecurityDepositService : ISecurityDepositService
         if (entity.Status is SecurityDepositStatus.Returned or SecurityDepositStatus.PartiallyReturned)
             return null;
 
-        var deductions = string.IsNullOrWhiteSpace(entity.DeductionsJson)
-            ? new List<DepositDeduction>()
-            : JsonSerializer.Deserialize<List<DepositDeduction>>(entity.DeductionsJson, _jsonOptions) ?? [];
-
-        var totalDeductions = deductions.Sum(d => d.Amount);
+        var totalDeductions = entity.DeductionsTotal;
         var net = Math.Max(0m, entity.Amount - totalDeductions);
 
         entity.ReturnedAmount = net;

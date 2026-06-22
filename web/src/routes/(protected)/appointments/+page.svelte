@@ -25,6 +25,7 @@
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import {
 		TYPE_LEGEND,
+		labelForType,
 		utcIsoToLocalWallClock,
 		localWallClockToUtcIso
 	} from './calendar-utils';
@@ -43,31 +44,47 @@
 	let search = $state(readGridParam(page.url.searchParams, 'q'));
 	let typeFilter = $state(readGridParam(page.url.searchParams, 'type'));
 	let statusFilter = $state(readGridParam(page.url.searchParams, 'status'));
-	// List grid sort persisted in the URL (seeds the client-side DataGrid, mirrored back via onSortChange).
-	// The list view fetches a single window of PAGE_SIZE rows server-side via `skip`, so the grid never
-	// shows more than one client page — there's no page position to persist here, only sort.
+	// List grid sort/page persisted in the URL. The list view is server-side; the calendar still uses a
+	// bounded broader fetch until it has a visible-date-window API.
 	let gridSort = $state(readGridParam(page.url.searchParams, 'sort'));
-	let skip = $state(0);
+	let gridPage = $state(readGridParam(page.url.searchParams, 'page', 1));
 	const debouncedSearch = debounced(() => search, 300);
+	let filterResetPrimed = false;
 	$effect(() => {
 		debouncedSearch.value;
 		typeFilter;
 		statusFilter;
-		skip = 0;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
 	});
 	$effect(() => {
-		syncGridUrl({ view, q: search, type: typeFilter, status: statusFilter, sort: gridSort }, { view: 'calendar' });
+		syncGridUrl({ view, q: search, type: typeFilter, status: statusFilter, sort: gridSort, page: gridPage }, { view: 'calendar', page: 1 });
 	});
 
 	// List view is paged/searched server-side; the calendar needs a fuller window
 	// so the month/week shows everything, so we pull a larger batch for it.
 	const appointmentsQuery = createQuery(() => ({
-		queryKey: ['appointments', portfolioId, debouncedSearch.value, skip],
-		queryFn: () => appointments.list(portfolioId, { search: debouncedSearch.value, skip, take: PAGE_SIZE }),
+		queryKey: ['appointments', portfolioId, 'page', debouncedSearch.value, typeFilter, statusFilter, gridSort, gridPage, PAGE_SIZE],
+		queryFn: () => appointments.listPage(portfolioId, {
+			search: debouncedSearch.value,
+			type: typeFilter || undefined,
+			status: statusFilter || undefined,
+			sort: gridSort || undefined,
+			skip: (gridPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+		}),
 	}));
 	const calendarQuery = createQuery(() => ({
-		queryKey: ['appointments', portfolioId, 'calendar'],
-		queryFn: () => appointments.list(portfolioId, { take: 500 }),
+		queryKey: ['appointments', portfolioId, 'calendar', debouncedSearch.value, typeFilter, statusFilter],
+		queryFn: () => appointments.list(portfolioId, {
+			search: debouncedSearch.value,
+			type: typeFilter || undefined,
+			status: statusFilter || undefined,
+			take: 500,
+		}),
 	}));
 	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
 	const tenantsQuery = createQuery(() => ({ queryKey: ['tenants', portfolioId], queryFn: () => tenants.list(portfolioId, { take: 200 }) }));
@@ -175,24 +192,16 @@
 		});
 	}
 
-	// List view honours the type/status quick filters on top of the search query.
-	const list = $derived((appointmentsQuery.data ?? []).filter((a) =>
-		(!typeFilter || a.type === typeFilter) && (!statusFilter || a.status === statusFilter)
-	));
-	// Calendar view uses the broad window; type/status filters still apply for focus.
-	const calendarList = $derived((calendarQuery.data ?? []).filter((a) =>
-		(!typeFilter || a.type === typeFilter) && (!statusFilter || a.status === statusFilter)
-	));
-
-	// Default sort by scheduledStart ascending
-	let gridPage = $state(1);
+	const list = $derived(appointmentsQuery.data?.items ?? []);
+	const totalCount = $derived(appointmentsQuery.data?.totalCount ?? 0);
+	const calendarList = $derived(calendarQuery.data ?? []);
 
 	const columns: ColumnDef<Appointment>[] = [
 		{ key: 'title', title: 'Title', sortable: true, mobileRole: 'title' },
-		{ key: 'type', title: 'Type', mobileRole: 'meta' },
+		{ key: 'type', title: 'Type', mobileRole: 'meta', cell: typeCellSnippet },
 		{ key: 'scheduledStart', title: 'When', format: 'datetime', sortable: true, mobileRole: 'subtitle' },
-		{ key: 'propertyName', title: 'Property', mobileRole: 'meta' },
-		{ key: 'tenantName', title: 'Tenant', mobileRole: 'meta' },
+		{ key: 'propertyName', title: 'Property', sortable: true, mobileRole: 'meta' },
+		{ key: 'tenantName', title: 'Tenant', sortable: true, mobileRole: 'meta' },
 		{
 			key: 'status',
 			title: 'Status',
@@ -201,6 +210,10 @@
 		},
 	];
 </script>
+
+{#snippet typeCellSnippet(appt: Appointment)}
+	{labelForType(appt.type)}
+{/snippet}
 
 {#snippet statusCellSnippet(appt: Appointment)}
 	<StatusBadge status={appt.status} />
@@ -275,11 +288,11 @@
 				</div>
 				<Select.Root type="single" bind:value={typeFilter}>
 					<Select.Trigger class="w-full max-w-[160px]" data-testid="appointment-calendar-type-filter">
-						{typeFilter ? typeFilter : 'All types'}
+						{typeFilter ? labelForType(typeFilter) : 'All types'}
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="" label="All types">All types</Select.Item>
-						{#each APPT_TYPES as t}<Select.Item value={t} label={t}>{t}</Select.Item>{/each}
+						{#each APPT_TYPES as t}<Select.Item value={t} label={labelForType(t)}>{labelForType(t)}</Select.Item>{/each}
 					</Select.Content>
 				</Select.Root>
 				<Select.Root type="single" bind:value={statusFilter}>
@@ -321,14 +334,17 @@
 		<DataGrid
 			data={list}
 			{columns}
-			loading={appointmentsQuery.isLoading}
+			loading={appointmentsQuery.isLoading || appointmentsQuery.isFetching}
 			emptyMessage="No appointments found."
 			getRowKey={(a) => a.id}
 			onRowClick={(a) => goto('/appointments/' + a.id)}
-			bind:page={gridPage}
 			pageSize={PAGE_SIZE}
-			initialSort={gridSort}
-			onSortChange={(s) => (gridSort = s ?? '')}
+			page={gridPage}
+			totalCount={totalCount}
+			serverSide
+			onPageChange={(page) => (gridPage = page)}
+			sort={gridSort}
+			onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
 			data-testid="appointments-list"
 		>
 			{#snippet toolbar()}
@@ -337,11 +353,11 @@
 				</div>
 				<Select.Root type="single" bind:value={typeFilter}>
 					<Select.Trigger class="w-full max-w-[180px]" data-testid="appointment-type-filter">
-						{typeFilter ? typeFilter : 'All types'}
+						{typeFilter ? labelForType(typeFilter) : 'All types'}
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="" label="All types">All types</Select.Item>
-						{#each APPT_TYPES as t}<Select.Item value={t} label={t}>{t}</Select.Item>{/each}
+						{#each APPT_TYPES as t}<Select.Item value={t} label={labelForType(t)}>{labelForType(t)}</Select.Item>{/each}
 					</Select.Content>
 				</Select.Root>
 				<Select.Root type="single" bind:value={statusFilter}>
@@ -374,10 +390,10 @@
 			</div>
 			<Select.Root type="single" bind:value={form.type}>
 				<Select.Trigger class="w-full" data-testid="appointment-type-input">
-					{form.type ? form.type : 'Select type'}
+					{form.type ? labelForType(form.type) : 'Select type'}
 				</Select.Trigger>
 				<Select.Content>
-					{#each APPT_TYPES as t}<Select.Item value={t} label={t}>{t}</Select.Item>{/each}
+					{#each APPT_TYPES as t}<Select.Item value={t} label={labelForType(t)}>{labelForType(t)}</Select.Item>{/each}
 				</Select.Content>
 			</Select.Root>
 			<div>

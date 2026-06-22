@@ -15,6 +15,17 @@ export interface LeaseDocumentResponse {
 	generatedAt: string;
 }
 
+/** Response from GET /api/v1/leases/{id}/document-status. */
+export interface LeaseDocumentStatusResponse {
+	leaseId: number;
+	hasDocument: boolean;
+	storedFileId?: number | null;
+	fileName?: string | null;
+	fileSize?: number | null;
+	downloadUrl?: string | null;
+	generatedAt?: string | null;
+}
+
 /** Response from GET /api/v1/leases/{id}/signature-status (and the send-for-signature POST). */
 export interface LeaseSignatureStatusResponse {
 	leaseId: number;
@@ -25,10 +36,29 @@ export interface LeaseSignatureStatusResponse {
 	testId?: string | null;
 }
 
+export interface LeaseListParams extends ListParams {
+	tenantId?: number;
+	propertyId?: number;
+	status?: string;
+}
+
+export interface LeaseListResponse {
+	items: Lease[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
 export const leases = {
-	list: (portfolioId: number, params?: ListParams & { tenantId?: number; propertyId?: number }) => {
+	list: (portfolioId: number, params?: LeaseListParams) => {
 		const { tenantId, propertyId, ...list } = params ?? {};
 		return api.get<Lease[]>(`/leases${buildListQuery(list, { portfolioId, tenantId, propertyId })}`);
+	},
+	listPage: (portfolioId: number, params?: LeaseListParams) => {
+		const { tenantId, propertyId, status, ...list } = params ?? {};
+		return api.get<LeaseListResponse>(
+			`/leases/page${buildListQuery(list, { portfolioId, tenantId, propertyId, status })}`
+		);
 	},
 	get: (id: number) => api.get<Lease>(`/leases/${id}`),
 	create: (data: Record<string, unknown>) => api.post<Lease>('/leases', data),
@@ -41,6 +71,10 @@ export const leases = {
 	/** POST /api/v1/leases/{id}/generate-document — renders + stores a lease-agreement PDF. */
 	generateDocument: (id: number) =>
 		api.post<LeaseDocumentResponse>(`/leases/${id}/generate-document`, {}),
+
+	/** GET /api/v1/leases/{id}/document-status — generated agreement metadata without streaming the PDF. */
+	documentStatus: (id: number) =>
+		api.get<LeaseDocumentStatusResponse>(`/leases/${id}/document-status`),
 
 	/**
 	 * GET /api/v1/leases/{id}/document — streams the latest lease-agreement PDF with the

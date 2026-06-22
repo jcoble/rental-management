@@ -95,10 +95,20 @@ public class OwnerStatementService : IOwnerStatementService
                 NetToOwner:    net));
         }
 
-        var totalIncome    = lines.Sum(l => l.RentalIncome);
-        var totalExpenses  = lines.Sum(l => l.Expenses);
-        var totalMgmtFee   = lines.Sum(l => l.ManagementFee);
-        var totalNet       = lines.Sum(l => l.NetToOwner);
+        var totals = await OwnerPropertyNetRows(portfolioId, year)
+            .Where(p => p.OwnerId == ownerId)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                TotalIncome = g.Sum(p => p.RentalIncome),
+                TotalExpenses = g.Sum(p => p.Expenses),
+                TotalManagementFee = g.Sum(p => p.RentalIncome * p.ManagementFeePercent / 100m),
+                TotalNetToOwner = g.Sum(p =>
+                    p.RentalIncome -
+                    p.Expenses -
+                    (p.RentalIncome * p.ManagementFeePercent / 100m)),
+            })
+            .SingleAsync(ct);
 
         return new OwnerStatementReport
         {
@@ -106,10 +116,10 @@ public class OwnerStatementService : IOwnerStatementService
             OwnerName          = owner.Name,
             Year               = year,
             Properties         = lines,
-            TotalIncome        = totalIncome,
-            TotalExpenses      = totalExpenses,
-            TotalManagementFee = totalMgmtFee,
-            TotalNetToOwner    = totalNet,
+            TotalIncome        = Math.Round(totals.TotalIncome, 2),
+            TotalExpenses      = Math.Round(totals.TotalExpenses, 2),
+            TotalManagementFee = Math.Round(totals.TotalManagementFee, 2),
+            TotalNetToOwner    = Math.Round(totals.TotalNetToOwner, 2),
         };
     }
 
@@ -117,13 +127,48 @@ public class OwnerStatementService : IOwnerStatementService
     public async Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetAsync(
         int portfolioId, int year, CancellationToken ct = default)
     {
-        var propertyNetRows = _db.Properties
+        var propertyNetRows = OwnerPropertyNetRows(portfolioId, year);
+
+        var summaries = await propertyNetRows
+            .GroupBy(p => new { p.OwnerId, p.OwnerName })
+            .Select(g => new
+            {
+                g.Key.OwnerId,
+                g.Key.OwnerName,
+                NetToOwner = g.Sum(p =>
+                    p.RentalIncome -
+                    p.Expenses -
+                    (p.RentalIncome * p.ManagementFeePercent / 100m)),
+            })
+            .OrderBy(o => o.OwnerName)
+            .ToListAsync(ct);
+
+        return summaries
+            .Select(s => new OwnerStatementSummary(s.OwnerId, s.OwnerName, s.NetToOwner))
+            .ToList();
+    }
+
+    /// <inheritdoc/>
+    public async Task<decimal> GetTotalNetToOwnersAsync(int portfolioId, int year, CancellationToken ct = default)
+    {
+        return await OwnerPropertyNetRows(portfolioId, year)
+            .GroupBy(_ => 1)
+            .Select(g => g.Sum(p =>
+                p.RentalIncome -
+                p.Expenses -
+                (p.RentalIncome * p.ManagementFeePercent / 100m)))
+            .SingleOrDefaultAsync(ct);
+    }
+
+    private IQueryable<OwnerPropertyNetRow> OwnerPropertyNetRows(int portfolioId, int year)
+    {
+        return _db.Properties
             .AsNoTracking()
             .Where(p =>
                 p.PortfolioId == portfolioId &&
                 p.OwnerEntityId != null &&
                 p.OwnerEntity != null)
-            .Select(p => new
+            .Select(p => new OwnerPropertyNetRow
             {
                 OwnerId = p.OwnerEntityId!.Value,
                 OwnerName = p.OwnerEntity!.Name,
@@ -146,23 +191,14 @@ public class OwnerStatementService : IOwnerStatementService
                         (e.PaidAt ?? e.IncurredAt).Year == year)
                     .Sum(e => (decimal?)e.Amount) ?? 0m,
             });
+    }
 
-        var summaries = await propertyNetRows
-            .GroupBy(p => new { p.OwnerId, p.OwnerName })
-            .Select(g => new
-            {
-                g.Key.OwnerId,
-                g.Key.OwnerName,
-                NetToOwner = g.Sum(p =>
-                    p.RentalIncome -
-                    p.Expenses -
-                    (p.RentalIncome * p.ManagementFeePercent / 100m)),
-            })
-            .OrderBy(o => o.OwnerName)
-            .ToListAsync(ct);
-
-        return summaries
-            .Select(s => new OwnerStatementSummary(s.OwnerId, s.OwnerName, s.NetToOwner))
-            .ToList();
+    private sealed class OwnerPropertyNetRow
+    {
+        public int OwnerId { get; set; }
+        public string OwnerName { get; set; } = string.Empty;
+        public decimal ManagementFeePercent { get; set; }
+        public decimal RentalIncome { get; set; }
+        public decimal Expenses { get; set; }
     }
 }

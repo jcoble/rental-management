@@ -104,19 +104,241 @@ public sealed class ClaudeCliLlmProvider : ILlmProvider
         IReadOnlyList<LlmToolSpec> tools,
         CancellationToken ct = default)
     {
-        // Tool-calling over the CLI isn't modelled; return a best-effort plain-text answer so the
-        // assistant degrades gracefully rather than crashing. (Dev-only; the scan flow uses ExtractAsync.)
-        var sb = new StringBuilder();
-        if (!string.IsNullOrWhiteSpace(systemPrompt)) sb.AppendLine(systemPrompt).AppendLine();
-        foreach (var m in messages)
-            if (!string.IsNullOrWhiteSpace(m.Content)) sb.Append(m.Role).Append(": ").AppendLine(m.Content);
+        var prompt = tools.Count == 0
+            ? BuildPlainChatPrompt(systemPrompt, messages)
+            : messages.Any(m => m.Role == "tool")
+                ? BuildToolAnswerPrompt(systemPrompt, messages)
+                : BuildToolSelectionPrompt(systemPrompt, messages, tools);
 
-        var (ok, output, _) = await RunClaudeAsync(sb.ToString(), allowFileRead: false, ct);
+        var (ok, output, error) = await RunClaudeAsync(prompt, allowFileRead: false, ct);
+        if (!ok)
+        {
+            return new LlmToolResult(
+                "error",
+                $"AI is temporarily unavailable: {Truncate(error, 300)}",
+                Array.Empty<LlmToolCall>(),
+                0,
+                0,
+                $"claude-cli:{Model}");
+        }
+
+        if (tools.Count > 0 && !messages.Any(m => m.Role == "tool"))
+        {
+            return ParseToolProtocolResponse(
+                output,
+                tools.Select(t => t.Name).ToHashSet(StringComparer.Ordinal),
+                $"claude-cli:{Model}");
+        }
+
         return new LlmToolResult(ok ? "end" : "error", ok ? output.Trim() : null,
             Array.Empty<LlmToolCall>(), 0, 0, $"claude-cli:{Model}");
     }
 
     // ------------------------------------------------------------------ helpers
+
+    private static string BuildPlainChatPrompt(string systemPrompt, IReadOnlyList<LlmChatMessage> messages)
+    {
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(systemPrompt)) sb.AppendLine(systemPrompt).AppendLine();
+        AppendConversation(sb, messages);
+        return sb.ToString();
+    }
+
+    private static string BuildToolSelectionPrompt(
+        string systemPrompt,
+        IReadOnlyList<LlmChatMessage> messages,
+        IReadOnlyList<LlmToolSpec> tools)
+    {
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(systemPrompt)) sb.AppendLine(systemPrompt).AppendLine();
+        sb.AppendLine("You are running inside a local application server. You cannot call external tools,");
+        sb.AppendLine("Claude Code tools, Notion tools, browser tools, shell commands, or databases directly.");
+        sb.AppendLine("The only data access available to you is through the application tools listed below.");
+        sb.AppendLine("If the user asks about live portfolio records, choose the relevant listed tool before answering.");
+        sb.AppendLine();
+        sb.AppendLine("Conversation:");
+        AppendConversation(sb, messages);
+        sb.AppendLine();
+        sb.AppendLine("Available application tools:");
+        foreach (var tool in tools)
+        {
+            sb.Append("- ").Append(tool.Name).Append(": ").AppendLine(tool.Description);
+            sb.Append("  parameters JSON schema: ").AppendLine(tool.ParametersJsonSchema);
+        }
+        sb.AppendLine();
+        sb.AppendLine("Return ONLY one compact JSON object, with no prose and no markdown fences.");
+        sb.AppendLine("To call tools, use:");
+        sb.AppendLine("""{"tool_calls":[{"id":"call-1","name":"tool_name","arguments":{}}]}""");
+        sb.AppendLine("Use only listed tool names. arguments must be a JSON object.");
+        sb.AppendLine("If no live application data is needed, use:");
+        sb.AppendLine("""{"answer":"plain English answer"}""");
+        return sb.ToString();
+    }
+
+    private static string BuildToolAnswerPrompt(string systemPrompt, IReadOnlyList<LlmChatMessage> messages)
+    {
+        var sb = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(systemPrompt)) sb.AppendLine(systemPrompt).AppendLine();
+        sb.AppendLine("Answer the latest user question using ONLY the application tool result messages below.");
+        sb.AppendLine("Do not say you lack database access; the tool results are the database-backed app data.");
+        sb.AppendLine("If the tool result is empty, say there were no matching records.");
+        sb.AppendLine("Return plain English only, with no JSON and no markdown table.");
+        sb.AppendLine();
+        AppendConversation(sb, messages);
+        return sb.ToString();
+    }
+
+    private static void AppendConversation(StringBuilder sb, IReadOnlyList<LlmChatMessage> messages)
+    {
+        foreach (var message in messages)
+        {
+            if (!string.IsNullOrWhiteSpace(message.Content))
+            {
+                sb.Append(message.Role).Append(": ").AppendLine(message.Content);
+            }
+
+            if (message.ToolCalls is { Count: > 0 })
+            {
+                foreach (var call in message.ToolCalls)
+                {
+                    sb.Append("assistant tool call ")
+                        .Append(call.Id)
+                        .Append(": ")
+                        .Append(call.Name)
+                        .Append(' ')
+                        .AppendLine(call.ArgumentsJson);
+                }
+            }
+
+            if (message.Role == "tool" && !string.IsNullOrWhiteSpace(message.ToolCallId))
+            {
+                sb.Append("tool_call_id: ").AppendLine(message.ToolCallId);
+            }
+        }
+    }
+
+    internal static LlmToolResult ParseToolProtocolResponse(
+        string output,
+        IReadOnlySet<string> allowedToolNames,
+        string modelId)
+    {
+        var text = StripFences(output);
+        var start = text.IndexOf('{');
+        var end = text.LastIndexOf('}');
+        if (start < 0 || end <= start)
+        {
+            return new LlmToolResult("end", text.Trim(), Array.Empty<LlmToolCall>(), 0, 0, modelId);
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(text.Substring(start, end - start + 1));
+            var root = doc.RootElement;
+
+            if (TryGetToolCalls(root, out var toolCallsElement))
+            {
+                var calls = new List<LlmToolCall>();
+                var index = 1;
+                foreach (var item in toolCallsElement.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.Object) continue;
+                    if (!item.TryGetProperty("name", out var nameElement) ||
+                        nameElement.ValueKind != JsonValueKind.String)
+                    {
+                        continue;
+                    }
+
+                    var name = nameElement.GetString();
+                    if (string.IsNullOrWhiteSpace(name) ||
+                        !allowedToolNames.Contains(name))
+                    {
+                        continue;
+                    }
+
+                    var id = item.TryGetProperty("id", out var idElement) &&
+                             idElement.ValueKind == JsonValueKind.String &&
+                             !string.IsNullOrWhiteSpace(idElement.GetString())
+                        ? idElement.GetString()!
+                        : $"call-{index}";
+
+                    var argsJson = "{}";
+                    if (item.TryGetProperty("arguments", out var argsElement))
+                    {
+                        argsJson = argsElement.ValueKind switch
+                        {
+                            JsonValueKind.Object => argsElement.GetRawText(),
+                            JsonValueKind.String => NormalizeArgumentsJson(argsElement.GetString()),
+                            _ => "{}",
+                        };
+                    }
+
+                    calls.Add(new LlmToolCall(id, name, argsJson));
+                    index++;
+                }
+
+                if (calls.Count > 0)
+                {
+                    return new LlmToolResult("tool_use", null, calls, 0, 0, modelId);
+                }
+            }
+
+            if (root.TryGetProperty("answer", out var answerElement) &&
+                answerElement.ValueKind == JsonValueKind.String)
+            {
+                return new LlmToolResult(
+                    "end",
+                    answerElement.GetString()?.Trim(),
+                    Array.Empty<LlmToolCall>(),
+                    0,
+                    0,
+                    modelId);
+            }
+        }
+        catch (JsonException)
+        {
+            return new LlmToolResult("end", text.Trim(), Array.Empty<LlmToolCall>(), 0, 0, modelId);
+        }
+
+        return new LlmToolResult("end", text.Trim(), Array.Empty<LlmToolCall>(), 0, 0, modelId);
+    }
+
+    private static bool TryGetToolCalls(JsonElement root, out JsonElement toolCalls)
+    {
+        if (root.ValueKind == JsonValueKind.Object &&
+            root.TryGetProperty("tool_calls", out toolCalls) &&
+            toolCalls.ValueKind == JsonValueKind.Array)
+        {
+            return true;
+        }
+
+        if (root.ValueKind == JsonValueKind.Object &&
+            root.TryGetProperty("toolCalls", out toolCalls) &&
+            toolCalls.ValueKind == JsonValueKind.Array)
+        {
+            return true;
+        }
+
+        toolCalls = default;
+        return false;
+    }
+
+    private static string NormalizeArgumentsJson(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "{}";
+
+        var text = LlmResponseParsing.StripCodeFences(raw);
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                ? doc.RootElement.GetRawText()
+                : "{}";
+        }
+        catch (JsonException)
+        {
+            return "{}";
+        }
+    }
 
     private string BuildExtractionPrompt(
         string filePath, string instructions, IReadOnlyList<ExtractionFieldSpec> fields, string? grounding)

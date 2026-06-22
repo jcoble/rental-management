@@ -19,6 +19,7 @@ export interface RecurringMaintenanceTask {
 	propertyId: number;
 	unitId?: number | null;
 	vendorId?: number | null;
+	propertyName?: string | null;
 	title: string;
 	description?: string | null;
 	category?: string | null;
@@ -33,6 +34,13 @@ export interface RecurringMaintenanceTask {
 	updatedAt: string;
 	/** Stable selector for tests, e.g. `recurring-maintenance-1`. */
 	testId: string;
+}
+
+export interface RecurringMaintenanceTaskListResponse {
+	items: RecurringMaintenanceTask[];
+	totalCount: number;
+	skip: number;
+	take: number;
 }
 
 export interface CreateRecurringMaintenanceTask {
@@ -68,6 +76,17 @@ export const recurringMaintenance = {
 		const { propertyId, activeOnly, ...list } = params ?? {};
 		return api.get<RecurringMaintenanceTask[]>(
 			`/recurring-maintenance${buildListQuery(list, {
+				propertyId,
+				activeOnly: activeOnly == null ? undefined : String(activeOnly),
+			})}`
+		);
+	},
+	listPage: (
+		params?: ListParams & { propertyId?: number; activeOnly?: boolean }
+	) => {
+		const { propertyId, activeOnly, ...list } = params ?? {};
+		return api.get<RecurringMaintenanceTaskListResponse>(
+			`/recurring-maintenance/page${buildListQuery(list, {
 				propertyId,
 				activeOnly: activeOnly == null ? undefined : String(activeOnly),
 			})}`

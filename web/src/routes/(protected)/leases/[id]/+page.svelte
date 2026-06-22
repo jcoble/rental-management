@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { leases } from '$lib/api/endpoints/leases';
+	import { canSendLeaseForSignature, signableStateMessage } from '$lib/leases/lease-esign';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { payments } from '$lib/api/endpoints/payments';
@@ -274,8 +275,8 @@
 	}));
 
 	// --- Lease agreement PDF (generate + authed blob download) ---
-	// Whether a generated agreement already exists. Probed once on load with a
-	// no-download GET; 404 → only show Generate, 200 → also show Download.
+	// Whether a generated agreement already exists. Status is checked without
+	// streaming the PDF so a missing agreement does not create a browser 404.
 	let hasDocument = $state(false);
 	let documentChecked = $state(false);
 	let downloadingDocument = $state(false);
@@ -284,12 +285,12 @@
 		if (leaseId > 0 && !documentChecked) {
 			documentChecked = true;
 			leases
-				.downloadDocument(leaseId, false)
-				.then((exists) => {
-					hasDocument = exists;
+				.documentStatus(leaseId)
+				.then((status) => {
+					hasDocument = status.hasDocument;
 				})
 				.catch(() => {
-					// Probe failure is non-fatal — leave the Generate button available.
+					// Status failure is non-fatal — leave the Generate button available.
 				});
 		}
 	});
@@ -333,6 +334,7 @@
 		refetchInterval: (query) => (query.state.data?.esignStatus === 'Sent' ? 5000 : false),
 	}));
 	const signature = $derived(signatureStatusQuery.data);
+	const canSendForSignature = $derived(canSendLeaseForSignature(signature?.leaseStatus, signature?.esignStatus));
 
 	const esignStatusLabel = $derived.by(() => {
 		switch (signature?.esignStatus) {
@@ -834,21 +836,23 @@
 							{/if}
 						</div>
 						<div class="flex flex-wrap items-center gap-2">
-							<Button
-								data-testid="lease-send-for-signature"
-								variant="outline"
-								size="sm"
-								class="gap-1.5"
-								onclick={() => sendForSignatureMutation.mutate()}
-								disabled={sendForSignatureMutation.isPending}
-							>
-								<PenLine class="h-4 w-4" />
-								{sendForSignatureMutation.isPending
-									? 'Sending…'
-									: signature?.esignStatus === 'Sent'
-										? 'Resend for signature'
-										: 'Send for signature'}
-							</Button>
+							{#if canSendForSignature}
+								<Button
+									data-testid="lease-send-for-signature"
+									variant="outline"
+									size="sm"
+									class="gap-1.5"
+									onclick={() => sendForSignatureMutation.mutate()}
+									disabled={sendForSignatureMutation.isPending}
+								>
+									<PenLine class="h-4 w-4" />
+									{sendForSignatureMutation.isPending
+										? 'Sending…'
+										: signature?.esignStatus === 'Sent'
+											? 'Resend for signature'
+											: 'Send for signature'}
+								</Button>
+							{/if}
 							{#if signature?.hasSignedDocument}
 								<Button
 									data-testid="lease-download-signed-document"
@@ -881,6 +885,10 @@
 					{:else if signature?.esignStatus === 'Declined'}
 						<p class="mt-2 text-xs text-muted-foreground" data-testid="lease-esign-declined-note">
 							The signer declined. You can send it again when you’re ready.
+						</p>
+					{:else if !canSendForSignature}
+						<p class="mt-2 text-xs text-muted-foreground" data-testid="lease-esign-not-signable-note">
+							{signableStateMessage(signature?.leaseStatus)}
 						</p>
 					{:else}
 						<p class="mt-2 text-xs text-muted-foreground">

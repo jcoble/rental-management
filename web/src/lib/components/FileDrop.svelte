@@ -1,18 +1,6 @@
 <script lang="ts">
 	import { toast } from 'svelte-sonner';
-
-	const ALLOWED_MIME_TYPES = [
-		'application/pdf',
-		'image/jpeg',
-		'image/jpg',
-		'image/png',
-		'image/gif',
-		'image/webp',
-		'image/heic',
-		'image/heif',
-		'image/bmp',
-		'image/tiff'
-	];
+	import { partitionSupportedFiles, unsupportedFileMessage } from '$lib/components/file-drop';
 
 	let {
 		onselected,
@@ -36,14 +24,21 @@
 
 	function handleFiles(files: File[]) {
 		if (files.length === 0) return;
-		for (const f of files) {
-			if (!ALLOWED_MIME_TYPES.includes(f.type)) {
-				toast.warning(`File type "${f.type || 'unknown'}" may not be supported. Expected a PDF or image.`);
-			}
+		const { accepted, rejected } = partitionSupportedFiles(files);
+
+		for (const file of rejected) {
+			toast.warning(unsupportedFileMessage(file));
 		}
-		selectedFile = files[0];
-		if (multiple) onselectedmany?.(files);
-		else onselected?.(files[0]);
+
+		if (accepted.length === 0) {
+			selectedFile = null;
+			if (inputEl) inputEl.value = '';
+			return;
+		}
+
+		selectedFile = accepted[0];
+		if (multiple) onselectedmany?.(accepted);
+		else onselected?.(accepted[0]);
 	}
 
 	function onDragOver(e: DragEvent) {

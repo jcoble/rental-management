@@ -24,13 +24,12 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const PAGE_SIZE = 20;
 	const LEASE_STATUSES = ['Draft', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
 
-	// Search / status / sort / page persisted in the URL so they survive navigating away and back. Paging
-	// and sorting are handled client-side by the DataGrid over the fetched list (matching the
-	// tenants/properties grids); the list endpoint returns no total count, so server-side paging isn't
-	// wired here. Sort/page seed the grid (initialSort / page) and are mirrored back via
-	// onSortChange / bind:page.
+	// Search / status / sort / page persisted in the URL so they survive navigating away and back. The
+	// grid is server-side: these values drive the API query instead of fetching a broad capped list and
+	// filtering/sorting/paging in Svelte.
 	const initialParams = page.url.searchParams;
 	let search = $state(readGridParam(initialParams, 'q'));
 	let statusFilter = $state(readGridParam(initialParams, 'status'));
@@ -55,8 +54,14 @@
 	});
 
 	const leasesQuery = createQuery(() => ({
-		queryKey: ['leases', portfolioId, debouncedSearch.value],
-		queryFn: () => leases.list(portfolioId, { search: debouncedSearch.value, take: 500 }),
+		queryKey: ['leases', portfolioId, 'page', debouncedSearch.value, statusFilter, gridSort, gridPage, PAGE_SIZE],
+		queryFn: () => leases.listPage(portfolioId, {
+			search: debouncedSearch.value,
+			status: statusFilter || undefined,
+			sort: gridSort || undefined,
+			skip: (gridPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+		}),
 	}));
 
 	const propertiesQuery = createQuery(() => ({
@@ -172,7 +177,8 @@
 		saveMutation.mutate({ id: editingId, data: { portfolioId, ...result.data } });
 	}
 
-	const list = $derived((leasesQuery.data ?? []).filter((l) => !statusFilter || l.status === statusFilter));
+	const list = $derived(leasesQuery.data?.items ?? []);
+	const totalCount = $derived(leasesQuery.data?.totalCount ?? 0);
 
 	// Derived labels for select triggers
 	const selectedPropertyLabel = $derived(
@@ -260,7 +266,7 @@
 	<DataGrid
 		data={list}
 		{columns}
-		loading={leasesQuery.isLoading}
+		loading={leasesQuery.isLoading || leasesQuery.isFetching}
 		emptyMessage="No leases yet"
 		emptyDescription="A lease ties a tenant to a unit and sets the rent and dates. Add your first to start tracking rent."
 		emptyIcon={FileText}
@@ -270,9 +276,13 @@
 		onRowClick={(lease) => goto('/leases/' + lease.id)}
 		getRowKey={(l) => l.id}
 		data-testid="leases-list"
-		initialSort={gridSort}
-		bind:page={gridPage}
-		onSortChange={(s) => (gridSort = s ?? '')}
+		pageSize={PAGE_SIZE}
+		page={gridPage}
+		totalCount={totalCount}
+		serverSide
+		onPageChange={(page) => (gridPage = page)}
+		sort={gridSort}
+		onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 flex-wrap items-center gap-2">

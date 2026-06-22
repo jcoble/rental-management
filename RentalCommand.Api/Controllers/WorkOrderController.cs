@@ -39,6 +39,15 @@ public class WorkOrderController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(WorkOrderListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<WorkOrderListResponse>> ListPage(
+        [FromQuery] WorkOrderListQuery query, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        return Ok(page);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(WorkOrderDetailResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

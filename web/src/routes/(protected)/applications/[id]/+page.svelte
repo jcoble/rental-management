@@ -11,6 +11,12 @@
 	import { downloadDocument } from '$lib/api/endpoints/documents';
 	import { ApiError } from '$lib/api/client';
 	import { showSuccess, showWarning, showError, apiErrorMessage } from '$lib/utils/toast';
+	import {
+		formatApplicationAddress,
+		canRunApplicationScreening,
+		formatRequestedProperty,
+		formatRequestedUnit,
+	} from '$lib/applications/application-display';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
@@ -117,7 +123,9 @@
 		screeningQuery.data?.[0]
 	);
 	const hasScreening = $derived(!!latestScreening);
-	const canScreen = $derived(application?.consentGiven === true);
+		const canScreen = $derived(
+			canRunApplicationScreening(application?.status, application?.consentGiven)
+		);
 
 	const RECOMMENDATION_MAP = {
 		Accept: { label: 'Accept', class: 'm3-tone-chip border m3-tone--success' },
@@ -315,7 +323,7 @@
 					<Card.Title class="flex items-center gap-2 text-base"><Briefcase class="h-4 w-4" /> Residence & income</Card.Title>
 				</Card.Header>
 				<Card.Content class="grid grid-cols-2 gap-x-4 gap-y-4 text-sm">
-					<div class="col-span-2">{@render fieldRow('Current address', application.currentAddress || '—')}</div>
+					<div class="col-span-2">{@render fieldRow('Current address', formatApplicationAddress(application))}</div>
 					{@render fieldRow('Employer', application.employer || '—')}
 					{@render fieldRow('Monthly income', fmtMoney(application.monthlyIncome))}
 				</Card.Content>
@@ -327,8 +335,8 @@
 					<Card.Title class="flex items-center gap-2 text-base"><Home class="h-4 w-4" /> Requested home</Card.Title>
 				</Card.Header>
 				<Card.Content class="grid grid-cols-2 gap-x-4 gap-y-4 text-sm">
-					{@render fieldRow('Property', application.propertyId != null ? `#${application.propertyId}` : 'No preference')}
-					{@render fieldRow('Unit', application.unitId != null ? `#${application.unitId}` : 'No preference')}
+					{@render fieldRow('Property', formatRequestedProperty(application))}
+					{@render fieldRow('Unit', formatRequestedUnit(application))}
 				</Card.Content>
 			</Card.Root>
 
@@ -371,21 +379,27 @@
 				<Card.Header>
 					<div class="flex flex-wrap items-center justify-between gap-3">
 						<Card.Title class="flex items-center gap-2 text-base"><ScanSearch class="h-4 w-4" /> Screening</Card.Title>
-						<div class="flex flex-col items-end gap-1">
-							<Button
-								class="gap-2"
-								disabled={!canScreen || screenMutation.isPending}
-								onclick={() => screenMutation.mutate()}
-								data-testid="application-run-screening"
-							>
-								<ScanSearch class="h-4 w-4" />
-								{screenMutation.isPending ? 'Screening…' : hasScreening ? 'Re-run screening' : 'Run screening'}
-							</Button>
-							{#if !canScreen}
-								<p class="text-xs text-muted-foreground" data-testid="application-screening-consent-note">
-									Applicant consent is required to screen
-								</p>
-							{/if}
+							<div class="flex flex-col items-end gap-1">
+								{#if isOpen}
+									<Button
+										class="gap-2"
+										disabled={!canScreen || screenMutation.isPending}
+										onclick={() => screenMutation.mutate()}
+										data-testid="application-run-screening"
+									>
+										<ScanSearch class="h-4 w-4" />
+										{screenMutation.isPending ? 'Screening…' : hasScreening ? 'Re-run screening' : 'Run screening'}
+									</Button>
+								{/if}
+								{#if !isOpen}
+									<p class="text-xs text-muted-foreground" data-testid="application-screening-terminal-note">
+										Screening can only be run before a decision
+									</p>
+								{:else if !canScreen}
+									<p class="text-xs text-muted-foreground" data-testid="application-screening-consent-note">
+										Applicant consent is required to screen
+									</p>
+								{/if}
 						</div>
 					</div>
 				</Card.Header>

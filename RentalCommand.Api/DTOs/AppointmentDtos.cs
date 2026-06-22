@@ -64,6 +64,22 @@ public class AppointmentResponse
     };
 }
 
+public class AppointmentListResponse
+{
+    public IReadOnlyList<AppointmentResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
+public class AppointmentListQuery : ListQuery
+{
+    public int? PropertyId { get; set; }
+    public int? TenantId { get; set; }
+    public AppointmentType? Type { get; set; }
+    public AppointmentStatus? Status { get; set; }
+}
+
 public class CreateAppointmentRequest
 {
     [Range(1, int.MaxValue)]

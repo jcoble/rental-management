@@ -54,6 +54,14 @@ public class VendorResponse
     };
 }
 
+public class VendorListResponse
+{
+    public IReadOnlyList<VendorResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
 /// <summary>Body for <c>POST /api/v1/vendors/{id}/ratings</c>: a 1–5 star rating of a vendor.</summary>
 public class CreateVendorRatingRequest
 {

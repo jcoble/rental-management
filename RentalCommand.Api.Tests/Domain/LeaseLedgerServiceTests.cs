@@ -1,6 +1,8 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -14,6 +16,7 @@ public class LeaseLedgerServiceTests : IDisposable
     private const int PortfolioId = 1;
 
     private readonly SqliteConnection _conn;
+    private readonly List<string> _executedSql = [];
     private readonly RentalCommandDbContext _db;
     private readonly LeaseService _sut;
 
@@ -24,6 +27,7 @@ public class LeaseLedgerServiceTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
             .Options;
 
         _db = new AccountingServiceTestDbContext(options);
@@ -106,6 +110,48 @@ public class LeaseLedgerServiceTests : IDisposable
         ledger.TotalCharged.Should().Be(2400m);
         ledger.TotalPaid.Should().Be(1200m);
         ledger.Balance.Should().Be(1200m);
+    }
+
+    [Fact]
+    public async Task GetLedgerAsync_OrdersPaymentRowsInSql()
+    {
+        var lease = SeedLease();
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Late,
+            Amount = 1200m,
+            DueDate = new DateTime(2026, 04, 01, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1200m,
+            DueDate = new DateTime(2026, 03, 01, 0, 0, 0, DateTimeKind.Utc),
+            PaidDate = new DateTime(2026, 03, 03, 0, 0, 0, DateTimeKind.Utc),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
+
+        _executedSql.Clear();
+
+        var ledger = await _sut.GetLedgerAsync(PortfolioId, lease.Id, ct: CancellationToken.None);
+
+        ledger.Should().NotBeNull();
+        ledger!.Entries.Select(e => e.Date).Should().BeInDescendingOrder();
+        _executedSql.Should().Contain(command =>
+            command.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase)
+            && command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
+            && !command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),
+            "lease ledger transaction rows must be ordered by the database before materialization");
     }
 
     [Fact]
@@ -213,6 +259,28 @@ public class LeaseLedgerServiceTests : IDisposable
         {
             _files.Remove(path);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
 }

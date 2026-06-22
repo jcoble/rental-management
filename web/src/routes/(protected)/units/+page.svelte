@@ -16,23 +16,40 @@
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const PAGE_SIZE = 20;
 
-	// Search + property filter persisted in the URL so they survive navigating away and back. Paging is
-	// handled client-side by the DataGrid over the fetched list (matching the other grids).
-	let search = $state(readGridParam(page.url.searchParams, 'q'));
-	let propertyFilter = $state(readGridParam(page.url.searchParams, 'property'));
+	// Search/filter/sort/page persisted in the URL so they survive navigating away and back. The health
+	// grid is server-side; the API returns the matching page plus total count.
+	const initialParams = page.url.searchParams;
+	let search = $state(readGridParam(initialParams, 'q'));
+	let propertyFilter = $state(readGridParam(initialParams, 'property'));
+	let gridSort = $state(readGridParam(initialParams, 'sort'));
+	let gridPage = $state(readGridParam(initialParams, 'page', 1));
 	const debouncedSearch = debounced(() => search, 300);
 
+	let filterResetPrimed = false;
 	$effect(() => {
-		syncGridUrl({ q: search, property: propertyFilter });
+		search;
+		propertyFilter;
+		if (!filterResetPrimed) {
+			filterResetPrimed = true;
+			return;
+		}
+		gridPage = 1;
+	});
+
+	$effect(() => {
+		syncGridUrl({ q: search, property: propertyFilter, sort: gridSort, page: gridPage }, { page: 1 });
 	});
 
 	const unitsQuery = createQuery(() => ({
-		queryKey: ['units', portfolioId, 'health', debouncedSearch.value, propertyFilter],
+		queryKey: ['units', portfolioId, 'health', debouncedSearch.value, propertyFilter, gridSort, gridPage, PAGE_SIZE],
 		queryFn: () =>
-			units.listWithHealth({
+			units.listWithHealthPage({
 				search: debouncedSearch.value,
-				take: 500,
+				sort: gridSort || undefined,
+				skip: (gridPage - 1) * PAGE_SIZE,
+				take: PAGE_SIZE,
 				propertyId: propertyFilter ? Number(propertyFilter) : undefined,
 			}),
 	}));
@@ -42,7 +59,8 @@
 		queryFn: () => properties.list(portfolioId, { take: 200 }),
 	}));
 
-	const list = $derived(unitsQuery.data ?? []);
+	const list = $derived(unitsQuery.data?.items ?? []);
+	const totalCount = $derived(unitsQuery.data?.totalCount ?? 0);
 
 	// Simplified-stage badge map. Reuses the app's tone-chip recipes (the same class strings StatusBadge
 	// uses internally) so the colors flip correctly in dark/light — never raw Tailwind palette literals.
@@ -96,7 +114,7 @@
 	<DataGrid
 		data={list}
 		{columns}
-		loading={unitsQuery.isLoading}
+		loading={unitsQuery.isLoading || unitsQuery.isFetching}
 		emptyMessage="No units yet"
 		emptyDescription="Units live under a property. Add a property and its units to start managing them here."
 		emptyIcon={Home}
@@ -105,6 +123,13 @@
 		getRowKey={(u) => u.id}
 		getRowTestId={(u) => `unit-row-${u.id}`}
 		data-testid="units-list"
+		pageSize={PAGE_SIZE}
+		page={gridPage}
+		totalCount={totalCount}
+		serverSide
+		onPageChange={(page) => (gridPage = page)}
+		sort={gridSort}
+		onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 flex-wrap items-center gap-2">

@@ -12,6 +12,8 @@ namespace RentalCommand.Api.Services.Domain;
 /// </summary>
 public class DailyBriefingService : IDailyBriefingService
 {
+    private const int MaxBriefingBullets = 25;
+
     private readonly RentalCommandDbContext _db;
     private readonly ILlmProvider _llm;
 
@@ -25,11 +27,13 @@ public class DailyBriefingService : IDailyBriefingService
     {
         // TODO: portfolio-timezone handling is a future refinement; using UTC for now.
         var today = DateTime.UtcNow.Date;
-
-        var rawBullets = new List<(int SortOrder, BriefingBullet Bullet)>();
+        var tomorrow = today.AddDays(1);
+        var nextWeekEnd = today.AddDays(8);
+        var sixtyDaysOut = today.AddDays(60);
+        var criticalOverdueCutoff = today.AddDays(-5);
 
         // --- Rule 1: Emergency maintenance ---
-        var emergencyWorkOrders = await _db.WorkOrders
+        var emergencyWorkOrders = _db.WorkOrders
             .AsNoTracking()
             .Where(w =>
                 w.PortfolioId == portfolioId &&
@@ -37,144 +41,156 @@ public class DailyBriefingService : IDailyBriefingService
                 w.Status != WorkOrderStatus.Completed &&
                 w.Status != WorkOrderStatus.Cancelled &&
                 w.Status != WorkOrderStatus.Archived)
-            .ToListAsync(ct);
-
-        foreach (var wo in emergencyWorkOrders)
-        {
-            rawBullets.Add((1, new BriefingBullet(
-                Title: $"Emergency: {wo.Title}",
-                Detail: wo.Description.Length > 120 ? wo.Description[..120] + "…" : wo.Description,
-                Category: "Maintenance",
-                Severity: "critical",
-                EntityType: "WorkOrder",
-                EntityId: wo.Id)));
-        }
+            .Select(w => new BriefingCandidate
+            {
+                SortOrder = 1,
+                SeverityOrder = 0,
+                Category = "Maintenance",
+                EntityType = "WorkOrder",
+                EntityId = w.Id,
+                TitleText = w.Title,
+                DetailText = w.Description,
+                LeaseNumber = null,
+                UnitNumber = null,
+                Amount = 0m,
+                EventDate = w.RequestedAt,
+                TypeValue = 0,
+            });
 
         // --- Rule 2: Overdue rent ---
-        var overduePayments = await _db.Payments
+        var overduePayments = _db.Payments
             .AsNoTracking()
-            .Include(p => p.Lease)
             .Where(p =>
                 p.PortfolioId == portfolioId &&
                 (p.Status == PaymentStatus.Scheduled ||
                  p.Status == PaymentStatus.Partial ||
                  p.Status == PaymentStatus.Late) &&
                 p.DueDate < today)
-            .ToListAsync(ct);
-
-        foreach (var pmt in overduePayments)
-        {
-            var daysOverdue = (int)(today - pmt.DueDate.Date).TotalDays;
-            var severity = daysOverdue >= 5 ? "critical" : "warning";
-            var leaseRef = pmt.Lease?.LeaseNumber ?? $"Lease #{pmt.LeaseId}";
-            rawBullets.Add((2, new BriefingBullet(
-                Title: $"Rent overdue — {leaseRef}",
-                Detail: $"${pmt.Amount:N0} was due {daysOverdue} day{(daysOverdue == 1 ? "" : "s")} ago",
-                Category: "RentLate",
-                Severity: severity,
-                EntityType: "Payment",
-                EntityId: pmt.Id)));
-        }
+            .Select(p => new BriefingCandidate
+            {
+                SortOrder = 2,
+                SeverityOrder = p.DueDate <= criticalOverdueCutoff ? 0 : 1,
+                Category = "RentLate",
+                EntityType = "Payment",
+                EntityId = p.Id,
+                TitleText = null,
+                DetailText = null,
+                LeaseNumber = p.Lease != null ? p.Lease.LeaseNumber : null,
+                UnitNumber = null,
+                Amount = p.Amount,
+                EventDate = p.DueDate,
+                TypeValue = 0,
+            });
 
         // --- Rule 3: Rent due today ---
-        var rentDueLeases = await _db.Leases
+        var rentDueLeases = _db.Leases
             .AsNoTracking()
-            .Include(l => l.Unit)
             .Where(l =>
                 l.PortfolioId == portfolioId &&
                 l.Status == LeaseStatus.Active &&
                 l.RentDueDay == today.Day)
-            .ToListAsync(ct);
-
-        foreach (var lease in rentDueLeases)
-        {
-            var unitRef = lease.Unit != null ? $"Unit {lease.Unit.UnitNumber}" : lease.LeaseNumber;
-            rawBullets.Add((3, new BriefingBullet(
-                Title: $"Rent due today — {unitRef}",
-                Detail: $"${lease.MonthlyRent:N0} due",
-                Category: "RentDue",
-                Severity: "info",
-                EntityType: "Lease",
-                EntityId: lease.Id)));
-        }
+            .Select(l => new BriefingCandidate
+            {
+                SortOrder = 3,
+                SeverityOrder = 2,
+                Category = "RentDue",
+                EntityType = "Lease",
+                EntityId = l.Id,
+                TitleText = null,
+                DetailText = null,
+                LeaseNumber = l.LeaseNumber,
+                UnitNumber = l.Unit != null ? l.Unit.UnitNumber : null,
+                Amount = l.MonthlyRent,
+                EventDate = today,
+                TypeValue = 0,
+            });
 
         // --- Rule 4: Appointments today ---
-        var todayAppointments = await _db.Appointments
+        var todayAppointments = _db.Appointments
             .AsNoTracking()
             .Where(a =>
                 a.PortfolioId == portfolioId &&
                 (a.Status == AppointmentStatus.Scheduled || a.Status == AppointmentStatus.Confirmed) &&
-                a.ScheduledStart >= today && a.ScheduledStart < today.AddDays(1))
-            .ToListAsync(ct);
-
-        foreach (var appt in todayAppointments)
-        {
-            rawBullets.Add((4, new BriefingBullet(
-                Title: $"Appointment today: {appt.Title}",
-                Detail: $"{appt.Type} at {appt.ScheduledStart:h:mm tt}",
-                Category: "Appointment",
-                Severity: "info",
-                EntityType: "Appointment",
-                EntityId: appt.Id)));
-        }
+                a.ScheduledStart >= today && a.ScheduledStart < tomorrow)
+            .Select(a => new BriefingCandidate
+            {
+                SortOrder = 4,
+                SeverityOrder = 2,
+                Category = "Appointment",
+                EntityType = "Appointment",
+                EntityId = a.Id,
+                TitleText = a.Title,
+                DetailText = null,
+                LeaseNumber = null,
+                UnitNumber = null,
+                Amount = 0m,
+                TypeValue = (int)a.Type,
+                EventDate = a.ScheduledStart,
+            });
 
         // --- Rule 5: Inspections due within 7 days ---
-        var upcomingInspections = await _db.Inspections
+        var upcomingInspections = _db.Inspections
             .AsNoTracking()
             .Where(i =>
                 i.PortfolioId == portfolioId &&
                 i.Status == InspectionStatus.Scheduled &&
-                i.ScheduledFor.Date >= today &&
-                i.ScheduledFor.Date <= today.AddDays(7))
-            .ToListAsync(ct);
-
-        foreach (var insp in upcomingInspections)
-        {
-            var daysUntil = (int)(insp.ScheduledFor.Date - today).TotalDays;
-            var severity = daysUntil <= 1 ? "warning" : "info";
-            var when = daysUntil == 0 ? "today"
-                     : daysUntil == 1 ? "tomorrow"
-                     : $"in {daysUntil} days";
-            rawBullets.Add((5, new BriefingBullet(
-                Title: $"Inspection {when} — {insp.Type}",
-                Detail: $"Scheduled for {insp.ScheduledFor:MMM d}",
-                Category: "Inspection",
-                Severity: severity,
-                EntityType: "Inspection",
-                EntityId: insp.Id)));
-        }
+                i.ScheduledFor >= today &&
+                i.ScheduledFor < nextWeekEnd)
+            .Select(i => new BriefingCandidate
+            {
+                SortOrder = 5,
+                SeverityOrder = i.ScheduledFor < today.AddDays(2) ? 1 : 2,
+                Category = "Inspection",
+                EntityType = "Inspection",
+                EntityId = i.Id,
+                TitleText = null,
+                DetailText = null,
+                LeaseNumber = null,
+                UnitNumber = null,
+                Amount = 0m,
+                TypeValue = (int)i.Type,
+                EventDate = i.ScheduledFor,
+            });
 
         // --- Rule 6: Leases expiring within 60 days ---
-        var expiringLeases = await _db.Leases
+        var expiringLeases = _db.Leases
             .AsNoTracking()
-            .Include(l => l.Unit)
             .Where(l =>
                 l.PortfolioId == portfolioId &&
                 l.Status == LeaseStatus.Active &&
                 l.EndDate > today &&
-                l.EndDate <= today.AddDays(60))
+                l.EndDate <= sixtyDaysOut)
+            .Select(l => new BriefingCandidate
+            {
+                SortOrder = 6,
+                SeverityOrder = 1,
+                Category = "LeaseExpiring",
+                EntityType = "Lease",
+                EntityId = l.Id,
+                TitleText = null,
+                DetailText = null,
+                LeaseNumber = l.LeaseNumber,
+                UnitNumber = l.Unit != null ? l.Unit.UnitNumber : null,
+                Amount = 0m,
+                EventDate = l.EndDate,
+                TypeValue = 0,
+            });
+
+        var candidates = await emergencyWorkOrders
+            .Concat(overduePayments)
+            .Concat(rentDueLeases)
+            .Concat(todayAppointments)
+            .Concat(upcomingInspections)
+            .Concat(expiringLeases)
+            .OrderBy(c => c.SeverityOrder)
+            .ThenBy(c => c.SortOrder)
+            .ThenBy(c => c.EventDate)
+            .ThenBy(c => c.EntityId)
+            .Take(MaxBriefingBullets)
             .ToListAsync(ct);
 
-        foreach (var lease in expiringLeases)
-        {
-            var daysLeft = (int)(lease.EndDate.Date - today).TotalDays;
-            var unitRef = lease.Unit != null ? $"Unit {lease.Unit.UnitNumber}" : lease.LeaseNumber;
-            rawBullets.Add((6, new BriefingBullet(
-                Title: $"Lease expiring — {unitRef}",
-                Detail: $"Ends {lease.EndDate:MMM d} ({daysLeft} day{(daysLeft == 1 ? "" : "s")} left)",
-                Category: "LeaseExpiring",
-                Severity: "warning",
-                EntityType: "Lease",
-                EntityId: lease.Id)));
-        }
-
-        // Sort: critical → warning → info, then by internal rule priority.
-        static int SeverityOrder(string s) => s switch { "critical" => 0, "warning" => 1, _ => 2 };
-
-        var sortedBullets = rawBullets
-            .OrderBy(x => SeverityOrder(x.Bullet.Severity))
-            .ThenBy(x => x.SortOrder)
-            .Select(x => x.Bullet)
+        var sortedBullets = candidates
+            .Select(c => ToBullet(c, today))
             .ToList();
 
         // LLM polish — skip when there is nothing to summarize.
@@ -209,5 +225,118 @@ public class DailyBriefingService : IDailyBriefingService
             LlmEnhanced = llmEnhanced,
             Bullets = sortedBullets,
         };
+    }
+
+    private static BriefingBullet ToBullet(BriefingCandidate candidate, DateTime today)
+    {
+        var severity = SeverityLabel(candidate.SeverityOrder);
+        return candidate.Category switch
+        {
+            "Maintenance" => new BriefingBullet(
+                Title: $"Emergency: {candidate.TitleText}",
+                Detail: Truncate(candidate.DetailText ?? string.Empty, 120),
+                Category: candidate.Category,
+                Severity: severity,
+                EntityType: candidate.EntityType,
+                EntityId: candidate.EntityId),
+
+            "RentLate" => new BriefingBullet(
+                Title: $"Rent overdue — {LeaseRef(candidate)}",
+                Detail: $"${candidate.Amount:N0} was due {DaysBetween(today, candidate.EventDate)} day{(DaysBetween(today, candidate.EventDate) == 1 ? "" : "s")} ago",
+                Category: candidate.Category,
+                Severity: severity,
+                EntityType: candidate.EntityType,
+                EntityId: candidate.EntityId),
+
+            "RentDue" => new BriefingBullet(
+                Title: $"Rent due today — {UnitOrLeaseRef(candidate)}",
+                Detail: $"${candidate.Amount:N0} due",
+                Category: candidate.Category,
+                Severity: severity,
+                EntityType: candidate.EntityType,
+                EntityId: candidate.EntityId),
+
+            "Appointment" => new BriefingBullet(
+                Title: $"Appointment today: {candidate.TitleText}",
+                Detail: $"{(AppointmentType)candidate.TypeValue} at {candidate.EventDate:h:mm tt}",
+                Category: candidate.Category,
+                Severity: severity,
+                EntityType: candidate.EntityType,
+                EntityId: candidate.EntityId),
+
+            "Inspection" => new BriefingBullet(
+                Title: $"Inspection {RelativeWhen(candidate.EventDate, today)} — {(InspectionType)candidate.TypeValue}",
+                Detail: $"Scheduled for {candidate.EventDate:MMM d}",
+                Category: candidate.Category,
+                Severity: severity,
+                EntityType: candidate.EntityType,
+                EntityId: candidate.EntityId),
+
+            "LeaseExpiring" => new BriefingBullet(
+                Title: $"Lease expiring — {UnitOrLeaseRef(candidate)}",
+                Detail: $"Ends {candidate.EventDate:MMM d} ({DaysUntil(candidate.EventDate, today)} day{(DaysUntil(candidate.EventDate, today) == 1 ? "" : "s")} left)",
+                Category: candidate.Category,
+                Severity: severity,
+                EntityType: candidate.EntityType,
+                EntityId: candidate.EntityId),
+
+            _ => new BriefingBullet(
+                Title: candidate.TitleText ?? candidate.Category,
+                Detail: candidate.DetailText ?? string.Empty,
+                Category: candidate.Category,
+                Severity: severity,
+                EntityType: candidate.EntityType,
+                EntityId: candidate.EntityId),
+        };
+    }
+
+    private static string SeverityLabel(int order) => order switch
+    {
+        0 => "critical",
+        1 => "warning",
+        _ => "info",
+    };
+
+    private static string Truncate(string value, int maxLength)
+        => value.Length > maxLength ? value[..maxLength] + "…" : value;
+
+    private static string LeaseRef(BriefingCandidate candidate)
+        => !string.IsNullOrWhiteSpace(candidate.LeaseNumber)
+            ? candidate.LeaseNumber!
+            : $"Lease #{candidate.EntityId}";
+
+    private static string UnitOrLeaseRef(BriefingCandidate candidate)
+        => !string.IsNullOrWhiteSpace(candidate.UnitNumber)
+            ? $"Unit {candidate.UnitNumber}"
+            : LeaseRef(candidate);
+
+    private static int DaysBetween(DateTime later, DateTime earlier)
+        => (int)(later.Date - earlier.Date).TotalDays;
+
+    private static int DaysUntil(DateTime later, DateTime today)
+        => (int)(later.Date - today.Date).TotalDays;
+
+    private static string RelativeWhen(DateTime date, DateTime today)
+    {
+        var daysUntil = DaysUntil(date, today);
+        return daysUntil == 0 ? "today"
+            : daysUntil == 1 ? "tomorrow"
+            : $"in {daysUntil} days";
+    }
+
+    private sealed class BriefingCandidate
+    {
+        public int SortOrder { get; set; }
+        public int SeverityOrder { get; set; }
+        public string Category { get; set; } = string.Empty;
+        public string EntityType { get; set; } = string.Empty;
+        public int EntityId { get; set; }
+        public string? TitleText { get; set; }
+        public string? DetailText { get; set; }
+        public string? LeaseNumber { get; set; }
+        public string? UnitNumber { get; set; }
+        public decimal Amount { get; set; }
+        public DateTime EventDate { get; set; }
+        public int TypeValue { get; set; }
     }
 }

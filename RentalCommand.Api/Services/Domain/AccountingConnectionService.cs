@@ -430,13 +430,25 @@ public class AccountingConnectionService
     /// DB-side. The UI shows these in the mapping-review panel so the landlord can confirm/adjust.
     /// </summary>
     public async Task<List<AccountingMappingResponse>> GetMappingsAsync(
-        int portfolioId, AccountingProvider provider, CancellationToken ct)
+        int portfolioId, AccountingProvider provider, bool? confirmed, int skip, int take, CancellationToken ct)
     {
-        return await _db.AccountingEntityMappings
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 100);
+
+        var query = _db.AccountingEntityMappings
             .Where(m => m.PortfolioId == portfolioId
-                && m.AccountingConnection!.Provider == provider)
+                && m.AccountingConnection!.Provider == provider);
+
+        if (confirmed is not null)
+        {
+            query = query.Where(m => (m.ConfirmedAt != null) == confirmed.Value);
+        }
+
+        return await query
             .OrderByDescending(m => m.ConfirmedAt == null) // unconfirmed (needs attention) first
             .ThenByDescending(m => m.UpdatedAt)
+            .Skip(skip)
+            .Take(take)
             .Select(m => new AccountingMappingResponse
             {
                 Id = m.Id,
@@ -503,14 +515,19 @@ public class AccountingConnectionService
     /// for a connected provider. The landlord confirms a mapping or creates the missing entity from here.
     /// </summary>
     public async Task<List<AccountingReviewItemResponse>> GetReviewQueueAsync(
-        int portfolioId, AccountingProvider provider, CancellationToken ct)
+        int portfolioId, AccountingProvider provider, int skip, int take, CancellationToken ct)
     {
+        skip = Math.Max(0, skip);
+        take = Math.Clamp(take, 1, 100);
+
         return await _db.AccountingSyncMaps
             .Where(m => m.PortfolioId == portfolioId
                 && m.AccountingConnection!.Provider == provider
                 && m.Direction == LedgerDirection.Import
                 && (m.Status == LedgerStatus.NeedsReview || m.Status == LedgerStatus.Unmatched))
             .OrderByDescending(m => m.UpdatedAt)
+            .Skip(skip)
+            .Take(take)
             .Select(m => new AccountingReviewItemResponse
             {
                 Id = m.Id,

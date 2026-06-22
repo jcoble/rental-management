@@ -1,14 +1,32 @@
 import type { SecurityDepositHolding } from '$lib/types';
 import { api, refreshToken } from '../client';
+import { buildListQuery, type ListParams } from '../list-params';
 import { CLIENT_API_BASE_URL } from '$lib/config';
 import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
 import { browser } from '$app/environment';
+
+export interface SecurityDepositListParams extends ListParams {
+	leaseId?: number;
+}
+
+export interface SecurityDepositListResponse {
+	items: SecurityDepositHolding[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
 
 export const securityDeposits = {
 	/** GET /api/v1/security-deposits[?leaseId=N] — scoped by JWT claim. */
 	list: (leaseId?: number) =>
 		api.get<SecurityDepositHolding[]>(
 			leaseId != null ? `/security-deposits?leaseId=${leaseId}` : '/security-deposits'
+		),
+
+	/** GET /api/v1/security-deposits/page[?skip&take&sort&leaseId=N] — scoped by JWT claim. */
+	listPage: (params?: SecurityDepositListParams) =>
+		api.get<SecurityDepositListResponse>(
+			`/security-deposits/page${buildListQuery(params, { leaseId: params?.leaseId })}`
 		),
 
 	/** GET /api/v1/security-deposits/{id} */

@@ -58,23 +58,39 @@ public class WorkOrderService : IWorkOrderService
 
     public async Task<IReadOnlyList<WorkOrderResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? vendorId, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, ToWorkOrderListQuery(query, propertyId, unitId, vendorId), ct);
+        return page.Items;
+    }
+
+    public async Task<WorkOrderListResponse> ListPageAsync(int portfolioId, WorkOrderListQuery query, CancellationToken ct = default)
+    {
         var q = _db.WorkOrders
             .AsNoTracking()
             .Where(w => w.PortfolioId == portfolioId);
 
-        if (propertyId.HasValue)
+        if (query.PropertyId.HasValue)
         {
-            q = q.Where(w => w.PropertyId == propertyId.Value);
+            q = q.Where(w => w.PropertyId == query.PropertyId.Value);
         }
 
-        if (unitId.HasValue)
+        if (query.UnitId.HasValue)
         {
-            q = q.Where(w => w.UnitId == unitId.Value);
+            q = q.Where(w => w.UnitId == query.UnitId.Value);
         }
 
-        if (vendorId.HasValue)
+        if (query.VendorId.HasValue)
         {
-            q = q.Where(w => w.VendorId == vendorId.Value);
+            q = q.Where(w => w.VendorId == query.VendorId.Value);
+        }
+
+        if (query.Status.HasValue)
+        {
+            q = q.Where(w => w.Status == query.Status.Value);
+        }
+
+        if (query.Priority.HasValue)
+        {
+            q = q.Where(w => w.Priority == query.Priority.Value);
         }
 
         if (!string.IsNullOrWhiteSpace(query.Search))
@@ -83,12 +99,26 @@ public class WorkOrderService : IWorkOrderService
             q = q.Where(w =>
                 EF.Functions.ILike(w.Title, $"%{term}%") ||
                 EF.Functions.ILike(w.Description, $"%{term}%") ||
-                EF.Functions.ILike(w.Category, $"%{term}%"));
+                EF.Functions.ILike(w.Category, $"%{term}%") ||
+                (w.Property != null && EF.Functions.ILike(w.Property.Name, $"%{term}%")) ||
+                (w.Unit != null && EF.Functions.ILike(w.Unit.UnitNumber, $"%{term}%")) ||
+                (w.Vendor != null && EF.Functions.ILike(w.Vendor.Name, $"%{term}%")) ||
+                (w.Tenant != null && (
+                    EF.Functions.ILike(w.Tenant.FirstName, $"%{term}%") ||
+                    EF.Functions.ILike(w.Tenant.LastName, $"%{term}%"))));
         }
+
+        var totalCount = await q.CountAsync(ct);
 
         q = query.SortField switch
         {
             "title" => query.SortDescending ? q.OrderByDescending(w => w.Title) : q.OrderBy(w => w.Title),
+            "propertyname" => query.SortDescending ? q.OrderByDescending(w => w.Property!.Name) : q.OrderBy(w => w.Property!.Name),
+            "unitnumber" => query.SortDescending ? q.OrderByDescending(w => w.Unit!.UnitNumber) : q.OrderBy(w => w.Unit!.UnitNumber),
+            "vendorname" => query.SortDescending ? q.OrderByDescending(w => w.Vendor!.Name) : q.OrderBy(w => w.Vendor!.Name),
+            "tenantname" => query.SortDescending
+                ? q.OrderByDescending(w => w.Tenant!.FirstName).ThenByDescending(w => w.Tenant!.LastName)
+                : q.OrderBy(w => w.Tenant!.FirstName).ThenBy(w => w.Tenant!.LastName),
             "status" => query.SortDescending ? q.OrderByDescending(w => w.Status) : q.OrderBy(w => w.Status),
             "priority" => query.SortDescending ? q.OrderByDescending(w => w.Priority) : q.OrderBy(w => w.Priority),
             "requestedat" => query.SortDescending ? q.OrderByDescending(w => w.RequestedAt) : q.OrderBy(w => w.RequestedAt),
@@ -112,8 +142,25 @@ public class WorkOrderService : IWorkOrderService
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return rows.Select(ToListResponse).ToList();
+        return new WorkOrderListResponse
+        {
+            Items = rows.Select(ToListResponse).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
     }
+
+    private static WorkOrderListQuery ToWorkOrderListQuery(ListQuery query, int? propertyId, int? unitId, int? vendorId) => new()
+    {
+        Skip = query.Skip,
+        Take = query.Take,
+        Search = query.Search,
+        Sort = query.Sort,
+        PropertyId = propertyId,
+        UnitId = unitId,
+        VendorId = vendorId,
+    };
 
     private sealed record WorkOrderListRow(
         WorkOrder WorkOrder, string? PropertyName, string? UnitNumber, string? VendorName, string? TenantName);
