@@ -4,6 +4,8 @@ import { parseForm, propertySchema } from '../schemas/index.ts';
 import {
 	createNewRentalPropertyForm,
 	findNewRentalExistingUnitId,
+	formatNewRentalStepLabel,
+	formatNewRentalStepPosition,
 	seedNewRentalLateFeeAmount
 } from './new-rental-state.ts';
 
@@ -59,5 +61,17 @@ describe('seedNewRentalLateFeeAmount', () => {
 		assert.equal(seedNewRentalLateFeeAmount('35.00'), '35.00');
 		assert.equal(seedNewRentalLateFeeAmount('  '), '0');
 		assert.equal(seedNewRentalLateFeeAmount(null), '0');
+	});
+});
+
+describe('new rental progress labels', () => {
+	it('uses one consistent five-step sequence including review', () => {
+		const labels = ['Property', 'Unit', 'Tenant', 'Lease'];
+
+		assert.equal(formatNewRentalStepLabel(0, labels), 'Step 1 of 5 · Property');
+		assert.equal(formatNewRentalStepLabel(3, labels), 'Step 4 of 5 · Lease');
+		assert.equal(formatNewRentalStepLabel(4, labels), 'Step 5 of 5 · Review & confirm');
+		assert.equal(formatNewRentalStepPosition(0, labels), '1/5');
+		assert.equal(formatNewRentalStepPosition(4, labels), '5/5');
 	});
 });
