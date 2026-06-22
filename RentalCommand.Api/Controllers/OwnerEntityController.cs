@@ -28,6 +28,14 @@ public class OwnerEntityController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(OwnerEntityListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<OwnerEntityListResponse>> ListPage([FromQuery] ListQuery query, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        return Ok(page);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(OwnerEntityResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

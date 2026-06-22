@@ -39,23 +39,53 @@ public class ConversationService : IConversationService
 
     public async Task<IReadOnlyList<ConversationSummary>> ListAsync(int portfolioId, CancellationToken ct = default)
     {
-        var rows = await _db.Conversations
-            .AsNoTracking()
-            .Include(c => c.Tenant)
-            .Include(c => c.Property)
-            .Where(c => c.PortfolioId == portfolioId)
-            .OrderByDescending(c => c.LastMessageAt)
+        var page = await ListPageAsync(portfolioId, new ListQuery(), ct);
+        return page.Items;
+    }
+
+    public async Task<ConversationListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default)
+    {
+        var summaries = ProjectSummaries(
+            _db.Conversations
+                .AsNoTracking()
+                .Where(c => c.PortfolioId == portfolioId),
+            tenantViewer: false);
+
+        summaries = query.SortField switch
+        {
+            "tenantname" => query.SortDescending ? summaries.OrderByDescending(c => c.TenantName) : summaries.OrderBy(c => c.TenantName),
+            "subject" => query.SortDescending ? summaries.OrderByDescending(c => c.Subject) : summaries.OrderBy(c => c.Subject),
+            "unreadcount" => query.SortDescending ? summaries.OrderByDescending(c => c.UnreadCount) : summaries.OrderBy(c => c.UnreadCount),
+            "messagecount" => query.SortDescending ? summaries.OrderByDescending(c => c.MessageCount) : summaries.OrderBy(c => c.MessageCount),
+            "lastmessageat" => query.SortDescending ? summaries.OrderByDescending(c => c.LastMessageAt) : summaries.OrderBy(c => c.LastMessageAt),
+            _ => summaries.OrderByDescending(c => c.LastMessageAt),
+        };
+
+        var totalCount = await summaries.CountAsync(ct);
+
+        var items = await summaries
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return rows.Select(c => ToSummary(c, c.LandlordUnreadCount)).ToList();
+        return new ConversationListResponse
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
     }
+
+    public async Task<int> GetUnreadCountAsync(int portfolioId, CancellationToken ct = default) =>
+        await _db.Conversations
+            .AsNoTracking()
+            .Where(c => c.PortfolioId == portfolioId)
+            .SumAsync(c => (int?)c.LandlordUnreadCount, ct) ?? 0;
 
     public async Task<ConversationDetail?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
         var entity = await _db.Conversations
-            .Include(c => c.Tenant)
-            .Include(c => c.Property)
-            .Include(c => c.Messages)
             .FirstOrDefaultAsync(c => c.Id == id && c.PortfolioId == portfolioId, ct);
 
         if (entity == null)
@@ -70,7 +100,74 @@ public class ConversationService : IConversationService
             await _db.SaveChangesAsync(ct);
         }
 
-        return ToDetail(entity, entity.LandlordUnreadCount);
+        return await LoadDetailAsync(portfolioId, id, tenantId: null, tenantViewer: false, ct);
+    }
+
+    private async Task<ConversationDetail?> LoadDetailAsync(
+        int portfolioId,
+        int id,
+        int? tenantId,
+        bool tenantViewer,
+        CancellationToken ct = default)
+    {
+        var query = _db.Conversations
+            .AsNoTracking()
+            .Where(c => c.Id == id && c.PortfolioId == portfolioId);
+
+        if (tenantId.HasValue)
+        {
+            query = query.Where(c => c.TenantId == tenantId.Value);
+        }
+
+        return await ProjectDetails(query, tenantViewer).FirstOrDefaultAsync(ct);
+    }
+
+    private static IQueryable<ConversationSummary> ProjectSummaries(
+        IQueryable<Conversation> query,
+        bool tenantViewer)
+    {
+        return query.Select(c => new ConversationSummary
+        {
+            Id = c.Id,
+            TenantId = c.TenantId,
+            TenantName = c.Tenant != null ? (c.Tenant.FirstName + " " + c.Tenant.LastName).Trim() : string.Empty,
+            Subject = c.Subject,
+            PropertyName = c.Property != null ? c.Property.Name : null,
+            LastMessagePreview = c.LastMessagePreview,
+            LastMessageAt = c.LastMessageAt,
+            UnreadCount = tenantViewer ? c.TenantUnreadCount : c.LandlordUnreadCount,
+            MessageCount = c.Messages.Count(),
+        });
+    }
+
+    private static IQueryable<ConversationDetail> ProjectDetails(
+        IQueryable<Conversation> query,
+        bool tenantViewer)
+    {
+        return query.Select(c => new ConversationDetail
+        {
+            Id = c.Id,
+            TenantId = c.TenantId,
+            TenantName = c.Tenant != null ? (c.Tenant.FirstName + " " + c.Tenant.LastName).Trim() : string.Empty,
+            Subject = c.Subject,
+            PropertyName = c.Property != null ? c.Property.Name : null,
+            LastMessagePreview = c.LastMessagePreview,
+            LastMessageAt = c.LastMessageAt,
+            UnreadCount = tenantViewer ? c.TenantUnreadCount : c.LandlordUnreadCount,
+            MessageCount = c.Messages.Count(),
+            Messages = c.Messages
+                .OrderBy(m => m.CreatedAt)
+                .ThenBy(m => m.Id)
+                .Select(m => new ConversationMessageDto
+                {
+                    Id = m.Id,
+                    SenderRole = m.SenderRole == ConversationSenderRole.Landlord ? "Landlord" : "Tenant",
+                    Body = m.Body,
+                    Channels = m.Channels,
+                    CreatedAt = m.CreatedAt,
+                })
+                .ToList(),
+        });
     }
 
     public async Task<ConversationDetail?> StartAsync(
@@ -133,7 +230,11 @@ public class ConversationService : IConversationService
         await tx.CommitAsync(ct);
 
         conversation.Tenant = tenant;
-        var detail = ToDetail(conversation, conversation.LandlordUnreadCount);
+        var detail = await LoadDetailAsync(portfolioId, conversation.Id, tenantId: null, tenantViewer: false, ct);
+        if (detail is null)
+        {
+            return null;
+        }
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
         if (tenantNotification is not null)
         {
@@ -188,7 +289,11 @@ public class ConversationService : IConversationService
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
 
-        var detail = ToDetail(conversation, conversation.LandlordUnreadCount);
+        var detail = await LoadDetailAsync(portfolioId, conversation.Id, tenantId: null, tenantViewer: false, ct);
+        if (detail is null)
+        {
+            return null;
+        }
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
         if (tenantNotification is not null)
         {
@@ -205,15 +310,13 @@ public class ConversationService : IConversationService
     public async Task<IReadOnlyList<ConversationSummary>> ListForTenantAsync(
         int portfolioId, int tenantId, CancellationToken ct = default)
     {
-        var rows = await _db.Conversations
-            .AsNoTracking()
-            .Include(c => c.Tenant)
-            .Include(c => c.Property)
-            .Where(c => c.PortfolioId == portfolioId && c.TenantId == tenantId)
+        return await ProjectSummaries(
+                _db.Conversations
+                    .AsNoTracking()
+                    .Where(c => c.PortfolioId == portfolioId && c.TenantId == tenantId),
+                tenantViewer: true)
             .OrderByDescending(c => c.LastMessageAt)
             .ToListAsync(ct);
-
-        return rows.Select(c => ToSummary(c, c.TenantUnreadCount)).ToList();
     }
 
     public async Task<ConversationDetail?> GetForTenantAsync(
@@ -236,7 +339,7 @@ public class ConversationService : IConversationService
             await _db.SaveChangesAsync(ct);
         }
 
-        return ToDetail(entity, entity.TenantUnreadCount);
+        return await LoadDetailAsync(portfolioId, id, tenantId, tenantViewer: true, ct);
     }
 
     public async Task<ConversationDetail?> TenantStartAsync(
@@ -283,7 +386,11 @@ public class ConversationService : IConversationService
         await tx.CommitAsync(ct);
 
         conversation.Tenant = tenant;
-        var detail = ToDetail(conversation, conversation.TenantUnreadCount);
+        var detail = await LoadDetailAsync(portfolioId, conversation.Id, tenantId, tenantViewer: true, ct);
+        if (detail is null)
+        {
+            return null;
+        }
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
         foreach (var notification in notifications)
         {
@@ -327,7 +434,11 @@ public class ConversationService : IConversationService
         await _db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
 
-        var detail = ToDetail(conversation, conversation.TenantUnreadCount);
+        var detail = await LoadDetailAsync(portfolioId, conversation.Id, tenantId, tenantViewer: true, ct);
+        if (detail is null)
+        {
+            return null;
+        }
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, conversation.Id, detail, ct);
         foreach (var notification in notifications)
         {
@@ -546,41 +657,4 @@ public class ConversationService : IConversationService
         return body.Length <= PreviewMaxLength ? body : body[..PreviewMaxLength];
     }
 
-    private static ConversationSummary ToSummary(Conversation c, int viewerUnread) => new()
-    {
-        Id = c.Id,
-        TenantId = c.TenantId,
-        TenantName = c.Tenant != null ? $"{c.Tenant.FirstName} {c.Tenant.LastName}".Trim() : string.Empty,
-        Subject = c.Subject,
-        PropertyName = c.Property?.Name,
-        LastMessagePreview = c.LastMessagePreview,
-        LastMessageAt = c.LastMessageAt,
-        UnreadCount = viewerUnread,
-        MessageCount = c.Messages.Count,
-    };
-
-    private static ConversationDetail ToDetail(Conversation c, int viewerUnread) => new()
-    {
-        Id = c.Id,
-        TenantId = c.TenantId,
-        TenantName = c.Tenant != null ? $"{c.Tenant.FirstName} {c.Tenant.LastName}".Trim() : string.Empty,
-        Subject = c.Subject,
-        PropertyName = c.Property?.Name,
-        LastMessagePreview = c.LastMessagePreview,
-        LastMessageAt = c.LastMessageAt,
-        UnreadCount = viewerUnread,
-        MessageCount = c.Messages.Count,
-        Messages = c.Messages
-            .OrderBy(m => m.CreatedAt)
-            .ThenBy(m => m.Id)
-            .Select(m => new ConversationMessageDto
-            {
-                Id = m.Id,
-                SenderRole = m.SenderRole.ToString(),
-                Body = m.Body,
-                Channels = m.Channels,
-                CreatedAt = m.CreatedAt,
-            })
-            .ToList(),
-    };
 }

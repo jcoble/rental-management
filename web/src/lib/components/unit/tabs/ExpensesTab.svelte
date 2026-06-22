@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
+	import { untrack } from 'svelte';
 	import type { UnitDashboard, Expense } from '$lib/types';
 	import { expenses as expensesApi } from '$lib/api/endpoints/expenses';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -34,16 +35,44 @@
 		'Taxes', 'Utilities', 'Depreciation', 'Other',
 	];
 	const EXPENSE_STATUSES = ['Pending', 'Approved', 'Paid'];
+	const EXPENSE_PAGE_SIZE = 20;
 	const today = () => new Date().toISOString().slice(0, 10);
 
 	// Unit-relevant expenses: tied to the unit OR to one of its work orders (DB-side correlated filter).
+	let expensePage = $state(1);
+	let expenseItems = $state<Expense[]>([]);
 	const expensesQuery = createQuery(() => ({
-		queryKey: ['unit-expenses', portfolioId, unitId],
+		queryKey: ['unit-expenses', portfolioId, unitId, expensePage, EXPENSE_PAGE_SIZE],
 		enabled: portfolioId > 0 && unitId > 0,
-		queryFn: () => expensesApi.list(portfolioId, { unitId, take: 500 }),
+		queryFn: () => expensesApi.listPage(portfolioId, {
+			unitId,
+			skip: (expensePage - 1) * EXPENSE_PAGE_SIZE,
+			take: EXPENSE_PAGE_SIZE,
+			sort: '-incurredAt',
+		}),
 	}));
 
-	const list = $derived(expensesQuery.data ?? []);
+	$effect(() => {
+		void unitId;
+		expensePage = 1;
+		expenseItems = [];
+	});
+
+	$effect(() => {
+		const page = expensesQuery.data;
+		if (!page) return;
+		if (page.skip === 0) {
+			expenseItems = page.items;
+			return;
+		}
+		const currentItems = untrack(() => expenseItems);
+		const seen = new Set(currentItems.map((e) => e.id));
+		expenseItems = [...currentItems, ...page.items.filter((e) => !seen.has(e.id))];
+	});
+
+	const list = $derived(expenseItems);
+	const totalExpenses = $derived(expensesQuery.data?.totalCount ?? expenseItems.length);
+	const hasMoreExpenses = $derived(expenseItems.length < totalExpenses);
 
 	let expandedId = $state<number | null>(null);
 	function toggleExpand(id: number) {
@@ -52,10 +81,17 @@
 	}
 
 	function invalidate() {
+		expenseItems = [];
+		expensePage = 1;
 		queryClient.invalidateQueries({ queryKey: ['unit-expenses', portfolioId, unitId] });
 		queryClient.invalidateQueries({ queryKey: ['expenses', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['unit-dashboard', unitId] });
 		queryClient.invalidateQueries({ queryKey: ['unit-timeline', unitId] });
+	}
+
+	function loadMoreExpenses() {
+		if (expensesQuery.isFetching || !hasMoreExpenses) return;
+		expensePage += 1;
 	}
 
 	// ── Inline "add expense" form (reuses expenseSchema + the app's form conventions; sets UnitId) ──
@@ -276,5 +312,12 @@
 				</li>
 			{/each}
 		</ul>
+		{#if hasMoreExpenses}
+			<div class="flex justify-center">
+				<Button variant="outline" size="sm" onclick={loadMoreExpenses} disabled={expensesQuery.isFetching} data-testid="expenses-load-more">
+					{expensesQuery.isFetching ? 'Loading…' : 'Load more'}
+				</Button>
+			</div>
+		{/if}
 	{/if}
 </div>

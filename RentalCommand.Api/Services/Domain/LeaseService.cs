@@ -190,46 +190,98 @@ public class LeaseService : ILeaseService
 
     public async Task<IReadOnlyList<LeaseResponse>> ListAsync(int portfolioId, int? tenantId, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, ToLeaseListQuery(query, tenantId, propertyId), ct);
+        return page.Items;
+    }
+
+    public async Task<LeaseListResponse> ListPageAsync(int portfolioId, LeaseListQuery query, CancellationToken ct = default)
+    {
         var q = _db.Leases
             .AsNoTracking()
-            .Include(l => l.Tenant)
-            .Include(l => l.Unit)
-            .Include(l => l.Property)
             .Where(l => l.PortfolioId == portfolioId);
 
-        if (tenantId.HasValue)
+        if (query.TenantId.HasValue)
         {
-            q = q.Where(l => l.TenantId == tenantId.Value);
+            q = q.Where(l => l.TenantId == query.TenantId.Value);
         }
 
-        if (propertyId.HasValue)
+        if (query.PropertyId.HasValue)
         {
-            q = q.Where(l => l.PropertyId == propertyId.Value);
+            q = q.Where(l => l.PropertyId == query.PropertyId.Value);
+        }
+
+        if (query.Status.HasValue)
+        {
+            q = q.Where(l => l.Status == query.Status.Value);
         }
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var term = query.Search.Trim();
-            q = q.Where(l => EF.Functions.ILike(l.LeaseNumber, $"%{term}%"));
+            q = q.Where(l =>
+                EF.Functions.ILike(l.LeaseNumber, $"%{term}%") ||
+                EF.Functions.ILike(l.Tenant!.FirstName, $"%{term}%") ||
+                EF.Functions.ILike(l.Tenant.LastName, $"%{term}%") ||
+                EF.Functions.ILike(l.Tenant.FirstName + " " + l.Tenant.LastName, $"%{term}%") ||
+                EF.Functions.ILike(l.Property!.Name, $"%{term}%") ||
+                EF.Functions.ILike(l.Unit!.UnitNumber, $"%{term}%"));
         }
 
         q = query.SortField switch
         {
             "leasenumber" => query.SortDescending ? q.OrderByDescending(l => l.LeaseNumber) : q.OrderBy(l => l.LeaseNumber),
+            "tenantname" => query.SortDescending ? q.OrderByDescending(l => l.Tenant!.LastName).ThenByDescending(l => l.Tenant!.FirstName) : q.OrderBy(l => l.Tenant!.LastName).ThenBy(l => l.Tenant!.FirstName),
+            "propertyname" => query.SortDescending ? q.OrderByDescending(l => l.Property!.Name) : q.OrderBy(l => l.Property!.Name),
+            "unitnumber" => query.SortDescending ? q.OrderByDescending(l => l.Unit!.UnitNumber) : q.OrderBy(l => l.Unit!.UnitNumber),
             "status" => query.SortDescending ? q.OrderByDescending(l => l.Status) : q.OrderBy(l => l.Status),
             "startdate" => query.SortDescending ? q.OrderByDescending(l => l.StartDate) : q.OrderBy(l => l.StartDate),
             "enddate" => query.SortDescending ? q.OrderByDescending(l => l.EndDate) : q.OrderBy(l => l.EndDate),
             "monthlyrent" => query.SortDescending ? q.OrderByDescending(l => l.MonthlyRent) : q.OrderBy(l => l.MonthlyRent),
+            "createdat" => query.SortDescending ? q.OrderByDescending(l => l.CreatedAt) : q.OrderBy(l => l.CreatedAt),
             "updatedat" => query.SortDescending ? q.OrderByDescending(l => l.UpdatedAt) : q.OrderBy(l => l.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(l => l.CreatedAt) : q.OrderBy(l => l.CreatedAt),
         };
 
-        var items = await q
+        var totalCount = await q.CountAsync(ct);
+
+        var rows = await q
+            .Select(l => new ProjectedLease(
+                l,
+                l.Tenant == null ? null : (l.Tenant.FirstName + " " + l.Tenant.LastName).Trim(),
+                l.Unit == null ? null : l.Unit.UnitNumber,
+                l.Property == null ? null : l.Property.Name))
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return items.Select(l => LeaseResponse.FromEntity(l, includeNavigations: true)).ToList();
+        return new LeaseListResponse
+        {
+            Items = rows.Select(ToResponse).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    private static LeaseListQuery ToLeaseListQuery(ListQuery query, int? tenantId, int? propertyId) => new()
+    {
+        Skip = query.Skip,
+        Take = query.Take,
+        Search = query.Search,
+        Sort = query.Sort,
+        TenantId = tenantId,
+        PropertyId = propertyId,
+    };
+
+    private sealed record ProjectedLease(Lease Lease, string? TenantName, string? UnitNumber, string? PropertyName);
+
+    private static LeaseResponse ToResponse(ProjectedLease row)
+    {
+        var response = LeaseResponse.FromEntity(row.Lease);
+        response.TenantName = row.TenantName;
+        response.UnitNumber = row.UnitNumber;
+        response.PropertyName = row.PropertyName;
+        return response;
     }
 
     public async Task<LeaseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
@@ -299,7 +351,10 @@ public class LeaseService : ILeaseService
                 p.DueDate,
                 p.PaidDate,
                 p.Method,
+                LedgerDate = p.PaidDate ?? p.DueDate,
             })
+            .OrderByDescending(p => p.LedgerDate)
+            .ThenByDescending(p => p.Id)
             .ToListAsync(ct);
 
         // A lease may carry an opening balance migrated in from before Rental Command. It anchors the
@@ -324,7 +379,7 @@ public class LeaseService : ILeaseService
 
                 return new LedgerTransactionResponse
                 {
-                    Date = p.PaidDate ?? p.DueDate,
+                    Date = p.LedgerDate,
                     Type = isCollected ? "Payment" : "Charge",
                     Id = p.Id,
                     Description = p.PaymentType.ToString(),
@@ -339,8 +394,6 @@ public class LeaseService : ILeaseService
                         p.PaymentType, p.Status, p.Amount, p.DueDate, p.PaidDate, p.Method),
                 };
             })
-            .OrderByDescending(e => e.Date)
-            .ThenByDescending(e => e.Id)
             .ToList();
 
         // Each payment row is a billed charge (rent, fee, deposit). "Charged" is every real charge;
@@ -691,6 +744,43 @@ public class LeaseService : ILeaseService
             stored.FileSize,
             $"/api/v1/leases/{lease.Id}/document",
             stored.UploadedAt);
+    }
+
+    public async Task<LeaseDocumentStatusResponse?> GetDocumentStatusAsync(int portfolioId, int id, CancellationToken ct = default)
+    {
+        var leaseExists = await _db.Leases
+            .AsNoTracking()
+            .AnyAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
+        if (!leaseExists)
+        {
+            return null;
+        }
+
+        var file = await _db.StoredFiles
+            .AsNoTracking()
+            .Where(f => f.PortfolioId == portfolioId
+                && f.EntityType == EntityType
+                && f.EntityId == id
+                && f.DeletedAt == null)
+            .OrderByDescending(f => f.UploadedAt)
+            .ThenByDescending(f => f.Id)
+            .Select(f => new
+            {
+                f.Id,
+                f.FileName,
+                f.FileSize,
+                f.UploadedAt
+            })
+            .FirstOrDefaultAsync(ct);
+
+        return new LeaseDocumentStatusResponse(
+            id,
+            file is not null,
+            file?.Id,
+            file?.FileName,
+            file?.FileSize,
+            file is null ? null : $"/api/v1/leases/{id}/document",
+            file?.UploadedAt);
     }
 
     public async Task<(Stream Stream, string FileName, string ContentType)?> GetDocumentAsync(int portfolioId, int id, CancellationToken ct = default)

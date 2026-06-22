@@ -16,6 +16,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Pencil, Save, Trash2, X, CalendarCheck, CheckCircle, XCircle, UserX, CalendarClock, Users } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
+	import { labelForType } from '../calendar-utils';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -40,7 +41,7 @@
 
 	const appt = $derived(appointmentQuery.data);
 
-	const typeOptions = $derived(APPT_TYPES.map((value) => ({ value, label: value })));
+	const typeOptions = $derived(APPT_TYPES.map((value) => ({ value, label: labelForType(value) })));
 	const statusOptions = $derived(APPT_STATUSES.map((value) => ({ value, label: value })));
 	const propertyOptions = $derived([
 		{ value: '', label: 'No property' },
@@ -174,7 +175,7 @@
 					<h1 class="text-2xl font-bold" data-testid="appointment-detail-title">{appt.title}</h1>
 					<StatusBadge status={appt.status} />
 				</div>
-				<p class="text-sm text-muted-foreground" data-testid="appointment-detail-type">{appt.type}</p>
+				<p class="text-sm text-muted-foreground" data-testid="appointment-detail-type">{labelForType(appt.type)}</p>
 				<p class="text-sm text-muted-foreground" data-testid="appointment-detail-when">
 					{fmtDateTime(appt.scheduledStart)}{appt.scheduledEnd ? ' – ' + fmtDateTime(appt.scheduledEnd) : ''}
 				</p>
@@ -256,7 +257,7 @@
 		<div class="grid gap-6 lg:grid-cols-2">
 			<DetailCard title="What & when" icon={CalendarClock} accent="primary" testid="appointment-detail-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Title" bind:value={form.title} display={appt.title} {editing} error={formErrors.title} testid="appointment-detail-title-field" class="sm:col-span-2" />
-				<InlineField label="Type" bind:value={form.type} display={appt.type} {editing} type="select" options={typeOptions} testid="appointment-detail-type-field" />
+				<InlineField label="Type" bind:value={form.type} display={labelForType(appt.type)} {editing} type="select" options={typeOptions} testid="appointment-detail-type-field" />
 				<InlineField label="Status" bind:value={form.status} display={appt.status} {editing} type="select" options={statusOptions} testid="appointment-detail-status-field" />
 				<InlineField label="Start" bind:value={form.scheduledStart} display={fmtDateTime(appt.scheduledStart)} {editing} type="datetime-local" error={formErrors.scheduledStart} testid="appointment-detail-start" />
 				<InlineField label="End" bind:value={form.scheduledEnd} display={appt.scheduledEnd ? fmtDateTime(appt.scheduledEnd) : ''} {editing} type="datetime-local" error={formErrors.scheduledEnd} testid="appointment-detail-end" />

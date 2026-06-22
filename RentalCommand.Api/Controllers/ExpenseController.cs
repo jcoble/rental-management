@@ -39,6 +39,21 @@ public class ExpenseController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(ExpenseListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ExpenseListResponse>> ListPage(
+        [FromQuery] ListQuery query,
+        [FromQuery] int? propertyId,
+        [FromQuery] int? unitId,
+        [FromQuery] int? workOrderId,
+        [FromQuery] bool workOrderLinkedOnly = false,
+        CancellationToken ct = default)
+    {
+        var page = await _service.ListPageAsync(
+            GetPortfolioId(), propertyId, unitId, workOrderId, workOrderLinkedOnly, query, ct);
+        return Ok(page);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(ExpenseResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

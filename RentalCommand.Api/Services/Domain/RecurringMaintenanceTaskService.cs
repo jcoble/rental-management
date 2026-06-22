@@ -22,6 +22,12 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
 
     public async Task<IReadOnlyList<RecurringMaintenanceTaskResponse>> ListAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, propertyId, activeOnly, query, ct);
+        return page.Items;
+    }
+
+    public async Task<RecurringMaintenanceTaskListResponse> ListPageAsync(int portfolioId, int? propertyId, bool? activeOnly, ListQuery query, CancellationToken ct = default)
+    {
         var q = _db.RecurringMaintenanceTasks
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId);
@@ -48,20 +54,33 @@ public class RecurringMaintenanceTaskService : IRecurringMaintenanceTaskService
         q = query.SortField switch
         {
             "title" => query.SortDescending ? q.OrderByDescending(t => t.Title) : q.OrderBy(t => t.Title),
+            "property" => query.SortDescending ? q.OrderByDescending(t => t.Property!.Name) : q.OrderBy(t => t.Property!.Name),
+            "propertyname" => query.SortDescending ? q.OrderByDescending(t => t.Property!.Name) : q.OrderBy(t => t.Property!.Name),
             "nextduedate" => query.SortDescending ? q.OrderByDescending(t => t.NextDueDate) : q.OrderBy(t => t.NextDueDate),
             "interval" => query.SortDescending ? q.OrderByDescending(t => t.RecurrenceInterval) : q.OrderBy(t => t.RecurrenceInterval),
+            "recurrenceinterval" => query.SortDescending ? q.OrderByDescending(t => t.RecurrenceInterval) : q.OrderBy(t => t.RecurrenceInterval),
             "priority" => query.SortDescending ? q.OrderByDescending(t => t.Priority) : q.OrderBy(t => t.Priority),
+            "isactive" => query.SortDescending ? q.OrderByDescending(t => t.IsActive) : q.OrderBy(t => t.IsActive),
             "updatedat" => query.SortDescending ? q.OrderByDescending(t => t.UpdatedAt) : q.OrderBy(t => t.UpdatedAt),
             "createdat" => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
             _ => query.SortDescending ? q.OrderByDescending(t => t.NextDueDate) : q.OrderBy(t => t.NextDueDate),
         };
 
+        var totalCount = await q.CountAsync(ct);
+
         var items = await q
+            .Include(t => t.Property)
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
 
-        return items.Select(RecurringMaintenanceTaskResponse.FromEntity).ToList();
+        return new RecurringMaintenanceTaskListResponse
+        {
+            Items = items.Select(RecurringMaintenanceTaskResponse.FromEntity).ToList(),
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
     }
 
     public async Task<RecurringMaintenanceTaskResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)

@@ -12,9 +12,11 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IPaymentService
 {
     Task<IReadOnlyList<PaymentResponse>> ListAsync(int portfolioId, int? leaseId, ListQuery query, CancellationToken ct = default);
+    Task<PaymentListResponse> ListPageAsync(int portfolioId, int? leaseId, ListQuery query, CancellationToken ct = default);
     Task<PaymentResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
     Task<PaymentResponse?> CreateAsync(int portfolioId, CreatePaymentRequest request, CancellationToken ct = default);
     Task<PaymentResponse?> UpdateAsync(int portfolioId, int id, UpdatePaymentRequest request, CancellationToken ct = default);
     Task<PaymentResponse?> MarkPaidAsync(int portfolioId, int id, MarkPaidRequest request, CancellationToken ct = default);
+    Task<MarkLeasePastDuePaidResponse?> MarkLeasePastDuePaidAsync(int portfolioId, int leaseId, MarkPaidRequest request, CancellationToken ct = default);
     Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default);
 }

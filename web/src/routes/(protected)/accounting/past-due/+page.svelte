@@ -114,25 +114,13 @@
 		markPaidTarget = null;
 	}
 
-	// Mark every still-owed past-due payment on a lease as paid. Mirrors the mobile OverdueScreen:
-	// mark-paid is a per-payment action, so we resolve this lease's open payments and settle them. A
-	// lease has only a handful of open payments, so this is a small bounded set — not an N+1 over the
-	// whole list. Afterwards we refresh the shared sources (past-due list + dashboard snapshot) so the
-	// KPI count and these rows update together and stay in lockstep.
+	// Mark every still-owed past-due payment on a lease as paid in one server-side action. Afterwards we
+	// refresh the shared sources (past-due list + dashboard snapshot) so the KPI count and these rows
+	// update together and stay in lockstep.
 	const markPaidMutation = createMutation(() => ({
 		mutationFn: async ({ lease, data }: { lease: PastDueLease; data: Record<string, unknown> }) => {
-			const leasePayments = await payments.list(portfolioId, { leaseId: lease.leaseId, take: 200 });
-			const now = Date.now();
-			const owed = leasePayments.filter((p) => {
-				if (p.status === 'Paid' || p.status === 'Waived' || p.status === 'Refunded' || p.status === 'Failed') {
-					return false;
-				}
-				return p.status === 'Late' || (p.dueDate ? new Date(p.dueDate).getTime() < now : false);
-			});
-			for (const p of owed) {
-				await payments.markPaid(p.id, data);
-			}
-			return owed.length;
+			const result = await payments.markLeasePastDuePaid(lease.leaseId, data);
+			return result.markedPaidCount;
 		},
 		onMutate: ({ lease }) => {
 			busyLeaseId = lease.leaseId;

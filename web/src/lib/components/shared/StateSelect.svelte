@@ -19,7 +19,7 @@
 <script lang="ts">
 	import * as Combobox from '$lib/components/ui/combobox';
 	import { US_STATES, US_TERRITORIES, type UsState } from '$lib/data/us-states';
-	import { resolveStateCode } from './resolve-state';
+	import { commitStateInput } from './resolve-state';
 
 	let {
 		value = $bindable(''),
@@ -89,6 +89,16 @@
 		onchange?.(code);
 	}
 
+	function commitTypedInput(typed: string) {
+		const committed = commitStateInput({ typed, items, currentValue: value });
+		if (committed.value !== value) {
+			value = committed.value;
+			onchange?.(committed.value);
+		}
+		inputValue = committed.label;
+		typedWhileOpen = '';
+	}
+
 	// On close (Tab / blur / outside-click) the user may have typed a prefix without
 	// explicitly picking an item. Resolve that typed text into a code and commit it —
 	// and never blank an already-set value just because the typed text was unmatched.
@@ -110,14 +120,12 @@
 			return;
 		}
 
-		const resolved = resolveStateCode({ typed: typedWhileOpen, items, currentValue: value });
-		if (resolved !== value) {
-			value = resolved;
-			onchange?.(resolved);
-		}
-		// Show the committed value's label in the now-closed input (empty if cleared).
-		inputValue = items.find((i) => i.value === resolved)?.label ?? '';
-		typedWhileOpen = '';
+		commitTypedInput(typedWhileOpen);
+	}
+
+	function handleBlur() {
+		if (isOpen || cancelNextClose || pickedThisSession) return;
+		commitTypedInput(inputValue);
 	}
 </script>
 
@@ -136,6 +144,7 @@
 		data-testid={testid}
 		aria-label={placeholder}
 		onkeydown={handleKeydown}
+		onblur={handleBlur}
 	/>
 	<Combobox.Content>
 		{#each filtered as item (item.value)}

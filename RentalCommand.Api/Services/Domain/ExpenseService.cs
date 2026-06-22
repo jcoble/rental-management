@@ -22,23 +22,79 @@ public class ExpenseService : IExpenseService
 
     public async Task<IReadOnlyList<ExpenseResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? workOrderId, ListQuery query, CancellationToken ct = default)
     {
+        var page = await ListPageAsync(portfolioId, propertyId, unitId, workOrderId, workOrderLinkedOnly: false, query, ct);
+        return page.Items;
+    }
+
+    public async Task<ExpenseListResponse> ListPageAsync(
+        int portfolioId,
+        int? propertyId,
+        int? unitId,
+        int? workOrderId,
+        bool workOrderLinkedOnly,
+        ListQuery query,
+        CancellationToken ct = default)
+    {
+        var filtered = BuildListQuery(portfolioId, propertyId, unitId, workOrderId, workOrderLinkedOnly, query);
+        var totalCount = await filtered.CountAsync(ct);
+
+        var items = await ApplySort(filtered, query)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
+            .ToListAsync(ct);
+
+        var results = await MapExpenseResponsesAsync(portfolioId, items, ct);
+
+        return new ExpenseListResponse
+        {
+            Items = results,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
+    }
+
+    private IQueryable<Expense> BuildListQuery(
+        int portfolioId,
+        int? propertyId,
+        int? unitId,
+        int? workOrderId,
+        bool workOrderLinkedOnly,
+        ListQuery query)
+    {
         var q = _db.Expenses
             .AsNoTracking()
             .Where(e => e.PortfolioId == portfolioId);
 
         if (propertyId.HasValue)
         {
-            q = q.Where(e => e.PropertyId == propertyId.Value);
+            var pid = propertyId.Value;
+            q = q.Where(e =>
+                e.PropertyId == pid ||
+                (e.WorkOrderId != null && _db.WorkOrders.Any(w => w.Id == e.WorkOrderId && w.PropertyId == pid)));
         }
 
         if (unitId.HasValue)
         {
-            // The unit's expenses: directly tied to the unit OR tied to one of the unit's work orders.
-            // The work-order set is a correlated subquery so this stays a single SQL statement (no N+1).
             var uid = unitId.Value;
-            q = q.Where(e =>
-                e.UnitId == uid ||
-                (e.WorkOrderId != null && _db.WorkOrders.Any(w => w.Id == e.WorkOrderId && w.UnitId == uid)));
+            if (workOrderLinkedOnly)
+            {
+                q = q.Where(e =>
+                    e.WorkOrderId != null &&
+                    _db.WorkOrders.Any(w => w.Id == e.WorkOrderId && w.UnitId == uid));
+            }
+            else
+            {
+                // The unit's expenses: directly tied to the unit OR tied to one of the unit's work orders.
+                // The work-order set is a correlated subquery so this stays a single SQL statement (no N+1).
+                q = q.Where(e =>
+                    e.UnitId == uid ||
+                    (e.WorkOrderId != null && _db.WorkOrders.Any(w => w.Id == e.WorkOrderId && w.UnitId == uid)));
+            }
+        }
+        else if (workOrderLinkedOnly)
+        {
+            q = q.Where(e => e.WorkOrderId != null);
         }
 
         if (workOrderId.HasValue)
@@ -54,7 +110,11 @@ public class ExpenseService : IExpenseService
                 (e.Notes != null && EF.Functions.ILike(e.Notes, $"%{term}%")));
         }
 
-        q = query.SortField switch
+        return q;
+    }
+
+    private static IQueryable<Expense> ApplySort(IQueryable<Expense> q, ListQuery query) =>
+        query.SortField switch
         {
             "description" => query.SortDescending ? q.OrderByDescending(e => e.Description) : q.OrderBy(e => e.Description),
             "category" => query.SortDescending ? q.OrderByDescending(e => e.Category) : q.OrderBy(e => e.Category),
@@ -65,11 +125,8 @@ public class ExpenseService : IExpenseService
             _ => query.SortDescending ? q.OrderByDescending(e => e.CreatedAt) : q.OrderBy(e => e.CreatedAt),
         };
 
-        var items = await q
-            .Skip(query.NormalizedSkip)
-            .Take(query.NormalizedTake)
-            .ToListAsync(ct);
-
+    private async Task<List<ExpenseResponse>> MapExpenseResponsesAsync(int portfolioId, IReadOnlyCollection<Expense> items, CancellationToken ct)
+    {
         // One batched query for all expense ids in this page — avoids N+1.
         var expenseIds = items.Select(e => e.Id).ToList();
         var filesByExpenseId = await _db.StoredFiles

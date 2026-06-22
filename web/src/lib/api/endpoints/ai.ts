@@ -1,7 +1,9 @@
-import { api } from '../client';
+import { api, fetchApi } from '../client';
 import type { DocCitation } from './docs';
 
 export type { DocCitation } from './docs';
+
+const AI_ASK_TIMEOUT_MS = 120_000;
 
 export interface BriefingBullet {
 	title: string;
@@ -73,7 +75,11 @@ export interface FairHousingReviewResult {
 export const ai = {
 	briefing: () => api.get<BriefingResponse>('/ai/briefing'),
 	ask: (question: string, history?: QaTurn[], delivery?: AskDelivery) =>
-		api.post<AskResponse>('/ai/ask', { question, history, ...delivery }),
+		fetchApi<AskResponse>('/ai/ask', {
+			method: 'POST',
+			body: JSON.stringify({ question, history, ...delivery }),
+			timeoutMs: AI_ASK_TIMEOUT_MS
+		}),
 	chat: (message: string) => api.post<AiChatResponse>('/ai/chat', { message }),
 	fairHousingCheck: (text: string) =>
 		api.post<FairHousingReviewResult>('/ai/fair-housing-check', { text }),

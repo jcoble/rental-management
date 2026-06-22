@@ -359,6 +359,7 @@ public sealed class ScanService : IScanService
 
         // Build ReceiptData JSON for the non-promoted details.
         var receiptDataJson = BuildReceiptDataJson(dto);
+        var matchedVendorId = await FindExactVendorMatchAsync(portfolioId, dto.VendorName, ct);
 
         var expenseAmount = dto.Total ?? dto.Subtotal ?? 0m;
         if (expenseAmount <= 0m)
@@ -370,6 +371,7 @@ public sealed class ScanService : IScanService
         var request = new CreateExpenseRequest
         {
             PropertyId  = propertyId, // null when no property context; ExpenseService validates in-portfolio.
+            VendorId    = matchedVendorId,
             Category    = dto.Category ?? ScheduleECategory.Other,
             Description = string.IsNullOrWhiteSpace(dto.VendorName) ? "Scanned receipt" : dto.VendorName!,
             Amount      = expenseAmount,
@@ -458,6 +460,24 @@ public sealed class ScanService : IScanService
             ct: ct);
 
         return new ScanConfirmResult(true, expense.Id, null, "Expense");
+    }
+
+    private async Task<int?> FindExactVendorMatchAsync(int portfolioId, string? vendorName, CancellationToken ct)
+    {
+        var normalizedName = vendorName?.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalizedName))
+            return null;
+
+        var matches = await _db.Vendors
+            .Where(v => v.PortfolioId == portfolioId
+                && v.DeletedAt == null
+                && v.Name.Trim().ToLower() == normalizedName)
+            .OrderBy(v => v.Id)
+            .Select(v => v.Id)
+            .Take(2)
+            .ToListAsync(ct);
+
+        return matches.Count == 1 ? matches[0] : null;
     }
 
     // -------------------------------------------------------------------------
@@ -744,7 +764,7 @@ public sealed class ScanService : IScanService
         }
         else
         {
-            var resolved = await ResolveOrCreateTenantAsync(portfolioId, fields.TenantName, ct);
+            var resolved = await ResolveOrCreateTenantAsync(portfolioId, fields, ct);
             if (resolved is null)
                 return new ScanConfirmResult(false, null, "Select a tenant for this lease");
             tenantId = resolved.Value;
@@ -966,24 +986,23 @@ public sealed class ScanService : IScanService
     /// in-portfolio Tenant from the name ("chained Tenant") and returns its id. Returns null only when
     /// there is no usable name to create from.
     /// </summary>
-    private async Task<int?> ResolveOrCreateTenantAsync(int portfolioId, string? tenantName, CancellationToken ct)
+    private async Task<int?> ResolveOrCreateTenantAsync(int portfolioId, LeaseDraftFields fields, CancellationToken ct)
     {
-        var name = tenantName?.Trim();
+        var name = fields.TenantName?.Trim();
         if (string.IsNullOrWhiteSpace(name))
             return null;
 
-        // Match against existing in-portfolio tenants by full name (case-insensitive). Whitespace-collapse
-        // both sides so "Jane   Doe" still matches "Jane Doe".
-        var normalized = CollapseWhitespace(name);
-        var existing = await _db.Tenants
+        // Match against existing in-portfolio tenants by full name in SQL; do not materialize every tenant
+        // just to compare names in memory.
+        var normalized = CollapseWhitespace(name).ToLowerInvariant();
+        var matchId = await _db.Tenants
             .Where(t => t.PortfolioId == portfolioId && t.DeletedAt == null)
-            .Select(t => new { t.Id, FullName = (t.FirstName + " " + t.LastName).Trim() })
-            .ToListAsync(ct);
+            .Where(t => (t.FirstName + " " + t.LastName).Trim().ToLower() == normalized)
+            .Select(t => (int?)t.Id)
+            .FirstOrDefaultAsync(ct);
 
-        var match = existing.FirstOrDefault(t =>
-            string.Equals(CollapseWhitespace(t.FullName), normalized, StringComparison.OrdinalIgnoreCase));
-        if (match is not null)
-            return match.Id;
+        if (matchId is not null)
+            return matchId.Value;
 
         // No match — chain a new Tenant. Split the name into first/last on the last space.
         var (firstName, lastName) = SplitName(name);
@@ -993,6 +1012,9 @@ public sealed class ScanService : IScanService
             {
                 FirstName = firstName,
                 LastName = lastName,
+                Email = BlankToNull(fields.TenantEmail),
+                Phone = BlankToNull(fields.TenantPhone),
+                EmergencyContact = BlankToNull(fields.TenantEmergencyContact),
                 Notes = "Created from scanned lease PDF.",
             },
             ct);
@@ -1151,14 +1173,12 @@ public sealed class ScanService : IScanService
     {
         var unitKey = CollapseWhitespace(unitNumber).ToLowerInvariant();
 
-        var existing = await _db.Units
+        return await _db.Units
             .Where(u => u.PropertyId == propertyId && u.DeletedAt == null)
-            .Select(u => new { u.Id, u.UnitNumber })
-            .ToListAsync(ct);
-
-        var match = existing.FirstOrDefault(u =>
-            CollapseWhitespace(u.UnitNumber ?? string.Empty).ToLowerInvariant() == unitKey);
-        return match is null ? null : new UnitMatch(match.Id, match.UnitNumber);
+            .Where(u => (u.UnitNumber ?? "").Trim().ToLower() == unitKey)
+            .OrderBy(u => u.Id)
+            .Select(u => new UnitMatch(u.Id, u.UnitNumber))
+            .FirstOrDefaultAsync(ct);
     }
 
     /// <summary>The unit number to use, defaulting a blank one to "1" so single-family leases still get a unit.</summary>
@@ -1762,16 +1782,16 @@ public sealed class ScanService : IScanService
             using var doc = JsonDocument.Parse(overridesJson);
             var root = doc.RootElement;
 
-            if (TryGetOverrideInt(root, out var propertyId, "propertyId", "property_id"))
-                fields.PropertyId = propertyId;
-            if (TryGetOverrideInt(root, out var unitId, "unitId", "unit_id"))
-                fields.UnitId = unitId > 0 ? unitId : null;
-            if (TryGetOverrideInt(root, out var tenantId, "tenantId", "tenant_id"))
-                fields.TenantId = tenantId > 0 ? tenantId : null;
-            if (TryGetOverrideInt(root, out var leaseId, "leaseId", "lease_id"))
-                fields.LeaseId = leaseId > 0 ? leaseId : null;
-            if (TryGetOverrideInt(root, out var vendorId, "vendorId", "vendor_id"))
-                fields.VendorId = vendorId > 0 ? vendorId : null;
+            if (TryGetOverrideNullableInt(root, out var propertyId, "propertyId", "property_id"))
+                fields.PropertyId = propertyId.GetValueOrDefault();
+            if (TryGetOverrideNullableInt(root, out var unitId, "unitId", "unit_id"))
+                fields.UnitId = unitId is > 0 ? unitId : null;
+            if (TryGetOverrideNullableInt(root, out var tenantId, "tenantId", "tenant_id"))
+                fields.TenantId = tenantId is > 0 ? tenantId : null;
+            if (TryGetOverrideNullableInt(root, out var leaseId, "leaseId", "lease_id"))
+                fields.LeaseId = leaseId is > 0 ? leaseId : null;
+            if (TryGetOverrideNullableInt(root, out var vendorId, "vendorId", "vendor_id"))
+                fields.VendorId = vendorId is > 0 ? vendorId : null;
             if (TryGetOverrideString(root, out var title, "title"))
                 fields.Title = title;
             if (TryGetOverrideString(root, out var description, "description"))
@@ -1811,6 +1831,12 @@ public sealed class ScanService : IScanService
             fields.UnitId = ParseIntField(root, "unit_id") ?? ParseIntField(root, "unitId");
             fields.TenantId = ParseIntField(root, "tenant_id") ?? ParseIntField(root, "tenantId");
             fields.TenantName = ReadFieldValue(root, "tenant_name") ?? ReadFieldValue(root, "tenantName");
+            fields.TenantEmail = ReadFieldValue(root, "tenant_email") ?? ReadFieldValue(root, "tenantEmail");
+            fields.TenantPhone = ReadFieldValue(root, "tenant_phone") ?? ReadFieldValue(root, "tenantPhone");
+            fields.TenantEmergencyContact = ReadFieldValue(root, "tenant_emergency_contact")
+                ?? ReadFieldValue(root, "tenantEmergencyContact")
+                ?? ReadFieldValue(root, "emergency_contact")
+                ?? ReadFieldValue(root, "emergencyContact");
             fields.PropertyName = ReadFieldValue(root, "property_name") ?? ReadFieldValue(root, "propertyName");
             fields.PropertyAddress = ReadFieldValue(root, "property_address") ?? ReadFieldValue(root, "propertyAddress");
             fields.PropertyCity = ReadFieldValue(root, "property_city") ?? ReadFieldValue(root, "propertyCity");
@@ -1874,14 +1900,20 @@ public sealed class ScanService : IScanService
             using var doc = JsonDocument.Parse(overridesJson);
             var root = doc.RootElement;
 
-            if (TryGetOverrideInt(root, out var propertyId, "propertyId", "property_id"))
-                fields.PropertyId = propertyId;
-            if (TryGetOverrideInt(root, out var unitId, "unitId", "unit_id"))
-                fields.UnitId = unitId > 0 ? unitId : null;
-            if (TryGetOverrideInt(root, out var tenantId, "tenantId", "tenant_id"))
-                fields.TenantId = tenantId > 0 ? tenantId : null;
+            if (TryGetOverrideNullableInt(root, out var propertyId, "propertyId", "property_id"))
+                fields.PropertyId = propertyId.GetValueOrDefault();
+            if (TryGetOverrideNullableInt(root, out var unitId, "unitId", "unit_id"))
+                fields.UnitId = unitId is > 0 ? unitId : null;
+            if (TryGetOverrideNullableInt(root, out var tenantId, "tenantId", "tenant_id"))
+                fields.TenantId = tenantId is > 0 ? tenantId : null;
             if (TryGetOverrideString(root, out var tenantName, "tenantName", "tenant_name"))
                 fields.TenantName = tenantName;
+            if (TryGetOverrideString(root, out var tenantEmail, "tenantEmail", "tenant_email"))
+                fields.TenantEmail = tenantEmail;
+            if (TryGetOverrideString(root, out var tenantPhone, "tenantPhone", "tenant_phone"))
+                fields.TenantPhone = tenantPhone;
+            if (TryGetOverrideString(root, out var tenantEmergency, "tenantEmergencyContact", "tenant_emergency_contact", "emergencyContact", "emergency_contact"))
+                fields.TenantEmergencyContact = tenantEmergency;
             // Leased-premises corrections: the reviewer can fix the address/unit the match-or-create
             // uses. Supplying propertyId=0 (above) forces "create new" using these fields even if the
             // model had guessed an id.
@@ -2043,10 +2075,10 @@ public sealed class ScanService : IScanService
             if (TryGetOverrideString(root, out var notes, "notes"))
                 fields.Notes = notes;
             // Reviewer can correct the property/unit link; 0 clears it back to "no property".
-            if (TryGetOverrideInt(root, out var propertyId, "propertyId", "property_id"))
-                fields.PropertyId = propertyId > 0 ? propertyId : null;
-            if (TryGetOverrideInt(root, out var unitId, "unitId", "unit_id"))
-                fields.UnitId = unitId > 0 ? unitId : null;
+            if (TryGetOverrideNullableInt(root, out var propertyId, "propertyId", "property_id"))
+                fields.PropertyId = propertyId is > 0 ? propertyId : null;
+            if (TryGetOverrideNullableInt(root, out var unitId, "unitId", "unit_id"))
+                fields.UnitId = unitId is > 0 ? unitId : null;
         }
         catch (Exception ex)
         {
@@ -2070,6 +2102,12 @@ public sealed class ScanService : IScanService
     {
         var str = ReadFieldValue(root, key);
         return int.TryParse(str, out var value) ? value : null;
+    }
+
+    private static string? BlankToNull(string? value)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed;
     }
 
     /// <summary>First present key wins. Accepts JSON string or number (number returned as text).</summary>
@@ -2120,6 +2158,47 @@ public sealed class ScanService : IScanService
         return false;
     }
 
+    /// <summary>First present key wins. Accepts null, empty string, a JSON integer, or a numeric string.</summary>
+    private static bool TryGetOverrideNullableInt(JsonElement root, out int? value, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!root.TryGetProperty(key, out var el))
+                continue;
+
+            if (el.ValueKind == JsonValueKind.Null)
+            {
+                value = null;
+                return true;
+            }
+
+            if (el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var number))
+            {
+                value = number;
+                return true;
+            }
+
+            if (el.ValueKind == JsonValueKind.String)
+            {
+                var raw = el.GetString();
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    value = null;
+                    return true;
+                }
+
+                if (int.TryParse(raw, out var parsed))
+                {
+                    value = parsed;
+                    return true;
+                }
+            }
+        }
+
+        value = null;
+        return false;
+    }
+
     private sealed class WorkOrderDraftFields
     {
         public int PropertyId { get; set; }
@@ -2140,6 +2219,9 @@ public sealed class ScanService : IScanService
         public int? UnitId { get; set; }
         public int? TenantId { get; set; }
         public string? TenantName { get; set; }
+        public string? TenantEmail { get; set; }
+        public string? TenantPhone { get; set; }
+        public string? TenantEmergencyContact { get; set; }
 
         // Leased-premises text extracted straight off the document, used to match-or-create the
         // Property/Unit when no in-portfolio id was matched (the empty-portfolio bootstrap path).

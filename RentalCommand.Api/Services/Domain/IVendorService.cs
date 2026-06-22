@@ -9,6 +9,7 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IVendorService
 {
     Task<IReadOnlyList<VendorResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
+    Task<VendorListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
     Task<VendorResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
     Task<VendorResponse> CreateAsync(int portfolioId, CreateVendorRequest request, CancellationToken ct = default);
     Task<VendorResponse?> UpdateAsync(int portfolioId, int id, UpdateVendorRequest request, CancellationToken ct = default);

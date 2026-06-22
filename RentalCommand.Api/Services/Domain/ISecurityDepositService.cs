@@ -11,6 +11,9 @@ public interface ISecurityDepositService
     /// <summary>List all holdings for the portfolio, optionally filtered by lease.</summary>
     Task<IReadOnlyList<SecurityDepositResponse>> ListAsync(int portfolioId, int? leaseId, CancellationToken ct = default);
 
+    /// <summary>List one page of holdings with SQL-side sorting/paging and a total count.</summary>
+    Task<SecurityDepositListResponse> ListPageAsync(int portfolioId, int? leaseId, ListQuery query, CancellationToken ct = default);
+
     /// <summary>Get a single holding by id. Returns null when not found or out of scope.</summary>
     Task<SecurityDepositResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 

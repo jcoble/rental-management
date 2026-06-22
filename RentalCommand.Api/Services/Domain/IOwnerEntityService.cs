@@ -9,6 +9,7 @@ namespace RentalCommand.Api.Services.Domain;
 public interface IOwnerEntityService
 {
     Task<IReadOnlyList<OwnerEntityResponse>> ListAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
+    Task<OwnerEntityListResponse> ListPageAsync(int portfolioId, ListQuery query, CancellationToken ct = default);
     Task<OwnerEntityResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
     Task<OwnerEntityResponse> CreateAsync(int portfolioId, CreateOwnerEntityRequest request, CancellationToken ct = default);
     Task<OwnerEntityResponse?> UpdateAsync(int portfolioId, int id, UpdateOwnerEntityRequest request, CancellationToken ct = default);

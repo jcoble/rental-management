@@ -40,6 +40,14 @@ public class LeaseController : ManagementControllerBase
         return Ok(items);
     }
 
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(LeaseListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<LeaseListResponse>> ListPage([FromQuery] LeaseListQuery query, CancellationToken ct)
+    {
+        var page = await _service.ListPageAsync(GetPortfolioId(), query, ct);
+        return Ok(page);
+    }
+
     [HttpGet("{id:int}")]
     [ProducesResponseType(typeof(LeaseResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -124,6 +132,18 @@ public class LeaseController : ManagementControllerBase
         return doc == null
             ? NotFound(new { error = "Lease not found" })
             : CreatedAtAction(nameof(Document), new { id }, doc);
+    }
+
+    /// <summary>Lightweight status for the latest generated lease agreement, without streaming the PDF.</summary>
+    [HttpGet("{id:int}/document-status")]
+    [ProducesResponseType(typeof(LeaseDocumentStatusResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseDocumentStatusResponse>> DocumentStatus(int id, CancellationToken ct)
+    {
+        var status = await _service.GetDocumentStatusAsync(GetPortfolioId(), id, ct);
+        return status == null
+            ? NotFound(new { error = "Lease not found" })
+            : Ok(status);
     }
 
     /// <summary>Download the latest generated lease agreement PDF (404 until one has been generated).</summary>

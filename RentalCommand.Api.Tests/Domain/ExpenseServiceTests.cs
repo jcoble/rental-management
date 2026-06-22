@@ -1,6 +1,8 @@
 using FluentAssertions;
+using System.Data.Common;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
@@ -17,6 +19,7 @@ public class ExpenseServiceTests : IDisposable
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
     private readonly ExpenseService _sut;
+    private readonly List<string> _commands = [];
 
     public ExpenseServiceTests()
     {
@@ -25,6 +28,7 @@ public class ExpenseServiceTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new RecordingCommandInterceptor(_commands))
             .Options;
 
         _db = new ExpenseServiceTestDbContext(options);
@@ -48,6 +52,46 @@ public class ExpenseServiceTests : IDisposable
     {
         _db.Dispose();
         _conn.Dispose();
+    }
+
+    [Fact]
+    public async Task ListPageAsync_FiltersWorkOrderReceiptsAndPagesInSql()
+    {
+        var (unitId, otherUnitId) = SeedUnitsForListPage();
+        SeedWorkOrderExpense(unitId, "Alpha", DateTime.UtcNow.AddDays(-4), 10m);
+        SeedWorkOrderExpense(unitId, "Bravo", DateTime.UtcNow.AddDays(-3), 20m);
+        SeedWorkOrderExpense(unitId, "Cedar", DateTime.UtcNow.AddDays(-2), 30m);
+        SeedDirectUnitExpense(unitId, "Direct unit", DateTime.UtcNow.AddDays(-1), 40m);
+        SeedWorkOrderExpense(otherUnitId, "Other unit", DateTime.UtcNow, 50m);
+
+        _commands.Clear();
+        var page = await _sut.ListPageAsync(
+            PortfolioId,
+            propertyId: null,
+            unitId,
+            workOrderId: null,
+            workOrderLinkedOnly: true,
+            new ListQuery
+            {
+                Sort = "description",
+                Skip = 1,
+                Take = 2,
+            });
+
+        page.TotalCount.Should().Be(3);
+        page.Skip.Should().Be(1);
+        page.Take.Should().Be(2);
+        page.Items.Select(e => e.Description).Should().Equal("Bravo", "Cedar");
+        page.Items.Should().OnlyContain(e => e.WorkOrderId != null);
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("WorkOrders", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -253,6 +297,103 @@ public class ExpenseServiceTests : IDisposable
         prop!.SetValue(request, value);
     }
 
+    private (int UnitId, int OtherUnitId) SeedUnitsForListPage()
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Cedar Point Flats",
+            AddressLine1 = "100 Cedar St",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Properties.Add(property);
+        _db.SaveChanges();
+
+        var unit = new Unit
+        {
+            PropertyId = property.Id,
+            UnitNumber = "1A",
+            Bedrooms = 1,
+            Bathrooms = 1,
+            MarketRent = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var otherUnit = new Unit
+        {
+            PropertyId = property.Id,
+            UnitNumber = "2A",
+            Bedrooms = 1,
+            Bathrooms = 1,
+            MarketRent = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Units.AddRange(unit, otherUnit);
+        _db.SaveChanges();
+
+        return (unit.Id, otherUnit.Id);
+    }
+
+    private void SeedWorkOrderExpense(int unitId, string description, DateTime incurredAt, decimal amount)
+    {
+        var now = DateTime.UtcNow;
+        var propertyId = _db.Units.Where(u => u.Id == unitId).Select(u => u.PropertyId).Single();
+        var workOrder = new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+            UnitId = unitId,
+            Title = $"{description} work order",
+            Description = $"{description} work",
+            Category = "General",
+            Status = WorkOrderStatus.New,
+            Priority = WorkOrderPriority.Normal,
+            RequestedAt = now,
+            UpdatedAt = now,
+        };
+        _db.WorkOrders.Add(workOrder);
+        _db.SaveChanges();
+
+        _db.Expenses.Add(new Expense
+        {
+            PortfolioId = PortfolioId,
+            WorkOrderId = workOrder.Id,
+            Category = ScheduleECategory.Repairs,
+            Description = description,
+            Status = ExpenseStatus.Paid,
+            Amount = amount,
+            IncurredAt = incurredAt,
+            CreatedAt = incurredAt,
+            UpdatedAt = incurredAt,
+        });
+        _db.SaveChanges();
+    }
+
+    private void SeedDirectUnitExpense(int unitId, string description, DateTime incurredAt, decimal amount)
+    {
+        var propertyId = _db.Units.Where(u => u.Id == unitId).Select(u => u.PropertyId).Single();
+        _db.Expenses.Add(new Expense
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+            UnitId = unitId,
+            Category = ScheduleECategory.Repairs,
+            Description = description,
+            Status = ExpenseStatus.Paid,
+            Amount = amount,
+            IncurredAt = incurredAt,
+            CreatedAt = incurredAt,
+            UpdatedAt = incurredAt,
+        });
+        _db.SaveChanges();
+    }
+
     private sealed class NoopDataUpdateService : IDataUpdateService
     {
         public Task BroadcastEntityUpdateAsync(int portfolioId, string entityType, int entityId, object data, CancellationToken ct = default)
@@ -260,6 +401,28 @@ public class ExpenseServiceTests : IDisposable
 
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
             => Task.CompletedTask;
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
     }
 }
 

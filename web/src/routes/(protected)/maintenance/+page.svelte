@@ -28,12 +28,13 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
+	const PAGE_SIZE = 20;
 	const WO_STATUSES = ['New', 'Scheduled', 'InProgress', 'WaitingParts', 'Completed', 'Cancelled'];
 	const WO_PRIORITIES = ['Low', 'Normal', 'High', 'Emergency'];
 
 	// Work-order search / status / priority / sort / page persisted in the URL so they survive navigating
-	// away and back. Sort/page seed the client-side DataGrid (initialSort / page) and are mirrored back
-	// via onSortChange / bind:page.
+	// away and back. The main work-order grid is server-side so these controls feed the SQL query instead
+	// of filtering a capped list in the browser.
 	const initialParams = page.url.searchParams;
 	let woSearch = $state(readGridParam(initialParams, 'q'));
 	let woStatusFilter = $state(readGridParam(initialParams, 'status'));
@@ -63,8 +64,25 @@
 	});
 
 	const workOrdersQuery = createQuery(() => ({
-		queryKey: ['work-orders', portfolioId, debouncedWoSearch.value],
-		queryFn: () => workOrders.list(portfolioId, { search: debouncedWoSearch.value, take: 100 }),
+		queryKey: [
+			'work-orders',
+			portfolioId,
+			'page',
+			debouncedWoSearch.value,
+			woStatusFilter,
+			woPriorityFilter,
+			gridSort,
+			gridPage,
+			PAGE_SIZE,
+		],
+		queryFn: () => workOrders.listPage(portfolioId, {
+			search: debouncedWoSearch.value,
+			status: woStatusFilter || undefined,
+			priority: woPriorityFilter || undefined,
+			sort: gridSort || undefined,
+			skip: (gridPage - 1) * PAGE_SIZE,
+			take: PAGE_SIZE,
+		}),
 	}));
 	const inspectionsQuery = createQuery(() => ({ queryKey: ['inspections', portfolioId], queryFn: () => inspections.list(portfolioId) }));
 	const propertiesQuery = createQuery(() => ({ queryKey: ['properties', portfolioId], queryFn: () => properties.list(portfolioId, { take: 200 }) }));
@@ -218,18 +236,15 @@
 			return;
 		}
 		inspectionErrors = {};
-		createInspectionMutation.mutate({ portfolioId, ...result.data });
+		createInspectionMutation.mutate({
+			portfolioId,
+			...result.data,
+			scheduledFor: localInputToOffsetIso(inspectionForm.scheduledFor),
+		});
 	}
 
-	// Work orders with client-side status + priority filter
-	const woList = $derived.by(() => {
-		const all = workOrdersQuery.data ?? [];
-		return all.filter((w) => {
-			if (woStatusFilter && w.status !== woStatusFilter) return false;
-			if (woPriorityFilter && w.priority !== woPriorityFilter) return false;
-			return true;
-		});
-	});
+	const woList = $derived(workOrdersQuery.data?.items ?? []);
+	const woTotalCount = $derived(workOrdersQuery.data?.totalCount ?? 0);
 
 	// DataGrid column definitions — cell snippets referenced below in template
 	const woColumns: ColumnDef<WorkOrder>[] = [
@@ -302,14 +317,18 @@
 	<DataGrid
 		data={woList}
 		columns={woColumns}
-		loading={workOrdersQuery.isLoading}
+		loading={workOrdersQuery.isLoading || workOrdersQuery.isFetching}
 		emptyMessage="No work orders found."
 		onRowClick={(wo) => goto('/maintenance/' + wo.id)}
 		getRowKey={(wo) => wo.id}
 		data-testid="work-orders-list"
-		initialSort={gridSort}
-		bind:page={gridPage}
-		onSortChange={(s) => (gridSort = s ?? '')}
+		pageSize={PAGE_SIZE}
+		page={gridPage}
+		totalCount={woTotalCount}
+		serverSide
+		onPageChange={(page) => (gridPage = page)}
+		sort={gridSort}
+		onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 items-center gap-2 min-w-0">

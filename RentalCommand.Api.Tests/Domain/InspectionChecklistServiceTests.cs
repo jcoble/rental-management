@@ -1,5 +1,7 @@
 using FluentAssertions;
+using System.Data.Common;
 using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
@@ -21,9 +23,9 @@ public class InspectionChecklistServiceTests : IDisposable
     private const int PortfolioId = 1;
 
     private readonly SqliteConnection _conn;
+    private readonly List<string> _executedSql = [];
     private readonly RentalCommandDbContext _db;
     private readonly InspectionService _service;
-    private readonly WorkOrderService _workOrders;
 
     public InspectionChecklistServiceTests()
     {
@@ -35,6 +37,7 @@ public class InspectionChecklistServiceTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
             .Options;
 
         _db = new InspectionTestDbContext(options);
@@ -51,11 +54,9 @@ public class InspectionChecklistServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _workOrders = new WorkOrderService(_db, new NoopInspectionDataUpdate(), new NoopInspectionMessagePublisher(), NullLogger<WorkOrderService>.Instance);
         _service = new InspectionService(
             _db,
             new NoopInspectionDataUpdate(),
-            _workOrders,
             new InMemoryFileStorage(),
             new InspectionReportPdfGenerator(),
             NullLogger<InspectionService>.Instance);
@@ -195,6 +196,49 @@ public class InspectionChecklistServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Complete_BatchesFailedItemWorkOrderCreationWithoutPerItemScopeQueries()
+    {
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+
+        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = DateTime.UtcNow,
+            Inspector = "Jane Doe",
+            TemplateId = moveIn.Id,
+        });
+        created.Should().NotBeNull();
+
+        var items = created!.Items.OrderBy(i => i.SortOrder).Take(3).ToList();
+        foreach (var item in items)
+        {
+            await _service.UpdateItemAsync(PortfolioId, created.Id, item.Id,
+                new UpdateInspectionItemRequest { Result = InspectionItemResult.Fail, Note = $"Fail {item.Id}" });
+        }
+
+        _executedSql.Clear();
+        var (summary, error) = await _service.CompleteAsync(PortfolioId, created.Id, userId: 7);
+
+        error.Should().BeNull();
+        summary.Should().NotBeNull();
+        summary!.CreatedWorkOrderIds.Should().HaveCount(3);
+
+        var propertyScopeChecks = _executedSql.Count(sql =>
+            sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase));
+        propertyScopeChecks.Should().BeLessThanOrEqualTo(1,
+            "inspection completion should not revalidate the same property once per failed checklist item");
+
+        var workOrderHydrationReads = _executedSql.Count(sql =>
+            sql.Contains("FROM \"WorkOrders\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LEFT JOIN", StringComparison.OrdinalIgnoreCase));
+        workOrderHydrationReads.Should().BeLessThanOrEqualTo(1,
+            "broadcast payloads should be hydrated with one projection instead of one read per created work order");
+    }
+
+    [Fact]
     public async Task Complete_AlreadyCompleted_ReturnsError()
     {
         var property = SeedProperty();
@@ -239,12 +283,6 @@ public class InspectionChecklistServiceTests : IDisposable
             => Task.CompletedTask;
     }
 
-    private sealed class NoopInspectionMessagePublisher : IMessagePublisher
-    {
-        public Task PublishAsync<TPayload>(int portfolioId, string messageType, TPayload payload, CancellationToken ct = default)
-            => Task.CompletedTask;
-    }
-
     /// <summary>In-memory <see cref="IFileStorage"/> so report generation works without disk.</summary>
     private sealed class InMemoryFileStorage : IFileStorage
     {
@@ -270,6 +308,47 @@ public class InspectionChecklistServiceTests : IDisposable
         {
             _files.Remove(path);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override InterceptionResult<int> NonQueryExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result)
+        {
+            commands.Add(command.CommandText);
+            return base.NonQueryExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<int>> NonQueryExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.NonQueryExecutingAsync(command, eventData, result, cancellationToken);
         }
     }
 

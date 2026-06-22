@@ -1,4 +1,5 @@
 import { api } from '../client';
+import { buildListQuery, type ListParams } from '../list-params';
 
 /** Channels a message can be delivered on. Portal is the always-on base channel. */
 export type MessageChannel = 'Portal' | 'Email' | 'Sms';
@@ -34,6 +35,17 @@ export interface Conversation extends ConversationSummary {
 	messages: ConversationMessage[];
 }
 
+export interface ConversationListResponse {
+	items: ConversationSummary[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
+export interface ConversationUnreadCountResponse {
+	count: number;
+}
+
 export interface StartConversationRequest {
 	tenantId: number;
 	subject: string;
@@ -55,6 +67,9 @@ export interface SendMessageRequest {
 export const messages = {
 	/** List all conversations, newest activity first. */
 	list: () => api.get<ConversationSummary[]>('/conversations'),
+	listPage: (params?: ListParams) =>
+		api.get<ConversationListResponse>(`/conversations/page${buildListQuery(params)}`),
+	unreadCount: () => api.get<ConversationUnreadCountResponse>('/conversations/unread-count'),
 	/** Fetch one conversation's full history. Marks the thread read for the landlord. */
 	get: (id: number) => api.get<Conversation>(`/conversations/${id}`),
 	/** Start a new conversation with a tenant. */

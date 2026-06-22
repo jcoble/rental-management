@@ -34,9 +34,10 @@
 		}
 	}));
 
-	function askLease() {
-		const q = leaseQuestion.trim();
+	function askLease(question = leaseQuestion) {
+		const q = question.trim();
 		if (!q || askLeaseMutation.isPending) return;
+		leaseQuestion = q;
 		askLeaseMutation.mutate(q);
 	}
 
@@ -48,8 +49,7 @@
 	];
 
 	function askSuggestion(q: string) {
-		leaseQuestion = q;
-		askLease();
+		askLease(q);
 	}
 </script>
 
@@ -92,7 +92,7 @@
 					/>
 					<Button
 						data-testid="portal-lease-question-submit"
-						onclick={askLease}
+						onclick={() => askLease()}
 						disabled={askLeaseMutation.isPending || !leaseQuestion.trim()}
 					>
 						{askLeaseMutation.isPending ? 'Answering…' : 'Ask'}

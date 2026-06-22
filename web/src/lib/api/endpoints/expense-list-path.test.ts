@@ -1,0 +1,24 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { buildExpenseListPagePath } from './expense-list-path.ts';
+
+describe('buildExpenseListPagePath', () => {
+	it('serializes work-order receipt filtering as an ASP.NET boolean', () => {
+		assert.equal(
+			buildExpenseListPagePath(2, {
+				unitId: 3,
+				take: 20,
+				sort: '-incurredAt',
+				workOrderLinkedOnly: true
+			}),
+			'/expenses/page?take=20&sort=-incurredAt&portfolioId=2&unitId=3&workOrderLinkedOnly=true'
+		);
+	});
+
+	it('omits optional filters when they are not set', () => {
+		assert.equal(
+			buildExpenseListPagePath(2, { take: 20 }),
+			'/expenses/page?take=20&portfolioId=2'
+		);
+	});
+});

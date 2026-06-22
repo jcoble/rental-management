@@ -1,0 +1,868 @@
+# TSK-397 Real-User UI Pass
+
+Date: 2026-06-22
+Branch: `tsk-397-real-user-ui-pass`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-real-user-ui-pass`
+
+## Scope
+
+Run the web app as a real new live user starting from empty portfolio data. Build sanitized, production-like local data through the product workflows, including properties, units, tenants, leases, scanned documents, receipts, payments, applications, and image uploads. Plaid banking and QuickBooks/provider accounting are deferred until sandbox credentials are available.
+
+## Local Stack
+
+- Web: `https://localhost:5807`
+- API: `https://localhost:5806` (`http://localhost:5805`)
+- Database: PostgreSQL container `rentalcommand-tsk397-full-ui-db`, database `rentalcommand_tsk397_full_ui`, host port `5754`
+- Assistant provider setting: `claude-cli`, model `sonnet`
+- Safe wrapper: `scripts/qa/start-scan-audit-local.sh` with local provider-backed email/SMS settings blanked.
+
+## Synthetic Account
+
+- Earlier broad-pass user: Riley Morgan, `tsk397.ui.1782115363@example.local`
+- Current clean-start continuation user: Nora Vale, `tsk397.full.1782131040@example.local`
+- Current portfolio: Nora Vale's Portfolio
+
+## Pass Log
+
+### Dashboard
+
+Acceptance criteria:
+- Dashboard loads the real portfolio, money snapshot, briefing, messages, work orders, appointments, and setup progress without demo rows.
+- Hero actions and card links route to the intended product surfaces.
+- User-facing labels do not expose enum tokens, and money prose is formatted as currency.
+- Empty/current states are truthful for overdue rent and expiring leases.
+
+Bug RC-UI-017:
+- Repro: Create a `MaintenanceVisit` appointment, then open `/`.
+- Observed: Upcoming Appointments displayed raw enum `MaintenanceVisit`.
+- Fix: Dashboard now uses the shared appointment type label helper used by appointment list/detail.
+- Regression: `web/src/routes/(protected)/appointments/calendar-utils.test.ts` already covers `MaintenanceVisit -> Maintenance`.
+
+Bug RC-UI-018:
+- Repro: Open `/` with cents-bearing monthly expense/net values.
+- Observed: Money explanation text rendered `$572.9`, which looked unpolished and inconsistent with currency.
+- Fix: accounting snapshot explanation formatting keeps whole-dollar values compact and formats cents-bearing values with two decimals.
+- Regression: `RentalCommand.Api.Tests/Domain/AccountingServiceTests.cs`.
+
+Evidence:
+- `/` loaded `GET /api/v1/portfolios/2/dashboard => 200` and `GET /api/v1/accounting/snapshot => 200`.
+- Dashboard rendered Riley Morgan's real portfolio, setup progress `6 of 8 done`, latest message/work order, no overdue rent, and no expiring leases.
+- Browser proof after fixes showed `Clearline plumbing service visit · Maintenance`, `You spent $572.90`, and `You're keeping $950.55 ... after $572.90 of expenses`.
+- Console error count remained zero.
+
+Status: Pass after fixes for loaded-state dashboard display and primary hero/card link targets. Setup checklist route is covered separately.
+
+### Registration and Setup Entry
+
+Acceptance criteria:
+- New user can register, verify email, log in, choose live setup, and land on onboarding.
+- Empty live portfolio starts without seeded properties, units, tenants, or leases.
+
+Evidence:
+- Verification link was pulled from local `OutboxMessages`.
+- Browser reached `/onboarding` authenticated as the synthetic user.
+- Initial DB check showed zero properties and zero units for the fresh live portfolio.
+
+Status: Pass.
+
+### Onboarding Property and Units
+
+Acceptance criteria:
+- User can type a state abbreviation into the state combobox, tab/click away, and continue.
+- A resumed onboarding session can attach a property to the existing owner created earlier.
+- Property save includes required hidden API fields and persists units.
+- Successful save advances to the Tenants step and creates rows in PostgreSQL.
+
+Bug RC-UI-001:
+- Repro: On the property address step, type `OH` into State, fill the rest of the address, click Next.
+- Observed: The UI showed `OH`, but Next displayed `State is required`.
+- Root cause: `StateSelect` visible typed text could diverge from its bound value when the combobox was not open during blur/submit.
+- Fix: Added shared state-input commit logic and wired closed-combobox blur to commit a resolved state code.
+- Regression: `web/src/lib/components/shared/resolve-state.test.ts`.
+
+Bug RC-UI-002:
+- Repro: Create owner, refresh or resume onboarding, fill a property and two units, then click Save & continue.
+- Observed: UI jumped back to the property address step with no visible error and no property API POST.
+- Root cause: Onboarding property validation omitted the required hidden `status` field. The owner id also only came from the current-session `createdOwner`, which made resume fragile.
+- Fix: Added onboarding helpers for owner selection and property payload construction with `status: Active`.
+- Regressions:
+  - `web/src/lib/onboarding/owner-selection.test.ts`
+  - `web/src/lib/onboarding/property-payload.test.ts`
+
+Evidence after fixes:
+- Browser requests showed `POST /api/v1/properties => 201` and two `POST /api/v1/units => 201`.
+- DB rows:
+  - Property: `Maple Grove Duplex`, state `OH`, postal code `43215`, owner entity `1`.
+  - Units: `A` rent `1400.00`; `B` rent `1450.00`.
+- Browser advanced to the Tenants step.
+
+Status: Pass after fixes.
+
+### Onboarding Tenants, Lease, and Photo Extraction
+
+Acceptance criteria:
+- User can create a tenant from onboarding and the tenant is available to the lease step.
+- Lease step preselects the newly created tenant/property/unit and seeds monthly rent from the unit.
+- User can upload a camera-style lease image through "Snap a photo"; the shared scan engine processes it as an image and returns reviewable extracted values.
+- Applying extracted values fills the editable lease form without changing the selected tenant/property/unit.
+- Creating the lease finishes onboarding and persists a usable property -> unit -> tenant -> lease spine.
+
+Synthetic image:
+- `output/qa/tsk397-ui-pass/lease-photo-maple-grove.jpg`
+- Sanitized phone-camera-style JPG generated locally with tenant/property/rent/date/deposit/late-fee terms.
+
+Evidence:
+- `POST /api/v1/tenants => 201`, tenant `Avery Brooks` persisted.
+- Onboarding lease step prefilled `Avery Brooks`, `Maple Grove Duplex`, `Unit A`, and rent `1400`.
+- `POST /api/v1/scans => 201`; engine log: `claude-cli extraction: VISION read (image/jpeg, no extractable text)` and `Scan extraction succeeded for draft 1 ... Lease, Reviewing`.
+- Review UI displayed extracted values for lease number, dates, monthly rent, security deposit, late fee, and rent due day with confidence.
+- Applying extracted values filled monthly rent `1400.00`, security deposit `1400.00`, late fee `50.00`, and due day `1`.
+- `POST /api/v1/leases => 201`.
+- DB row: lease `MGD-A-20260622`, property `1`, unit `1`, tenant `1`, start `2026-06-22`, end `2027-06-22`, rent `1400.00`, deposit `1400.00`, late fee `50.00`, due day `1`.
+- Browser reached the truthful completion state: `You're all set!`.
+
+Status: Pass.
+
+### Receipt Image Scan To Expense
+
+Acceptance criteria:
+- User can upload a camera-style receipt image through the scan workflow.
+- The shared extraction engine treats the image as vision input and returns reviewable expense fields.
+- Confirming the draft creates a usable expense detail page with preview/file, receipt fields, line items, and vendor linkage.
+
+Synthetic image:
+- `output/qa/tsk397-ui-pass/receipt-clearline-plumbing.jpg`
+
+Bug RC-UI-003:
+- Repro: Upload a receipt image whose vendor name exactly matches an existing active portfolio vendor, confirm as an expense, then open the created expense detail.
+- Observed: Expense detail showed `No vendor` even though `Clearline Plumbing` already existed.
+- Root cause: scan-confirm expense creation promoted vendor text but did not resolve an exact existing vendor id.
+- Fix: `ScanService.ConfirmAsExpenseAsync` now uses a portfolio-scoped exact vendor lookup before creating the expense.
+- Regression: `RentalCommand.Api.Tests/Scanning/ScanServiceTests.cs`.
+
+Evidence:
+- Engine log: `claude-cli extraction: VISION read (image/jpeg, no extractable text)`.
+- Expense detail route `/accounting/expenses/2` rendered the scanned document preview and line items.
+
+Status: Pass after fix.
+
+### Maintenance, Appointments, Recurring Tasks, Inspections
+
+Acceptance criteria:
+- User can create and schedule a maintenance work order with property/unit/tenant/vendor context.
+- User can create and open a calendar appointment from the work flow.
+- Appointment labels are user-facing names, not enum tokens.
+- Recurring maintenance tasks can be created, edited, paused, and resumed with correct date-only display.
+- Inspections preserve the local scheduled date/time when submitted.
+
+Bug RC-UI-004:
+- Repro: Create a maintenance visit appointment and view the appointment list/detail.
+- Observed: UI displayed raw enum `MaintenanceVisit`.
+- Fix: Added appointment type label helper and used it on appointment list/detail.
+- Regression: `web/src/routes/(protected)/appointments/calendar-utils.test.ts`.
+
+Bug RC-UI-005:
+- Repro: Create a recurring maintenance task with next due `09/22/2026`.
+- Observed: Row displayed `Sep 21, 2026`.
+- Root cause: UTC-midnight date-only value was formatted through local-time date formatting.
+- Fix: recurring task UI now formats next due with `formatDateOnly`.
+- Regression: `web/src/lib/utils/date.test.ts`.
+
+Bug RC-UI-006:
+- Repro: Create an inspection for `2026-06-25 10:30`.
+- Observed risk: raw `datetime-local` value sent without offset, vulnerable to timezone shift.
+- Fix: inspection submit now serializes via `localInputToOffsetIso`.
+- Regression: `web/src/lib/utils/date.test.ts`.
+
+Evidence:
+- Work order `Kitchen sink leak under Unit A` persisted and was scheduled with vendor `Clearline Plumbing`.
+- Appointment `Clearline plumbing service visit` opened from the calendar row and displayed `Maintenance`.
+- Recurring task `Quarterly HVAC filter replacement` created, edited, paused, and resumed.
+- Inspection detail `/maintenance/inspections/1` displayed the intended `6/25/2026 10:30 AM`.
+
+Status: Pass after fixes for the covered workflows.
+
+### Public Applications and Application Lifecycle
+
+Acceptance criteria:
+- Landlord can generate/use a public application link.
+- Applicant can submit with image-extracted or manually entered data.
+- Requested property/unit display uses names/numbers, not raw ids.
+- Full-address scan output does not duplicate structured address pieces.
+- Landlord can approve, decline, and withdraw separate applications.
+- Approval creates a tenant and lands on a usable tenant detail page.
+- Terminal application states do not offer new screening actions.
+
+Synthetic image:
+- `output/qa/tsk397-ui-pass/jordan-ellis-application-camera.jpg`
+
+Bug RC-UI-007:
+- Repro: Submit an application with property/unit selected, then open application detail.
+- Observed: requested home displayed `#1` / `#2`.
+- Fix: application list/get now projects property/unit display labels in the paged SQL query, and the frontend prefers names/numbers.
+- Regressions:
+  - `RentalCommand.Api.Tests/Domain/ApplicationServiceTests.cs`
+  - `web/src/lib/applications/application-display.test.ts`
+
+Bug RC-UI-008:
+- Repro: Scan/submit an application where image extraction puts a full address in line 1 and also fills city/state/ZIP.
+- Observed: detail and approved tenant notes could show duplicated address pieces.
+- Fix: shared address composition deduplicates structured parts; approval notes use the same composer.
+- Regressions:
+  - `RentalCommand.Api.Tests/Domain/ApplicationServiceTests.cs`
+  - `web/src/lib/applications/application-display.test.ts`
+
+Bug RC-UI-009:
+- Repro: Decline or withdraw an application and reopen the detail page.
+- Observed: `Run screening` remained visible on terminal applications.
+- Fix: screening action now uses the application lifecycle predicate and is hidden after a decision, with a terminal-state note.
+- Regression: `web/src/lib/applications/application-display.test.ts`.
+
+Evidence:
+- Jordan Ellis submitted via public apply using a JPG upload. Engine log showed vision extraction; form autofilled partial image data and allowed user edits.
+- Jordan approval created tenant `/tenants/2`.
+- Casey Nguyen submitted through public form, was declined with a reason, and grid displayed `Declined`.
+- Taylor Brooks submitted with no property preference, was withdrawn, and detail displayed `Screening can only be run before a decision` with no run button.
+- Morgan Pierce submitted with scan-style full address, was approved, and tenant `/tenants/3` note showed `Prior address: 44 Cedar Bend Apt 5, Columbus, OH 43215.` once.
+
+Status: Pass after fixes for application happy paths and core terminal states.
+
+### Owners
+
+Acceptance criteria:
+- Owner list loads the seeded portfolio owner and supports create, detail, edit, and delete for an unrelated owner.
+- Owner create/edit uses the same state/address behavior expected elsewhere in the app.
+- Delete confirmation identifies the selected owner and removes only that local synthetic record.
+
+Evidence:
+- `/owners` loaded Riley Morgan from the onboarding-created portfolio owner.
+- Created disposable owner `Lena Ortiz Holdings` with Ohio address/contact fields through the add-owner modal.
+- Opened `/owners/2`; detail displayed address, contact, documents/history panels, and edit controls.
+- Edited phone/email from detail; UI showed `Owner updated`.
+- Deleted `Lena Ortiz Holdings` through the confirmation dialog; `/owners` still displayed Riley Morgan and no Lena row.
+
+Status: Pass for covered create/detail/edit/delete workflow.
+
+### Vendors
+
+Acceptance criteria:
+- Vendor list loads existing scan-linked vendors and supports create, detail, rating, tax edit, W-9 state toggle, and delete for an unrelated vendor.
+- Vendor detail changes persist back to the list grid.
+- Delete confirmation identifies the selected vendor and removes only that local synthetic record.
+- Outbound W-9 text request is not exercised unless local provider behavior is confirmed safe.
+
+Evidence:
+- `/vendors` loaded scanned vendor `Clearline Plumbing`, used by the receipt/work-order workflows.
+- Created disposable vendor `Summit Electric` with service type, email, phone, preferred status, 1099 eligibility, and W-9-on-file state.
+- Detail `/vendors/2` displayed the performance scorecard, compliance fields, and tax controls.
+- Rated `Summit Electric` 5 stars with a comment; detail and list grid updated to `5.0` / one rating.
+- Toggled W-9 from `Yes` to `Missing`; the detail and list grid reflected `W-9: Missing`.
+- Edited tax info and saved synthetic EIN `31-1234567`; detail displayed the saved tax id.
+- Deleted only `Summit Electric` through the confirmation dialog; `/vendors` retained `Clearline Plumbing`.
+- `Text W-9 request` was intentionally not clicked because the implementation enqueues outbound SMS via the outbox and may hit an SMS provider when credentials are configured.
+
+Status: Pass for covered local CRUD/compliance workflow; outbound SMS request remains gated by provider safety.
+
+### Messages
+
+Acceptance criteria:
+- Message center loads from the real portfolio state and supports starting a local-safe tenant conversation.
+- User can select portal-only delivery, send a message, open the thread, and reply without invoking email/SMS providers.
+- Outbound provider-backed channels are not exercised unless local provider behavior is confirmed safe.
+
+Evidence:
+- `/messages` loaded the empty state, then created a tenant conversation with Avery Brooks using portal-only delivery.
+- Thread detail accepted a reply and retained the conversation history.
+- Email/SMS channel send paths were intentionally not used during this local pass.
+- Later production-scale grid proof seeded 25 local-only synthetic conversations for Nora Vale and verified the staff message list loads through `/api/v1/conversations/page?take=20`, `Load more` fetches `/api/v1/conversations/page?skip=20&take=20`, the shell badge uses `/api/v1/conversations/unread-count`, and compose tenant search uses `/api/v1/tenants/page?take=20&search=Avery...`; no legacy `/api/v1/conversations` or `/api/v1/tenants?take=500` list call occurred and console warnings/errors were zero.
+
+Status: Pass for local portal-only messaging workflow; provider-backed email/SMS sending remains gated.
+
+### Settings Notifications and In-App Broadcasts
+
+Acceptance criteria:
+- Getting Started can deep-link to the Settings Notifications tab and the tab state is preserved in the URL hash.
+- Notification email saves against the portfolio and reloads with the saved value.
+- Notification channel matrix renders current preferences and saves without clobbering hidden push settings.
+- Local in-app broadcast validates title/message before enabling submit, creates an unread notification, supports the exposed severity choices, clears the form after success, and refreshes the header bell/list immediately.
+- SMS test/send controls are not exercised unless local provider behavior is confirmed safe.
+
+Bug RC-UI-019:
+- Repro: Open `/settings#notifications`, send a local in-app broadcast, and watch the header notification badge.
+- Observed: API returned `201` with `isRead:false`, but the header stayed at `0 unread notifications`; the page invalidated generic query keys and refetched conversations/appointments, not the notification singleton used by the shell.
+- Fix: broadcast success now invalidates notification queries and calls `notificationStore.refresh()` so the shell bell refetches unread count and recent list immediately.
+- Regression: browser proof plus service-level notification regression in `RentalCommand.Api.Tests/Domain/ConversationNotificationTests.cs`.
+
+Bug RC-UI-020:
+- Repro: Broadcast severity dropdown offered `Critical`, but the typed notification renderer only modeled `Info`, `Success`, `Warning`, and `Error`.
+- Observed: Critical notifications could fall back to Info styling client-side, and API casing was not normalized.
+- Fix: `Critical` is now a first-class notification severity in the web type/config, and `NotificationService.CreateBroadcastAsync` normalizes allowed severities case-insensitively.
+- Regression: `CreateBroadcastAsync_NormalizesSeverityAndCountsAsUnreadForPortfolioUsers`.
+
+Bug RC-UI-021:
+- Repro: Protected Settings page exposed the broadcast card to roles beyond the API's `Admin,Manager,Owner` authorization.
+- Observed: an Agent could reach a form that would 403 on submit.
+- Fix: the card now uses the same role set as the API.
+
+Evidence:
+- Getting Started `Show me` link opened `/settings#notifications`.
+- `PUT /api/v1/notifications/email => 200` saved `riley.alerts@example.local`.
+- Pre-fix network proof: `POST /api/v1/notifications/broadcast => 201` returned notification id `1`, `isRead:false`, followed by no notification refetch and header `0 unread notifications`.
+- Post-fix reload picked up id `1` and rendered `1 unread notification`.
+- Post-fix Critical broadcast returned id `2`, `severity:"Critical"`, `isRead:false`; the app then fetched `GET /api/v1/notifications/unread-count => 200` with `{"count":2}` and `GET /api/v1/notifications?take=20 => 200` listing ids `2` and `1`.
+- Header rendered `2 unread notifications`; form cleared; console warnings/errors remained zero.
+
+Status: Pass after fixes for notification email save, local in-app broadcast validation/submit/refresh, severity handling, and role-gated broadcast UI. SMS provider test remains intentionally unsubmitted.
+
+### Lease Agreement, Native Signing, and Public Signing
+
+Acceptance criteria:
+- Lease detail can generate/download a printable agreement PDF from persisted lease data.
+- Native e-sign send creates a local signature request and signer link without using production providers.
+- Public signer can open the document, consent to electronic records, sign, and reach completion.
+- Completed signature stores a signed document and certificate of completion.
+- Management detail for an already signed/finalized lease must not offer another send-for-signature action.
+
+Bug RC-UI-010:
+- Repro: Open a lease detail before an agreement PDF exists.
+- Observed: The page probed `/api/v1/leases/{id}/document`, producing a visible 404 in console/network before the user requested a download.
+- Fix: Added `GET /api/v1/leases/{id}/document-status` and switched lease detail to use metadata status instead of probing the binary download endpoint.
+- Regressions:
+  - `RentalCommand.Api.Tests/Domain/LeaseAgreementDocumentTests.cs`
+  - lease detail browser proof: `/leases/1/document-status => 200`, no initial `/leases/1/document` 404.
+
+Bug RC-UI-011:
+- Repro: After a lease was signed and active, open Agreement & Signing.
+- Observed: UI could still offer send/resend signature actions even though service state rejected finalized leases; a notice-given lease could also be pushed into signature flow.
+- Fix: server-side send now only accepts Draft/PendingSignature, and the web helper hides send actions for Signed/Active/NoticeGiven/Expired/Terminated leases while preserving signed download.
+- Regressions:
+  - `RentalCommand.Api.Tests/Domain/LeaseEsignServiceTests.cs`
+  - `web/src/lib/leases/lease-esign.test.ts`
+
+Evidence:
+- Generated agreement downloaded as `.playwright-cli/lease-agreement-1.pdf` and rendered to PNG for visual inspection.
+- Local outbox contained the e-sign message; public signer route loaded from the local token.
+- Public signer opened the document, consent enabled signing, typed `Avery Brooks`, submitted, and reached completion.
+- DB showed the signature request completed and lease signed with a stored signed document.
+- Management Agreement & Signing tab showed `Signed`, exposed `Download signed lease`, and did not show send/resend signature.
+- Signed PDF downloaded as `.playwright-cli/signed-lease-1.pdf`; `pdfinfo` showed 3 A4 pages; rendered PNG inspection showed executed agreement, signature page, and certificate of completion.
+
+Status: Pass after fixes for generated agreement, public signing happy path, signed-document download, and finalized-lease action guard.
+
+### Tenant Notices
+
+Acceptance criteria:
+- Notices page loads current lease/payment state and does not generate drafts when no notice condition exists.
+- Draft review/approval/send workflow remains gated unless a local-safe eligible notice condition exists.
+
+Evidence:
+- `/notices` loaded the empty/current state.
+- `Generate drafts` produced no draft for the clean current portfolio state.
+
+Status: Partial pass for empty/no-op state. Draft edit, fair-housing rewrite, approval, and send/dismiss remain open for an eligible synthetic notice condition.
+
+### Reports Hub and Generic Report Viewer
+
+Acceptance criteria:
+- Reports catalog loads from the real API and lists every server-declared report.
+- Each generic report route auto-generates with server defaults and renders either a populated table or a truthful empty state without console errors.
+- Shared report controls support property filtering, CSV export, and print.
+- External/deep-link reports still route to their existing product pages instead of trying to render in the generic viewer.
+
+Evidence:
+- `/reports` loaded `GET /api/v1/reports/catalog => 200` and rendered Accounting, Rent & Payments, Owners, and Operations report cards.
+- Browser route sweep covered all generic report keys:
+  - Initial tables: `income-expense-statement`, `property-pnl-summary`, `general-ledger`, `cash-flow`, `rent-roll`, `rent-ledger`, `owner-distributions`, `occupancy`, `vendor-1099`, `work-orders`.
+  - Expected empty states before later data setup: `delinquency`, `lease-expirations`, `security-deposit-register`.
+- Network proof showed each report endpoint returning `200`, including `GET /api/v1/reports/rent-roll?propertyIds=1 => 200`.
+- Rent Roll shared controls:
+  - Selected `Maple Grove Duplex` in the property popover and clicked `Update`.
+  - Table stayed scoped to `Maple Grove Duplex`, `Unit A`, lease `MGD-A-20260622`, tenant `Avery Brooks`.
+  - `Export CSV` downloaded `.playwright-cli/rent-roll-2026-06-22.csv`.
+  - `Print` invoked `window.print` through a test stub.
+- After the deposits workflow created a holding and deduction, `/reports/security-deposit-register` rendered a table row for `Maple Grove Duplex`, `Unit A · MGD-A-20260622`, tenant `Avery Brooks`, held `$1,400.00`, deductions `$125.50`, balance `$1,274.50`, and matching totals.
+- Console error count remained zero during the sweep.
+
+Status: Pass for the reports catalog, all generic report default routes, report property filtering, CSV export, and print action. External reports are covered separately by `/tax`, `/owners-report`, and `/accounting/year-end`.
+
+### Security Deposits
+
+Acceptance criteria:
+- Deposits page distinguishes held tenant money from rent/payments and starts with a truthful empty state.
+- User can create a security-deposit holding from an existing lease, defaulting amount from lease deposit when amount is blank.
+- Required-form validation is visible for missing lease and missing deduction fields.
+- User can add a deduction, see detail totals and net refund update, upload a camera-style image as a condition photo, download the move-out statement PDF, and open/cancel the return confirmation without changing status.
+
+Evidence:
+- `/deposits` initially showed `No security deposits on record yet. Add a holding to get started.`
+- `New Holding` with no lease showed required validation.
+- Created a holding for lease `MGD-A-20260622 · Avery Brooks` with amount left blank; list rendered `$1,400.00`, `Held`, held date `6/22/2026`.
+- `Add deduction` with empty fields showed validation, then saved `Move-out cleaning`, `$125.50`, notes `TSK397 synthetic cleaning deduction.`
+- Detail `/deposits/1` rendered amount held `$1,400.00`, total deductions `$125.50`, net refund `$1,274.50`, notes, and deduction row.
+- Uploaded synthetic camera-style JPG `lease-photo-maple-grove.jpg` as a condition photo; API proof `POST /api/v1/documents => 201`, `GET /api/v1/documents/10/file => 200`.
+- `Download move-out statement (PDF)` saved `.playwright-cli/move-out-statement-1.pdf`; network proof `GET /api/v1/security-deposits/1/move-out-statement => 200`.
+- `Process Return` opened a confirmation message for `Return $1,274.50`; canceled it and verified status remained `Held`.
+- Console error count remained zero.
+
+Status: Pass for create, validation, deduction, detail, image attachment, move-out statement download, and return-confirm cancel path. Actual return confirmation remains intentionally unsubmitted to preserve synthetic state for later flows.
+
+### Payment Detail
+
+Acceptance criteria:
+- Payment detail page loads a real payment with lease/tenant display labels, status, method/reference, and audit history.
+- Edit mode validates required fields, can save a non-destructive update, and refreshes audit history.
+- Delete remains available but is not clicked during the pass because it would remove synthetic ledger state.
+
+Evidence:
+- Opened `/accounting/payments/2` for the rent payment resolved by the past-due workflow.
+- Detail rendered `Avery Brooks`, `Rent · $123.45 · Paid`, lease `MGD-A-20260622`, due date `May 1, 2026`, paid date `Jun 22, 2026`, method `Cash`, reference `TSK397-CASH-001`, and audit history.
+- Edit mode with blank amount showed required validation.
+- Restored amount `$123.45`, updated notes to `TSK397 browser past-due mark-paid seed; detail edit verified.`, and saved.
+- Network proof: `PATCH /api/v1/payments/2 => 200`, followed by refreshed `GET /api/v1/payments/2 => 200` and payment audit requests.
+- UI returned to view mode with updated notes and `Updated payment just now`.
+- Console error count remained zero.
+
+Status: Pass for detail load, validation, update, and audit refresh. Delete intentionally not submitted.
+
+### Expense Detail
+
+Acceptance criteria:
+- Expense detail page loads a scanned receipt expense with property/vendor labels, scan preview, parsed receipt fields, line items, raw receipt disclosure, and audit history.
+- Edit mode validates required fields, can repair a missing vendor on local pre-fix data, and preserves typed scan line items.
+- Delete remains available but is not clicked because it would remove synthetic accounting history.
+
+Evidence:
+- Opened `/accounting/expenses/2`; detail rendered `Clearline Plumbing`, `Repairs · $286.45 · Paid`, property `Maple Grove Duplex`, scanned document preview/link, receipt subtotal `270`, tax `16.45`, card last 4 `4242`, payment method `Card`, document kind `Receipt`, vendor phone/address, and two line items.
+- The existing local row initially showed `No vendor` because it was created before the scan vendor-linking fix; this was treated as local data remediation, while future scan-linking is covered by `ScanServiceTests`.
+- Edit mode with blank amount showed required validation.
+- Selected vendor `Clearline Plumbing`, updated notes to `Kitchen sink trap repair — Maple Grove Duplex, Unit A; detail vendor repaired after scan-link fix.`, and saved.
+- Network proof: `PATCH /api/v1/expenses/2 => 200`, followed by refreshed `GET /api/v1/expenses/2 => 200` and expense audit requests.
+- UI returned to view mode with `Vendor: Clearline Plumbing`, parsed line items still intact, and `Updated expense just now`.
+- Console error count remained zero.
+
+Status: Pass for detail load, validation, update, scan preview/receipt fields, line items, and audit refresh. Delete intentionally not submitted.
+
+### Money Ledger Filters and Create Dialogs
+
+Acceptance criteria:
+- Main money ledger loads from real portfolio data with KPI cards, paged transactions, and no seeded/demo rows.
+- Search, type, status, category, property, and sort controls persist in the URL and drive server requests with explicit query parameters.
+- Filtered ledger rows remain openable/deletable through visible row actions, while destructive delete is not submitted during this pass.
+- New Payment and New Expense dialogs validate required fields without posting incomplete rows, and Cancel returns to the same filtered ledger state.
+
+Evidence:
+- `/accounting` loaded KPI cards from `GET /api/v1/accounting/summary => 200` and report data from `GET /api/v1/accounting/reports => 200`.
+- Applied filters: search `Clearline`, type `Expense`, status `Paid`, category `Repairs`, property `Maple Grove Duplex`, then sorted by `Amount`.
+- URL persisted as `/accounting?q=Clearline&kind=Expense&status=Paid&category=Repairs&property=1&sort=amount`.
+- Network proof: `GET /api/v1/accounting/transactions?take=20&search=Clearline&sort=amount&kind=Expense&status=Paid&category=Repairs&propertyId=1 => 200`.
+- Grid rendered two matching Clearline repair expenses, both scoped to `Maple Grove Duplex`, with the scanned receipt thumbnail/link still visible on the receipt-backed row.
+- `New Payment` empty save showed `Lease is required`, `Amount is required`, and `Due date is required`; Cancel closed the modal without a `POST /api/v1/payments`.
+- `New Expense` empty save showed `Description is required`, `Amount is required`, and `Incurred date is required`; Cancel closed the modal without a `POST /api/v1/expenses`.
+- Console error count remained zero.
+
+Status: Pass for ledger KPI load, server-backed filter/sort URL state, create-payment validation/cancel, and create-expense validation/cancel. Row delete remains intentionally unsubmitted.
+
+### Assistant Briefing and Data Q&A
+
+Acceptance criteria:
+- Assistant page loads the daily briefing from real portfolio state.
+- A live-data question uses server-side portfolio tools instead of generic model memory or external Claude/Notion tools.
+- Long-running local `claude -p` assistant requests do not hit the frontend's global short timeout.
+- UI renders the answer, tools used, and no console/network errors.
+
+Bug RC-UI-015:
+- Repro: On `/ai`, ask `Show me my recent expenses` with the local `claude-cli` provider.
+- Observed: Browser posted `/api/v1/ai/ask`; the server returned 200 after roughly 46-49 seconds, but the frontend aborted at the global 20-second timeout and showed `The request is taking longer than expected`.
+- Fix: `ai.ask` now uses the lower-level `fetchApi` call with an assistant-specific timeout budget instead of the default API timeout.
+
+Bug RC-UI-016:
+- Repro: After extending the timeout, ask `Show me my recent expenses` again.
+- Observed: API returned 200 with `toolsUsed: []` and an answer claiming it only had Notion/project-planning tools, not Rental Command database access.
+- Root cause: `ClaudeCliLlmProvider.ChatWithToolsAsync` ignored the supplied application tool specs and returned best-effort prose from `claude -p`, so the portfolio assistant could not execute its DB-backed tools in local testing.
+- Fix: local Claude now follows the same tool-call contract as the HTTP providers: the first pass returns compact JSON tool calls constrained to the supplied app tools, the service executes those tools, and the second pass answers from the tool-result messages only.
+- Regression: `RentalCommand.Api.Tests/Scanning/ClaudeCliLlmProviderTests.cs`.
+
+Evidence:
+- `/ai` daily briefing rendered a real inspection alert: `Inspection in 3 days — Routine`.
+- Browser proof after fix: `POST /api/v1/ai/ask => 200`.
+- Response body: `toolsUsed:["list_recent_expenses"]`, `source:"Data"`, model `claude-cli:sonnet`.
+- Rendered answer used real synthetic app data: 2 expenses in the last 90 days totaling `$572.90`, both at `Maple Grove Duplex` for `Clearline Plumbing`.
+- Console error count remained zero.
+
+Status: Pass after fixes for daily briefing and data-backed assistant Q&A. Optional answer delivery via email/SMS remains gated by provider safety.
+
+### External Report Pages: Owner Statement and Tax
+
+Acceptance criteria:
+- Owner statement page lists owners with year-scoped net distribution, opens a selected owner statement, and exports CSV without using outbound email.
+- Tax page shows Schedule E summary, vendor W-9 checklist, CSV export, and year-end packet PDF download.
+- Outbound email/SMS actions remain gated unless local provider safety is confirmed.
+
+Evidence:
+- `/owners-report` loaded `GET /api/v1/accounting/owner-statements?year=2026 => 200`.
+- Owner list displayed `Riley Morgan Net: $951`; selecting the owner rendered `Riley Morgan — 2026`, total income `$1,523`, total expenses `$573`, management fee `$0`, net to owner `$951`, and property row `Maple Grove Duplex`.
+- `Download CSV` saved `.playwright-cli/owner-statement-1-2026.csv`.
+- `/tax` loaded `GET /api/v1/accounting/schedule-e?year=2026 => 200` and `GET /api/v1/accounting/reports => 200`.
+- Tax page displayed 2026 Schedule E totals: rental income `$1,523`, expenses `$573`, net income `$951`, and a 1099 checklist row for `Clearline Plumbing`.
+- `Download CSV` saved `.playwright-cli/schedule-e-2026.csv`; network proof `GET /api/v1/accounting/schedule-e/export?year=2026 => 200`.
+- `Download packet` saved `.playwright-cli/year-end-2025.pdf`; network proof `GET /api/v1/accounting/year-end-packet?year=2025 => 200`.
+- `Email to owner` and `Text W-9 request` were intentionally not clicked because they may enqueue or send provider-backed outbound messages.
+- Console error count remained zero.
+
+Status: Pass for owner-statement list/detail/export and tax Schedule E/packet downloads. Outbound email/SMS actions remain gated.
+
+### Past-Due Mark Paid Workflow
+
+Acceptance criteria:
+- A real user can resolve a past-due rent item from the past-due UI without client-side loading/filtering of payment pages.
+- The mark-paid action opens a modal, collects received date/method/reference, posts one lease-level server action, and refreshes the list to an empty current state.
+
+Evidence:
+- Seeded local synthetic late rent payment `Payment.Id=2`, lease `1`, amount `$123.45`, due `2026-05-01`.
+- `/accounting/past-due` rendered `1 rental behind, owing $123` with row `Avery Brooks`, `Maple Grove Duplex · Unit A`.
+- Clicking `Mark paid` opened the confirmation modal with date, method, reference, and notes fields.
+- Selected `Cash`, filled reference `TSK397-CASH-001`, submitted the modal.
+- Network proof: `POST /api/v1/payments/leases/1/past-due/mark-paid => 200`, followed by `GET /api/v1/accounting/past-due => 200`.
+- UI refreshed to `Everyone is current. Nice.` with zero console errors.
+
+Status: Pass after the B015 server-action fix.
+
+### B015 Data-Access Fixes From This Pass
+
+Acceptance criteria:
+- Reporting/accounting/banking endpoints touched during this pass do not materialize rows and then filter/group/sort/aggregate for the covered B015 defects.
+- Regression tests inspect behavior and, where practical, emitted SQL shape.
+
+Fixes:
+- Past-due snapshot/list totals now derive from shared SQL grouped queries instead of materialized payment rows.
+- Banking review queue now performs candidate filtering, scoring, and top-match ranking SQL-side before response mapping.
+- Vendor 1099 report now filters year/vendor eligibility and totals paid SQL-side.
+- Security-deposit register no longer parses deduction JSON to total report rows. A maintained `DeductionsTotal` scalar was added, backfilled from JSONB in migration `20260622100316_AddSecurityDepositDeductionsTotal`, and report totals now aggregate that column SQL-side.
+- Year-end selected-property view now calls `/accounting/year-end?propertyId=...`; cash-flow, Schedule E, and rent-roll blocks are filtered server-side instead of Svelte filtering/reducing the full portfolio response.
+- Past-due `Mark paid` now calls one lease-level server action that resolves eligible past-due payments in one filtered query, instead of the page loading up to 200 payments, filtering, and marking each client-side.
+- Lease-expiration totals now use a SQL count/sum over the filtered lease query instead of `rows.Count`/`rows.Sum`.
+- Rent-ledger running balances are projected through a correlated SQL sum, and per-lease/portfolio charged/paid totals are grouped SQL-side. The remaining in-memory work is DTO nesting from ordered SQL rows.
+- True cash-flow, property P&L, occupancy, year-end packet monthly/yearly totals, and owner-distribution portfolio totals now use DB-side grouped/summed queries.
+- Single-owner statement report totals now use a grouped SQL aggregate instead of summing per-property DTOs in memory.
+- Schedule E raw rental income, deductible expense, and modeled interest totals are SQL-side. Depreciation remains an app-domain calculation from per-property basis data, not an aggregate over materialized transaction rows.
+- Assistant/portfolio QA tools now use SQL aggregates for property totals, recent expense totals, and recent payment totals; the mixed appointments/inspections schedule tool now merges, sorts, and caps through a SQL union before formatting.
+- Accounting import retry now queries parked payment and expense rows by external type before materialization, deposit account matching pushes name predicates into SQL, and active lease lookup selects the latest lease per tenant through a grouped/order projection.
+- Accounting mappings and review queues now support DB-side `confirmed`, `skip`, and `take` filters. The settings loader fetches confirmed/unconfirmed mappings and review queue rows as separate capped overfetch queries instead of filtering full arrays in Svelte.
+- Accounting transaction inline reconciliation suggestions now perform amount/date/name gating, scoring, and top-match ranking SQL-side before the suggested bank chip is attached to page rows.
+- Audit pagination now overfetches by one row and passes an explicit `hasNext` signal, so an exactly full final page no longer enables a fake next page.
+- Banking summary `LastSyncedAt` now uses a DB-side `MAX` aggregate instead of loading bank connections and aggregating in memory.
+- Plaid reconnect/exchange matching now uses queryable SHA-256 lookup hashes for external item/account ids, with provider ids still encrypted at rest. The exchange flow no longer loads every Plaid connection and decrypts each row to find a match.
+
+Regressions:
+- `RentalCommand.Api.Tests/Domain/AccountingServiceTests.cs`
+- `RentalCommand.Api.Tests/Domain/BankingServiceTests.cs`
+- `RentalCommand.Api.Tests/Domain/ReportsServiceTests.cs`
+- `RentalCommand.Api.Tests/Domain/PaymentServiceTests.cs`
+- `RentalCommand.Api.Tests/Domain/ScheduleEServiceTests.cs`
+- `RentalCommand.Api.Tests/Domain/OwnerStatementServiceTests.cs`
+- `RentalCommand.Api.Tests/Domain/PortfolioQaServiceTests.cs`
+- `RentalCommand.Api.Tests/Domain/AccountingImportServiceTests.cs`
+- `RentalCommand.Api.Tests/Domain/AccountingConnectionServiceTests.cs`
+- `web/src/lib/audit/pagination.test.ts`
+
+Focused static audit:
+- Read-only audit of `RentalCommand.Api/Services/Domain` and `RentalCommand.Api/Controllers` found the two remaining banking violations above after the earlier report/accounting/banking fixes.
+- After the hash lookup, `MAX`, banking review-queue ranking, and accounting inline-reconciliation ranking fixes, no additional high-confidence report/accounting/banking controller/service B015 violations were identified in that audited scope.
+
+Status: Pass for the repaired attached B015 slices in the audited report/accounting/banking controller/service scope. Do not generalize this to a full-app DB-side audit outside that scope.
+
+### Attached Inventory Follow-Up Fixes
+
+Acceptance criteria:
+- Read-only inventory findings are either fixed with regression coverage, proven safe with browser evidence, or left explicitly open with a bounded next step.
+- UI escape paths are real user actions, not only comments or dead links.
+- Data-access fixes respect the hard DB-side rule for filtering, sorting, grouping, paging, and aggregation.
+
+Fixes closed after the initial scan-heavy pass:
+- `ConversationService` list/detail projections now compute message counts and message ordering through SQL projections instead of materialized navigation mapping. Regression: `ConversationNotificationTests`.
+- `NoticeDraftService` now applies renewal/move-out eligibility windows DB-side for non-forced generation runs while preserving forced targeted notices. Regression: `NoticeDraftServiceTests`.
+- Scan batch upload now wraps batch and draft creation in one transaction and rolls back both when any draft creation fails. Regression: `ScanBatchControllerTests`.
+- Failed scan draft copy no longer tells the user to manually confirm a failed draft; it points the user to retry extraction or reject because server confirmation only accepts `Reviewing` drafts.
+- Shared `FileDrop` now rejects unsupported dragged files before any selected-file state or upload callback runs, while supported PDF/image files still pass through. Regression: `web/src/lib/components/file-drop.test.ts`.
+- `/properties` grid no longer fetches `take=500` and filters/sorts/pages in Svelte; it uses `/api/v1/properties/page` with SQL count, search/filter, sort, offset, and page size. Regression: `PropertyServiceTests`.
+- `/tenants` grid no longer fetches `take=500` and filters/sorts/pages in Svelte; it uses `/api/v1/tenants/page` with SQL count, search, sort, offset, page size, and DB-side `ActiveLeaseCount` sorting. Regression: `TenantServiceTests`.
+- `/leases` grid no longer fetches `take=500` and filters/sorts/pages in Svelte; it uses `/api/v1/leases/page` with SQL count, search, status filtering, sort, offset, page size, and DB-side tenant-name sorting. Regression: `LeaseServiceListTests`.
+- `/units` health grid no longer fetches `take=500` and sorts/pages in Svelte; it uses `/api/v1/units/list-with-health/page` with SQL count, search, property filtering, sort, offset, page size, and DB-side open-repair-count sorting. Regression: `UnitServiceListTests`.
+- Command Center unit search no longer eagerly loads every unit health row on login; it lazily opens a server-searched first page from `/api/v1/units/list-with-health/page`.
+- `/maintenance` work-order grid no longer fetches `take=100` and filters status/priority in Svelte; it uses `/api/v1/work-orders/page` with SQL count, search, status/priority filtering, sort, offset, page size, and DB-side property-name sorting. Regression: `WorkOrderServiceListTests`.
+- `/appointments?view=list` no longer fetches a single `take=20` legacy list and filters type/status in Svelte; it uses `/api/v1/appointments/page` with SQL count, search, type/status filtering, sort, offset, page size, and DB-side property/tenant-name sorting. Regression: `AppointmentServiceListTests`.
+- `/vendors` grid no longer fetches `take=100` and sorts/pages in Svelte; it uses `/api/v1/vendors/page` with SQL count, search, sort, offset, and page size. Regression: `VendorServiceListTests`.
+- `/owners` grid no longer fetches a capped legacy list and sorts/pages in Svelte; it uses `/api/v1/owner-entities/page` with SQL count, search, sort, offset, and page size. Regression: `OwnerEntityServiceListTests`.
+- `/applications` grid no longer fetches a status-filtered list and then searches/sorts/pages in Svelte; it uses `/api/v1/applications/page` with SQL count, search, status filter, sort, offset, and page size. Regression: `ApplicationServiceTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`.
+- `/deposits` grid no longer fetches an unpaged security-deposit list and sorts/pages in Svelte; it uses `/api/v1/security-deposits/page` with SQL count, optional lease filter, sort, offset, and page size. Regression: `SecurityDepositServiceListTests`.
+- `/maintenance/recurring` no longer fetches a fixed `take=200` list and sorts/pages in Svelte; it uses `/api/v1/recurring-maintenance/page` with SQL count, search, active filtering, sort, offset, page size, and DB-side property-name sorting. Regression: `RecurringMaintenanceTaskServiceTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`.
+- `/scan` draft grid no longer fetches a fixed legacy draft array and lets DataGrid sort/page the current window; it uses `/api/v1/scans/page` with SQL count, status filtering, sort, offset, and page size. Regression: `ScanBatchControllerTests.ListPage_ReturnsSqlCountAndRequestedWindow`.
+- `/messages` staff conversation list no longer fetches the legacy unpaged conversation list; it uses `/api/v1/conversations/page` for initial/load-more windows, and the app-shell unread badge uses `/api/v1/conversations/unread-count` with a SQL `SUM`. The compose modal no longer preloads `tenants?take=500`; it uses modal-scoped `/api/v1/tenants/page` search. Regression: `ConversationNotificationTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow` and `ConversationNotificationTests.GetUnreadCountAsync_SumsUnreadCountsInSql`.
+- Unit detail work tabs no longer fetch broad capped child lists: Rent uses `/api/v1/payments/page`, Expenses uses `/api/v1/expenses/page`, and Maintenance uses `/api/v1/work-orders/page` plus `/api/v1/expenses/page?workOrderLinkedOnly=true`. Regression: `PaymentServiceTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`, `ExpenseServiceTests.ListPageAsync_FiltersWorkOrderReceiptsAndPagesInSql`, and `web/src/lib/api/endpoints/expense-list-path.test.ts`.
+- Converted primary-grid query keys now preserve the existing entity/portfolio invalidation prefix (`['entity', portfolioId, ...]`) so create/update/delete mutations refresh both legacy picker lists and new paged grids.
+- Public application submission now blocks duplicate open applications by normalized email like scan-created applications already did. Regression: `ApplicationServiceTests`.
+- `/settings/security` now exposes a confirm-password show/hide toggle instead of keeping hidden `showConfirm` state unreachable.
+- `/admin/users` generated-password modal now has an `I saved it manually` escape path when clipboard write fails.
+- `/settings/accounting` review queue no longer hardcodes `Create it` to tenants. Payments link to `Add tenant`, purchases/bills link to `Add vendor`, skipped non-cash rows expose no fake create action, and `/tenants?create=1` plus `/vendors?create=1` now open their create modals. Regression: `web/src/lib/accounting/review-create-target.test.ts`.
+- `/portal/lease` suggestion chips now pass the selected question directly into the ask mutation instead of relying on the intermediate bound input state. Regression: `web/e2e/portal-lease.spec.ts`.
+
+Browser evidence:
+- `/tenants?create=1` redirected through login as Riley Morgan and opened the `New Tenant` modal with first-name focus.
+- `/vendors?create=1` redirected through login as Riley Morgan and opened the `New Vendor` modal with vendor-name focus.
+- `web/e2e/portal-lease.spec.ts` captured the portal lease Q&A POST body and proved the `Can I have a pet?` chip submits that exact question, then renders the mocked answer.
+- `/properties` grid browser proof as Nora Vale showed initial and Name-sort requests go to `/api/v1/properties/page?take=20...`; no `/api/v1/properties?take=500` grid fetch occurred.
+- `/tenants` grid browser proof as Nora Vale showed initial, search, and Active Leases sort requests go to `/api/v1/tenants/page?take=20...`; no `/api/v1/tenants?take=500` grid fetch occurred.
+- `/leases` grid browser proof as Nora Vale showed initial load, `Avery` tenant-name search, and Tenant-column sort requests go to `/api/v1/leases/page?take=20...`; no `/api/v1/leases?take=500` grid fetch occurred.
+- `/units` grid and Command Center browser proof as Nora Vale showed initial unit list, `1A` search, Open Repairs sort, and command-center dropdown search go to `/api/v1/units/list-with-health/page?take=20...`; no `/api/v1/units/list-with-health?take=500` request occurred in that flow.
+- `/maintenance` work-order grid browser proof as Nora Vale showed initial load, `Front` search, New status, Normal priority, and Property-column sort requests go to `/api/v1/work-orders/page?take=20...`; no `/api/v1/work-orders?take=100` grid fetch occurred.
+- `/appointments?view=list` browser proof as Nora Vale created a real appointment through the UI, then showed `Nora Showing` search, Showing type, Scheduled status, and Property-column sort requests go to `/api/v1/appointments/page?take=20...`; no legacy `/api/v1/appointments?take=20` list fetch occurred.
+- `/vendors` grid browser proof as Nora Vale created a real vendor through the UI, then showed `Nora Vendor` search and Category-column sort requests go to `/api/v1/vendors/page?take=20...`; no `/api/v1/vendors?take=100` grid fetch occurred.
+- `/owners` grid browser proof as Nora Vale created a real owner through the UI, then showed `Nora Owner Grid` search and Type-column sort requests go to `/api/v1/owner-entities/page?take=20...`; no legacy `/api/v1/owner-entities?...` grid fetch occurred.
+- `/applications` grid browser proof as Nora Vale used the scan-created `Gray Johnson` application, then showed `Gray` search, Submitted status filtering, and Income-column sort requests go to `/api/v1/applications/page?take=20...`; no legacy `/api/v1/applications?...` grid fetch occurred. Console warnings/errors: zero.
+- `/deposits` grid browser proof as Nora Vale created a real $1,225 holding for the scanned Avery Ellis lease, then showed Amount-column sort requests go to `/api/v1/security-deposits/page?take=20...`; no legacy `/api/v1/security-deposits?...` grid fetch occurred. Console warnings/errors: zero.
+- `/maintenance/recurring` grid browser proof as Nora Vale created `TSK-397-HVAC-Filter-1782142807739` through the UI, then showed search, Next-column sort, and Active-only filtering requests go to `/api/v1/recurring-maintenance/page?take=20...`; no legacy `/api/v1/recurring-maintenance?...` grid fetch occurred. Console warnings/errors: zero.
+- `/scan` draft grid browser proof as Nora Vale showed initial load, Reviewing tab filtering, Created-column sort, and Status-column sort requests go to `/api/v1/scans/page?take=20...`; no legacy `/api/v1/scans?...` draft-list fetch occurred. The separate recent-batches call to `/api/v1/scans/batches` remained. Console warnings/errors: zero.
+- `/messages` staff conversation proof as Nora Vale loaded seeded local conversations, clicked `Load more`, opened New conversation, searched `Avery`, and observed only `/api/v1/conversations/page?take=20`, `/api/v1/conversations/page?skip=20&take=20`, `/api/v1/conversations/unread-count`, `/api/v1/tenants/page?take=20&sort=name...`, and `/api/v1/tenants/page?take=20&search=Avery&sort=name...`; no legacy `/api/v1/conversations` or `/api/v1/tenants?take=500` list request occurred. Console warnings/errors: zero.
+- `/units/3?tab=rent` unit-detail proof as Nora Vale visited the rent, maintenance, and expenses tabs and observed only `/api/v1/payments/page?take=20&sort=dueDate&portfolioId=2&leaseId=3`, `/api/v1/work-orders/page?take=20&sort=-requestedAt&portfolioId=2&unitId=3`, `/api/v1/expenses/page?take=20&sort=-incurredAt&portfolioId=2&unitId=3&workOrderLinkedOnly=true`, and `/api/v1/expenses/page?take=20&sort=-incurredAt&portfolioId=2&unitId=3`; no legacy `/payments`, `/expenses`, or `/work-orders` list request occurred. Console warnings/errors: zero.
+
+Status: Pass for the attached findings listed above. Remaining broad inventory gaps are tracked below under `Open While In Progress`.
+
+### Nora Vale Empty-Portfolio New-Rental Scan Continuation
+
+Acceptance criteria:
+- Starting from no rental rows, a live-mode user can scan a lease document and create the property, unit, tenant, lease, and attached source document.
+- The new-rental wizard can link to an existing property, choose create-new for a different unit, preserve visible tenant contact fields, and save a non-overlapping second lease.
+- Hidden form defaults and server-side id override semantics match what the review UI promises.
+- Provider-backed outbound email/SMS is not used during local scan testing.
+
+Safety issue RC-SAFE-001:
+- Repro: Started the generic `scripts/start-dev.sh` stack directly before switching to the safe audit wrapper.
+- Observed: Engine inherited configured SendGrid settings and sent a synthetic verification email to `tsk397.full.1782131040@example.local`; engine log showed `POST https://api.sendgrid.com/v3/mail/send => 202`.
+- Mitigation: Stopped the stack and restarted through `scripts/qa/start-scan-audit-local.sh`, which blanks SendGrid/SMTP/SMS provider settings. Subsequent provider-safety grep found no `SendGrid`, `SMTP`, `SMS`, `Twilio`, `Telnyx`, `Vonage`, `mail/send`, or `Email sent` lines in the safe-run logs.
+- Status: Process issue documented; no production or sensitive recipient was used, but future local real-user passes must start with the safe wrapper.
+
+Bug RC-UI-022:
+- Repro: Upload `output/scan-fixtures/scan-lease-excerpt.pdf` on `/scan/new-rental`, fill the missing city/state/ZIP on Property step, then click Next.
+- Observed: The wizard stayed on Step 1 with no visible user-actionable error.
+- Root cause: `new-rental` used the shared property schema but omitted hidden required `status`.
+- Fix: `createNewRentalPropertyForm()` now initializes `status: Active` and the page uses that helper.
+- Regression: `web/src/lib/scan/new-rental-state.test.ts`.
+
+Bug RC-UI-023:
+- Repro: In `/scan/new-rental`, fill visible Tenant step fields for email, phone, and emergency contact, confirm, then query/open the created tenant.
+- Observed: Tenant row was created with only first/last name; visible contact fields were silently dropped.
+- Root cause: The web override payload only sent `tenantName`, and `ScanService` did not parse or apply tenant contact overrides for lease confirmations.
+- Fix: The web override now includes `tenantEmail`, `tenantPhone`, and `tenantEmergencyContact`; `ScanService` parses those fields and passes them to tenant creation.
+- Regression: `ConfirmAndCreateAsync_LeaseDraftWithTenantContactOverrides_PersistsCreatedTenantContact`.
+
+Bug RC-UI-024:
+- Repro: After one scanned lease created Harbor View Unit 4B, rescan the same lease, select existing Harbor View property, choose `Create new from the lease` for Unit, edit unit number to `5C`, fill Lena Park contact fields, and confirm.
+- Observed: Review showed `Unit 5C (new)`, but the API rejected the confirm with `This unit already has an active lease (L-4B-2024-11) overlapping these dates`.
+- Evidence: Confirm request body contained `"unitId": null` and `"unitNumber": "5C"`, but server logs showed lease creation was attempted against the extracted/grounded Unit 4B id.
+- Root cause: nullable id overrides ignored JSON null, so an extracted `unit_id` survived even after the reviewer explicitly chose create-new.
+- Fix: Scan confirm override parsing now treats present null/empty/zero id keys as explicit clears for work-order, lease, and application id overrides. Lease unit matching also uses a DB-side unit-number predicate instead of materializing units to compare in memory.
+- Regression: `ConfirmAndCreateAsync_LeaseDraftWithNullUnitOverride_CreatesReviewerEditedUnit`.
+
+Browser and DB evidence:
+- Current stack: `https://localhost:5807`, `https://localhost:5806`, DB `rentalcommand_tsk397_full_ui`.
+- Registered Nora Vale, verified via local `OutboxMessages`, selected live setup, and confirmed the live portfolio initially had zero properties, units, tenants, leases, payments, expenses, work orders, and scan-created rental data.
+- First scan of `scan-lease-excerpt.pdf` created `Harbor View Apartments`, Unit `4B`, Tenant `Maria Chen`, Lease `L-4B-2024-11`, and attached the scanned source document.
+- Patched rerun: second scan selected existing Harbor View property, selected `Create new from the lease` for unit, changed the unit to `5C`, filled tenant `Lena Park`, `lena.park@example.local`, `555-010-3972`, and `Noah Park 555-010-3973`, changed lease number to `L-5C-2026-06`, reviewed `Unit 5C (new)`, confirmed, and landed on `/leases/2`.
+- DB proof after confirm:
+  - Tenants: `Maria Chen` and `Lena Park | lena.park@example.local | 555-010-3972 | Noah Park 555-010-3973`
+  - Units: `4B` and `5C` with bedrooms `2.0`, bathrooms `1.5`, rent `1500.00`
+  - Leases: `L-4B-2024-11 -> Unit 4B`, `L-5C-2026-06 -> Unit 5C`
+  - Scan drafts: draft `5` confirmed; stale drafts `1`, `2`, and `4` remain `Reviewing` and are reserved for scan-list reject/retry coverage.
+- Lease detail `/leases/2` rendered `Harbor View Apartments · Unit 5C · Lena Park`, Overview tabs/actions, financials, parties, notes, and `View scanned document (PDF)`.
+
+Status: Pass after fixes for this scan-new-rental continuation path. The scan list, batch, retry/reject, failed-state, and stale-draft cleanup workflows remain open below.
+
+### Nora Vale Generic Scan Hub Image Records
+
+Acceptance criteria:
+- A real user can start from `/scan`, choose a target document type, upload a camera-style JPG, review extracted fields, confirm, and open the created record.
+- Payment confirmation requires an explicit lease selection and blocks creation until the user selects one.
+- Created records retain the uploaded image as a viewable document/preview where the destination page supports attachments.
+- Scan list reflects confirmed records with `View record` links.
+
+Synthetic images:
+- `output/qa/production-scale-scans/02-expenses-camera/expense-001.jpg`
+- `output/qa/production-scale-scans/03-payments-camera/payment-001.jpg`
+- `output/qa/production-scale-scans/05-work-orders-camera/work-order-001.jpg`
+- `output/qa/production-scale-scans/04-applications-camera/application-001.jpg`
+
+Evidence:
+- Receipt image draft `7` processed through `claude-cli:sonnet` vision, confirmed as Expense `1`, and opened `/accounting/expenses/1`. Detail rendered `Green Thumb Landscaping`, `$63.75 · Paid`, category `Repairs`, property `Cedar Point Flats`, scanned image preview `/expense-file/1`, receipt subtotal `58.75`, tax `5.00`, card last four `4242`, payment method `Visa`, document kind `Receipt`, line items, and history. DB proof: `ScanDrafts 7 | Confirmed | Expense`; expense row linked vendor/property and retained receipt fields.
+- Rent-check image draft `8` processed through vision, extracted total `1125.00`, method `Check`, bank `First QA Bank`, payer `Avery Ellis`, check `8001`, transaction date `2026-02-03`, and notes for lease `QA-2026-001-1A`. Before selecting a lease, `Create Payment` stayed disabled with `Select a lease above to enable payment creation.` After selecting `#QA-2026-001-1A — Avery Ellis · Unit 1A`, confirmation created Payment `1` and opened `/accounting/payments/1`. Detail rendered `Avery Ellis`, `Rent · $1125 · Paid`, method `Check`, reference `8001`, notes, scanned document preview `/payment-file/1`, and history. DB proof: `ScanDrafts 8 | Confirmed | Payment`; payment row `1 | LeaseId 3 | Amount 1125.00 | Method Check | ExternalReference 8001 | PaidDate 2026-02-03`.
+- Maintenance request image draft `9` processed through vision, extracted property `Cedar Point Flats`, title `Front door lock sticks`, unit id `3`, tenant id `4`, priority `Normal`, and description. Confirmation created WorkOrder `1` and opened `/maintenance/1`. Detail rendered title, `New`, `Normal`, `Cedar Point Flats`, `Unit 1A`, category `General`, full description, attached scan photo, and history. DB proof: `ScanDrafts 9 | Confirmed | WorkOrder`; work order row `1 | PropertyId 2 | UnitId 3 | TenantId 4 | Front door lock sticks | General | Normal | New`.
+- Rental application image draft `10` processed through vision, extracted `Gray Johnson`, email `qa.applicant.001@example.local`, phone `555-0101`, employer `QA Employer 1`, income `3850.00`, requested home `Cedar Point Flats Unit 1A`, and ID last four `1000`. Confirmation redirected to `/applications`, where the grid displayed the new row as `Submitted`; detail `/applications/1` rendered applicant data, requested property `Cedar Point Flats`, unit `1A`, income `$3,850.00`, no-consent screening disabled state, and notes `Applying for: Cedar Point Flats Unit 1A. ID last-4: 1000.` DB proof: `ScanDrafts 10 | Confirmed | Application`; application row `1 | PropertyId 2 | UnitId 3 | Gray Johnson | Submitted`.
+- Console warning/error count after these flows: zero warnings, zero errors. Network proof for the application flow ended in `POST /api/v1/scans/10/confirm => 200`, `/api/v1/applications => 200`, `/api/v1/applications/1 => 200`, and `/api/v1/applications/1/screening => 200`.
+
+Watch item:
+- The scan detail page already polls while `Pending` or `Processing`. During manual testing, reloads sometimes raced worker completion; no confirmed auto-refresh defect is logged yet. Reproduce only if the engine has already logged `Scan extraction succeeded` and the open page remains in `Processing` past the next poll interval.
+
+Status: Pass for generic scan-hub image flows covering expense, payment, work order, and application records. Retry/reject/batch/failed-state variants remain open.
+
+### Properties Grid and Detail Labeling
+
+Acceptance criteria:
+- Property type/status displays and select triggers use landlord-facing labels while preserving API enum values in submitted payloads and filters.
+- Property create/edit controls offer only valid API enum values.
+- The fix applies consistently across the properties grid, type/status filters, create/edit modal, property detail inline fields, and onboarding property setup.
+
+Bug RC-UI-025:
+- Repro: Open `/properties`, inspect the Type column/filter, open New Property, or open a property detail page.
+- Observed: UI exposed raw enum values such as `MultiFamily` and `UnderMaintenance`. The shared `PropertyFields` control also offered invalid `Townhouse` and `Other` values that do not match the `PropertyType` API union.
+- Fix: Added shared property type/status label helpers and wired properties list/detail, shared property fields, and onboarding to use readable labels while keeping submitted values as API enum values.
+- Regression: `web/src/lib/properties/property-labels.test.ts`.
+
+Evidence:
+- `rtk node --test --experimental-strip-types web/src/lib/properties/property-labels.test.ts`: 4 passed.
+- Playwright browser proof on `https://localhost:5807` as Nora Vale verified `/properties`, the type filter, New Property modal, and Cedar Point Flats detail render `Multi-family`, do not leak `MultiFamily`, and no longer offer `Townhouse` or `Other` in the property type options.
+
+Status: Pass after fix for property enum labeling across the covered property/onboarding surfaces.
+
+## Route Inventory For Continued Pass
+
+Core route map to exercise next:
+- Dashboard/setup: `/`, `/get-started`, `/choose-setup`, `/setting-up`.
+- Scan: `/scan`, `/scan/[draftId]`, `/scan/batch`, `/scan/batch/[id]`, `/scan/new-rental`.
+- Rentals: `/properties`, `/properties/[id]`, `/units`, `/units/[id]`, `/tenants`, `/tenants/[id]`, `/leases`, `/leases/[id]`, `/applications`, `/applications/[id]`, `/owners`, `/owners/[id]`, `/owners-report`.
+- Work: `/maintenance`, `/maintenance/[id]`, `/maintenance/inspections/[id]`, `/maintenance/recurring`, `/appointments`, `/appointments/[id]`, `/vendors`, `/vendors/[id]`.
+- Inbox/comms: `/messages`, `/notices`.
+- Money/reports: `/accounting`, `/accounting/expenses/[id]`, `/accounting/payments/[id]`, `/accounting/past-due`, `/accounting/year-end`, `/deposits`, `/deposits/[id]`, `/reports`, `/reports/[report]`, `/tax`.
+- Settings/admin/support: `/settings`, `/settings/security`, `/settings/accounting`, `/audit`, `/admin/users`, `/admin/audit`, `/superadmin/engine`, `/ai`, `/docs`.
+- Portal/public: `/portal/*`, `/apply/[token]`, `/public/sign/[token]`.
+
+## Deferred External Integrations
+
+- Plaid banking: requires sandbox login/connect flow.
+- QuickBooks/accounting provider: requires sandbox credentials.
+
+## Verification
+
+- Browser: reports catalog, 13 generic report routes, report property filter, CSV export, print action, owner statement list/detail/export, tax Schedule E/export/year-end packet, year-end property filter, past-due mark-paid modal, money ledger filter/sort URL state, money create-dialog validation/cancel states, dashboard loaded state, Getting Started checklist/deep-link/reset states, settings notification email/broadcast flow, tenant/vendor create deep links, portal lease suggestion Q&A, assistant daily briefing, and assistant data Q&A were exercised with Playwright CLI against `https://localhost:5797`.
+- `rtk git diff --check`: pass.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ReportsServiceTests|FullyQualifiedName~ScheduleEServiceTests|FullyQualifiedName~OwnerStatementServiceTests|FullyQualifiedName~YearEndPacketTests|FullyQualifiedName~AccountingServiceTests|FullyQualifiedName~BankingServiceTests|FullyQualifiedName~PaymentServiceTests" --logger "console;verbosity=normal"`: 75 passed.
+- `rtk pnpm --dir web test:unit`: 74 passed.
+- `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --logger "console;verbosity=minimal"`: 476 passed.
+- `rtk env PW_BASE_URL=https://localhost:5797 PW_EMAIL=tsk397.ui.1782115363@example.local PW_PASSWORD='AuditPass!23' pnpm --dir web exec playwright test e2e/portal-lease.spec.ts --project=chromium`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ClaudeCliLlmProviderTests|FullyQualifiedName~PortfolioQa" --logger "console;verbosity=normal"`: 21 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ConversationNotificationTests"`: 4 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~NoticeDraftServiceTests"`: 2 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ConversationNotificationTests|FullyQualifiedName~NoticeDraftServiceTests" --logger "console;verbosity=normal"`: 8 passed after the messages page/unread-count change.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ScanBatchControllerTests"`: 14 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ApplicationServiceTests"`: 13 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~AccountingConnectionServiceTests"`: 3 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~AccountingImportServiceTests"`: 5 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~BankingServiceTests" --logger "console;verbosity=normal"`: 18 passed.
+- `rtk node --test --experimental-strip-types web/src/lib/scan/new-rental-state.test.ts`: 5 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ScanServiceTests" --logger "console;verbosity=normal"`: 18 passed.
+- Browser scan continuation on `https://localhost:5807`: `/scan/new-rental` lease PDF upload, existing property selection, create-new Unit 5C, tenant contact entry, review, confirm, `/leases/2` detail, and DB verification passed.
+- `rtk node --test --experimental-strip-types web/src/lib/properties/property-labels.test.ts`: 4 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~LeaseLedgerServiceTests" --logger "console;verbosity=normal"`: 4 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~UnitDashboardServiceTests" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~DailyBriefingServiceTests" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~InspectionChecklistServiceTests" --logger "console;verbosity=normal"`: 6 passed.
+- `rtk node --test --experimental-strip-types web/src/lib/components/file-drop.test.ts`: 3 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~PropertyServiceTests" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~TenantServiceTests" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~LeaseServiceListTests" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~UnitServiceListTests" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~WorkOrderServiceListTests" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~AppointmentServiceListTests" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~VendorServiceListTests" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~OwnerEntityServiceListTests" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ApplicationServiceTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~SecurityDepositServiceListTests" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~RecurringMaintenanceTaskServiceTests" --logger "console;verbosity=normal"`: 7 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~ScanBatchControllerTests" --logger "console;verbosity=normal"`: 15 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~PaymentServiceTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow|FullyQualifiedName~ExpenseServiceTests.ListPageAsync_FiltersWorkOrderReceiptsAndPagesInSql" --logger "console;verbosity=normal"`: 2 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~PaymentServiceTests|FullyQualifiedName~ExpenseServiceTests|FullyQualifiedName~WorkOrderServiceListTests" --logger "console;verbosity=normal"`: 18 passed.
+- `rtk node --test --experimental-strip-types web/src/lib/api/endpoints/expense-list-path.test.ts`: 2 passed.
+- `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings after the FileDrop/properties/tenants/leases/units/maintenance/appointments/vendors/owners/applications/deposits/recurring-maintenance/scan/messages UI changes.
+- Browser property-label proof on `https://localhost:5807`: `/properties`, type filter, New Property modal, and property detail use landlord-facing labels while preserving API enum values.
+- Browser FileDrop proof on `https://localhost:5807/scan`: dragged unsupported CSV emitted a rejection warning, did not render as the selected file, and did not trigger `POST /api/v1/scans`.
+- Browser properties grid proof on `https://localhost:5807`: initial load and Name sort used `/api/v1/properties/page?take=20...`; no `/api/v1/properties?take=500` grid fetch occurred.
+- Browser tenants grid proof on `https://localhost:5807`: initial load, `Avery` search, and Active Leases sort used `/api/v1/tenants/page?take=20...`; no `/api/v1/tenants?take=500` grid fetch occurred.
+- Browser leases grid proof on `https://localhost:5807`: initial load, `Avery` search, and Tenant sort used `/api/v1/leases/page?take=20...`; no `/api/v1/leases?take=500` grid fetch occurred.
+- Browser units grid and Command Center proof on `https://localhost:5807`: initial load, `1A` search, Open Repairs sort, and command-center dropdown used `/api/v1/units/list-with-health/page?take=20...`; no `/api/v1/units/list-with-health?take=500` request occurred.
+- Browser maintenance grid proof on `https://localhost:5807`: initial load, `Front` search, New status filter, Normal priority filter, and Property sort used `/api/v1/work-orders/page?take=20...`; no `/api/v1/work-orders?take=100` grid fetch occurred.
+- Browser appointments list proof on `https://localhost:5807`: created `Nora Showing Grid Proof` via the UI, then list search/type/status/property-sort used `/api/v1/appointments/page?take=20...`; no legacy `/api/v1/appointments?take=20` list fetch occurred. Calendar still uses a bounded broad query and remains an open date-window risk.
+- Browser vendors grid proof on `https://localhost:5807`: created `Nora Vendor Grid Proof` via the UI, then search/category-sort used `/api/v1/vendors/page?take=20...`; no legacy `/api/v1/vendors?take=100` grid fetch occurred.
+- Browser owners grid proof on `https://localhost:5807`: created `Nora Owner Grid Proof` via the UI, then search/type-sort used `/api/v1/owner-entities/page?take=20...`; no legacy `/api/v1/owner-entities?...` grid fetch occurred.
+- Browser applications grid proof on `https://localhost:5807`: used the scan-created `Gray Johnson` row, then search/status/income-sort used `/api/v1/applications/page?take=20...`; no legacy `/api/v1/applications?...` grid fetch occurred.
+- Browser deposits grid proof on `https://localhost:5807`: created a `$1,225.00` holding for the scanned Avery Ellis lease, then amount-sort used `/api/v1/security-deposits/page?take=20...`; no legacy `/api/v1/security-deposits?...` grid fetch occurred.
+- Browser recurring-maintenance grid proof on `https://localhost:5807`: created `TSK-397-HVAC-Filter-1782142807739`, then search/next-due-sort/active-only filtering used `/api/v1/recurring-maintenance/page?take=20...`; no legacy `/api/v1/recurring-maintenance?...` grid fetch occurred and console warnings/errors were zero.
+- Browser scan grid proof on `https://localhost:5807`: initial load, Reviewing tab, Created sort, and Status sort used `/api/v1/scans/page?take=20...`; no legacy `/api/v1/scans?...` draft-list fetch occurred and console warnings/errors were zero.
+- Browser messages grid/compose proof on `https://localhost:5807`: initial staff conversation load and `Load more` used `/api/v1/conversations/page?take=20...`, header unread count used `/api/v1/conversations/unread-count`, compose tenant search used `/api/v1/tenants/page?take=20...`, no legacy `/api/v1/conversations` or `/api/v1/tenants?take=500` list fetch occurred, and console warnings/errors were zero.
+- Browser unit-detail tab proof on `https://localhost:5807`: rent, maintenance, and expenses tabs used paged `/api/v1/payments/page`, `/api/v1/work-orders/page`, and `/api/v1/expenses/page` requests with `take=20`; work-order receipt filtering used `workOrderLinkedOnly=true`; no legacy child-list endpoint was observed and console warnings/errors were zero.
+
+## Open While In Progress
+
+- This is not yet a claim that every button/modal/grid/state in the product has been exercised. Continue real-user flow through dashboard cards/actions, settings/security, settings/accounting, audit/admin, docs/help, assistant delivery variants, portal, banking connection review states, scan batch/retry/reject variants, tenant-notice draft/send states, row delete confirmations, and remaining CRUD unhappy/edge states.
+- Plaid and QuickBooks remain deferred until sandbox credentials are available.
+- Continue static DB-side sweep outside the repaired report/accounting/banking controller/service scope; no endpoint should be marked production-scale until generated SQL is confirmed for filtering, sorting, paging, grouping, and aggregation. Read-only follow-up found additional high-confidence DB-side risks in lease ledger, unit timeline, daily briefing, inspection completion, unpaged document/deposit/opening-balance/conversation/portal lists, admin users, and broad `take:100/500` grid screens. Lease ledger, unit timeline, daily briefing, inspection completion, Command Center unit search, the scan draft grid, staff messages grid, staff messages unread count, staff messages compose tenant picker, and the properties/tenants/leases/units/maintenance/appointments/vendors/owners/applications/deposits/recurring-maintenance primary grids are now fixed with focused regressions; other unpaged/capped lists and shared-grid risks remain open.
+- Tenant-notice draft review/approve/send still needs an eligible synthetic notice condition and provider-safe channel setup.
+
+## Inventory Gaps For Next Browser Pass
+
+The current pass is not a complete every-control inventory. The next new-user pass must explicitly cover:
+- `/scan`, `/scan/batch`, `/scan/batch/[id]`, `/scan/new-rental`, and `/scan/[draftId]`: batch creation/detail, mixed success/failure states, retry, reject, hold, bulk operations, progress/error banners, draft edit/re-open, validation failures, and destructive confirmations.
+- `/banking`, `/settings/accounting`, and `/plaid/auth`: Plaid unconfigured/configured states, disabled connect, sandbox exchange validation, manual import invalid/missing/success states, transaction status filters, match/ignore/unignore/clear/review controls, provider connect/reconnect/disconnect, OAuth return banners, pull toggles, disabled push, date range import, mapping confirm, and provider-safe review queue create-target links.
+- `/notices` and `/tenants/[id]` notice panels: generate drafts, filter, edit/save, fair-housing acknowledgement, suggested rewrite, channel checkboxes, approve/send, dismiss, conversation link, force renewal/move-out drafts, retry, no-channel blocking, provider-safe portal-only sends, and reload persistence.
+- `/properties`, `/properties/[id]`, `/units`, `/units/[id]`, `/tenants`, `/tenants/[id]`, `/leases`, and `/leases/[id]`: detail tabs, inline edits, contextual action menus, archive/delete/restore where available, remaining non-primary-grid search/filter/sort paths, empty states, validation, save/cancel, and success/error banners. Properties, tenants, leases, units, maintenance, recurring-maintenance, owners, applications, deposits, vendors, and appointment-list primary grids are server-side/page browser-proven.
+- `/appointments` and `/appointments/[id]`: calendar month/week/agenda date-window loading, drag-reschedule failure snapback, create-at-slot, detail edit/delete, and calendar/list cross-invalidation. The appointments list primary grid is server-side/page browser-proven.
+- Portal routes `/portal`, `/portal/messages`, `/portal/maintenance`, `/portal/payments`, `/portal/notifications`, `/portal/appointments`, and `/portal/lease`: dashboard links, compose/reply/cancel/delete, Enter vs Shift+Enter, unread invalidation, maintenance request create with photo preview/remove/failure, detail/timeline, Stripe unavailable, checkout success/cancel params, autopay on/off, notification action links/read state, appointment real workflow or placeholder defect, pagination, empty/loading/error states, and optimistic-update failures.
+- `/settings/security` and `/settings/accounting`: every toggle/submit/reset/copy action, confirmations, persistence after reload, provider-unconfigured states, review queue controls, and stale-session failure behavior.
+- `/admin/users`, `/admin/audit`, and `/superadmin/engine`: advanced filters, date ranges, row actions, role/status toggles, generated-password/copy escapes, refresh/reindex actions, exports, no-results states, and loading/error states.
+- `/import`: entity cards, template download, CSV drop/click, non-CSV rejection, dry-run preview, invalid rows, import-valid, result links, import another, and stale preview/file/result clearing when switching entity.
+- `/docs`, public `/apply/[token]`, and public `/sign/[token]`: docs search/results/no results/articles/navigation/404, valid/invalid/expired public application states, scan success/failure/no extracted fields, duplicate application, valid/invalid/expired signing envelopes, PDF open/download, typed/drawn signature, clear, decline modal, terminal states, and provider gates.
+- App shell/navigation: staff versus portal role menus, collapsible groups, collapsed rail, mobile drawer/overlay, command-center search/no matches, header badges, account menu/logout, theme toggle, and role-hidden route gates.
+- Shared controls in composed routes: data grids, pagination, search inputs, confirm dialogs, app-shell navigation, command-center navigation, notification bell/list interactions, keyboard/focus/escape behavior, and select-all/bulk states. FileDrop unsupported-file rejection is fixed and browser-proven for drag/drop on `/scan`; upload failure states still need route-specific coverage.
+- `/activity/*` and `/analytics/*`: route-level matrix with evidence for each visible control cluster and empty/error/loading state.
+
+## DB-Side Rule Findings
+
+Fixed in this branch:
+- `ReportsService.GetRentRollAsync`: totals now use SQL aggregates over the scoped lease query.
+- `ReportsService.GetRentLedgerAsync`: running balances and charged/paid totals now use SQL projection/aggregates; in-memory code only assembles nested lease DTOs.
+- `ReportsService.GetCashFlowAsync`, `GetPropertyProfitAndLossAsync`, `GetOccupancyAsync`, and `GetLeaseExpirationsAsync`: total rows now come from SQL aggregates over the scoped query.
+- `AccountingService.GetSnapshotAsync` / `GetPastDueAsync`: past-due count and totals now aggregate SQL-side over the grouped per-lease query.
+- `AccountingService.GetYearEndPacketDataAsync`: year-end P&L, cash-flow, rent-roll, and past-due totals now use SQL-side grouping/filtering.
+- `BankingService.GetReviewQueueAsync`: review queue count and rows now use the DB-side suggestion predicate before in-memory scoring.
+- `BankingService.GetSummaryAsync`: `LastSyncedAt` now uses SQL `MAX`.
+- `BankingService.ExchangePlaidPublicTokenAsync`: Plaid reconnect matching now queries indexed external item/account hash columns instead of filtering decrypted rows in memory.
+- `OwnerStatementService.GetForOwnerAsync`, `ListOwnersWithNetAsync`, and `GetTotalNetToOwnersAsync`: owner totals and distributions now aggregate in SQL.
+- `ScheduleEService.GetReportAsync`: transaction/loan income and expense totals aggregate in SQL; depreciation remains a deterministic per-property formula over property basis fields.
+- `ReportsService.GetSecurityDepositRegisterAsync`: deduction JSON totals now use maintained scalar `DeductionsTotal` with migration backfill.
+- `ReportsService.GetVendor1099Async`: vendor filtering, tax-year range, and total paid are SQL-side.
+- `PortfolioQaService` assistant tools: property totals aggregate in SQL; recent expenses/payments use SQL totals over the full filtered window while the visible row preview stays SQL-capped; upcoming appointment/inspection events are merged, sorted, and capped through a SQL union before enum/date formatting.
+- `ConversationService`: message counts and ordered message details now project through SQL instead of mapping materialized navigation collections.
+- `NoticeDraftService`: non-forced renewal/move-out generation now narrows candidate leases DB-side before notice evaluation.
+- `AccountingImportService`: parked retry rows, deposit account detection, and latest active lease lookup now filter/order/group in SQL before materialization.
+- `AccountingConnectionService`: mapping review and review queue endpoints now filter/sort/page in SQL and the settings page fetches bounded sections instead of filtering full arrays client-side.
+- Audit pages: exactly full audit pages now use server overfetch and explicit next-page state instead of `count >= take`.
+- `LeaseService.GetLedgerAsync`: payment ledger rows now project `LedgerDate` and order by date/id in SQL before materialization. Regression: `LeaseLedgerServiceTests.GetLedgerAsync_OrdersPaymentRowsInSql`.
+- `UnitDashboardService.GetTimelineAsync`: child entity scopes now stay as translated subqueries inside the paged audit-log query instead of preloading lease/payment/work-order/inspection/appointment/expense id lists. Regression: `UnitDashboardServiceTests.GetTimelineAsync_ScopesChildAuditRowsInSqlWithoutPreloadingIds`.
+- `DailyBriefingService.ComposeAsync`: briefing candidates now come from a single translated `UNION`/`ORDER BY`/`LIMIT` query across maintenance, overdue rent, rent due, appointments, inspections, and expiring leases before bounded bullet formatting and optional LLM summarization. Regression: `DailyBriefingServiceTests.ComposeAsync_RanksAndCapsBriefingCandidatesInSql`.
+- `InspectionService.CompleteAsync`: failed checklist items now create inspection follow-up work orders and initial status events in one tracked batch, then hydrate all new broadcast payloads with one SQL projection instead of revalidating/hydrating per failed item. Regression: `InspectionChecklistServiceTests.Complete_BatchesFailedItemWorkOrderCreationWithoutPerItemScopeQueries`.
+- `PropertyService.ListPageAsync` and `/properties` grid: primary property table now uses a page contract with SQL count, search/filter, sort, skip, and take instead of a capped client-side `take=500` list. Regression: `PropertyServiceTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`.
+- `TenantService.ListPageAsync` and `/tenants` grid: primary tenant table now uses a page contract with SQL count, search, sort, skip, take, and active-lease count ordering instead of a capped client-side `take=500` list. Regression: `TenantServiceTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`.
+- `LeaseService.ListPageAsync` and `/leases` grid: primary lease table now uses a page contract with SQL count, search, status filter, sort, skip, take, and tenant-name ordering instead of a capped client-side `take=500` list. Regression: `LeaseServiceListTests.ListPageAsync_FiltersSortsAndPagesInSql`.
+- `UnitService.ListWithHealthPageAsync`, `/units` grid, and Command Center unit search: unit health rows now use a page contract with SQL count, search, property filter, sort, skip, take, and open-work-order-count ordering instead of capped client-side `take=500` health lists. Regression: `UnitServiceListTests.ListWithHealthPageAsync_ReturnsSqlCountAndRequestedWindow`.
+- `WorkOrderService.ListPageAsync` and `/maintenance` grid: primary work-order table now uses a page contract with SQL count, search, status/priority filters, sort, skip, take, and property-name ordering instead of a capped client-side `take=100` list. Regression: `WorkOrderServiceListTests.ListPageAsync_FiltersSortsAndPagesInSql`.
+- `AppointmentService.ListPageAsync` and `/appointments?view=list` grid: primary appointment list now uses a page contract with SQL count, search, type/status filters, sort, skip, take, and property/tenant-name ordering instead of a one-window client-side filtered list. Regression: `AppointmentServiceListTests.ListPageAsync_FiltersSortsAndPagesInSql`.
+- `VendorService.ListPageAsync` and `/vendors` grid: primary vendor table now uses a page contract with SQL count, search, sort, skip, and take instead of a capped client-side `take=100` list. Regression: `VendorServiceListTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`.
+- `OwnerEntityService.ListPageAsync` and `/owners` grid: primary owner table now uses a page contract with SQL count, search, sort, skip, and take instead of a capped client-side list. Regression: `OwnerEntityServiceListTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`.
+- `ApplicationService.ListPageAsync` and `/applications` grid: primary application table now uses a page contract with SQL count, search, status filter, sort, skip, and take instead of client-side search/sort/page over a status-filtered list. Regression: `ApplicationServiceTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`.
+- `SecurityDepositService.ListPageAsync` and `/deposits` grid: primary security-deposit table now uses a page contract with SQL count, optional lease filter, sort, skip, and take instead of an unpaged list with client-side sort/page. Regression: `SecurityDepositServiceListTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`.
+- `ConversationService.ListPageAsync`, `GetUnreadCountAsync`, `/messages`, and the app-shell message badge: staff conversation rows now use SQL count/sort/skip/take for initial/load-more windows, unread badge totals use a SQL `SUM` instead of loading all conversations and reducing client-side, and the compose modal uses the existing tenant page query instead of preloading `tenants?take=500`. Regression: `ConversationNotificationTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow` and `ConversationNotificationTests.GetUnreadCountAsync_SumsUnreadCountsInSql`.
+- `PaymentService.ListPageAsync`, `ExpenseService.ListPageAsync`, and unit detail Rent/Expenses/Maintenance tabs: child payments, expenses, work orders, and work-order receipt rows now use page contracts with SQL count/filter/sort/skip/take instead of unit-tab `take=500` lists and client-side receipt filtering. Regression: `PaymentServiceTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`, `ExpenseServiceTests.ListPageAsync_FiltersWorkOrderReceiptsAndPagesInSql`, and `web/src/lib/api/endpoints/expense-list-path.test.ts`.
+
+Remaining:
+- Unpaged list endpoints still need tightening or SQL proof: documents, opening balances, portal conversation/payment/work-order lists, admin users, appointment calendar date-window loading, and remaining capped `take:100/500` screens other than the fixed properties/tenants/leases/units/maintenance/appointments-list/vendors/owners/applications/deposits/recurring-maintenance/scan/messages primary grids and unit detail work tabs.
+- Shared `DataGrid` defaults to client-side sort/page, and several DB-backed list screens still fetch broad capped lists before Svelte filtering/sorting. Treat these remaining screens as unresolved production-scale risks until converted to server-side paging/filtering/sorting or proven bounded by design.
+- `FileDrop` unsupported drag/drop now rejects before upload; route-specific upload failure states remain open where they depend on each page's mutation/error handling.
+- Banking/accounting match suggestions have been moved to SQL-ranked candidate queries for the audited review-queue and accounting-grid surfaces. Continue the remaining static sweep outside this repaired controller/service scope before making a full-app DB-side claim.

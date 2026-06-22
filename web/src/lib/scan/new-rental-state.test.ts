@@ -1,6 +1,30 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { findNewRentalExistingUnitId, seedNewRentalLateFeeAmount } from './new-rental-state.ts';
+import { parseForm, propertySchema } from '../schemas/index.ts';
+import {
+	createNewRentalPropertyForm,
+	findNewRentalExistingUnitId,
+	seedNewRentalLateFeeAmount
+} from './new-rental-state.ts';
+
+describe('createNewRentalPropertyForm', () => {
+	it('includes hidden defaults required by the shared property schema', () => {
+		const form = createNewRentalPropertyForm();
+		Object.assign(form, {
+			name: 'Harbor View Apartments',
+			type: 'MultiFamily',
+			addressLine1: '1807 Harbor View Apartments',
+			city: 'Columbus',
+			state: 'OH',
+			postalCode: '43215'
+		});
+
+		const result = parseForm(propertySchema, form);
+
+		assert.equal(result.errors, null);
+		assert.equal(result.data?.status, 'Active');
+	});
+});
 
 describe('findNewRentalExistingUnitId', () => {
 	it('uses a linked proposal when that unit belongs to the selected property', () => {

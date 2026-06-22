@@ -196,6 +196,8 @@ public class ApplicationResponse
     public int PortfolioId { get; set; }
     public int? PropertyId { get; set; }
     public int? UnitId { get; set; }
+    public string? PropertyName { get; set; }
+    public string? UnitNumber { get; set; }
     public string FirstName { get; set; } = string.Empty;
     public string LastName { get; set; } = string.Empty;
     public string? Email { get; set; }
@@ -223,12 +225,14 @@ public class ApplicationResponse
     /// <summary>Stable selector for frontend tests, e.g. <c>application-1</c>.</summary>
     public string TestId => $"application-{Id}";
 
-    public static ApplicationResponse FromEntity(RentalApplication e) => new()
+    public static ApplicationResponse FromEntity(RentalApplication e, string? propertyName = null, string? unitNumber = null) => new()
     {
         Id = e.Id,
         PortfolioId = e.PortfolioId,
         PropertyId = e.PropertyId,
         UnitId = e.UnitId,
+        PropertyName = propertyName ?? e.Property?.Name,
+        UnitNumber = unitNumber ?? e.Unit?.UnitNumber,
         FirstName = e.FirstName,
         LastName = e.LastName,
         Email = e.Email,
@@ -253,6 +257,14 @@ public class ApplicationResponse
         ReviewedAtUtc = e.ReviewedAtUtc,
         ApprovedTenantId = e.ApprovedTenantId,
     };
+}
+
+public class ApplicationListResponse
+{
+    public IReadOnlyList<ApplicationResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
 }
 
 /// <summary>Body for <c>POST /api/v1/applications/{id}/decline</c>.</summary>

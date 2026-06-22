@@ -80,6 +80,14 @@ public class PaymentResponse
     };
 }
 
+public class PaymentListResponse
+{
+    public IReadOnlyList<PaymentResponse> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
 public class CreatePaymentRequest
 {
     [Required]
@@ -188,4 +196,12 @@ public class MarkPaidRequest
     /// <summary>Optional free-text note captured when marking the payment paid (persisted to <see cref="Payment.Notes"/>).</summary>
     [MaxLength(2000)]
     public string? Notes { get; set; }
+}
+
+/// <summary>Result of settling every still-owed past-due payment on one lease in one server action.</summary>
+public class MarkLeasePastDuePaidResponse
+{
+    public int LeaseId { get; set; }
+    public int MarkedPaidCount { get; set; }
+    public IReadOnlyList<int> PaymentIds { get; set; } = [];
 }

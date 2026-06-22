@@ -398,6 +398,49 @@ public class BankingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetSummaryAsync_ComputesLastSyncedAtInSql()
+    {
+        var executedSql = new List<string>();
+        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        var sut = CreateServiceFor(ctx);
+        var older = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+        var newer = new DateTime(2026, 06, 02, 0, 0, 0, DateTimeKind.Utc);
+        ctx.Db.BankConnections.AddRange(
+            new BankConnection
+            {
+                PortfolioId = 1,
+                Provider = "Plaid",
+                InstitutionName = "Bank A",
+                AccountName = "Checking",
+                Status = "Active",
+                LastSyncedAt = older,
+                CreatedAt = older,
+                UpdatedAt = older,
+            },
+            new BankConnection
+            {
+                PortfolioId = 1,
+                Provider = "Plaid",
+                InstitutionName = "Bank B",
+                AccountName = "Savings",
+                Status = "Active",
+                LastSyncedAt = newer,
+                CreatedAt = newer,
+                UpdatedAt = newer,
+            });
+        await ctx.Db.SaveChangesAsync();
+        executedSql.Clear();
+
+        var summary = await sut.GetSummaryAsync(1);
+
+        summary.LastSyncedAt.Should().Be(newer);
+        executedSql.Should().Contain(sql =>
+            sql.Contains("MAX", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LastSyncedAt", StringComparison.OrdinalIgnoreCase),
+            "the summary must not load connections and aggregate LastSyncedAt in memory");
+    }
+
+    [Fact]
     public async Task ReviewQueue_PrefiltersPaymentSuggestionCandidatesInSql()
     {
         var executedSql = new List<string>();
@@ -418,17 +461,61 @@ public class BankingServiceTests : IDisposable
         item.Transaction.SuggestedMatch!.EntityType.Should().Be("Payment");
         item.Transaction.SuggestedMatch.EntityId.Should().Be(payment.Id);
 
+        var reviewQueueSql = executedSql
+            .Where(sql => sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        reviewQueueSql.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase),
+            "the review queue count must use the DB-side suggestion predicate instead of counting mapped rows");
+        reviewQueueSql.Should().Contain(sql =>
+            sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase),
+            "the review queue row query must prefilter suggestible transactions in SQL before scoring");
+
         var paymentCandidateSql = executedSql
             .Where(sql => sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         paymentCandidateSql.Should().Contain(sql =>
-            sql.Contains("@minAmount", StringComparison.OrdinalIgnoreCase) &&
-            sql.Contains("@maxAmount", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("COALESCE", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("CASE", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ROW_NUMBER", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains(">=", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("<", StringComparison.OrdinalIgnoreCase),
-            "bank suggestion candidates must be narrowed by amount and date in SQL before scoring");
+            "bank suggestion candidates must be narrowed, scored, and ranked with the bank line in SQL before materialization");
+    }
+
+    [Fact]
+    public async Task ReviewQueue_RanksPaymentSuggestionCandidatesInSql()
+    {
+        var executedSql = new List<string>();
+        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        var sut = CreateServiceFor(ctx);
+        var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
+        SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily");
+        var carlos = SeedRentPaymentInto(ctx, "Carlos", "Reyes", 1400m, postedAt, "L-carlos");
+
+        await sut.ImportAsync(1, BankImport("queue-rank", postedAt, "Carlos Reyes", 1400m));
+        executedSql.Clear();
+
+        var queue = await sut.GetReviewQueueAsync(1);
+
+        var item = queue.Items.Should().ContainSingle().Subject;
+        item.Transaction.SuggestedMatch.Should().NotBeNull();
+        item.Transaction.SuggestedMatch!.EntityType.Should().Be("Payment");
+        item.Transaction.SuggestedMatch.EntityId.Should().Be(carlos.Id);
+
+        var paymentCandidateSql = executedSql
+            .Where(sql => sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        paymentCandidateSql.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("CASE", StringComparison.OrdinalIgnoreCase),
+            "bank suggestion candidate ranking must run in SQL, not after materializing every same-amount/date candidate");
     }
 
     [Fact]
@@ -468,6 +555,48 @@ public class BankingServiceTests : IDisposable
         connection.ExternalAccessTokenCipherText.Should().NotContain("access-sandbox-token");
         connection.ExternalItemIdCipherText.Should().NotBe("item-id-1");
         connection.ExternalAccountIdCipherText.Should().NotBe("account-id-1");
+        connection.ExternalItemIdHash.Should().HaveLength(64);
+        connection.ExternalAccountIdHash.Should().HaveLength(64);
+        connection.ExternalItemIdHash.Should().NotContain("item-id-1");
+        connection.ExternalAccountIdHash.Should().NotContain("account-id-1");
+    }
+
+    [Fact]
+    public async Task ExchangePlaidPublicTokenAsync_ReusesExistingConnectionByLookupHash()
+    {
+        var executedSql = new List<string>();
+        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        var sut = CreateServiceFor(ctx);
+        _plaid
+            .Setup(p => p.ExchangePublicTokenAsync(
+                It.IsAny<PlaidRuntimeSettings>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PlaidExchangeResult("access-sandbox-token", "item-id-1", "request-id-1"));
+
+        await sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
+        {
+            PublicToken = "public-sandbox-token-1",
+            InstitutionName = "Plaid Test Bank",
+            AccountId = "account-id-1",
+            AccountName = "Operating Checking",
+        });
+        executedSql.Clear();
+
+        await sut.ExchangePlaidPublicTokenAsync(1, new ExchangePlaidPublicTokenRequest
+        {
+            PublicToken = "public-sandbox-token-2",
+            InstitutionName = "Plaid Test Bank",
+            AccountId = "account-id-1",
+            AccountName = "Operating Checking",
+        });
+
+        ctx.Db.BankConnections.Should().ContainSingle();
+        executedSql.Should().Contain(sql =>
+            sql.Contains("FROM \"BankConnections\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ExternalItemIdHash", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ExternalAccountIdHash", StringComparison.OrdinalIgnoreCase),
+            "Plaid reconnect must use queryable lookup hashes instead of materializing rows and decrypting each one");
     }
 
     [Fact]

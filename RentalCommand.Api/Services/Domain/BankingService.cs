@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -37,6 +38,10 @@ public class BankingService : IBankingService
             .ThenBy(c => c.AccountName)
             .ToListAsync(ct);
 
+        var lastSyncedAt = await _db.BankConnections
+            .Where(c => c.PortfolioId == portfolioId && c.LastSyncedAt != null)
+            .MaxAsync(c => c.LastSyncedAt, ct);
+
         var transactions = await BaseTransactions(portfolioId)
             .OrderByDescending(t => t.PostedAt)
             .ThenByDescending(t => t.Id)
@@ -56,7 +61,7 @@ public class BankingService : IBankingService
             TransactionCount = await _db.BankTransactions.CountAsync(t => t.PortfolioId == portfolioId, ct),
             UnmatchedCount = unmatchedCount,
             SuggestedMatchCount = suggestedMatchCount,
-            LastSyncedAt = connections.Select(c => c.LastSyncedAt).Where(d => d.HasValue).Max(),
+            LastSyncedAt = lastSyncedAt,
             Connections = connections.Select(MapConnection).ToList(),
             RecentTransactions = mappedTransactions
         };
@@ -121,12 +126,15 @@ public class BankingService : IBankingService
 
         var exchange = await _plaid.ExchangePublicTokenAsync(settings, publicToken, ct);
         var now = DateTime.UtcNow;
-        var existingConnections = await _db.BankConnections
-            .Where(c => c.PortfolioId == portfolioId && c.Provider == "Plaid")
-            .ToListAsync(ct);
-        var connection = existingConnections.FirstOrDefault(c =>
-            UnprotectNullable(c.ExternalItemIdCipherText) == exchange.ItemId &&
-            UnprotectNullable(c.ExternalAccountIdCipherText) == accountId);
+        var itemIdHash = ExternalLookupHash(exchange.ItemId);
+        var accountIdHash = ExternalLookupHash(accountId);
+        var connection = await _db.BankConnections
+            .FirstOrDefaultAsync(c =>
+                c.PortfolioId == portfolioId &&
+                c.Provider == "Plaid" &&
+                c.ExternalItemIdHash == itemIdHash &&
+                c.ExternalAccountIdHash == accountIdHash,
+                ct);
 
         if (connection == null)
         {
@@ -146,6 +154,8 @@ public class BankingService : IBankingService
         connection.AccountSubtype = Normalize(request.AccountSubtype);
         connection.ExternalItemIdCipherText = ProtectNullable(exchange.ItemId);
         connection.ExternalAccountIdCipherText = ProtectNullable(accountId);
+        connection.ExternalItemIdHash = itemIdHash;
+        connection.ExternalAccountIdHash = accountIdHash;
         connection.ExternalAccessTokenCipherText = ProtectNullable(exchange.AccessToken);
         connection.Status = "Active";
         connection.UpdatedAt = now;
@@ -451,8 +461,9 @@ public class BankingService : IBankingService
         // Unmatched (not yet confirmed, dismissed, or removed) AND the matcher currently has a
         // payment/expense candidate for it. These are the lines at risk of double-counting a
         // scanned receipt against the bank deposit/withdrawal.
-        var transactions = await BaseTransactions(portfolioId)
-            .Where(t => t.MatchStatus == "Unmatched")
+        var candidateQuery = SuggestibleUnmatchedTransactionsQuery(portfolioId);
+        var count = await candidateQuery.CountAsync(ct);
+        var transactions = await candidateQuery
             .OrderByDescending(t => t.PostedAt)
             .ThenByDescending(t => t.Id)
             .ToListAsync(ct);
@@ -460,7 +471,6 @@ public class BankingService : IBankingService
         var mapped = await MapTransactionsWithSuggestionsAsync(portfolioId, transactions, ct);
 
         var items = mapped
-            .Where(t => t.SuggestedMatch != null)
             .Select(t => new BankReviewQueueItemResponse
             {
                 Transaction = t,
@@ -470,7 +480,7 @@ public class BankingService : IBankingService
 
         return new BankReviewQueueResponse
         {
-            Count = items.Count,
+            Count = count,
             Items = items,
         };
     }
@@ -592,9 +602,14 @@ public class BankingService : IBankingService
     /// </summary>
     private Task<int> CountSuggestibleUnmatchedAsync(int portfolioId, CancellationToken ct)
     {
-        return _db.BankTransactions
-            .Where(t => t.PortfolioId == portfolioId && t.MatchStatus == "Unmatched")
-            .CountAsync(t =>
+        return SuggestibleUnmatchedTransactionsQuery(portfolioId).CountAsync(ct);
+    }
+
+    private IQueryable<BankTransaction> SuggestibleUnmatchedTransactionsQuery(int portfolioId)
+    {
+        return BaseTransactions(portfolioId)
+            .Where(t => t.MatchStatus == "Unmatched")
+            .Where(t =>
                 // Deposits (income) suggest against eligible recorded/expected payments.
                 (t.Amount > 0 && _db.Payments.Any(p =>
                     p.PortfolioId == portfolioId &&
@@ -610,8 +625,7 @@ public class BankingService : IBankingService
                     e.PortfolioId == portfolioId &&
                     e.Amount >= -t.Amount - 0.01m && e.Amount <= -t.Amount + 0.01m &&
                     (e.PaidAt ?? e.IncurredAt) >= t.PostedAt.AddDays(-7) &&
-                    (e.PaidAt ?? e.IncurredAt) <= t.PostedAt.AddDays(7))),
-                ct);
+                    (e.PaidAt ?? e.IncurredAt) <= t.PostedAt.AddDays(7))));
     }
 
     private Task<PlaidRuntimeSettings> GetRuntimeSettingsAsync(int portfolioId, CancellationToken ct)
@@ -643,6 +657,17 @@ public class BankingService : IBankingService
 
     private string? ProtectNullable(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : _protector.Protect(value);
+
+    private static string? ExternalLookupHash(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(value.Trim()));
+        return Convert.ToHexString(bytes);
+    }
 
     private string? UnprotectNullable(string? cipherText)
     {
@@ -696,58 +721,121 @@ public class BankingService : IBankingService
     {
         if (transactions.Count == 0) return [];
 
-        var unmatched = transactions
+        var unmatchedTransactionIds = transactions
             .Where(t => t.MatchStatus == "Unmatched")
-            .ToList();
+            .Select(t => t.Id)
+            .ToArray();
 
-        var deposits = unmatched.Where(t => t.Amount > 0m).ToList();
-        IReadOnlyList<Payment> paymentCandidates = [];
-        if (deposits.Count > 0)
-        {
-            var minAmount = deposits.Min(t => t.Amount) - 0.01m;
-            var maxAmount = deposits.Max(t => t.Amount) + 0.01m;
-            var minDate = deposits.Min(t => t.PostedAt.Date).AddDays(-14);
-            var maxDateExclusive = deposits.Max(t => t.PostedAt.Date).AddDays(15);
-
-            paymentCandidates = await _db.Payments
-                .AsNoTracking()
-                .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
-                .Include(p => p.Lease!).ThenInclude(l => l.Property)
-                .Where(p =>
-                    p.PortfolioId == portfolioId &&
-                    p.Status != PaymentStatus.Failed &&
-                    p.Status != PaymentStatus.Refunded &&
-                    p.Amount >= minAmount &&
-                    p.Amount <= maxAmount &&
-                    (p.PaidDate ?? p.DueDate) >= minDate &&
-                    (p.PaidDate ?? p.DueDate) < maxDateExclusive)
-                .ToListAsync(ct);
-        }
-
-        var withdrawals = unmatched.Where(t => t.Amount < 0m).ToList();
-        IReadOnlyList<Expense> expenseCandidates = [];
-        if (withdrawals.Count > 0)
-        {
-            var minAmount = withdrawals.Min(t => -t.Amount) - 0.01m;
-            var maxAmount = withdrawals.Max(t => -t.Amount) + 0.01m;
-            var minDate = withdrawals.Min(t => t.PostedAt.Date).AddDays(-14);
-            var maxDateExclusive = withdrawals.Max(t => t.PostedAt.Date).AddDays(15);
-
-            expenseCandidates = await _db.Expenses
-                .AsNoTracking()
-                .Include(e => e.Vendor)
-                .Where(e =>
-                    e.PortfolioId == portfolioId &&
-                    e.Amount >= minAmount &&
-                    e.Amount <= maxAmount &&
-                    (e.PaidAt ?? e.IncurredAt) >= minDate &&
-                    (e.PaidAt ?? e.IncurredAt) < maxDateExclusive)
-                .ToListAsync(ct);
-        }
+        var suggestionsByTransactionId = unmatchedTransactionIds.Length == 0
+            ? new Dictionary<int, BankMatchSuggestionResponse>()
+            : await LoadSqlRankedSuggestionsAsync(portfolioId, unmatchedTransactionIds, ct);
 
         return transactions
-            .Select(t => MapTransaction(t, SuggestMatch(t, paymentCandidates, expenseCandidates)))
+            .Select(t => MapTransaction(t, suggestionsByTransactionId.GetValueOrDefault(t.Id)))
             .ToList();
+    }
+
+    private async Task<Dictionary<int, BankMatchSuggestionResponse>> LoadSqlRankedSuggestionsAsync(
+        int portfolioId,
+        int[] transactionIds,
+        CancellationToken ct)
+    {
+        var paymentCandidates =
+            from t in _db.BankTransactions.AsNoTracking()
+            from p in _db.Payments.AsNoTracking()
+            let anchor = p.PaidDate ?? p.DueDate
+            let bankText = ((t.MerchantName ?? "") + " " + t.Description).ToLower()
+            let tenantName = (p.Lease!.Tenant!.FirstName + " " + p.Lease!.Tenant!.LastName).Trim().ToLower()
+            let leaseNumber = p.Lease!.LeaseNumber.ToLower()
+            let propertyName = p.Lease!.Property!.Name.ToLower()
+            let hasNameMatch =
+                (tenantName != "" && bankText.Contains(tenantName)) ||
+                (leaseNumber != "" && bankText.Contains(leaseNumber)) ||
+                (propertyName != "" && bankText.Contains(propertyName))
+            let dateScore =
+                anchor >= t.PostedAt.AddDays(-1) && anchor <= t.PostedAt.AddDays(1) ? 0.80m :
+                anchor >= t.PostedAt.AddDays(-2) && anchor <= t.PostedAt.AddDays(2) ? 0.72m :
+                anchor >= t.PostedAt.AddDays(-4) && anchor <= t.PostedAt.AddDays(4) ? 0.62m :
+                anchor >= t.PostedAt.AddDays(-7) && anchor <= t.PostedAt.AddDays(7) ? 0.52m :
+                anchor >= t.PostedAt.AddDays(-14) && anchor <= t.PostedAt.AddDays(14) && hasNameMatch ? 0.42m :
+                0m
+            where
+                transactionIds.Contains(t.Id) &&
+                t.PortfolioId == portfolioId &&
+                t.MatchStatus == "Unmatched" &&
+                t.Amount > 0m &&
+                p.PortfolioId == portfolioId &&
+                p.Status != PaymentStatus.Failed &&
+                p.Status != PaymentStatus.Refunded &&
+                p.Amount >= t.Amount - 0.01m &&
+                p.Amount <= t.Amount + 0.01m &&
+                dateScore > 0m
+            select new BankSuggestionRankRow
+            {
+                TransactionId = t.Id,
+                EntityType = "Payment",
+                EntityId = p.Id,
+                Confidence = hasNameMatch ? dateScore + 0.19m : dateScore,
+                Label = (p.Lease!.Tenant!.FirstName + " " + p.Lease!.Tenant!.LastName).Trim() + " rent payment",
+                Reason = "Deposit amount and date line up with an expected or recorded payment.",
+            };
+
+        var expenseCandidates =
+            from t in _db.BankTransactions.AsNoTracking()
+            from e in _db.Expenses.AsNoTracking()
+            let anchor = e.PaidAt ?? e.IncurredAt
+            let bankText = ((t.MerchantName ?? "") + " " + t.Description).ToLower()
+            let vendorName = e.Vendor != null ? e.Vendor.Name.ToLower() : ""
+            let expenseDescription = e.Description.ToLower()
+            let hasNameMatch =
+                (vendorName != "" && bankText.Contains(vendorName)) ||
+                (expenseDescription != "" && bankText.Contains(expenseDescription))
+            let dateScore =
+                anchor >= t.PostedAt.AddDays(-1) && anchor <= t.PostedAt.AddDays(1) ? 0.80m :
+                anchor >= t.PostedAt.AddDays(-2) && anchor <= t.PostedAt.AddDays(2) ? 0.72m :
+                anchor >= t.PostedAt.AddDays(-4) && anchor <= t.PostedAt.AddDays(4) ? 0.62m :
+                anchor >= t.PostedAt.AddDays(-7) && anchor <= t.PostedAt.AddDays(7) ? 0.52m :
+                anchor >= t.PostedAt.AddDays(-14) && anchor <= t.PostedAt.AddDays(14) && hasNameMatch ? 0.42m :
+                0m
+            where
+                transactionIds.Contains(t.Id) &&
+                t.PortfolioId == portfolioId &&
+                t.MatchStatus == "Unmatched" &&
+                t.Amount < 0m &&
+                e.PortfolioId == portfolioId &&
+                e.Amount >= -t.Amount - 0.01m &&
+                e.Amount <= -t.Amount + 0.01m &&
+                dateScore > 0m
+            select new BankSuggestionRankRow
+            {
+                TransactionId = t.Id,
+                EntityType = "Expense",
+                EntityId = e.Id,
+                Confidence = hasNameMatch ? dateScore + 0.19m : dateScore,
+                Label = e.Vendor == null ? e.Description : e.Vendor!.Name,
+                Reason = "Withdrawal amount and date line up with an expense.",
+            };
+
+        var rows = await paymentCandidates
+            .Concat(expenseCandidates)
+            .GroupBy(c => c.TransactionId)
+            .Select(g => g
+                .OrderByDescending(c => c.Confidence)
+                .ThenBy(c => c.EntityType)
+                .ThenBy(c => c.EntityId)
+                .First())
+            .ToListAsync(ct);
+
+        return rows.ToDictionary(
+            r => r.TransactionId,
+            r => new BankMatchSuggestionResponse
+            {
+                EntityType = r.EntityType,
+                EntityId = r.EntityId,
+                Confidence = r.Confidence > 0.99m ? 0.99m : r.Confidence,
+                Label = string.IsNullOrWhiteSpace(r.Label) ? r.EntityType.ToLowerInvariant() : r.Label,
+                Reason = r.Reason,
+            });
     }
 
     private static BankMatchSuggestionResponse? SuggestMatch(
@@ -876,6 +964,16 @@ public class BankingService : IBankingService
     /// </summary>
     private static decimal NameMatchStrength(string? bankMerchant, string? bankDescription, params string?[] candidateNames)
         => NameMatcher.NameMatchStrength($"{bankMerchant} {bankDescription}", candidateNames);
+
+    private sealed class BankSuggestionRankRow
+    {
+        public int TransactionId { get; set; }
+        public string EntityType { get; set; } = string.Empty;
+        public int EntityId { get; set; }
+        public decimal Confidence { get; set; }
+        public string Label { get; set; } = string.Empty;
+        public string Reason { get; set; } = string.Empty;
+    }
 
     private static BankConnectionResponse MapConnection(BankConnection c) => new()
     {
