@@ -411,6 +411,13 @@ public sealed class NativeSigningService : INativeSigningService
 
         var request = signer.SignatureRequest;
 
+        if (signer.ExpiresAtUtc <= DateTime.UtcNow
+            && signer.Status is not (SignatureSignerStatus.Signed or SignatureSignerStatus.Declined)
+            && request.Status is not (SignatureRequestStatus.Completed or SignatureRequestStatus.Declined or SignatureRequestStatus.Voided))
+        {
+            return (signer, request, SignTokenError.Expired("This signing link has expired. Please ask the sender for a new one."));
+        }
+
         if (requireActive)
         {
             if (signer.Status is SignatureSignerStatus.Signed)
@@ -424,10 +431,6 @@ public sealed class NativeSigningService : INativeSigningService
             if (request.Status is SignatureRequestStatus.Completed or SignatureRequestStatus.Declined or SignatureRequestStatus.Voided)
             {
                 return (signer, request, SignTokenError.Expired("This signing request is no longer active."));
-            }
-            if (signer.ExpiresAtUtc <= DateTime.UtcNow)
-            {
-                return (signer, request, SignTokenError.Expired("This signing link has expired. Please ask the sender for a new one."));
             }
         }
 

@@ -296,6 +296,34 @@ public sealed class NativeEsignTests : IDisposable
     }
 
     [Fact]
+    public async Task GetPackage_ExpiredPendingToken_IsRejected()
+    {
+        var (token, _) = await SendAndGetTokenAsync();
+        var row = await _db.SignatureSigners.FirstAsync(s => s.Token == token);
+        row.ExpiresAtUtc = DateTime.UtcNow.AddMinutes(-1);
+        await _db.SaveChangesAsync();
+
+        var signing = CreateSigningService();
+        var res = await signing.GetPackageAsync(token, "1.1.1.1", "UA", default);
+
+        res.Outcome.Should().Be(SignTokenOutcome.Expired);
+    }
+
+    [Fact]
+    public async Task GetDocument_ExpiredPendingToken_IsRejected()
+    {
+        var (token, _) = await SendAndGetTokenAsync();
+        var row = await _db.SignatureSigners.FirstAsync(s => s.Token == token);
+        row.ExpiresAtUtc = DateTime.UtcNow.AddMinutes(-1);
+        await _db.SaveChangesAsync();
+
+        var signing = CreateSigningService();
+        var res = await signing.GetDocumentAsync(token, default);
+
+        res.Outcome.Should().Be(SignTokenOutcome.Expired);
+    }
+
+    [Fact]
     public async Task Sign_ExpiredToken_IsRejected()
     {
         var (token, _) = await SendAndGetTokenAsync();

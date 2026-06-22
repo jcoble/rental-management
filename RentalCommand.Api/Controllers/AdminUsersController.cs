@@ -43,14 +43,37 @@ public class AdminUsersController : ManagementControllerBase
     /// <summary>List all team members in the caller's portfolio.</summary>
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<TeamMemberDto>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<TeamMemberDto>>> List(CancellationToken ct)
+    public async Task<ActionResult<IReadOnlyList<TeamMemberDto>>> List([FromQuery] ListQuery query, CancellationToken ct)
     {
-        var portfolioId = GetPortfolioId();
+        var page = await BuildListPageAsync(GetPortfolioId(), query, ct);
+        return Ok(page.Items);
+    }
 
-        var members = await _db.UserAccounts
+    /// <summary>Page team members in the caller's portfolio with SQL-side count/sort/skip/take.</summary>
+    [HttpGet("page")]
+    [ProducesResponseType(typeof(TeamMemberListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<TeamMemberListResponse>> ListPage([FromQuery] ListQuery query, CancellationToken ct)
+        => await BuildListPageAsync(GetPortfolioId(), query, ct);
+
+    private async Task<TeamMemberListResponse> BuildListPageAsync(int portfolioId, ListQuery query, CancellationToken ct)
+    {
+        var filtered = _db.UserAccounts
             .AsNoTracking()
-            .Where(u => u.PortfolioId == portfolioId)
-            .OrderBy(u => u.CreatedAt)
+            .Where(u => u.PortfolioId == portfolioId);
+
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var term = query.Search.Trim();
+            filtered = filtered.Where(u =>
+                EF.Functions.ILike(u.Email, $"%{term}%") ||
+                EF.Functions.ILike(u.DisplayName, $"%{term}%"));
+        }
+
+        var totalCount = await filtered.CountAsync(ct);
+
+        var members = await ApplySort(filtered, query)
+            .Skip(query.NormalizedSkip)
+            .Take(query.NormalizedTake)
             .Select(u => new TeamMemberDto
             {
                 Id = u.Id,
@@ -64,8 +87,25 @@ public class AdminUsersController : ManagementControllerBase
             })
             .ToListAsync(ct);
 
-        return Ok(members);
+        return new TeamMemberListResponse
+        {
+            Items = members,
+            TotalCount = totalCount,
+            Skip = query.NormalizedSkip,
+            Take = query.NormalizedTake,
+        };
     }
+
+    private static IQueryable<UserAccount> ApplySort(IQueryable<UserAccount> q, ListQuery query) =>
+        query.SortField switch
+        {
+            "email" => query.SortDescending ? q.OrderByDescending(u => u.Email) : q.OrderBy(u => u.Email),
+            "displayname" or "name" => query.SortDescending ? q.OrderByDescending(u => u.DisplayName) : q.OrderBy(u => u.DisplayName),
+            "role" => query.SortDescending ? q.OrderByDescending(u => u.Role) : q.OrderBy(u => u.Role),
+            "status" or "isactive" => query.SortDescending ? q.OrderByDescending(u => u.IsActive) : q.OrderBy(u => u.IsActive),
+            "createdat" => query.SortDescending ? q.OrderByDescending(u => u.CreatedAt) : q.OrderBy(u => u.CreatedAt),
+            _ => query.SortDescending ? q.OrderByDescending(u => u.CreatedAt) : q.OrderBy(u => u.CreatedAt),
+        };
 
     // ──────────────────────────────────────────────────────────────
     // POST /api/v1/admin/users

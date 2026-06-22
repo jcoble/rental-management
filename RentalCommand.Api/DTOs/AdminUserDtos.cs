@@ -16,6 +16,14 @@ public class TeamMemberDto
     public DateTime CreatedAt { get; set; }
 }
 
+public class TeamMemberListResponse
+{
+    public IReadOnlyList<TeamMemberDto> Items { get; set; } = [];
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+}
+
 /// <summary>
 /// Response wrapper for the create endpoint. Includes the member DTO plus, when a password
 /// was auto-generated, the temporary password so the admin can share it with the new user.

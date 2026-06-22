@@ -8,23 +8,27 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import { Loader2, Plus, Copy, Check, TriangleAlert } from '@lucide/svelte';
 
 	const ROLES: UserRole[] = ['Admin', 'Manager', 'Agent', 'Owner', 'Tenant'];
+	const PAGE_SIZE = 20;
 
 	const queryClient = useQueryClient();
 	const currentUser = $derived(getCurrentUser());
 	const authState = getAuthState();
+	let skip = $state(0);
 
 	// ---- Query ----
 
 	const membersQuery = createQuery(() => ({
-		queryKey: ['admin-users'],
+		queryKey: ['admin-users', skip],
 		enabled: authState.isAuthenticated,
-		queryFn: () => adminUsers.list()
+		queryFn: () => adminUsers.listPage({ skip, take: PAGE_SIZE, sort: '-createdAt' })
 	}));
 
-	const members = $derived((membersQuery.data ?? []) as TeamMember[]);
+	const members = $derived((membersQuery.data?.items ?? []) as TeamMember[]);
+	const hasNext = $derived(skip + members.length < (membersQuery.data?.totalCount ?? 0));
 
 	function invalidate() {
 		queryClient.invalidateQueries({ queryKey: ['admin-users'] });
@@ -68,14 +72,15 @@
 				temporaryPassword: inviteForm.temporaryPassword || undefined
 			}),
 		onSuccess: (result: CreateTeamMemberResponse) => {
-			showSuccess(`${result.email} added to the team.`);
+			showSuccess(`${result.member.email} added to the team.`);
 			inviteForm = { ...emptyForm };
 			showInviteDialog = false;
+			skip = 0;
 			invalidate();
 			if (result.generatedPassword) {
 				// Small delay so the invite dialog closes before the password dialog opens.
 				setTimeout(() => {
-					generatedPasswordInfo = { email: result.email, password: result.generatedPassword! };
+					generatedPasswordInfo = { email: result.member.email, password: result.generatedPassword! };
 					passwordCopied = false;
 					showPasswordDialog = true;
 				}, 100);
@@ -248,6 +253,17 @@
 						<p class="text-xs text-muted-foreground">Joined {formatDate(member.createdAt)}</p>
 					</div>
 				{/each}
+			</div>
+		{/if}
+		{#if !membersQuery.isPending && members.length > 0}
+			<div class="border-t border-border px-4 py-3">
+				<Pagination
+					bind:skip
+					take={PAGE_SIZE}
+					count={members.length}
+					{hasNext}
+					testid="team-pagination"
+				/>
 			</div>
 		{/if}
 	</div>

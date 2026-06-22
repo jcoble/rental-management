@@ -3,6 +3,7 @@ using System.Data.Common;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
@@ -45,7 +46,7 @@ public class ExpenseServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new ExpenseService(_db, new NoopDataUpdateService());
+        _sut = new ExpenseService(_db, new NoopDataUpdateService(), Mock.Of<IFileStorage>());
     }
 
     public void Dispose()

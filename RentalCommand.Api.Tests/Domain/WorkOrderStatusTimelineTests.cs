@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
@@ -49,7 +50,12 @@ public class WorkOrderStatusTimelineTests : IDisposable
         });
         _db.SaveChanges();
 
-        _service = new WorkOrderService(_db, new NoopDataUpdateService(), new NoopMessagePublisher(), NullLogger<WorkOrderService>.Instance);
+        _service = new WorkOrderService(
+            _db,
+            new NoopDataUpdateService(),
+            new NoopMessagePublisher(),
+            Mock.Of<IFileStorage>(),
+            NullLogger<WorkOrderService>.Instance);
         _portal = new PortalService(_db, new NoopLeaseQaService());
     }
 
