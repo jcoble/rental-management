@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
@@ -48,7 +49,12 @@ public class WorkOrderTenantScheduleSmsTests : IDisposable
         });
         _db.SaveChanges();
 
-        _workOrders = new WorkOrderService(_db, new NoopDataUpdate(), _publisher, NullLogger<WorkOrderService>.Instance);
+        _workOrders = new WorkOrderService(
+            _db,
+            new NoopDataUpdate(),
+            _publisher,
+            Mock.Of<IFileStorage>(),
+            NullLogger<WorkOrderService>.Instance);
     }
 
     public void Dispose()

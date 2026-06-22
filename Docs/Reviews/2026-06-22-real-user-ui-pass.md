@@ -799,6 +799,32 @@ Evidence:
 
 Status: Partial pass for the local unconnected accounting shell and OAuth-return error banner. The actual QuickBooks connect/reconnect/disconnect, import, direction toggles, mapping confirmation, and review-queue create-target workflows remain gated until sandbox credentials are available.
 
+### Activity History And Admin Forensic Audit
+
+Acceptance criteria:
+- Staff activity history loads portfolio-scoped rows, exposes Admin-only Advanced navigation, and supports refresh, search, action filter, entity filter, no-results state, pagination state, and row deep links.
+- Following an activity row to a scanned-source record must not emit broken image/file requests when the stored file metadata row has no readable backing blob.
+- Admin forensic audit loads behind the Admin role, supports refresh, search, action/entity filters, no-results state, row disclosure, raw old/new JSON panels, IP address display, entity links, and filtered CSV export.
+- Browser pass must not perform any provider-backed or destructive action.
+
+Bug RC-UI-028:
+- Repro: From `/audit`, filter to `Created` + `Payment`, click the `Payment #1` row, and open `/accounting/payments/1`.
+- Observed: Payment detail rendered a scanned-document preview because `hasScan` came from a `StoredFiles` metadata row, then the browser requested `/payment-file/1?thumb=true` and logged a 404 because the local blob was missing.
+- Root cause: detail DTO scan flags trusted attachment metadata without verifying storage availability. The serving endpoint correctly returned 404 for unreadable blobs, so the UI could advertise a file that could not be served.
+- Fix: added a shared available-file lookup that opens the blob before setting detail scan/receipt flags, and used it in payment, lease, work-order, and expense detail services. List/grid flags remain DB-side metadata only to avoid storage N+1 behavior.
+- Regression: `PaymentServiceTests.GetAsync_DoesNotAdvertiseScanWhenStoredFileBlobIsMissing`.
+
+Evidence:
+- Local DB confirmed Nora Vale is an active Admin in portfolio 2.
+- `/audit` loaded `Page 1 · 25 shown`; Advanced link was visible, Refresh stayed local, unmatched search `no-audit-hit-1782149519` showed `No audit entries found`, and `Created` + `Payment` filters loaded `Page 1 · 1 shown`.
+- Clicking the filtered payment row reached `/accounting/payments/1`; after the fix the API returned `hasScan:false` / `scanIsImage:false`.
+- Playwright proof on the payment detail returned `scannedCards:0`, `paymentFileRequests:[]`, `consoleErrors:[]`, and `pageErrors:[]`; the only relevant detail request was `GET /api/v1/payments/1`.
+- `/admin/audit` loaded `Page 1 · 25 shown`; unmatched search `no-admin-audit-hit-1782149519` showed the no-results state; `Created` + `Payment` filters loaded `Page 1 · 1 shown`.
+- Opening the forensic row showed two raw JSON panels, IP `::1`, and payment entity links. Filtered CSV export requested `/api/v1/admin/audit/export?sort=-timestamp&operation=Created&entityType=Payment` and downloaded `audit-2026-06-22-17-33-17.csv`; the generated local artifact was deleted after verification.
+- Browser page errors and console errors were zero during the post-fix `/audit`, payment detail, and `/admin/audit` proofs.
+
+Status: Pass for staff activity history and Admin forensic audit controls covered above. Team management, platform Engine health, and remaining admin role/error variants remain open.
+
 ## Route Inventory For Continued Pass
 
 Core route map to exercise next:
@@ -864,6 +890,9 @@ Core route map to exercise next:
 - `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings after the import-page copy fixes.
 - `rtk env PW_BASE_URL=https://localhost:5807 API_BASE_URL=https://localhost:5806 PW_EMAIL=tsk397.full.1782131040@example.local PW_PASSWORD='AuditPass!23' PW_TEMP_PASSWORD='AuditTemp!24' pnpm --dir web exec node output/playwright/security-proof.mjs`: pass with `restored: true`.
 - Browser settings-accounting proof on `https://localhost:5807`: QuickBooks configured-but-not-connected shell rendered only Back to settings and Connect QuickBooks, OAuth `access_denied` return showed a toast and stripped the query parameter, back navigation reached `/settings`, no external provider action was clicked, and console warnings/errors were zero.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~PaymentServiceTests.GetAsync_DoesNotAdvertiseScanWhenStoredFileBlobIsMissing" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~PaymentServiceTests|FullyQualifiedName~ExpenseServiceTests|FullyQualifiedName~WorkOrderStatusTimelineTests|FullyQualifiedName~WorkOrderCostsTimingAndProjectionTests|FullyQualifiedName~WorkOrderTenantScheduleSmsTests|FullyQualifiedName~WorkOrderServiceListTests" --logger "console;verbosity=normal"`: 33 passed.
+- Browser activity/admin proof on `https://localhost:5807`: `/audit` refresh, unmatched search, Created + Payment filters, payment row deep link, missing-blob payment detail, `/admin/audit` no-results/filter/disclosure/IP/raw JSON, and filtered CSV export passed with no console/page errors and no `/payment-file/1` request after the fix.
 - Browser property-label proof on `https://localhost:5807`: `/properties`, type filter, New Property modal, and property detail use landlord-facing labels while preserving API enum values.
 - Browser FileDrop proof on `https://localhost:5807/scan`: dragged unsupported CSV emitted a rejection warning, did not render as the selected file, and did not trigger `POST /api/v1/scans`.
 - Browser properties grid proof on `https://localhost:5807`: initial load and Name sort used `/api/v1/properties/page?take=20...`; no `/api/v1/properties?take=500` grid fetch occurred.
@@ -883,7 +912,7 @@ Core route map to exercise next:
 
 ## Open While In Progress
 
-- This is not yet a claim that every button/modal/grid/state in the product has been exercised. Continue real-user flow through dashboard cards/actions, settings/security account/session variants, settings/accounting connected-provider states, audit/admin, docs/help, assistant delivery variants, portal, banking connection review states, scan batch/retry/reject variants, tenant-notice draft/send states, row delete confirmations, and remaining CRUD unhappy/edge states.
+- This is not yet a claim that every button/modal/grid/state in the product has been exercised. Continue real-user flow through dashboard cards/actions, settings/security account/session variants, settings/accounting connected-provider states, team management, platform Engine health, docs/help, assistant delivery variants, portal, banking connection review states, scan batch/retry/reject variants, tenant-notice draft/send states, row delete confirmations, and remaining CRUD unhappy/edge states.
 - Plaid and QuickBooks remain deferred until sandbox credentials are available.
 - Continue static DB-side sweep outside the repaired report/accounting/banking controller/service scope; no endpoint should be marked production-scale until generated SQL is confirmed for filtering, sorting, paging, grouping, and aggregation. Read-only follow-up found additional high-confidence DB-side risks in lease ledger, unit timeline, daily briefing, inspection completion, unpaged document/deposit/opening-balance/conversation/portal lists, admin users, and broad `take:100/500` grid screens. Lease ledger, unit timeline, daily briefing, inspection completion, Command Center unit search, the scan draft grid, staff messages grid, staff messages unread count, staff messages compose tenant picker, and the properties/tenants/leases/units/maintenance/appointments/vendors/owners/applications/deposits/recurring-maintenance primary grids are now fixed with focused regressions; other unpaged/capped lists and shared-grid risks remain open.
 - Tenant-notice draft review/approve/send still needs an eligible synthetic notice condition and provider-safe channel setup.
@@ -898,7 +927,7 @@ The current pass is not a complete every-control inventory. The next new-user pa
 - `/appointments` and `/appointments/[id]`: calendar month/week/agenda date-window loading, drag-reschedule failure snapback, create-at-slot, detail edit/delete, and calendar/list cross-invalidation. The appointments list primary grid is server-side/page browser-proven.
 - Portal routes `/portal`, `/portal/messages`, `/portal/maintenance`, `/portal/payments`, `/portal/notifications`, `/portal/appointments`, and `/portal/lease`: dashboard links, compose/reply/cancel/delete, Enter vs Shift+Enter, unread invalidation, maintenance request create with photo preview/remove/failure, detail/timeline, Stripe unavailable, checkout success/cancel params, autopay on/off, notification action links/read state, appointment real workflow or placeholder defect, pagination, empty/loading/error states, and optimistic-update failures.
 - `/settings/accounting`: connected-provider toggle/submit/reset/copy actions, confirmations, persistence after reload, provider-unconfigured states, review queue controls, and stale-session failure behavior. `/settings/security` still needs Google-only/no-local-password and stale-session variants; local password-change controls are browser-proven.
-- `/admin/users`, `/admin/audit`, and `/superadmin/engine`: advanced filters, date ranges, row actions, role/status toggles, generated-password/copy escapes, refresh/reindex actions, exports, no-results states, and loading/error states.
+- `/admin/users` and `/superadmin/engine`: row actions, role/status toggles, generated-password/copy escapes, refresh/reindex actions, exports where present, no-results states, and loading/error states. `/audit` and `/admin/audit` core filters/refresh/no-results/detail/export controls are browser-proven; role-denied/error variants remain open.
 - `/docs`, public `/apply/[token]`, and public `/sign/[token]`: docs search/results/no results/articles/navigation/404, valid/invalid/expired public application states, scan success/failure/no extracted fields, duplicate application, valid/invalid/expired signing envelopes, PDF open/download, typed/drawn signature, clear, decline modal, terminal states, and provider gates.
 - App shell/navigation: staff versus portal role menus, collapsible groups, collapsed rail, mobile drawer/overlay, command-center search/no matches, header badges, account menu/logout, theme toggle, and role-hidden route gates.
 - Shared controls in composed routes: data grids, pagination, search inputs, confirm dialogs, app-shell navigation, command-center navigation, notification bell/list interactions, keyboard/focus/escape behavior, and select-all/bulk states. FileDrop unsupported-file rejection is fixed and browser-proven for drag/drop on `/scan`; upload failure states still need route-specific coverage.
