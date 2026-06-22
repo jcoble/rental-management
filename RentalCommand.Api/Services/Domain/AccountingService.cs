@@ -652,43 +652,94 @@ public class AccountingService : IAccountingService
             }
         }
 
-        // 2) For rows not already cleared, suggest a still-unmatched bank line. Pull the portfolio's
-        // open (Unmatched, unlinked) bank lines once and pair them in-memory by amount (hard gate) +
-        // date proximity, with a merchant/counterparty name signal — same shape as the banking engine.
-        var unmatched = await _db.BankTransactions
+        // 2) For rows not already cleared, suggest a still-unmatched bank line. Bound the bank candidate
+        // lookup by the page rows' amount and date hard gates in SQL, then apply the shared name/date
+        // scoring in memory.
+        var openPaymentRows = paymentRows
+            .Where(p => !result.ContainsKey((KindPayment, p.Id)))
+            .ToList();
+        var openExpenseRows = expenseRows
+            .Where(e => !result.ContainsKey((KindExpense, e.Id)))
+            .ToList();
+
+        if (openPaymentRows.Count == 0 && openExpenseRows.Count == 0) return result;
+
+        var unmatchedQuery = _db.BankTransactions
             .AsNoTracking()
             .Where(t =>
                 t.PortfolioId == portfolioId &&
                 t.MatchStatus == "Unmatched" &&
                 t.MatchedPaymentId == null &&
-                t.MatchedExpenseId == null)
-            .Select(t => new BankSuggestionCandidate
-            {
-                Id = t.Id,
-                PostedAt = t.PostedAt,
-                Amount = t.Amount,
-                MerchantName = t.MerchantName,
-                Description = t.Description,
-                InstitutionName = t.BankConnection!.InstitutionName,
-            })
-            .ToListAsync(ct);
+                t.MatchedExpenseId == null);
+
+        var unmatched = new List<BankSuggestionCandidate>();
+
+        if (openPaymentRows.Count > 0)
+        {
+            var minAmount = openPaymentRows.Min(p => p.Amount) - 0.01m;
+            var maxAmount = openPaymentRows.Max(p => p.Amount) + 0.01m;
+            var minDate = openPaymentRows.Min(p => p.Date.Date).AddDays(-14);
+            var maxDateExclusive = openPaymentRows.Max(p => p.Date.Date).AddDays(15);
+
+            unmatched.AddRange(await unmatchedQuery
+                .Where(t =>
+                    t.Amount > 0m &&
+                    t.Amount >= minAmount &&
+                    t.Amount <= maxAmount &&
+                    t.PostedAt >= minDate &&
+                    t.PostedAt < maxDateExclusive)
+                .Select(t => new BankSuggestionCandidate
+                {
+                    Id = t.Id,
+                    PostedAt = t.PostedAt,
+                    Amount = t.Amount,
+                    MerchantName = t.MerchantName,
+                    Description = t.Description,
+                    InstitutionName = t.BankConnection!.InstitutionName,
+                })
+                .ToListAsync(ct));
+        }
+
+        if (openExpenseRows.Count > 0)
+        {
+            var minAmount = openExpenseRows.Min(e => -e.Amount) - 0.01m;
+            var maxAmount = openExpenseRows.Max(e => -e.Amount) + 0.01m;
+            var minDate = openExpenseRows.Min(e => e.Date.Date).AddDays(-14);
+            var maxDateExclusive = openExpenseRows.Max(e => e.Date.Date).AddDays(15);
+
+            unmatched.AddRange(await unmatchedQuery
+                .Where(t =>
+                    t.Amount < 0m &&
+                    t.Amount >= minAmount &&
+                    t.Amount <= maxAmount &&
+                    t.PostedAt >= minDate &&
+                    t.PostedAt < maxDateExclusive)
+                .Select(t => new BankSuggestionCandidate
+                {
+                    Id = t.Id,
+                    PostedAt = t.PostedAt,
+                    Amount = t.Amount,
+                    MerchantName = t.MerchantName,
+                    Description = t.Description,
+                    InstitutionName = t.BankConnection!.InstitutionName,
+                })
+                .ToListAsync(ct));
+        }
 
         if (unmatched.Count == 0) return result;
 
         var deposits = unmatched.Where(c => c.Amount > 0).ToList();   // suggest against payments (income)
         var withdrawals = unmatched.Where(c => c.Amount < 0).ToList(); // suggest against expenses
 
-        foreach (var p in paymentRows)
+        foreach (var p in openPaymentRows)
         {
-            if (result.ContainsKey((KindPayment, p.Id))) continue; // already cleared
             var suggestion = BestBankSuggestion(deposits, p.Amount, p.Date, p.Counterparty);
             if (suggestion != null)
                 result[(KindPayment, p.Id)] = new ReconciliationState { Suggested = suggestion };
         }
 
-        foreach (var e in expenseRows)
+        foreach (var e in openExpenseRows)
         {
-            if (result.ContainsKey((KindExpense, e.Id))) continue;
             // Expense amounts are stored positive; the bank withdrawal is negative.
             var suggestion = BestBankSuggestion(withdrawals, -e.Amount, e.Date, e.Counterparty);
             if (suggestion != null)
