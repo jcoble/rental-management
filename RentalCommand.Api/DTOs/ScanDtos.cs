@@ -13,7 +13,7 @@ public sealed record ScanFieldDto(string Name, string Value, decimal Confidence)
 public sealed record ScanDraftResponse(
     int Id, int PortfolioId, string TargetEntityType, string Status,
     string FileUrl, IReadOnlyList<ScanFieldDto> Fields,
-    string? ModelId, int? TokensUsed, decimal? CostUsd,
+    string? ModelId, int? TokensUsed, decimal? CostUsd, string? FailureReason,
     DateTime CreatedAt, DateTime? ReviewedAt, DateTime? ConfirmedAt,
     string? CreatedEntityType = null, int? CreatedEntityId = null,
     // Conversational-voice ("Tell me") slot state. Populated only via
@@ -48,7 +48,7 @@ public sealed record ScanDraftResponse(
         return new ScanDraftResponse(
             d.Id, d.PortfolioId, d.TargetEntityType, d.Status,
             fileUrl, fields,
-            d.ModelId, d.TokensUsed, d.CostUsd,
+            d.ModelId, d.TokensUsed, d.CostUsd, d.FailureReason,
             d.CreatedAt, d.ReviewedAt, d.ConfirmedAt,
             createdEntityType, createdEntityId);
     }
@@ -143,7 +143,7 @@ public sealed record ScanBatchSummaryResponse(
 public sealed record ScanBatchDraftResponse(
     int Id, string Status, string TargetEntityType, string FileUrl,
     string? Tenant, string? Unit, string? Term,
-    int? CreatedEntityId, DateTime CreatedAt);
+    int? CreatedEntityId, DateTime CreatedAt, string? FailureReason = null);
 
 /// <summary>Full batch detail: the batch, its rollup counts, and its drafts for the review queue.</summary>
 public sealed record ScanBatchDetailResponse(

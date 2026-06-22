@@ -1,9 +1,11 @@
 using System.Security.Claims;
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
@@ -24,6 +26,7 @@ public class ScanBatchControllerTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
+    private readonly List<string> _executedSql = [];
 
     public ScanBatchControllerTests()
     {
@@ -32,6 +35,7 @@ public class ScanBatchControllerTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
             .Options;
 
         _db = new RentalCommandTestDbContext(options);
@@ -172,6 +176,134 @@ public class ScanBatchControllerTests : IDisposable
         confirmed.Term.Should().Be("2026-01-01 – 2026-12-31");
     }
 
+    [Fact]
+    public async Task GetBatch_ComputesCountsWithGroupedSql()
+    {
+        var batch = SeedBatch(PortfolioId, fileCount: 5);
+        SeedDraft(batch.Id, "Pending");
+        SeedDraft(batch.Id, "Processing");
+        SeedDraft(batch.Id, "Reviewing");
+        SeedDraft(batch.Id, "Confirmed");
+        SeedDraft(batch.Id, "Failed");
+
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        _executedSql.Clear();
+        var result = await controller.GetBatch(batch.Id, CancellationToken.None);
+
+        var detail = result.Result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<ScanBatchDetailResponse>().Subject;
+        detail.Counts.Total.Should().Be(5);
+        detail.Counts.Pending.Should().Be(2);
+        detail.Counts.Reviewing.Should().Be(1);
+        detail.Counts.Confirmed.Should().Be(1);
+        detail.Counts.Failed.Should().Be(1);
+
+        _executedSql.Should().Contain(sql =>
+            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase)
+            && sql.Contains("\"Status\"", StringComparison.Ordinal)
+            && sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase),
+            "batch detail counts must be rolled up by the database, not by folding materialized draft rows");
+    }
+
+    [Fact]
+    public async Task GetBatch_SummarizesUnitNumberFromLeaseExtraction()
+    {
+        var batch = SeedBatch(PortfolioId, fileCount: 1);
+        SeedDraft(batch.Id, "Reviewing",
+            extractedFields: """{"tenant_name":{"value":"Avery Ellis","confidence":0.9},"unit_number":{"value":"1A","confidence":0.9},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2027-01-01","confidence":0.9}}""");
+
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        var result = await controller.GetBatch(batch.Id, CancellationToken.None);
+
+        var detail = result.Result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<ScanBatchDetailResponse>().Subject;
+        detail.Drafts.Should().ContainSingle().Which.Unit.Should().Be("1A");
+    }
+
+    [Fact]
+    public async Task Get_IncludesFailureReasonForFailedDraft()
+    {
+        var batch = SeedBatch(PortfolioId, fileCount: 1);
+        var draft = SeedDraft(batch.Id, "Failed",
+            targetEntityType: "Expense",
+            failureReason: "extraction interrupted (timeout or shutdown)");
+
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        var result = await controller.Get(draft.Id, CancellationToken.None);
+
+        var response = result.Result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<ScanDraftResponse>().Subject;
+        response.Status.Should().Be("Failed");
+        response.FailureReason.Should().Be("extraction interrupted (timeout or shutdown)");
+    }
+
+    [Fact]
+    public async Task Retry_FailedDraft_RequeuesAndClearsStaleExtractionData()
+    {
+        var batch = SeedBatch(PortfolioId, fileCount: 1);
+        var draft = SeedDraft(batch.Id, "Failed",
+            extractedFields: """{"tenant_name":{"value":"Avery Ellis","confidence":0.9}}""",
+            failureReason: "extraction interrupted (timeout or shutdown)");
+        draft.ModelId = "claude-cli:sonnet";
+        draft.TokensUsed = 1234;
+        draft.CostUsd = 0.0123m;
+        draft.ReviewedAt = DateTime.UtcNow;
+        draft.ReviewedBy = "7";
+        draft.ConfirmedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        var result = await controller.Retry(draft.Id, CancellationToken.None);
+
+        result.Should().BeOfType<OkResult>();
+
+        _db.ChangeTracker.Clear();
+        var reloaded = await _db.ScanDrafts.SingleAsync(d => d.Id == draft.Id);
+        reloaded.Status.Should().Be("Pending");
+        reloaded.ExtractedFields.Should().BeNull();
+        reloaded.FailureReason.Should().BeNull();
+        reloaded.ModelId.Should().BeNull();
+        reloaded.TokensUsed.Should().BeNull();
+        reloaded.CostUsd.Should().BeNull();
+        reloaded.ReviewedAt.Should().BeNull();
+        reloaded.ReviewedBy.Should().BeNull();
+        reloaded.ConfirmedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Retry_NonFailedDraft_ReturnsBadRequest()
+    {
+        var batch = SeedBatch(PortfolioId, fileCount: 1);
+        var draft = SeedDraft(batch.Id, "Reviewing");
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        var result = await controller.Retry(draft.Id, CancellationToken.None);
+
+        result.Should().BeOfType<BadRequestObjectResult>();
+        _db.ChangeTracker.Clear();
+        (await _db.ScanDrafts.SingleAsync(d => d.Id == draft.Id)).Status.Should().Be("Reviewing");
+    }
+
+    [Fact]
+    public async Task Retry_CrossPortfolioDraft_ReturnsNotFound()
+    {
+        const int otherPortfolioId = 99;
+        SeedPortfolio(otherPortfolioId);
+        var foreignBatch = SeedBatch(otherPortfolioId, fileCount: 1);
+        var foreignDraft = SeedDraft(foreignBatch.Id, "Failed", portfolioId: otherPortfolioId);
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        var result = await controller.Retry(foreignDraft.Id, CancellationToken.None);
+
+        result.Should().BeOfType<NotFoundObjectResult>();
+        _db.ChangeTracker.Clear();
+        (await _db.ScanDrafts.SingleAsync(d => d.Id == foreignDraft.Id)).Status.Should().Be("Failed");
+    }
+
     // -------------------------------------------------------------------------
     // IDOR: a batch (and its drafts) in another portfolio is not readable.
     // -------------------------------------------------------------------------
@@ -268,16 +400,23 @@ public class ScanBatchControllerTests : IDisposable
         return batch;
     }
 
-    private ScanDraft SeedDraft(int batchId, string status, string? extractedFields = null, int? portfolioId = null)
+    private ScanDraft SeedDraft(
+        int batchId,
+        string status,
+        string? extractedFields = null,
+        int? portfolioId = null,
+        string targetEntityType = "Lease",
+        string? failureReason = null)
     {
         var draft = new ScanDraft
         {
             PortfolioId = portfolioId ?? PortfolioId,
             BatchId = batchId,
             FilePath = $"uploads/{Guid.NewGuid():N}.pdf",
-            TargetEntityType = "Lease",
+            TargetEntityType = targetEntityType,
             Status = status,
             ExtractedFields = extractedFields,
+            FailureReason = failureReason,
             CreatedAt = DateTime.UtcNow,
         };
         _db.ScanDrafts.Add(draft);
@@ -324,5 +463,27 @@ public class ScanBatchControllerTests : IDisposable
 
         public Task<bool> RejectDraftAsync(int portfolioId, int draftId, int userId, string? reason, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for batch tests.");
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
     }
 }

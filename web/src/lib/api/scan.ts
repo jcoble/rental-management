@@ -42,6 +42,7 @@ export interface ScanDraftResponse {
 	modelId: string | null;
 	tokensUsed: number | null;
 	costUsd: number | null;
+	failureReason: string | null;
 	createdAt: string;
 	reviewedAt: string | null;
 	confirmedAt: string | null;
@@ -106,6 +107,7 @@ export interface ScanBatchDraft {
 	/** Id of the entity (e.g. Lease) created once the draft is confirmed. */
 	createdEntityId: number | null;
 	createdAt: string;
+	failureReason: string | null;
 }
 
 /** Full batch detail with its drafts. */
@@ -145,6 +147,9 @@ export const scan = {
 
 	confirm: (id: number, overridesJson: string): Promise<ScanConfirmResponse> =>
 		api.post<ScanConfirmResponse>(`/scans/${id}/confirm`, { overridesJson }),
+
+	retry: (id: number): Promise<unknown> =>
+		api.post(`/scans/${id}/retry`, {}),
 
 	createVoiceDraft: (audio: Blob): Promise<ScanDraftResponse> => {
 		const fd = new FormData();

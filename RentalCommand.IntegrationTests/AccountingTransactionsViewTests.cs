@@ -1,5 +1,7 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Npgsql;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -273,6 +275,54 @@ public sealed class AccountingTransactionsViewTests : IAsyncLifetime
         paymentRow.SuggestedBankMatch.Confidence.Should().BeGreaterThan(0m);
     }
 
+    [SkippableFact]
+    public async Task GetTransactionsAsync_PrefiltersInlineBankSuggestionsInSql()
+    {
+        SkipIfNoDocker();
+        var commands = new List<string>();
+        await using var db = NewContext(_ownerConnString, [new RecordingCommandInterceptor(commands)]);
+        var date = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+
+        SeedPropertyLeaseAndPayment(db, _portfolioId, date);
+        var paymentId = await db.Payments.Where(p => p.PortfolioId == _portfolioId).Select(p => p.Id).SingleAsync();
+        SeedBankTransaction(
+            db, _portfolioId,
+            description: "ACH CREDIT",
+            merchantName: "Maria Tenant",
+            amount: 1200m,
+            postedAt: date,
+            category: "Deposit",
+            matchStatus: "Unmatched");
+        SeedBankTransaction(
+            db, _portfolioId,
+            description: "OLD CREDIT",
+            merchantName: "Maria Tenant",
+            amount: 1200m,
+            postedAt: date.AddMonths(-6),
+            category: "Deposit",
+            matchStatus: "Unmatched");
+        commands.Clear();
+
+        var page = await NewService(db).GetTransactionsAsync(
+            _portfolioId,
+            new AccountingTransactionsQuery { Kind = "Payment", Take = 20 },
+            CancellationToken.None);
+
+        page.Items.Single(t => t.Kind == "Payment" && t.Id == paymentId)
+            .SuggestedBankMatch.Should().NotBeNull();
+
+        var bankCandidateSql = commands
+            .Where(sql => sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        bankCandidateSql.Should().Contain(sql =>
+            sql.Contains("\"Amount\" >=", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"Amount\" <=", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"PostedAt\" >=", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"PostedAt\" <", StringComparison.OrdinalIgnoreCase),
+            "inline reconciliation suggestions must bound open bank candidates in SQL before scoring");
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────────────────────
     // (f) An unmatched withdrawal surfaces a suggestion on the expense row.
     // ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -375,8 +425,18 @@ public sealed class AccountingTransactionsViewTests : IAsyncLifetime
     private void SkipIfNoDocker() =>
         Skip.IfNot(_dockerAvailable, "Docker is not available; accounting-view runtime verification skipped.");
 
-    private static RentalCommandDbContext NewContext(string connString) =>
-        new(new DbContextOptionsBuilder<RentalCommandDbContext>().UseNpgsql(connString).Options);
+    private static RentalCommandDbContext NewContext(
+        string connString,
+        IEnumerable<IInterceptor>? interceptors = null)
+    {
+        var optionsBuilder = new DbContextOptionsBuilder<RentalCommandDbContext>()
+            .UseNpgsql(connString);
+
+        if (interceptors is not null)
+            optionsBuilder.AddInterceptors(interceptors);
+
+        return new RentalCommandDbContext(optionsBuilder.Options);
+    }
 
     private static AccountingService NewService(RentalCommandDbContext db) =>
         new(db, new ScheduleEService(db), new YearEndPacketPdfGenerator());
@@ -517,5 +577,27 @@ public sealed class AccountingTransactionsViewTests : IAsyncLifetime
         db.BankTransactions.Add(transaction);
         db.SaveChanges();
         return transaction;
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
     }
 }

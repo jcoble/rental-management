@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -171,6 +172,28 @@ public sealed class ApplicationService : IApplicationService
             unitId = request.UnitId;
         }
 
+        var normalizedEmail = NormalizeEmailForComparison(request.Email);
+        if (normalizedEmail is not null)
+        {
+            var existingOpenApplication = await _db.RentalApplications
+                .AsNoTracking()
+                .Where(a => a.PortfolioId == portfolioId
+                    && a.Email != null
+                    && (a.Status == ApplicationStatus.Submitted
+                        || a.Status == ApplicationStatus.UnderReview
+                        || a.Status == ApplicationStatus.Approved))
+                .Where(a => a.Email!.Trim().ToLower() == normalizedEmail)
+                .Select(a => new { a.Id })
+                .FirstOrDefaultAsync(ct);
+
+            if (existingOpenApplication is not null)
+            {
+                throw new DomainValidationException(
+                    $"An application for {normalizedEmail} already exists as application #{existingOpenApplication.Id}. Review the existing application before creating another.",
+                    statusCode: 409);
+            }
+        }
+
         var now = DateTime.UtcNow;
         var entity = new RentalApplication
         {
@@ -179,7 +202,7 @@ public sealed class ApplicationService : IApplicationService
             UnitId = unitId,
             FirstName = request.FirstName.Trim(),
             LastName = request.LastName.Trim(),
-            Email = request.Email,
+            Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
             Phone = request.Phone,
             DateOfBirth = request.DateOfBirth.ToUtc(),
             // The scanned application carries a single-line current address; keep it on the legacy
@@ -427,6 +450,11 @@ public sealed class ApplicationService : IApplicationService
             .Replace('+', '-')
             .Replace('/', '_')
             .TrimEnd('=');
+    }
+
+    private static string? NormalizeEmailForComparison(string? email)
+    {
+        return string.IsNullOrWhiteSpace(email) ? null : email.Trim().ToLowerInvariant();
     }
 
     /// <summary>Folds the application's non-tenant fields (income, employer, address) into the tenant note.</summary>

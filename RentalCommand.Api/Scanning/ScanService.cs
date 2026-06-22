@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Imaging;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -413,6 +414,11 @@ public sealed class ScanService : IScanService
         {
             expense = await _expenses.CreateAsync(portfolioId, request, ct);
         }
+        catch (DomainValidationException ex)
+        {
+            _logger.LogInformation(ex, "Expense creation was rejected while confirming scan draft {DraftId}", draftId);
+            return new ScanConfirmResult(false, null, ex.Message);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Expense creation threw while confirming scan draft {DraftId}", draftId);
@@ -521,6 +527,11 @@ public sealed class ScanService : IScanService
         {
             payment = await _payments.CreateAsync(portfolioId, paymentRequest, ct);
         }
+        catch (DomainValidationException ex)
+        {
+            _logger.LogInformation(ex, "Payment creation was rejected while confirming scan draft {DraftId}", draftId);
+            return new ScanConfirmResult(false, null, ex.Message);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Payment creation threw while confirming scan draft {DraftId}", draftId);
@@ -615,6 +626,11 @@ public sealed class ScanService : IScanService
         try
         {
             workOrder = await _workOrders.CreateAsync(portfolioId, request, userId, "Staff", ct);
+        }
+        catch (DomainValidationException ex)
+        {
+            _logger.LogInformation(ex, "Work order creation was rejected while confirming scan draft {DraftId}", draftId);
+            return new ScanConfirmResult(false, null, ex.Message);
         }
         catch (Exception ex)
         {
@@ -767,6 +783,11 @@ public sealed class ScanService : IScanService
         {
             lease = await _leases.CreateAsync(portfolioId, request, ct);
         }
+        catch (DomainValidationException ex)
+        {
+            _logger.LogInformation(ex, "Lease creation was rejected while confirming scan draft {DraftId}", draftId);
+            return new ScanConfirmResult(false, null, ex.Message);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Lease creation threw while confirming scan draft {DraftId}", draftId);
@@ -873,6 +894,11 @@ public sealed class ScanService : IScanService
         try
         {
             application = await _applications.CreateFromScanAsync(portfolioId, request, userId, ct);
+        }
+        catch (DomainValidationException ex)
+        {
+            _logger.LogInformation(ex, "Application creation was rejected while confirming scan draft {DraftId}", draftId);
+            return new ScanConfirmResult(false, null, ex.Message);
         }
         catch (Exception ex)
         {

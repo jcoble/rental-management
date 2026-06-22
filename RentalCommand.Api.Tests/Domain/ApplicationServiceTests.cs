@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -216,6 +217,73 @@ public class ApplicationServiceTests : IDisposable
 
         var act = async () => await _sut.ApproveAsync(PortfolioId, app.Id, userId: 7);
         await act.Should().ThrowAsync<InvalidOperationException>();
+    }
+
+    [Fact]
+    public async Task CreateFromScanAsync_OpenApplicationWithSameEmail_ThrowsAndDoesNotDuplicate()
+    {
+        var existing = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Quinn",
+            LastName = "Applicant",
+            Email = "qa.applicant.001@example.local",
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = DateTime.UtcNow.AddDays(-1),
+            CreatedAt = DateTime.UtcNow.AddDays(-1),
+            UpdatedAt = DateTime.UtcNow.AddDays(-1),
+        };
+        _db.RentalApplications.Add(existing);
+        await _db.SaveChangesAsync();
+
+        var request = new CreateApplicationRequest
+        {
+            FirstName = "Quinn",
+            LastName = "Applicant",
+            Email = " QA.Applicant.001@EXAMPLE.local ",
+            CurrentAddress = "110 Cedar St, Columbus, OH 43215",
+        };
+
+        var act = async () => await _sut.CreateFromScanAsync(PortfolioId, request, userId: 7);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("qa.applicant.001@example.local");
+        ex.Which.Message.Should().Contain($"application #{existing.Id}");
+        (await _db.RentalApplications.CountAsync()).Should().Be(1);
+    }
+
+    [Theory]
+    [InlineData(ApplicationStatus.Declined)]
+    [InlineData(ApplicationStatus.Withdrawn)]
+    public async Task CreateFromScanAsync_TerminalApplicationWithSameEmail_CreatesNewApplication(ApplicationStatus status)
+    {
+        var existing = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Quinn",
+            LastName = "Applicant",
+            Email = "qa.applicant.001@example.local",
+            Status = status,
+            SubmittedAtUtc = DateTime.UtcNow.AddDays(-10),
+            ReviewedAtUtc = DateTime.UtcNow.AddDays(-9),
+            CreatedAt = DateTime.UtcNow.AddDays(-10),
+            UpdatedAt = DateTime.UtcNow.AddDays(-9),
+        };
+        _db.RentalApplications.Add(existing);
+        await _db.SaveChangesAsync();
+
+        var request = new CreateApplicationRequest
+        {
+            FirstName = "Quinn",
+            LastName = "Applicant",
+            Email = "qa.applicant.001@example.local",
+        };
+
+        var result = await _sut.CreateFromScanAsync(PortfolioId, request, userId: 7);
+
+        result.Id.Should().NotBe(existing.Id);
+        result.Status.Should().Be(ApplicationStatus.Submitted.ToString());
+        (await _db.RentalApplications.CountAsync()).Should().Be(2);
     }
 
     [Fact]

@@ -29,14 +29,39 @@ public class OwnerStatementService : IOwnerStatementService
         if (owner is null)
             return null;
 
-        // ── Load this owner's properties ────────────────────────────────────────────────────────
-        var properties = await _db.Properties
+        // ── Property lines ─────────────────────────────────────────────────────────────────────
+        // Filter/sort each owned property and project its rent/expense aggregates in one translated
+        // property query. DTO math/rounding stays post-query; no payment/expense rows are materialized.
+        var propertyRows = await _db.Properties
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId && p.OwnerEntityId == ownerId)
-            .Select(p => new { p.Id, p.Name, p.ManagementFeePercent })
+            .OrderBy(p => p.Name)
+            .Select(p => new
+            {
+                p.Id,
+                p.Name,
+                p.ManagementFeePercent,
+                RentalIncome = _db.Payments
+                    .Where(pay =>
+                        pay.PortfolioId == portfolioId &&
+                        pay.PaymentType == PaymentType.Rent &&
+                        pay.Status == PaymentStatus.Paid &&
+                        pay.PaidDate != null &&
+                        pay.PaidDate.Value.Year == year &&
+                        pay.Lease != null &&
+                        pay.Lease.PropertyId == p.Id)
+                    .Sum(pay => (decimal?)pay.Amount) ?? 0m,
+                Expenses = _db.Expenses
+                    .Where(e =>
+                        e.PortfolioId == portfolioId &&
+                        e.PropertyId == p.Id &&
+                        e.Status == ExpenseStatus.Paid &&
+                        (e.PaidAt ?? e.IncurredAt).Year == year)
+                    .Sum(e => (decimal?)e.Amount) ?? 0m,
+            })
             .ToListAsync(ct);
 
-        if (properties.Count == 0)
+        if (propertyRows.Count == 0)
         {
             return new OwnerStatementReport
             {
@@ -51,49 +76,13 @@ public class OwnerStatementService : IOwnerStatementService
             };
         }
 
-        var propertyIds = properties.Select(p => p.Id).ToHashSet();
-
-        // ── Rental income: Paid Rent payments in year, keyed by PropertyId via Lease ───────────
-        // Grouped + summed SQL-side (one row per property), not by grouping materialized rows.
-        var incomeByProperty = (await _db.Payments
-            .AsNoTracking()
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                p.PaymentType == PaymentType.Rent &&
-                p.Status == PaymentStatus.Paid &&
-                p.PaidDate != null &&
-                p.PaidDate.Value.Year == year &&
-                p.Lease != null &&
-                propertyIds.Contains(p.Lease!.PropertyId))
-            .GroupBy(p => p.Lease!.PropertyId)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) })
-            .ToListAsync(ct))
-            .ToDictionary(g => g.PropertyId, g => g.Total);
-
-        // ── Expenses in year, keyed by PropertyId ────────────────────────────────────────────────
-        // Cash basis (to match the cash-basis rental income above): only Paid expenses count, dated by
-        // PaidAt (falling back to IncurredAt) — the same COALESCE(PaidAt, IncurredAt) convention used
-        // across the accounting/reports services and the vw_accounting_transactions view.
-        var expensesByProperty = (await _db.Expenses
-            .AsNoTracking()
-            .Where(e =>
-                e.PortfolioId == portfolioId &&
-                e.PropertyId != null &&
-                propertyIds.Contains(e.PropertyId!.Value) &&
-                e.Status == ExpenseStatus.Paid &&
-                (e.PaidAt ?? e.IncurredAt).Year == year)
-            .GroupBy(e => e.PropertyId!.Value)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) })
-            .ToListAsync(ct))
-            .ToDictionary(g => g.PropertyId, g => g.Total);
-
         // ── Assemble per-property lines ──────────────────────────────────────────────────────────
-        var lines = new List<OwnerStatementPropertyLine>(properties.Count);
+        var lines = new List<OwnerStatementPropertyLine>(propertyRows.Count);
 
-        foreach (var prop in properties)
+        foreach (var prop in propertyRows)
         {
-            var income   = Math.Round(incomeByProperty.GetValueOrDefault(prop.Id, 0m), 2);
-            var expenses = Math.Round(expensesByProperty.GetValueOrDefault(prop.Id, 0m), 2);
+            var income   = Math.Round(prop.RentalIncome, 2);
+            var expenses = Math.Round(prop.Expenses, 2);
             var mgmtFee  = Math.Round(income * (prop.ManagementFeePercent ?? 0m) / 100m, 2);
             var net      = income - expenses - mgmtFee;
 
@@ -105,8 +94,6 @@ public class OwnerStatementService : IOwnerStatementService
                 ManagementFee: mgmtFee,
                 NetToOwner:    net));
         }
-
-        lines.Sort((a, b) => string.Compare(a.PropertyName, b.PropertyName, StringComparison.OrdinalIgnoreCase));
 
         var totalIncome    = lines.Sum(l => l.RentalIncome);
         var totalExpenses  = lines.Sum(l => l.Expenses);
@@ -130,86 +117,52 @@ public class OwnerStatementService : IOwnerStatementService
     public async Task<IReadOnlyList<OwnerStatementSummary>> ListOwnersWithNetAsync(
         int portfolioId, int year, CancellationToken ct = default)
     {
-        // Load all OwnerEntities that have at least one property in this portfolio.
-        var owners = await _db.OwnerEntities
-            .AsNoTracking()
-            .Where(o => o.PortfolioId == portfolioId &&
-                        _db.Properties.Any(p => p.PortfolioId == portfolioId && p.OwnerEntityId == o.Id))
-            .Select(o => new { o.Id, o.Name })
-            .OrderBy(o => o.Name)
-            .ToListAsync(ct);
-
-        if (owners.Count == 0)
-            return [];
-
-        // Load properties for all these owners in one shot.
-        var ownerIds = owners.Select(o => o.Id).ToHashSet();
-
-        var properties = await _db.Properties
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                        p.OwnerEntityId != null &&
-                        ownerIds.Contains(p.OwnerEntityId!.Value))
-            .Select(p => new { p.Id, OwnerId = p.OwnerEntityId, p.ManagementFeePercent })
-            .ToListAsync(ct);
-
-        var propertyIds = properties.Select(p => p.Id).ToHashSet();
-
-        // Load income and expenses for those properties — grouped + summed SQL-side (one row per
-        // property each), not by grouping the materialized payment/expense rows in memory.
-        var incomeByProperty = (await _db.Payments
+        var propertyNetRows = _db.Properties
             .AsNoTracking()
             .Where(p =>
                 p.PortfolioId == portfolioId &&
-                p.PaymentType == PaymentType.Rent &&
-                p.Status == PaymentStatus.Paid &&
-                p.PaidDate != null &&
-                p.PaidDate.Value.Year == year &&
-                p.Lease != null &&
-                propertyIds.Contains(p.Lease!.PropertyId))
-            .GroupBy(p => p.Lease!.PropertyId)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) })
-            .ToListAsync(ct))
-            .ToDictionary(g => g.PropertyId, g => g.Total);
-
-        // Cash basis (to match the cash-basis rental income above): only Paid expenses count, dated by
-        // PaidAt (falling back to IncurredAt) — the same COALESCE(PaidAt, IncurredAt) convention used
-        // across the accounting/reports services and the vw_accounting_transactions view.
-        var expensesByProperty = (await _db.Expenses
-            .AsNoTracking()
-            .Where(e =>
-                e.PortfolioId == portfolioId &&
-                e.PropertyId != null &&
-                propertyIds.Contains(e.PropertyId!.Value) &&
-                e.Status == ExpenseStatus.Paid &&
-                (e.PaidAt ?? e.IncurredAt).Year == year)
-            .GroupBy(e => e.PropertyId!.Value)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) })
-            .ToListAsync(ct))
-            .ToDictionary(g => g.PropertyId, g => g.Total);
-
-        // Group properties by owner and compute net for each.
-        var propsByOwner = properties.GroupBy(p => p.OwnerId!.Value)
-                                     .ToDictionary(g => g.Key, g => g.ToList());
-
-        var summaries = new List<OwnerStatementSummary>(owners.Count);
-
-        foreach (var o in owners)
-        {
-            var ownerProps = propsByOwner.GetValueOrDefault(o.Id) ?? [];
-            var net = 0m;
-
-            foreach (var prop in ownerProps)
+                p.OwnerEntityId != null &&
+                p.OwnerEntity != null)
+            .Select(p => new
             {
-                var income   = Math.Round(incomeByProperty.GetValueOrDefault(prop.Id, 0m), 2);
-                var expenses = Math.Round(expensesByProperty.GetValueOrDefault(prop.Id, 0m), 2);
-                var mgmtFee  = Math.Round(income * (prop.ManagementFeePercent ?? 0m) / 100m, 2);
-                net += income - expenses - mgmtFee;
-            }
+                OwnerId = p.OwnerEntityId!.Value,
+                OwnerName = p.OwnerEntity!.Name,
+                ManagementFeePercent = p.ManagementFeePercent ?? 0m,
+                RentalIncome = _db.Payments
+                    .Where(pay =>
+                        pay.PortfolioId == portfolioId &&
+                        pay.PaymentType == PaymentType.Rent &&
+                        pay.Status == PaymentStatus.Paid &&
+                        pay.PaidDate != null &&
+                        pay.PaidDate.Value.Year == year &&
+                        pay.Lease != null &&
+                        pay.Lease.PropertyId == p.Id)
+                    .Sum(pay => (decimal?)pay.Amount) ?? 0m,
+                Expenses = _db.Expenses
+                    .Where(e =>
+                        e.PortfolioId == portfolioId &&
+                        e.PropertyId == p.Id &&
+                        e.Status == ExpenseStatus.Paid &&
+                        (e.PaidAt ?? e.IncurredAt).Year == year)
+                    .Sum(e => (decimal?)e.Amount) ?? 0m,
+            });
 
-            summaries.Add(new OwnerStatementSummary(o.Id, o.Name, net));
-        }
+        var summaries = await propertyNetRows
+            .GroupBy(p => new { p.OwnerId, p.OwnerName })
+            .Select(g => new
+            {
+                g.Key.OwnerId,
+                g.Key.OwnerName,
+                NetToOwner = g.Sum(p =>
+                    p.RentalIncome -
+                    p.Expenses -
+                    (p.RentalIncome * p.ManagementFeePercent / 100m)),
+            })
+            .OrderBy(o => o.OwnerName)
+            .ToListAsync(ct);
 
-        return summaries;
+        return summaries
+            .Select(s => new OwnerStatementSummary(s.OwnerId, s.OwnerName, s.NetToOwner))
+            .ToList();
     }
 }
