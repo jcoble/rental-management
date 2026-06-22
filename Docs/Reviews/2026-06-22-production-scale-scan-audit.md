@@ -255,21 +255,19 @@ Representative browser states exercised:
 - `/scan` target selector for receipt, payment, application, work order, file upload, tabs, table pagination, review links, and recent batch import card.
 - `/applications` populated list after scan-created applicants.
 
-## Inventory Gaps From Route Sweep
+## Classified Inventory Matrix
 
-The current inventory is intentionally not marked complete. Read-only route/control audit found these missing or under-specified surfaces:
+The route/control inventory now has a finite closure matrix instead of a raw tag-count table. `scripts/qa/inventory-web-surfaces.mjs` includes layout guards, error surfaces, redirects, server routes, file proxies, custom component controls, `data-testid` coverage, route scopes, route kinds, roles, acceptance criteria, and finite edge cases.
 
-- Compatibility redirect routes: `/activity`, `/analytics`, `/owners/vendors`, `/owners/vendors/[id]`, `/maintenance/work-orders/[id]`.
-- Public application flow details: `/apply/[token]` scan-to-autofill, property/unit preferences, consent, not-found/error/retry/success states.
-- Public signing details: `/sign/[token]` document open, consent, typed versus drawn signature, clear, decline-with-reason modal, expired/invalid/signed states.
-- Settings subroutes: `/settings/security` password change/reveal/mismatch/success/error; `/settings/accounting` provider connect/reconnect/disconnect, pull/push toggles, backfill range, mapping confirmation, review queue.
-- Accounting/reporting routes: `/accounting/past-due`, `/accounting/year-end`, `/accounting/expenses/[id]`, `/accounting/payments/[id]`, `/owners-report`, `/reports/[report]` filters, generate/update, CSV export, print, redirect states, custom report request.
-- Maintenance details: `/maintenance/[id]` status-note modal, vendor dispatch/text dialog, contact buttons, vendor rating, documents/history; `/maintenance/recurring`; `/maintenance/inspections/[id]` checklist, photos, complete-confirm, report download.
-- Detail workflows: `/applications/[id]` approve/decline/withdraw/screening/adverse-action; `/leases/[id]` tabs, set active, notice, generated document, e-sign send/status/download, opening balance; `/deposits` and `/deposits/[id]` holdings, deductions, return, move-out photos, statement PDF.
-- Portal role coverage: portal layout allows authenticated helpers/staff as well as tenants; inventory needs compose/reply modal, maintenance photo upload/detail modal, lease Q&A, payment checkout return states, autopay enroll/cancel.
-- Admin/superadmin states: one-time password modal, filtered CSV export, expandable audit diffs, engine refresh/provider/model/heartbeat/contested-instance/last-error modal.
-- File proxy routes: `/scan-file/[id]`, `/lease-file/[id]`, `/payment-file/[id]`, `/expense-file/[id]`, `/workorder-file/[id]`.
-- DB-side acceptance must name concrete route targets: `/properties`, `/tenants`, `/applications`, `/leases`, `/maintenance`, `/appointments`, `/portal`, `/accounting/past-due`, `/accounting/year-end`, and the report/accounting grids.
+Latest output:
+
+- `output/qa/web-surface-inventory.json`
+- `output/qa/web-surface-inventory.md`
+- Route count: 85
+- Unclassified routes: none
+- Surface groups: shell/guards/errors, public auth/OAuth, public docs/apply/sign, core staff app, scan intake, file proxies, accounting/reports, settings/setup/import, maintenance detail, portal, admin/superadmin, compatibility redirects.
+
+The generated acceptance matrix is the canonical checklist for rerunning this audit. Every route row is classified as page, guard/layout, redirect, server route, file proxy, or error surface and is tied to one or more surface groups with documented roles, acceptance criteria, and risk-based edge cases.
 
 ## DB-Side Rule Findings From Sweep
 
@@ -304,7 +302,7 @@ Read-only data-access audit found broad violations of the hard SQL-side rule. Th
 | TSK397-B013 | P1 | Camera lease wizard | A camera-derived lease with no late fee could not advance from the Lease step because `lateFeeAmount` is required by the shared lease schema, but the field stayed blank and the shared term component did not render a late-fee error. | Browser red: draft #43 stayed on Step 4 after `Next` with no visible validation message; late fee was blank. Green: `seedNewRentalLateFeeAmount` defaults missing values to `0`, `LeaseTermFields` renders `lateFeeAmount` errors, focused web unit tests passed 48/48, `web check` passed, and draft #44 advanced to review. | Fixed |
 | TSK397-B014 | P2 | Application scan dedupe | Fixed in this branch. Scan-created applications now block a second non-terminal application in the same portfolio with the same applicant email, ignoring trim/case, while allowing terminal `Declined`/`Withdrawn` applications to re-apply. | Browser red: PDF draft #50 created application #1; camera draft #51 from the same synthetic application created application #2. `/applications` showed two `Gray Johnson` rows with `qa.applicant.001@example.local`, both `Submitted`. Green: `CreateFromScanAsync_OpenApplicationWithSameEmail_ThrowsAndDoesNotDuplicate` and `CreateFromScanAsync_TerminalApplicationWithSameEmail_CreatesNewApplication`; focused `ApplicationServiceTests` passed 10/10; full `RentalCommand.Api.Tests` passed 447/447. Existing local duplicate rows were left intact as evidence, not rewritten. | Fixed |
 | TSK397-B015 | P0 | DB-side data rule | Reports/accounting/banking endpoints still materialize rows and then filter/group/sort/aggregate/score in memory. This violates the project hard rule and blocks a clean production-scale pass. | Read-only data sweep found definite violations in `ReportsService`, `AccountingService`, and `BankingService`, including general ledger, property P&L, rent ledger, banking suggestions, accounting reports, and reconciliation suggestions. Fixed slices: property P&L regression `GetPropertyProfitAndLossAsync_FiltersGroupsAndSumsInSql`; general ledger regression `GetGeneralLedgerAsync_FiltersOrdersAndTotalsInSql`; rent ledger regression `GetRentLedgerAsync_FiltersOrdersAndTotalsInSql`; cash-flow totals regression `GetCashFlowAsync_TotalsAreSummedInSql`; delinquency regression `GetDelinquencyAsync_OrdersAndTotalsInSql`; work-order regression `GetWorkOrdersAsync_CountsAndSumsInSql`; banking review candidate regression `ReviewQueue_PrefiltersPaymentSuggestionCandidatesInSql`; accounting inline suggestion regression `GetTransactionsAsync_PrefiltersInlineBankSuggestionsInSql`; accounting reports regression `GetReportsAsync_BuildsLedgerWithSqlUnionAndOrdering`; owner statement SQL-shape regressions in `OwnerStatementServiceTests`; Schedule E SQL-shape assertions in `ScheduleEServiceTests`. Full `ReportsServiceTests` passed 35/35; full `BankingServiceTests` passed 16/16; `AccountingTransactionsViewTests` passed 9/9; `AccountingServiceTests` passed 7/7; `OwnerStatementServiceTests` passed 2/2; `ScheduleEServiceTests` passed 2/2. No B015 sub-items remain from the sweep. | Fixed |
-| TSK397-B016 | P1 | Inventory completeness | Initial inventory was too broad for a full user-facing audit and missed route-specific controls, modals, proxy routes, and compatibility redirects. | Read-only route/control sweep found missing coverage for public apply/sign flows, settings subroutes, accounting/report detail routes, maintenance/detail workflows, portal helper role states, admin modals, and file proxy routes. | Open |
+| TSK397-B016 | P1 | Inventory completeness | Fixed in this branch. The inventory script now emits a classified acceptance matrix and route inventory instead of a raw tag-count table. | Read-only route/control sweep found missing coverage for public apply/sign flows, settings subroutes, accounting/report detail routes, maintenance/detail workflows, portal helper role states, admin modals, and file proxy routes. Green: `node scripts/qa/inventory-web-surfaces.mjs` produced 85 classified route rows, 12 surface groups, and `Unclassified routes: none` in `output/qa/web-surface-inventory.md`/`.json`. | Fixed |
 
 ## Regression Expectations
 
