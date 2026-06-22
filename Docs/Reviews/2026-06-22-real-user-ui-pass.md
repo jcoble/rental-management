@@ -1325,3 +1325,70 @@ Status: Pass after fixes for covered accounting category labels and expense-deta
 ### Deferred User-Reported Item
 
 - `TSK-399` — User reported that the Unit Command Center `Send renewal` link does nothing when pressed. This was captured for later and intentionally not fixed in this pass.
+
+## Pass 8 Fresh-User Scan Spine and Vendor-Link Regression
+
+Date: 2026-06-22
+Branch: `tsk-397-full-ui-pass-8`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-8`
+
+Local stack:
+- Web: `https://localhost:5872`
+- API: `https://localhost:5871` (`http://localhost:5870`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass8-db`, database `rentalcommand_tsk397_pass8_clean`, host port `5548`
+- Assistant provider: `claude-cli`, model `sonnet`
+
+Synthetic account:
+- Jordan Harper, `tsk397.pass8.20260622b@example.local`
+- Registered through the public welcome page, verified by opening the local `OutboxMessages` verification URL, logged in, selected "Set up my real portfolio", and confirmed the starting DB state had one seeded portfolio and zero properties, units, tenants, leases, and scan drafts.
+
+Generated sanitized scan inputs:
+- Lease photo: `output/qa/pass8-docs/harbor-unit-1-lease-2026-2027-photo.jpg`
+- Receipt photo: `output/qa/pass8-docs/harbor-hardware-receipt-photo.jpg`
+- Contractor invoice photo: `output/qa/pass8-docs/clearwater-plumbing-invoice-photo.jpg`
+
+### Lease Photo to First Rental Spine
+
+Acceptance criteria:
+- A clean live user can choose the scan-first path, upload a camera-style lease image, review extracted values, edit missing fields, and create a property, unit, tenant, and lease in one confirmation.
+- The confirmed lease detail links to the created property/unit/tenant, shows the financial terms, and preserves the uploaded scan as a viewable document.
+
+Evidence:
+- `/scan` exposed `New rental from your lease`; `/scan/new-rental` accepted the camera-style lease image and transitioned from `Reading your lease...` to the five-step review form.
+- Review prefilled property `Harbor Test Duplex`, address `2100 Harbor Test Ave`, state `OH`, unit `1`, rent `$1125.00`, tenant `Morgan Lee`, lease `L-2026-101`, start `2026-07-01`, end `2027-06-30`, security deposit `$1125.00`, late fee `$50.00`, and due day `1`.
+- User-corrected fields in the review UI: city `Columbus`, ZIP `43215`, property type `Multi-family`, beds `2`, baths `1`, tenant email `morgan.lee@example.local`, phone `614-555-0132`, emergency contact `Casey Lee, 614-555-0144`.
+- Confirm landed on `/leases/1`; lease detail showed `Harbor Test Duplex · Unit 1 · Morgan Lee`, `$1,125.00` rent, active status, linked tenant/property/unit, and scanned document link.
+- Database proof after confirm: one property, one unit, one tenant, one lease, scan draft `1` status `Confirmed`, stored file `EntityType=Lease`, `EntityId=1`.
+- The `/lease-file/1` tab rendered the converted one-page PDF in the browser. Console warnings/errors for the proof path: zero user-facing app warnings/errors; only the known `/favicon.ico` 404 appeared.
+
+Notes:
+- The current pass8 lease fixture did not visibly include city/ZIP or beds/baths, so the missing city/ZIP/bed/bath extraction values are fixture coverage gaps, not evidence of a mapper failure.
+- `TSK397-B029` remains open: the live setup wizard still starts at manual Add Property while the scan-first path is discoverable through the sidebar Scan / Add route.
+
+### Receipt and Invoice Scans to Expenses
+
+Acceptance criteria:
+- A receipt photo can create a paid expense with extracted vendor text, property association, category, receipt metadata, and line items.
+- An invoice photo can create an unpaid bill with extracted due date and a linked vendor even when that vendor does not already exist.
+- Confirmed scan drafts route to their created expense records and the records remain usable from accounting detail pages.
+
+Evidence:
+- Uploaded `harbor-hardware-receipt-photo.jpg` through `/scan` with Receipt/Bill selected.
+- Draft `/scan/2?type=Expense` extracted vendor `Franklin Hardware Supply`, receipt `FH-88219`, subtotal `$56.69`, tax `$4.25`, total `$60.94`, payment method Visa, card last4 `4242`, date `2026-07-03`, notes, and four balanced line items.
+- Assigned property `Harbor Test Duplex`, category `Repairs & maintenance`, confirmed as paid, and opened `/accounting/expenses/1`.
+- Expense detail showed title/description `Franklin Hardware Supply`, category `Repairs & maintenance`, property `Harbor Test Duplex`, receipt preview, card/payment fields, notes, and all line items.
+- Browser reproduction of `TSK397-B032`: before the fix, that scanned expense still showed `Vendor: No vendor` because no matching vendor existed.
+
+Fixed in this pass:
+- `TSK397-B032` — Receipt/invoice scan confirmation promoted vendor text into the expense description but left `VendorId` null when the vendor did not already exist. Fix: expense scan confirm now exact-matches an active vendor by normalized name, creates a lightweight `General` vendor from the scanned vendor name/contact fields when there are zero matches, and leaves ambiguous duplicate matches unlinked instead of guessing.
+- Regression: `RentalCommand.Api.Tests/Scanning/ScanServiceTests.cs` now covers new scanned vendor creation/linking and the existing exact-match behavior.
+- Browser proof after restarting the API: uploaded `clearwater-plumbing-invoice-photo.jpg`; draft `/scan/3?type=Expense` extracted `Clearwater Plumbing LLC`, invoice `CP-2026-447`, subtotal/total `$268.75`, due date `2026-07-20`, invoice date `2026-07-05`, notes, and three line items. After selecting `Unpaid bill`, property `Harbor Test Duplex`, and category `Repairs & maintenance`, confirm created `/accounting/expenses/2`.
+- `/accounting/expenses/2` showed `Status: Pending`, due date `Jul 20, 2026`, property `Harbor Test Duplex`, and `Vendor: Clearwater Plumbing LLC`. DB proof showed `Expenses.VendorId=1` joined to `Vendors.Name=Clearwater Plumbing LLC`, `ServiceType=General`.
+
+Verification:
+- RED: `MSBUILDDISABLENODEREUSE=1 rtk dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ScanServiceTests.ConfirmAndCreateAsync_ReviewingExpenseDraft_WithNewVendorName_CreatesAndLinksVendor"` failed before the fix with no vendor row.
+- GREEN: same targeted test passed after the fix.
+- Focused regression suite: `MSBUILDDISABLENODEREUSE=1 rtk dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ScanServiceTests"` passed 20/20 with the known `SQLitePCLRaw.lib.e_sqlite3` vulnerability warnings.
+- Browser console check after the invoice retest: zero warning-or-higher messages.
+
+Status: Pass after fix for the covered scan-first rental spine, paid receipt scan, unpaid invoice scan, and scanned-vendor linking workflow. Continue next with Unit Command Center remaining tabs/actions and other non-banking/non-QuickBooks workflows.

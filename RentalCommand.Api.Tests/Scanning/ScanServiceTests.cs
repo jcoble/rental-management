@@ -188,6 +188,31 @@ public class ScanServiceTests : IDisposable
         _expenses.LastRequest!.VendorId.Should().Be(vendor.Id);
     }
 
+    [Fact]
+    public async Task ConfirmAndCreateAsync_ReviewingExpenseDraft_WithNewVendorName_CreatesAndLinksVendor()
+    {
+        const string extractedJson =
+            """{"vendor_name":{"value":"Franklin Hardware Supply","confidence":0.94},"vendor_phone":{"value":"614-555-0188","confidence":0.86},"vendor_tax_id":{"value":"12-3456789","confidence":0.81},"amount":{"value":"60.94","confidence":0.95},"transaction_date":{"value":"2026-07-03","confidence":0.9},"document_kind":{"value":"Receipt","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson);
+        SeedStoredFile(draft.FilePath);
+        _expenses.SetupResponse(new ExpenseResponse { Id = 102, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+
+        var vendor = await _db.Vendors.AsNoTracking().SingleAsync(v => v.PortfolioId == PortfolioId);
+        vendor.Name.Should().Be("Franklin Hardware Supply");
+        vendor.ServiceType.Should().Be("General");
+        vendor.Phone.Should().Be("614-555-0188");
+        vendor.TaxId.Should().Be("12-3456789");
+
+        _expenses.LastRequest.Should().NotBeNull();
+        _expenses.LastRequest!.VendorId.Should().Be(vendor.Id);
+        _expenses.LastRequest.Description.Should().Be("Franklin Hardware Supply");
+    }
+
     // -------------------------------------------------------------------------
     // Confirm: overrides win
     // -------------------------------------------------------------------------
