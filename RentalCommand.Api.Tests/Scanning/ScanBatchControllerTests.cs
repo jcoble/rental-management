@@ -206,6 +206,22 @@ public class ScanBatchControllerTests : IDisposable
             "batch detail counts must be rolled up by the database, not by folding materialized draft rows");
     }
 
+    [Fact]
+    public async Task GetBatch_SummarizesUnitNumberFromLeaseExtraction()
+    {
+        var batch = SeedBatch(PortfolioId, fileCount: 1);
+        SeedDraft(batch.Id, "Reviewing",
+            extractedFields: """{"tenant_name":{"value":"Avery Ellis","confidence":0.9},"unit_number":{"value":"1A","confidence":0.9},"start_date":{"value":"2026-01-01","confidence":0.9},"end_date":{"value":"2027-01-01","confidence":0.9}}""");
+
+        var controller = CreateController(new RecordingBatchScanService(_db));
+
+        var result = await controller.GetBatch(batch.Id, CancellationToken.None);
+
+        var detail = result.Result.Should().BeOfType<OkObjectResult>().Subject
+            .Value.Should().BeOfType<ScanBatchDetailResponse>().Subject;
+        detail.Drafts.Should().ContainSingle().Which.Unit.Should().Be("1A");
+    }
+
     // -------------------------------------------------------------------------
     // IDOR: a batch (and its drafts) in another portfolio is not readable.
     // -------------------------------------------------------------------------
