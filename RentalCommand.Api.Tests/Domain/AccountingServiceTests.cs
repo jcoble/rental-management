@@ -1,6 +1,8 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
@@ -21,6 +23,7 @@ public class AccountingServiceTests : IDisposable
     private const int PortfolioId = 1;
 
     private readonly SqliteConnection _conn;
+    private readonly List<string> _commands = [];
     private readonly RentalCommandDbContext _db;
     private readonly AccountingService _sut;
 
@@ -31,6 +34,7 @@ public class AccountingServiceTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new RecordingCommandInterceptor(_commands))
             .Options;
 
         _db = new AccountingServiceTestDbContext(options);
@@ -259,6 +263,89 @@ public class AccountingServiceTests : IDisposable
 
         var paymentEntry = reports.Ledger.Single(l => l.Type == "Payment");
         paymentEntry.Explanation.Should().Be("Payment of $1,200 received by check on Mar 3.");
+    }
+
+    [Fact]
+    public async Task GetReportsAsync_BuildsLedgerWithSqlUnionAndOrdering()
+    {
+        var now = new DateTime(2026, 03, 03, 12, 0, 0, 0, DateTimeKind.Utc);
+        var (property, lease) = SeedPropertyAndLease(now);
+
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1200m,
+            DueDate = now.AddDays(-2),
+            PaidDate = now,
+            Method = "Check",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        var vendor = new Vendor
+        {
+            PortfolioId = PortfolioId,
+            Name = "Ace Plumbing",
+            ServiceType = "Plumbing",
+            Is1099Eligible = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Vendors.Add(vendor);
+        _db.Expenses.Add(new Expense
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Vendor = vendor,
+            Category = ScheduleECategory.Repairs,
+            Description = "Sink repair",
+            Status = ExpenseStatus.Paid,
+            Amount = 225m,
+            IncurredAt = now.AddDays(-1),
+            PaidAt = now.AddDays(-1),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.SaveChanges();
+
+        SeedBankTransaction(
+            description: "Unmatched deposit",
+            merchantName: "Tenant",
+            amount: 150m,
+            postedAt: now.AddDays(-3),
+            category: "Deposit",
+            matchStatus: "Unmatched");
+        SeedBankTransaction(
+            description: "Matched duplicate deposit",
+            merchantName: "Tenant",
+            amount: 1200m,
+            postedAt: now.AddDays(-2),
+            category: "Deposit",
+            matchStatus: "Matched",
+            matchedPaymentId: _db.Payments.Select(p => p.Id).Single());
+
+        _commands.Clear();
+
+        var reports = await _sut.GetReportsAsync(PortfolioId, CancellationToken.None);
+
+        reports.Ledger.Should().Contain(l => l.Type == "Payment" && l.Amount == 1200m);
+        reports.Ledger.Should().Contain(l => l.Type == "Expense" && l.Amount == -225m);
+        reports.Ledger.Should().ContainSingle(l => l.Type == "Bank" && l.Description == "Unmatched deposit");
+        reports.Ledger.Should().NotContain(l => l.Description == "Matched duplicate deposit");
+
+        var ledgerSql = _commands.FirstOrDefault(sql =>
+            sql.Contains("UNION", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"Payments\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"BankTransactions\"", StringComparison.OrdinalIgnoreCase));
+
+        ledgerSql.Should().NotBeNull("the report ledger must filter, combine, and sort rows as one DB-side query");
+        ledgerSql!.Should().Contain("ORDER BY", "ledger sorting must run in SQL");
+        ledgerSql.Should().Contain("\"MatchedPaymentId\" IS NULL", "matched bank rows must be suppressed before materialization");
+        ledgerSql.Should().Contain("\"MatchedExpenseId\" IS NULL", "matched bank rows must be suppressed before materialization");
     }
 
     [Fact]
@@ -533,5 +620,27 @@ internal sealed class AccountingServiceTestDbContext : RentalCommandDbContext
         modelBuilder.Entity<Expense>().Property(e => e.ReceiptData).HasColumnType("TEXT");
         modelBuilder.Entity<Lease>().ToTable("Leases");
         modelBuilder.Entity<VendorRating>().ToTable("VendorRatings");
+    }
+}
+
+internal sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+{
+    public override InterceptionResult<DbDataReader> ReaderExecuting(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result)
+    {
+        commands.Add(command.CommandText);
+        return base.ReaderExecuting(command, eventData, result);
+    }
+
+    public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+        DbCommand command,
+        CommandEventData eventData,
+        InterceptionResult<DbDataReader> result,
+        CancellationToken cancellationToken = default)
+    {
+        commands.Add(command.CommandText);
+        return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
     }
 }
