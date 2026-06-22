@@ -893,7 +893,7 @@ public class ReportsService : IReportsService
         if (propertyFilter is not null)
             paymentQuery = paymentQuery.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));
 
-        var payments = await paymentQuery
+        var paymentEntries = paymentQuery
             .Select(p => new GeneralLedgerEntry
             {
                 Date = p.PaidDate ?? p.DueDate,
@@ -905,8 +905,7 @@ public class ReportsService : IReportsService
                 PropertyName = p.Lease!.Property!.Name,
                 Counterparty = p.Lease!.Tenant!.FirstName + " " + p.Lease!.Tenant!.LastName,
                 Amount = p.Amount,
-            })
-            .ToListAsync(ct);
+            });
 
         var expenseQuery = _db.Expenses
             .AsNoTracking()
@@ -915,7 +914,7 @@ public class ReportsService : IReportsService
         if (propertyFilter is not null)
             expenseQuery = expenseQuery.Where(e => e.PropertyId != null && propertyFilter.Contains(e.PropertyId.Value));
 
-        var expenses = await expenseQuery
+        var expenseEntries = expenseQuery
             .Select(e => new GeneralLedgerEntry
             {
                 Date = e.PaidAt ?? e.IncurredAt,
@@ -927,16 +926,26 @@ public class ReportsService : IReportsService
                 PropertyName = e.Property != null ? e.Property.Name : null,
                 Counterparty = e.Vendor != null ? e.Vendor.Name : null,
                 Amount = -e.Amount,
-            })
-            .ToListAsync(ct);
+            });
 
-        var entries = payments
-            .Concat(expenses)
-            .Where(e => e.Date >= from && e.Date <= to)
+        var ledgerQuery = paymentEntries
+            .Concat(expenseEntries)
+            .Where(e => e.Date >= from && e.Date <= to);
+
+        var entries = await ledgerQuery
             .OrderBy(e => e.Date)
             .ThenBy(e => e.Type)
             .ThenBy(e => e.Id)
-            .ToList();
+            .ToListAsync(ct);
+
+        var totals = await ledgerQuery
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                TotalIncome = g.Sum(e => e.Amount > 0m ? e.Amount : 0m),
+                TotalExpense = g.Sum(e => e.Amount < 0m ? -e.Amount : 0m),
+            })
+            .SingleOrDefaultAsync(ct);
 
         var running = 0m;
         foreach (var e in entries)
@@ -945,8 +954,8 @@ public class ReportsService : IReportsService
             e.RunningBalance = running;
         }
 
-        var totalIncome = entries.Where(e => e.Amount > 0).Sum(e => e.Amount);
-        var totalExpense = entries.Where(e => e.Amount < 0).Sum(e => -e.Amount);
+        var totalIncome = totals?.TotalIncome ?? 0m;
+        var totalExpense = totals?.TotalExpense ?? 0m;
 
         return new GeneralLedgerResponse
         {
