@@ -17,7 +17,7 @@
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
 	import { propertySchema, unitSchema, tenantSchema, leaseSchema, parseForm } from '$lib/schemas';
 	import { toLeasePrefill, type PrefillConfidence } from '$lib/scan/lease-prefill';
-	import { createNewRentalPropertyForm, findNewRentalExistingUnitId, seedNewRentalLateFeeAmount } from '$lib/scan/new-rental-state';
+	import { createNewRentalPropertyForm, findNewRentalExistingUnitId, formatNewRentalStepLabel, formatNewRentalStepPosition, seedNewRentalLateFeeAmount } from '$lib/scan/new-rental-state';
 	import { stitchImagesToPdf } from '$lib/scan/stitch-pdf';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 
@@ -294,11 +294,20 @@
 			</div>
 			<div>
 				<p class="mb-1 text-xs font-medium text-muted-foreground">Photos of the lease (one or many)</p>
-				<FileDrop multiple onselectedmany={onPhotos} />
+				<FileDrop
+					multiple
+					title="Drop lease photos here"
+					helperText="or click to browse — PDF, JPG, PNG, HEIC accepted"
+					onselectedmany={onPhotos}
+				/>
 			</div>
 			<div>
 				<p class="mb-1 text-xs font-medium text-muted-foreground">…or a single PDF</p>
-				<FileDrop onselected={onPdf} />
+				<FileDrop
+					title="Drop the lease PDF here"
+					helperText="or click to browse — PDF, JPG, PNG, HEIC accepted"
+					onselected={onPdf}
+				/>
 			</div>
 		</div>
 	{:else if phase === 'processing'}
@@ -310,9 +319,9 @@
 		<div data-testid="new-rental-stepper">
 			<div class="mb-1 flex items-center justify-between text-xs text-muted-foreground">
 				<span data-testid="new-rental-step-label">
-					{step < TOTAL ? `Step ${step + 1} of ${TOTAL} · ${STEP_LABELS[step]}` : 'Review & confirm'}
+					{formatNewRentalStepLabel(step, STEP_LABELS)}
 				</span>
-				<span>{Math.min(step + 1, TOTAL + 1)}/{TOTAL + 1}</span>
+				<span>{formatNewRentalStepPosition(step, STEP_LABELS)}</span>
 			</div>
 			<div class="h-1.5 w-full overflow-hidden rounded-full bg-muted">
 				<div class="h-full bg-primary transition-all" style={`width:${((Math.min(step, TOTAL) + 1) / (TOTAL + 1)) * 100}%`}></div>

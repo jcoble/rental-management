@@ -251,7 +251,7 @@
 								<div><dt class="text-muted-foreground">Cost</dt><dd>{money(w.actualCost ?? w.estimatedCost ?? 0)}</dd></div>
 							</dl>
 							<div class="mt-3 flex justify-end">
-								<Button variant="outline" size="sm" class="gap-1" onclick={() => goto('/work-orders/' + w.id)} data-testid="maintenance-open-{w.id}">
+								<Button variant="outline" size="sm" class="gap-1" onclick={() => goto('/maintenance/' + w.id)} data-testid="maintenance-open-{w.id}">
 									Open work order <ExternalLink class="h-3 w-3" />
 								</Button>
 							</div>

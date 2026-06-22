@@ -36,6 +36,7 @@ public static class LeaseExtractionSchema
         "leave it empty for a single-family home with no unit designation. " +
         "unit_bedrooms and unit_bathrooms are the unit's bed/bath counts (decimals, e.g. 1.5) and unit_square_feet its size, only if the lease states them. " +
         "For tenant_name, return the full name of the primary tenant/lessee exactly as written on the lease — do NOT return an id. " +
+        "Also extract tenant_email, tenant_phone, and tenant_emergency_contact when the lease states them, because those populate the tenant record. " +
         "Dates must be ISO 8601 (YYYY-MM-DD). monthly_rent, security_deposit, and late_fee are decimal numbers with no currency symbol. " +
         "rent_due_day is the day of the month rent is due (1–31). " +
         "Leave unknown or absent fields empty — never invent values not present on the document.";
@@ -48,6 +49,12 @@ public static class LeaseExtractionSchema
         new ExtractionFieldSpec("tenant_name", "string",
             "Full name of the primary tenant / lessee as written on the lease. Free text, not an id.",
             Required: true),
+        new ExtractionFieldSpec("tenant_email", "string",
+            "Email address of the primary tenant / lessee, exactly as written on the lease. Empty if absent."),
+        new ExtractionFieldSpec("tenant_phone", "string",
+            "Phone number of the primary tenant / lessee, exactly as written on the lease. Empty if absent."),
+        new ExtractionFieldSpec("tenant_emergency_contact", "string",
+            "Emergency contact name and phone for the tenant, if the lease states one. Empty if absent."),
         new ExtractionFieldSpec("property_id", "integer",
             "Exact id of the matching property, copied from the grounding list's properties[].id, only when strongly matched. Empty otherwise."),
         new ExtractionFieldSpec("unit_id", "integer",
