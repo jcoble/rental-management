@@ -195,6 +195,44 @@ public class ReportsServiceTests : IDisposable
         report.ClosingBalance.Should().Be(900m);
     }
 
+    [Fact]
+    public async Task GetGeneralLedgerAsync_FiltersOrdersAndTotalsInSql()
+    {
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+        var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+        var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2000m);
+
+        SeedPayment(mapleLease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedPayment(mapleLease, 777m, dueDate: D(2026, 2, 1), PaymentStatus.Paid, paidDate: D(2026, 2, 5));
+        SeedPayment(oakLease, 222m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedExpense(maple.Id, 300m, paidAt: D(2026, 1, 10));
+        SeedExpense(maple.Id, 444m, paidAt: D(2026, 2, 10));
+        SeedExpense(oak.Id, 111m, paidAt: D(2026, 1, 10));
+
+        _executedSql.Clear();
+
+        var report = await _sut.GetGeneralLedgerAsync(PortfolioId, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+            PropertyIds = [maple.Id],
+        }, CancellationToken.None);
+
+        report.Entries.Should().HaveCount(2);
+        report.TotalIncome.Should().Be(1000m);
+        report.TotalExpense.Should().Be(300m);
+        report.ClosingBalance.Should().Be(700m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        sql.Should().Contain("UNION", "ledger entries must be combined before materialization");
+        sql.Should().Contain("ORDER BY", "ledger ordering must run in SQL");
+        sql.Should().Contain(">=", "the start date filter must run in SQL");
+        sql.Should().Contain("<=", "the end date filter must run in SQL");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("ledger totals must be summed in SQL");
+    }
+
     // ── Rent Ledger running balance (DB) ───────────────────────────────────────────────────────────
 
     [Fact]
