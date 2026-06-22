@@ -256,95 +256,118 @@ public class ReportsService : IReportsService
         var (from, to) = ResolveRange(query);
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
-        // Pull the leases in scope (any non-draft/void lease that can have rent activity), then their
-        // payments within the range. A "charge" is the amount owed on a payment's DueDate; a "payment"
-        // is the cash received on PaidDate. Tenant-ledger convention: charges add to the balance owed,
-        // payments reduce it.
-        var leaseQuery = _db.Leases
+        const int chargeEntryKind = 0;
+        const int paymentEntryKind = 1;
+
+        var paymentQuery = _db.Payments
             .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId &&
-                        l.Status != LeaseStatus.Draft && l.Status != LeaseStatus.Void);
+            .Where(p => p.PortfolioId == portfolioId &&
+                        p.Lease!.Status != LeaseStatus.Draft &&
+                        p.Lease.Status != LeaseStatus.Void);
 
         if (propertyFilter is not null)
-            leaseQuery = leaseQuery.Where(l => propertyFilter.Contains(l.PropertyId));
-
-        var leases = await leaseQuery
-            .Select(l => new
-            {
-                l.Id,
-                l.LeaseNumber,
-                l.PropertyId,
-                PropertyName = l.Property!.Name,
-                UnitNumber = l.Unit!.UnitNumber,
-                TenantName = (l.Tenant!.FirstName + " " + l.Tenant!.LastName).Trim(),
-            })
-            .ToListAsync(ct);
-
-        var leaseIds = leases.Select(l => l.Id).ToHashSet();
+            paymentQuery = paymentQuery.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));
 
         // Charges: every payment due in the range (regardless of paid status) is a charge accrued on its
         // due date. Payments collected (PaidDate within the range, Paid status) reduce the balance.
-        var charges = await _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                        leaseIds.Contains(p.LeaseId) &&
+        var chargeEntries = paymentQuery
+            .Where(p =>
                         p.Status != PaymentStatus.Waived &&
                         p.Status != PaymentStatus.Failed &&
                         p.Status != PaymentStatus.Refunded &&
                         p.DueDate >= from && p.DueDate <= to)
-            .Select(p => new { p.LeaseId, p.Amount, Date = p.DueDate, p.PaymentType })
-            .ToListAsync(ct);
+            .Select(p => new RentLedgerQueryRow
+            {
+                LeaseId = p.LeaseId,
+                LeaseNumber = p.Lease!.LeaseNumber,
+                PropertyId = p.Lease.PropertyId,
+                PropertyName = p.Lease.Property!.Name,
+                UnitNumber = p.Lease.Unit!.UnitNumber,
+                TenantName = (p.Lease.Tenant!.FirstName + " " + p.Lease.Tenant.LastName).Trim(),
+                PaymentId = p.Id,
+                Date = p.DueDate,
+                EntryKind = chargeEntryKind,
+                Amount = p.Amount,
+                PaymentType = p.PaymentType,
+            });
 
-        var receipts = await _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                        leaseIds.Contains(p.LeaseId) &&
+        var receiptEntries = paymentQuery
+            .Where(p =>
                         p.Status == PaymentStatus.Paid &&
                         p.PaidDate != null &&
                         p.PaidDate >= from && p.PaidDate <= to)
-            .Select(p => new { p.LeaseId, p.Amount, Date = p.PaidDate!.Value, p.PaymentType })
+            .Select(p => new RentLedgerQueryRow
+            {
+                LeaseId = p.LeaseId,
+                LeaseNumber = p.Lease!.LeaseNumber,
+                PropertyId = p.Lease.PropertyId,
+                PropertyName = p.Lease.Property!.Name,
+                UnitNumber = p.Lease.Unit!.UnitNumber,
+                TenantName = (p.Lease.Tenant!.FirstName + " " + p.Lease.Tenant.LastName).Trim(),
+                PaymentId = p.Id,
+                Date = p.PaidDate!.Value,
+                EntryKind = paymentEntryKind,
+                Amount = p.Amount,
+                PaymentType = p.PaymentType,
+            });
+
+        var activityQuery = chargeEntries.Concat(receiptEntries);
+
+        var activityRows = await activityQuery
+            .OrderBy(r => r.PropertyName.ToLower())
+            .ThenBy(r => r.PropertyName)
+            .ThenBy(r => r.UnitNumber.ToLower())
+            .ThenBy(r => r.UnitNumber)
+            .ThenBy(r => r.LeaseId)
+            .ThenBy(r => r.Date)
+            .ThenBy(r => r.EntryKind)
+            .ThenBy(r => r.PaymentId)
             .ToListAsync(ct);
 
-        var chargesByLease = charges.GroupBy(c => c.LeaseId).ToDictionary(g => g.Key, g => g.ToList());
-        var receiptsByLease = receipts.GroupBy(r => r.LeaseId).ToDictionary(g => g.Key, g => g.ToList());
-
-        var ledgerLeases = new List<RentLedgerLease>(leases.Count);
-
-        foreach (var lease in leases)
-        {
-            var entries = new List<(DateTime Date, bool IsCharge, decimal Amount, PaymentType Type)>();
-
-            if (chargesByLease.TryGetValue(lease.Id, out var leaseCharges))
-                entries.AddRange(leaseCharges.Select(c => (c.Date, true, c.Amount, c.PaymentType)));
-            if (receiptsByLease.TryGetValue(lease.Id, out var leaseReceipts))
-                entries.AddRange(leaseReceipts.Select(r => (r.Date, false, r.Amount, r.PaymentType)));
-
-            if (entries.Count == 0)
-                continue; // no activity in range → omit the lease to keep the ledger tight
-
-            // Charge before payment on the same day so a same-day pay-as-charged nets to zero, not a
-            // transient negative balance.
-            var ordered = entries
-                .OrderBy(e => e.Date)
-                .ThenByDescending(e => e.IsCharge)
-                .ToList();
-
-            var rows = new List<RentLedgerEntry>(ordered.Count);
-            var balance = 0m;
-            var totalCharged = 0m;
-            var totalPaid = 0m;
-
-            foreach (var e in ordered)
+        var totalsByLease = await activityQuery
+            .GroupBy(r => r.LeaseId)
+            .Select(g => new
             {
-                if (e.IsCharge)
+                LeaseId = g.Key,
+                TotalCharged = g.Sum(r => r.EntryKind == chargeEntryKind ? r.Amount : 0m),
+                TotalPaid = g.Sum(r => r.EntryKind == paymentEntryKind ? r.Amount : 0m),
+            })
+            .ToDictionaryAsync(r => r.LeaseId, r => new { r.TotalCharged, r.TotalPaid }, ct);
+
+        var portfolioTotals = await activityQuery
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                TotalCharged = g.Sum(r => r.EntryKind == chargeEntryKind ? r.Amount : 0m),
+                TotalPaid = g.Sum(r => r.EntryKind == paymentEntryKind ? r.Amount : 0m),
+            })
+            .SingleOrDefaultAsync(ct);
+
+        var ledgerLeases = new List<RentLedgerLease>();
+
+        foreach (var lease in activityRows.GroupBy(r => new
+        {
+            r.LeaseId,
+            r.LeaseNumber,
+            r.PropertyId,
+            r.PropertyName,
+            r.UnitNumber,
+            r.TenantName,
+        }))
+        {
+            var rows = new List<RentLedgerEntry>();
+            var balance = 0m;
+
+            foreach (var e in lease)
+            {
+                if (e.EntryKind == chargeEntryKind)
                 {
                     balance += e.Amount;
-                    totalCharged += e.Amount;
                     rows.Add(new RentLedgerEntry
                     {
                         Date = e.Date,
                         Type = "Charge",
-                        Description = $"{e.Type} due",
+                        Description = $"{e.PaymentType} due",
                         Charge = e.Amount,
                         Payment = 0m,
                         Balance = balance,
@@ -353,12 +376,11 @@ public class ReportsService : IReportsService
                 else
                 {
                     balance -= e.Amount;
-                    totalPaid += e.Amount;
                     rows.Add(new RentLedgerEntry
                     {
                         Date = e.Date,
                         Type = "Payment",
-                        Description = $"{e.Type} payment received",
+                        Description = $"{e.PaymentType} payment received",
                         Charge = 0m,
                         Payment = e.Amount,
                         Balance = balance,
@@ -366,34 +388,30 @@ public class ReportsService : IReportsService
                 }
             }
 
+            var totals = totalsByLease[lease.Key.LeaseId];
             ledgerLeases.Add(new RentLedgerLease
             {
-                LeaseId = lease.Id,
-                LeaseNumber = lease.LeaseNumber,
-                PropertyId = lease.PropertyId,
-                PropertyName = lease.PropertyName,
-                UnitNumber = lease.UnitNumber,
-                TenantName = lease.TenantName,
+                LeaseId = lease.Key.LeaseId,
+                LeaseNumber = lease.Key.LeaseNumber,
+                PropertyId = lease.Key.PropertyId,
+                PropertyName = lease.Key.PropertyName,
+                UnitNumber = lease.Key.UnitNumber,
+                TenantName = lease.Key.TenantName,
                 Entries = rows,
-                TotalCharged = totalCharged,
-                TotalPaid = totalPaid,
-                Balance = totalCharged - totalPaid,
+                TotalCharged = totals.TotalCharged,
+                TotalPaid = totals.TotalPaid,
+                Balance = totals.TotalCharged - totals.TotalPaid,
             });
         }
-
-        ledgerLeases = ledgerLeases
-            .OrderBy(l => l.PropertyName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(l => l.UnitNumber, StringComparer.OrdinalIgnoreCase)
-            .ToList();
 
         return new RentLedgerResponse
         {
             From = from,
             To = to,
             Leases = ledgerLeases,
-            TotalCharged = ledgerLeases.Sum(l => l.TotalCharged),
-            TotalPaid = ledgerLeases.Sum(l => l.TotalPaid),
-            TotalBalance = ledgerLeases.Sum(l => l.Balance),
+            TotalCharged = portfolioTotals?.TotalCharged ?? 0m,
+            TotalPaid = portfolioTotals?.TotalPaid ?? 0m,
+            TotalBalance = (portfolioTotals?.TotalCharged ?? 0m) - (portfolioTotals?.TotalPaid ?? 0m),
         };
     }
 
@@ -1161,6 +1179,21 @@ public class ReportsService : IReportsService
             LeaseCount = rows.Count,
             TotalMonthlyRent = rows.Sum(r => r.MonthlyRent),
         };
+    }
+
+    private sealed class RentLedgerQueryRow
+    {
+        public int LeaseId { get; set; }
+        public string LeaseNumber { get; set; } = string.Empty;
+        public int PropertyId { get; set; }
+        public string PropertyName { get; set; } = string.Empty;
+        public string UnitNumber { get; set; } = string.Empty;
+        public string TenantName { get; set; } = string.Empty;
+        public int PaymentId { get; set; }
+        public DateTime Date { get; set; }
+        public int EntryKind { get; set; }
+        public decimal Amount { get; set; }
+        public PaymentType PaymentType { get; set; }
     }
 
     // ── Security Deposit Register ──────────────────────────────────────────────────────────────────

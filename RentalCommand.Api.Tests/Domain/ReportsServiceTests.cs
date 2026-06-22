@@ -289,6 +289,45 @@ public class ReportsServiceTests : IDisposable
         ledger.Balance.Should().Be(0m);
     }
 
+    [Fact]
+    public async Task GetRentLedgerAsync_FiltersOrdersAndTotalsInSql()
+    {
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+        var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+        var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2000m);
+
+        SeedPayment(mapleLease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedPayment(mapleLease, 777m, dueDate: D(2026, 2, 1), PaymentStatus.Paid, paidDate: D(2026, 2, 5));
+        SeedPayment(oakLease, 222m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+
+        _executedSql.Clear();
+
+        var report = await _sut.GetRentLedgerAsync(PortfolioId, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+            PropertyIds = [maple.Id],
+        }, CancellationToken.None);
+
+        var ledger = report.Leases.Should().ContainSingle().Subject;
+        ledger.LeaseId.Should().Be(mapleLease.Id);
+        ledger.Entries.Should().HaveCount(2);
+        ledger.TotalCharged.Should().Be(1000m);
+        ledger.TotalPaid.Should().Be(1000m);
+        ledger.Balance.Should().Be(0m);
+        report.TotalCharged.Should().Be(1000m);
+        report.TotalPaid.Should().Be(1000m);
+        report.TotalBalance.Should().Be(0m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        sql.Should().Contain("UNION", "charge and receipt rows must be combined before materialization");
+        sql.Should().Contain("GROUP BY", "per-lease rent-ledger totals must be grouped in SQL");
+        sql.Should().Contain("ORDER BY", "ledger ordering must run in SQL");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("rent-ledger totals must be summed in SQL");
+    }
+
     // ── Cash flow by month (DB) ────────────────────────────────────────────────────────────────────
 
     [Fact]
