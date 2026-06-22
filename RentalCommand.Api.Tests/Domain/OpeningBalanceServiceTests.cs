@@ -211,6 +211,26 @@ public class OpeningBalanceServiceTests : IDisposable
         opening.Explanation.Should().Contain("Opening credit");
     }
 
+    [Fact]
+    public async Task GetLedgerAsync_FormatsOpeningBalanceCentsInPlainEnglishExplanation()
+    {
+        var lease = SeedLease(PortfolioId);
+
+        await _sut.CreateAsync(PortfolioId, new CreateOpeningBalanceRequest
+        {
+            LeaseId = lease.Id,
+            Amount = 225.30m,
+            AsOfDate = new DateTime(2026, 01, 01, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        var ledger = await _leaseService.GetLedgerAsync(PortfolioId, lease.Id, ct: CancellationToken.None);
+
+        ledger.Should().NotBeNull();
+        var opening = ledger!.Entries.Single(e => e.Type == "Opening");
+        opening.Explanation.Should().Be(
+            "Opening balance carried over from before Rental Command — $225.30 as of Jan 1, 2026.");
+    }
+
     private Lease SeedLease(int portfolioId)
     {
         var now = DateTime.UtcNow;

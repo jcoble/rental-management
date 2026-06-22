@@ -142,7 +142,10 @@ public static class LedgerExplanation
     private static string CategoryLabel(ScheduleECategory category) =>
         category == ScheduleECategory.Other ? "expenses" : category.ToString().ToLowerInvariant();
 
-    private static string Money(decimal value) => value.ToString("$#,0.##;$-#,0.##;$0");
+    private static string Money(decimal value)
+        => decimal.Truncate(value) == value
+            ? value.ToString("$#,0;$-#,0;$0")
+            : value.ToString("$#,0.00;$-#,0.00;$0.00");
 
     private static string ShortDate(DateTime date) => date.ToString("MMM d");
 
