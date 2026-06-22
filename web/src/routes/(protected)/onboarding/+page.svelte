@@ -8,6 +8,7 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { leases } from '$lib/api/endpoints/leases';
+	import { scan } from '$lib/api/scan';
 	import { notifications } from '$lib/api/endpoints/notifications';
 	import type { Owner, Property, Unit, Tenant, OwnerEntityType } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -41,6 +42,10 @@
 		type WizardStepKey,
 		type WizardStepMeta,
 	} from '$lib/onboarding/wizard-steps';
+	import {
+		buildOnboardingLeaseScanOverrides,
+		type OnboardingLeaseConfirmInput,
+	} from '$lib/onboarding/lease-scan-confirm';
 	import { ownerEntityIdForOnboarding } from '$lib/onboarding/owner-selection';
 	import { buildOnboardingPropertyPayload } from '$lib/onboarding/property-payload';
 	import { formatPropertyType, propertyTypeOptions } from '$lib/properties/property-labels';
@@ -520,6 +525,7 @@
 	});
 	let leaseErrors = $state<Record<string, string>>({});
 	let leasePrefilled = false;
+	let leasePrefillDraftId = $state<number | null>(null);
 
 	const leaseProperties = $derived(propertiesQuery.data ?? []);
 	const leaseTenants = $derived(tenantsQuery.data ?? []);
@@ -555,6 +561,7 @@
 	// Apply photo-extracted (and user-confirmed) lease terms onto the form. Never overwrites a value
 	// the user already typed — the confirmed extraction fills blanks, the user stays in control.
 	function applyLeasePrefill(values: {
+		draftId: number;
 		leaseNumber?: string;
 		startDate?: string;
 		endDate?: string;
@@ -563,6 +570,7 @@
 		lateFee?: string;
 		rentDueDay?: string;
 	}) {
+		leasePrefillDraftId = values.draftId;
 		if (values.leaseNumber) leaseForm.leaseNumber = values.leaseNumber;
 		if (values.startDate) leaseForm.startDate = values.startDate;
 		if (values.endDate) leaseForm.endDate = values.endDate;
@@ -573,12 +581,30 @@
 		showSuccess('Filled in from your lease — please double-check the values.');
 	}
 
-	const saveLeaseMutation = createMutation(() => ({
-		mutationFn: (data: Record<string, unknown>) => leases.create(data),
+	type LeaseSubmitPayload = {
+		data: OnboardingLeaseConfirmInput & {
+			portfolioId: number;
+			status: string;
+			notes?: string | null;
+			moveInDate?: string | null;
+		};
+		prefillDraftId: number | null;
+	};
+
+	const saveLeaseMutation = createMutation<unknown, Error, LeaseSubmitPayload>(() => ({
+		mutationFn: async ({ data, prefillDraftId }: LeaseSubmitPayload): Promise<unknown> => {
+			if (prefillDraftId != null) {
+				return scan.confirm(prefillDraftId, buildOnboardingLeaseScanOverrides(data));
+			}
+
+			return leases.create(data as unknown as Record<string, unknown>);
+		},
 		onSuccess: () => {
 			createdLease = true;
+			leasePrefillDraftId = null;
 			showSuccess('Lease created.');
 			queryClient.invalidateQueries({ queryKey: ['leases', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			next();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -607,7 +633,10 @@
 			return;
 		}
 		leaseErrors = {};
-		saveLeaseMutation.mutate({ portfolioId, ...result.data });
+		saveLeaseMutation.mutate({
+			data: { portfolioId, ...result.data },
+			prefillDraftId: leasePrefillDraftId
+		});
 	}
 
 	// ---------------------------------------------------------------------------
