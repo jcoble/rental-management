@@ -1168,8 +1168,17 @@ export interface TeamMember {
 	createdAt: string;
 }
 
+/** Page wrapper from GET /api/v1/admin/users/page. */
+export interface TeamMemberListResponse {
+	items: TeamMember[];
+	totalCount: number;
+	skip: number;
+	take: number;
+}
+
 /** Returned from POST /api/v1/admin/users — includes the one-time generated password. */
-export interface CreateTeamMemberResponse extends TeamMember {
+export interface CreateTeamMemberResponse {
+	member: TeamMember;
 	generatedPassword?: string;
 }
 

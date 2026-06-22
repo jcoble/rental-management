@@ -823,7 +823,39 @@ Evidence:
 - Opening the forensic row showed two raw JSON panels, IP `::1`, and payment entity links. Filtered CSV export requested `/api/v1/admin/audit/export?sort=-timestamp&operation=Created&entityType=Payment` and downloaded `audit-2026-06-22-17-33-17.csv`; the generated local artifact was deleted after verification.
 - Browser page errors and console errors were zero during the post-fix `/audit`, payment detail, and `/admin/audit` proofs.
 
-Status: Pass for staff activity history and Admin forensic audit controls covered above. Team management, platform Engine health, and remaining admin role/error variants remain open.
+Status: Pass for staff activity history and Admin forensic audit controls covered above. Platform Engine health and remaining admin role/error variants remain open.
+
+### Admin Team Management
+
+Acceptance criteria:
+- Team page loads behind the Admin role through a paged API contract and shows current members with role, status, joined date, and pagination state.
+- Current admin's own role/status controls are disabled to avoid self-lockout.
+- Invite member modal keeps submit disabled until email is present, supports role selection and optional temporary password, and creates a local team member without external calls.
+- Auto-generated temporary-password modal shows the created member email, blocks accidental close/Escape until copy or manual-save acknowledgement, and exposes a copy action.
+- Role changes and active/inactive toggles persist through the API and refresh the list.
+- Browser pass must not hit an unbounded team-member list endpoint or emit page/console errors.
+
+Bug RC-UI-029:
+- Repro: Create a team member without a manually supplied temporary password.
+- Observed: the generated-password modal was typed as if the create response were a flat `TeamMember`, but the API returns `{ member, generatedPassword }`; the modal could read the wrong email field.
+- Root cause: frontend `CreateTeamMemberResponse` did not match `AdminUsersController.Create`.
+- Fix: corrected the TypeScript response shape and used `result.member.email` for the toast and generated-password modal.
+- Regression: `rtk pnpm --dir web check` plus browser proof for generated email `tsk397.team.paged.1782150198228@example.local`.
+
+Bug RC-UI-030:
+- Repro: Open `/admin/users` and inspect the team-member load path.
+- Observed: the UI used the legacy list endpoint, which returned the portfolio team list without an explicit paged response/count contract.
+- Root cause: admin user management predated the hard DB-side paging rule.
+- Fix: added `GET /api/v1/admin/users/page` with SQL-side count, search, sort, skip, and take; kept `GET /api/v1/admin/users?take=50` bounded for compatibility; changed the Team page to use the page endpoint.
+- Regression: `AdminUsersControllerTests.ListPage_ReturnsSqlCountAndRequestedWindow`.
+
+Evidence:
+- Browser proof on `https://localhost:5807/admin/users` as Nora Vale loaded `/api/v1/admin/users/page?take=20&sort=-createdAt`, showed `Page 1 · 2 shown`, and confirmed the current admin's own role/status controls were disabled.
+- Created `tsk397.team.paged.1782150198228@example.local` through the invite modal; submit started disabled, generated-password response returned HTTP 201, modal showed the created email, generated a 16-character required-class password, blocked Escape before acknowledgement, and allowed close after manual-save/copy acknowledgement.
+- Changed the new member role from Agent to Manager, deactivated it, then reactivated it; the API returned 200 for each PATCH and the refreshed row reflected Manager/Inactive/Active states.
+- Browser page errors and console errors were zero for the post-restart proof; older cumulative console artifacts included pre-restart 404s from before the new API route was live.
+
+Status: Pass for the core Admin Team controls covered above. Role-denied, stale-session, duplicate email, tenant-linked team member, and service-error variants remain open.
 
 ## Route Inventory For Continued Pass
 
@@ -892,7 +924,10 @@ Core route map to exercise next:
 - Browser settings-accounting proof on `https://localhost:5807`: QuickBooks configured-but-not-connected shell rendered only Back to settings and Connect QuickBooks, OAuth `access_denied` return showed a toast and stripped the query parameter, back navigation reached `/settings`, no external provider action was clicked, and console warnings/errors were zero.
 - `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~PaymentServiceTests.GetAsync_DoesNotAdvertiseScanWhenStoredFileBlobIsMissing" --logger "console;verbosity=normal"`: 1 passed.
 - `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~PaymentServiceTests|FullyQualifiedName~ExpenseServiceTests|FullyQualifiedName~WorkOrderStatusTimelineTests|FullyQualifiedName~WorkOrderCostsTimingAndProjectionTests|FullyQualifiedName~WorkOrderTenantScheduleSmsTests|FullyQualifiedName~WorkOrderServiceListTests" --logger "console;verbosity=normal"`: 33 passed.
+- `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~AdminUsersControllerTests" --logger "console;verbosity=normal"`: 1 passed.
+- `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings after the Admin Team page contract/type fix.
 - Browser activity/admin proof on `https://localhost:5807`: `/audit` refresh, unmatched search, Created + Payment filters, payment row deep link, missing-blob payment detail, `/admin/audit` no-results/filter/disclosure/IP/raw JSON, and filtered CSV export passed with no console/page errors and no `/payment-file/1` request after the fix.
+- Browser Admin Team proof on `https://localhost:5807`: `/admin/users` loaded through `/api/v1/admin/users/page?take=20&sort=-createdAt`, created `tsk397.team.paged.1782150198228@example.local`, showed the correct generated-password email and guarded close/Escape states, changed role Agent to Manager, deactivated/reactivated the row, and finished with console/page errors at zero.
 - Browser property-label proof on `https://localhost:5807`: `/properties`, type filter, New Property modal, and property detail use landlord-facing labels while preserving API enum values.
 - Browser FileDrop proof on `https://localhost:5807/scan`: dragged unsupported CSV emitted a rejection warning, did not render as the selected file, and did not trigger `POST /api/v1/scans`.
 - Browser properties grid proof on `https://localhost:5807`: initial load and Name sort used `/api/v1/properties/page?take=20...`; no `/api/v1/properties?take=500` grid fetch occurred.
@@ -912,9 +947,9 @@ Core route map to exercise next:
 
 ## Open While In Progress
 
-- This is not yet a claim that every button/modal/grid/state in the product has been exercised. Continue real-user flow through dashboard cards/actions, settings/security account/session variants, settings/accounting connected-provider states, team management, platform Engine health, docs/help, assistant delivery variants, portal, banking connection review states, scan batch/retry/reject variants, tenant-notice draft/send states, row delete confirmations, and remaining CRUD unhappy/edge states.
+- This is not yet a claim that every button/modal/grid/state in the product has been exercised. Continue real-user flow through dashboard cards/actions, settings/security account/session variants, settings/accounting connected-provider states, platform Engine health, docs/help, assistant delivery variants, portal, banking connection review states, scan batch/retry/reject variants, tenant-notice draft/send states, row delete confirmations, and remaining CRUD unhappy/edge states.
 - Plaid and QuickBooks remain deferred until sandbox credentials are available.
-- Continue static DB-side sweep outside the repaired report/accounting/banking controller/service scope; no endpoint should be marked production-scale until generated SQL is confirmed for filtering, sorting, paging, grouping, and aggregation. Read-only follow-up found additional high-confidence DB-side risks in lease ledger, unit timeline, daily briefing, inspection completion, unpaged document/deposit/opening-balance/conversation/portal lists, admin users, and broad `take:100/500` grid screens. Lease ledger, unit timeline, daily briefing, inspection completion, Command Center unit search, the scan draft grid, staff messages grid, staff messages unread count, staff messages compose tenant picker, and the properties/tenants/leases/units/maintenance/appointments/vendors/owners/applications/deposits/recurring-maintenance primary grids are now fixed with focused regressions; other unpaged/capped lists and shared-grid risks remain open.
+- Continue static DB-side sweep outside the repaired report/accounting/banking controller/service scope; no endpoint should be marked production-scale until generated SQL is confirmed for filtering, sorting, paging, grouping, and aggregation. Read-only follow-up found additional high-confidence DB-side risks in lease ledger, unit timeline, daily briefing, inspection completion, unpaged document/deposit/opening-balance/conversation/portal lists, and broad `take:100/500` grid screens. Lease ledger, unit timeline, daily briefing, inspection completion, Command Center unit search, the scan draft grid, staff messages grid, staff messages unread count, staff messages compose tenant picker, Admin Team, and the properties/tenants/leases/units/maintenance/appointments/vendors/owners/applications/deposits/recurring-maintenance primary grids are now fixed with focused regressions; other unpaged/capped lists and shared-grid risks remain open.
 - Tenant-notice draft review/approve/send still needs an eligible synthetic notice condition and provider-safe channel setup.
 
 ## Inventory Gaps For Next Browser Pass
@@ -927,7 +962,7 @@ The current pass is not a complete every-control inventory. The next new-user pa
 - `/appointments` and `/appointments/[id]`: calendar month/week/agenda date-window loading, drag-reschedule failure snapback, create-at-slot, detail edit/delete, and calendar/list cross-invalidation. The appointments list primary grid is server-side/page browser-proven.
 - Portal routes `/portal`, `/portal/messages`, `/portal/maintenance`, `/portal/payments`, `/portal/notifications`, `/portal/appointments`, and `/portal/lease`: dashboard links, compose/reply/cancel/delete, Enter vs Shift+Enter, unread invalidation, maintenance request create with photo preview/remove/failure, detail/timeline, Stripe unavailable, checkout success/cancel params, autopay on/off, notification action links/read state, appointment real workflow or placeholder defect, pagination, empty/loading/error states, and optimistic-update failures.
 - `/settings/accounting`: connected-provider toggle/submit/reset/copy actions, confirmations, persistence after reload, provider-unconfigured states, review queue controls, and stale-session failure behavior. `/settings/security` still needs Google-only/no-local-password and stale-session variants; local password-change controls are browser-proven.
-- `/admin/users` and `/superadmin/engine`: row actions, role/status toggles, generated-password/copy escapes, refresh/reindex actions, exports where present, no-results states, and loading/error states. `/audit` and `/admin/audit` core filters/refresh/no-results/detail/export controls are browser-proven; role-denied/error variants remain open.
+- `/admin/users` and `/superadmin/engine`: Admin Team core list/create/generated-password/role/status controls are browser-proven; remaining Admin Team variants include role-denied, stale-session, duplicate email, tenant-linked member, service-error, and larger-page pagination. Engine health refresh/reindex actions, exports where present, no-results states, and loading/error states remain open. `/audit` and `/admin/audit` core filters/refresh/no-results/detail/export controls are browser-proven; role-denied/error variants remain open.
 - `/docs`, public `/apply/[token]`, and public `/sign/[token]`: docs search/results/no results/articles/navigation/404, valid/invalid/expired public application states, scan success/failure/no extracted fields, duplicate application, valid/invalid/expired signing envelopes, PDF open/download, typed/drawn signature, clear, decline modal, terminal states, and provider gates.
 - App shell/navigation: staff versus portal role menus, collapsible groups, collapsed rail, mobile drawer/overlay, command-center search/no matches, header badges, account menu/logout, theme toggle, and role-hidden route gates.
 - Shared controls in composed routes: data grids, pagination, search inputs, confirm dialogs, app-shell navigation, command-center navigation, notification bell/list interactions, keyboard/focus/escape behavior, and select-all/bulk states. FileDrop unsupported-file rejection is fixed and browser-proven for drag/drop on `/scan`; upload failure states still need route-specific coverage.
@@ -970,9 +1005,10 @@ Fixed in this branch:
 - `SecurityDepositService.ListPageAsync` and `/deposits` grid: primary security-deposit table now uses a page contract with SQL count, optional lease filter, sort, skip, and take instead of an unpaged list with client-side sort/page. Regression: `SecurityDepositServiceListTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`.
 - `ConversationService.ListPageAsync`, `GetUnreadCountAsync`, `/messages`, and the app-shell message badge: staff conversation rows now use SQL count/sort/skip/take for initial/load-more windows, unread badge totals use a SQL `SUM` instead of loading all conversations and reducing client-side, and the compose modal uses the existing tenant page query instead of preloading `tenants?take=500`. Regression: `ConversationNotificationTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow` and `ConversationNotificationTests.GetUnreadCountAsync_SumsUnreadCountsInSql`.
 - `PaymentService.ListPageAsync`, `ExpenseService.ListPageAsync`, and unit detail Rent/Expenses/Maintenance tabs: child payments, expenses, work orders, and work-order receipt rows now use page contracts with SQL count/filter/sort/skip/take instead of unit-tab `take=500` lists and client-side receipt filtering. Regression: `PaymentServiceTests.ListPageAsync_ReturnsSqlCountAndRequestedWindow`, `ExpenseServiceTests.ListPageAsync_FiltersWorkOrderReceiptsAndPagesInSql`, and `web/src/lib/api/endpoints/expense-list-path.test.ts`.
+- `AdminUsersController.ListPage` and `/admin/users`: team-member management now uses a page contract with SQL count, search, sort, skip, and take instead of an unpaged list. Regression: `AdminUsersControllerTests.ListPage_ReturnsSqlCountAndRequestedWindow`.
 
 Remaining:
-- Unpaged list endpoints still need tightening or SQL proof: documents, opening balances, portal conversation/payment/work-order lists, admin users, appointment calendar date-window loading, and remaining capped `take:100/500` screens other than the fixed properties/tenants/leases/units/maintenance/appointments-list/vendors/owners/applications/deposits/recurring-maintenance/scan/messages primary grids and unit detail work tabs.
+- Unpaged list endpoints still need tightening or SQL proof: documents, opening balances, portal conversation/payment/work-order lists, appointment calendar date-window loading, and remaining capped `take:100/500` screens other than the fixed properties/tenants/leases/units/maintenance/appointments-list/vendors/owners/applications/deposits/recurring-maintenance/scan/messages/Admin Team primary grids and unit detail work tabs.
 - Shared `DataGrid` defaults to client-side sort/page, and several DB-backed list screens still fetch broad capped lists before Svelte filtering/sorting. Treat these remaining screens as unresolved production-scale risks until converted to server-side paging/filtering/sorting or proven bounded by design.
 - `FileDrop` unsupported drag/drop now rejects before upload; route-specific upload failure states remain open where they depend on each page's mutation/error handling.
 - Banking/accounting match suggestions have been moved to SQL-ranked candidate queries for the audited review-queue and accounting-grid surfaces. Continue the remaining static sweep outside this repaired controller/service scope before making a full-app DB-side claim.
