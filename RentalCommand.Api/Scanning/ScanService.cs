@@ -365,7 +365,7 @@ public sealed class ScanService : IScanService
 
         // Build ReceiptData JSON for the non-promoted details.
         var receiptDataJson = BuildReceiptDataJson(dto);
-        var matchedVendorId = await FindExactVendorMatchAsync(portfolioId, dto.VendorName, ct);
+        var matchedVendorId = await FindOrCreateVendorForScannedExpenseAsync(portfolioId, dto, ct);
 
         var expenseAmount = dto.Total ?? dto.Subtotal ?? 0m;
         if (expenseAmount <= 0m)
@@ -470,12 +470,16 @@ public sealed class ScanService : IScanService
         return new ScanConfirmResult(true, expense.Id, null, "Expense");
     }
 
-    private async Task<int?> FindExactVendorMatchAsync(int portfolioId, string? vendorName, CancellationToken ct)
+    private async Task<int?> FindOrCreateVendorForScannedExpenseAsync(
+        int portfolioId,
+        ExtractedReceiptDto dto,
+        CancellationToken ct)
     {
-        var normalizedName = vendorName?.Trim().ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(normalizedName))
+        var name = dto.VendorName?.Trim();
+        if (string.IsNullOrWhiteSpace(name))
             return null;
 
+        var normalizedName = name.ToLowerInvariant();
         var matches = await _db.Vendors
             .Where(v => v.PortfolioId == portfolioId
                 && v.DeletedAt == null
@@ -485,7 +489,40 @@ public sealed class ScanService : IScanService
             .Take(2)
             .ToListAsync(ct);
 
-        return matches.Count == 1 ? matches[0] : null;
+        if (matches.Count == 1)
+            return matches[0];
+
+        if (matches.Count > 1)
+            return null;
+
+        var now = DateTime.UtcNow;
+        var vendor = new Vendor
+        {
+            PortfolioId = portfolioId,
+            Name = TruncateRequired(name, 200),
+            ServiceType = "General",
+            Phone = Truncate(dto.VendorPhone?.Trim(), 50),
+            TaxId = Truncate(dto.VendorTaxId?.Trim(), 50),
+            Notes = "Created from scanned receipt.",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+        _db.Vendors.Add(vendor);
+        await _db.SaveChangesAsync(ct);
+
+        return vendor.Id;
+    }
+
+    private static string TruncateRequired(string value, int maxLength)
+        => value.Length <= maxLength ? value : value[..maxLength];
+
+    private static string? Truncate(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return value.Length <= maxLength ? value : value[..maxLength];
     }
 
     // -------------------------------------------------------------------------
