@@ -17,12 +17,18 @@ public class PaymentService : IPaymentService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
+    private readonly IFileStorage _files;
 
-    public PaymentService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IAuditTrailService audit)
+    public PaymentService(
+        RentalCommandDbContext db,
+        IDataUpdateService dataUpdate,
+        IAuditTrailService audit,
+        IFileStorage files)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _audit = audit;
+        _files = files;
     }
 
     // Money movement is high-stakes: status changes (reversals / refunds / waivers), collection, and
@@ -151,7 +157,7 @@ public class PaymentService : IPaymentService
         }
 
         var response = PaymentResponse.FromEntity(entity);
-        var scan = await _db.FindLatestEntityFileAsync(portfolioId, "Payment", id, ct);
+        var scan = await _db.FindLatestAvailableEntityFileAsync(_files, portfolioId, EntityType, id, ct);
         if (scan is not null)
         {
             response.HasScan = true;

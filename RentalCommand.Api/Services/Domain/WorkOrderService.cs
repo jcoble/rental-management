@@ -42,17 +42,20 @@ public class WorkOrderService : IWorkOrderService
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IMessagePublisher _publisher;
+    private readonly IFileStorage _files;
     private readonly ILogger<WorkOrderService> _logger;
 
     public WorkOrderService(
         RentalCommandDbContext db,
         IDataUpdateService dataUpdate,
         IMessagePublisher publisher,
+        IFileStorage files,
         ILogger<WorkOrderService> logger)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _publisher = publisher;
+        _files = files;
         _logger = logger;
     }
 
@@ -197,7 +200,7 @@ public class WorkOrderService : IWorkOrderService
             .ToListAsync(ct);
 
         var response = WorkOrderDetailResponse.FromEntity(entity, events);
-        var scan = await _db.FindLatestEntityFileAsync(portfolioId, "WorkOrder", id, ct);
+        var scan = await _db.FindLatestAvailableEntityFileAsync(_files, portfolioId, EntityType, id, ct);
         if (scan is not null)
         {
             response.HasScan = true;

@@ -26,6 +26,8 @@
 	type EntityOption = {
 		value: ImportEntityType;
 		label: string;
+		recordLabel: string;
+		recordPluralLabel: string;
 		columns: string;
 		/** Where finished records live, for the "view them" link. */
 		listHref: string;
@@ -36,6 +38,8 @@
 		{
 			value: 'tenant',
 			label: 'Tenants',
+			recordLabel: 'tenant',
+			recordPluralLabel: 'tenants',
 			columns: 'first name, last name, email, phone',
 			listHref: '/tenants',
 			listLabel: 'tenants'
@@ -43,6 +47,8 @@
 		{
 			value: 'property',
 			label: 'Properties',
+			recordLabel: 'property',
+			recordPluralLabel: 'properties',
 			columns: 'name, address, city, state, ZIP, type',
 			listHref: '/properties',
 			listLabel: 'properties'
@@ -50,6 +56,8 @@
 		{
 			value: 'unit',
 			label: 'Units',
+			recordLabel: 'unit',
+			recordPluralLabel: 'units',
 			columns: 'property name, unit number, beds, baths, market rent',
 			listHref: '/properties',
 			listLabel: 'properties'
@@ -325,7 +333,9 @@
 							<h2 class="text-lg font-semibold">Import complete</h2>
 							<p class="mt-1 text-sm text-foreground" data-testid="import-result-summary">
 								Created {imported.createdRows}
-								{selectedOption.listLabel.replace(/s$/, '')}{imported.createdRows === 1 ? '' : 's'}.
+								{imported.createdRows === 1
+									? selectedOption.recordLabel
+									: selectedOption.recordPluralLabel}.
 								{#if imported.totalRows - imported.createdRows > 0}
 									{imported.totalRows - imported.createdRows} row{imported.totalRows -
 										imported.createdRows ===
@@ -384,8 +394,8 @@
 								{/if}
 								<div>
 									<h2 class="text-lg font-semibold" data-testid="import-preview-summary">
-										{preview.validRows} of {preview.totalRows} row{preview.totalRows === 1 ? '' : 's'} look
-										good
+										{preview.validRows} of {preview.totalRows} row{preview.totalRows === 1 ? '' : 's'}
+										{preview.totalRows === 1 ? 'looks' : 'look'} good
 									</h2>
 									<p class="mt-1 text-sm text-muted-foreground">
 										{#if preview.validRows === preview.totalRows}

@@ -13,11 +13,13 @@ public class ExpenseService : IExpenseService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly IFileStorage _files;
 
-    public ExpenseService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public ExpenseService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IFileStorage files)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _files = files;
     }
 
     public async Task<IReadOnlyList<ExpenseResponse>> ListAsync(int portfolioId, int? propertyId, int? unitId, int? workOrderId, ListQuery query, CancellationToken ct = default)
@@ -174,16 +176,7 @@ public class ExpenseService : IExpenseService
             .Select(ExpenseLineItemResponse.FromEntity)
             .ToList();
 
-        var storedFile = await _db.StoredFiles
-            .AsNoTracking()
-            .Where(f =>
-                f.PortfolioId == portfolioId &&
-                f.EntityType == "Expense" &&
-                f.EntityId == entity.Id &&
-                f.DeletedAt == null)
-            .OrderByDescending(f => f.UploadedAt)
-            .Select(f => new { f.ContentType })
-            .FirstOrDefaultAsync(ct);
+        var storedFile = await _db.FindLatestAvailableEntityFileAsync(_files, portfolioId, EntityType, entity.Id, ct);
 
         if (storedFile != null)
         {

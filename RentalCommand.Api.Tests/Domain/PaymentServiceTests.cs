@@ -20,6 +20,7 @@ public class PaymentServiceTests : IDisposable
 
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
+    private readonly FakeFileStorage _files = new();
     private readonly PaymentService _sut;
     private readonly List<string> _commands = [];
 
@@ -39,7 +40,8 @@ public class PaymentServiceTests : IDisposable
         SeedPortfolioAndLease();
 
         _sut = new PaymentService(_db, new NoopDataUpdateService(),
-            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()));
+            new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
+            _files);
     }
 
     public void Dispose()
@@ -168,6 +170,44 @@ public class PaymentServiceTests : IDisposable
         fetched.Should().NotBeNull();
         fetched!.LeaseNumber.Should().Be("L-1");
         fetched.TenantName.Should().Be("Marcus Williams");
+    }
+
+    [Fact]
+    public async Task GetAsync_DoesNotAdvertiseScanWhenStoredFileBlobIsMissing()
+    {
+        // A StoredFiles row without a readable blob makes the web detail page request
+        // /payment-file/{id}?thumb=true and log a 404. Detail DTO scan flags must reflect
+        // file availability, not just database metadata.
+        var now = DateTime.UtcNow;
+        var created = await _sut.CreateAsync(PortfolioId, new CreatePaymentRequest
+        {
+            LeaseId = LeaseId,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1200.00m,
+            DueDate = now,
+            PaidDate = now,
+        });
+        created.Should().NotBeNull();
+
+        _db.StoredFiles.Add(new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            EntityType = "Payment",
+            EntityId = created!.Id,
+            FileName = "missing-check.jpg",
+            FilePath = "missing-check.jpg",
+            ContentType = "image/jpeg",
+            FileSize = 1024,
+            UploadedAt = now,
+        });
+        await _db.SaveChangesAsync();
+
+        var fetched = await _sut.GetAsync(PortfolioId, created.Id);
+
+        fetched.Should().NotBeNull();
+        fetched!.HasScan.Should().BeFalse();
+        fetched.ScanIsImage.Should().BeFalse();
     }
 
     [Fact]
@@ -391,6 +431,36 @@ public class PaymentServiceTests : IDisposable
 
         public Task BroadcastEntityDeleteAsync(int portfolioId, string entityType, int entityId, CancellationToken ct = default)
             => Task.CompletedTask;
+    }
+
+    private sealed class FakeFileStorage : IFileStorage
+    {
+        private readonly Dictionary<string, byte[]> _files = new();
+
+        public async Task<string> UploadAsync(Stream content, string fileName, string contentType, CancellationToken ct = default)
+        {
+            using var ms = new MemoryStream();
+            await content.CopyToAsync(ms, ct);
+            var key = $"{Guid.NewGuid():N}_{fileName}";
+            _files[key] = ms.ToArray();
+            return key;
+        }
+
+        public Task<Stream> DownloadAsync(string path, CancellationToken ct = default)
+        {
+            if (!_files.TryGetValue(path, out var bytes))
+            {
+                throw new FileNotFoundException(path);
+            }
+
+            return Task.FromResult<Stream>(new MemoryStream(bytes));
+        }
+
+        public Task DeleteAsync(string path, CancellationToken ct = default)
+        {
+            _files.Remove(path);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
