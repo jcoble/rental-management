@@ -30,6 +30,14 @@ export Assistant__ImageDetail="${Assistant__ImageDetail:-low}"
 export Assistant__UseImageOcr="${Assistant__UseImageOcr:-false}"
 export Auth__ExposeDevTokens="${Auth__ExposeDevTokens:-true}"
 
+# This audit uses synthetic local accounts, but it must not call real outbound providers.
+# Empty env vars override developer secrets for this process only.
+export Notifications__SendGrid__ApiKey=""
+export Notifications__SendGrid__FromEmail=""
+export Notifications__Smtp__Host=""
+export Notifications__Smtp__Username=""
+export Notifications__Smtp__Password=""
+
 echo "TSK-397 local audit stack"
 echo "  Web:  https://localhost:$WEB_PORT"
 echo "  API:  $API_HTTPS_URL"
