@@ -242,7 +242,13 @@ public class ScanController : ManagementControllerBase
             .ThenBy(d => d.Id)
             .ToListAsync(ct);
 
-        var counts = BuildCounts(drafts.Select(d => (d.Status, 1)));
+        var statusCounts = await _db.ScanDrafts
+            .Where(d => d.PortfolioId == portfolioId && d.BatchId == id)
+            .GroupBy(d => d.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var counts = BuildCounts(statusCounts.Select(c => (c.Status, c.Count)));
 
         // Resolve the created-entity id for any confirmed draft so the UI can link straight to the record.
         var filePaths = drafts.Select(d => d.FilePath).ToHashSet(StringComparer.Ordinal);
