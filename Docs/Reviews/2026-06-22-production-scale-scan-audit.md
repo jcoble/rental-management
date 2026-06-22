@@ -241,6 +241,7 @@ Finite risk edge cases:
 | ID | Severity | Area | Finding | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
 | TSK397-B001 | P0 | Audit recovery | Previous uncommitted TSK-397 worktree disappeared before it was committed. Recreated compliant worktree from `main` and rebuilt the audit tooling slice first. | `git worktree list` showed no TSK-397 worktree; branch recreated at `b6d80c2`; tooling slice committed as `52e4968`. | Recovered |
+| TSK397-B002 | P1 | Local stack | `scripts/start-dev.sh` could reuse an existing Postgres volume/container without ensuring the configured `PG_DB` existed. The API exited with `3D000: database "rentalcommand_tsk397" does not exist` while the web server still started and produced API connection errors. | Red: first TSK-397 startup failed in `/tmp/rentalcommand-api.log`. Green: restart printed `Creating database 'rentalcommand_tsk397'...`; `curl -ks https://localhost:5696/health` returned `{"status":"ok"}`; listeners were present on 5696 and 5697. | Fixed |
 | TSK397-B005 | P1 | Scan batch detail | `/api/v1/scans/batches/{id}` displayed correct counts only because it folded loaded draft rows in memory. This violated the DB-side aggregation rule and would scale poorly for production-sized review queues. | Red: `dotnet test ... --filter "FullyQualifiedName~ScanBatchControllerTests.GetBatch_ComputesCountsWithGroupedSql"` failed with no `GROUP BY`/`COUNT` SQL. Green after fix: focused test passed; full `ScanBatchControllerTests` passed 8/8. | Fixed |
 
 ## Regression Expectations

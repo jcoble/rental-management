@@ -93,6 +93,42 @@ export NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem"
 # the port a second time — that double-bind was a hard crash.
 pg_port_in_use() { (exec 3<>"/dev/tcp/localhost/$PG_PORT") 2>/dev/null && { exec 3>&-; return 0; } || return 1; }
 
+sql_literal() {
+    local value="${1//\'/\'\'}"
+    printf "'%s'" "$value"
+}
+
+ensure_database_exists() {
+    local db_literal
+    local db_exists
+
+    db_literal="$(sql_literal "$PG_DB")"
+
+    if docker ps --format '{{.Names}}' | grep -qx "$PG_CONTAINER"; then
+        db_exists="$(docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = $db_literal;" | tr -d '[:space:]')"
+        if [ "$db_exists" != "1" ]; then
+            echo "Creating database '$PG_DB' in Postgres container '$PG_CONTAINER'..."
+            docker exec "$PG_CONTAINER" createdb -U "$PG_USER" "$PG_DB"
+        fi
+        return
+    fi
+
+    command -v psql >/dev/null 2>&1 || {
+        echo "psql not found; cannot verify database '$PG_DB' exists on localhost:$PG_PORT"
+        exit 1
+    }
+    command -v createdb >/dev/null 2>&1 || {
+        echo "createdb not found; cannot create database '$PG_DB' on localhost:$PG_PORT"
+        exit 1
+    }
+
+    db_exists="$(PGPASSWORD="$PG_PASSWORD" psql -h localhost -p "$PG_PORT" -U "$PG_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = $db_literal;" | tr -d '[:space:]')"
+    if [ "$db_exists" != "1" ]; then
+        echo "Creating database '$PG_DB' on localhost:$PG_PORT..."
+        PGPASSWORD="$PG_PASSWORD" createdb -h localhost -p "$PG_PORT" -U "$PG_USER" "$PG_DB"
+    fi
+}
+
 if pg_port_in_use; then
     echo "Postgres already listening on :$PG_PORT — reusing it (leaving container management alone)."
 else
@@ -120,6 +156,8 @@ else
         sleep 1
     done
 fi
+
+ensure_database_exists
 
 # ─── .NET environment ────────────────────────────────────────────────────────
 # The DB connection comes from .NET User Secrets in Development — do NOT export
