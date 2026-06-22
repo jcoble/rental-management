@@ -696,16 +696,54 @@ public class BankingService : IBankingService
     {
         if (transactions.Count == 0) return [];
 
-        var paymentCandidates = await _db.Payments
-            .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
-            .Include(p => p.Lease!).ThenInclude(l => l.Property)
-            .Where(p => p.PortfolioId == portfolioId && p.Status != PaymentStatus.Failed && p.Status != PaymentStatus.Refunded)
-            .ToListAsync(ct);
+        var unmatched = transactions
+            .Where(t => t.MatchStatus == "Unmatched")
+            .ToList();
 
-        var expenseCandidates = await _db.Expenses
-            .Include(e => e.Vendor)
-            .Where(e => e.PortfolioId == portfolioId)
-            .ToListAsync(ct);
+        var deposits = unmatched.Where(t => t.Amount > 0m).ToList();
+        IReadOnlyList<Payment> paymentCandidates = [];
+        if (deposits.Count > 0)
+        {
+            var minAmount = deposits.Min(t => t.Amount) - 0.01m;
+            var maxAmount = deposits.Max(t => t.Amount) + 0.01m;
+            var minDate = deposits.Min(t => t.PostedAt.Date).AddDays(-14);
+            var maxDateExclusive = deposits.Max(t => t.PostedAt.Date).AddDays(15);
+
+            paymentCandidates = await _db.Payments
+                .AsNoTracking()
+                .Include(p => p.Lease!).ThenInclude(l => l.Tenant)
+                .Include(p => p.Lease!).ThenInclude(l => l.Property)
+                .Where(p =>
+                    p.PortfolioId == portfolioId &&
+                    p.Status != PaymentStatus.Failed &&
+                    p.Status != PaymentStatus.Refunded &&
+                    p.Amount >= minAmount &&
+                    p.Amount <= maxAmount &&
+                    (p.PaidDate ?? p.DueDate) >= minDate &&
+                    (p.PaidDate ?? p.DueDate) < maxDateExclusive)
+                .ToListAsync(ct);
+        }
+
+        var withdrawals = unmatched.Where(t => t.Amount < 0m).ToList();
+        IReadOnlyList<Expense> expenseCandidates = [];
+        if (withdrawals.Count > 0)
+        {
+            var minAmount = withdrawals.Min(t => -t.Amount) - 0.01m;
+            var maxAmount = withdrawals.Max(t => -t.Amount) + 0.01m;
+            var minDate = withdrawals.Min(t => t.PostedAt.Date).AddDays(-14);
+            var maxDateExclusive = withdrawals.Max(t => t.PostedAt.Date).AddDays(15);
+
+            expenseCandidates = await _db.Expenses
+                .AsNoTracking()
+                .Include(e => e.Vendor)
+                .Where(e =>
+                    e.PortfolioId == portfolioId &&
+                    e.Amount >= minAmount &&
+                    e.Amount <= maxAmount &&
+                    (e.PaidAt ?? e.IncurredAt) >= minDate &&
+                    (e.PaidAt ?? e.IncurredAt) < maxDateExclusive)
+                .ToListAsync(ct);
+        }
 
         return transactions
             .Select(t => MapTransaction(t, SuggestMatch(t, paymentCandidates, expenseCandidates)))
