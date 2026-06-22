@@ -978,31 +978,33 @@ public class ReportsService : IReportsService
             .Select(p => new { p.Id, p.Name })
             .ToListAsync(ct);
 
-        var inScope = properties.Select(p => p.Id).ToHashSet();
+        var inScope = properties.Select(p => p.Id).ToArray();
 
         // Income: paid payments dated in range, keyed to property via lease.
-        var incomeRows = await _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
-            .Select(p => new { PropertyId = p.Lease!.PropertyId, p.Amount, When = p.PaidDate ?? p.DueDate })
-            .ToListAsync(ct);
-
-        var incomeByProperty = incomeRows
-            .Where(r => inScope.Contains(r.PropertyId) && r.When >= from && r.When <= to)
-            .GroupBy(r => r.PropertyId)
-            .ToDictionary(g => g.Key, g => g.Sum(r => r.Amount));
+        var incomeByProperty = inScope.Length == 0
+            ? new Dictionary<int, decimal>()
+            : (await _db.Payments
+                .AsNoTracking()
+                .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
+                .Where(p => inScope.Contains(p.Lease!.PropertyId))
+                .Where(p => (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
+                .GroupBy(p => p.Lease!.PropertyId)
+                .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) })
+                .ToListAsync(ct))
+            .ToDictionary(r => r.PropertyId, r => r.Total);
 
         // Expense: expenses dated in range, keyed to property (unassigned ones never match a property).
-        var expenseRows = await _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
-            .Select(e => new { PropertyId = e.PropertyId!.Value, e.Amount, When = e.PaidAt ?? e.IncurredAt })
-            .ToListAsync(ct);
-
-        var expenseByProperty = expenseRows
-            .Where(r => inScope.Contains(r.PropertyId) && r.When >= from && r.When <= to)
-            .GroupBy(r => r.PropertyId)
-            .ToDictionary(g => g.Key, g => g.Sum(r => r.Amount));
+        var expenseByProperty = inScope.Length == 0
+            ? new Dictionary<int, decimal>()
+            : (await _db.Expenses
+                .AsNoTracking()
+                .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
+                .Where(e => inScope.Contains(e.PropertyId!.Value))
+                .Where(e => (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to)
+                .GroupBy(e => e.PropertyId!.Value)
+                .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) })
+                .ToListAsync(ct))
+            .ToDictionary(r => r.PropertyId, r => r.Total);
 
         var rows = properties
             .Select(p =>
@@ -1025,9 +1027,9 @@ public class ReportsService : IReportsService
             From = from,
             To = to,
             Rows = rows,
-            TotalIncome = rows.Sum(r => r.Income),
-            TotalExpense = rows.Sum(r => r.Expense),
-            TotalNet = rows.Sum(r => r.Net),
+            TotalIncome = incomeByProperty.Values.Sum(),
+            TotalExpense = expenseByProperty.Values.Sum(),
+            TotalNet = incomeByProperty.Values.Sum() - expenseByProperty.Values.Sum(),
         };
     }
 

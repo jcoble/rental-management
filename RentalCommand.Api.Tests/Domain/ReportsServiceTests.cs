@@ -1,6 +1,8 @@
+using System.Data.Common;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
@@ -20,6 +22,7 @@ public class ReportsServiceTests : IDisposable
     private const int PortfolioId = 1;
 
     private readonly SqliteConnection _conn;
+    private readonly List<string> _executedSql = [];
     private readonly RentalCommandDbContext _db;
     private readonly ReportsService _sut;
 
@@ -30,6 +33,7 @@ public class ReportsServiceTests : IDisposable
 
         var options = new DbContextOptionsBuilder<RentalCommandDbContext>()
             .UseSqlite(_conn)
+            .AddInterceptors(new RecordingCommandInterceptor(_executedSql))
             .Options;
 
         _db = new ReportsServiceTestDbContext(options);
@@ -342,6 +346,47 @@ public class ReportsServiceTests : IDisposable
         // accept either so the assertion proves DB-side aggregation regardless of provider.
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("the period total must be summed in the database");
+    }
+
+    // ── Property P&L Summary (DB) ─────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetPropertyProfitAndLossAsync_FiltersGroupsAndSumsInSql()
+    {
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+        var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+        var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2000m);
+
+        SeedPayment(mapleLease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedPayment(mapleLease, 777m, dueDate: D(2026, 2, 1), PaymentStatus.Paid, paidDate: D(2026, 2, 5));
+        SeedPayment(oakLease, 222m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedExpense(maple.Id, 300m, paidAt: D(2026, 1, 10));
+        SeedExpense(maple.Id, 444m, paidAt: D(2026, 2, 10));
+        SeedExpense(oak.Id, 111m, paidAt: D(2026, 1, 10));
+
+        _executedSql.Clear();
+
+        var report = await _sut.GetPropertyProfitAndLossAsync(PortfolioId, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+            PropertyIds = [maple.Id],
+        }, CancellationToken.None);
+
+        var row = report.Rows.Should().ContainSingle().Subject;
+        row.PropertyId.Should().Be(maple.Id);
+        row.Income.Should().Be(1000m);
+        row.Expense.Should().Be(300m);
+        row.Net.Should().Be(700m);
+        report.TotalIncome.Should().Be(1000m);
+        report.TotalExpense.Should().Be(300m);
+        report.TotalNet.Should().Be(700m);
+
+        var sql = string.Join("\n---\n", _executedSql);
+        sql.Should().Contain("GROUP BY", "payment and expense totals must be grouped in SQL, not after materialization");
+        (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("payment and expense totals must be summed in SQL");
     }
 
     // ── True cash flow (§9/§18, DB) ──────────────────────────────────────────────────────────────
@@ -787,6 +832,47 @@ public class ReportsServiceTests : IDisposable
         _db.LoanPayments.Add(payment);
         _db.SaveChanges();
         return payment;
+    }
+
+    private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
+    {
+        public override InterceptionResult<DbDataReader> ReaderExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        public override InterceptionResult<object> ScalarExecuting(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<object> result)
+        {
+            commands.Add(command.CommandText);
+            return base.ScalarExecuting(command, eventData, result);
+        }
+
+        public override ValueTask<InterceptionResult<object>> ScalarExecutingAsync(
+            DbCommand command,
+            CommandEventData eventData,
+            InterceptionResult<object> result,
+            CancellationToken cancellationToken = default)
+        {
+            commands.Add(command.CommandText);
+            return base.ScalarExecutingAsync(command, eventData, result, cancellationToken);
+        }
     }
 }
 
