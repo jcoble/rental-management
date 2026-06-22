@@ -16,9 +16,15 @@
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
 
-	// Reconcile the active-portfolio selection with localStorage AFTER hydration (L-18): the
-	// store defaults to a deterministic placeholder during SSR + first client render so markup
-	// agrees, and the real persisted id is applied here on the client.
+	// Reconcile before child route queries are created. Doing this only in an effect lets the first
+	// protected page briefly query the SSR placeholder portfolio id before the authenticated id wins.
+	// svelte-ignore state_referenced_locally
+	const initialPortfolioId = data.user?.portfolioId ?? undefined;
+	if (browser) {
+		initPortfolio(initialPortfolioId);
+	}
+
+	// Reconcile again when layout data changes during client navigation.
 	$effect(() => {
 		initPortfolio(data.user?.portfolioId ?? undefined);
 	});
