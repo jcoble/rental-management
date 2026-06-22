@@ -974,6 +974,32 @@ Core route map to exercise next:
 - Browser messages grid/compose proof on `https://localhost:5807`: initial staff conversation load and `Load more` used `/api/v1/conversations/page?take=20...`, header unread count used `/api/v1/conversations/unread-count`, compose tenant search used `/api/v1/tenants/page?take=20...`, no legacy `/api/v1/conversations` or `/api/v1/tenants?take=500` list fetch occurred, and console warnings/errors were zero.
 - Browser unit-detail tab proof on `https://localhost:5807`: rent, maintenance, and expenses tabs used paged `/api/v1/payments/page`, `/api/v1/work-orders/page`, and `/api/v1/expenses/page` requests with `take=20`; work-order receipt filtering used `workOrderLinkedOnly=true`; no legacy child-list endpoint was observed and console warnings/errors were zero.
 
+## Pass 2 Fresh-User Scan Findings
+
+Pass-2 local account: `tsk397.pass2.20260622.1852@example.local`. Synthetic document evidence was generated from scratch and kept under local ignored QA output at `output/qa/tsk397-pass2/`: lease PDF, lease camera images, application PDF, receipt PDF/image, rent-check image, and maintenance photo.
+
+Fixed in this slice:
+
+- `TSK397-B017` — `/scan/new-rental` displayed contradictory progress (`Step 1 of 4 · Property` beside `1/5`) and used receipt/invoice upload copy on lease-only drop zones. Fix: shared helper renders the full five-step sequence including review, and `FileDrop` accepts context-specific title/helper text. Regression: `web/src/lib/scan/new-rental-state.test.ts`.
+- `TSK397-B018` — lease scans could visibly contain tenant email/phone, but the lease extraction schema did not ask the engine to return `tenant_email`, `tenant_phone`, or `tenant_emergency_contact`; the confirm path already knew how to persist them if present. Fix: lease schema instructions and fields now include tenant contact fields. Regression: `LeaseExtractionSchemaTests`.
+- `TSK397-B019` — work-order deep links from unit maintenance cards and audit/activity rows used `/work-orders/{id}`, which is an API/mobile route shape and has no protected web detail page. The canonical web route is `/maintenance/{id}`. Fix: unit maintenance open action and audit DTO detail hrefs now emit `/maintenance/{id}`. Regression: `AuditDetailHrefTests`.
+
+Browser retest on `https://localhost:5817` as Taylor Brooks:
+
+- `/scan/new-rental` capture page rendered lease-specific drop zones: `Drop lease photos here` and `Drop the lease PDF here`.
+- Uploaded `output/qa/tsk397-pass2/harbor-view-lease.pdf`; after extraction reached the real wizard, the stepper rendered `Step 1 of 5 · Property` and `1/5`.
+- `/units/1?tab=maintenance` expanded the scan-created `Kitchen sink leak` work order; clicking `Open work order` navigated to `/maintenance/1`.
+- After restarting the API with the patched DTO, the unit recent-activity rail's `Created a work order` link rendered `/maintenance/1`.
+- Playwright console check after the route-link proof returned zero warnings and zero errors.
+
+Open pass-2 product gaps:
+
+- Application scan confirm creates the `RentalApplication`, but the application detail page does not expose the original scanned PDF; there is no persisted source-file relationship on the application record yet.
+- Expense receipt scan stores extracted vendor details but does not auto-create or link a Vendor entity; the categorization screen can still show "No vendor".
+- Payment scan did not auto-match a clear rent check to the only matching lease; the user had to select the lease manually.
+- Maintenance scan review exposes raw numeric relationship IDs in editable "Other" fields. The final work-order detail also does not show the tenant even when the scan extracted a tenant id.
+- New-user live setup still starts with manual property/spreadsheet onboarding; the scan-first path is in the sidebar/scan page, not the primary onboarding path.
+
 ## Open While In Progress
 
 - This is not yet a claim that every button/modal/grid/state in the product has been exercised. Continue real-user flow through dashboard cards/actions, settings/security account/session variants, settings/accounting connected-provider states, platform Engine health, in-app help variants, assistant delivery variants, portal, banking connection review states, scan batch/retry/reject variants, tenant-notice draft/send states, row delete confirmations, and remaining CRUD unhappy/edge states.

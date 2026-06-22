@@ -116,7 +116,7 @@ public class AuditEntryResponse
         "Lease" => $"/leases/{entityId}",
         "Tenant" => $"/tenants/{entityId}",
         "Property" => $"/properties/{entityId}",
-        "WorkOrder" => $"/work-orders/{entityId}",
+        "WorkOrder" => $"/maintenance/{entityId}",
         "Vendor" => "/owners",
         "OwnerEntity" => "/owners",
         "Appointment" => $"/appointments/{entityId}",

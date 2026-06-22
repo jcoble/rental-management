@@ -190,7 +190,11 @@
 		</div>
 	{:else}
 		<div class="space-y-2">
-			<FileDrop onselected={handleFile} />
+			<FileDrop
+				title="Drop a lease photo or PDF here"
+				helperText="or click to browse — PDF, JPG, PNG, HEIC accepted"
+				onselected={handleFile}
+			/>
 			<div class="flex flex-wrap items-center gap-x-4 gap-y-1">
 				<button type="button" class="text-xs text-muted-foreground underline-offset-4 hover:underline" onclick={reset} data-testid="lease-photo-prefill-back">
 					Never mind, I'll type it in
