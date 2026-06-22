@@ -12,8 +12,19 @@
 	import { formatDateOnly } from '$lib/utils/date';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import {
+		EXPENSE_CATEGORY_OPTIONS,
+		formatExpenseCategory
+	} from '$lib/accounting/expense-categories';
+	import {
+		confirmExpenseDelete,
+		expenseDeleteConfirmMessage,
+		requestExpenseDelete,
+		type ExpenseDeleteTarget
+	} from '$lib/accounting/expense-detail-actions';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Table from '$lib/components/ui/table';
@@ -22,9 +33,9 @@
 	const expenseId = $derived(parseInt(page.params.id ?? '0', 10));
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const STATUSES = ['Pending', 'Approved', 'Paid', 'Rejected', 'Draft'];
-	const CATEGORIES = ['Advertising', 'AutoTravel', 'CleaningMaintenance', 'Commissions', 'Insurance', 'LegalProfessional', 'ManagementFees', 'MortgageInterest', 'Repairs', 'Supplies', 'Taxes', 'Utilities', 'Depreciation', 'Other'];
 
 	let editing = $state(false);
+	let deleteTarget = $state<ExpenseDeleteTarget | null>(null);
 	let form = $state({
 		description: '',
 		amount: '',
@@ -174,7 +185,7 @@
 	}
 
 	const statusOptions = $derived(STATUSES.map((value) => ({ value, label: value })));
-	const categoryOptions = $derived(CATEGORIES.map((value) => ({ value, label: value })));
+	const categoryOptions = $derived(EXPENSE_CATEGORY_OPTIONS);
 	const propertyOptions = $derived([{ value: '', label: 'No property' }, ...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name }))]);
 	const vendorOptions = $derived([{ value: '', label: 'No vendor' }, ...(vendorsQuery.data ?? []).map((v) => ({ value: String(v.id), label: v.name }))]);
 
@@ -263,6 +274,7 @@
 		mutationFn: () => expenses.delete(expenseId),
 		onSuccess: () => {
 			showSuccess('Expense deleted.');
+			deleteTarget = null;
 			goto('/accounting');
 		},
 		onError: (err) => showError(apiErrorMessage(err))
@@ -310,7 +322,7 @@
 		<div class="min-w-0">
 			<Button variant="ghost" href="/accounting" class="mb-2 -ml-3"><ArrowLeft class="h-4 w-4" />Money</Button>
 			<h1 class="truncate text-2xl font-bold">{expense?.description ?? 'Expense'}</h1>
-			<p class="text-sm text-muted-foreground">{expense ? `${expense.category} · $${expense.amount} · ${expense.status}` : ''}</p>
+			<p class="text-sm text-muted-foreground">{expense ? `${formatExpenseCategory(expense.category)} · $${expense.amount} · ${expense.status}` : ''}</p>
 		</div>
 		{#if expense}
 			<div class="flex gap-2">
@@ -319,7 +331,7 @@
 					<Button onclick={saveExpense} disabled={saveMutation.isPending}><Save class="h-4 w-4" />{saveMutation.isPending ? 'Saving...' : 'Save'}</Button>
 				{:else}
 					<Button variant="outline" onclick={startEditing}><Pencil class="h-4 w-4" />Edit</Button>
-					<Button variant="destructive" onclick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}><Trash2 class="h-4 w-4" />Delete</Button>
+					<Button variant="destructive" onclick={() => (deleteTarget = requestExpenseDelete(expense))} disabled={deleteMutation.isPending}><Trash2 class="h-4 w-4" />Delete</Button>
 				{/if}
 			</div>
 		{/if}
@@ -359,7 +371,7 @@
 			</DetailCard>
 
 			<DetailCard title="Categorization & references" icon={Tags} accent="muted" testid="expense-card-references" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-				<InlineField label="Category" bind:value={form.category} display={expense.category} {editing} type="select" options={categoryOptions} testid="expense-detail-category" />
+				<InlineField label="Category" bind:value={form.category} display={formatExpenseCategory(expense.category)} {editing} type="select" options={categoryOptions} testid="expense-detail-category" />
 				<InlineField label="Property" bind:value={form.propertyId} display={expense.propertyName ?? 'General'} {editing} type="select" options={propertyOptions} testid="expense-detail-property" />
 				<InlineField label="Vendor" bind:value={form.vendorId} display={expense.vendorName ?? 'No vendor'} {editing} type="select" options={vendorOptions} testid="expense-detail-vendor" />
 				<div data-testid="expense-detail-billable-field">
@@ -619,3 +631,13 @@
 		</div>
 	{/if}
 </div>
+
+<ConfirmDialog
+	open={deleteTarget !== null}
+	title="Delete expense"
+	message={expenseDeleteConfirmMessage(deleteTarget)}
+	busy={deleteMutation.isPending}
+	testid="expense-detail-delete"
+	onconfirm={() => confirmExpenseDelete(deleteTarget, () => deleteMutation.mutate())}
+	oncancel={() => (deleteTarget = null)}
+/>
