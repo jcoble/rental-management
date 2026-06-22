@@ -213,6 +213,26 @@ public class ScanServiceTests : IDisposable
         _expenses.LastRequest!.Amount.Should().Be(99.99m);
     }
 
+    [Fact]
+    public async Task ConfirmAndCreateAsync_ExpenseDraft_WithUnitAndWorkOrderOverrides_PassesAssociationsToExpenseCreate()
+    {
+        const string extractedJson =
+            """{"vendor_name":{"value":"ComfortZone HVAC","confidence":0.9},"amount":{"value":"232.50","confidence":0.9},"transaction_date":{"value":"2026-06-22","confidence":0.9},"category":{"value":"Repairs","confidence":0.8},"document_kind":{"value":"Receipt","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson);
+        SeedStoredFile(draft.FilePath);
+        _expenses.SetupResponse(new ExpenseResponse { Id = 101, PortfolioId = PortfolioId });
+
+        var overrides = """{"propertyId":10,"unitId":20,"workOrderId":30}""";
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: overrides);
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _expenses.LastRequest.Should().NotBeNull();
+        _expenses.LastRequest!.PropertyId.Should().Be(10);
+        _expenses.LastRequest.UnitId.Should().Be(20);
+        _expenses.LastRequest.WorkOrderId.Should().Be(30);
+    }
+
     // -------------------------------------------------------------------------
     // Confirm: snake_case vendor/date overrides are honored (regression guard)
     // The review UI keys edits by the extraction field names (vendor_name,

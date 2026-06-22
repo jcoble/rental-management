@@ -57,7 +57,7 @@
 		<!-- Primary action: Scan/Upload is visually prominent (core product strength). Domain work (post
 		     payment, add expense, create work order) happens inline in the relevant tab, not here. -->
 		<div class="flex shrink-0 items-center gap-2">
-			<Button onclick={onScan} class="gap-2" data-testid="unit-scan-button">
+			<Button onclick={() => onScan()} class="gap-2" data-testid="unit-scan-button">
 				<ScanLine class="h-4 w-4" />
 				Scan / Upload
 			</Button>

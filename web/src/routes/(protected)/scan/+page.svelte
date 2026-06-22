@@ -14,6 +14,7 @@
 	import { Mic, Square, Layers } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import { appendScanContext, parseScanContext, type ScanDocType } from '$lib/scan/scan-context';
 
 	const queryClient = useQueryClient();
 	const PAGE_SIZE = 20;
@@ -48,6 +49,8 @@
 	// Document type the scan should become: 'Expense' (receipt/bill) or
 	// 'Payment' (rent check). Drives the LLM extraction + confirm flow.
 	// Defaults to 'Expense' since receipts/bills are the most common capture.
+	const initialScanContext = parseScanContext(page.url.searchParams);
+	const scanContext = $derived(parseScanContext(page.url.searchParams));
 	const DOC_TYPES = [
 		{ value: 'Expense', label: 'Receipt / Bill', hint: 'Becomes an expense record' },
 		{ value: 'Payment', label: 'Rent Check / Payment', hint: 'Becomes a payment record' },
@@ -55,7 +58,7 @@
 		{ value: 'Lease', label: 'Lease Agreement', hint: 'Becomes a lease record' },
 		{ value: 'Application', label: 'Rental Application', hint: 'Becomes an applicant record' }
 	] as const;
-	let docType = $state<string>('Expense');
+	let docType = $state<ScanDocType>(initialScanContext.type ?? 'Expense');
 	let isRecording = $state(false);
 	let recorder: MediaRecorder | null = null;
 	let voiceChunks: Blob[] = [];
@@ -80,7 +83,7 @@
 		mutationFn: (file: File) => scan.upload(file, docType),
 		onSuccess: (res) => {
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
-			goto(`/scan/${res.draftId}`);
+			goto(appendScanContext(`/scan/${res.draftId}`, { ...scanContext, type: docType }));
 		},
 		onError: (err) => {
 			toast.error(err instanceof Error ? err.message : 'Upload failed');
@@ -91,7 +94,7 @@
 		mutationFn: (audio: Blob) => scan.createVoiceDraft(audio),
 		onSuccess: (draft) => {
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
-			goto(`/scan/${draft.id}`);
+			goto(appendScanContext(`/scan/${draft.id}`, { ...scanContext, type: docType }));
 		},
 		onError: (err) => {
 			toast.error(err instanceof Error ? err.message : 'Voice capture failed');

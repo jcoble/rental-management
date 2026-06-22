@@ -2,6 +2,7 @@
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { untrack } from 'svelte';
 	import type { UnitDashboard, Expense } from '$lib/types';
+	import type { ScanContext } from '$lib/scan/scan-context';
 	import { expenses as expensesApi } from '$lib/api/endpoints/expenses';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { expenseSchema, parseForm } from '$lib/schemas';
@@ -25,7 +26,7 @@
 		onScan,
 	}: {
 		dashboard: UnitDashboard;
-		onScan: () => void;
+		onScan: (context?: Partial<ScanContext>) => void;
 	} = $props();
 
 	const queryClient = useQueryClient();
@@ -98,6 +99,13 @@
 	let showCreate = $state(false);
 	let createForm = $state(emptyCreate());
 	let createErrors = $state<Record<string, string>>({});
+
+	function clearCreateError(field: string) {
+		if (!createErrors[field]) return;
+		const next = { ...createErrors };
+		delete next[field];
+		createErrors = next;
+	}
 
 	function openCreate() {
 		createForm = emptyCreate();
@@ -207,7 +215,7 @@
 		<Button class="gap-2" onclick={() => (showCreate ? closeCreate() : openCreate())} data-testid="expenses-create">
 			{#if showCreate}<X class="h-4 w-4" /> Cancel{:else}<Plus class="h-4 w-4" /> Add expense{/if}
 		</Button>
-		<Button variant="outline" class="gap-2" onclick={onScan} data-testid="expenses-scan">
+		<Button variant="outline" class="gap-2" onclick={() => onScan({ type: 'Expense', returnTo: `/units/${unitId}?tab=expenses` })} data-testid="expenses-scan">
 			<ScanLine class="h-4 w-4" /> Scan receipt
 		</Button>
 	</div>
@@ -219,17 +227,17 @@
 			<div class="grid gap-3 sm:grid-cols-2">
 				<div class="sm:col-span-2">
 					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-desc">Description</label>
-					<Input id="exp-desc" data-testid="expenses-description-input" bind:value={createForm.description} placeholder="e.g. Dishwasher repair" />
+					<Input id="exp-desc" data-testid="expenses-description-input" bind:value={createForm.description} oninput={() => clearCreateError('description')} placeholder="e.g. Dishwasher repair" />
 					{#if createErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expenses-description-error">{createErrors.description}</p>{/if}
 				</div>
 				<div>
 					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-amount">Amount</label>
-					<Input id="exp-amount" data-testid="expenses-amount-input" type="number" step="0.01" bind:value={createForm.amount} placeholder="0.00" />
+					<Input id="exp-amount" data-testid="expenses-amount-input" type="number" step="0.01" bind:value={createForm.amount} oninput={() => clearCreateError('amount')} placeholder="0.00" />
 					{#if createErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expenses-amount-error">{createErrors.amount}</p>{/if}
 				</div>
 				<div>
 					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-date">Incurred</label>
-					<Input id="exp-date" data-testid="expenses-date-input" type="date" bind:value={createForm.incurredAt} />
+					<Input id="exp-date" data-testid="expenses-date-input" type="date" bind:value={createForm.incurredAt} oninput={() => clearCreateError('incurredAt')} />
 					{#if createErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expenses-date-error">{createErrors.incurredAt}</p>{/if}
 				</div>
 				<div>

@@ -10,6 +10,7 @@
 	import { workOrderDetailSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -368,7 +369,7 @@
 							data-testid="work-order-set-{nextStatus.toLowerCase()}"
 							onclick={() => openStatusChange(nextStatus)}
 						>
-							{nextStatus === 'InProgress' ? 'In Progress' : nextStatus}
+							{formatStatusLabel(nextStatus)}
 						</Button>
 					{/each}
 					<!-- Text a vendor the job (they reply DONE to close it) -->
@@ -533,13 +534,13 @@
 	<Dialog.Content data-testid="work-order-status-note-dialog">
 		<Dialog.Header>
 			<Dialog.Title>
-				{pendingStatus === 'InProgress' ? 'Mark In Progress' : `Mark ${pendingStatus ?? ''}`}
+				{pendingStatus ? `Mark ${formatStatusLabel(pendingStatus)}` : 'Mark status'}
 			</Dialog.Title>
 		</Dialog.Header>
 		{#if wo && pendingStatus}
 			<p class="text-sm text-muted-foreground">
 				Change status from <span class="font-medium text-foreground">{wo.status}</span> to
-				<span class="font-medium text-foreground">{pendingStatus === 'InProgress' ? 'In Progress' : pendingStatus}</span>.
+				<span class="font-medium text-foreground">{formatStatusLabel(pendingStatus)}</span>.
 			</p>
 		{/if}
 		<div class="space-y-1.5">
