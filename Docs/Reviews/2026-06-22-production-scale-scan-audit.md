@@ -236,6 +236,54 @@ Finite risk edge cases:
 - Provider not configured.
 - Notification preferences invalid phone/email.
 
+## Browser Evidence So Far
+
+Synthetic live portfolio `TSK397 Landlord Two's Portfolio` was created from no domain data and populated through scan workflows. Current local database counts after browser confirmation:
+
+- 8 properties, 8 units, 7 tenants, 8 active leases from lease scans.
+- 2 expenses: PDF receipt draft #46 and camera JPEG receipt draft #47.
+- 2 payments: PDF rent-check draft #48 and camera JPEG rent-check draft #49, both confirmed after manually selecting lease `QA-2026-001-1A`.
+- 2 applications: PDF application draft #50 and camera JPEG application draft #51.
+- 2 work orders: PDF maintenance draft #52 and camera JPEG maintenance draft #53.
+- Remaining review queue includes duplicate/edge lease drafts and one extra expense draft; duplicate lease confirms now return actionable overlap messages instead of creating records.
+
+Representative browser states exercised:
+
+- `/scan/batch` upload and `/scan/batch/1` status review for 40 lease PDFs.
+- `/scan/[draftId]` retry, failure reason, document preview proxy, field review, confirm, reject controls, and confirmed success cards.
+- `/scan/new-rental` camera-photo path through property, unit, tenant, lease, review, duplicate conflict toast.
+- `/scan` target selector for receipt, payment, application, work order, file upload, tabs, table pagination, review links, and recent batch import card.
+- `/applications` populated list after scan-created applicants.
+
+## Inventory Gaps From Route Sweep
+
+The current inventory is intentionally not marked complete. Read-only route/control audit found these missing or under-specified surfaces:
+
+- Compatibility redirect routes: `/activity`, `/analytics`, `/owners/vendors`, `/owners/vendors/[id]`, `/maintenance/work-orders/[id]`.
+- Public application flow details: `/apply/[token]` scan-to-autofill, property/unit preferences, consent, not-found/error/retry/success states.
+- Public signing details: `/sign/[token]` document open, consent, typed versus drawn signature, clear, decline-with-reason modal, expired/invalid/signed states.
+- Settings subroutes: `/settings/security` password change/reveal/mismatch/success/error; `/settings/accounting` provider connect/reconnect/disconnect, pull/push toggles, backfill range, mapping confirmation, review queue.
+- Accounting/reporting routes: `/accounting/past-due`, `/accounting/year-end`, `/accounting/expenses/[id]`, `/accounting/payments/[id]`, `/owners-report`, `/reports/[report]` filters, generate/update, CSV export, print, redirect states, custom report request.
+- Maintenance details: `/maintenance/[id]` status-note modal, vendor dispatch/text dialog, contact buttons, vendor rating, documents/history; `/maintenance/recurring`; `/maintenance/inspections/[id]` checklist, photos, complete-confirm, report download.
+- Detail workflows: `/applications/[id]` approve/decline/withdraw/screening/adverse-action; `/leases/[id]` tabs, set active, notice, generated document, e-sign send/status/download, opening balance; `/deposits` and `/deposits/[id]` holdings, deductions, return, move-out photos, statement PDF.
+- Portal role coverage: portal layout allows authenticated helpers/staff as well as tenants; inventory needs compose/reply modal, maintenance photo upload/detail modal, lease Q&A, payment checkout return states, autopay enroll/cancel.
+- Admin/superadmin states: one-time password modal, filtered CSV export, expandable audit diffs, engine refresh/provider/model/heartbeat/contested-instance/last-error modal.
+- File proxy routes: `/scan-file/[id]`, `/lease-file/[id]`, `/payment-file/[id]`, `/expense-file/[id]`, `/workorder-file/[id]`.
+- DB-side acceptance must name concrete route targets: `/properties`, `/tenants`, `/applications`, `/leases`, `/maintenance`, `/appointments`, `/portal`, `/accounting/past-due`, `/accounting/year-end`, and the report/accounting grids.
+
+## DB-Side Rule Findings From Sweep
+
+Read-only data-access audit found broad violations of the hard SQL-side rule. These block a clean pass until fixed or explicitly split into a follow-up implementation lane:
+
+- `ReportsService.GetGeneralLedgerAsync`: payments/expenses are materialized, then date filtering, concat, ordering, running balance, and totals happen in memory.
+- `ReportsService.GetPropertyPnlAsync`: paid payments and expenses are materialized, then date/property filtering, grouping, and sums happen in memory.
+- `ReportsService.GetRentLedgerAsync`: leases, charges, and receipts are materialized, then grouped, ordered, balanced, and totaled in memory.
+- `BankingService.MapTransactionsWithSuggestionsAsync` and review queue paths: all payments/expenses or unmatched bank rows are loaded, then candidates are scored, filtered, and sorted in memory.
+- `AccountingService.GetReportsAsync` and vendor report paths: payments, expenses, and bank rows are loaded, then ledger rows, unmatched rows, sorting, and vendor filtering happen in memory.
+- `AccountingService.GetTransactionsAsync`: main grid is DB-side, but reconciliation suggestions load unmatched bank transactions and score matches per page row in memory.
+- `ReportsService.GetCashFlowAsync`, `GetDelinquencyAsync`, and `GetWorkOrdersAsync`: some SQL aggregation exists, but row suppression, sorting, totals, or summary counts/costs are computed from materialized rows.
+- `ScheduleEService` and `OwnerStatementService`: lower-priority literal-rule issues remain where pre-aggregated results are reshaped/grouped/sorted/summed in memory.
+
 ## Bug Log
 
 | ID | Severity | Area | Finding | Evidence | Status |
@@ -253,6 +301,9 @@ Finite risk edge cases:
 | TSK397-B011 | P1 | Scan domain errors | When a scan-confirm hit safe domain validation, such as an overlapping active lease for the same unit, the scan API returned a generic `Lease creation failed` message. Users could not tell whether to reject, end the old lease, or edit dates. | Browser/API red: draft #38 threw `DomainValidationException` for overlapping `QA-2026-006-2B` but showed generic failure. Red/green: `ConfirmAndCreateAsync_LeaseDomainValidation_ReturnsSpecificUserMessage` failed, then passed; full `ScanServiceTests` passed 15/15. Browser retest: confirm returned HTTP 400 with the overlap message and the toast displayed the same actionable text. | Fixed |
 | TSK397-B012 | P1 | Camera lease wizard | `/scan/new-rental` used the shared extraction engine for camera JPEGs and linked an existing property, but the Unit step still defaulted to `Create new from the lease` even when the selected property already had an exact matching unit. A user could create duplicate units from duplicate photos. | Browser red: camera draft #41 extracted Cedar Point Flats / Unit 1A, the dropdown contained `Unit 1A (Occupied)`, but the selected value was `Create new from the lease`. Green: `findNewRentalExistingUnitId` regression added; draft #44 reached review with `Property: Cedar Point Flats (existing)` and `Unit: Unit 1A (existing)`. | Fixed |
 | TSK397-B013 | P1 | Camera lease wizard | A camera-derived lease with no late fee could not advance from the Lease step because `lateFeeAmount` is required by the shared lease schema, but the field stayed blank and the shared term component did not render a late-fee error. | Browser red: draft #43 stayed on Step 4 after `Next` with no visible validation message; late fee was blank. Green: `seedNewRentalLateFeeAmount` defaults missing values to `0`, `LeaseTermFields` renders `lateFeeAmount` errors, focused web unit tests passed 48/48, `web check` passed, and draft #44 advanced to review. | Fixed |
+| TSK397-B014 | P2 | Application scan dedupe | Re-scanning the same completed application creates another Submitted application with the same applicant email. The lease flow now blocks overlapping duplicates, but application intake has no comparable duplicate review or warning. | Browser: PDF draft #50 created application #1; camera draft #51 from the same synthetic application created application #2. `/applications` showed two `Gray Johnson` rows with `qa.applicant.001@example.local`, both `Submitted`. | Open |
+| TSK397-B015 | P0 | DB-side data rule | Reports/accounting/banking endpoints still materialize rows and then filter/group/sort/aggregate/score in memory. This violates the project hard rule and blocks a clean production-scale pass. | Read-only data sweep found definite violations in `ReportsService`, `AccountingService`, and `BankingService`, including general ledger, property P&L, rent ledger, banking suggestions, accounting reports, and reconciliation suggestions. | Open - blocking |
+| TSK397-B016 | P1 | Inventory completeness | Initial inventory was too broad for a full user-facing audit and missed route-specific controls, modals, proxy routes, and compatibility redirects. | Read-only route/control sweep found missing coverage for public apply/sign flows, settings subroutes, accounting/report detail routes, maintenance/detail workflows, portal helper role states, admin modals, and file proxy routes. | Open |
 
 ## Regression Expectations
 
