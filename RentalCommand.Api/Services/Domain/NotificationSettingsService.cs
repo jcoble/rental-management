@@ -192,6 +192,47 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         if (row is not null)
             return row;
 
+        var now = DateTime.UtcNow;
+
+        if (_db.Database.IsNpgsql())
+        {
+            await _db.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                INSERT INTO "NotificationSettings" (
+                    "PortfolioId",
+                    "EnableRentCharges",
+                    "EnableLateFees",
+                    "EnableLeaseExpiryReminders",
+                    "NotifyTenants",
+                    "RentChargeLeadDays",
+                    "LateFeeGraceDays",
+                    "LeaseExpiryReminderDays",
+                    "EnableDailyBriefingMessages",
+                    "DailyBriefingSendHourLocal",
+                    "DailyBriefingIncludeEmpty",
+                    "CreatedAt",
+                    "UpdatedAt")
+                VALUES (
+                    {portfolioId},
+                    {false},
+                    {false},
+                    {true},
+                    {false},
+                    {5},
+                    {5},
+                    {60},
+                    {false},
+                    {8},
+                    {false},
+                    {now},
+                    {now})
+                ON CONFLICT ("PortfolioId") DO NOTHING;
+                """,
+                ct);
+
+            return await _db.NotificationSettings.SingleAsync(s => s.PortfolioId == portfolioId, ct);
+        }
+
         row = new NotificationSettings
         {
             PortfolioId = portfolioId,
@@ -200,8 +241,8 @@ public sealed class NotificationSettingsService : INotificationSettingsService
             LateFeeGraceDays = 5,
             LeaseExpiryReminderDays = 60,
             DailyBriefingSendHourLocal = 8,
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow,
+            CreatedAt = now,
+            UpdatedAt = now,
         };
         _db.NotificationSettings.Add(row);
         try

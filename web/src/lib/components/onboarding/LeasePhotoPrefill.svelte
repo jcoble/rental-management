@@ -27,7 +27,9 @@
 		rentDueDay?: string;
 	};
 
-	let { onapply }: { onapply: (values: PrefillValues) => void } = $props();
+	type PrefillApplyValues = PrefillValues & { draftId: number };
+
+	let { onapply }: { onapply: (values: PrefillApplyValues) => void } = $props();
 
 	// Field-name → friendly label + which form field it feeds. property_id/unit_id/tenant_name are
 	// captured by the schema but the wizard's lease step uses its own pickers, so we surface only the
@@ -93,11 +95,12 @@
 	}
 
 	function applyConfirmed() {
+		if (draftId == null) return;
 		const values: PrefillValues = {};
 		for (const row of review) {
 			if (row.include) values[row.key] = row.value;
 		}
-		onapply(values);
+		onapply({ ...values, draftId });
 		reset();
 	}
 
