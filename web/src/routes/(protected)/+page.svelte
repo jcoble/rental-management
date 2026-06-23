@@ -13,6 +13,7 @@
 	import AIBadge from '$lib/components/shared/AIBadge.svelte';
 	import GettingStartedCard from '$lib/components/onboarding/GettingStartedCard.svelte';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { labelForType } from './appointments/calendar-utils';
 
 	const dashboardQuery = createQuery(() => ({
@@ -540,7 +541,7 @@
 										<p class="truncate text-sm font-medium">{order.title}</p>
 										<span class="shrink-0 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">{order.priority}</span>
 									</div>
-									<p class="mt-1 truncate text-xs text-muted-foreground">{order.status} · {new Date(order.requestedAt).toLocaleDateString()}</p>
+									<p class="mt-1 truncate text-xs text-muted-foreground">{formatStatusLabel(order.status)} · {new Date(order.requestedAt).toLocaleDateString()}</p>
 								</a>
 							{:else}
 								<p class="text-sm text-muted-foreground">No open work orders.</p>
