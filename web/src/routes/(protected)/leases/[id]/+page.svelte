@@ -239,11 +239,12 @@
 
 	const statusMutation = createMutation(() => ({
 		mutationFn: (payload: Record<string, unknown>) => leases.update(leaseId, payload),
-		onSuccess: () => {
+		onSuccess: (updatedLease) => {
+			queryClient.setQueryData(['lease', leaseId], updatedLease);
 			showSuccess('Lease status updated.');
 			showSetActiveConfirm = false;
 			showGiveNotice = false;
-			invalidateLease();
+			invalidateSignatureStatus();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));

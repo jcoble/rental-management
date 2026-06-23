@@ -33,7 +33,7 @@
 	import * as Popover from '$lib/components/ui/popover';
 	import { buttonVariants } from '$lib/components/ui/button';
 	import { cn } from '$lib/utils';
-	import { parseLooseDate, formatIsoToUsInput } from '$lib/utils/parse-date';
+	import { parseCompleteLooseDate, parseLooseDate, formatIsoToUsInput } from '$lib/utils/parse-date';
 	import CalendarIcon from '@lucide/svelte/icons/calendar';
 	import { CalendarDate, parseDate, type DateValue } from '@internationalized/date';
 
@@ -135,6 +135,16 @@
 		text = (e.target as HTMLInputElement).value;
 		// Clear the error as soon as the user resumes typing.
 		if (invalid) invalid = false;
+		if (text.trim() === '') {
+			commit('');
+			return;
+		}
+		const iso = parseCompleteLooseDate(text);
+		if (iso && isInRange(iso)) {
+			invalid = false;
+			text = formatIsoToUsInput(iso);
+			commit(iso);
+		}
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
