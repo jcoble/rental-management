@@ -14,6 +14,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
+	import { resolveApplyHomeSelection } from '$lib/applications/application-link';
 
 	const token = $derived(page.params.token ?? '');
 
@@ -56,6 +57,7 @@
 	let desiredMoveInDate = $state('');
 	let notes = $state('');
 	let consentGiven = $state(false);
+	let homeSelectionApplied = false;
 
 	// Track which fields the scanner auto-filled so we can flag them.
 	let autoFilled = $state<Record<string, boolean>>({});
@@ -67,6 +69,15 @@
 	// Units available for the chosen property.
 	const selectedProperty = $derived(properties.find((p) => p.id === propertyId) ?? null);
 	const availableUnits = $derived(selectedProperty?.units ?? []);
+
+	$effect(() => {
+		if (homeSelectionApplied || properties.length === 0) return;
+		const selection = resolveApplyHomeSelection(page.url.searchParams, properties, NO_PREFERENCE);
+		if (!selection) return;
+		propertyValue = selection.propertyValue;
+		unitValue = selection.unitValue;
+		homeSelectionApplied = true;
+	});
 
 	// Secondary line (address) shown beneath the property name inside the dropdown options.
 	function propertyAddressLine(p: PublicApplicationProperty): string {
