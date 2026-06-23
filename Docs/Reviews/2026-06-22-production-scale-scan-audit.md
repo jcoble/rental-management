@@ -295,6 +295,47 @@ Bug fixed during this pass:
 - Browser proof after fix: `/scan/5?type=WorkOrder` showed Title, Priority, Description, Category, Estimated cost, and Notes; raw ID fields were absent. Screenshot: `.playwright-cli/page-2026-06-23T04-48-24-806Z.png`.
 - Verification commands: `pnpm --dir web exec node --test --experimental-strip-types src/lib/scans/scan-review-fields.test.ts`; `pnpm --dir web check`; `pnpm --dir web test:unit`.
 
+## Pass 17 Continuation Evidence
+
+Date: 2026-06-23
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-17`
+Local stack: `https://localhost:5962`, API `https://localhost:5961`, Postgres `localhost:5566/rentalcommand_tsk397_pass17_clean`
+
+Fresh local landlord account:
+
+- Name: Noah Carter
+- Email: `tsk397.pass17.202606230455@example.local`
+- Setup choice: live portfolio from zero domain data, not sandbox/demo
+
+Scan-created data confirmed in this checkpoint:
+
+- Lease PDF: `output/qa/production-scale-scans/01-leases/lease-001-1a.pdf`
+- Expense camera image: `output/qa/production-scale-scans/02-expenses-camera/expense-001.jpg`
+- Payment camera image: `output/qa/production-scale-scans/03-payments-camera/payment-001.jpg`
+
+Verified local database counts after browser confirmation:
+
+- 1 property, 1 unit, 1 tenant, 1 lease, 1 expense, 1 payment, 3 scan drafts.
+- Applications and work orders were not yet scanned in pass 17 at this checkpoint.
+
+Browser states exercised:
+
+- `/register`, local email verification, `/login`, `/choose-setup`, and the live empty portfolio setup path.
+- `/scan/batch` lease PDF upload and `/scan/1` review/confirm from no domain data to `/leases/1`.
+- `/scan` receipt camera upload and `/scan/2?type=Expense` review/confirm to `/accounting/expenses/1`, with scanned image preview.
+- `/scan` rent-check camera upload and `/scan/3?type=Payment` review/confirm to `/accounting/payments/1`, including manual lease selection.
+- Confirmed scan read-only views for Expense and Payment after fresh navigation.
+
+Bug fixed during this checkpoint:
+
+- Payment scan review reused the generic expense field grouping, showing empty Vendor, receipt, tax, category, and other expense-only controls for a rent check.
+- Expense scan review put payment-only bank, payer, and check-number fields in `Other`.
+- Confirmed scan drafts claimed to be read-only but still exposed editable fields, selectors, line-item add/remove controls, and payment-status toggles; fresh confirmed views could also show stale/unset linkage selectors.
+- Fix: target-specific scan review grouping now has separate Payment, Expense, and WorkOrder groups; terminal scan states hide transient linkage selectors and disable all remaining review controls. Confirmed read-only copy now uses the correct article (`an Expense`).
+- Regression coverage: `web/src/lib/scans/scan-review-fields.test.ts` and `web/src/lib/scans/scan-review-state.test.ts`.
+- Browser proof after fix: `/scan/3?type=Payment` showed only `Payment` and `Details` groups with disabled total/method/payer/bank/check/date fields; `/scan/2?type=Expense` showed no bank/payer/check fields, no property selector, no paid toggle, and disabled fields/line-item controls. Artifacts: `.playwright-cli/page-2026-06-23T05-16-14-488Z.yml`, `.playwright-cli/page-2026-06-23T05-16-15-131Z.png`, `.playwright-cli/page-2026-06-23T05-15-59-002Z.yml`, `.playwright-cli/page-2026-06-23T05-16-07-873Z.png`.
+- Verification commands: `pnpm --dir web exec node --test --experimental-strip-types src/lib/scans/scan-review-fields.test.ts`; `pnpm --dir web exec node --test --experimental-strip-types src/lib/scans/scan-review-state.test.ts`; `pnpm --dir web check`; `pnpm --dir web test:unit`.
+
 ## Classified Inventory Matrix
 
 The route/control inventory now has a finite closure matrix instead of a raw tag-count table. `scripts/qa/inventory-web-surfaces.mjs` includes layout guards, error surfaces, redirects, server routes, file proxies, custom component controls, `data-testid` coverage, route scopes, route kinds, roles, acceptance criteria, and finite edge cases.
