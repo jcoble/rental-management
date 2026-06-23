@@ -3,7 +3,11 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { leases } from '$lib/api/endpoints/leases';
-	import { scannedLeaseDocumentLinkLabel, tabForLeaseEdit } from '$lib/leases/lease-detail-state';
+	import {
+		hasNoticeMoveOutDate,
+		scannedLeaseDocumentLinkLabel,
+		tabForLeaseEdit,
+	} from '$lib/leases/lease-detail-state';
 	import { canSendLeaseForSignature, signableStateMessage } from '$lib/leases/lease-esign';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
@@ -241,6 +245,7 @@
 	let showSetActiveConfirm = $state(false);
 	let showGiveNotice = $state(false);
 	let moveOutDate = $state('');
+	const canConfirmGiveNotice = $derived(hasNoticeMoveOutDate(moveOutDate));
 
 	function openGiveNotice() {
 		// Pre-fill with the lease's existing move-out date if one is already recorded.
@@ -1084,14 +1089,15 @@
 			</Dialog.Description>
 		</Dialog.Header>
 		<div class="space-y-2">
-			<label for="lease-move-out-date" class="block text-xs text-muted-foreground">Move-out date (optional)</label>
+			<label for="lease-move-out-date" class="block text-xs text-muted-foreground">Move-out date</label>
 			<DatePicker id="lease-move-out-date" bind:value={moveOutDate} testid="lease-move-out-date" />
+			<p class="text-xs text-muted-foreground">Required to start move-out steps and show this lease on the move-out workflow.</p>
 		</div>
 		<Dialog.Footer>
 			<Button variant="outline" onclick={() => (showGiveNotice = false)} disabled={statusMutation.isPending} data-testid="lease-give-notice-cancel">
 				Cancel
 			</Button>
-			<Button onclick={confirmGiveNotice} disabled={statusMutation.isPending} data-testid="lease-give-notice-confirm">
+			<Button onclick={confirmGiveNotice} disabled={statusMutation.isPending || !canConfirmGiveNotice} data-testid="lease-give-notice-confirm">
 				{statusMutation.isPending ? 'Working…' : 'Give notice'}
 			</Button>
 		</Dialog.Footer>
