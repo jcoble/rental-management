@@ -1918,3 +1918,48 @@ Verification:
 - Browser regression: `/accounting/payments/4` showed Method Check, Reference `QA-REF-004`, and Notes `Quick post captured method and reference` from the unit quick-post form.
 
 Status: Pass after fix for unit rent quick-post payment tracking. Continue next with remaining unit tabs: Lease, Maintenance, Documents, Timeline, Unit Edit, and Scan/Upload; then fold explorer inventory gaps into implementation slices.
+
+## Pass 33 Unit Command Center Remaining Workflows
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-33`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Acceptance criteria:
+- Unit Lease tab should show the current lease, expose a real lease-detail handoff, and preserve unit/property context when scanning a replacement or supporting lease document.
+- Unit Maintenance tab should support empty-submit validation, cancellable creation, happy-path work-order creation, work-order detail navigation, and work-order receipt scan context.
+- Unit Documents tab should show unit-related documents across lease/work-order/expense sources, open stored files through the app proxy, and preserve unit context when scanning a new document.
+- Unit Timeline tab and Recent activity sidebar should link record-creation activities to their target records and expand update activities in place with before/after values.
+- Unit Edit should seed existing values, block invalid blank unit numbers, and allow cancel without mutation.
+- The top-level Unit Scan / Upload action should enter scan capture with property/unit context and a return target to the current tab.
+
+Evidence:
+- Landed the prior checkpoint first: PR `#254` merged to `main` at `67320d1`, remote branch `tsk-397-full-ui-pass-32` deleted, and the worktree moved to `tsk-397-full-ui-pass-33` from updated `origin/main`.
+- `/units/1?tab=lease` rendered lease `QA-2026-001-1A`, status Active, tenant Avery Ellis, rent `$1,125.00`, deposit `$1,125.00`, and term Jan 1 2026 to Jan 1 2027.
+- Lease-tab `Scan / upload lease` navigated to `/scan?type=Lease&propertyId=1&unitId=1&returnTo=%2Funits%2F1%3Ftab%3Dlease`, with Lease Agreement selected and upload copy `Drop a lease agreement here`.
+- Overview `View lease` switched to the Lease tab; Lease-tab `Open lease` navigated to `/leases/1`, which rendered the lease detail overview and linked back to `Unit 1A`.
+- `/units/1?tab=maintenance` empty-submit on `New work order` showed inline `Title is required` and `Description is required` without leaving the unit page.
+- Maintenance happy path created `QA hallway light flickers` with description `Hallway light outside Unit 1A flickers during evening walkthrough; please inspect fixture and switch.` Toast showed `Work order created.`, the header changed from `1 open repair` to `2 open repairs`, the new work order appeared first with New/Normal status, and Recent activity linked to `/maintenance/2`.
+- New work-order receipt scan navigated to `/scan?type=Expense&propertyId=1&unitId=1&workOrderId=2&returnTo=%2Funits%2F1%3Ftab%3Dmaintenance`, proving the receipt would attach back to the job.
+- Maintenance `Open work order` navigated to `/maintenance/2`; the detail page rendered title, New/Normal status, property Cedar Point Flats, `Unit 1A` back-link, status transition buttons, vendor dispatch, edit/delete, empty documents, status history, and record history.
+- `/units/1?tab=documents` grouped stored documents by Expense, Lease, and WorkOrder and exposed app-proxy view links such as `/document-file/1`.
+- Documents `Scan / upload` navigated to `/scan?type=Expense&propertyId=1&unitId=1&returnTo=%2Funits%2F1%3Ftab%3Ddocuments`, preserving the unit context.
+- Opening `/document-file/1` in a new tab rendered the generated scanned image as `1 (1800x2400)`. The only console issue was a standalone image-document `/favicon.ico` 404, not an app route failure.
+- `/units/1?tab=timeline` rendered full unit activity with the newly created work order first; linked creation rows navigated to their records, and expanding `Updated payment` showed before/after Method, Status, and Paid date values.
+- Unit edit modal seeded Unit number `1A`, Beds `2`, Baths `1`, and Rent `1125`. Clearing Unit number and saving showed `Unit number is required`; Cancel closed the modal and preserved `Unit 1A`.
+- Top-level Unit `Scan / Upload` navigated to `/scan?type=Expense&propertyId=1&unitId=1&returnTo=%2Funits%2F1%3Ftab%3Dtimeline`, preserving the current tab in `returnTo`.
+
+Fixed in this pass:
+- No production defect required a code patch in this slice. Existing known no-op lifecycle tasks remain tracked separately: `TSK-401` for List this unit and `TSK-404` for Send renewal.
+
+Verification:
+- Browser proof through Playwright CLI on the live local stack covered the Lease, Maintenance, Documents, Timeline, Edit, top-level Scan / Upload, stored-image document, and lease-detail handoff paths above.
+- Current app-page console check after the unit-to-lease detail handoff returned zero warning-or-error messages.
+- No code changed in this pass; no unit test rerun was required beyond the prior landed Pass 32 verification.
+
+Status: Pass for the remaining occupied-unit command-center workflows exercised here. Continue next with property detail/list workflows, tenant detail/list workflows, lease list/detail gaps, and the tracked lifecycle no-op tasks.
