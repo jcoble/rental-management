@@ -38,6 +38,7 @@
 	import {
 		WIZARD_STEPS,
 		CORE_WIZARD_STEPS,
+		ONBOARDING_SETUP_SHORTCUTS,
 		wizardStep,
 		type WizardStepKey,
 		type WizardStepMeta,
@@ -57,6 +58,7 @@
 		Trash2,
 		PartyPopper,
 		Sparkles,
+		ScanLine,
 		FileSpreadsheet,
 		FileText,
 		CheckCircle2,
@@ -877,18 +879,33 @@
 				</p>
 			</div>
 
-			<!-- Bulk import shortcut -->
+			<!-- Scan/import shortcuts -->
 			<div
-				class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2.5"
-				data-testid="onboarding-spreadsheet-import"
+				class="mb-4 grid gap-3 rounded-md border border-border bg-muted/40 p-3 sm:grid-cols-2"
+				data-testid="onboarding-setup-shortcuts"
 			>
-				<span class="text-sm text-foreground">
-					Already have your tenants, properties, or units in a spreadsheet?
-				</span>
-				<Button variant="outline" size="sm" class="gap-1.5" href="/import" data-testid="onboarding-import-spreadsheet">
-					<FileSpreadsheet class="h-4 w-4" />
-					Import from a spreadsheet
-				</Button>
+				{#each ONBOARDING_SETUP_SHORTCUTS as shortcut (shortcut.key)}
+					<div class="flex items-center justify-between gap-3">
+						<div class="min-w-0">
+							<p class="text-sm font-semibold text-foreground">{shortcut.label}</p>
+							<p class="text-xs leading-relaxed text-muted-foreground">{shortcut.description}</p>
+						</div>
+						<Button
+							variant={shortcut.primary ? 'default' : 'outline'}
+							size="sm"
+							class="shrink-0 gap-1.5"
+							href={shortcut.href}
+							data-testid={`onboarding-${shortcut.key}`}
+						>
+							{#if shortcut.key === 'scan-new-rental'}
+								<ScanLine class="h-4 w-4" />
+							{:else}
+								<FileSpreadsheet class="h-4 w-4" />
+							{/if}
+							{shortcut.label}
+						</Button>
+					</div>
+				{/each}
 			</div>
 
 			<!-- Step indicator (core steps + optional add-ons) -->
