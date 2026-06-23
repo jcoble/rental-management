@@ -9,6 +9,7 @@
 	import { paymentSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { formatPaymentMoney } from '$lib/accounting/payment-detail-display';
 	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
@@ -46,10 +47,7 @@
 
 	const payment = $derived(paymentQuery.data);
 
-	// Hero amount, formatted as currency (the page otherwise shows the raw value).
-	const heroAmount = $derived(
-		payment ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(payment.amount) || 0) : ''
-	);
+	const heroAmount = $derived(payment ? formatPaymentMoney(payment.amount) : '');
 	// Context tone keyed by collection status: green = money in, warning = owed,
 	// destructive = failed, primary otherwise.
 	const heroTone = $derived.by<HeroTone>(() => {
@@ -176,7 +174,7 @@
 		<div>
 			<Button variant="ghost" href="/accounting" class="mb-2 -ml-3"><ArrowLeft class="h-4 w-4" />Money</Button>
 			<h1 class="text-2xl font-bold">{payment?.tenantName || payment?.leaseNumber || 'Payment'}</h1>
-			<p class="text-sm text-muted-foreground">{payment ? `${paymentTypeLabel(payment.paymentType)} · $${payment.amount} · ${payment.status}` : ''}</p>
+			<p class="text-sm text-muted-foreground">{payment ? `${paymentTypeLabel(payment.paymentType)} · ${formatPaymentMoney(payment.amount)} · ${payment.status}` : ''}</p>
 		</div>
 		{#if payment}
 			<div class="flex gap-2">
@@ -224,7 +222,7 @@
 		<div class="grid gap-6 lg:grid-cols-2">
 			<DetailCard title="Charge" icon={Receipt} accent="primary" testid="payment-card-charge" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Lease" bind:value={form.leaseId} display={leaseDisplay} {editing} type="select" options={leaseOptions} error={formErrors.leaseId} testid="payment-detail-lease" class="sm:col-span-2" />
-				<InlineField label="Amount" bind:value={form.amount} display={`$${payment.amount}`} {editing} error={formErrors.amount} testid="payment-detail-amount" />
+				<InlineField label="Amount" bind:value={form.amount} display={formatPaymentMoney(payment.amount)} {editing} error={formErrors.amount} testid="payment-detail-amount" />
 				<InlineField label="Payment type" bind:value={form.paymentType} display={payment.paymentType} {editing} type="select" options={typeOptions} testid="payment-detail-type" />
 				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: formatDateOnly(payment.dueDate), error: formErrors.dueDate, testid: 'payment-detail-due-date' })}
 			</DetailCard>
@@ -235,7 +233,7 @@
 				     only when the chosen status is Partial; read-only show it only when the payment IS
 				     Partial — every other status has no split to display. -->
 				{#if editing ? form.status === 'Partial' : payment.status === 'Partial'}
-					<InlineField label="Amount paid" bind:value={form.amountPaid} display={payment.amountPaid != null ? `$${payment.amountPaid}` : '-'} {editing} error={formErrors.amountPaid} testid="payment-detail-amount-paid" />
+					<InlineField label="Amount paid" bind:value={form.amountPaid} display={payment.amountPaid != null ? formatPaymentMoney(payment.amountPaid) : '-'} {editing} error={formErrors.amountPaid} testid="payment-detail-amount-paid" />
 				{/if}
 				{@render dateField({ label: 'Paid date', value: form.paidDate, setValue: (v) => (form.paidDate = v), display: payment.paidDate ? formatDateOnly(payment.paidDate) : '', testid: 'payment-detail-paid-date' })}
 				<InlineField label="Method" bind:value={form.method} display={payment.method} {editing} testid="payment-detail-method" />
