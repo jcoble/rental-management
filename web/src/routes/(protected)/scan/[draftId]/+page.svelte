@@ -13,6 +13,7 @@
 		parseScanContext,
 		resolvePaymentLeaseIdFromContext
 	} from '$lib/scan/scan-context';
+	import { scanProcessingCopy } from '$lib/scan/scan-copy';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
@@ -111,6 +112,7 @@
 	}));
 
 	const data = $derived(draftQuery.data);
+	const processingCopy = $derived(scanProcessingCopy(data?.targetEntityType ?? scanContext.type));
 
 	// Whether this draft targets a Payment (rent check) rather than an Expense
 	const isPayment = $derived(data?.targetEntityType === 'Payment');
@@ -959,9 +961,9 @@
 			>
 				<div class="h-9 w-9 shrink-0 animate-spin rounded-full border-[3px] border-accent border-t-transparent"></div>
 				<div class="min-w-0">
-					<p class="text-base font-semibold text-foreground">Reading your document…</p>
+					<p class="text-base font-semibold text-foreground">{processingCopy.title}</p>
 					<p class="text-sm text-muted-foreground">
-						The computer is pulling out the vendor, amounts, and dates for you. This usually takes just a few seconds.
+						{processingCopy.body}
 					</p>
 					<!-- Indeterminate progress bar -->
 					<div class="mt-2 h-1.5 w-full max-w-sm overflow-hidden rounded-full bg-accent/20">

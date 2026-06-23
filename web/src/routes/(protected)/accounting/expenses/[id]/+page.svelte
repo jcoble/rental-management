@@ -423,7 +423,7 @@
 								class="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-3 text-sm font-medium text-foreground transition hover:border-primary hover:text-primary"
 							>
 								<FileText class="h-5 w-5 shrink-0" />
-								<span>View scanned document (PDF)</span>
+								<span>View scanned document</span>
 							</a>
 						{/if}
 					</div>

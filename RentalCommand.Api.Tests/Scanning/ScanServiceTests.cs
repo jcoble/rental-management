@@ -417,7 +417,7 @@ public class ScanServiceTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
-    // Confirm: a scanned lease PDF becomes a Lease with the extracted terms, the unit
+    // Confirm: a scanned lease document becomes a Lease with the extracted terms, the unit
     // linked, and a chained Tenant created from the extracted name (the "import your
     // PDF leases" migration unlock).
     // -------------------------------------------------------------------------
@@ -451,6 +451,7 @@ public class ScanServiceTests : IDisposable
         req.LateFeeAmount.Should().Be(75.00m);
         req.RentDueDay.Should().Be(1);
         req.Status.Should().Be(LeaseStatus.Active);
+        req.Notes.Should().Be("Imported from scanned lease document.");
 
         // A chained Tenant was created from the extracted name and its id linked on the lease.
         _tenants.LastRequest.Should().NotBeNull();
@@ -460,7 +461,7 @@ public class ScanServiceTests : IDisposable
         createdTenant.Should().NotBeNull();
         req.TenantId.Should().Be(createdTenant!.Id);
 
-        // Draft confirmed + source PDF re-keyed to the lease.
+        // Draft confirmed + source document re-keyed to the lease.
         string? draftStatus;
         using (var cmd = _conn.CreateCommand())
         {
@@ -696,16 +697,19 @@ public class ScanServiceTests : IDisposable
         property.State.Should().Be("OH");
         property.PostalCode.Should().Be("45503");
         property.Name.Should().Be("Riverside Flats");
+        property.Notes.Should().Be("Created from scanned lease document.");
 
         var unit = await _db.Units.SingleAsync();
         unit.PropertyId.Should().Be(property.Id);
         unit.UnitNumber.Should().Be("3C");
         unit.Bedrooms.Should().Be(2m);
         unit.Bathrooms.Should().Be(1.5m);
+        unit.Notes.Should().Be("Created from scanned lease document.");
 
         var tenant = await _db.Tenants.SingleAsync();
         tenant.FirstName.Should().Be("Dana");
         tenant.LastName.Should().Be("Brooks");
+        tenant.Notes.Should().Be("Created from scanned lease document.");
 
         // The Lease that was created links the freshly-created property, unit, and tenant.
         var leaseReq1 = _leases.LastRequest!;
@@ -713,6 +717,7 @@ public class ScanServiceTests : IDisposable
         leaseReq1.UnitId.Should().Be(unit.Id);
         leaseReq1.TenantId.Should().Be(tenant.Id);
         leaseReq1.MonthlyRent.Should().Be(1325.00m);
+        leaseReq1.Notes.Should().Be("Imported from scanned lease document.");
 
         _properties.CreateCount.Should().Be(1);
         _units.CreateCount.Should().Be(1);

@@ -15,6 +15,7 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { appendScanContext, parseScanContext, type ScanDocType } from '$lib/scan/scan-context';
+	import { scanUploadCopy } from '$lib/scan/scan-copy';
 
 	const queryClient = useQueryClient();
 	const PAGE_SIZE = 20;
@@ -59,6 +60,7 @@
 		{ value: 'Application', label: 'Rental Application', hint: 'Becomes an applicant record' }
 	] as const;
 	let docType = $state<ScanDocType>(initialScanContext.type ?? 'Expense');
+	const uploadCopy = $derived(scanUploadCopy(docType));
 	let isRecording = $state(false);
 	let recorder: MediaRecorder | null = null;
 	let voiceChunks: Blob[] = [];
@@ -289,7 +291,7 @@
 				</Card.Content>
 			</Card.Root>
 		{:else}
-			<FileDrop onselected={handleFileSelected} />
+			<FileDrop onselected={handleFileSelected} title={uploadCopy.title} helperText={uploadCopy.helperText} />
 		{/if}
 	</div>
 

@@ -18,6 +18,7 @@
 	import { Link2, Copy, Check } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import { formatApplicationsEmptyMessage } from '$lib/applications/application-display';
 
 	const PAGE_SIZE = 20;
 
@@ -68,6 +69,7 @@
 	const statusFilterLabel = $derived(
 		STATUS_OPTIONS.find((o) => o.value === statusValue)?.label ?? 'All statuses'
 	);
+	const emptyMessage = $derived(formatApplicationsEmptyMessage(search, statusValue, ALL_STATUSES));
 
 	const applicationsQuery = createQuery(() => ({
 		queryKey: ['applications', 'page', statusFilter, debouncedSearch.value, gridSort, gridPage, PAGE_SIZE],
@@ -175,7 +177,7 @@
 		data={list}
 		{columns}
 		loading={applicationsQuery.isLoading || applicationsQuery.isFetching}
-		emptyMessage="No applications yet. Share your application link to get started."
+		{emptyMessage}
 		onRowClick={(a) => goto(`/applications/${a.id}`)}
 		getRowKey={(a) => a.id}
 		getRowTestId={() => 'application-row'}
