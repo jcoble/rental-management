@@ -2,17 +2,22 @@
 	import type { UnitDocumentSummary } from '$lib/types';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { unitDocumentHref } from '$lib/components/unit/document-actions';
+	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { ExternalLink, FileText, ScanLine, Image as ImageIcon } from '@lucide/svelte';
 
 	let {
+		unitId,
 		docs,
 		onScan,
+		onDocumentsChanged,
 	}: {
+		unitId: number;
 		/** The unit's document set (files on the unit + its lease/payment/expense/work-order/inspection children). */
 		docs: UnitDocumentSummary[];
 		onScan: () => void;
+		onDocumentsChanged?: () => void;
 	} = $props();
 
 	// Group by the child entity type the file is attached to (e.g. Lease, WorkOrder), so the user sees
@@ -35,13 +40,15 @@
 			Documents on this unit and its lease, work orders, expenses, payments, and inspections.
 		</p>
 		<Button class="gap-2" onclick={() => onScan()} data-testid="documents-scan">
-			<ScanLine class="h-4 w-4" /> Scan / upload
+			<ScanLine class="h-4 w-4" /> Scan a record
 		</Button>
 	</div>
 
+	<DocumentsPanel entityType="Unit" entityId={unitId} title="Unit files" onChanged={onDocumentsChanged} />
+
 	{#if docs.length === 0}
 		<DetailCard title="No documents yet" icon={FileText} accent="muted" testid="documents-empty">
-			<p class="text-sm text-muted-foreground">Scan or upload a document — the computer extracts the fields for you to confirm.</p>
+			<p class="text-sm text-muted-foreground">No lease, payment, expense, work-order, or inspection files are linked yet.</p>
 		</DetailCard>
 	{:else}
 		{#each grouped as [type, items] (type)}
