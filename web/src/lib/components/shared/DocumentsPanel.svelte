@@ -12,10 +12,12 @@
 		entityType,
 		entityId,
 		title = 'Documents',
+		onChanged,
 	}: {
 		entityType: string;
 		entityId: number;
 		title?: string;
+		onChanged?: () => void;
 	} = $props();
 
 	const queryClient = useQueryClient();
@@ -43,6 +45,7 @@
 			await documents.upload(entityType, entityId, file);
 			showSuccess(`"${file.name}" uploaded.`);
 			queryClient.invalidateQueries({ queryKey: queryKey });
+			onChanged?.();
 		} catch (err) {
 			showError(apiErrorMessage(err, 'Upload failed.'));
 		} finally {
@@ -73,6 +76,7 @@
 		onSuccess: () => {
 			showSuccess('Document deleted.');
 			queryClient.invalidateQueries({ queryKey: queryKey });
+			onChanged?.();
 			pendingDelete = null;
 		},
 		onError: (err) => {

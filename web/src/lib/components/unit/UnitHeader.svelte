@@ -12,7 +12,7 @@
 	}: {
 		dashboard: UnitDashboard;
 		onEdit: () => void;
-		/** Scan / Upload — routes into the scan → draft → confirm flow. Domain work happens inline in tabs. */
+		/** Routes into the receipt scan flow. Domain-specific work happens inline in tabs. */
 		onScan: () => void;
 	} = $props();
 
@@ -56,8 +56,7 @@
 			</p>
 		</div>
 
-		<!-- Primary action: Scan/Upload is visually prominent (core product strength). Domain work (post
-		     payment, add expense, create work order) happens inline in the relevant tab, not here. -->
+		<!-- Primary receipt action; other domain work happens inline in the relevant tab. -->
 		<div class="flex shrink-0 items-center gap-2">
 			<Button variant="outline" onclick={() => onEdit()} class="gap-2" data-testid="unit-detail-edit-button">
 				<Pencil class="h-4 w-4" />
@@ -65,7 +64,7 @@
 			</Button>
 			<Button onclick={() => onScan()} class="gap-2" data-testid="unit-scan-button">
 				<ScanLine class="h-4 w-4" />
-				Scan / Upload
+				Scan receipt
 			</Button>
 		</div>
 	</div>
