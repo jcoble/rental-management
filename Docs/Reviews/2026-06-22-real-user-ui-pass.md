@@ -44,6 +44,7 @@ Fixed and verified:
 - `TSK397-B081`: lease detail tabs now honor and maintain `?tab=` deep links through reload/login redirect, direct tab clicks, and edit-mode redirection back to Overview.
 - `TSK397-B082` and `B083`: typed DatePicker dates now immediately update modal-gated actions, and Give Notice keeps lease/signature lifecycle state coherent so Notice given status, actions, and move-out date render together.
 - `TSK397-B084`: cancelling a Notice given lease back to Active now clears the expected move-out date so the active lease no longer shows stale move-out workflow data.
+- `TSK-401` and `TSK-404`: Unit Command Center `List this unit` now continues into a unit-scoped public application link with property/unit preselection, and `Send renewal` now opens the tenant renewal-offer notice workflow without sending automatically.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -51,7 +52,6 @@ Open, watch, or deferred:
 - `TSK397-B026` / `B040`: scan processing stuck-state family. It did not reproduce in later application-scan proof after scan-review cleanup, but stays on the watch list until more scan types are rerun.
 - `TSK397-B033`: receipt line-item extraction can produce incomplete line items; product policy is still needed on whether incomplete line items are optional hints or must block/warn.
 - `TSK397-B048`: scan front-door voice-note permission denied state has no visible recovery/status.
-- `TSK-401` and `TSK-404`: Unit Command Center `List this unit` and `Send renewal` no-op lifecycle actions are tracked separately in Notion.
 - Plaid banking and connected QuickBooks/accounting provider workflows remain deferred until sandbox credentials are available. The unconnected accounting shell and OAuth-return error state are browser-proven.
 
 ## Pass Log
@@ -2704,3 +2704,48 @@ Verification:
 - Browser regression: after rebuilding and restarting the local API with the same pass-26 database, Playwright CLI opened `/leases/7?tab=overview`, logged in as Harper Stone, clicked `Give Notice`, confirmed the prefilled `07/31/2027` date, then clicked `Set Active` and confirmed. The final snapshot rendered header/status card `Active`, top action `Give Notice`, overview CTA `View ledger`, and the Term card no longer contained a `Move-Out` row or `Jul 31, 2027` value.
 
 Status: Pass after fixing Notice given cancellation cleanup. Continue next with remaining lease lifecycle controls, tracked Unit Command Center lifecycle no-ops, and the broader non-banking/non-QuickBooks inventory.
+
+## Pass 50 Unit Command Center Lifecycle Action Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-401-404-full-ui-pass-50`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Harper Stone, `tsk397.pass39.202606231342@example.local`
+- Portfolio: Harper Stone's Portfolio, id `3`
+
+Acceptance criteria:
+- A landlord can use the Unit Command Center Ready-stage `List this unit` next action to leave the unit page and generate an application link scoped to that exact property/unit.
+- The generated public application URL carries property/unit context, and the public application form preselects the matching home while rejecting invalid or mismatched query parameters.
+- A landlord can use the Renewal-stage `Send renewal` next action to open the tenant notice workflow with a renewal-offer draft, without sending the notice automatically.
+
+Bug `TSK-401`:
+- Repro: Open a Ready-stage unit and click the Unit Command Center `List this unit` next action.
+- Observed: the action linked back to the same unit Overview tab, so the user could not list the unit or produce an application link from the lifecycle rail.
+- Root cause: `UnitDashboardService.NextBestActionHref` treated Ready-stage lifecycle guidance as a local tab hint instead of routing to the existing application-link workflow.
+- Fix: Ready-stage next actions now route to `/applications?action=list-unit&propertyId=...&unitId=...`; the applications page auto-creates a public application link for that context, and the public `/apply/[token]` page preselects the scoped property/unit.
+- Regression: `UnitDashboardServiceTests.GetDashboardAsync_LinksReadyNextActionToUnitApplicationLinkFlow` and `web/src/lib/applications/application-link.test.ts`.
+
+Bug `TSK-404`:
+- Repro: Open a Renewal-stage unit and click `Send renewal`.
+- Observed: the action linked to the unit Lease tab instead of starting a renewal workflow.
+- Root cause: the renewal next action did not carry the active tenant id and had no route contract for opening a specific notice draft.
+- Fix: Renewal-stage next actions now route to `/tenants/{tenantId}?action=create-notice&noticeType=RenewalOffer`; tenant detail reads that URL action once loaded, opens the notice dialog, and forces a renewal-offer draft.
+- Regression: `UnitDashboardServiceTests.GetDashboardAsync_LinksRenewalNextActionToTenantRenewalNoticeFlow` and `web/src/lib/tenants/tenant-notice-action.test.ts`.
+
+Verification:
+- RED: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~UnitDashboardServiceTests.GetDashboardAsync_Links --no-restore --logger "console;verbosity=normal"` failed before the fix because Ready linked to `/units/1?tab=overview` and Renewal linked to `/units/1?tab=lease`.
+- RED: `rtk pnpm --dir web test:unit -- src/lib/applications/application-link.test.ts src/lib/tenants/tenant-notice-action.test.ts` failed before the frontend helpers were implemented.
+- GREEN: the focused API dashboard-link tests passed 2/2 after routing Ready and Renewal actions to real workflows.
+- GREEN: `rtk node --test --experimental-strip-types web/src/lib/applications/application-link.test.ts web/src/lib/tenants/tenant-notice-action.test.ts` passed 9/9.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- Browser regression for `TSK-401`: Playwright CLI opened `https://localhost:6042/units/8?tab=overview`, confirmed the `List this unit` link target `/applications?action=list-unit&propertyId=6&unitId=8`, clicked it, and saw the `Application link for this unit` dialog. The generated URL was `https://localhost:6042/apply/C76eIUiD7LzzR0qnkRLb7QqM069ObRAPMtTPlqvQOTk?propertyId=6&unitId=8`; opening it rendered public application selects prefilled to `Riverside Courtyard` and `Unit TSK401-Ready`.
+- Browser regression for `TSK-404`: Playwright CLI opened `https://localhost:6042/units/6?tab=overview`, confirmed the `Send renewal -- lease ends in 43 days` link target `/tenants/7?action=create-notice&noticeType=RenewalOffer`, clicked it, and saw the `Create / Send notice` dialog with a `Renewal offer` draft for `Riverside Courtyard Unit 2A`. The notice was not sent.
+
+Status: Pass after fixing both Unit Command Center lifecycle no-op actions. Continue the full real-user UI inventory from merged main.

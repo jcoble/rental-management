@@ -270,7 +270,7 @@ public class UnitDashboardService : IUnitDashboardService
             NextBestAction = new UnitNextBestAction
             {
                 Label = nextActionLabel,
-                Href = NextBestActionHref(stage, unitId),
+                Href = NextBestActionHref(stage, unitId, unitRow.Unit.PropertyId, currentLease?.TenantId),
             },
             Header = new UnitDashboardHeader
             {
@@ -432,14 +432,15 @@ public class UnitDashboardService : IUnitDashboardService
     }
 
     /// <summary>Deep link for a stage's next-best-action: the relevant unit tab (drawer flows attach there).</summary>
-    private static string NextBestActionHref(UnitLifecycleStage stage, int unitId) => stage switch
+    private static string NextBestActionHref(UnitLifecycleStage stage, int unitId, int propertyId, int? tenantId) => stage switch
     {
-        UnitLifecycleStage.Ready => $"/units/{unitId}?tab=overview",
+        UnitLifecycleStage.Ready => $"/applications?action=list-unit&propertyId={propertyId}&unitId={unitId}",
         UnitLifecycleStage.Listed => $"/units/{unitId}?tab=overview",
         UnitLifecycleStage.Applicant => $"/units/{unitId}?tab=overview",
         UnitLifecycleStage.Lease => $"/units/{unitId}?tab=lease",
         UnitLifecycleStage.MoveIn => $"/units/{unitId}?tab=lease",
         UnitLifecycleStage.Active => $"/units/{unitId}?tab=rent",
+        UnitLifecycleStage.Renewal when tenantId is int id => $"/tenants/{id}?action=create-notice&noticeType=RenewalOffer",
         UnitLifecycleStage.Renewal => $"/units/{unitId}?tab=lease",
         UnitLifecycleStage.MoveOut => $"/units/{unitId}?tab=maintenance",
         UnitLifecycleStage.Turnover => $"/units/{unitId}?tab=maintenance",
