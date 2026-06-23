@@ -151,6 +151,19 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     }
 
     [Fact]
+    public async Task GetAsync_GeneratedAgreementOnly_DoesNotAdvertiseScannedSourceDocument()
+    {
+        var lease = SeedLeaseWithGraph();
+        await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
+
+        var detail = await _sut.GetAsync(PortfolioId, lease.Id);
+
+        detail.Should().NotBeNull();
+        detail!.HasScan.Should().BeFalse();
+        detail.ScanIsImage.Should().BeFalse();
+    }
+
+    [Fact]
     public async Task GetDocumentStatusAsync_NoGeneratedDocument_ReturnsMissingStatus()
     {
         var lease = SeedLeaseWithGraph();

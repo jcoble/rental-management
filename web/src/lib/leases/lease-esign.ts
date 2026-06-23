@@ -2,10 +2,19 @@ import type { EsignStatus, LeaseStatus } from '$lib/types';
 
 const SIGNABLE_LEASE_STATUSES = new Set<LeaseStatus>(['Draft', 'PendingSignature']);
 
+interface SignatureSendState {
+	esignStatus?: EsignStatus | null;
+	leaseStatus?: LeaseStatus | null;
+}
+
 export function canSendLeaseForSignature(leaseStatus?: LeaseStatus | null, esignStatus?: EsignStatus | null): boolean {
 	if (esignStatus === 'Signed') return false;
 	if (!leaseStatus) return false;
 	return SIGNABLE_LEASE_STATUSES.has(leaseStatus);
+}
+
+export function hasAgreementAfterSignatureSend(currentHasDocument: boolean, result?: SignatureSendState | null): boolean {
+	return currentHasDocument || result?.esignStatus === 'Sent';
 }
 
 export function signableStateMessage(leaseStatus?: LeaseStatus | null): string {
