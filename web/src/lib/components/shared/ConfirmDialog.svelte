@@ -23,6 +23,30 @@
 		onconfirm?: () => void;
 		oncancel?: () => void;
 	} = $props();
+
+	let confirming = $state(false);
+	let wasBusy = $state(false);
+
+	$effect(() => {
+		if (!open) {
+			confirming = false;
+			wasBusy = false;
+			return;
+		}
+
+		if (busy) {
+			wasBusy = true;
+		} else if (wasBusy) {
+			confirming = false;
+			wasBusy = false;
+		}
+	});
+
+	function handleConfirm() {
+		if (busy || confirming) return;
+		confirming = true;
+		onconfirm?.();
+	}
 </script>
 
 <Dialog.Root
@@ -39,17 +63,17 @@
 				variant="outline"
 				data-testid="{testid}-cancel"
 				onclick={oncancel}
-				disabled={busy}
+				disabled={busy || confirming}
 			>
 				{cancelLabel}
 			</Button>
 			<Button
 				variant="destructive"
 				data-testid="{testid}-confirm"
-				onclick={onconfirm}
-				disabled={busy}
+				onclick={handleConfirm}
+				disabled={busy || confirming}
 			>
-				{busy ? 'Working…' : confirmLabel}
+				{busy || confirming ? 'Working…' : confirmLabel}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
