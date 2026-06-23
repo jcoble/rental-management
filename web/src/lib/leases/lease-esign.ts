@@ -21,7 +21,12 @@ export function visibleLeaseStatus(
 	leaseStatus?: LeaseStatus | null,
 	signatureStatus?: SignatureSendState | null
 ): LeaseStatus | undefined {
-	return signatureStatus?.leaseStatus ?? leaseStatus ?? undefined;
+	if (!signatureStatus?.leaseStatus) return leaseStatus ?? undefined;
+	if (!leaseStatus) return signatureStatus.leaseStatus;
+	if (signatureStatus.leaseStatus === leaseStatus) return leaseStatus;
+	if (leaseStatus === 'Draft' && signatureStatus.leaseStatus === 'PendingSignature') return 'PendingSignature';
+	if (leaseStatus === 'PendingSignature' && signatureStatus.leaseStatus === 'Active') return 'Active';
+	return leaseStatus;
 }
 
 export function signableStateMessage(leaseStatus?: LeaseStatus | null): string {

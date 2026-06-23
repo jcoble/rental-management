@@ -42,6 +42,7 @@ Fixed and verified:
 - `TSK397-B079`: active lease delete confirmations now explain that the action terminates the lease record, releases the unit from active occupancy, and should be used only for duplicate or mistaken leases.
 - `TSK397-B080`: completed native signing now keeps lease detail header/actions/status cards in sync with the fresh signed/active signature status while the main lease cache catches up.
 - `TSK397-B081`: lease detail tabs now honor and maintain `?tab=` deep links through reload/login redirect, direct tab clicks, and edit-mode redirection back to Overview.
+- `TSK397-B082` and `B083`: typed DatePicker dates now immediately update modal-gated actions, and Give Notice keeps lease/signature lifecycle state coherent so Notice given status, actions, and move-out date render together.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2626,3 +2627,43 @@ Verification:
 - Browser regression: fresh browser loaded `/leases/7?tab=agreement`, redirected to login, logged in as Harper Stone, and landed with `Agreement & Signing` selected. Clicking Ledger changed the URL to `?tab=ledger`; clicking Edit moved to `?tab=overview`, selected Overview, and showed edit controls. Cancel returned to read-only state without saving.
 
 Status: Pass after fixing lease detail tab deep links. Continue next with remaining lease lifecycle controls, tracked Unit Command Center lifecycle no-ops, and the broader non-banking/non-QuickBooks inventory.
+
+## Pass 48 Lease Give Notice Lifecycle Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-48`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Harper Stone, `tsk397.pass39.202606231342@example.local`
+- Portfolio: Harper Stone's Portfolio, id `3`
+
+Acceptance criteria:
+- A landlord can open Give Notice on an active signed lease, type the visible `MM/DD/YYYY` move-out date, and submit without requiring a hidden blur/keyboard workaround.
+- Submitting Give Notice stores the move-out date, transitions the lease to Notice given, replaces the Give Notice action with the appropriate active-state recovery action, and keeps header/card/status fields coherent even when e-sign status was previously signed.
+- DatePicker should not auto-normalize partial year-first input such as `2027-07-3` while the user may still be typing `2027-07-31`.
+
+Bug `TSK397-B082`:
+- Repro: Open `/leases/7?tab=overview`, click `Give Notice`, type `07/31/2027` into the visible `Move-out date` field, and inspect the modal action.
+- Observed: the field displayed `07/31/2027`, but the `Give notice` button stayed disabled because `DatePicker` only committed typed text to the bound ISO value on blur or Enter.
+- Fix: added `parseCompleteLooseDate` and wired `DatePicker` to commit complete typed dates immediately while leaving partial input uncommitted until blur/Enter.
+- Regression: `web/src/lib/utils/parse-date.test.ts`.
+
+Bug `TSK397-B083`:
+- Repro: Submit Give Notice on the signed lease after entering the move-out date.
+- Observed: the move-out date appeared, but the page still rendered `Active` and kept offering `Give Notice` because stale signature-status cache data overrode the newly updated lease lifecycle status.
+- Fix: lifecycle mutations now seed the updated lease query and invalidate signature status; `visibleLeaseStatus` now only uses e-sign status for known signing transitions and will not let stale signature state override explicit lease lifecycle states such as Notice given or Terminated.
+- Regression: `web/src/lib/leases/lease-esign.test.ts`.
+
+Verification:
+- GREEN: `rtk pnpm exec node --test --experimental-strip-types src/lib/utils/parse-date.test.ts src/lib/leases/lease-detail-state.test.ts src/lib/leases/lease-esign.test.ts` passed 18/18.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- GREEN: `rtk git diff --check` reported no whitespace errors.
+- Browser regression: typing `07/31/2027` into the Give Notice modal immediately enabled `Give notice`; submitting saved the move-out date. After refresh, `/leases/7?tab=overview` rendered header/status card `Notice given`, top action `Set Active`, overview CTA `Set lease active`, and Move-Out `Jul 31, 2027`.
+
+Status: Pass after fixing Give Notice typed-date gating and signed-lease lifecycle state coherence. Continue next with remaining lease lifecycle controls, tracked Unit Command Center lifecycle no-ops, and the broader non-banking/non-QuickBooks inventory.

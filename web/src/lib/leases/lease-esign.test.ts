@@ -38,7 +38,22 @@ describe('lease e-sign state helpers', () => {
 			visibleLeaseStatus('PendingSignature', { esignStatus: 'Signed', leaseStatus: 'Active' }),
 			'Active'
 		);
+		assert.equal(
+			visibleLeaseStatus('Draft', { esignStatus: 'Sent', leaseStatus: 'PendingSignature' }),
+			'PendingSignature'
+		);
 		assert.equal(visibleLeaseStatus('PendingSignature', undefined), 'PendingSignature');
 		assert.equal(visibleLeaseStatus(undefined, { esignStatus: 'Sent', leaseStatus: 'PendingSignature' }), 'PendingSignature');
+	});
+
+	it('does not let stale signature status override a newer explicit lease lifecycle state', () => {
+		assert.equal(
+			visibleLeaseStatus('NoticeGiven', { esignStatus: 'Signed', leaseStatus: 'Active' }),
+			'NoticeGiven'
+		);
+		assert.equal(
+			visibleLeaseStatus('Terminated', { esignStatus: 'Signed', leaseStatus: 'Active' }),
+			'Terminated'
+		);
 	});
 });
