@@ -1,9 +1,10 @@
 <script lang="ts">
 	import type { UnitDocumentSummary } from '$lib/types';
 	import { formatDateOnly } from '$lib/utils/date';
+	import { unitDocumentHref } from '$lib/components/unit/document-actions';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { FileText, ScanLine, Image as ImageIcon } from '@lucide/svelte';
+	import { ExternalLink, FileText, ScanLine, Image as ImageIcon } from '@lucide/svelte';
 
 	let {
 		docs,
@@ -47,12 +48,30 @@
 			<DetailCard title={type} icon={FileText} accent="primary" testid="documents-group-{type}">
 				<ul class="divide-y text-sm">
 					{#each items as d (d.id)}
-						<li class="flex items-center justify-between py-1.5">
+						{@const href = unitDocumentHref(d)}
+						<li class="flex items-center justify-between gap-3 py-1.5">
 							<span class="flex min-w-0 items-center gap-2">
 								{#if d.contentType.startsWith('image/')}<ImageIcon class="h-4 w-4 shrink-0 text-muted-foreground" />{:else}<FileText class="h-4 w-4 shrink-0 text-muted-foreground" />{/if}
 								<span class="truncate">{d.fileName}</span>
 							</span>
-							<span class="shrink-0 text-xs text-muted-foreground">{formatDateOnly(d.uploadedAt)}</span>
+							<span class="flex shrink-0 items-center gap-2">
+								<span class="text-xs text-muted-foreground">{formatDateOnly(d.uploadedAt)}</span>
+								{#if href}
+									<Button
+										href={href}
+										target="_blank"
+										rel="noreferrer"
+										variant="ghost"
+										size="sm"
+										class="h-8 px-3"
+										aria-label={`View ${d.fileName}`}
+										data-testid={`unit-document-view-${d.id}`}
+									>
+										View
+										<ExternalLink class="h-3.5 w-3.5" />
+									</Button>
+								{/if}
+							</span>
 						</li>
 					{/each}
 				</ul>
