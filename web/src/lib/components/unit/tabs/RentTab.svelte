@@ -13,7 +13,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import { DollarSign, Plus, X, ScanLine, ChevronDown, ChevronRight } from '@lucide/svelte';
+	import { PAYMENT_METHODS } from '$lib/constants/payments';
+	import { Plus, X, ScanLine, ChevronDown, ChevronRight } from '@lucide/svelte';
 
 	let {
 		dashboard,
@@ -82,7 +83,15 @@
 	}
 
 	// ── Inline "post payment" create form (reuses the app's paymentSchema + form conventions) ──
-	const emptyCreate = () => ({ amount: '', dueDate: today(), paymentType: 'Rent', status: 'Paid' });
+	const emptyCreate = () => ({
+		amount: '',
+		dueDate: today(),
+		paymentType: 'Rent',
+		status: 'Paid',
+		method: '',
+		externalReference: '',
+		notes: '',
+	});
 	let showCreate = $state(false);
 	let createForm = $state(emptyCreate());
 	let createErrors = $state<Record<string, string>>({});
@@ -227,6 +236,33 @@
 							{#each PAYMENT_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
 						</Select.Content>
 					</Select.Root>
+				</div>
+				<div>
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-method">Method</label>
+					<Select.Root type="single" bind:value={createForm.method}>
+						<Select.Trigger id="rent-method" class="w-full" data-testid="rent-method-input">
+							{createForm.method || 'Select method'}
+						</Select.Trigger>
+						<Select.Content>
+							<Select.Item value="" label="No method">No method</Select.Item>
+							{#each PAYMENT_METHODS as m}<Select.Item value={m} label={m}>{m}</Select.Item>{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
+				<div>
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-reference">Reference</label>
+					<Input id="rent-reference" data-testid="rent-reference-input" bind:value={createForm.externalReference} placeholder="Check #, transaction id, memo" />
+				</div>
+				<div class="sm:col-span-2">
+					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="rent-notes">Notes</label>
+					<textarea
+						id="rent-notes"
+						data-testid="rent-notes-input"
+						bind:value={createForm.notes}
+						rows="2"
+						class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+						placeholder="Optional payment note"
+					></textarea>
 				</div>
 			</div>
 			<div class="mt-3 flex justify-end gap-2">

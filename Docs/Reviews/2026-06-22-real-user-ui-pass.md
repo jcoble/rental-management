@@ -1880,3 +1880,41 @@ Verification:
 - Browser regression: payment detail Delete opened a cancellable dialog; Cancel preserved `/accounting/payments/2` and the record.
 
 Status: Pass after fix for payment-detail destructive confirmation. Continue next with expense detail pages, then remaining non-banking/non-QuickBooks inventory.
+
+## Pass 32 Unit Expense/Rent Workflow and Quick-Post Payment Tracking
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-32`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Acceptance criteria:
+- Unit Expenses tab should create a unit-scoped expense, show it in the unit list, support inline expansion/edit/cancel/save, and deep-link to expense detail.
+- Expense detail should persist paid date and itemized receipt rows, expose delete confirmation, and keep history/audit expansion useful.
+- Unit Rent tab should clear an overdue scheduled payment when marked paid, update header/next-best action/outstanding balance, and support posting an additional rent payment.
+- Unit Rent tab quick Post payment must capture method, reference, and notes before save, not require a second detail edit.
+
+Evidence:
+- `/units/1?tab=expenses` created `QA filter replacement` for `$12.34`; row appeared first with Pending and activity linked to `/accounting/expenses/2`.
+- Inline expense edit changed amount to `$14.99` and status to Paid; toast `Expense updated.` and row/detail reflected the update.
+- `/accounting/expenses/2` saved paid date Jun 23, 2026 and line item Air filter, qty 1, unit price/amount `$14.99`; detail showed paid date and line item table total.
+- Expense detail Delete opened cancellable `Delete expense` dialog and Cancel preserved the record.
+- Unit expense/payment update history buttons expanded audit metadata in place; recorded activity rows deep-linked correctly.
+- `/units/1?tab=rent` followed `Collect $10.00`, expanded scheduled rent payment, changed status to Paid, paid date Jun 23 2026, method Check; header changed to `Rent current`, outstanding `$0.00`, and next-best action changed to `Rent on track`.
+- Pre-fix quick-post reproduction: posting `$15` rent from unit created `/accounting/payments/3`, but detail showed Method `-` and Reference `-` because the create form had no method/reference/notes fields.
+- Post-fix browser proof: quick Post payment form rendered Method, Reference, and Notes. Posting `$16` with Method Check, Reference `QA-REF-004`, Notes `Quick post captured method and reference` created `/accounting/payments/4`, whose detail showed all three values.
+
+Fixed in this pass:
+- `TSK397-B054` - Unit Rent tab Post payment created valid payments but omitted method/reference/notes capture, forcing check/cash/manual payments through a second edit. Fix: quick-post state/form now includes method, external reference, and notes, using the shared `PAYMENT_METHODS` list so web/mobile method values stay aligned.
+
+Verification:
+- RED: `rtk pnpm --dir web test:unit -- src/lib/components/unit/rent-tab-create.test.ts` failed before the fix because create state/form lacked method/reference/notes.
+- GREEN: `rtk pnpm --dir web test:unit -- src/lib/components/unit/rent-tab-create.test.ts` passed 146/146 after the fix.
+- Frontend check: `rtk pnpm --dir web check` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+- Browser regression: `/accounting/payments/4` showed Method Check, Reference `QA-REF-004`, and Notes `Quick post captured method and reference` from the unit quick-post form.
+
+Status: Pass after fix for unit rent quick-post payment tracking. Continue next with remaining unit tabs: Lease, Maintenance, Documents, Timeline, Unit Edit, and Scan/Upload; then fold explorer inventory gaps into implementation slices.
