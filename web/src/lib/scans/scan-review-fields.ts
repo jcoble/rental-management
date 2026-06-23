@@ -9,6 +9,53 @@ export interface ScanReviewFieldGroup {
 	fields: ScanReviewField[];
 }
 
+export interface ScanCategoryOption {
+	value: string;
+	label: string;
+}
+
+// ScheduleECategory enum values (mirrors RentalCommand.Core.Enums.ScheduleECategory).
+// The submitted value stays the enum name; only the label shown to the landlord is friendly.
+export const EXPENSE_SCAN_CATEGORY_OPTIONS: ScanCategoryOption[] = [
+	{ value: 'Advertising', label: 'Advertising' },
+	{ value: 'AutoTravel', label: 'Auto & travel' },
+	{ value: 'CleaningMaintenance', label: 'Cleaning & maintenance' },
+	{ value: 'Commissions', label: 'Commissions' },
+	{ value: 'Insurance', label: 'Insurance' },
+	{ value: 'LegalProfessional', label: 'Legal & professional fees' },
+	{ value: 'ManagementFees', label: 'Management fees' },
+	{ value: 'MortgageInterest', label: 'Mortgage interest' },
+	{ value: 'Repairs', label: 'Repairs & maintenance' },
+	{ value: 'Supplies', label: 'Supplies' },
+	{ value: 'Taxes', label: 'Taxes' },
+	{ value: 'Utilities', label: 'Utilities' },
+	{ value: 'Depreciation', label: 'Depreciation' },
+	{ value: 'Other', label: 'Other' }
+];
+
+export const WORK_ORDER_SCAN_CATEGORY_OPTIONS: ScanCategoryOption[] = [
+	{ value: 'General', label: 'General' },
+	{ value: 'Plumbing', label: 'Plumbing' },
+	{ value: 'Electrical', label: 'Electrical' },
+	{ value: 'HVAC', label: 'HVAC' },
+	{ value: 'Appliance', label: 'Appliance' },
+	{ value: 'Repairs', label: 'Repairs' },
+	{ value: 'Roofing', label: 'Roofing' },
+	{ value: 'Pest', label: 'Pest' },
+	{ value: 'Safety', label: 'Safety' },
+	{ value: 'Landscaping', label: 'Landscaping' },
+	{ value: 'Cleaning', label: 'Cleaning' },
+	{ value: 'Other', label: 'Other' }
+];
+
+const EXPENSE_CATEGORY_LABELS: Record<string, string> = Object.fromEntries(
+	EXPENSE_SCAN_CATEGORY_OPTIONS.map((category) => [category.value, category.label])
+);
+
+const WORK_ORDER_CATEGORY_LABELS: Record<string, string> = Object.fromEntries(
+	WORK_ORDER_SCAN_CATEGORY_OPTIONS.map((category) => [category.value, category.label])
+);
+
 const LINE_ITEMS_FIELD = 'line_items';
 
 const EXPENSE_FIELD_GROUPS: { label: string; fields: string[] }[] = [
@@ -123,6 +170,18 @@ function reviewFieldGroupsForTarget(targetEntityType: string | null | undefined)
 	if (targetEntityType === 'WorkOrder') return WORK_ORDER_FIELD_GROUPS;
 	if (targetEntityType === 'Payment') return PAYMENT_FIELD_GROUPS;
 	return EXPENSE_FIELD_GROUPS;
+}
+
+export function scanCategoryOptionsForTarget(targetEntityType: string | null | undefined): ScanCategoryOption[] {
+	if (targetEntityType === 'WorkOrder') return WORK_ORDER_SCAN_CATEGORY_OPTIONS;
+	return EXPENSE_SCAN_CATEGORY_OPTIONS;
+}
+
+export function scanCategoryLabel(value: string | undefined | null, targetEntityType: string | null | undefined): string {
+	if (!value) return 'Select category';
+
+	const labels = targetEntityType === 'WorkOrder' ? WORK_ORDER_CATEGORY_LABELS : EXPENSE_CATEGORY_LABELS;
+	return labels[value] ?? value;
 }
 
 export function buildScanReviewFieldGroups(
