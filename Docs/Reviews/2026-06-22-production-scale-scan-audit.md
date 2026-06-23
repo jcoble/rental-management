@@ -255,6 +255,46 @@ Representative browser states exercised:
 - `/scan` target selector for receipt, payment, application, work order, file upload, tabs, table pagination, review links, and recent batch import card.
 - `/applications` populated list after scan-created applicants.
 
+## Pass 16 Continuation Evidence
+
+Date: 2026-06-23
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-16`
+Local stack: `https://localhost:5942`, API `https://localhost:5941`, Postgres `localhost:5565/rentalcommand_tsk397_pass16_clean`
+
+Fresh local landlord account:
+
+- Name: Mia Rivera
+- Email: `tsk397.pass16.202606230428@example.local`
+- Setup choice: live portfolio from zero domain data, not sandbox/demo
+
+Camera-style scan fixtures confirmed in this pass:
+
+- Lease image: `output/qa/production-scale-scans/01-leases-camera/lease-001-1a.jpg`
+- Expense image: `output/qa/production-scale-scans/02-expenses-camera/expense-001.jpg`
+- Payment image: `output/qa/production-scale-scans/03-payments-camera/payment-001.jpg`
+- Application image: `output/qa/production-scale-scans/04-applications-camera/application-001.jpg`
+- Work order image: `output/qa/production-scale-scans/05-work-orders-camera/work-order-001.jpg`
+
+Verified local database counts after browser confirmation:
+
+- 1 property, 1 unit, 1 lease, 1 payment, 1 expense, 1 rental application, 1 work order, 5 scan drafts.
+- 2 tenants: one lease tenant created from the lease scan and one applicant tenant created after approving the scanned application.
+
+Browser states exercised:
+
+- `/register`, local email verification, `/login`, `/choose-setup`, `/onboarding`, and scan-first navigation from an empty live portfolio.
+- `/scan/new-rental` camera upload through property/unit/tenant/lease/review confirmation, including manual correction of missing beds/baths before create.
+- `/scan/[draftId]` target-specific review for Expense, Payment, Application, and WorkOrder camera JPEGs.
+- `/accounting/expenses/1`, `/accounting/payments/1`, `/applications/1`, `/tenants/2`, and `/maintenance/1` record drilldowns created from scan confirmations.
+
+Bug fixed during this pass:
+
+- Work Order scan review exposed raw internal linkage fields (`unit_id`, `tenant_id`, `property_id`, `target_entity_type`) as editable landlord fields.
+- Fix: extracted review grouping now hides internal linkage fields from all generic scan review forms, renders Work Order scans as `Work order` and `Notes` sections, and keeps the underlying extracted values available to the confirm payload.
+- Regression coverage: `web/src/lib/scans/scan-review-fields.test.ts`.
+- Browser proof after fix: `/scan/5?type=WorkOrder` showed Title, Priority, Description, Category, Estimated cost, and Notes; raw ID fields were absent. Screenshot: `.playwright-cli/page-2026-06-23T04-48-24-806Z.png`.
+- Verification commands: `pnpm --dir web exec node --test --experimental-strip-types src/lib/scans/scan-review-fields.test.ts`; `pnpm --dir web check`; `pnpm --dir web test:unit`.
+
 ## Classified Inventory Matrix
 
 The route/control inventory now has a finite closure matrix instead of a raw tag-count table. `scripts/qa/inventory-web-surfaces.mjs` includes layout guards, error surfaces, redirects, server routes, file proxies, custom component controls, `data-testid` coverage, route scopes, route kinds, roles, acceptance criteria, and finite edge cases.
