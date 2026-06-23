@@ -1763,3 +1763,41 @@ Verification:
 - Browser/SQL regression: unsupported text-file drop showed inline alert and did not increase `ScanDrafts` count; Rejected and Failed filters used DB-backed `/scans/page` requests and rendered the expected row/empty states.
 
 Status: Pass after fixes for invalid upload feedback and terminal scan history filters. Continue next with confirmed-record detail pages from scan history, maintenance actions, document/timeline surfaces, and the remaining non-banking/non-QuickBooks inventory.
+
+## Pass 29 Lease Detail Controls and Scanned Document Proof
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-29`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Acceptance criteria:
+- Lease detail tabs must expose Overview, Agreement & Signing, Ledger, and History without console warnings.
+- Destructive or lifecycle-changing lease controls must require an explicit confirmation step and must be cancellable without changing data.
+- Giving notice must capture the expected move-out date before the lease is marked `NoticeGiven`, because the date feeds later move-out steps.
+- The scanned lease document link must open the original uploaded/generated document and preserve the detail page.
+
+Evidence:
+- Opened `/leases/3` from the scan-created lease row for `QA-2026-004-4D`. Overview rendered Active status, linked tenant Dana Nguyen, linked property Sunset Ridge, linked Unit 4D, term Apr 1 2026 to Apr 1 2027, monthly rent `$1,350.00`, security deposit `$1,350.00`, and scan provenance notes.
+- Agreement & Signing rendered `Regenerate lease agreement (PDF)`, `Download agreement`, `Not sent`, and blocked sending because the lease is already active. The Send for signature help popover opened and closed cleanly.
+- Ledger rendered Charged/Paid/Balance `$0.00`, `All caught up — nothing owed.`, `Set opening balance`, `View deposits`, and the scanned document list. History rendered `Added lease`.
+- Edit from the non-editable History tab moved safely to the Overview edit surface; Cancel returned to the read-only lease without mutation.
+- Delete opened a confirmation modal with focus on Cancel and copy `Delete lease QA-2026-004-4D? This cannot be undone.` Cancelling closed it without deleting.
+- Scanned document link opened `/lease-file/3` in a new tab and rendered the synthetic lease PDF. Screenshot: `output/playwright/lease-file-3-20260623.png`.
+- Pre-fix Give Notice reproduction: the dialog copy said the date feeds move-out steps, but the field label was `Move-out date (optional)` and the `Give notice` button was enabled with a blank date.
+- Post-fix proof: the dialog labels the field `Move-out date`, shows required workflow copy, disables `Give notice` while blank, and enables it after a typed date commits on blur. Cancel closed the dialog without changing the lease.
+- Browser console check after the lease-detail pass returned zero warning-or-higher messages.
+
+Fixed in this pass:
+- `TSK397-B051` - Lease detail Give Notice allowed marking an active lease as `NoticeGiven` without the expected move-out date even though the dialog said the date feeds the move-out workflow. Fix: the Give Notice dialog now treats move-out date as required, disables submission until the date exists, and documents the state rule in a focused helper test.
+
+Verification:
+- `rtk pnpm --dir web test:unit -- src/lib/leases/lease-detail-state.test.ts` passed 142/142.
+- `rtk pnpm --dir web check` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+- Browser regression: blank Give Notice dialog showed disabled submit; entering `07/15/2026` and blurring enabled submit; Cancel left `/leases/3` unchanged.
+
+Status: Pass after fix for lease notice date gating and scanned document rendering. Continue next with application, maintenance, expense, and payment detail pages created from scan history, then remaining non-banking/non-QuickBooks inventory.
