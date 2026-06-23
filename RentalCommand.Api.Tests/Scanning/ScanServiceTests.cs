@@ -258,6 +258,26 @@ public class ScanServiceTests : IDisposable
         _expenses.LastRequest.WorkOrderId.Should().Be(30);
     }
 
+    [Fact]
+    public async Task ConfirmAndCreateAsync_ExpenseDraft_WithSelectedPropertyAndUnitInNotes_GroundsUnit()
+    {
+        SeedPropertyAndUnit();
+
+        const string extractedJson =
+            """{"vendor_name":{"value":"Green Thumb Landscaping","confidence":0.99},"total":{"value":"63.75","confidence":0.99},"transaction_date":{"value":"2026-02-02","confidence":0.95},"document_kind":{"value":"Receipt","confidence":0.9},"notes":{"value":"Property: Maple Court, Unit 1. Lease reference: QA-2026-001.","confidence":0.97}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson);
+        SeedStoredFile(draft.FilePath);
+        _expenses.SetupResponse(new ExpenseResponse { Id = 103, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: """{"propertyId":10}""");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _expenses.LastRequest.Should().NotBeNull();
+        _expenses.LastRequest!.PropertyId.Should().Be(10);
+        _expenses.LastRequest.UnitId.Should().Be(20);
+    }
+
     // -------------------------------------------------------------------------
     // Confirm: snake_case vendor/date overrides are honored (regression guard)
     // The review UI keys edits by the extraction field names (vendor_name,

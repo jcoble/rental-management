@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Imaging;
@@ -29,6 +30,10 @@ public sealed class ScanService : IScanService
     private readonly IApplicationService _applications;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<ScanService> _logger;
+    private static readonly Regex ExpenseUnitReferenceRegex = new(
+        @"\b(?:unit|apt|apartment)\s*(?:#|:)?\s*([A-Za-z0-9][A-Za-z0-9-]*)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(100));
 
     public ScanService(
         RentalCommandDbContext db,
@@ -361,6 +366,11 @@ public sealed class ScanService : IScanService
                 : dto.DocumentKind is "Bill" or "Invoice" or "UtilityBill" or "PropertyTax"
                     ? false
                     : true;
+        }
+
+        if (unitId is null && propertyId is int selectedPropertyId)
+        {
+            unitId = await TryResolveExpenseUnitFromNotesAsync(portfolioId, selectedPropertyId, dto.Notes, ct);
         }
 
         // Build ReceiptData JSON for the non-promoted details.
@@ -1224,6 +1234,36 @@ public sealed class ScanService : IScanService
             .OrderBy(u => u.Id)
             .Select(u => new UnitMatch(u.Id, u.UnitNumber))
             .FirstOrDefaultAsync(ct);
+    }
+
+    private async Task<int?> TryResolveExpenseUnitFromNotesAsync(
+        int portfolioId,
+        int propertyId,
+        string? notes,
+        CancellationToken ct)
+    {
+        var unitNumber = ExtractUnitNumberFromExpenseNotes(notes);
+        if (string.IsNullOrWhiteSpace(unitNumber))
+            return null;
+
+        var unitKey = CollapseWhitespace(unitNumber).ToLowerInvariant();
+
+        return await _db.Units
+            .Where(u => u.PropertyId == propertyId && u.DeletedAt == null)
+            .Where(u => u.Property != null && u.Property.PortfolioId == portfolioId && u.Property.DeletedAt == null)
+            .Where(u => (u.UnitNumber ?? "").Trim().ToLower() == unitKey)
+            .OrderBy(u => u.Id)
+            .Select(u => (int?)u.Id)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    private static string? ExtractUnitNumberFromExpenseNotes(string? notes)
+    {
+        if (string.IsNullOrWhiteSpace(notes))
+            return null;
+
+        var match = ExpenseUnitReferenceRegex.Match(notes);
+        return match.Success ? match.Groups[1].Value.Trim() : null;
     }
 
     /// <summary>The unit number to use, defaulting a blank one to "1" so single-family leases still get a unit.</summary>
