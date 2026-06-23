@@ -336,6 +336,42 @@ Bug fixed during this checkpoint:
 - Browser proof after fix: `/scan/3?type=Payment` showed only `Payment` and `Details` groups with disabled total/method/payer/bank/check/date fields; `/scan/2?type=Expense` showed no bank/payer/check fields, no property selector, no paid toggle, and disabled fields/line-item controls. Artifacts: `.playwright-cli/page-2026-06-23T05-16-14-488Z.yml`, `.playwright-cli/page-2026-06-23T05-16-15-131Z.png`, `.playwright-cli/page-2026-06-23T05-15-59-002Z.yml`, `.playwright-cli/page-2026-06-23T05-16-07-873Z.png`.
 - Verification commands: `pnpm --dir web exec node --test --experimental-strip-types src/lib/scans/scan-review-fields.test.ts`; `pnpm --dir web exec node --test --experimental-strip-types src/lib/scans/scan-review-state.test.ts`; `pnpm --dir web check`; `pnpm --dir web test:unit`.
 
+## Pass 18 Continuation Evidence
+
+Date: 2026-06-23
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-18`
+Local stack: `https://localhost:5962`, API `https://localhost:5961`, Postgres `localhost:5566/rentalcommand_tsk397_pass17_clean`
+
+Fresh local landlord account:
+
+- Name: Noah Carter
+- Email: `tsk397.pass17.202606230455@example.local`
+- Setup choice: live portfolio from zero domain data, not sandbox/demo
+
+Additional scan-created data confirmed in this checkpoint:
+
+- Application camera image: `output/qa/production-scale-scans/04-applications-camera/application-001.jpg`
+- Work order camera image: `output/qa/production-scale-scans/05-work-orders-camera/work-order-001.jpg`
+
+Verified local database counts after browser confirmation:
+
+- 1 property, 1 unit, 1 tenant, 1 lease, 1 expense, 1 payment, 1 rental application, 1 work order, 5 scan drafts.
+
+Browser states exercised:
+
+- `/scan` application camera upload to `/scan/4?type=Application`, review/confirm to `/applications`, and populated application row for Gray Johnson.
+- `/scan` maintenance-request camera upload to `/scan/5?type=WorkOrder`, review/confirm to `/maintenance/1`.
+- `/maintenance/1` status modals, edit fields, vendor text disabled state for a vendor without a phone, document upload, document download, and unit cross-link to `/units/1?tab=maintenance`.
+- `/units/1` command-center overview, lease tab, lease detail agreement/download/regenerate controls, ledger opening-balance validation, rent tab payment validation, maintenance tab new-work-order validation, documents tab file links, and scan shortcuts from rent/maintenance/documents/expenses tabs.
+
+Bug fixed during this pass:
+
+- Unit Documents grouped several stored files by parent entity, but linked every lease file to `/lease-file/{leaseId}` and every work-order file to `/workorder-file/{workOrderId}`. After a generated lease agreement or extra work-order attachment existed, rows for the original scan opened the wrong parent-level file.
+- Fix: Unit document rows now link by stored file id through `/document-file/{id}`, a same-origin authenticated proxy to `GET /documents/{id}/file`. The proxy preserves safe inline rendering for images/PDFs and forces unsafe content to download.
+- Browser/API proof after fix: Unit Documents showed distinct links for `lease-1-agreement.pdf` (`/document-file/11`), original lease scan (`/document-file/1`), payment scan (`/document-file/4`), uploaded work-order image (`/document-file/10`), and original work-order scan (`/document-file/8`). Authenticated fetches returned `200` with the expected MIME types and byte sizes for all five stored-file IDs.
+- Regression coverage: `web/src/lib/components/unit/document-actions.test.ts`; inventory classifier now includes `/document-file/[id]` in the file-proxy surface group.
+- Verification commands: `pnpm --dir web exec node --test --experimental-strip-types src/lib/components/unit/document-actions.test.ts`; `node scripts/qa/inventory-web-surfaces.mjs`.
+
 ## Classified Inventory Matrix
 
 The route/control inventory now has a finite closure matrix instead of a raw tag-count table. `scripts/qa/inventory-web-surfaces.mjs` includes layout guards, error surfaces, redirects, server routes, file proxies, custom component controls, `data-testid` coverage, route scopes, route kinds, roles, acceptance criteria, and finite edge cases.
@@ -344,7 +380,7 @@ Latest output:
 
 - `output/qa/web-surface-inventory.json`
 - `output/qa/web-surface-inventory.md`
-- Route count: 85
+- Route count: 87
 - Unclassified routes: none
 - Surface groups: shell/guards/errors, public auth/OAuth, public docs/apply/sign, core staff app, scan intake, file proxies, accounting/reports, settings/setup/import, maintenance detail, portal, admin/superadmin, compatibility redirects.
 
@@ -384,6 +420,7 @@ Read-only data-access audit found broad violations of the hard SQL-side rule. Th
 | TSK397-B014 | P2 | Application scan dedupe | Fixed in this branch. Scan-created applications now block a second non-terminal application in the same portfolio with the same applicant email, ignoring trim/case, while allowing terminal `Declined`/`Withdrawn` applications to re-apply. | Browser red: PDF draft #50 created application #1; camera draft #51 from the same synthetic application created application #2. `/applications` showed two `Gray Johnson` rows with `qa.applicant.001@example.local`, both `Submitted`. Green: `CreateFromScanAsync_OpenApplicationWithSameEmail_ThrowsAndDoesNotDuplicate` and `CreateFromScanAsync_TerminalApplicationWithSameEmail_CreatesNewApplication`; focused `ApplicationServiceTests` passed 10/10; full `RentalCommand.Api.Tests` passed 447/447. Existing local duplicate rows were left intact as evidence, not rewritten. | Fixed |
 | TSK397-B015 | P0 | DB-side data rule | Fixed in this branch. The original audit found reports/accounting/banking endpoints materializing rows and then filtering/grouping/sorting/aggregating/scoring in memory, violating the project hard rule. | Read-only data sweep found definite violations in `ReportsService`, `AccountingService`, and `BankingService`, including general ledger, property P&L, rent ledger, banking suggestions, accounting reports, and reconciliation suggestions. Fixed slices: property P&L regression `GetPropertyProfitAndLossAsync_FiltersGroupsAndSumsInSql`; general ledger regression `GetGeneralLedgerAsync_FiltersOrdersAndTotalsInSql`; rent ledger regression `GetRentLedgerAsync_FiltersOrdersAndTotalsInSql`; cash-flow totals regression `GetCashFlowAsync_TotalsAreSummedInSql`; delinquency regression `GetDelinquencyAsync_OrdersAndTotalsInSql`; work-order regression `GetWorkOrdersAsync_CountsAndSumsInSql`; banking review candidate regression `ReviewQueue_PrefiltersPaymentSuggestionCandidatesInSql`; accounting inline suggestion regression `GetTransactionsAsync_PrefiltersInlineBankSuggestionsInSql`; accounting reports regression `GetReportsAsync_BuildsLedgerWithSqlUnionAndOrdering`; owner statement SQL-shape regressions in `OwnerStatementServiceTests`; Schedule E SQL-shape assertions in `ScheduleEServiceTests`. Full `ReportsServiceTests` passed 35/35; full `BankingServiceTests` passed 16/16; `AccountingTransactionsViewTests` passed 9/9; `AccountingServiceTests` passed 7/7; `OwnerStatementServiceTests` passed 2/2; `ScheduleEServiceTests` passed 2/2. No B015 sub-items remain from the sweep. | Fixed |
 | TSK397-B016 | P1 | Inventory completeness | Fixed in this branch. The inventory script now emits a classified acceptance matrix and route inventory instead of a raw tag-count table. | Read-only route/control sweep found missing coverage for public apply/sign flows, settings subroutes, accounting/report detail routes, maintenance/detail workflows, portal helper role states, admin modals, and file proxy routes. Green: `node scripts/qa/inventory-web-surfaces.mjs` produced 85 classified route rows, 12 surface groups, and `Unclassified routes: none` in `output/qa/web-surface-inventory.md`/`.json`. | Fixed |
+| TSK397-B017 | P1 | Unit documents | Fixed in this branch. Unit Documents linked rows by parent entity route instead of stored file id, so multiple files attached to the same lease or work order could open the same parent-level file rather than the clicked file. | Browser red: generated lease agreement and original lease scan both pointed at `/lease-file/1`; original work-order scan and uploaded work-order image both pointed at `/workorder-file/1`. Green: rows now point to `/document-file/{storedFileId}`; authenticated fetches for ids 1, 4, 8, 10, and 11 returned the expected original PDFs/images/agreement. Focused `unit-document-actions` test passed and inventory classified 87 routes with no unclassified routes. | Fixed |
 
 ## Regression Expectations
 
