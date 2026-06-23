@@ -8,7 +8,11 @@
 		scannedLeaseDocumentLinkLabel,
 		tabForLeaseEdit,
 	} from '$lib/leases/lease-detail-state';
-	import { canSendLeaseForSignature, signableStateMessage } from '$lib/leases/lease-esign';
+	import {
+		canSendLeaseForSignature,
+		hasAgreementAfterSignatureSend,
+		signableStateMessage,
+	} from '$lib/leases/lease-esign';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { payments } from '$lib/api/endpoints/payments';
@@ -364,8 +368,9 @@
 
 	const sendForSignatureMutation = createMutation(() => ({
 		mutationFn: () => leases.sendForSignature(leaseId),
-		onSuccess: () => {
+		onSuccess: (result) => {
 			esignNotConfigured = false;
+			hasDocument = hasAgreementAfterSignatureSend(hasDocument, result);
 			showSuccess(`Sent to ${lease?.tenantName ?? 'the tenant'} for signature.`);
 			invalidateSignatureStatus();
 		},
