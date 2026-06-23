@@ -12,6 +12,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import AutoFilledBadge from './AutoFilledBadge.svelte';
 	import { STEP_FIELD_TO_EXTRACTION } from '$lib/scan/lease-prefill';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 
 	let {
 		form = $bindable(),
@@ -25,7 +26,7 @@
 		errors?: Record<string, string>;
 		autoFilled?: Set<string>;
 		confidence?: Record<string, number>;
-		statuses?: string[];
+		statuses?: readonly string[];
 		testidPrefix?: string;
 	} = $props();
 
@@ -95,10 +96,10 @@
 	<div class="md:col-span-2">
 		<span class="mb-1 block text-xs font-medium text-muted-foreground">Status</span>
 		<Select.Root type="single" bind:value={form.status}>
-			<Select.Trigger class="w-full" data-testid={`${testidPrefix}-status-input`}>{form.status || 'Select status'}</Select.Trigger>
+			<Select.Trigger class="w-full" data-testid={`${testidPrefix}-status-input`}>{form.status ? formatStatusLabel(form.status) : 'Select status'}</Select.Trigger>
 			<Select.Content>
 				{#each statuses as s}
-					<Select.Item value={s} label={s}>{s}</Select.Item>
+					<Select.Item value={s} label={formatStatusLabel(s)}>{formatStatusLabel(s)}</Select.Item>
 				{/each}
 			</Select.Content>
 		</Select.Root>
