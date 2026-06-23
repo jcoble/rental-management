@@ -18,16 +18,15 @@
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
 	import { propertySchema, unitSchema, tenantSchema, leaseSchema, parseForm } from '$lib/schemas';
 	import { toLeasePrefill, type PrefillConfidence } from '$lib/scan/lease-prefill';
-	import { createNewRentalPropertyForm, findNewRentalExistingUnitId, formatNewRentalStepLabel, formatNewRentalStepPosition, newRentalDraftUrl, parseNewRentalDraftId, seedNewRentalLateFeeAmount } from '$lib/scan/new-rental-state';
+	import { beginNewRentalDraftNavigation, createNewRentalPropertyForm, findNewRentalExistingUnitId, formatNewRentalStepLabel, formatNewRentalStepPosition, parseNewRentalDraftId, seedNewRentalLateFeeAmount, type NewRentalPhase } from '$lib/scan/new-rental-state';
 	import { prepareNewRentalPhotoUpload } from '$lib/scan/new-rental-upload';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 
 	const portfolioId = getCurrentPortfolioId();
 
 	// ----- phase: capture -> processing -> steps -> review -> done -----
-	type Phase = 'capture' | 'processing' | 'steps' | 'done';
 	const initialDraftId = parseNewRentalDraftId(page.url.searchParams);
-	let phase = $state<Phase>(initialDraftId == null ? 'capture' : 'processing');
+	let phase = $state<NewRentalPhase>(initialDraftId == null ? 'capture' : 'processing');
 	let draftId = $state<number | null>(initialDraftId);
 	let confidence = $state<PrefillConfidence>({});
 
@@ -104,9 +103,10 @@
 		mutationFn: (file: File) => scan.upload(file, 'Lease'),
 		onSuccess: (res) => {
 			resetReviewStateForDraft();
-			draftId = res.draftId;
-			phase = 'processing';
-			void goto(newRentalDraftUrl(res.draftId), { replaceState: true, noScroll: true, keepFocus: true });
+			const next = beginNewRentalDraftNavigation(res.draftId);
+			draftId = next.draftId;
+			phase = next.phase;
+			void goto(next.url, { replaceState: true, noScroll: true, keepFocus: true });
 		},
 		onError: (err) => showError(apiErrorMessage(err, 'Could not read that file. Try a clearer photo or the PDF.'))
 	}));

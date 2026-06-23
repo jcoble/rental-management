@@ -20,6 +20,8 @@ export interface NewRentalPropertyForm {
 	ownerEntityId: string;
 }
 
+export type NewRentalPhase = 'capture' | 'processing' | 'steps' | 'done';
+
 export function parseNewRentalDraftId(searchParams: Pick<URLSearchParams, 'get'>): number | null {
 	const raw = searchParams.get('draftId')?.trim();
 	if (!raw) return null;
@@ -32,6 +34,14 @@ export function parseNewRentalDraftId(searchParams: Pick<URLSearchParams, 'get'>
 
 export function newRentalDraftUrl(draftId: number): string {
 	return `/scan/new-rental?draftId=${draftId}`;
+}
+
+export function beginNewRentalDraftNavigation(draftId: number): { draftId: null; phase: NewRentalPhase; url: string } {
+	return {
+		draftId: null,
+		phase: 'processing',
+		url: newRentalDraftUrl(draftId)
+	};
 }
 
 export function createNewRentalPropertyForm(): NewRentalPropertyForm {
