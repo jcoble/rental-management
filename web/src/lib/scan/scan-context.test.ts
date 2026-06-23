@@ -4,6 +4,7 @@ import {
 	appendScanContext,
 	applyScanContextOverrides,
 	parseScanContext,
+	resolvePaymentLeaseIdFromContext,
 	scanHref
 } from './scan-context.ts';
 
@@ -59,5 +60,32 @@ describe('scan context helpers', () => {
 		const workOrderOverrides: Record<string, unknown> = {};
 		applyScanContextOverrides(workOrderOverrides, { propertyId: 10, unitId: 20 }, 'WorkOrder');
 		assert.deepEqual(workOrderOverrides, { propertyId: 10, unitId: 20 });
+	});
+
+	it('rejects unsafe return targets when parsing scan context', () => {
+		assert.deepEqual(parseScanContext(new URLSearchParams('returnTo=https://evil.test/units/20')), {});
+		assert.deepEqual(parseScanContext(new URLSearchParams('returnTo=//evil.test/units/20')), {});
+		assert.deepEqual(parseScanContext(new URLSearchParams('returnTo=/units/20?tab=rent')), {
+			returnTo: '/units/20?tab=rent'
+		});
+	});
+
+	it('resolves payment lease selection from explicit lease or an unambiguous unit context', () => {
+		const leases = [
+			{ id: 1, unitId: 20, status: 'Expired' },
+			{ id: 2, unitId: 20, status: 'Active' },
+			{ id: 3, unitId: 30, status: 'Active' }
+		];
+
+		assert.equal(resolvePaymentLeaseIdFromContext({ leaseId: 3, unitId: 20 }, leases), 3);
+		assert.equal(resolvePaymentLeaseIdFromContext({ unitId: 20 }, leases), 2);
+		assert.equal(resolvePaymentLeaseIdFromContext({ unitId: 30 }, leases), 3);
+		assert.equal(
+			resolvePaymentLeaseIdFromContext({ unitId: 40 }, [
+				{ id: 4, unitId: 40, status: 'Active' },
+				{ id: 5, unitId: 40, status: 'Active' }
+			]),
+			undefined
+		);
 	});
 });

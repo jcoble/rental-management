@@ -1392,3 +1392,50 @@ Verification:
 - Browser console check after the invoice retest: zero warning-or-higher messages.
 
 Status: Pass after fix for the covered scan-first rental spine, paid receipt scan, unpaid invoice scan, and scanned-vendor linking workflow. Continue next with Unit Command Center remaining tabs/actions and other non-banking/non-QuickBooks workflows.
+
+## Pass 9 Unit Command Center Deep Pass
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-9`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-9`
+
+Local stack:
+- Web: `https://localhost:5872`
+- API: `https://localhost:5871` (`http://localhost:5870`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass8-db`, database `rentalcommand_tsk397_pass8_clean`, host port `5548`
+- Assistant provider: `claude-cli`, model `sonnet`
+
+Synthetic account:
+- Jordan Harper, `tsk397.pass8.20260622b@example.local`
+
+Acceptance criteria:
+- Unit Command Center tabs and shortcuts support a property manager's normal unit workflow: lease review, rent posting/editing, maintenance creation, receipt scanning, documents, expenses, and timeline audit review.
+- Unit-scoped scan flows carry enough context to minimize duplicate user entry, attach the source file to the created record, and return the user back to the originating unit workflow.
+- Unit document counts and document lists include files attached to the unit and its child records using DB-side filtering.
+- Rent activity is listed newest-first with server-side sort/paging, matching the overview card.
+
+Evidence:
+- Lease tab rendered the current lease, tenant, rent, deposit, dates, Open lease link, and Scan/upload lease action.
+- Rent tab validation blocked an empty payment submit with `Amount is required`. Posting `$1,125.00` created Payment `3`, updated recent activity, and expanding/editing the row saved `$1,120.00` plus method `ACH`. The audit feed expanded the update diff for amount and method.
+- Maintenance tab validation blocked incomplete work-order creation. Creating `Kitchen sink leak` updated the header chip and recent activity. Opening the work-order detail and returning through the unit link preserved the Maintenance tab.
+- Maintenance receipt scan uploaded `output/scan-fixtures/scan-maintenance-invoice.pdf`, extracted `Harborline Maintenance LLC`, category Repairs & maintenance, amount `$420.68`, and created Expense `3` linked to Unit `1` and WorkOrder `1`.
+- Expenses tab created and edited a manual paid expense, then displayed the update diff in the full timeline.
+- Overview shortcuts `Open rent`, `Open maintenance`, and `Open documents` landed on the intended tabs. The current next-action link `Confirm move-in / collect deposit` landed on the Lease tab. Lifecycle `Move-Out` landed on Maintenance.
+- Documents tab and header now show `4 docs`, including the work-order expense scan `scan-20260623001412` grouped under Expense, plus the lease and two payment scans.
+- Browser console check after the pass returned 0 warning-or-higher messages.
+
+Fixed in this pass:
+- `TSK397-B035` - Unit-scoped payment scans did not infer a lease unless `leaseId` was explicitly present, so the rent-check review required manual lease selection. Fix: scan context now resolves a payment lease from an explicit lease or unambiguous unit lease context, with preferred Draft/PendingSignature/Active disambiguation. Regression: `web/src/lib/scan/scan-context.test.ts`.
+- `TSK397-B036` - Confirmed unit-origin scans left users on the scan success screen with no return-to-source action. Fix: confirmed scan success cards now offer `View/Edit Record`, context-aware `Back to unit/property/maintenance/lease/workflow`, and `Scan another`, only for safe local return targets.
+- `TSK397-B037` - Unit Documents omitted expense-attached files even when the expense belonged to the unit or one of its work orders. Fix: `UnitDashboardService.BuildUnitDocumentsQuery` now includes `Expense` stored files through DB-side expense and work-order subqueries. Regression: `UnitDashboardServiceTests.GetDashboardAsync_IncludesExpenseDocumentsLinkedToTheUnitOrItsWorkOrders`.
+- `TSK397-B038` - Unit Rent tab requested `sort=dueDate`, so the full list showed older payments before newly posted payments while Overview showed newest-first. Fix: Rent tab now requests `sort=-dueDate` server-side. Regression: `PaymentServiceTests.ListPageAsync_SortsDueDateDescendingWhenRequested`.
+
+Verification:
+- `pnpm --dir web test:unit -- src/lib/scan/scan-context.test.ts` passed 105/105.
+- `pnpm --dir web check` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+- `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.sln --filter "FullyQualifiedName~UnitDashboardServiceTests|FullyQualifiedName~PaymentServiceTests" --verbosity minimal` passed 11/11 in `RentalCommand.Api.Tests`, with only known NuGet vulnerability warnings.
+
+Deferred:
+- `TSK-399` - User-reported Unit Command Center `Send renewal` no-op remains captured and intentionally deferred.
+
+Status: Pass after fixes for unit-scoped payment scan context/return, expense document rollup, and rent-list newest-first ordering. Continue next with the remaining non-banking/non-QuickBooks app surfaces after this checkpoint.

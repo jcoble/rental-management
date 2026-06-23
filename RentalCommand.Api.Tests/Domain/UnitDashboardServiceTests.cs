@@ -83,6 +83,60 @@ public class UnitDashboardServiceTests : IDisposable
         auditSql.Should().Contain("Expenses", "expense child scope should be translated as a SQL subquery");
     }
 
+    [Fact]
+    public async Task GetDashboardAsync_IncludesExpenseDocumentsLinkedToTheUnitOrItsWorkOrders()
+    {
+        var seeded = SeedUnitWithTimelineChildren();
+        var now = new DateTime(2026, 1, 2, 12, 0, 0, DateTimeKind.Utc);
+        var directExpense = new Expense
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = seeded.Unit.PropertyId,
+            UnitId = seeded.Unit.Id,
+            Description = "Direct unit receipt",
+            Amount = 55m,
+            IncurredAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var foreignExpense = new Expense
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = seeded.ForeignLease.Unit!.PropertyId,
+            UnitId = seeded.ForeignLease.UnitId,
+            Description = "Other unit receipt",
+            Amount = 75m,
+            IncurredAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Expenses.AddRange(directExpense, foreignExpense);
+        _db.SaveChanges();
+
+        _db.StoredFiles.AddRange(
+            File("Expense", seeded.Expense.Id, "work-order-receipt.pdf", now),
+            File("Expense", directExpense.Id, "direct-unit-receipt.png", now.AddMinutes(-1)),
+            File("Expense", foreignExpense.Id, "foreign-unit-receipt.pdf", now.AddMinutes(1)),
+            File("Payment", seeded.Payment.Id, "rent-check.png", now.AddMinutes(-2)));
+        _db.SaveChanges();
+
+        _executedSql.Clear();
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, seeded.Unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.Header.DocsNeedingReviewCount.Should().Be(3);
+        dashboard.Overview.PendingDocs.Select(d => d.FileName)
+            .Should().BeEquivalentTo(["work-order-receipt.pdf", "direct-unit-receipt.png", "rent-check.png"]);
+        dashboard.Overview.PendingDocs.Should().NotContain(d => d.FileName == "foreign-unit-receipt.pdf");
+        dashboard.Overview.PendingDocs.Count(d => d.EntityType == "Expense").Should().Be(2);
+
+        _executedSql
+            .Where(command => command.Contains("FROM \"StoredFiles\"", StringComparison.OrdinalIgnoreCase))
+            .Should().OnlyContain(command => command.Contains("Expenses", StringComparison.OrdinalIgnoreCase),
+                "unit document list/count queries must scope expense attachments in SQL, not after materialization");
+    }
+
     private static bool IsChildIdPreload(string command)
         => IsBareIdSelect(command, "Leases")
             || IsBareIdSelect(command, "Payments")
@@ -108,6 +162,19 @@ public class UnitDashboardServiceTests : IDisposable
             Operation = AuditLogOperation.Created,
             ActorLabel = "test",
             Timestamp = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc).AddMinutes(-minutesAgo),
+        };
+
+    private static StoredFile File(string entityType, int entityId, string fileName, DateTime uploadedAt)
+        => new()
+        {
+            PortfolioId = PortfolioId,
+            EntityType = entityType,
+            EntityId = entityId,
+            FileName = fileName,
+            FilePath = fileName,
+            ContentType = fileName.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "application/pdf",
+            FileSize = 1024,
+            UploadedAt = uploadedAt,
         };
 
     private SeededTimelineGraph SeedUnitWithTimelineChildren()
