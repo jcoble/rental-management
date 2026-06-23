@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
 	canRunApplicationScreening,
+	formatApplicationsEmptyMessage,
 	formatApplicationAddress,
 	formatRequestedProperty,
 	formatRequestedUnit,
@@ -47,5 +48,19 @@ describe('requested home labels', () => {
 			'Maple Grove Duplex',
 		);
 		assert.equal(formatRequestedUnit({ unitId: 2, unitNumber: 'B' }), 'B');
+	});
+});
+
+describe('formatApplicationsEmptyMessage', () => {
+	it('uses first-run copy when no filters are active', () => {
+		assert.equal(
+			formatApplicationsEmptyMessage('', 'all'),
+			'No applications yet. Share your application link to get started.',
+		);
+	});
+
+	it('uses no-match copy when search or status filters are active', () => {
+		assert.equal(formatApplicationsEmptyMessage('gray', 'all'), 'No applications match your filters.');
+		assert.equal(formatApplicationsEmptyMessage('', 'Approved'), 'No applications match your filters.');
 	});
 });

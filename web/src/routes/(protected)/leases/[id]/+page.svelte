@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { leases } from '$lib/api/endpoints/leases';
-	import { tabForLeaseEdit } from '$lib/leases/lease-detail-state';
+	import { scannedLeaseDocumentLinkLabel, tabForLeaseEdit } from '$lib/leases/lease-detail-state';
 	import { canSendLeaseForSignature, signableStateMessage } from '$lib/leases/lease-esign';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
@@ -750,7 +750,7 @@
 											class="max-h-80 w-auto rounded-md border border-border object-contain transition group-hover:ring-2 group-hover:ring-primary"
 											loading="lazy"
 										/>
-										<span class="mt-1 block text-xs text-primary underline underline-offset-2 group-hover:text-primary/80">Open full size</span>
+										<span class="mt-1 block text-xs text-primary underline underline-offset-2 group-hover:text-primary/80">{scannedLeaseDocumentLinkLabel(true)}</span>
 									</a>
 								{:else}
 									<a
@@ -761,7 +761,7 @@
 										class="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-3 text-sm font-medium text-foreground transition hover:border-primary hover:text-primary"
 									>
 										<FileText class="h-5 w-5 shrink-0" />
-										<span>View scanned document (PDF)</span>
+										<span>{scannedLeaseDocumentLinkLabel(false)}</span>
 									</a>
 								{/if}
 							</div>

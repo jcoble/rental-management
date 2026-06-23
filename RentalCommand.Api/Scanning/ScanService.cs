@@ -838,7 +838,7 @@ public sealed class ScanService : IScanService
             SecurityDeposit = fields.SecurityDeposit ?? 0m,
             LateFeeAmount   = fields.LateFee ?? 0m,
             RentDueDay      = fields.RentDueDay is >= 1 and <= 31 ? fields.RentDueDay.Value : 1,
-            Notes           = "Imported from scanned lease PDF.",
+            Notes           = "Imported from scanned lease document.",
             // Keep the full scan extraction superset as jsonb extras.
             ExtractedData   = NormalizeExtractedData(draft.ExtractedFields),
         };
@@ -862,7 +862,7 @@ public sealed class ScanService : IScanService
         if (lease is null)
             return new ScanConfirmResult(false, null, "Lease creation failed");
 
-        // Re-attach the source PDF to the created lease (FinalizeDraft re-keys the StoredFile + marks Confirmed).
+        // Re-attach the source document to the created lease (FinalizeDraft re-keys the StoredFile + marks Confirmed).
         await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "Lease", lease.Id, ct);
 
         var appliedJson = JsonSerializer.Serialize(new
@@ -1060,7 +1060,7 @@ public sealed class ScanService : IScanService
                 Email = BlankToNull(fields.TenantEmail),
                 Phone = BlankToNull(fields.TenantPhone),
                 EmergencyContact = BlankToNull(fields.TenantEmergencyContact),
-                Notes = "Created from scanned lease PDF.",
+                Notes = "Created from scanned lease document.",
             },
             ct);
 
@@ -1110,7 +1110,7 @@ public sealed class ScanService : IScanService
                 City = !string.IsNullOrWhiteSpace(fields.PropertyCity) ? fields.PropertyCity!.Trim() : "Unknown",
                 State = !string.IsNullOrWhiteSpace(fields.PropertyState) ? fields.PropertyState!.Trim() : "Unknown",
                 PostalCode = !string.IsNullOrWhiteSpace(fields.PropertyPostalCode) ? fields.PropertyPostalCode!.Trim() : "Unknown",
-                Notes = "Created from scanned lease PDF.",
+                Notes = "Created from scanned lease document.",
             },
             ct);
 
@@ -1146,7 +1146,7 @@ public sealed class ScanService : IScanService
                 SquareFeet = fields.UnitSquareFeet is > 0 ? fields.UnitSquareFeet : null,
                 MarketRent = fields.MonthlyRent is > 0m ? fields.MonthlyRent.Value : 0m,
                 Status = UnitStatus.Occupied, // an imported lease means the unit is currently leased
-                Notes = "Created from scanned lease PDF.",
+                Notes = "Created from scanned lease document.",
             },
             ct);
 
