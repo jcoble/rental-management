@@ -24,6 +24,29 @@ Run the web app as a real new live user starting from empty portfolio data. Buil
 - Current clean-start continuation user: Nora Vale, `tsk397.full.1782131040@example.local`
 - Current portfolio: Nora Vale's Portfolio
 
+## Findings Index
+
+This is the consolidated ledger for the pass. The detailed repro, fix, test, and browser evidence remains in the pass sections below.
+
+Fixed and verified:
+- `RC-UI-001` through `RC-UI-031`: dashboard, onboarding, photo extraction, receipt scan, application flows, owner/vendor/portal/notification/signing/reporting/security/admin/public-route controls covered in the first broad pass.
+- `B015` DB-side rule slices: audited report/accounting/banking/list endpoints now push the covered filtering, grouping, sorting, paging, and aggregation work to SQL. This is not a full-app DB-side certification; remaining broad grid/DataGrid risk is listed below.
+- `TSK397-B017`, `B018`, `B019`: scan-new-rental progress/copy, lease extraction contact fields, and work-order detail links.
+- `TSK397-B021`, `B023`, `B024`, `B025`: lease ledger currency, status enum labels, lease edit tab switching, and Unit Command Center tab URL sync.
+- `TSK397-B027`, `B028`, `B029`, `B030`, `B031`, `B032`, `B034`: image/PDF wording and single-image preservation, Unit edit, scan-first onboarding, expense category labels, unit scan context, scanned-vendor linking, and expense delete confirmation.
+- `TSK397-B035` through `B038`: unit-scoped payment scan lease inference, post-scan return actions, unit document rollup for expense files, and newest-first rent rows.
+- `TSK397-B039`, `B041` through `B047`, `B049` through `B069`: application scan copy/detail, neutral scanned-source labels, image preservation, application requested-home linking, work-order unit grounding, scan rejection persistence, invalid upload feedback, terminal scan filters, lease notice gating, work-order no-phone dispatch gating, payment delete confirmation, unit quick-post payment method/reference/notes, filtered empty states, tenant notice behavior, document delete accessibility, duplicate confirm guarding, lease agreement/source separation, lease history note diffs, no-reload signature state, scan-first setup shortcut, lease-prefill contact fields, and payment detail currency formatting.
+- `TSK397-B071` through `B073`: work-order status modal enum labels, stale completed-work-order dispatch hints/no-vendor dispatch recovery, and scheduled/completed date ordering.
+
+Open, watch, or deferred:
+- `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
+- `TSK397-B022` and `TSK397-B070`: lease/property history copy promises every change, but child records such as opening balances, generated agreements, document uploads, loans, and recurring expenses do not all appear in the parent history. This needs a product decision on parent-history scope.
+- `TSK397-B026` / `B040`: scan processing stuck-state family. It did not reproduce in later application-scan proof after scan-review cleanup, but stays on the watch list until more scan types are rerun.
+- `TSK397-B033`: receipt line-item extraction can produce incomplete line items; product policy is still needed on whether incomplete line items are optional hints or must block/warn.
+- `TSK397-B048`: scan front-door voice-note permission denied state has no visible recovery/status.
+- `TSK-401` and `TSK-404`: Unit Command Center `List this unit` and `Send renewal` no-op lifecycle actions are tracked separately in Notion.
+- Plaid banking and connected QuickBooks/accounting provider workflows remain deferred until sandbox credentials are available. The unconnected accounting shell and OAuth-return error state are browser-proven.
+
 ## Pass Log
 
 ### Dashboard
@@ -2306,3 +2329,58 @@ Verification:
 - Browser regression: Playwright CLI confirmed the full payment detail formatting fix on the running local stack and zero browser warnings/errors.
 
 Status: Pass for the covered fresh-user dashboard checklist, settings notification/automation, property loan/recurring-expense, unit rent, and payment-detail workflows after fixing payment amount formatting. Continue next with remaining unit Maintenance/Documents/Expenses/Timeline, tenant detail/list, lease lifecycle/delete/signing follow-through, and the broader non-banking/non-QuickBooks inventory.
+
+## Pass 41 Fresh-User Maintenance Detail Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-41`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Harper Stone, `tsk397.pass39.202606231342@example.local`
+- Portfolio: Harper Stone's Portfolio, id `3`
+
+Acceptance criteria:
+- Unit Maintenance and work-order detail must support a real create -> dispatch -> status -> document -> rating -> edit workflow without leaking implementation enum names.
+- Completed work orders must not continue showing active dispatch helper copy that implies the vendor can still close the job by SMS.
+- Work-order dispatch with no vendors should give a next action rather than a dead empty state.
+- Work-order cost/timing edit must reject completion dates before scheduled visits and allow users to correct invalid data.
+- Work-order camera/image attachments must upload, render, download, and preserve image content.
+
+Evidence:
+- `/units/6?tab=maintenance` started from the scan-created unit, showed zero work orders, and exposed `New work order` plus `Scan receipt`.
+- Empty work-order submit showed `Title is required` and `Description is required`.
+- Created `Bathroom vanity leak`, priority High, category Plumbing; Unit header updated to `1 open repair`, and Recent activity linked to `/maintenance/3`.
+- Before the no-vendor follow-up, `Text a vendor` on the new work order showed an empty vendor state with only cancel/disabled submit. The page now includes a direct `Add vendor` action to `/vendors?create=1` for that empty state. The current local portfolios both already have vendors after the real dispatch flow, so the markup fix is recorded here without a second no-vendor account.
+- Created synthetic vendor `Harbor City Plumbing` through `/vendors?create=1`; empty save showed `Name is required`, then save succeeded with phone `614-555-0188`, email `dispatch@harborcity.example`, Preferred and W-9 flags.
+- Dispatch dialog required selecting a vendor before submit; selecting Harbor City Plumbing and submitting a local SMS-provider dispatch produced `Job texted to the vendor.`, assigned vendor links (`Call`, `Text`, `Email`), and a dispatch history row.
+- Status path New -> Scheduled -> In progress -> Waiting on parts -> Completed saved notes and rendered readable status history rows. Pre-fix, the modal copy leaked raw enum names such as `InProgress` and `WaitingParts`.
+- Uploaded camera image `output/qa/production-scale-scans/05-work-orders-camera/work-order-014.jpg` to the work order; detail listed the JPG, and downloading it produced a real JPEG, 1800x2400, about 130 KB.
+- Rating modal stayed disabled until a star value was chosen; saving a 5-star rating with a comment returned `Thanks - rating saved.`
+- Pre-fix, the completed work order still displayed `Harbor City Plumbing has the job. When they text back DONE, this work order closes automatically.` Post-fix snapshot of `/maintenance/3` showed no active dispatch hint after status Completed while preserving vendor contact links.
+- Pre-fix, editing the completed work order allowed Scheduled For Jun 24, 2026 and Completed Jun 23, 2026. Post-fix browser proof saved the same inverted pair and showed the toast `The completion date can't be before the scheduled visit.`; correcting Scheduled For to Jun 22, 2026 and Completed to Jun 23, 2026 saved successfully.
+- Created a second work order, `Pass 41 status label check`, from Unit 2A to prove non-terminal modal text after the fix. Opening `In progress` showed `Change status from New to In progress.`; after saving that transition, opening `Waiting on parts` showed `Change status from In progress to Waiting on parts.` with no raw enum tokens.
+
+Browser console note:
+- The Playwright console log includes expected `400` entries for the two intentional invalid work-order edit submissions, plus transient `500` SignalR/API entries from restarting and stopping the local API in the same browser context. These were environment/proof artifacts during the validation check, not crashes from the repaired status/date flows.
+
+Fixed in this pass:
+- `TSK397-B071` - Work-order status-change modal copy leaked raw enum tokens for compound statuses. Fix: status transition helper formats both current and next status through the shared status-label helper. Regression: `web/src/lib/maintenance/work-order-dispatch.test.ts`.
+- `TSK397-B072` - Completed/cancelled work orders could still show active vendor-dispatch helper copy, and the no-vendor dispatch state did not offer a direct next action. Fix: terminal statuses suppress the active dispatch hint, and the no-vendor empty state links to vendor creation. Regression: `web/src/lib/maintenance/work-order-dispatch.test.ts`; browser proof covered the completed-work-order hint.
+- `TSK397-B073` - Work-order edit accepted completion before the scheduled visit, corrupting the maintenance timeline. Fix: `WorkOrderService.UpdateAsync` rejects effective scheduled/completed pairs where completion is before the scheduled visit. Regressions: `WorkOrderCostsTimingAndProjectionTests.UpdateAsync_RejectsCompletedBeforeScheduled_WhenBothTimingFieldsAreSubmitted` and `UpdateAsync_RejectsCompletedBeforeExistingScheduled_WhenCompletionIsSubmitted`.
+
+Verification:
+- RED: `rtk node --test --experimental-strip-types web/src/lib/maintenance/work-order-dispatch.test.ts` failed with missing `formatStatusTransitionCopy` / `shouldShowActiveDispatchHint` helpers before the web fix.
+- GREEN: `rtk node --test --experimental-strip-types web/src/lib/maintenance/work-order-dispatch.test.ts web/src/lib/utils/status-labels.test.ts web/src/lib/components/unit/maintenance-actions.test.ts` passed 12/12.
+- RED: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~WorkOrderCostsTimingAndProjectionTests --no-restore` failed because no `DomainValidationException` was thrown for completed-before-scheduled.
+- GREEN: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~WorkOrderCostsTimingAndProjectionTests|FullyQualifiedName~WorkOrderControllerWindowValidationTests" --no-restore` passed 13/13.
+- `rtk pnpm --dir web check` passed with 0 errors and the known four `PageHeader.svelte` unused-selector warnings.
+- `rtk dotnet build-server shutdown` completed after the focused API tests.
+- Browser regression: Playwright CLI confirmed completed-work-order dispatch hint removal, invalid scheduled/completed save rejection with visible toast, successful correction, fresh non-terminal status transition modals using readable labels, image document persistence/download, and unit open-repair count updates.
+
+Status: Pass after fixes for the covered work-order detail/maintenance slice. Continue next with Unit Documents/Expenses/Timeline follow-through, tenant detail/list, lease lifecycle/delete/signing follow-through, and the broader non-banking/non-QuickBooks inventory.

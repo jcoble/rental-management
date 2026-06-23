@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -125,6 +126,50 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         var entity = await _db.WorkOrders.AsNoTracking().FirstAsync(w => w.Id == created.Id);
         entity.ActualCost.Should().Be(980.25m);
         entity.CompletedAt.Should().Be(new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc));
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RejectsCompletedBeforeScheduled_WhenBothTimingFieldsAreSubmitted()
+    {
+        var property = SeedProperty("Sycamore Place");
+        var created = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        {
+            PropertyId = property.Id,
+            Title = "Repair vanity leak",
+            Description = "Supply line leak under the bathroom vanity",
+            Status = WorkOrderStatus.InProgress,
+        });
+
+        var act = () => _workOrders.UpdateAsync(PortfolioId, created!.Id, new UpdateWorkOrderRequest
+        {
+            ScheduledFor = new DateTimeOffset(2026, 6, 24, 0, 0, 0, TimeSpan.Zero),
+            CompletedAt = new DateTime(2026, 6, 23, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Be("The completion date can't be before the scheduled visit.");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RejectsCompletedBeforeExistingScheduled_WhenCompletionIsSubmitted()
+    {
+        var property = SeedProperty("Spruce Court");
+        var created = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        {
+            PropertyId = property.Id,
+            Title = "Repair tub drain",
+            Description = "Tub drains slowly",
+            Status = WorkOrderStatus.InProgress,
+            ScheduledFor = new DateTimeOffset(2026, 6, 24, 0, 0, 0, TimeSpan.Zero),
+        });
+
+        var act = () => _workOrders.UpdateAsync(PortfolioId, created!.Id, new UpdateWorkOrderRequest
+        {
+            CompletedAt = new DateTime(2026, 6, 23, 0, 0, 0, DateTimeKind.Utc),
+        });
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Be("The completion date can't be before the scheduled visit.");
     }
 
     [Fact]
