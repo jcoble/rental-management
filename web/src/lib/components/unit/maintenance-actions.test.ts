@@ -1,0 +1,39 @@
+import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import {
+	defaultWorkOrderReceiptScanContext,
+	unitMaintenanceReturnTo,
+	workOrderDetailHref,
+	workOrderReceiptScanContext
+} from './maintenance-actions.ts';
+
+describe('unit maintenance actions', () => {
+	it('builds a direct work-order detail target', () => {
+		assert.equal(workOrderDetailHref(42), '/maintenance/42');
+	});
+
+	it('builds job-scoped receipt scan context', () => {
+		assert.deepEqual(workOrderReceiptScanContext(7, 42), {
+			type: 'Expense',
+			workOrderId: 42,
+			returnTo: '/units/7?tab=maintenance'
+		});
+	});
+
+	it('only defaults the shared receipt action to a work order when unambiguous', () => {
+		assert.deepEqual(defaultWorkOrderReceiptScanContext(7, [42]), {
+			type: 'Expense',
+			workOrderId: 42,
+			returnTo: '/units/7?tab=maintenance'
+		});
+		assert.deepEqual(defaultWorkOrderReceiptScanContext(7, [42, 43]), {
+			type: 'Expense',
+			workOrderId: undefined,
+			returnTo: '/units/7?tab=maintenance'
+		});
+	});
+
+	it('returns the unit maintenance tab return target', () => {
+		assert.equal(unitMaintenanceReturnTo(7), '/units/7?tab=maintenance');
+	});
+});
