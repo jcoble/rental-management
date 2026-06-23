@@ -39,6 +39,7 @@ Fixed and verified:
 - `TSK397-B071` through `B075`: work-order status modal enum labels, stale completed-work-order dispatch hints/no-vendor dispatch recovery, scheduled/completed date ordering, reset-password lockout recovery, and dashboard work-order status labels.
 - `TSK397-B076` and `B077`: Unit Documents direct unit-file uploads/page-level receipt labeling, and audit amount diff currency formatting.
 - `TSK397-B078`: tenant delete dialogs now block active-lease deletes up front with dependency copy instead of sending users into a known server-side rejection.
+- `TSK397-B079`: active lease delete confirmations now explain that the action terminates the lease record, releases the unit from active occupancy, and should be used only for duplicate or mistaken leases.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2511,3 +2512,38 @@ Verification:
 - `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings.
 
 Status: Pass after fixes for tenant list/detail create, edit, documents, history, active-lease delete guard, and local notice draft review/dismiss. Continue next with lease lifecycle/delete/signing follow-through, the tracked lifecycle no-op tasks, and the broader non-banking/non-QuickBooks inventory.
+
+## Pass 45 Lease Delete Copy Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-45`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Harper Stone, `tsk397.pass39.202606231342@example.local`
+- Portfolio: Harper Stone's Portfolio, id `3`
+
+Acceptance criteria:
+- Lease detail destructive actions must describe the real business effect before a user can confirm.
+- Active lease delete copy must not read like deleting a harmless draft when the backend soft-deletes the lease, logs it as terminated, and releases unit occupancy.
+- Cancelling the dialog must leave the active lease untouched.
+
+Evidence:
+- Pre-fix browser repro: `/leases/6` active lease `RC-2A-2026` opened a generic confirmation titled `Delete lease` with message `Delete lease RC-2A-2026? This cannot be undone.` even though `LeaseService.DeleteAsync` soft-deletes the lease, logs `Lease RC-2A-2026 terminated`, and calls occupancy sync for the unit.
+- Post-fix browser proof: the same active lease dialog now renders title `Remove active lease`, message `RC-2A-2026 is active for Riverside Courtyard - Unit 2A. Removing it will terminate this lease record, release the unit from active occupancy, and hide it from active lease workflows. Use Give Notice for a normal move-out; remove only duplicate or mistaken leases.`, and confirm label `Remove active lease`.
+- Cancel was clicked after the post-fix proof, returning to `/leases/6` with the lease still active and no destructive request submitted.
+
+Fixed in this pass:
+- `TSK397-B079` - Active lease delete used generic irreversible-delete copy even though the action has lease-lifecycle and unit-occupancy side effects. Fix: added shared lease delete-state copy for active, notice-given, pending-signature, draft, and ordinary lease deletes, then wired the lease detail confirmation to that helper. Regression: `web/src/lib/leases/lease-delete-state.test.ts`.
+
+Verification:
+- GREEN: `rtk pnpm exec node --test --experimental-strip-types src/lib/leases/lease-delete-state.test.ts src/lib/tenants/tenant-delete-state.test.ts src/lib/components/shared/confirm-dialog-submit.test.ts` passed 6/6.
+- Browser regression: Playwright CLI confirmed the active lease dialog renders the status-aware title, explanatory unit-release message, and `Remove active lease` confirm label; cancel returned to the active lease detail.
+- `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings.
+
+Status: Pass after fixing active lease delete copy. Continue next with the rest of lease lifecycle/signing follow-through, the tracked lifecycle no-op tasks, and the broader non-banking/non-QuickBooks inventory.
