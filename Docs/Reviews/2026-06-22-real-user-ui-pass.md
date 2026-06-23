@@ -46,6 +46,7 @@ Fixed and verified:
 - `TSK397-B084`: cancelling a Notice given lease back to Active now clears the expected move-out date so the active lease no longer shows stale move-out workflow data.
 - `TSK-401` and `TSK-404`: Unit Command Center `List this unit` now continues into a unit-scoped public application link with property/unit preselection, and `Send renewal` now opens the tenant renewal-offer notice workflow without sending automatically.
 - `TSK-406`: local API and Engine scan workers now share one upload directory by default and in local Docker Compose, so camera-image scans created by the web app are readable by the Engine.
+- `TSK-407`: appointment edit modals now preserve a typed replacement date when the user edits the time afterward, so rescheduling does not mix the old date with the new time.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2789,3 +2790,41 @@ Verification:
 - Image proof: the lease Overview rendered the `Scanned document` card, `View scanned document full size` opened `/lease-file/8` in a protected browser tab titled `8 (1800x2400)`, and screenshot proof was saved to `output/playwright/pass51-lease-file-8-image.png`.
 
 Status: Pass after fixing the local API/Engine scan upload storage mismatch and proving a fresh-user camera-image lease scan through confirmation. Continue Pass 51 with appointments, messages, notices, and portal workflows from the scan-created rental spine.
+
+## Pass 52 Appointment Date Edit Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-52`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Jordan Vale, `tsk397.pass51.202606231856@example.local`
+- Portfolio: Jordan Vale's Portfolio, id `4`
+
+Acceptance criteria:
+- A landlord can create an appointment from an empty appointments state with title, type, property, tenant, start time, and end time.
+- Empty required fields keep the modal open and show visible validation errors.
+- Reopening an appointment from the calendar and typing a new date plus time persists the new local wall-clock date and time together.
+- The list and calendar render the updated date/time, and the stored UTC values match the local wall-clock edit.
+
+Bug `TSK-407`:
+- Repro: Open `/appointments`, create `Pass 51 service visit`, reopen it from the calendar, type start `06/26/2026 11:15` and end `06/26/2026 12:00`, then save.
+- Observed: the row updated the start time but kept the old start date, rendering `6/25/2026, 11:15:00 AM`; the DB row had `ScheduledStart = 2026-06-25 15:15:00+00` while `ScheduledEnd = 2026-06-26 16:00:00+00`.
+- Root cause: the shared `DateTimePicker` recombined date/time changes through local component state after child picker events. A typed date change could be lost before a following time edit, so the following time edit recombined with the previous date.
+- Fix: extracted tested date-time part helpers and wired `DateTimePicker` to commit explicit next date/time parts from each event, preserving a typed replacement date across subsequent time edits.
+- Regression: `web/src/lib/components/shared/date-time-picker-state.test.ts`.
+
+Verification:
+- RED: `rtk pnpm --dir web test:unit -- src/lib/components/shared/date-time-picker-state.test.ts` failed before the helper existed with `ERR_MODULE_NOT_FOUND`.
+- GREEN: the same command passed after adding the helper and DateTimePicker wiring, with 196/196 frontend unit tests passing.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- Browser proof: Playwright CLI logged in as Jordan Vale, opened `/appointments`, reopened the existing mixed-date appointment, typed start `06/27/2026 09:30`, end `06/27/2026 10:15`, saved, and the calendar/list rendered `9:30 AM Pass 51 service visit date fixed` plus `6/27/2026, 9:30:00 AM`.
+- DB proof: `Appointments` row `1` stored `ScheduledStart = 2026-06-27 13:30:00+00` and `ScheduledEnd = 2026-06-27 14:15:00+00`, matching the EDT local wall-clock edit.
+- Screenshot proof: `output/playwright/pass52-appointment-date-edit-fixed.png`.
+
+Status: Pass after fixing typed date/time edits in the shared appointment DateTimePicker. Continue next with appointment list/detail workflows, messages, notices, and portal workflows from the scan-created rental spine.
