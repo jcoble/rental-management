@@ -34,6 +34,7 @@ public class ScanServiceTests : IDisposable
     private readonly RecordingTenantService _tenants;
     private readonly RecordingPropertyService _properties;
     private readonly RecordingUnitService _units;
+    private readonly RecordingApplicationService _applications;
     private readonly RecordingAuditService _audit;
     private readonly ScanService _sut;
 
@@ -70,6 +71,7 @@ public class ScanServiceTests : IDisposable
         _tenants      = new RecordingTenantService(_db);
         _properties   = new RecordingPropertyService(_db);
         _units        = new RecordingUnitService(_db);
+        _applications = new RecordingApplicationService();
         _audit        = new RecordingAuditService();
 
         _sut = new ScanService(
@@ -82,8 +84,7 @@ public class ScanServiceTests : IDisposable
             _tenants,
             _properties,
             _units,
-            // Existing tests don't exercise the Application confirm path; a default mock satisfies the ctor.
-            new Mock<IApplicationService>().Object,
+            _applications,
             _audit,
             NullLogger<ScanService>.Instance);
     }
@@ -434,6 +435,53 @@ public class ScanServiceTests : IDisposable
         }
         draftStatus.Should().Be("Confirmed");
         _audit.Calls.Should().Contain(c => c.entityType == "WorkOrder" && c.entityId == 123);
+    }
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_ReviewingWorkOrderDraft_WithSelectedPropertyAndUnitInDescription_GroundsUnit()
+    {
+        _db.Properties.Add(new Property
+        {
+            Id = 10,
+            PortfolioId = PortfolioId,
+            Name = "Summit Row",
+            AddressLine1 = "66 Northline Pkwy",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43207",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 20,
+            PropertyId = 10,
+            UnitNumber = "4D",
+            Bedrooms = 3,
+            Bathrooms = 2,
+            MarketRent = 1650m,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
+
+        const string extractedJson =
+            """{"title":{"value":"Toilet runs continuously","confidence":0.9},"description":{"value":"Tenant reports the toilet runs continuously at Unit 4D and requests weekday afternoon entry.","confidence":0.9},"category":{"value":"Plumbing","confidence":0.8},"priority":{"value":"Normal","confidence":0.8}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "WorkOrder");
+        SeedStoredFile(draft.FilePath);
+        _workOrders.SetupResponse(new WorkOrderResponse { Id = 124, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson: """{"propertyId":10}""");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _workOrders.LastRequest.Should().NotBeNull();
+        _workOrders.LastRequest!.PropertyId.Should().Be(10);
+        _workOrders.LastRequest.UnitId.Should().Be(20);
     }
 
     // -------------------------------------------------------------------------
@@ -822,6 +870,57 @@ public class ScanServiceTests : IDisposable
         captured.ExtractedData.Should().Contain("RentCheck");
     }
 
+    [Fact]
+    public async Task ConfirmAndCreateAsync_ReviewingApplicationDraft_WithApplyingForText_LinksRequestedHome()
+    {
+        var now = DateTime.UtcNow;
+        _db.Properties.Add(new Property
+        {
+            Id = 110,
+            PortfolioId = PortfolioId,
+            Name = "Summit Row",
+            AddressLine1 = "66 Northline Pkwy",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43207",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Units.Add(new Unit
+        {
+            Id = 120,
+            PropertyId = 110,
+            UnitNumber = "4D",
+            Bedrooms = 3,
+            Bathrooms = 2,
+            MarketRent = 1650m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _db.SaveChangesAsync();
+
+        const string extractedJson =
+            """{"first_name":{"value":"Harper","confidence":0.95},"last_name":{"value":"Kim","confidence":0.95},"email":{"value":"qa.applicant.002@example.local","confidence":0.9},"phone":{"value":"555-0102","confidence":0.9},"monthly_income":{"value":"4100.00","confidence":0.9},"applying_for":{"value":"Summit Row Unit 4D","confidence":0.86}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Application");
+        SeedStoredFile(draft.FilePath);
+        _applications.SetupResponse(new ApplicationResponse { Id = 707, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        result.EntityType.Should().Be("Application");
+        result.CreatedEntityId.Should().Be(707);
+
+        _applications.LastRequest.Should().NotBeNull();
+        var request = _applications.LastRequest!;
+        request.PropertyId.Should().Be(110);
+        request.UnitId.Should().Be(120);
+        request.Notes.Should().Contain("Applying for: Summit Row Unit 4D.");
+        request.FirstName.Should().Be("Harper");
+        request.LastName.Should().Be("Kim");
+    }
+
     // -------------------------------------------------------------------------
     // Reject: happy path
     // -------------------------------------------------------------------------
@@ -993,6 +1092,54 @@ public class ScanServiceTests : IDisposable
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+    }
+
+    private sealed class RecordingApplicationService : IApplicationService
+    {
+        private ApplicationResponse _response = new() { Id = 0, PortfolioId = PortfolioId };
+
+        public CreateApplicationRequest? LastRequest { get; private set; }
+
+        public void SetupResponse(ApplicationResponse response) => _response = response;
+
+        public Task<ApplicationResponse> CreateFromScanAsync(
+            int portfolioId, CreateApplicationRequest request, int userId, CancellationToken ct = default)
+        {
+            LastRequest = request;
+            return Task.FromResult(_response);
+        }
+
+        public Task<PublicApplicationFormInfo?> GetPublicFormInfoAsync(string token, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<SubmitApplicationResult?> SubmitAsync(
+            string token, SubmitApplicationRequest request, string? ipAddress, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<IReadOnlyList<ApplicationResponse>> ListAsync(
+            int portfolioId, string? status, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<ApplicationListResponse> ListPageAsync(
+            int portfolioId, string? status, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<ApplicationResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<ApproveApplicationResult?> ApproveAsync(
+            int portfolioId, int id, int userId, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<ApplicationResponse?> DeclineAsync(
+            int portfolioId, int id, int userId, string? reason, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<ApplicationResponse?> WithdrawAsync(int portfolioId, int id, int userId, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<ApplicationLinkResult> GenerateLinkAsync(int portfolioId, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
     }
 
