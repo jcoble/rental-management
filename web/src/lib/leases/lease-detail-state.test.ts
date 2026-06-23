@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { tabForLeaseEdit } from './lease-detail-state.ts';
+import { scannedLeaseDocumentLinkLabel, tabForLeaseEdit } from './lease-detail-state.ts';
 
 describe('lease detail edit state', () => {
 	it('keeps the overview tab when editing starts from overview', () => {
@@ -11,5 +11,12 @@ describe('lease detail edit state', () => {
 		assert.equal(tabForLeaseEdit('history'), 'overview');
 		assert.equal(tabForLeaseEdit('ledger'), 'overview');
 		assert.equal(tabForLeaseEdit('agreement'), 'overview');
+	});
+});
+
+describe('scannedLeaseDocumentLinkLabel', () => {
+	it('does not assume every scanned lease source was uploaded as a PDF', () => {
+		assert.equal(scannedLeaseDocumentLinkLabel(true), 'Open full size');
+		assert.equal(scannedLeaseDocumentLinkLabel(false), 'View scanned document');
 	});
 });

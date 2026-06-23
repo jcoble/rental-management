@@ -1493,3 +1493,61 @@ Deferred:
 - `TSK-399` - User-reported Unit Command Center `Send renewal` no-op remains captured and intentionally deferred.
 
 Status: Pass after fix for the covered fresh-user lease camera scan, application camera scan, and application scanned-source detail proof. Continue next with the remaining scan transition/copy defects and non-banking/non-QuickBooks surfaces.
+
+## Pass 11 Fresh-User Scan Copy, Application Decision, and Lease Source Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-11`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-11`
+
+Local stack:
+- Web: `https://localhost:5892`
+- API: `https://localhost:5891` (`http://localhost:5890`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass8-db`, database `rentalcommand_tsk397_pass11_clean`, host port `5548`
+- Assistant provider: `claude-cli`, model `sonnet`
+
+Synthetic account:
+- Parker Lane Pass 11, `tsk397.pass11.202606230124@example.local`
+- Registered through `/register`, verified through the local outbox email link, logged in, selected "Set up my real portfolio", and confirmed the live portfolio started with zero properties, units, tenants, leases, payments, expenses, work orders, and scan drafts.
+
+Generated sanitized scan inputs:
+- Reused `scripts/qa/generate-production-scale-scan-fixtures.py` output under `output/qa/production-scale-scans`: 480 synthetic files across lease, expense, payment, application, and work-order PDF/photo fixtures.
+
+Acceptance criteria:
+- Application scan should use application-specific upload and processing copy, transition from processing to review without a reload, create an applicant, and support the application approval path into a tenant.
+- New-rental lease scan should create a property, unit, tenant, lease, and viewable source document from a camera-style lease image with human edits preserved.
+- Filtered application lists should distinguish "no matches" from true first-run empty state.
+- Scanned-source UI and persisted scan-created notes should not label camera-photo imports as PDFs.
+
+Evidence:
+- `/scan` with Rental Application selected now says `Drop a rental application here`; default Receipt/Bill copy remains receipt-specific.
+- Uploaded `output/qa/production-scale-scans/04-applications-camera/application-001.jpg`; draft `/scan/1?type=Application` auto-transitioned from Processing to `Ready to review` without reload.
+- Review extracted applicant `Gray Johnson`, email `qa.applicant.001@example.local`, phone `555-0101`, employer `QA Employer 1`, income `$3,850.00`, requested home `Cedar Point Flats Unit 1A`, and ID last four `1000`.
+- Confirming created application `1`; Applications list showed the submitted row. `Get application link` opened the public link modal and Copy showed `Link copied to clipboard.`
+- Application detail rendered the scanned application preview. Approve opened a confirmation modal, then created tenant `Gray Johnson` and exposed `View tenant`; tenant detail showed the application-derived provenance notes.
+- Uploaded `output/qa/production-scale-scans/01-leases-camera/lease-001-1a.jpg` through `/scan/new-rental`; it transitioned to the five-step review wizard.
+- Review prefilled property `Cedar Point Flats`, address `742 Evergreen St`, city `Columbus`, state `OH`, ZIP `43200`, unit `1A`, rent `$1125.00`, tenant `Avery Ellis`, lease `QA-2026-001-1A`, dates `2026-01-01` to `2027-01-01`, deposit `$1125.00`, and due day `1`.
+- Human edits in the review UI set unit beds `2`, baths `1`, tenant email `avery.ellis@example.local`, phone `555-1101`, and emergency contact `Morgan Ellis 555-1102`; confirmation landed on `/leases/1`.
+- DB proof after confirm: `properties=1`, `units=1`, `tenants=2`, `leases=1`, `applications=1`, `scan_drafts=2`; unit `1A` retained `Bedrooms=2.0`, `Bathrooms=1.0`; lease `QA-2026-001-1A` linked tenant `2` and unit `1`.
+- `/lease-file/1` rendered the camera lease source document in-browser; screenshot proof: `output/playwright/pass11-lease-file-1.png`.
+- Lease Agreement, Ledger, and History tabs rendered usable states. Ledger showed zero balance, opening-balance CTA, no payments yet, and the attached scan document.
+
+Fixed in this pass:
+- `TSK397-B039` - Application scan upload/review used receipt-specific copy. Fix: added `scan-copy.ts` and wired upload/processing copy by target entity type. Regression: `web/src/lib/scan/scan-copy.test.ts`.
+- `TSK397-B042` - Applications search/status filters showed first-run empty copy (`No applications yet...`) when rows existed but no rows matched the active filters. Fix: added `formatApplicationsEmptyMessage` and wired the Applications grid empty message to active filters. Regression: `web/src/lib/applications/application-display.test.ts`.
+- `TSK397-B043` - Scanned-source labels and scan-created notes assumed `PDF` even for camera-photo imports. Fix: lease, payment, and expense scanned-source links now use format-neutral `View scanned document`; lease scan confirmation now persists `Imported/Created from scanned lease document.` for lease/property/unit/tenant notes. Regressions: `web/src/lib/leases/lease-detail-state.test.ts` and `RentalCommand.Api.Tests/Scanning/ScanServiceTests.cs`.
+
+Browser proof after fixes:
+- `/applications?status=Declined` now shows `No applications match your filters.`
+- `/leases/1` scanned-source link now reads `View scanned document`. The existing Pass 11 lease row was created before the backend note text change, so its persisted note still says `Imported from scanned lease PDF`; focused API tests cover the corrected note for newly confirmed scans.
+
+Verification:
+- `pnpm --dir web test:unit -- src/lib/applications/application-display.test.ts src/lib/leases/lease-detail-state.test.ts src/lib/scan/scan-copy.test.ts` passed 110/110.
+- `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~ScanServiceTests --logger "trx;LogFileName=scan-service-pass11.trx" --logger "console;verbosity=minimal"` passed 20/20 with the known `SQLitePCLRaw.lib.e_sqlite3` vulnerability warnings.
+- `pnpm --dir web check` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+
+Deferred:
+- `TSK397-B040` - Application scan processing stuck state did not reproduce on Pass 11 after the copy fix; the draft auto-transitioned to review and confirmed normally. Keep watching in later scan passes.
+- `TSK-399` - User reported again that the Unit Command Center `Send renewal` link does nothing. Existing task `TSK-399` was updated with the 2026-06-23 repro note and screenshot; intentionally not fixed in this pass.
+
+Status: Pass after fixes for application scan copy, application filtered-empty copy, and scanned-source PDF-specific wording. Pause after this checkpoint commit, then continue the remaining non-banking/non-QuickBooks UI inventory.
