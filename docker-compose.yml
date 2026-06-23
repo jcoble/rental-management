@@ -83,8 +83,10 @@ services:
       - Assistant__Provider=${ASSISTANT_PROVIDER:-openai}
       - Assistant__ModelId=${ASSISTANT_MODEL_ID:-gpt-4o}
       - Assistant__ApiKey=${ASSISTANT_API_KEY:-}
+      - Upload__BasePath=/var/lib/rentalcommand/uploads
       - DataProtection__KeysPath=/var/lib/rentalcommand/dataprotection-keys
     volumes:
+      - uploads:/var/lib/rentalcommand/uploads
       - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
     depends_on:
       postgres:
@@ -127,6 +129,7 @@ services:
       - Assistant__Provider=${ASSISTANT_PROVIDER:-openai}
       - Assistant__ModelId=${ASSISTANT_MODEL_ID:-gpt-4o}
       - Assistant__ApiKey=${ASSISTANT_API_KEY:-}
+      - Upload__BasePath=/var/lib/rentalcommand/uploads
       - DataProtection__KeysPath=/var/lib/rentalcommand/dataprotection-keys
       - Notifications__Twilio__AccountSid=${TWILIO_ACCOUNT_SID:-}
       - Notifications__Twilio__AuthToken=${TWILIO_AUTH_TOKEN:-}
@@ -135,6 +138,7 @@ services:
       - Notifications__SendGrid__FromEmail=${SENDGRID_FROM_EMAIL:-}
       - Notifications__SendGrid__FromName=${SENDGRID_FROM_NAME:-Rental Command}
     volumes:
+      - uploads:/var/lib/rentalcommand/uploads
       - dataprotection_keys:/var/lib/rentalcommand/dataprotection-keys
     depends_on:
       postgres:
@@ -190,4 +194,5 @@ networks:
 
 volumes:
   postgres_data:
+  uploads:
   dataprotection_keys:
