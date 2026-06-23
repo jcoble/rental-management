@@ -2,6 +2,7 @@
 	import type { WorkOrderTimelineEntry } from '$lib/types';
 	import StatusBadge from './StatusBadge.svelte';
 	import { formatRelative } from '$lib/utils/date';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { ArrowRight, Plus } from '@lucide/svelte';
 
 	let {
@@ -58,9 +59,9 @@
 						<StatusBadge status={entry.toStatus} />
 						<span class="flex items-center gap-1 text-xs text-muted-foreground">
 							{#if entry.fromStatus}
-								<span data-testid="{testid}-from">{entry.fromStatus}</span>
+								<span data-testid="{testid}-from">{formatStatusLabel(entry.fromStatus)}</span>
 								<ArrowRight class="h-3 w-3" />
-								<span data-testid="{testid}-to">{entry.toStatus}</span>
+								<span data-testid="{testid}-to">{formatStatusLabel(entry.toStatus)}</span>
 							{:else}
 								<Plus class="h-3 w-3" />
 								<span data-testid="{testid}-created">Created</span>
