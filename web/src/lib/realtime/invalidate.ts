@@ -20,85 +20,8 @@ import {
 	type EntityUpdatePayload,
 	type EntityDeletePayload
 } from '$lib/realtime/signalr';
-
-/**
- * Maps a backend `entityType` to the query-key prefixes it affects. Keys come
- * from the `createQuery` calls across the rental routes; partial matching means
- * we only need the first (entity) segment.
- */
-const entityQueryKeys: Record<string, string[][]> = {
-	Property: [['properties'], ['units'], ['dashboard']],
-	Unit: [['units'], ['units-for-lease'], ['properties'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
-	Tenant: [['tenants'], ['dashboard'], ['unit-dashboard']],
-	Lease: [['leases'], ['units-for-lease'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
-	// Payment/Expense both feed the accounting `/summary` rollup (collected /
-	// outstanding / overdue / total expenses), keyed `['accounting-summary', …]`
-	// on the accounting page. The earlier `payment-summary` / `expense-summary`
-	// keys matched no query, so the summary cards stayed stale on realtime events.
-	Payment: [['payments'], ['accounting-summary'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
-	Expense: [['expenses'], ['accounting-summary'], ['dashboard'], ['unit-expenses'], ['unit-dashboard'], ['unit-timeline']],
-	WorkOrder: [['work-orders'], ['dashboard'], ['unit-work-orders'], ['unit-dashboard'], ['unit-timeline']],
-	Inspection: [['inspections'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
-	Appointment: [['appointments'], ['dashboard'], ['unit-dashboard'], ['unit-timeline']],
-	Vendor: [['vendors']],
-	OwnerEntity: [['owners'], ['dashboard']],
-	Portfolio: [['portfolio'], ['portfolios'], ['dashboard']],
-	// A confirmed scan creates an Expense (the backend also broadcasts that
-	// `Expense` event), so refresh the expense list + accounting summary too —
-	// the just-confirmed expense and its effect on the cards show without a reload.
-	ScanDraft: [['scans'], ['scan'], ['expenses'], ['accounting-summary'], ['dashboard']],
-	// A conversation event (a new message from either side) refreshes the thread list and,
-	// via the ['conversation'] prefix, whichever thread is currently open. The
-	// `portal-*` keys cover the tenant-side portal messenger so a landlord message
-	// lands live in the resident portal too.
-	Conversation: [
-		['conversations'],
-		['conversation'],
-		['portal-conversations'],
-		['portal-conversation']
-	]
-};
-
-/** Detail query-key prefix for an entity, used to drop a deleted entity's cache. */
-const entityDetailKey: Record<string, string> = {
-	Property: 'property',
-	Unit: 'unit',
-	Tenant: 'tenant',
-	Lease: 'lease',
-	Payment: 'payment',
-	Expense: 'expense',
-	WorkOrder: 'work-order',
-	Inspection: 'inspection',
-	Appointment: 'appointment',
-	Vendor: 'vendor',
-	OwnerEntity: 'owner',
-	Portfolio: 'portfolio',
-	ScanDraft: 'scan',
-	Conversation: 'conversation'
-};
-
-function invalidateForEntity(queryClient: QueryClient, entityType: string): void {
-	const keys = entityQueryKeys[entityType];
-	if (keys) {
-		for (const key of keys) {
-			queryClient.invalidateQueries({ queryKey: key });
-		}
-	} else {
-		// Unknown entity — be conservative and refresh the dashboard summary.
-		queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-	}
-}
-
-function removeDeletedEntity(
-	queryClient: QueryClient,
-	entityType: string,
-	entityId: number
-): void {
-	const detailKey = entityDetailKey[entityType];
-	if (detailKey) {
-		queryClient.removeQueries({ queryKey: [detailKey, entityId] });
-	}
-}
+import { invalidateQueriesForDataUpdate } from './invalidate-keys';
+export { invalidateQueriesForDataUpdate } from './invalidate-keys';
 
 /**
  * Wire SignalR data-update events to the given QueryClient. Returns an
@@ -108,11 +31,7 @@ function removeDeletedEntity(
 export function useInvalidateOnSignalR(queryClient: QueryClient): () => void {
 	return signalRService.subscribe(
 		(event: DataUpdateEvent, payload: EntityUpdatePayload | EntityDeletePayload) => {
-			const { entityType, entityId } = payload;
-			if (event === 'EntityDeleted') {
-				removeDeletedEntity(queryClient, entityType, entityId);
-			}
-			invalidateForEntity(queryClient, entityType);
+			invalidateQueriesForDataUpdate(queryClient, event, payload);
 		}
 	);
 }
