@@ -165,6 +165,9 @@
 			tenantForm.firstName = parts.length > 1 ? parts.slice(0, -1).join(' ') : parts[0];
 			tenantForm.lastName = parts.length > 1 ? parts[parts.length - 1] : '';
 		}
+		tenantForm.email = values.tenantEmail;
+		tenantForm.phone = values.tenantPhone;
+		tenantForm.emergencyContact = values.tenantEmergencyContact;
 		// seed lease terms
 		leaseForm.leaseNumber = values.leaseNumber;
 		leaseForm.startDate = values.startDate;
@@ -184,6 +187,9 @@
 		if (values.unitBedrooms) af.add('bedrooms');
 		if (values.unitBathrooms) af.add('bathrooms');
 		if (values.tenantName) { af.add('firstName'); af.add('lastName'); }
+		if (values.tenantEmail) af.add('email');
+		if (values.tenantPhone) af.add('phone');
+		if (values.tenantEmergencyContact) af.add('emergencyContact');
 		if (values.leaseNumber) af.add('leaseNumber');
 		if (values.startDate) af.add('startDate');
 		if (values.endDate) af.add('endDate');

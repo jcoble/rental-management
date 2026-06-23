@@ -21,6 +21,9 @@ export interface LeasePrefill {
 	unitSquareFeet: string;
 	// Tenant (free text — no tenant_id in schema)
 	tenantName: string;
+	tenantEmail: string;
+	tenantPhone: string;
+	tenantEmergencyContact: string;
 	// Lease terms
 	leaseNumber: string;
 	startDate: string;           // YYYY-MM-DD
@@ -54,6 +57,9 @@ export function toLeasePrefill(fields: ScanFieldDto[]): { values: LeasePrefill; 
 		unitBathrooms: FIELD(fs, 'unit_bathrooms'),
 		unitSquareFeet: FIELD(fs, 'unit_square_feet'),
 		tenantName: FIELD(fs, 'tenant_name'),
+		tenantEmail: FIELD(fs, 'tenant_email'),
+		tenantPhone: FIELD(fs, 'tenant_phone'),
+		tenantEmergencyContact: FIELD(fs, 'tenant_emergency_contact'),
 		leaseNumber: FIELD(fs, 'lease_number'),
 		startDate: FIELD(fs, 'start_date'),
 		endDate: FIELD(fs, 'end_date'),
@@ -80,6 +86,9 @@ export const STEP_FIELD_TO_EXTRACTION: Record<string, string> = {
 	// tenant
 	firstName: 'tenant_name',
 	lastName: 'tenant_name',
+	email: 'tenant_email',
+	phone: 'tenant_phone',
+	emergencyContact: 'tenant_emergency_contact',
 	// lease
 	leaseNumber: 'lease_number',
 	startDate: 'start_date',
