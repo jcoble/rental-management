@@ -206,6 +206,7 @@
 
 	function invalidateUnits() {
 		queryClient.invalidateQueries({ queryKey: ['units', id] });
+		queryClient.invalidateQueries({ queryKey: ['property', id] });
 		queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
 	}
 
