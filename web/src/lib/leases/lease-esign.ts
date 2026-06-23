@@ -17,6 +17,13 @@ export function hasAgreementAfterSignatureSend(currentHasDocument: boolean, resu
 	return currentHasDocument || result?.esignStatus === 'Sent';
 }
 
+export function visibleLeaseStatus(
+	leaseStatus?: LeaseStatus | null,
+	signatureStatus?: SignatureSendState | null
+): LeaseStatus | undefined {
+	return signatureStatus?.leaseStatus ?? leaseStatus ?? undefined;
+}
+
 export function signableStateMessage(leaseStatus?: LeaseStatus | null): string {
 	if (leaseStatus === 'Active') {
 		return 'This lease is already active. Create or send agreements before activating a lease.';

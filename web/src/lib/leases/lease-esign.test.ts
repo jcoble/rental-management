@@ -4,6 +4,7 @@ import {
 	canSendLeaseForSignature,
 	hasAgreementAfterSignatureSend,
 	signableStateMessage,
+	visibleLeaseStatus,
 } from './lease-esign.ts';
 
 describe('lease e-sign state helpers', () => {
@@ -30,5 +31,14 @@ describe('lease e-sign state helpers', () => {
 		assert.equal(hasAgreementAfterSignatureSend(false, { esignStatus: 'Sent', leaseStatus: 'PendingSignature' }), true);
 		assert.equal(hasAgreementAfterSignatureSend(true, { esignStatus: 'Sent', leaseStatus: 'PendingSignature' }), true);
 		assert.equal(hasAgreementAfterSignatureSend(false, { esignStatus: 'None', leaseStatus: 'Draft' }), false);
+	});
+
+	it('uses fresh signature status while the lease detail cache catches up', () => {
+		assert.equal(
+			visibleLeaseStatus('PendingSignature', { esignStatus: 'Signed', leaseStatus: 'Active' }),
+			'Active'
+		);
+		assert.equal(visibleLeaseStatus('PendingSignature', undefined), 'PendingSignature');
+		assert.equal(visibleLeaseStatus(undefined, { esignStatus: 'Sent', leaseStatus: 'PendingSignature' }), 'PendingSignature');
 	});
 });
