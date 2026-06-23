@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { seedLeaseUnitId, shouldSeedLeaseReviewState } from './lease-review-state.ts';
+import { LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS, seedLeaseUnitId, shouldSeedLeaseReviewState } from './lease-review-state.ts';
 
 describe('shouldSeedLeaseReviewState', () => {
 	it('waits until extraction produced reviewable fields', () => {
@@ -20,5 +20,14 @@ describe('seedLeaseUnitId', () => {
 	it('prefers the extracted unit id and never selects an existing unit while creating a property', () => {
 		assert.equal(seedLeaseUnitId('9', { action: 'link', existingId: 12 }, false), '9');
 		assert.equal(seedLeaseUnitId('', { action: 'link', existingId: 12 }, true), '');
+	});
+});
+
+describe('LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS', () => {
+	it('keeps the editable lease-recovery unit details aligned with backend override keys', () => {
+		assert.deepEqual(
+			LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS.map((field) => field.name),
+			['unit_bedrooms', 'unit_bathrooms', 'unit_square_feet']
+		);
 	});
 });

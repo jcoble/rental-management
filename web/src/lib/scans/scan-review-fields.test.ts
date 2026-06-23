@@ -4,6 +4,8 @@ import { describe, it } from 'node:test';
 import {
 	buildScanReviewFieldGroups,
 	fieldDisplayLabel,
+	scanCategoryLabel,
+	scanCategoryOptionsForTarget,
 	shouldShowScanReviewField,
 	type ScanReviewField
 } from './scan-review-fields.ts';
@@ -25,6 +27,7 @@ describe('scan review field grouping', () => {
 				field('target_entity_type', 'WorkOrder'),
 				field('priority', 'Normal'),
 				field('description', 'Tenant reports the lock sticks.'),
+				field('category', 'Plumbing'),
 				field('notes', 'Photo attached.'),
 				field('transcript', 'Tenant said the door lock sticks.')
 			],
@@ -34,8 +37,20 @@ describe('scan review field grouping', () => {
 		assert.deepEqual(groups.map((group) => group.label), ['Work order', 'Notes']);
 		assert.deepEqual(
 			groups.flatMap((group) => group.fields.map((workOrderField) => workOrderField.name)),
-			['title', 'priority', 'description', 'notes']
+			['title', 'priority', 'description', 'category', 'notes']
 		);
+	});
+
+	it('uses maintenance categories for work-order scans instead of Schedule E expense categories', () => {
+		const workOrderCategories = scanCategoryOptionsForTarget('WorkOrder').map((option) => option.value);
+		const expenseCategories = scanCategoryOptionsForTarget('Expense').map((option) => option.value);
+
+		assert.ok(workOrderCategories.includes('Plumbing'));
+		assert.ok(workOrderCategories.includes('HVAC'));
+		assert.equal(workOrderCategories.includes('MortgageInterest'), false);
+		assert.ok(expenseCategories.includes('MortgageInterest'));
+		assert.equal(scanCategoryLabel('Plumbing', 'WorkOrder'), 'Plumbing');
+		assert.equal(scanCategoryLabel('MortgageInterest', 'Expense'), 'Mortgage interest');
 	});
 
 	it('keeps linkage ids out of generic payment and expense review groups too', () => {

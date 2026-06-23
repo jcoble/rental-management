@@ -20,6 +20,20 @@ export interface NewRentalPropertyForm {
 	ownerEntityId: string;
 }
 
+export function parseNewRentalDraftId(searchParams: Pick<URLSearchParams, 'get'>): number | null {
+	const raw = searchParams.get('draftId')?.trim();
+	if (!raw) return null;
+
+	const parsed = Number(raw);
+	if (!Number.isInteger(parsed) || parsed <= 0) return null;
+
+	return parsed;
+}
+
+export function newRentalDraftUrl(draftId: number): string {
+	return `/scan/new-rental?draftId=${draftId}`;
+}
+
 export function createNewRentalPropertyForm(): NewRentalPropertyForm {
 	return {
 		name: '',
