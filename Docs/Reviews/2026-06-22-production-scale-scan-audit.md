@@ -417,6 +417,53 @@ Deferred findings captured outside this fix:
 
 - Unit Command Center `Send renewal` no-op is tracked as TSK-400 and was not fixed in this pass.
 
+## Pass 20 Continuation Evidence
+
+Date: 2026-06-23
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-20`
+Local stack: `https://localhost:5982`, API `https://localhost:5981`, Postgres `localhost:5568/rentalcommand_tsk397_pass20_clean`
+
+Fresh local landlord account:
+
+- Name: Olivia Hart
+- Email: `tsk397.pass20.202606230650@example.local`
+- Setup choice: live portfolio from zero domain data, not sandbox/demo
+
+Camera-style scan fixtures confirmed in this pass:
+
+- Lease image: `output/qa/production-scale-scans/01-leases-camera/lease-001-1a.jpg`
+- Expense image: `output/qa/production-scale-scans/02-expenses-camera/expense-001.jpg`
+- Payment image: `output/qa/production-scale-scans/03-payments-camera/payment-001.jpg`
+- Application image: `output/qa/production-scale-scans/04-applications-camera/application-001.jpg`
+- Work order image: `output/qa/production-scale-scans/05-work-orders-camera/work-order-001.jpg`
+
+Verified local database counts after browser confirmation:
+
+- 1 property, 1 unit, 1 tenant, 1 lease, 1 payment, 1 expense, 1 rental application, 1 work order, 5 scan drafts.
+
+Browser states exercised:
+
+- `/register`, local email verification, `/login`, `/choose-setup`, and the live empty portfolio setup path.
+- `/scan/new-rental` camera upload through property/unit/tenant/lease/review confirmation, including manual correction of missing beds/baths before create.
+- `/scan/2?type=Expense` generic receipt review, selected only `Cedar Point Flats`, confirmed to `/accounting/expenses/1`, and verified `Expenses.Id=1` has `PropertyId=1`, `UnitId=1`.
+- `/units/1?tab=expenses` showed the scanned Green Thumb Landscaping expense, and `/accounting/expenses/1` now shows `Unit 1A` in Categorization & references.
+- `/scan/3?type=Payment` camera rent-check review, manual lease selection, confirmation to `/accounting/payments/1`, and `/units/1?tab=rent` showing the paid rent row.
+- `/scan/4?type=Application` camera application review/confirm to `/applications/1`, with `RentalApplications.PropertyId=1` and `UnitId=1`.
+- `/scan/5?type=WorkOrder` camera maintenance request review/confirm to `/maintenance/1`, with raw internal linkage fields still hidden and `WorkOrders.PropertyId=1`, `UnitId=1`, `TenantId=1`.
+- `/units/1?tab=maintenance` showed the scanned work order and recent activity.
+
+Bug fixed during this pass:
+
+- Expense detail pages hid the unit reference even when the expense was unit-grounded by the scan flow. The API already returned `unitId` and `unitNumber`; the page rendered only property and vendor in the reference card.
+- Fix: expense detail now renders a `Unit` reference row and links unit-grounded expenses to `/units/{id}?tab=expenses`.
+- Regression coverage: `web/src/lib/accounting/expense-detail-actions.test.ts`.
+- Browser proof after fix: `/accounting/expenses/1` showed `Unit 1A` in the `Categorization & references` card and linked it to `/units/1?tab=expenses`.
+- Verification commands: `pnpm --dir web exec node --test --experimental-strip-types src/lib/accounting/expense-detail-actions.test.ts`; `pnpm --dir web check`; `pnpm --dir web test:unit`.
+
+Deferred findings captured outside this fix:
+
+- Unit Command Center `Send renewal` no-op is tracked as TSK-400; the user provided an FYI screenshot, which was attached to the existing task. It was not fixed in this pass.
+
 ## Classified Inventory Matrix
 
 The route/control inventory now has a finite closure matrix instead of a raw tag-count table. `scripts/qa/inventory-web-surfaces.mjs` includes layout guards, error surfaces, redirects, server routes, file proxies, custom component controls, `data-testid` coverage, route scopes, route kinds, roles, acceptance criteria, and finite edge cases.
@@ -467,6 +514,7 @@ Read-only data-access audit found broad violations of the hard SQL-side rule. Th
 | TSK397-B016 | P1 | Inventory completeness | Fixed in this branch. The inventory script now emits a classified acceptance matrix and route inventory instead of a raw tag-count table. | Read-only route/control sweep found missing coverage for public apply/sign flows, settings subroutes, accounting/report detail routes, maintenance/detail workflows, portal helper role states, admin modals, and file proxy routes. Green: `node scripts/qa/inventory-web-surfaces.mjs` produced 85 classified route rows, 12 surface groups, and `Unclassified routes: none` in `output/qa/web-surface-inventory.md`/`.json`. | Fixed |
 | TSK397-B017 | P1 | Unit documents | Fixed in this branch. Unit Documents linked rows by parent entity route instead of stored file id, so multiple files attached to the same lease or work order could open the same parent-level file rather than the clicked file. | Browser red: generated lease agreement and original lease scan both pointed at `/lease-file/1`; original work-order scan and uploaded work-order image both pointed at `/workorder-file/1`. Green: rows now point to `/document-file/{storedFileId}`; authenticated fetches for ids 1, 4, 8, 10, and 11 returned the expected original PDFs/images/agreement. Focused `unit-document-actions` test passed and inventory classified 87 routes with no unclassified routes. | Fixed |
 | TSK397-B018 | P1 | Expense scan unit grounding | Fixed in this branch. Generic receipt scans could capture a unit reference in notes but persist only `PropertyId`, leaving `UnitId` null and making the Unit Expenses tab look empty. | Browser red: first camera receipt scan created expense #1 with `PropertyId=1`, `UnitId=NULL`, and `/units/1?tab=expenses` showed no expenses. Red/green: `ConfirmAndCreateAsync_ExpenseDraft_WithSelectedPropertyAndUnitInNotes_GroundsUnit` failed, then passed. Browser green: second generic camera receipt scan selected only `Cedar Point Flats`, created expense #2 with `UnitId=1`, and the Unit Expenses tab displayed the paid Green Thumb Landscaping expense. | Fixed |
+| TSK397-B019 | P2 | Expense detail references | Fixed in this branch. Unit-grounded expenses showed Property and Vendor on the expense detail page but omitted Unit, forcing users to infer the unit from notes or navigate through the unit Expenses tab. | Browser red in pass 20: `/accounting/expenses/1` for a scan-created receipt had `Expenses.UnitId=1` and appeared in `/units/1?tab=expenses`, but the detail reference card lacked `Unit`. Green: `formatExpenseUnitReference` regression passed, `/accounting/expenses/1` now shows `Unit 1A` linked to `/units/1?tab=expenses`, `pnpm --dir web check` passed with only pre-existing PageHeader warnings, and `pnpm --dir web test:unit` passed 129/129. | Fixed |
 
 ## Regression Expectations
 
