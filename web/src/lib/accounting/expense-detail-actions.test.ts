@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
 	confirmExpenseDelete,
 	expenseDeleteConfirmMessage,
+	formatExpenseUnitReference,
 	requestExpenseDelete
 } from './expense-detail-actions.ts';
 
@@ -32,5 +33,16 @@ describe('expense detail delete actions', () => {
 
 		assert.deepEqual(deletedIds, []);
 		assert.equal(expenseDeleteConfirmMessage(null), '');
+	});
+});
+
+describe('expense detail reference labels', () => {
+	it('shows the linked unit number instead of hiding unit-grounded expenses', () => {
+		assert.equal(formatExpenseUnitReference({ unitId: 7, unitNumber: '1A' }), 'Unit 1A');
+		assert.equal(formatExpenseUnitReference({ unitId: 7, unitNumber: 'Unit 2B' }), 'Unit 2B');
+	});
+
+	it('uses a clear empty label when an expense has no unit', () => {
+		assert.equal(formatExpenseUnitReference({ unitId: null, unitNumber: null }), 'No unit');
 	});
 });

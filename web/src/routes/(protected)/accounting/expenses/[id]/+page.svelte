@@ -22,6 +22,7 @@
 	import {
 		confirmExpenseDelete,
 		expenseDeleteConfirmMessage,
+		formatExpenseUnitReference,
 		requestExpenseDelete,
 		type ExpenseDeleteTarget
 	} from '$lib/accounting/expense-detail-actions';
@@ -373,6 +374,22 @@
 			<DetailCard title="Categorization & references" icon={Tags} accent="muted" testid="expense-card-references" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Category" bind:value={form.category} display={formatExpenseCategory(expense.category)} {editing} type="select" options={categoryOptions} testid="expense-detail-category" />
 				<InlineField label="Property" bind:value={form.propertyId} display={expense.propertyName ?? 'General'} {editing} type="select" options={propertyOptions} testid="expense-detail-property" />
+				<div data-testid="expense-detail-unit-field">
+					<p class="mb-1 text-xs font-medium text-muted-foreground">Unit</p>
+					{#if expense.unitId}
+						<a
+							href="/units/{expense.unitId}?tab=expenses"
+							class="block min-h-10 rounded-md py-2 text-sm font-medium text-primary underline-offset-4 hover:underline"
+							data-testid="expense-detail-unit-link"
+						>
+							{formatExpenseUnitReference(expense)}
+						</a>
+					{:else}
+						<p class="min-h-10 rounded-md py-2 text-sm font-medium text-foreground" data-testid="expense-detail-unit-value">
+							{formatExpenseUnitReference(expense)}
+						</p>
+					{/if}
+				</div>
 				<InlineField label="Vendor" bind:value={form.vendorId} display={expense.vendorName ?? 'No vendor'} {editing} type="select" options={vendorOptions} testid="expense-detail-vendor" />
 				<div data-testid="expense-detail-billable-field">
 					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="expense-detail-billable-input">Billable to owner</label>
