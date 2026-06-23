@@ -2,9 +2,25 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
 	hasNoticeMoveOutDate,
+	LEASE_DETAIL_TABS,
+	resolveLeaseDetailTab,
 	scannedLeaseDocumentLinkLabel,
 	tabForLeaseEdit,
 } from './lease-detail-state.ts';
+
+describe('lease detail tab routing', () => {
+	it('accepts every supported lease detail tab from the URL', () => {
+		for (const tab of LEASE_DETAIL_TABS) {
+			assert.equal(resolveLeaseDetailTab(tab), tab);
+		}
+	});
+
+	it('falls back to overview for missing or invalid tab query values', () => {
+		assert.equal(resolveLeaseDetailTab(null), 'overview');
+		assert.equal(resolveLeaseDetailTab(''), 'overview');
+		assert.equal(resolveLeaseDetailTab('unknown'), 'overview');
+	});
+});
 
 describe('lease detail edit state', () => {
 	it('keeps the overview tab when editing starts from overview', () => {
