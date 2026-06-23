@@ -15,6 +15,7 @@ public class NoticeDraftService : INoticeDraftService
     // Renewal terms: propose a modest escalation on the current rent for the new term.
     private const decimal RenewalEscalationPercent = 3.0m;
     private const int RenewalTermMonths = 12;
+    private static readonly TimeSpan CopyGenerationTimeout = TimeSpan.FromMilliseconds(1500);
 
     private readonly RentalCommandDbContext _db;
     private readonly IConversationService _conversations;
@@ -172,7 +173,7 @@ public class NoticeDraftService : INoticeDraftService
         return new GenerateNoticeDraftsResponse
         {
             CreatedCount = created.Count,
-            Drafts = created.Select(Map).ToList()
+            Drafts = await BuildGenerateResponseDraftsAsync(portfolioId, tenantId, requestedType, created, ct)
         };
     }
 
@@ -245,6 +246,34 @@ public class NoticeDraftService : INoticeDraftService
             .Include(d => d.Property)
             .Include(d => d.Lease).ThenInclude(l => l!.Unit)
             .Where(d => d.PortfolioId == portfolioId);
+
+    private async Task<IReadOnlyList<NoticeDraftResponse>> BuildGenerateResponseDraftsAsync(
+        int portfolioId,
+        int? tenantId,
+        string? requestedType,
+        List<NoticeDraft> created,
+        CancellationToken ct)
+    {
+        if (!tenantId.HasValue)
+        {
+            return created.Select(Map).ToList();
+        }
+
+        var query = BaseQuery(portfolioId)
+            .Where(d => d.Status == "Draft" && d.TenantId == tenantId.Value);
+
+        if (!string.IsNullOrWhiteSpace(requestedType))
+        {
+            query = query.Where(d => d.NoticeType == requestedType);
+        }
+
+        var drafts = await query
+            .OrderBy(d => d.TriggerDate)
+            .ThenByDescending(d => d.CreatedAt)
+            .ToListAsync(ct);
+
+        return drafts.Select(Map).ToList();
+    }
 
     /// <summary>
     /// True if an open (Draft-status) notice of this type already exists for the lease — either
@@ -443,7 +472,7 @@ public class NoticeDraftService : INoticeDraftService
 
         try
         {
-            var raw = await _llm.ChatAsync(prompt, ct);
+            var raw = await GenerateCopyAsync(prompt, noticeType, lease.Id, ct);
             if (TryParseCopy(raw, out var llmSubject, out var llmBody))
             {
                 subject = Truncate(llmSubject, 200);
@@ -451,6 +480,10 @@ public class NoticeDraftService : INoticeDraftService
                 usedPrompt = Truncate(prompt, 8000);
             }
             // else: empty (no-op / no key) or malformed → keep deterministic template.
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -473,6 +506,35 @@ public class NoticeDraftService : INoticeDraftService
             CreatedAt = now,
             UpdatedAt = now
         };
+    }
+
+    private async Task<string?> GenerateCopyAsync(
+        string prompt,
+        string noticeType,
+        int leaseId,
+        CancellationToken ct)
+    {
+        using var copyCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var chatTask = _llm.ChatAsync(prompt, copyCts.Token);
+        var timeoutTask = Task.Delay(CopyGenerationTimeout, CancellationToken.None);
+        var completed = await Task.WhenAny(chatTask, timeoutTask);
+        ct.ThrowIfCancellationRequested();
+
+        if (completed == chatTask)
+        {
+            return await chatTask;
+        }
+
+        await copyCts.CancelAsync();
+        _ = chatTask.ContinueWith(t =>
+        {
+            _ = t.Exception;
+        }, TaskContinuationOptions.OnlyOnFaulted);
+        _logger.LogInformation(
+            "LLM copy generation timed out for {NoticeType} (lease {LeaseId}); using template.",
+            noticeType,
+            leaseId);
+        return null;
     }
 
     private static string BuildPrompt(string intent, string facts)

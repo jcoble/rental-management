@@ -2006,3 +2006,50 @@ Verification:
 - Browser regression: Playwright CLI confirmed `/properties?status=Inactive` filter-aware empty copy, empty-state modal Status `Inactive`, and `/properties?type=Commercial&status=Inactive` toolbar modal Type `Commercial` plus Status `Inactive`.
 
 Status: Pass after fix for properties filtered-create defaults. Continue next with tenant detail/list workflows, lease list gaps, and the tracked lifecycle no-op tasks (`TSK-401`, `TSK-404`) after the main inventory lanes.
+
+## Pass 35 Tenant List, Detail, Documents, and Notice Workflows
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-35`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Acceptance criteria:
+- Tenants list search/filter/sort/page controls must preserve URL state and use the DB-backed tenant page endpoint.
+- Filtered tenant empty states must explain the active search/filter context and keep create actions useful.
+- Tenant detail must render contact, active lease count, leases, documents, history, edit/delete actions, and link active lease rows to lease detail.
+- Tenant document upload must accept image files from the same scan/camera-style fixture path used by the broader scan engine, refresh the document list, and expose named view/delete controls.
+- Tenant notice generation must be fast enough for the dialog, must fall back to deterministic copy if LLM copy generation is slow, and must surface any existing open tenant draft created by an earlier request.
+- Forced notice generation with no eligible lease must return a specific no-eligible-record state rather than generic "nothing due" copy.
+- Shared destructive confirmations must not allow rapid duplicate confirm submissions before the parent mutation flips busy state.
+
+Evidence:
+- `/tenants?q=NoSuchTenant397` rendered filtered empty copy `No tenants match your search`, description `Try adjusting the search, or add a tenant that matches this view.`, and action `Add tenant`.
+- `/tenants/1` rendered Avery Ellis, contact information, one active lease, scan-created notes, document panel, and record history.
+- Opening lease row `QA-2026-001-1A` from `/tenants/1` navigated to `/leases/1`; network proof included `GET /api/v1/leases/1`, lease ledger/payments, document-status, signature-status, documents, and audit.
+- Reopening `Create / Send notice` on Avery Ellis returned the existing draft renewal offer immediately after an earlier timed-out attempt had already created it. The dialog rendered subject `Lease renewal for Cedar Point Flats Unit 1A`, deterministic renewal body, Portal/Email/SMS channel toggles, Dismiss, and Send. Network proof: `POST /api/v1/notices/generate => 200`.
+- `/tenants/2` rendered Gray Johnson with `Active Leases` count `0` and no lease rows. Default notice generation showed `No notices are due for this tenant right now.`
+- Forcing `Lease renewal offer` on Gray Johnson returned `POST /api/v1/notices/generate => 200` and rendered `No lease renewal offer could be created.` with description `This tenant needs an active eligible lease for that notice type.`
+- Uploaded camera-style image fixture `output/scan-fixtures/scan-rent-check-image.png` through the tenant document panel. The document list refreshed after `POST /api/v1/documents => 201` and `GET /api/v1/documents?entityType=Tenant&entityId=2 => 200`.
+- The uploaded image row exposed a named file button `scan-rent-check-image.png` and a named icon button `Delete scan-rent-check-image.png`, proving the document delete control is no longer anonymous in the accessibility tree.
+
+Fixed in this pass:
+- `TSK397-B056` - Filtered tenants empty states reused first-run copy, making an active no-match search look like an empty account. Fix: the tenants page now uses a tested helper that distinguishes first-run and filtered-empty states.
+- `TSK397-B057` - Tenant notice generation could exceed the frontend dialog window when LLM copy generation was slow, even though deterministic copy was available. Fix: notice copy generation now has a short internal timeout and falls back to deterministic templates while respecting caller cancellation.
+- `TSK397-B058` - Tenant-scoped notice generation returned only newly created drafts, so a previous timed-out request could leave an existing open draft hidden from the tenant dialog. Fix: tenant-scoped generation now returns DB-side filtered open drafts for that tenant and requested notice type.
+- `TSK397-B059` - Forced tenant notices with no eligible active lease used generic "nothing due" copy. Fix: the tenant notice dialog now tracks the forced notice label and renders a specific no-eligible-record message.
+- `TSK397-B060` - Document-panel delete icon buttons were unlabeled, making uploaded document deletion ambiguous for assistive technology and Playwright role queries. Fix: delete controls include the document filename in their accessible name.
+- `TSK397-B061` - Shared confirmation dialogs could accept rapid duplicate confirm clicks before the parent mutation propagated busy state, matching duplicate DELETE traffic observed during tenant/document delete testing. Fix: `ConfirmDialog` now has an internal submit latch in addition to the external busy prop.
+
+Verification:
+- RED: `rtk pnpm --dir web test:unit -- src/lib/tenants/tenant-list-state.test.ts src/lib/components/shared/documents-panel-accessibility.test.ts src/lib/components/shared/confirm-dialog-submit.test.ts` failed before the helpers/labels/latch existed.
+- RED: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~NoticeDraftServiceTests --no-restore` failed before the notice timeout/existing-draft fix.
+- GREEN: `rtk pnpm --dir web test:unit` passed 157/157.
+- GREEN: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~NoticeDraftServiceTests --no-restore` passed 4/4.
+- Browser regression: Playwright CLI confirmed filtered tenant empty copy, existing tenant notice draft retrieval, no-lease forced notice copy, tenant-to-lease handoff, and image upload with named document delete control.
+
+Status: Pass after fixes for tenant filtered-empty copy, notice timeout/draft visibility/no-eligible copy, document delete accessibility, and shared confirmation duplicate-submit guarding. Continue next with lease list/detail gaps and the tracked lifecycle no-op tasks (`TSK-401`, `TSK-404`) after the main inventory lanes.

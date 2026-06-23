@@ -10,6 +10,7 @@
 	import { tenantSchema, parseForm } from '$lib/schemas';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { getTenantNoticeEmptyCopy } from '$lib/tenants/tenant-notice-state';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
@@ -109,8 +110,10 @@
 	// approve endpoint) or dismiss it. Mirrors the portfolio-wide flow on /notices, scoped to one tenant.
 	let showNoticeDialog = $state(false);
 	let noticeDrafts = $state<NoticeDraft[]>([]);
+	let forcedNoticeLabel = $state<string | null>(null);
 	// Per-draft channel selection (portal / email / sms), defaulting to all on.
 	let noticeChannels = $state<Record<number, { portal: boolean; email: boolean; sms: boolean }>>({});
+	const noticeEmptyCopy = $derived(getTenantNoticeEmptyCopy(forcedNoticeLabel));
 
 	function noticeTypeLabel(type: string) {
 		switch (type) {
@@ -143,6 +146,7 @@
 	function openNoticeDialog() {
 		noticeDrafts = [];
 		noticeChannels = {};
+		forcedNoticeLabel = null;
 		showNoticeDialog = true;
 		// Default pass: generate whatever is actually due for this tenant.
 		generateNoticeMutation.mutate(undefined);
@@ -151,14 +155,18 @@
 	const generateNoticeMutation = createMutation(() => ({
 		// noticeType omitted → generate all due; supplied → force that one type (early renewal / move-out).
 		mutationFn: (noticeType?: string) => notices.generate(id, noticeType),
-		onSuccess: (result) => {
+		onSuccess: (result, noticeType) => {
+			const selectedForcedNoticeLabel = noticeType
+				? FORCEABLE_NOTICE_TYPES.find((nt) => nt.type === noticeType)?.label ?? noticeTypeLabel(noticeType)
+				: null;
+			forcedNoticeLabel = selectedForcedNoticeLabel;
 			noticeDrafts = result.drafts ?? [];
 			const seeded: Record<number, { portal: boolean; email: boolean; sms: boolean }> = {};
 			for (const d of noticeDrafts) seeded[d.id] = { portal: true, email: true, sms: true };
 			noticeChannels = seeded;
 			queryClient.invalidateQueries({ queryKey: ['notice-drafts', portfolioId] });
 			if (noticeDrafts.length === 0) {
-				showSuccess('No notices are due for this tenant right now.');
+				showSuccess(getTenantNoticeEmptyCopy(selectedForcedNoticeLabel).message);
 			}
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -435,9 +443,9 @@
 		{:else if noticeDrafts.length === 0}
 			<div class="rounded-lg border border-border p-6 text-center" data-testid="tenant-notice-empty">
 				<BellRing class="mx-auto mb-2 h-6 w-6 text-muted-foreground" />
-				<p class="text-sm font-medium">No notices are due for this tenant right now.</p>
+				<p class="text-sm font-medium">{noticeEmptyCopy.message}</p>
 				<p class="mt-1 text-xs text-muted-foreground">
-					Renewal, late-rent, and move-out notices appear here automatically when they come due.
+					{noticeEmptyCopy.description}
 				</p>
 				<!-- Force a specific notice even outside the trigger window (e.g. an early renewal offer). -->
 				<p class="mt-4 text-xs font-medium uppercase tracking-wide text-muted-foreground">Create one anyway</p>
