@@ -10,7 +10,14 @@ export interface ScanContext {
 	returnTo?: string;
 }
 
+interface LeaseContextCandidate {
+	id: number;
+	unitId?: number | null;
+	status?: string | null;
+}
+
 const DOC_TYPE_SET = new Set<string>(SCAN_DOC_TYPES);
+const PAYMENT_PREFERRED_LEASE_STATUSES = new Set(['Draft', 'PendingSignature', 'Active']);
 
 function parsePositiveInt(value: string | null): number | undefined {
 	if (!value) return undefined;
@@ -102,4 +109,25 @@ export function applyScanContextOverrides(
 		setIfMissing(overrides, 'propertyId', context.propertyId);
 		setIfMissing(overrides, 'unitId', context.unitId);
 	}
+}
+
+export function resolvePaymentLeaseIdFromContext(
+	context: ScanContext,
+	leases: LeaseContextCandidate[] | undefined | null
+): number | undefined {
+	if (!leases?.length) return undefined;
+
+	if (context.leaseId && leases.some((lease) => lease.id === context.leaseId)) {
+		return context.leaseId;
+	}
+
+	if (!context.unitId) return undefined;
+
+	const unitLeases = leases.filter((lease) => lease.unitId === context.unitId);
+	if (unitLeases.length === 1) return unitLeases[0].id;
+
+	const preferred = unitLeases.filter((lease) =>
+		lease.status ? PAYMENT_PREFERRED_LEASE_STATUSES.has(lease.status) : false
+	);
+	return preferred.length === 1 ? preferred[0].id : undefined;
 }

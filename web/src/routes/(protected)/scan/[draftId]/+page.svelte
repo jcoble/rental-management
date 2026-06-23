@@ -8,7 +8,11 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
-	import { applyScanContextOverrides, parseScanContext } from '$lib/scan/scan-context';
+	import {
+		applyScanContextOverrides,
+		parseScanContext,
+		resolvePaymentLeaseIdFromContext
+	} from '$lib/scan/scan-context';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
@@ -429,11 +433,9 @@
 					if (propertyField?.value) selectedPropertyId = propertyField.value;
 				}
 			}
-			if (data.targetEntityType === 'Payment' && !selectedLeaseId && scanContext.leaseId) {
-				const contextLeaseId = String(scanContext.leaseId);
-				if (leasesQuery.data?.some((l) => String(l.id) === contextLeaseId)) {
-					selectedLeaseId = contextLeaseId;
-				}
+			if (data.targetEntityType === 'Payment' && !selectedLeaseId && leasesQuery.data) {
+				const contextLeaseId = resolvePaymentLeaseIdFromContext(scanContext, leasesQuery.data);
+				if (contextLeaseId) selectedLeaseId = String(contextLeaseId);
 			}
 			// Lease drafts: seed the property/unit pickers + the create-new fields. Tenant stays on
 			// "create new" unless the user picks.
@@ -621,6 +623,15 @@
 			case 'Expense': return 'Expense';
 			default: return 'Record';
 		}
+	});
+
+	const returnToSourceLabel = $derived.by(() => {
+		const href = scanContext.returnTo ?? '';
+		if (href.startsWith('/units/')) return 'Back to unit';
+		if (href.startsWith('/properties/')) return 'Back to property';
+		if (href.startsWith('/maintenance')) return 'Back to maintenance';
+		if (href.startsWith('/leases/')) return 'Back to lease';
+		return 'Back to workflow';
 	});
 
 	// Confirm mutation
@@ -879,8 +890,11 @@
 						<p class="text-xs opacity-80">{confirmedRecord.type === 'WorkOrder' ? 'It is saved to maintenance.' : 'It is saved to your books.'} You can view it or scan another document.</p>
 					</div>
 				</div>
-				<div class="flex shrink-0 gap-2">
+				<div class="flex shrink-0 flex-wrap justify-end gap-2">
 					<Button size="sm" href={linkedRecordHref} data-testid="scan-view-record">View/Edit Record</Button>
+					{#if scanContext.returnTo}
+						<Button size="sm" variant="outline" href={scanContext.returnTo} data-testid="scan-return-to-source">{returnToSourceLabel}</Button>
+					{/if}
 					<Button size="sm" variant="outline" href="/scan">Scan another</Button>
 				</div>
 			</div>
@@ -901,8 +915,11 @@
 						</p>
 					</div>
 				</div>
-				<div class="flex shrink-0 gap-2">
+				<div class="flex shrink-0 flex-wrap justify-end gap-2">
 					<Button size="sm" href={linkedRecordHref} data-testid="scan-view-record">View/Edit {createdTypeLabel}</Button>
+					{#if scanContext.returnTo}
+						<Button size="sm" variant="outline" href={scanContext.returnTo} data-testid="scan-return-to-source">{returnToSourceLabel}</Button>
+					{/if}
 					<Button size="sm" variant="outline" href="/scan">Scan another</Button>
 				</div>
 			</div>
