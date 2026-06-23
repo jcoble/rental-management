@@ -45,6 +45,7 @@ Fixed and verified:
 - `TSK397-B082` and `B083`: typed DatePicker dates now immediately update modal-gated actions, and Give Notice keeps lease/signature lifecycle state coherent so Notice given status, actions, and move-out date render together.
 - `TSK397-B084`: cancelling a Notice given lease back to Active now clears the expected move-out date so the active lease no longer shows stale move-out workflow data.
 - `TSK-401` and `TSK-404`: Unit Command Center `List this unit` now continues into a unit-scoped public application link with property/unit preselection, and `Send renewal` now opens the tenant renewal-offer notice workflow without sending automatically.
+- `TSK-406`: local API and Engine scan workers now share one upload directory by default and in local Docker Compose, so camera-image scans created by the web app are readable by the Engine.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2749,3 +2750,42 @@ Verification:
 - Browser regression for `TSK-404`: Playwright CLI opened `https://localhost:6042/units/6?tab=overview`, confirmed the `Send renewal -- lease ends in 43 days` link target `/tenants/7?action=create-notice&noticeType=RenewalOffer`, clicked it, and saw the `Create / Send notice` dialog with a `Renewal offer` draft for `Riverside Courtyard Unit 2A`. The notice was not sent.
 
 Status: Pass after fixing both Unit Command Center lifecycle no-op actions. Continue the full real-user UI inventory from merged main.
+
+## Pass 51 Fresh-User Camera Scan Storage Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-51`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- Engine: local worker process with `Assistant__Provider=claude-cli`, `Assistant__ModelId=sonnet`, empty SendGrid/SMTP secrets, and shared `Upload__BasePath=/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26/uploads`
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Jordan Vale, `tsk397.pass51.202606231856@example.local`
+- Portfolio: Jordan Vale's Portfolio, id `4`
+
+Acceptance criteria:
+- A fresh landlord can start from live onboarding, choose `Scan a lease`, upload a camera-style lease image, and reach the editable five-step review wizard.
+- The API and Engine use the same local upload storage path, so the Engine can read files created by the web app without copying files between project directories.
+- Confirming the reviewed scan creates the property, unit, tenant, lease, and source image document, and the scanned image opens from the lease detail page.
+
+Bug `TSK-406`:
+- Repro: From `/scan/new-rental`, upload `output/qa/production-scale-scans/01-leases-camera/lease-001-1a.jpg` while the API uses its project-relative default `./uploads` and the Engine uses its own project-relative default `./uploads`.
+- Observed: scan draft `11` failed with `FileNotFoundException`; the uploaded image existed under `RentalCommand.Api/uploads`, while the Engine looked under `RentalCommand.Engine/uploads`.
+- Root cause: `DiskFileStorage` resolved relative upload paths against each process content root. API and Engine content roots differ, so matching `./uploads` values still pointed at different physical directories.
+- Fix: default local API and Engine upload paths now resolve to the repo-level `uploads` directory, and local `docker-compose.yml` mounts one named `uploads` volume at `/var/lib/rentalcommand/uploads` for both API and Engine.
+- Regression: `RentalCommand.Engine.Tests/Configuration/UploadPathConfigurationTests.cs`.
+
+Verification:
+- RED: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Engine.Tests/RentalCommand.Engine.Tests.csproj --filter "FullyQualifiedName~UploadPathConfigurationTests" --logger "console;verbosity=normal"` failed before the fix because local config resolved API uploads under `RentalCommand.Api/uploads` and local Docker Compose had no shared upload volume/env entries.
+- GREEN: the same focused test passed after the config and Docker Compose fix.
+- Browser retry: Playwright CLI uploaded `output/qa/production-scale-scans/01-leases-camera/lease-002-2b.jpg` on `/scan/new-rental`; draft `12` stored `224fd603da074a189eafaa517a48811b_scan-20260623230836` and thumbnail `aef406f647f44c1ca674250d3010ff7e_scan-thumb-20260623230836` under the shared `uploads/` directory, with no new files in stale `RentalCommand.Api/uploads`.
+- Engine proof: worker log reported `claude-cli extraction: VISION read (image/jpeg, no extractable text)` and `Scan extraction succeeded for draft 12 (model claude-cli:sonnet): 14 field(s) with a value -> Lease, Reviewing`.
+- Wizard proof: the scan reached `Step 1 of 5 - Property`, prefilled `Riverside Flats`, `1188 Maple Ave`, `Columbus`, `OH`, `43201`; Unit step prefilled `2B` and `$1200.00`, and the landlord filled missing beds/baths as `2` / `1`; Tenant step prefilled `Blake Hayes`, and the landlord filled synthetic email/phone/emergency contact; Lease step prefilled `QA-2026-002-2B`, `02/01/2026` to `02/01/2027`, rent/deposit `$1200.00`, due day `1`, and status `Active`.
+- Confirm proof: `Confirm & create` landed on `/leases/8`. DB proof showed draft `12` as `Confirmed`, lease `8` `QA-2026-002-2B`, property `7` `Riverside Flats`, unit `9` `2B`, tenant `10` `Blake Hayes`, and `StoredFiles` row `39` as `image/jpeg` linked to `Lease` `8`.
+- Image proof: the lease Overview rendered the `Scanned document` card, `View scanned document full size` opened `/lease-file/8` in a protected browser tab titled `8 (1800x2400)`, and screenshot proof was saved to `output/playwright/pass51-lease-file-8-image.png`.
+
+Status: Pass after fixing the local API/Engine scan upload storage mismatch and proving a fresh-user camera-image lease scan through confirmation. Continue Pass 51 with appointments, messages, notices, and portal workflows from the scan-created rental spine.
