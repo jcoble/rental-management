@@ -221,6 +221,8 @@ public class ApplicationResponse
     public DateTime SubmittedAtUtc { get; set; }
     public DateTime? ReviewedAtUtc { get; set; }
     public int? ApprovedTenantId { get; set; }
+    public bool HasScan { get; set; }
+    public bool ScanIsImage { get; set; }
 
     /// <summary>Stable selector for frontend tests, e.g. <c>application-1</c>.</summary>
     public string TestId => $"application-{Id}";
