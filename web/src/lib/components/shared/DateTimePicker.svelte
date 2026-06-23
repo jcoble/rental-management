@@ -23,6 +23,7 @@
 -->
 <script lang="ts">
 	import DatePicker from './DatePicker.svelte';
+	import { applyDateTimePartChange, combineDateTimeParts, splitDateTimeValue } from './date-time-picker-state';
 
 	let {
 		value = $bindable(''),
@@ -42,55 +43,41 @@
 		id?: string;
 	} = $props();
 
-	// Split the incoming local ISO into its date (`yyyy-MM-dd`) and time (`HH:mm`)
-	// parts. We keep these as local component state and recombine on change so a
-	// partially-entered value (date but no time yet) doesn't get lost.
-	function splitDate(iso: string): string {
-		const [datePart] = iso.split('T');
-		return datePart ?? '';
-	}
-	function splitTime(iso: string): string {
-		const timePart = iso.split('T')[1] ?? '';
-		// Normalize to HH:mm for the native time input (drop seconds if present).
-		return timePart ? timePart.slice(0, 5) : '';
-	}
-
-	let datePart = $state(splitDate(value));
-	let timePart = $state(splitTime(value));
+	const initialParts = splitDateTimeValue(value);
+	let datePart = $state(initialParts.datePart);
+	let timePart = $state(initialParts.timePart);
 
 	// Re-sync internal parts if the bound value is replaced from outside (e.g. a
 	// form loads existing data) — guarded so we don't clobber in-progress edits.
 	$effect(() => {
 		const incoming = value;
-		const combined = combine(datePart, timePart);
+		const combined = combineDateTimeParts(datePart, timePart);
 		if (incoming !== combined) {
-			datePart = splitDate(incoming);
-			timePart = splitTime(incoming);
+			const next = splitDateTimeValue(incoming);
+			datePart = next.datePart;
+			timePart = next.timePart;
 		}
 	});
 
-	function combine(d: string, t: string): string {
-		if (!d || !t) return '';
-		// Always emit seconds for a stable `yyyy-MM-ddTHH:mm:ss` shape.
-		const time = t.length === 5 ? `${t}:00` : t;
-		return `${d}T${time}`;
-	}
-
-	function emit() {
-		const next = combine(datePart, timePart);
-		if (next === value) return;
-		value = next;
-		onchange?.(next);
+	function commit(next: ReturnType<typeof applyDateTimePartChange>) {
+		datePart = next.datePart;
+		timePart = next.timePart;
+		if (next.value === value) return;
+		value = next.value;
+		onchange?.(next.value);
 	}
 
 	function handleDateChange(iso: string) {
-		datePart = iso;
-		emit();
+		const next = applyDateTimePartChange({ datePart, timePart }, { datePart: iso });
+		commit(next);
 	}
 
 	function handleTimeInput(e: Event) {
-		timePart = (e.target as HTMLInputElement).value;
-		emit();
+		const next = applyDateTimePartChange(
+			{ datePart, timePart },
+			{ timePart: (e.target as HTMLInputElement).value }
+		);
+		commit(next);
 	}
 
 	const timeInputClass =
