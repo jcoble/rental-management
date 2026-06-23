@@ -5,6 +5,7 @@
 	import { leases } from '$lib/api/endpoints/leases';
 	import {
 		hasNoticeMoveOutDate,
+		resolveLeaseDetailTab,
 		scannedLeaseDocumentLinkLabel,
 		tabForLeaseEdit,
 	} from '$lib/leases/lease-detail-state';
@@ -429,7 +430,7 @@
 		};
 		formPropertyId = String(lease.propertyId);
 		formErrors = {};
-		activeTab = tabForLeaseEdit(activeTab);
+		setTab(tabForLeaseEdit(activeTab));
 		editing = true;
 	}
 	function cancelEditing() {
@@ -523,13 +524,26 @@
 	}
 
 	// Active tab for the detail page.
-	let activeTab = $state('overview');
+	let activeTab = $state(resolveLeaseDetailTab(page.url.searchParams.get('tab')));
 	const tabs = [
 		{ value: 'overview', label: 'Overview' },
 		{ value: 'agreement', label: 'Agreement & Signing' },
 		{ value: 'ledger', label: 'Ledger' },
 		{ value: 'history', label: 'History' },
 	];
+
+	$effect(() => {
+		const tabFromUrl = resolveLeaseDetailTab(page.url.searchParams.get('tab'));
+		if (tabFromUrl !== activeTab) activeTab = tabFromUrl;
+	});
+
+	function setTab(tab: string) {
+		const nextTab = resolveLeaseDetailTab(tab);
+		activeTab = nextTab;
+		const url = new URL(page.url);
+		url.searchParams.set('tab', nextTab);
+		goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+	}
 
 	// Context tone for the hero wash — status-keyed (see HeroCard for the recipe).
 	const heroTone = $derived.by<HeroTone>(() => {
@@ -664,7 +678,7 @@
 			</div>
 		</div>
 
-		<Tabs.Root bind:value={activeTab} class="w-full">
+		<Tabs.Root value={activeTab} onValueChange={setTab} class="w-full">
 			<Tabs.List class="mb-6" data-testid="lease-detail-tabs">
 				{#each tabs as t}
 					<Tabs.Trigger value={t.value} data-testid="lease-tab-{t.value}">{t.label}</Tabs.Trigger>
