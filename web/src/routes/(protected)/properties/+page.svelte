@@ -28,6 +28,10 @@
 		propertyStatusOptions,
 		propertyTypeOptions
 	} from '$lib/properties/property-labels';
+	import {
+		createEmptyPropertyDraft,
+		getPropertiesEmptyStateCopy
+	} from '$lib/properties/property-list-state';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -106,11 +110,12 @@
 
 	const list = $derived(propertiesQuery.data?.items ?? []);
 	const totalCount = $derived(propertiesQuery.data?.totalCount ?? 0);
+	const hasActiveFilters = $derived(Boolean(search.trim() || typeFilter || statusFilter));
+	const emptyStateCopy = $derived(getPropertiesEmptyStateCopy({ hasActiveFilters }));
 
-	const emptyProperty = { name: '', type: 'MultiFamily', status: 'Active', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', ownerEntityId: '' };
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
-	let form = $state({ ...emptyProperty });
+	let form = $state(createEmptyPropertyDraft());
 	let formErrors = $state<Record<string, string>>({});
 	let deleteTarget = $state<Property | null>(null);
 
@@ -141,7 +146,7 @@
 
 	function openCreate() {
 		editingId = null;
-		form = { ...emptyProperty };
+		form = createEmptyPropertyDraft({ typeFilter, statusFilter });
 		formErrors = {};
 		showForm = true;
 	}
@@ -291,10 +296,10 @@
 		data={list}
 		{columns}
 		loading={propertiesQuery.isLoading || propertiesQuery.isFetching}
-		emptyMessage="No rentals yet"
-		emptyDescription="A property is one building or address. Add your first to get started."
+		emptyMessage={emptyStateCopy.message}
+		emptyDescription={emptyStateCopy.description}
 		emptyIcon={Building}
-		emptyActionLabel="Add your first property"
+		emptyActionLabel={emptyStateCopy.actionLabel}
 		emptyOnAction={openCreate}
 		emptyTone="primary"
 		onRowClick={openProperty}

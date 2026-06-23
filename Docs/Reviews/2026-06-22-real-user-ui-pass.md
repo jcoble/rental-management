@@ -1963,3 +1963,46 @@ Verification:
 - No code changed in this pass; no unit test rerun was required beyond the prior landed Pass 32 verification.
 
 Status: Pass for the remaining occupied-unit command-center workflows exercised here. Continue next with property detail/list workflows, tenant detail/list workflows, lease list/detail gaps, and the tracked lifecycle no-op tasks.
+
+## Pass 34 Properties List and Detail Workflows
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-34`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Acceptance criteria:
+- Properties list search, type filter, status filter, sorting, paging, row open, row edit, row delete, create, and filtered empty states must operate through the DB-backed paged endpoint and preserve URL state.
+- Creating from a filtered empty list must not create a record that immediately disappears because the modal defaults conflict with the active filters.
+- Property detail must support identity/cost-basis edit/cancel/save, cancellable delete, unit create/edit/open/delete, loan create/edit/schedule/delete, recurring expense create/edit/delete, and activity history expansion.
+- Property detail changes must recalculate visible summary cards and preserve navigation to related Unit Command Center records.
+
+Evidence:
+- `/properties` rendered Cedar Point Flats, Riverside Flats, and Sunset Ridge. Search for `Sunset` made `GET /api/v1/properties/page?take=20&search=Sunset&portfolioId=2 => 200`; selecting Multi-family added `type=MultiFamily`, proving the primary search/type filters are DB-backed.
+- Status filter options rendered All statuses, Active, Under maintenance, and Inactive. Selecting Inactive navigated to `/properties?status=Inactive` and rendered a status-filtered empty state.
+- Created disposable property `QA Maple Annex`, then opened `/properties/4`; detail rendered identity, address, details, cost basis, units, loans, recurring expenses, leases, and history.
+- Add Unit empty submit showed `Unit number is required`; creating `QA-1`, editing rent to `$1,400`, opening `/units/4`, returning by breadcrumb, and deleting the unit all updated the property summary and occupancy counts correctly.
+- Add Loan empty submit showed required validation for lender, original amount, interest rate, start date, and monthly P&I. Creating `QA Mutual Bank`, expanding `Amortization schedule`, editing escrow settings, and cancelling/confirming delete all behaved correctly.
+- Add Recurring Expense empty submit showed required validation for description, amount, and start date. Creating annual tax true-up, editing amount, cancelling delete, and confirming delete all behaved correctly.
+- Property edit seeded existing fields; changing name, purchase price, land value, and in-service date updated the detail page and produced an expandable history row with before/after values.
+- Property delete opened cancellable confirmation `Delete "QA Maple Annex Updated"? This also removes its units.`; confirming removed the disposable property and returned to `/properties`.
+- Row edit/delete on seeded Cedar Point Flats opened seeded edit and delete confirmation surfaces; Cancel preserved the row.
+- Pre-fix filtered-empty reproduction: `/properties?status=Inactive` showed first-run copy `No rentals yet` / `Add your first property`; pressing the empty-state action opened New Property with Status `Active`, so saving would create a property hidden by the current Inactive filter.
+- Post-fix proof: `/properties?status=Inactive` now renders `No properties match your filters`, description `Try adjusting search or filters, or add a property that matches this view.`, and action `Add property`; opening it seeds Status `Inactive`.
+- Toolbar create proof: `/properties?type=Commercial&status=Inactive` then `New Property` opened the modal with Type `Commercial` and Status `Inactive`.
+- No backend/data-access code changed in this slice; the existing properties page continues to call the paged endpoint for search/filter/sort/page.
+
+Fixed in this pass:
+- `TSK397-B055` - Filtered properties empty states used first-run copy and the New Property draft ignored active type/status filters. Fix: property list state now has a tested draft builder and filter-aware empty copy helper, and the page seeds create modals from valid active filters.
+
+Verification:
+- RED: `rtk bash -lc 'cd web && node --test --experimental-strip-types src/lib/properties/property-list-state.test.ts'` failed before the helper existed with `ERR_MODULE_NOT_FOUND`.
+- GREEN: `rtk bash -lc 'cd web && node --test --experimental-strip-types src/lib/properties/property-list-state.test.ts src/lib/properties/property-labels.test.ts'` passed 9/9.
+- Frontend check: `rtk bash -lc 'pnpm --dir web check'` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+- Browser regression: Playwright CLI confirmed `/properties?status=Inactive` filter-aware empty copy, empty-state modal Status `Inactive`, and `/properties?type=Commercial&status=Inactive` toolbar modal Type `Commercial` plus Status `Inactive`.
+
+Status: Pass after fix for properties filtered-create defaults. Continue next with tenant detail/list workflows, lease list gaps, and the tracked lifecycle no-op tasks (`TSK-401`, `TSK-404`) after the main inventory lanes.
