@@ -1530,6 +1530,9 @@ public sealed class ScanService : IScanService
         draft.Status = "Rejected";
         draft.ReviewedAt = DateTime.UtcNow;
         draft.ReviewedBy = userId.ToString();
+        var rejectionReason = Truncate(reason?.Trim(), 500);
+        if (rejectionReason is not null)
+            draft.FailureReason = rejectionReason;
         await _db.SaveChangesAsync(ct);
 
         await _audit.LogAsync(

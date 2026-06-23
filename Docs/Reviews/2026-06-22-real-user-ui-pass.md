@@ -1679,3 +1679,50 @@ Watch items:
 - `TSK-404` - User-reported Unit Command Center `Send renewal` no-op remains captured with the 2026-06-23 screenshot and is intentionally deferred from this scan/data-spine lane.
 
 Status: Pass after fix for work-order unit grounding and browser proof for payment, expense, and work-order camera scan workflows. Continue next with maintenance actions, document/timeline surfaces, and the remaining non-banking/non-QuickBooks app inventory.
+
+## Pass 27 Scan Front-Door Controls and Reject Reason Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-27`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+- Assistant provider: `claude-cli`, model `sonnet`
+
+Synthetic account:
+- Avery Rowan Pass 26, `tsk397.pass26.202606231127@example.local`
+- Continued from the fresh live portfolio created in the current production-scale scan pass.
+
+Acceptance criteria:
+- The `/scan` front door must expose usable document-type selection, contextual help, upload/history tabs, and DB-backed status/sort controls.
+- Rejecting a reviewable draft with a typed reason must persist that reason for the user's records and show it on the rejected scan detail.
+- Blank reject reasons should not erase an existing extraction failure reason.
+- Rejected scans must be finalized: review fields/actions disabled, scan history updated, and no confirm/retry action available from the rejected detail.
+- Permission-denied voice capture should give the user visible recovery/status feedback instead of silently doing nothing.
+
+Evidence:
+- `/scan` rendered `New rental from your lease`, `Bulk import leases`, document-type buttons, `Record voice note`, scan history tabs, and the current batch import summary.
+- Help popover for `Record voice note` rendered the expected title and guidance, then dismissed cleanly with Escape.
+- Status tabs used server-side list calls: Pending and Reviewing showed empty filtered states, Confirmed listed confirmed captures, and sorting by Type/Created updated the URL plus `/api/v1/scans/page?take=20&sort=...&status=Confirmed`.
+- Browser microphone capability probe showed `navigator.mediaDevices`, `getUserMedia`, and `MediaRecorder` present, but permission state `denied`. Clicking `Record voice note` produced no visible inline status, recovery copy, or durable error message, and no useful network request.
+- Pre-fix reject reproduction: uploaded `output/qa/production-scale-scans/02-expenses-camera/expense-002.jpg`, created draft `8`, rejected it with reason `QA pass: reject disposable expense scan`; browser POST body contained the reason, but SQL showed `ScanDrafts 8 | Rejected | FailureReason NULL/blank`.
+- Post-fix reject regression: uploaded `output/qa/production-scale-scans/02-expenses-camera/expense-003.jpg`, created draft `9`, waited until Ready to review, and rejected with reason `QA pass: verify rejection reason persistence`.
+- `/scan` history showed draft `9` as `Rejected Expense`; opening `/scan/9` showed disabled rejected-state controls and `This scan has been rejected: QA pass: verify rejection reason persistence`.
+- SQL proof after the fix: `ScanDrafts 9 | Rejected | QA pass: verify rejection reason persistence`; draft `8` remains the pre-fix comparison row with a blank reason.
+
+Fixed in this pass:
+- `TSK397-B047` - Scan reject modal promised a reason "for your records", but `RejectDraftAsync` only sent it to the audit log and did not persist it on the draft or display it on the rejected detail. Fix: rejection now stores the trimmed reason in `ScanDraft.FailureReason`, preserves an existing failure reason when the user submits a blank reason, and the rejected review footer displays the stored reason.
+
+Watch items:
+- `TSK397-B048` - With browser microphone permission denied, `Record voice note` gives no visible recovery/status in the scan front door. This is a user-facing dead click in the denied-permission state and should be fixed in a later voice-intake slice.
+
+Verification:
+- RED: `dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ScanServiceTests.RejectDraftAsync_ReviewingDraft_SetsRejectedAndLogsAudit"` failed before the fix because `FailureReason` was null.
+- GREEN: `rtk dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ScanServiceTests.RejectDraftAsync_ReviewingDraft_SetsRejectedAndLogsAudit"` passed after the fix with only known `SQLitePCLRaw.lib.e_sqlite3` vulnerability warnings.
+- Frontend check: `rtk pnpm --dir web check` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+- Browser/SQL regression: draft `9` rejected from a camera JPEG scan, displayed the stored rejection reason on `/scan/9`, and persisted the same reason in PostgreSQL.
+
+Status: Pass after fix for scan rejection reason persistence/display and DB-backed history tab/sort checks. Continue next with invalid upload handling, adjacent created-record pages, maintenance actions, document/timeline surfaces, and the remaining non-banking/non-QuickBooks app inventory.
