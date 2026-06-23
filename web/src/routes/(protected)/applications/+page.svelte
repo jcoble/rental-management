@@ -19,6 +19,11 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { formatApplicationsEmptyMessage } from '$lib/applications/application-display';
+	import {
+		buildApplicationLinkUrl,
+		readUnitListingLinkContext,
+		type UnitListingLinkContext,
+	} from '$lib/applications/application-link';
 
 	const PAGE_SIZE = 20;
 
@@ -89,17 +94,38 @@
 	let showLinkDialog = $state(false);
 	let applyUrl = $state('');
 	let copied = $state(false);
+	let activeLinkContext = $state<UnitListingLinkContext | null>(null);
+	let listUnitActionHandled = false;
+	const listUnitContext = $derived(readUnitListingLinkContext(page.url.searchParams));
+	const linkDialogTitle = $derived(
+		activeLinkContext ? 'Application link for this unit' : 'Your application link'
+	);
+	const linkDialogDescription = $derived(
+		activeLinkContext
+			? 'Share this link with prospects for this unit. The public application will open with this property and unit preselected.'
+			: 'Share this link with prospective tenants. Anyone with the link can apply — no account needed.'
+	);
 
 	const linkMutation = createMutation(() => ({
-		mutationFn: () => applications.createLink(),
-		onSuccess: (result) => {
+		mutationFn: async (context?: UnitListingLinkContext | null) => ({
+			result: await applications.createLink(),
+			context: context ?? null,
+		}),
+		onSuccess: ({ result, context }) => {
 			const origin = typeof window !== 'undefined' ? window.location.origin : '';
-			applyUrl = `${origin}${result.applyPath}`;
+			activeLinkContext = context;
+			applyUrl = buildApplicationLinkUrl(origin, result.applyPath, context);
 			copied = false;
 			showLinkDialog = true;
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	$effect(() => {
+		if (listUnitActionHandled || !listUnitContext) return;
+		listUnitActionHandled = true;
+		linkMutation.mutate(listUnitContext);
+	});
 
 	async function copyLink() {
 		try {
@@ -206,7 +232,7 @@
 			</div>
 			<Button
 				class="gap-2 shrink-0"
-				onclick={() => linkMutation.mutate()}
+				onclick={() => linkMutation.mutate(listUnitContext)}
 				disabled={linkMutation.isPending}
 				data-testid="application-get-link-button"
 			>
@@ -221,9 +247,9 @@
 <Dialog.Root open={showLinkDialog} onOpenChange={(v) => (showLinkDialog = v)}>
 	<Dialog.Content class="max-w-lg">
 		<Dialog.Header>
-			<Dialog.Title>Your application link</Dialog.Title>
+			<Dialog.Title>{linkDialogTitle}</Dialog.Title>
 			<Dialog.Description>
-				Share this link with prospective tenants. Anyone with the link can apply — no account needed.
+				{linkDialogDescription}
 			</Dialog.Description>
 		</Dialog.Header>
 		<div class="flex items-center gap-2" data-testid="application-link-row">
