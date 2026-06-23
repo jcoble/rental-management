@@ -580,6 +580,64 @@ Deferred findings captured outside this fix:
 - Rent tab payment type menu still exposes raw enum-ish labels such as `SecurityDeposit` and `LateFee`.
 - Work-order scan category review still uses accounting-style categories before creating a maintenance record.
 
+## Pass 23 Continuation Evidence
+
+Date: 2026-06-23
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-23`
+Local stack: `https://localhost:6012`, API `https://localhost:6011`, Postgres `localhost:5571/rentalcommand_tsk397_pass23_clean`
+
+Fresh local landlord account:
+
+- Name: Jordan Blake
+- Email: `tsk397.pass23.202606230850@example.local`
+- Setup choice: live portfolio from zero domain data, not sandbox/demo
+
+Camera-style scan fixtures confirmed in this pass:
+
+- Lease image: `output/qa/production-scale-scans/01-leases-camera/lease-001-1a.jpg`
+- Expense image: `output/qa/production-scale-scans/02-expenses-camera/expense-001.jpg`
+- Payment image: `output/qa/production-scale-scans/03-payments-camera/payment-001.jpg`
+- Application image: `output/qa/production-scale-scans/04-applications-camera/application-001.jpg`
+- Work order image: `output/qa/production-scale-scans/05-work-orders-camera/work-order-001.jpg`
+
+Verified local database counts:
+
+- Before scans: no domain data in the live portfolio.
+- After browser confirmation: 1 property, 1 unit, 1 tenant, 1 lease, 1 payment, 1 expense, 1 rental application, 1 work order, 7 scan drafts.
+- Drafts 1-5 are confirmed Lease, Expense, Payment, Application, and WorkOrder scans. Draft 6 is an unconfirmed Lease review draft used for guided-flow resume proof. Draft 7 is an unconfirmed WorkOrder review draft used for category-option proof.
+
+Browser states exercised:
+
+- `/scan/new-rental` camera lease upload from the empty portfolio to Cedar Point Flats, Unit 1A, Avery Ellis, and lease `QA-2026-001-1A`.
+- `/leases/1`, scanned document proxy preview, `/accounting/expenses/1`, `/accounting/payments/1`, `/applications/1`, `/maintenance/1`, and `/units/1?tab=maintenance` for records created from image scans.
+- `/scan/new-rental?draftId=6` upload/reload proof: the URL stayed draft-specific and returned to the guided stepper instead of the blank capture screen. Screenshot: `output/playwright/pass23-new-rental-resume-after-fix-final.png`.
+- `/scan/6?type=Lease` generic recovery proof: switching the property selector to create-new showed editable `unit_bedrooms`, `unit_bathrooms`, and `unit_square_feet` inputs. Screenshot: `output/playwright/pass23-generic-lease-unit-fields-after-fix.png`.
+- `/scan/7?type=WorkOrder` maintenance-request review proof: category options were General, Plumbing, Electrical, HVAC, Appliance, Repairs, Roofing, Pest, Safety, Landscaping, Cleaning, and Other; accounting-only categories such as Mortgage interest were absent. Screenshot: `output/playwright/pass23-workorder-category-options-after-fix.png`.
+
+Bug fixes during this checkpoint:
+
+- `/scan/new-rental` did not persist the newly uploaded draft id in the URL, so refresh/reopen dropped the landlord back to the capture screen even while the draft was still processing/reviewable.
+- The generic lease recovery route could create a new unit from a lease scan but exposed only Unit number, leaving no visible way to correct bedrooms, bathrooms, or square feet before confirmation.
+- Work-order scan category review reused Schedule E expense categories, including accounting/tax categories such as Mortgage interest, before creating a maintenance record.
+
+Fixes:
+
+- Guided new-rental uploads now replace the URL with `/scan/new-rental?draftId={id}` and initialize/resume processing state from that query parameter.
+- Generic lease review now exposes editable unit detail override fields using the backend-supported `unit_bedrooms`, `unit_bathrooms`, and `unit_square_feet` keys.
+- Scan review category options are target-specific: expenses retain Schedule E categories, while work orders use maintenance categories.
+
+Regression coverage and verification:
+
+- `pnpm --dir web exec node --test --experimental-strip-types src/lib/scan/new-rental-state.test.ts`
+- `pnpm --dir web exec node --test --experimental-strip-types src/lib/scans/lease-review-state.test.ts`
+- `pnpm --dir web exec node --test --experimental-strip-types src/lib/scans/scan-review-fields.test.ts`
+- `pnpm --dir web check` passed with 0 errors and the pre-existing PageHeader unused CSS selector warnings.
+
+Deferred findings captured outside this fix:
+
+- Unit Command Center `Send renewal` no-op is tracked as TSK-404; the user explicitly said not to fix it now.
+- Rent tab payment type menu still exposes raw enum-ish labels such as `SecurityDeposit` and `LateFee`.
+
 ## Classified Inventory Matrix
 
 The route/control inventory now has a finite closure matrix instead of a raw tag-count table. `scripts/qa/inventory-web-surfaces.mjs` includes layout guards, error surfaces, redirects, server routes, file proxies, custom component controls, `data-testid` coverage, route scopes, route kinds, roles, acceptance criteria, and finite edge cases.

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { createMutation, createQuery } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
 	import { scan } from '$lib/api/scan';
 	import { properties } from '$lib/api/endpoints/properties';
@@ -17,7 +18,7 @@
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
 	import { propertySchema, unitSchema, tenantSchema, leaseSchema, parseForm } from '$lib/schemas';
 	import { toLeasePrefill, type PrefillConfidence } from '$lib/scan/lease-prefill';
-	import { createNewRentalPropertyForm, findNewRentalExistingUnitId, formatNewRentalStepLabel, formatNewRentalStepPosition, seedNewRentalLateFeeAmount } from '$lib/scan/new-rental-state';
+	import { createNewRentalPropertyForm, findNewRentalExistingUnitId, formatNewRentalStepLabel, formatNewRentalStepPosition, newRentalDraftUrl, parseNewRentalDraftId, seedNewRentalLateFeeAmount } from '$lib/scan/new-rental-state';
 	import { stitchImagesToPdf } from '$lib/scan/stitch-pdf';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 
@@ -25,8 +26,9 @@
 
 	// ----- phase: capture -> processing -> steps -> review -> done -----
 	type Phase = 'capture' | 'processing' | 'steps' | 'done';
-	let phase = $state<Phase>('capture');
-	let draftId = $state<number | null>(null);
+	const initialDraftId = parseNewRentalDraftId(page.url.searchParams);
+	let phase = $state<Phase>(initialDraftId == null ? 'capture' : 'processing');
+	let draftId = $state<number | null>(initialDraftId);
 	let confidence = $state<PrefillConfidence>({});
 
 	// Step machine. 0=Property 1=Unit 2=Tenant 3=Lease 4=Review.
@@ -70,10 +72,42 @@
 		enabled: phase === 'steps'
 	}));
 
+	function resetReviewStateForDraft() {
+		confidence = {};
+		step = 0;
+		propertyForm = createNewRentalPropertyForm();
+		unitForm = { unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' };
+		tenantForm = { firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' };
+		leaseForm = { leaseNumber: '', startDate: '', endDate: '', monthlyRent: '', securityDeposit: '', lateFeeAmount: '', rentDueDay: '1', status: 'Active', notes: '' };
+		propertyErrors = {};
+		unitErrors = {};
+		tenantErrors = {};
+		leaseErrors = {};
+		autoFilled = new Set();
+		propertyChoice = CREATE;
+		unitChoice = CREATE;
+		seeded = false;
+		unitChoiceSeeded = false;
+	}
+
+	$effect(() => {
+		const urlDraftId = parseNewRentalDraftId(page.url.searchParams);
+		if (urlDraftId == null || urlDraftId === draftId) return;
+
+		resetReviewStateForDraft();
+		draftId = urlDraftId;
+		phase = 'processing';
+	});
+
 	// ----- upload: one PDF passes straight through; many photos are stitched first -----
 	const uploadOne = createMutation(() => ({
 		mutationFn: (file: File) => scan.upload(file, 'Lease'),
-		onSuccess: (res) => { draftId = res.draftId; phase = 'processing'; },
+		onSuccess: (res) => {
+			resetReviewStateForDraft();
+			draftId = res.draftId;
+			phase = 'processing';
+			void goto(newRentalDraftUrl(res.draftId), { replaceState: true, noScroll: true, keepFocus: true });
+		},
 		onError: (err) => showError(apiErrorMessage(err, 'Could not read that file. Try a clearer photo or the PDF.'))
 	}));
 
@@ -109,6 +143,7 @@
 			showError('We could not read that document. Try a clearer photo or the PDF.');
 			phase = 'capture';
 			draftId = null;
+			void goto('/scan/new-rental', { replaceState: true, noScroll: true, keepFocus: true });
 			return;
 		}
 		if (d.status !== 'Reviewing' || seeded) return;
