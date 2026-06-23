@@ -8,6 +8,7 @@
 		scannedLeaseDocumentLinkLabel,
 		tabForLeaseEdit,
 	} from '$lib/leases/lease-detail-state';
+	import { getLeaseDeleteState } from '$lib/leases/lease-delete-state';
 	import {
 		canSendLeaseForSignature,
 		hasAgreementAfterSignatureSend,
@@ -63,6 +64,7 @@
 	}));
 
 	const lease = $derived(leaseQuery.data);
+	const leaseDeleteState = $derived(getLeaseDeleteState(lease));
 
 	// Payments for this lease
 	const paymentsQuery = createQuery(() => ({
@@ -1063,8 +1065,9 @@
 
 <ConfirmDialog
 	open={showDeleteConfirm}
-	title="Delete lease"
-	message={lease ? `Delete lease ${lease.leaseNumber}? This cannot be undone.` : ''}
+	title={leaseDeleteState.title}
+	message={leaseDeleteState.message}
+	confirmLabel={leaseDeleteState.confirmLabel}
 	busy={deleteMutation.isPending}
 	testid="lease-delete-confirm"
 	onconfirm={() => deleteMutation.mutate()}
