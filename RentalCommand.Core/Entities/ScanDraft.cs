@@ -34,10 +34,9 @@ public class ScanDraft
     public decimal? CostUsd { get; set; }
 
     /// <summary>
-    /// Concise, human-readable reason a draft ended in <c>Status == "Failed"</c> (e.g. the LLM
-    /// returned no usable fields, the response was truncated, or extraction is unavailable). Null
-    /// for drafts that have not failed. Surfaced on the review screen so the user knows why a scan
-    /// could not be auto-extracted and can re-scan or enter the record manually.
+    /// Concise, human-readable reason a draft ended in <c>Status == "Failed"</c> or was explicitly
+    /// rejected. Surfaced on the review screen so the user knows why a scan could not be used or
+    /// why they chose not to keep it.
     /// </summary>
     public string? FailureReason { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
