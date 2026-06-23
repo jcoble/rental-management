@@ -75,7 +75,7 @@ const SURFACE_GROUPS = [
     id: 'file-proxies',
     title: 'File Proxies',
     roles: ['authenticated staff'],
-    routes: ['/scan-file/[id]', '/lease-file/[id]', '/payment-file/[id]', '/expense-file/[id]', '/workorder-file/[id]'],
+    routes: ['/scan-file/[id]', '/lease-file/[id]', '/payment-file/[id]', '/expense-file/[id]', '/workorder-file/[id]', '/application-file/[id]'],
     acceptance: [
       'Proxy routes require auth, scope by portfolio, and return 404 for missing files.',
       'Safe inline content renders inline and unsafe content is forced to attachment.',
@@ -236,7 +236,7 @@ function classifySurfaceGroups(route, item) {
   if (route === '/scan' || route.startsWith('/scan/')) {
     groups.add('scan-intake');
   }
-  if (/^\/(scan|lease|payment|expense|workorder)-file\/\[id\]$/.test(route)) {
+  if (/^\/(scan|lease|payment|expense|workorder|application)-file\/\[id\]$/.test(route)) {
     groups.add('file-proxies');
   }
   if (hasAny(route, ['/accounting', '/accounting/past-due', '/accounting/year-end', '/accounting/expenses/[id]', '/accounting/payments/[id]', '/reports', '/reports/[report]', '/owners-report', '/banking', '/tax'])) {
