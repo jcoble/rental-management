@@ -8,8 +8,8 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { invalidateQueriesAfterScanConfirm } from '$lib/scans/scan-confirm-invalidation';
-	import { seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
-	import { buildScanReviewFieldGroups, fieldDisplayLabel } from '$lib/scans/scan-review-fields';
+	import { LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS, seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
+	import { buildScanReviewFieldGroups, fieldDisplayLabel, scanCategoryLabel, scanCategoryOptionsForTarget } from '$lib/scans/scan-review-fields';
 	import { createdRecordArticle, isTerminalScanReview, shouldDisableScanReviewControls } from '$lib/scans/scan-review-state';
 	import {
 		applyScanContextOverrides,
@@ -26,35 +26,6 @@
 	import * as Select from '$lib/components/ui/select';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
-
-	// ScheduleECategory enum values (mirrors RentalCommand.Core.Enums.ScheduleECategory).
-	// The submitted value stays the enum name; only the label shown to the landlord is friendly.
-	const SCHEDULE_E_CATEGORIES: { value: string; label: string }[] = [
-		{ value: 'Advertising', label: 'Advertising' },
-		{ value: 'AutoTravel', label: 'Auto & travel' },
-		{ value: 'CleaningMaintenance', label: 'Cleaning & maintenance' },
-		{ value: 'Commissions', label: 'Commissions' },
-		{ value: 'Insurance', label: 'Insurance' },
-		{ value: 'LegalProfessional', label: 'Legal & professional fees' },
-		{ value: 'ManagementFees', label: 'Management fees' },
-		{ value: 'MortgageInterest', label: 'Mortgage interest' },
-		{ value: 'Repairs', label: 'Repairs & maintenance' },
-		{ value: 'Supplies', label: 'Supplies' },
-		{ value: 'Taxes', label: 'Taxes' },
-		{ value: 'Utilities', label: 'Utilities' },
-		{ value: 'Depreciation', label: 'Depreciation' },
-		{ value: 'Other', label: 'Other' }
-	];
-
-	// Map enum name → friendly label (falls back to the raw value if unknown).
-	const CATEGORY_LABELS: Record<string, string> = Object.fromEntries(
-		SCHEDULE_E_CATEGORIES.map((c) => [c.value, c.label])
-	);
-
-	function categoryLabel(value: string | undefined | null): string {
-		if (!value) return 'Select category';
-		return CATEGORY_LABELS[value] ?? value;
-	}
 
 	const LINE_ITEMS_FIELD = 'line_items';
 
@@ -1116,6 +1087,24 @@
 										<Input id="scan-lease-new-unit" data-testid="scan-lease-new-unit" placeholder="e.g. 1 (single-family) or 2B" bind:value={newUnitNumber} disabled={reviewControlsDisabled} />
 										<p class="mt-1 text-xs text-muted-foreground">A new unit with this number is created under the new property.</p>
 									</div>
+									<div class="grid grid-cols-3 gap-2" data-testid="scan-lease-new-unit-details">
+										{#each LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS as unitField (unitField.name)}
+											<div>
+												<label class="mb-1 block text-xs font-medium text-muted-foreground" for="scan-{unitField.name}">
+													{unitField.label}
+												</label>
+												<Input
+													id="scan-{unitField.name}"
+													data-testid="scan-field-{unitField.name}"
+													type="number"
+													inputmode="decimal"
+													placeholder={unitField.placeholder}
+													bind:value={editedFields[unitField.name]}
+													disabled={reviewControlsDisabled}
+												/>
+											</div>
+										{/each}
+									</div>
 								{:else}
 									<div>
 										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-unit-select">
@@ -1286,10 +1275,10 @@
 										<!-- Category dropdown — friendly labels, enum value submitted -->
 										<Select.Root type="single" bind:value={editedFields[fieldName]} disabled={reviewControlsDisabled}>
 											<Select.Trigger id="field-{fieldName}" data-testid="scan-field-{fieldName}" class="w-full" disabled={reviewControlsDisabled}>
-												{categoryLabel(editedFields[fieldName])}
+												{scanCategoryLabel(editedFields[fieldName], data.targetEntityType)}
 											</Select.Trigger>
 											<Select.Content>
-												{#each SCHEDULE_E_CATEGORIES as cat}
+												{#each scanCategoryOptionsForTarget(data.targetEntityType) as cat}
 													<Select.Item value={cat.value} label={cat.label}>{cat.label}</Select.Item>
 												{/each}
 											</Select.Content>
@@ -1333,10 +1322,10 @@
 													<!-- Category dropdown — friendly labels, enum value submitted -->
 													<Select.Root type="single" bind:value={editedFields[field.name]} disabled={reviewControlsDisabled}>
 														<Select.Trigger id="field-{field.name}" data-testid="scan-field-{field.name}" class="w-full" disabled={reviewControlsDisabled}>
-															{categoryLabel(editedFields[field.name])}
+															{scanCategoryLabel(editedFields[field.name], data.targetEntityType)}
 														</Select.Trigger>
 														<Select.Content>
-															{#each SCHEDULE_E_CATEGORIES as cat}
+															{#each scanCategoryOptionsForTarget(data.targetEntityType) as cat}
 																<Select.Item value={cat.value} label={cat.label}>{cat.label}</Select.Item>
 															{/each}
 														</Select.Content>

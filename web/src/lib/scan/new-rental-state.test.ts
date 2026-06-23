@@ -6,8 +6,24 @@ import {
 	findNewRentalExistingUnitId,
 	formatNewRentalStepLabel,
 	formatNewRentalStepPosition,
+	newRentalDraftUrl,
+	parseNewRentalDraftId,
 	seedNewRentalLateFeeAmount
 } from './new-rental-state.ts';
+
+describe('new rental draft URL state', () => {
+	it('parses a valid resume draft id from the URL and rejects unsafe values', () => {
+		assert.equal(parseNewRentalDraftId(new URLSearchParams('draftId=42')), 42);
+		assert.equal(parseNewRentalDraftId(new URLSearchParams('draftId=0')), null);
+		assert.equal(parseNewRentalDraftId(new URLSearchParams('draftId=-1')), null);
+		assert.equal(parseNewRentalDraftId(new URLSearchParams('draftId=42x')), null);
+		assert.equal(parseNewRentalDraftId(new URLSearchParams('')), null);
+	});
+
+	it('formats the stable guided-review URL used after upload', () => {
+		assert.equal(newRentalDraftUrl(42), '/scan/new-rental?draftId=42');
+	});
+});
 
 describe('createNewRentalPropertyForm', () => {
 	it('includes hidden defaults required by the shared property schema', () => {
