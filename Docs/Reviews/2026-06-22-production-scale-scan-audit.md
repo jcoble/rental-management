@@ -372,6 +372,51 @@ Bug fixed during this pass:
 - Regression coverage: `web/src/lib/components/unit/document-actions.test.ts`; inventory classifier now includes `/document-file/[id]` in the file-proxy surface group.
 - Verification commands: `pnpm --dir web exec node --test --experimental-strip-types src/lib/components/unit/document-actions.test.ts`; `node scripts/qa/inventory-web-surfaces.mjs`.
 
+## Pass 19 Continuation Evidence
+
+Date: 2026-06-23
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-19`
+Local stack: `https://localhost:5972`, API `https://localhost:5971`, Postgres `localhost:5567/rentalcommand_tsk397_pass19_clean`
+
+Fresh local landlord account:
+
+- Name: Ivy Morgan
+- Email: `tsk397.pass19.202606230604@example.local`
+- Setup choice: live portfolio from zero domain data, not sandbox/demo
+
+Camera-style scan fixtures confirmed in this pass:
+
+- Lease image: `output/qa/production-scale-scans/01-leases-camera/lease-001-1a.jpg`
+- Expense image: `output/qa/production-scale-scans/02-expenses-camera/expense-001.jpg`
+- Payment image: `output/qa/production-scale-scans/03-payments-camera/payment-001.jpg`
+- Application image: `output/qa/production-scale-scans/04-applications-camera/application-001.jpg`
+- Work order image: `output/qa/production-scale-scans/05-work-orders-camera/work-order-001.jpg`
+
+Verified local database counts after browser confirmation:
+
+- 1 property, 1 unit, 1 tenant, 1 lease, 1 payment, 2 expenses, 1 rental application, 1 work order, 6 scan drafts.
+- The second expense was created after the B018 fix as a real browser regression proof. The first expense remains the pre-fix evidence row with `UnitId` null.
+
+Browser states exercised:
+
+- `/register`, local email verification, `/login`, `/choose-setup`, `/welcome`, and the live empty portfolio setup path.
+- `/scan/new-rental` camera upload through property/unit/tenant/lease/review confirmation, including manual correction of missing beds/baths before create.
+- `/scan/[draftId]` target-specific review for Expense, Payment, Application, and WorkOrder camera JPEGs.
+- `/maintenance/1` source document image download via the file proxy; the downloaded file was verified as a real 1800x2400 JPEG.
+- `/units/1` command-center overview, edit validation, lifecycle rail display, lease tab, rent tab payment validation, maintenance tab work-order validation, documents tab file proxy links, expenses tab, recent activity links, and scan shortcuts.
+
+Bug fixed during this pass:
+
+- Generic receipt scan confirmation persisted the selected `PropertyId` but left `UnitId` null when the extracted notes contained the unit reference and the review form had no unit selector. The Unit Expenses tab was filtering correctly; the scan-created expense was not grounded to the unit.
+- Fix: `ScanService` now resolves finite unit references from expense notes (`Unit 1A`, `Unit: 1A`, `Apt #2B`, `Apartment 12-B`) only when the reviewer selected a property. It then performs one DB-side exact unit lookup under that property and portfolio. Explicit reviewer `unitId` overrides still win.
+- Red/green regression: `ConfirmAndCreateAsync_ExpenseDraft_WithSelectedPropertyAndUnitInNotes_GroundsUnit` failed with `Expected UnitId to be 20, but found <null>`, then passed after the fix.
+- Browser proof after restart: scanned `expense-001.jpg` from generic `/scan`, selected only `Cedar Point Flats`, confirmed expense #2, and verified `Expenses.Id=2` has `PropertyId=1`, `UnitId=1`. `/units/1?tab=expenses` then showed `Green Thumb Landscaping - Repairs & maintenance - Paid - $63.75` and recent activity linked to `/accounting/expenses/2`.
+- Verification commands: `dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ScanServiceTests.ConfirmAndCreateAsync_ExpenseDraft_WithSelectedPropertyAndUnitInNotes_GroundsUnit"`; `dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ScanServiceTests"`.
+
+Deferred findings captured outside this fix:
+
+- Unit Command Center `Send renewal` no-op is tracked as TSK-400 and was not fixed in this pass.
+
 ## Classified Inventory Matrix
 
 The route/control inventory now has a finite closure matrix instead of a raw tag-count table. `scripts/qa/inventory-web-surfaces.mjs` includes layout guards, error surfaces, redirects, server routes, file proxies, custom component controls, `data-testid` coverage, route scopes, route kinds, roles, acceptance criteria, and finite edge cases.
@@ -421,6 +466,7 @@ Read-only data-access audit found broad violations of the hard SQL-side rule. Th
 | TSK397-B015 | P0 | DB-side data rule | Fixed in this branch. The original audit found reports/accounting/banking endpoints materializing rows and then filtering/grouping/sorting/aggregating/scoring in memory, violating the project hard rule. | Read-only data sweep found definite violations in `ReportsService`, `AccountingService`, and `BankingService`, including general ledger, property P&L, rent ledger, banking suggestions, accounting reports, and reconciliation suggestions. Fixed slices: property P&L regression `GetPropertyProfitAndLossAsync_FiltersGroupsAndSumsInSql`; general ledger regression `GetGeneralLedgerAsync_FiltersOrdersAndTotalsInSql`; rent ledger regression `GetRentLedgerAsync_FiltersOrdersAndTotalsInSql`; cash-flow totals regression `GetCashFlowAsync_TotalsAreSummedInSql`; delinquency regression `GetDelinquencyAsync_OrdersAndTotalsInSql`; work-order regression `GetWorkOrdersAsync_CountsAndSumsInSql`; banking review candidate regression `ReviewQueue_PrefiltersPaymentSuggestionCandidatesInSql`; accounting inline suggestion regression `GetTransactionsAsync_PrefiltersInlineBankSuggestionsInSql`; accounting reports regression `GetReportsAsync_BuildsLedgerWithSqlUnionAndOrdering`; owner statement SQL-shape regressions in `OwnerStatementServiceTests`; Schedule E SQL-shape assertions in `ScheduleEServiceTests`. Full `ReportsServiceTests` passed 35/35; full `BankingServiceTests` passed 16/16; `AccountingTransactionsViewTests` passed 9/9; `AccountingServiceTests` passed 7/7; `OwnerStatementServiceTests` passed 2/2; `ScheduleEServiceTests` passed 2/2. No B015 sub-items remain from the sweep. | Fixed |
 | TSK397-B016 | P1 | Inventory completeness | Fixed in this branch. The inventory script now emits a classified acceptance matrix and route inventory instead of a raw tag-count table. | Read-only route/control sweep found missing coverage for public apply/sign flows, settings subroutes, accounting/report detail routes, maintenance/detail workflows, portal helper role states, admin modals, and file proxy routes. Green: `node scripts/qa/inventory-web-surfaces.mjs` produced 85 classified route rows, 12 surface groups, and `Unclassified routes: none` in `output/qa/web-surface-inventory.md`/`.json`. | Fixed |
 | TSK397-B017 | P1 | Unit documents | Fixed in this branch. Unit Documents linked rows by parent entity route instead of stored file id, so multiple files attached to the same lease or work order could open the same parent-level file rather than the clicked file. | Browser red: generated lease agreement and original lease scan both pointed at `/lease-file/1`; original work-order scan and uploaded work-order image both pointed at `/workorder-file/1`. Green: rows now point to `/document-file/{storedFileId}`; authenticated fetches for ids 1, 4, 8, 10, and 11 returned the expected original PDFs/images/agreement. Focused `unit-document-actions` test passed and inventory classified 87 routes with no unclassified routes. | Fixed |
+| TSK397-B018 | P1 | Expense scan unit grounding | Fixed in this branch. Generic receipt scans could capture a unit reference in notes but persist only `PropertyId`, leaving `UnitId` null and making the Unit Expenses tab look empty. | Browser red: first camera receipt scan created expense #1 with `PropertyId=1`, `UnitId=NULL`, and `/units/1?tab=expenses` showed no expenses. Red/green: `ConfirmAndCreateAsync_ExpenseDraft_WithSelectedPropertyAndUnitInNotes_GroundsUnit` failed, then passed. Browser green: second generic camera receipt scan selected only `Cedar Point Flats`, created expense #2 with `UnitId=1`, and the Unit Expenses tab displayed the paid Green Thumb Landscaping expense. | Fixed |
 
 ## Regression Expectations
 
