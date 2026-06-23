@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using System.Text.Json;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
@@ -24,6 +25,26 @@ public sealed class AuditDiffBuilder
     {
         "UpdatedAt", "CreatedAt", "DeletedAt", "PortfolioId", "Id",
         "ReceiptData", "RowVersion", "ConcurrencyStamp",
+    };
+
+    private static readonly Lazy<IReadOnlyDictionary<string, Type>> EnumPropertyTypes =
+        new(BuildEnumPropertyTypes);
+
+    private static readonly Dictionary<string, string> EnumLabels = new(StringComparer.Ordinal)
+    {
+        ["InProgress"] = "In progress",
+        ["NeedsFollowUp"] = "Needs follow-up",
+        ["NeedsReconnect"] = "Needs reconnect",
+        ["NoShow"] = "No show",
+        ["NoticeGiven"] = "Notice given",
+        ["OnHold"] = "On hold",
+        ["PaidOff"] = "Paid off",
+        ["PartiallyReturned"] = "Partially returned",
+        ["PartiallySigned"] = "Partially signed",
+        ["PendingSignature"] = "Pending signature",
+        ["UnderMaintenance"] = "Under maintenance",
+        ["UnderReview"] = "Under review",
+        ["WaitingParts"] = "Waiting on parts",
     };
 
     /// <summary>
@@ -58,8 +79,8 @@ public sealed class AuditDiffBuilder
             oldValues.TryGetValue(key, out var oldEl);
             newValues.TryGetValue(key, out var newEl);
 
-            var oldText = Format(oldEl);
-            var newText = Format(newEl);
+            var oldText = Format(row.EntityType, key, oldEl);
+            var newText = Format(row.EntityType, key, newEl);
 
             // No visible change (e.g. only redaction noise) — skip.
             if (string.Equals(oldText, newText, StringComparison.Ordinal))
@@ -109,8 +130,13 @@ public sealed class AuditDiffBuilder
     }
 
     /// <summary>Render one JSON value as friendly display text (currency-agnostic numbers, dates, booleans).</summary>
-    private static string Format(JsonElement el)
+    private static string Format(string entityType, string field, JsonElement el)
     {
+        if (TryFormatKnownEnum(entityType, field, el, out var enumText))
+        {
+            return enumText;
+        }
+
         switch (el.ValueKind)
         {
             case JsonValueKind.Undefined:
@@ -152,6 +178,79 @@ public sealed class AuditDiffBuilder
                 return el.ToString();
         }
     }
+
+    private static bool TryFormatKnownEnum(string entityType, string field, JsonElement el, out string text)
+    {
+        text = string.Empty;
+        if (el.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            return false;
+        }
+
+        if (!EnumPropertyTypes.Value.TryGetValue($"{entityType}.{field}", out var enumType))
+        {
+            return false;
+        }
+
+        object? enumValue = null;
+        if (el.ValueKind == JsonValueKind.Number && el.TryGetInt64(out var numeric))
+        {
+            enumValue = Enum.ToObject(enumType, numeric);
+        }
+        else if (el.ValueKind == JsonValueKind.String)
+        {
+            var raw = el.GetString();
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return false;
+            }
+
+            if (!Enum.TryParse(enumType, raw, ignoreCase: true, out enumValue)
+                && long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out numeric))
+            {
+                enumValue = Enum.ToObject(enumType, numeric);
+            }
+        }
+
+        if (enumValue is null || !Enum.IsDefined(enumType, enumValue))
+        {
+            return false;
+        }
+
+        var enumName = Enum.GetName(enumType, enumValue);
+        if (string.IsNullOrWhiteSpace(enumName))
+        {
+            return false;
+        }
+
+        text = FormatEnumLabel(enumName);
+        return true;
+    }
+
+    private static IReadOnlyDictionary<string, Type> BuildEnumPropertyTypes()
+    {
+        var map = new Dictionary<string, Type>(StringComparer.OrdinalIgnoreCase);
+        var entityAssembly = typeof(AuditLog).Assembly;
+        foreach (var type in entityAssembly.GetTypes().Where(t => t.IsClass && t.Namespace == typeof(AuditLog).Namespace))
+        {
+            foreach (var prop in type.GetProperties(BindingFlags.Instance | BindingFlags.Public))
+            {
+                var propType = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+                if (!propType.IsEnum)
+                {
+                    continue;
+                }
+
+                map[$"{type.Name}.{prop.Name}"] = propType;
+            }
+        }
+
+        return map;
+    }
+
+    private static string FormatEnumLabel(string enumName) => EnumLabels.TryGetValue(enumName, out var label)
+        ? label
+        : Humanize(enumName);
 
     /// <summary>Turn a PascalCase property name into Title-Case words ("PaymentMethod" → "Payment method").</summary>
     internal static string Humanize(string field)

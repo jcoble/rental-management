@@ -529,6 +529,57 @@ Deferred findings captured outside this fix:
 - Unit Command Center `Send renewal` no-op remains tracked as TSK-400; the user explicitly said not to fix it in this slice.
 - Scan review can still require manual category/relationship confirmation even when extracted notes contain a likely match: the expense review required selecting `Cedar Point Flats` and `Repairs & maintenance`, the payment review required selecting lease `QA-2026-001-1A`, and the work-order review exposed accounting-style categories before creating a maintenance record. These did not block record creation because the review UI made the required choices available, but they remain product-fit candidates for a later matching/taxonomy pass.
 
+## Pass 22 Continuation Evidence
+
+Date: 2026-06-23
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-22`
+Local stack: `https://localhost:6002`, API `https://localhost:6001`, Postgres `localhost:5570/rentalcommand_tsk397_pass22_clean`
+
+Fresh local landlord account:
+
+- Name: Sofia Reed
+- Email: `tsk397.pass22.202606230810@example.local`
+- Setup choice: live portfolio from zero domain data, not sandbox/demo
+
+Camera-style scan fixtures confirmed in this pass:
+
+- Fixture generator: `scripts/qa/generate-production-scale-scan-fixtures.py`
+- Fixture output: `output/qa/production-scale-scans/` with 480 generated PDFs/images.
+- Lease image: `output/qa/production-scale-scans/01-leases-camera/lease-001-1a.jpg`
+- Expense image: `output/qa/production-scale-scans/02-expenses-camera/expense-001.jpg`
+- Payment image: `output/qa/production-scale-scans/03-payments-camera/payment-001.jpg`
+- Application image: `output/qa/production-scale-scans/04-applications-camera/application-001.jpg`
+- Work order image: `output/qa/production-scale-scans/05-work-orders-camera/work-order-001.jpg`
+
+Verified local database counts:
+
+- Before scans: 0 properties, 0 units, 0 tenants, 0 leases, 0 payments, 0 expenses, 0 rental applications, 0 work orders, 0 scan drafts.
+- After browser confirmation: 1 property, 1 unit, 1 tenant, 1 lease, 1 payment, 1 expense, 1 rental application, 1 work order, 5 scan drafts.
+
+Browser states exercised:
+
+- `/register`, local email verification, `/login`, `/choose-setup`, and live empty portfolio setup.
+- `/scan/new-rental` camera lease upload through property/unit/tenant/lease/review confirmation for Cedar Point Flats, Unit 1A, Avery Ellis, and lease `QA-2026-001-1A`.
+- `/scan/[draftId]` target-specific review for Expense, Payment, Application, and WorkOrder camera JPEGs.
+- `/dashboard`, `/properties`, `/properties/1`, `/units/1`, and every Unit tab: Overview, Lease, Rent, Maintenance, Documents, Expenses, and Timeline.
+- Work order detail `/maintenance/1`: attachment image, vendor-text modal disabled state for no vendor phone, status change modals, status notes, and timeline/status-history updates from New -> Scheduled -> In progress.
+- Unit Documents tab file proxy proof: `/document-file/8` opened the scan-created work-order image and rendered a single 1800x2400 image.
+
+Bug fixed during this pass:
+
+- Unit Timeline expanded audit diffs displayed numeric enum values for work-order status changes (`Status 1 -> 2`) because the generic audit interceptor stored enum scalars as JSON numbers and the landlord-facing `AuditDiffBuilder` formatted those numbers without entity/property context.
+- Fix: `AuditDiffBuilder` now builds a one-time map of enum-valued Core entity properties and formats both numeric JSON values and enum-name strings into user-facing labels before the generic number/date/string fallback.
+- Regression coverage: `Build_Updated_FormatsNumericEnumAuditValuesForKnownEntityFields` in `RentalCommand.Api.Tests/Domain/AuditDiffBuilderTests.cs`.
+- Browser proof after API restart: `/units/1?tab=timeline`, expanded first `Updated work order` row, now shows `Status Scheduled -> In progress` instead of `1 -> 2`.
+- Verification commands: `dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~AuditDiffBuilderTests"`; `dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~AuditDiffBuilderTests|FullyQualifiedName~AuditTrailTests|FullyQualifiedName~UnitDashboardServiceTests"` passed 23/23. Restore/build emitted existing package vulnerability warnings for `SQLitePCLRaw.lib.e_sqlite3` and `MailKit`.
+
+Deferred findings captured outside this fix:
+
+- Unit Command Center `Send renewal` no-op remains tracked as TSK-400; the user explicitly said not to fix it in this slice.
+- Unit lifecycle `List this unit` no-op remains tracked as TSK-401 and was not fixed in this slice.
+- Rent tab payment type menu still exposes raw enum-ish labels such as `SecurityDeposit` and `LateFee`.
+- Work-order scan category review still uses accounting-style categories before creating a maintenance record.
+
 ## Classified Inventory Matrix
 
 The route/control inventory now has a finite closure matrix instead of a raw tag-count table. `scripts/qa/inventory-web-surfaces.mjs` includes layout guards, error surfaces, redirects, server routes, file proxies, custom component controls, `data-testid` coverage, route scopes, route kinds, roles, acceptance criteria, and finite edge cases.
@@ -581,6 +632,7 @@ Read-only data-access audit found broad violations of the hard SQL-side rule. Th
 | TSK397-B018 | P1 | Expense scan unit grounding | Fixed in this branch. Generic receipt scans could capture a unit reference in notes but persist only `PropertyId`, leaving `UnitId` null and making the Unit Expenses tab look empty. | Browser red: first camera receipt scan created expense #1 with `PropertyId=1`, `UnitId=NULL`, and `/units/1?tab=expenses` showed no expenses. Red/green: `ConfirmAndCreateAsync_ExpenseDraft_WithSelectedPropertyAndUnitInNotes_GroundsUnit` failed, then passed. Browser green: second generic camera receipt scan selected only `Cedar Point Flats`, created expense #2 with `UnitId=1`, and the Unit Expenses tab displayed the paid Green Thumb Landscaping expense. | Fixed |
 | TSK397-B019 | P2 | Expense detail references | Fixed in this branch. Unit-grounded expenses showed Property and Vendor on the expense detail page but omitted Unit, forcing users to infer the unit from notes or navigate through the unit Expenses tab. | Browser red in pass 20: `/accounting/expenses/1` for a scan-created receipt had `Expenses.UnitId=1` and appeared in `/units/1?tab=expenses`, but the detail reference card lacked `Unit`. Green: `formatExpenseUnitReference` regression passed, `/accounting/expenses/1` now shows `Unit 1A` linked to `/units/1?tab=expenses`, `pnpm --dir web check` passed with only pre-existing PageHeader warnings, and `pnpm --dir web test:unit` passed 129/129. | Fixed |
 | TSK397-B020 | P1 | Lease scan cache invalidation | Fixed in this branch. Empty-portfolio lease scan confirmation left pre-confirm empty property/tenant lookup caches fresh, so the new lease detail page's edit selectors showed blank property and tenant values even though `/leases/1`, `/properties`, and `/tenants` all had the records. | Browser red: `/leases/1` edit mode showed blank Property and Tenant triggers and dropdowns with only `Select property` / `Select tenant`. Root cause: scan confirm invalidated only `['leases']`. Green: `invalidateQueriesAfterScanConfirm` regression passed; browser edit mode showed `Cedar Point Flats` and `Avery Ellis`, and both dropdowns contained the scan-created records. Full `pnpm --dir web test:unit` passed 130/130; `pnpm --dir web check` passed with only pre-existing PageHeader warnings. | Fixed |
+| TSK397-B021 | P2 | Unit timeline audit diff | Fixed in this branch. Expanded unit timeline audit rows leaked numeric enum values for work-order status transitions instead of user-facing labels. | Browser red in pass 22: `/units/1?tab=timeline`, expand first `Updated work order`, showed `Status 1 -> 2`. Root cause: generic audit JSON stored enum scalars as numbers and `AuditDiffBuilder` lacked entity-property enum context. Green: `Build_Updated_FormatsNumericEnumAuditValuesForKnownEntityFields` passed; broader audit/unit-dashboard focused tests passed 23/23; browser retest showed `Status Scheduled -> In progress`. | Fixed |
 
 ## Regression Expectations
 
