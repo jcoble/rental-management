@@ -80,6 +80,30 @@ export function parseLooseDate(input: string): string | null {
 }
 
 /**
+ * Parse only a date string that looks complete enough to auto-commit while the
+ * user is still focused in the field. This avoids normalizing partial input like
+ * `2027-07-3` to July 3 while the user is still typing July 31.
+ */
+export function parseCompleteLooseDate(input: string): string | null {
+	if (!input) return null;
+	const trimmed = input.trim();
+	if (!trimmed) return null;
+
+	const parts = trimmed.split(/[\s/.\-]+/).filter((p) => p.length > 0);
+	if (parts.length !== 3) return null;
+	if (parts.some((p) => !/^\d+$/.test(p))) return null;
+
+	const yearFirst = parts[0].length === 4;
+	if (yearFirst) {
+		if (parts[1].length !== 2 || parts[2].length !== 2) return null;
+		return parseLooseDate(trimmed);
+	}
+
+	const yearLast = parts[2].length === 4 || parts[2].length === 2;
+	return yearLast ? parseLooseDate(trimmed) : null;
+}
+
+/**
  * Format a canonical `yyyy-MM-dd` string as `MM/DD/YYYY` for the text input.
  * Returns "" for empty/invalid input. Pure string math — no Date, no tz.
  */
