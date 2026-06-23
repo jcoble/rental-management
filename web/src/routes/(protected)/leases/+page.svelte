@@ -16,6 +16,11 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
+	import {
+		LEASE_STATUSES,
+		getLeaseStatusOptions,
+		getLeasesEmptyStateCopy,
+	} from '$lib/leases/lease-list-state';
 	import { Plus, FileText } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Select from '$lib/components/ui/select';
@@ -25,7 +30,7 @@
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 20;
-	const LEASE_STATUSES = ['Draft', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
+	const leaseStatusOptions = getLeaseStatusOptions();
 
 	// Search / status / sort / page persisted in the URL so they survive navigating away and back. The
 	// grid is server-side: these values drive the API query instead of fetching a broad capped list and
@@ -179,6 +184,11 @@
 
 	const list = $derived(leasesQuery.data?.items ?? []);
 	const totalCount = $derived(leasesQuery.data?.totalCount ?? 0);
+	const hasActiveFilters = $derived(Boolean(search.trim() || statusFilter));
+	const emptyCopy = $derived(getLeasesEmptyStateCopy({ hasActiveFilters }));
+	const selectedStatusLabel = $derived(
+		leaseStatusOptions.find((option) => option.value === statusFilter)?.label ?? ''
+	);
 
 	// Derived labels for select triggers
 	const selectedPropertyLabel = $derived(
@@ -267,10 +277,10 @@
 		data={list}
 		{columns}
 		loading={leasesQuery.isLoading || leasesQuery.isFetching}
-		emptyMessage="No leases yet"
-		emptyDescription="A lease ties a tenant to a unit and sets the rent and dates. Add your first to start tracking rent."
+		emptyMessage={emptyCopy.message}
+		emptyDescription={emptyCopy.description}
 		emptyIcon={FileText}
-		emptyActionLabel="Add your first lease"
+		emptyActionLabel={emptyCopy.actionLabel}
 		emptyOnAction={openCreate}
 		emptyTone="primary"
 		onRowClick={(lease) => goto('/leases/' + lease.id)}
@@ -291,12 +301,12 @@
 				</div>
 				<Select.Root type="single" bind:value={statusFilter}>
 					<Select.Trigger class="w-[180px]" data-testid="lease-status-filter">
-						{statusFilter ? statusFilter : 'All statuses'}
+						{selectedStatusLabel || 'All statuses'}
 					</Select.Trigger>
 					<Select.Content>
 						<Select.Item value="" label="All statuses">All statuses</Select.Item>
-						{#each LEASE_STATUSES as s}
-							<Select.Item value={s} label={s}>{s}</Select.Item>
+						{#each leaseStatusOptions as status}
+							<Select.Item value={status.value} label={status.label}>{status.label}</Select.Item>
 						{/each}
 					</Select.Content>
 				</Select.Root>
