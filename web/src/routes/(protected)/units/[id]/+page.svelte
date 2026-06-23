@@ -1,9 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { createQuery } from '@tanstack/svelte-query';
+	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { units } from '$lib/api/endpoints/units';
 	import * as Tabs from '$lib/components/ui/tabs';
+	import * as Dialog from '$lib/components/ui/dialog';
+	import { Button } from '$lib/components/ui/button';
 	import UnitHeader from '$lib/components/unit/UnitHeader.svelte';
 	import LifecycleRail from '$lib/components/unit/LifecycleRail.svelte';
 	import UnitTimelineRail from '$lib/components/unit/UnitTimelineRail.svelte';
@@ -14,14 +16,23 @@
 	import DocumentsTab from '$lib/components/unit/tabs/DocumentsTab.svelte';
 	import ExpensesTab from '$lib/components/unit/tabs/ExpensesTab.svelte';
 	import TimelineTab from '$lib/components/unit/tabs/TimelineTab.svelte';
+	import UnitFields from '$lib/components/forms/UnitFields.svelte';
 	import { resolveUnitTab } from '$lib/components/unit/unit-tabs';
+	import { createUnitEditForm, type UnitEditForm } from '$lib/components/unit/unit-edit-form';
 	import { scanHref, type ScanContext } from '$lib/scan/scan-context';
+	import { unitSchema, parseForm } from '$lib/schemas';
+	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { ArrowLeft } from '@lucide/svelte';
 
+	const queryClient = useQueryClient();
 	const id = $derived(Number(page.params.id));
+	const emptyUnitForm: UnitEditForm = { unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' };
 
 	// Active tab is driven by ?tab= (default overview) so deep links land on the right tab.
 	let activeTab = $state(resolveUnitTab(page.url.searchParams.get('tab')));
+	let showEditUnit = $state(false);
+	let unitForm = $state({ ...emptyUnitForm });
+	let unitFormErrors = $state<Record<string, string>>({});
 
 	$effect(() => {
 		const tabFromUrl = resolveUnitTab(page.url.searchParams.get('tab'));
@@ -44,6 +55,44 @@
 	}));
 
 	const dashboard = $derived(dashboardQuery.data);
+
+	function openEditUnit() {
+		if (!dashboard) return;
+		unitForm = createUnitEditForm(dashboard.unit);
+		unitFormErrors = {};
+		showEditUnit = true;
+	}
+
+	function closeEditUnit() {
+		showEditUnit = false;
+		unitFormErrors = {};
+	}
+
+	function submitUnit() {
+		if (!dashboard) return;
+		const result = parseForm(unitSchema, unitForm);
+		if (result.errors) {
+			unitFormErrors = result.errors;
+			return;
+		}
+		unitFormErrors = {};
+		updateUnitMutation.mutate({ unitId: dashboard.unit.id, data: result.data });
+	}
+
+	const updateUnitMutation = createMutation(() => ({
+		mutationFn: ({ unitId, data }: { unitId: number; data: Record<string, unknown> }) =>
+			units.update(unitId, data),
+		onSuccess: () => {
+			const propertyId = dashboard?.unit.propertyId;
+			showSuccess('Unit updated.');
+			closeEditUnit();
+			queryClient.invalidateQueries({ queryKey: ['unit-dashboard', id] });
+			queryClient.invalidateQueries({ queryKey: ['units'] });
+			queryClient.invalidateQueries({ queryKey: ['properties'] });
+			if (propertyId) queryClient.invalidateQueries({ queryKey: ['property', propertyId] });
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
 
 	// Scan / Upload routes into the existing scan -> draft -> confirm flow while preserving
 	// the unit context the user started from.
@@ -83,7 +132,7 @@
 		</div>
 	{:else}
 		<div class="space-y-4">
-			<UnitHeader {dashboard} onScan={() => goScan()} />
+			<UnitHeader {dashboard} onEdit={openEditUnit} onScan={() => goScan()} />
 			<LifecycleRail stage={dashboard.lifecycleStage} nextBestAction={dashboard.nextBestAction} onStageClick={setTab} />
 
 			<div class="grid gap-4 lg:grid-cols-[1fr_320px]">
@@ -132,3 +181,22 @@
 		</div>
 	{/if}
 </div>
+
+<Dialog.Root open={showEditUnit} onOpenChange={(v) => { if (!v) closeEditUnit(); }}>
+	<Dialog.Content class="max-w-sm" data-testid="unit-detail-edit-dialog">
+		<Dialog.Header>
+			<Dialog.Title>Edit unit</Dialog.Title>
+		</Dialog.Header>
+		<UnitFields bind:form={unitForm} errors={unitFormErrors} testidPrefix="unit-detail" />
+		<Dialog.Footer class="mt-4">
+			<Button variant="outline" onclick={closeEditUnit}>Cancel</Button>
+			<Button
+				data-testid="unit-detail-save-button"
+				onclick={submitUnit}
+				disabled={updateUnitMutation.isPending}
+			>
+				{updateUnitMutation.isPending ? 'Saving…' : 'Save Unit'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
