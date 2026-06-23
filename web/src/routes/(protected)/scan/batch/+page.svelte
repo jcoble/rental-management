@@ -54,6 +54,7 @@
 
 	function removeFile(index: number) {
 		selectedFiles = selectedFiles.filter((_, i) => i !== index);
+		if (inputEl) inputEl.value = '';
 	}
 
 	function clearAll() {
