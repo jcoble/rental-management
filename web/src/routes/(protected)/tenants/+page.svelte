@@ -16,6 +16,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import { getTenantsEmptyStateCopy } from '$lib/tenants/tenant-list-state';
 	import { Plus, Pencil, Trash2, Users } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -57,6 +58,7 @@
 
 	const list = $derived(tenantsQuery.data?.items ?? []);
 	const totalCount = $derived(tenantsQuery.data?.totalCount ?? 0);
+	const emptyCopy = $derived(getTenantsEmptyStateCopy({ hasActiveFilters: search.trim().length > 0 }));
 
 	const empty = { firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' };
 	let showForm = $state(false);
@@ -224,10 +226,10 @@
 		data={list}
 		{columns}
 		loading={tenantsQuery.isLoading || tenantsQuery.isFetching}
-		emptyMessage="No tenants yet"
-		emptyDescription="Tenants are the people who rent from you. Add your first to start tracking leases and rent."
+		emptyMessage={emptyCopy.message}
+		emptyDescription={emptyCopy.description}
 		emptyIcon={Users}
-		emptyActionLabel="Add your first tenant"
+		emptyActionLabel={emptyCopy.actionLabel}
 		emptyOnAction={openCreate}
 		emptyTone="primary"
 		onRowClick={(t) => goto(`/tenants/${t.id}`)}

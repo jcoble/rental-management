@@ -175,6 +175,7 @@
 							variant="ghost"
 							class="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
 							onclick={() => (pendingDelete = doc)}
+							aria-label={`Delete ${doc.fileName}`}
 							data-testid="document-delete-{doc.id}"
 						>
 							<Trash2 class="h-3.5 w-3.5" />
