@@ -42,7 +42,7 @@
 			leaseId,
 			skip: (paymentPage - 1) * PAYMENT_PAGE_SIZE,
 			take: PAYMENT_PAGE_SIZE,
-			sort: 'dueDate',
+			sort: '-dueDate',
 		}),
 	}));
 

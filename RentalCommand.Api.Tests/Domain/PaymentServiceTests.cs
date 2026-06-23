@@ -83,6 +83,28 @@ public class PaymentServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_SortsDueDateDescendingWhenRequested()
+    {
+        var now = DateTime.UtcNow;
+        SeedPayment(LeaseId, "Old rent", now.AddDays(-10), 100m);
+        SeedPayment(LeaseId, "Newest rent", now.AddDays(2), 200m);
+        SeedPayment(LeaseId, "Middle rent", now.AddDays(-1), 300m);
+
+        _commands.Clear();
+        var page = await _sut.ListPageAsync(PortfolioId, LeaseId, new ListQuery
+        {
+            Sort = "-dueDate",
+            Take = 3,
+        });
+
+        page.Items.Select(p => p.ExternalReference).Should().Equal("Newest rent", "Middle rent", "Old rent");
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("DESC", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task CreateAsync_FromScannedRentCheck_PersistsPayerCheckBankMethodAndExtras()
     {
         var now = DateTime.UtcNow;
