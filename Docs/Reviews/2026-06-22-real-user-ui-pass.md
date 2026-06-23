@@ -43,6 +43,7 @@ Fixed and verified:
 - `TSK397-B080`: completed native signing now keeps lease detail header/actions/status cards in sync with the fresh signed/active signature status while the main lease cache catches up.
 - `TSK397-B081`: lease detail tabs now honor and maintain `?tab=` deep links through reload/login redirect, direct tab clicks, and edit-mode redirection back to Overview.
 - `TSK397-B082` and `B083`: typed DatePicker dates now immediately update modal-gated actions, and Give Notice keeps lease/signature lifecycle state coherent so Notice given status, actions, and move-out date render together.
+- `TSK397-B084`: cancelling a Notice given lease back to Active now clears the expected move-out date so the active lease no longer shows stale move-out workflow data.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2667,3 +2668,39 @@ Verification:
 - Browser regression: typing `07/31/2027` into the Give Notice modal immediately enabled `Give notice`; submitting saved the move-out date. After refresh, `/leases/7?tab=overview` rendered header/status card `Notice given`, top action `Set Active`, overview CTA `Set lease active`, and Move-Out `Jul 31, 2027`.
 
 Status: Pass after fixing Give Notice typed-date gating and signed-lease lifecycle state coherence. Continue next with remaining lease lifecycle controls, tracked Unit Command Center lifecycle no-ops, and the broader non-banking/non-QuickBooks inventory.
+
+## Pass 49 Lease Notice Cancellation Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-49`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Harper Stone, `tsk397.pass39.202606231342@example.local`
+- Portfolio: Harper Stone's Portfolio, id `3`
+
+Acceptance criteria:
+- A landlord can cancel an accidental Notice given state by using `Set Active`.
+- The lease returns to Active, the primary action returns to `Give Notice`, and the overview CTA returns to `View ledger`.
+- Cancelling notice clears the expected move-out date; an active lease must not continue to display stale move-out workflow data.
+- The audit trail should record that the move-out date changed to none.
+
+Bug `TSK397-B084`:
+- Repro: On `/leases/7?tab=overview`, start from a Notice given lease with Move-Out `Jul 31, 2027`, click `Set Active`, confirm `Set active`, and inspect the Term card.
+- Observed: status changed to `Active` and the top action returned to `Give Notice`, but the Term card still showed `Move-Out Jul 31, 2027`.
+- Root cause: `UpdateLeaseRequest.MoveOutDate` is nullable and omitted nullable dates are preserved by generic PATCH behavior. The lease state machine comment already treats `NoticeGiven -> Active` as notice cancellation, but `LeaseService.UpdateAsync` did not clear `MoveOutDate` for that transition.
+- Fix: `LeaseService.UpdateAsync` now clears `MoveOutDate` when transitioning from `NoticeGiven` to `Active` and records a move-out date diff in the audit change reason.
+- Regression: `RentalCommand.Api.Tests/Domain/LeaseServiceAuditTests.cs`.
+
+Verification:
+- RED: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~LeaseServiceAuditTests.UpdateAsync_ClearsMoveOutDateWhenNoticeIsCancelled --no-restore --logger "console;verbosity=normal"` failed before the fix because `result.MoveOutDate` still had `2026-07-31`.
+- GREEN: the same focused test passed after clearing `MoveOutDate` on notice cancellation and checking the DB row plus audit reason `move-out date 2026-07-31→none`.
+- GREEN: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet build RentalCommand.Api` passed with 0 warnings and 0 errors before browser retest.
+- Browser regression: after rebuilding and restarting the local API with the same pass-26 database, Playwright CLI opened `/leases/7?tab=overview`, logged in as Harper Stone, clicked `Give Notice`, confirmed the prefilled `07/31/2027` date, then clicked `Set Active` and confirmed. The final snapshot rendered header/status card `Active`, top action `Give Notice`, overview CTA `View ledger`, and the Term card no longer contained a `Move-Out` row or `Jul 31, 2027` value.
+
+Status: Pass after fixing Notice given cancellation cleanup. Continue next with remaining lease lifecycle controls, tracked Unit Command Center lifecycle no-ops, and the broader non-banking/non-QuickBooks inventory.
