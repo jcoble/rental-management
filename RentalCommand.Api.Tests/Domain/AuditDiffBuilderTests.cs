@@ -15,9 +15,9 @@ public sealed class AuditDiffBuilderTests
 {
     private readonly AuditDiffBuilder _builder = new();
 
-    private static AuditLog Updated(string oldJson, string newJson) => new()
+    private static AuditLog Updated(string oldJson, string newJson, string entityType = "Expense") => new()
     {
-        EntityType = "Expense",
+        EntityType = entityType,
         EntityId = 5,
         Operation = AuditLogOperation.Updated,
         OldValues = oldJson,
@@ -36,6 +36,21 @@ public sealed class AuditDiffBuilderTests
         changes.Should().HaveCount(2);
         changes.Should().ContainSingle(c => c.Field == "Amount" && c.OldValue == "32,423" && c.NewValue == "23,423");
         changes.Should().ContainSingle(c => c.Field == "Status" && c.OldValue == "Pending" && c.NewValue == "Paid");
+    }
+
+    [Fact]
+    public void Build_Updated_FormatsNumericEnumAuditValuesForKnownEntityFields()
+    {
+        var row = Updated(
+            JsonSerializer.Serialize(new { Status = (int)WorkOrderStatus.Scheduled }),
+            JsonSerializer.Serialize(new { Status = (int)WorkOrderStatus.InProgress }),
+            entityType: "WorkOrder");
+
+        var changes = _builder.Build(row);
+
+        changes.Should().ContainSingle(c => c.Field == "Status"
+            && c.OldValue == "Scheduled"
+            && c.NewValue == "In progress");
     }
 
     [Fact]
