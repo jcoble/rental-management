@@ -38,6 +38,8 @@ export interface ApplicationResponse {
 	submittedAtUtc: string | null;
 	reviewedAtUtc: string | null;
 	approvedTenantId: number | null;
+	hasScan: boolean;
+	scanIsImage: boolean;
 	testId: string | null;
 }
 

@@ -374,6 +374,45 @@
 				</Card.Root>
 			{/if}
 
+			{#if application.hasScan}
+				<Card.Root class="lg:col-span-2" data-testid="application-scan-card">
+					<Card.Header>
+						<Card.Title class="flex items-center gap-2 text-base"><FileText class="h-4 w-4" /> Scanned application</Card.Title>
+					</Card.Header>
+					<Card.Content>
+						{#if application.scanIsImage}
+							<a
+								href="/application-file/{application.id}"
+								target="_blank"
+								rel="noopener noreferrer"
+								data-testid="application-scan-link"
+								aria-label="View scanned application full size"
+								class="group inline-block"
+							>
+								<img
+									src="/application-file/{application.id}?thumb=true"
+									alt="Scanned application preview"
+									class="max-h-80 w-auto rounded-md border border-border object-contain transition group-hover:ring-2 group-hover:ring-primary"
+									loading="lazy"
+								/>
+								<span class="mt-1 block text-xs text-primary underline underline-offset-2 group-hover:text-primary/80">Open full size</span>
+							</a>
+						{:else}
+							<a
+								href="/application-file/{application.id}"
+								target="_blank"
+								rel="noopener noreferrer"
+								data-testid="application-scan-link"
+								class="inline-flex items-center gap-2 rounded-md border border-border bg-background px-4 py-3 text-sm font-medium text-foreground transition hover:border-primary hover:text-primary"
+							>
+								<FileText class="h-5 w-5 shrink-0" />
+								<span>View scanned application document</span>
+							</a>
+						{/if}
+					</Card.Content>
+				</Card.Root>
+			{/if}
+
 			<!-- Screening -->
 			<Card.Root class="lg:col-span-2" data-testid="application-screening-card">
 				<Card.Header>

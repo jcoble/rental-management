@@ -13,17 +13,21 @@ namespace RentalCommand.Api.Services.Domain;
 public sealed class ApplicationService : IApplicationService
 {
     private const string EntityType = "RentalApplication";
+    private const string ScanEntityType = "Application";
 
     private readonly RentalCommandDbContext _db;
+    private readonly IFileStorage _files;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
 
     public ApplicationService(
         RentalCommandDbContext db,
+        IFileStorage files,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit)
     {
         _db = db;
+        _files = files;
         _dataUpdate = dataUpdate;
         _audit = audit;
     }
@@ -317,9 +321,20 @@ public sealed class ApplicationService : IApplicationService
             })
             .FirstOrDefaultAsync(ct);
 
-        return item == null
-            ? null
-            : ApplicationResponse.FromEntity(item.Application, item.PropertyName, item.UnitNumber);
+        if (item == null)
+        {
+            return null;
+        }
+
+        var response = ApplicationResponse.FromEntity(item.Application, item.PropertyName, item.UnitNumber);
+        var scan = await _db.FindLatestAvailableEntityFileAsync(_files, portfolioId, ScanEntityType, id, ct);
+        if (scan is not null)
+        {
+            response.HasScan = true;
+            response.ScanIsImage = scan.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return response;
     }
 
     public async Task<ApproveApplicationResult?> ApproveAsync(
