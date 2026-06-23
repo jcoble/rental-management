@@ -1843,3 +1843,40 @@ Verification:
 - Browser regression: no-phone vendor selection kept `Text the job` disabled and showed the inline phone-number requirement; status transition, edit cancel, delete cancel, and document download paths worked.
 
 Status: Pass after fix for work-order no-phone dispatch gating. Continue next with payment and expense detail pages created from scan history, then remaining non-banking/non-QuickBooks inventory.
+
+## Pass 31 Payment Detail Delete Confirmation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-31`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Acceptance criteria:
+- Payment detail must render charge, tracking, scanned-document provenance, and record history for scan-created payments.
+- Edit must be cancellable without mutation.
+- Delete must require an explicit, cancellable confirmation step before any destructive request.
+- Canceling the delete confirmation must keep the user on the payment detail page and preserve the payment.
+
+Evidence:
+- `/accounting/payments/1` rendered scan-created payment Avery Ellis, `Rent · $1125 · Paid`, lease `QA-2026-001-1A`, due date Feb 3 2026, paid date Feb 3 2026, method Check, reference `8001`, scan notes, and history `Recorded a payment`.
+- The scanned payment link opened `/payment-file/1` as the generated camera check image. Screenshot: `output/playwright/payment-file-1-20260623.png`.
+- Edit exposed lease, amount, payment type, due date, status, paid date, method, reference, and notes. Cancel returned to read-only without mutation.
+- Pre-fix destructive repro: pressing Delete on `/accounting/payments/1` immediately navigated back to `/accounting`, removed the payment row, and dropped collected totals to zero. There was no in-app confirmation dialog to cancel.
+- Post-fix browser proof used a replacement local UI-created payment, `/accounting/payments/2`, for Avery Ellis, `$10.00`, Scheduled, due Jun 15 2026.
+- Pressing Delete on `/accounting/payments/2` kept the URL on `/accounting/payments/2` and opened a `Delete payment` confirmation dialog with copy `Delete this $10.00 rent payment? This cannot be undone.`
+- Pressing Cancel closed the dialog, stayed on `/accounting/payments/2`, and the payment detail still rendered the `$10.00` scheduled payment and history.
+
+Fixed in this pass:
+- `TSK397-B053` - Payment detail Delete bypassed the shared confirmation pattern and called the delete mutation directly from the header button. Fix: payment detail now tracks a pending delete target, renders the shared `ConfirmDialog`, and only deletes from the dialog confirm action.
+
+Verification:
+- RED: `rtk pnpm --dir web test:unit -- src/lib/accounting/payment-detail-delete.test.ts` failed before the fix because payment detail had no `ConfirmDialog` and still wired `onclick={() => deleteMutation.mutate()}`.
+- GREEN: `rtk pnpm --dir web test:unit -- src/lib/accounting/payment-detail-delete.test.ts` passed 145/145 after the fix.
+- Frontend check: `rtk pnpm --dir web check` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+- Browser regression: payment detail Delete opened a cancellable dialog; Cancel preserved `/accounting/payments/2` and the record.
+
+Status: Pass after fix for payment-detail destructive confirmation. Continue next with expense detail pages, then remaining non-banking/non-QuickBooks inventory.
