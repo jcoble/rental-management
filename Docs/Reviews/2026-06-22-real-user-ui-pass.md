@@ -36,7 +36,7 @@ Fixed and verified:
 - `TSK397-B027`, `B028`, `B029`, `B030`, `B031`, `B032`, `B034`: image/PDF wording and single-image preservation, Unit edit, scan-first onboarding, expense category labels, unit scan context, scanned-vendor linking, and expense delete confirmation.
 - `TSK397-B035` through `B038`: unit-scoped payment scan lease inference, post-scan return actions, unit document rollup for expense files, and newest-first rent rows.
 - `TSK397-B039`, `B041` through `B047`, `B049` through `B069`: application scan copy/detail, neutral scanned-source labels, image preservation, application requested-home linking, work-order unit grounding, scan rejection persistence, invalid upload feedback, terminal scan filters, lease notice gating, work-order no-phone dispatch gating, payment delete confirmation, unit quick-post payment method/reference/notes, filtered empty states, tenant notice behavior, document delete accessibility, duplicate confirm guarding, lease agreement/source separation, lease history note diffs, no-reload signature state, scan-first setup shortcut, lease-prefill contact fields, and payment detail currency formatting.
-- `TSK397-B071` through `B073`: work-order status modal enum labels, stale completed-work-order dispatch hints/no-vendor dispatch recovery, and scheduled/completed date ordering.
+- `TSK397-B071` through `B075`: work-order status modal enum labels, stale completed-work-order dispatch hints/no-vendor dispatch recovery, scheduled/completed date ordering, reset-password lockout recovery, and dashboard work-order status labels.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2384,3 +2384,41 @@ Verification:
 - Browser regression: Playwright CLI confirmed completed-work-order dispatch hint removal, invalid scheduled/completed save rejection with visible toast, successful correction, fresh non-terminal status transition modals using readable labels, image document persistence/download, and unit open-repair count updates.
 
 Status: Pass after fixes for the covered work-order detail/maintenance slice. Continue next with Unit Documents/Expenses/Timeline follow-through, tenant detail/list, lease lifecycle/delete/signing follow-through, and the broader non-banking/non-QuickBooks inventory.
+
+## Pass 42 Auth Recovery and Dashboard Status Follow-Up
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-42`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Harper Stone, `tsk397.pass39.202606231342@example.local`
+- Portfolio: Harper Stone's Portfolio, id `3`
+
+Acceptance criteria:
+- A successful reset-password flow must leave the user able to sign in immediately, even if the account was locked from prior failed login attempts.
+- Dashboard latest-work-order rows must display user-facing status labels, not implementation enum tokens.
+
+Evidence:
+- During account recovery, the real forgot-password/reset-password path showed the success state after password reset. The account had been locked by failed login attempts during recovery, so a successful reset that claims "you can now sign in" must clear lockout state as well as changing the password.
+- The local reset UI initially reported a server connection error because the API had been manually restarted with the ASP.NET dev certificate instead of the mkcert certificate trusted by the SvelteKit server. Restarting the API with the same mkcert certificate used by the normal stack corrected that local proof environment issue; this is not logged as a product bug.
+- Pre-fix dashboard proof: the logged-in Dashboard `Latest Work Orders` row rendered `Pass 41 status label check Normal InProgress · 6/23/2026`.
+- Post-fix browser proof: Playwright CLI snapshot of `https://localhost:6042/` rendered the same row as `Pass 41 status label check Normal In progress · 6/23/2026`, with the row subtitle `In progress · 6/23/2026`.
+
+Fixed in this pass:
+- `TSK397-B074` - Successful password reset did not clear an active Identity lockout, so the UI could tell a user they could sign in while the lockout window still blocked them. Fix: after a successful reset, `AuthService.ResetPasswordAsync` clears `LockoutEnd` and resets the access-failed count. Regression: `RentalCommand.Api.Tests/Auth/AuthServiceResetPasswordTests.cs`.
+- `TSK397-B075` - Dashboard `Latest Work Orders` subtitles rendered raw work-order status enum values such as `InProgress`. Fix: the dashboard uses the shared `formatStatusLabel` helper for work-order status text. Regression: `web/src/lib/dashboard/work-order-display.test.ts`.
+
+Verification:
+- RED: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~AuthServiceResetPasswordTests.ResetPasswordAsync_ClearsLockoutSoUserCanSignInAfterReset --no-restore --logger "console;verbosity=normal"` failed before the auth fix because the reset user remained locked.
+- GREEN: the same focused auth command passed 1/1 after clearing lockout/access-failed state on successful reset.
+- RED: `rtk pnpm exec node --test --experimental-strip-types src/lib/dashboard/work-order-display.test.ts` failed before the dashboard fix because the page source contained raw `{order.status} ·` interpolation.
+- GREEN: `rtk pnpm exec node --test --experimental-strip-types src/lib/dashboard/work-order-display.test.ts src/lib/utils/status-labels.test.ts` passed 5/5.
+- Browser regression: Playwright CLI snapshot confirmed the Dashboard latest-work-order row now shows `In progress` instead of `InProgress`.
+
+Status: Pass after fixes for reset-password lockout recovery and the dashboard work-order status label. Continue next with Unit Documents/Expenses/Timeline follow-through, tenant detail/list, lease lifecycle/delete/signing follow-through, and the broader non-banking/non-QuickBooks inventory.

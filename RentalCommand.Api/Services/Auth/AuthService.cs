@@ -379,6 +379,9 @@ public class AuthService : IAuthService
             return AuthUserResult.Fail(errors, AuthErrorType.BadRequest);
         }
 
+        await _userManager.SetLockoutEndDateAsync(user, null);
+        await _userManager.ResetAccessFailedCountAsync(user);
+
         // Confirm the email too in case they reset before verifying.
         if (!user.EmailConfirmed)
         {
