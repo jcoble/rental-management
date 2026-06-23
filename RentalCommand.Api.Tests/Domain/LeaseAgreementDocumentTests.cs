@@ -117,6 +117,39 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         file.Should().BeNull();
     }
 
+    [Theory]
+    [InlineData("scan-lease.pdf", "application/pdf")]
+    [InlineData("scan-lease.jpg", "image/jpeg")]
+    public async Task SourceScanAttachment_DoesNotCountAsGeneratedAgreement(string fileName, string contentType)
+    {
+        var lease = SeedLeaseWithGraph();
+        var storageKey = await _storage.UploadAsync(
+            new MemoryStream(Encoding.UTF8.GetBytes("source scan bytes")),
+            fileName,
+            contentType);
+        _db.StoredFiles.Add(new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            FileName = fileName,
+            FilePath = storageKey,
+            ContentType = contentType,
+            FileSize = 17,
+            EntityType = "Lease",
+            EntityId = lease.Id,
+            UploadedAt = DateTime.UtcNow,
+        });
+        await _db.SaveChangesAsync();
+
+        var status = await _sut.GetDocumentStatusAsync(PortfolioId, lease.Id);
+        var file = await _sut.GetDocumentAsync(PortfolioId, lease.Id);
+
+        status.Should().NotBeNull();
+        status!.HasDocument.Should().BeFalse();
+        status.StoredFileId.Should().BeNull();
+        status.DownloadUrl.Should().BeNull();
+        file.Should().BeNull();
+    }
+
     [Fact]
     public async Task GetDocumentStatusAsync_NoGeneratedDocument_ReturnsMissingStatus()
     {

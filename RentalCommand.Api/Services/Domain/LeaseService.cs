@@ -13,6 +13,7 @@ namespace RentalCommand.Api.Services.Domain;
 public class LeaseService : ILeaseService
 {
     private const string EntityType = "Lease";
+    private const string GeneratedAgreementContentType = "application/pdf";
 
     // Allowed lease lifecycle transitions. A lease is a legal contract, so status may only move along
     // these edges — anything else (e.g. resurrecting a Terminated lease, or jumping Draft→Expired) is a
@@ -756,11 +757,14 @@ public class LeaseService : ILeaseService
             return null;
         }
 
+        var agreementFileName = GeneratedAgreementFileName(id);
         var file = await _db.StoredFiles
             .AsNoTracking()
             .Where(f => f.PortfolioId == portfolioId
                 && f.EntityType == EntityType
                 && f.EntityId == id
+                && f.FileName == agreementFileName
+                && f.ContentType == GeneratedAgreementContentType
                 && f.DeletedAt == null)
             .OrderByDescending(f => f.UploadedAt)
             .ThenByDescending(f => f.Id)
@@ -794,11 +798,14 @@ public class LeaseService : ILeaseService
         }
 
         // Latest generated agreement for this lease, in this portfolio.
+        var agreementFileName = GeneratedAgreementFileName(id);
         var file = await _db.StoredFiles
             .AsNoTracking()
             .Where(f => f.PortfolioId == portfolioId
                 && f.EntityType == EntityType
                 && f.EntityId == id
+                && f.FileName == agreementFileName
+                && f.ContentType == GeneratedAgreementContentType
                 && f.DeletedAt == null)
             .OrderByDescending(f => f.UploadedAt)
             .ThenByDescending(f => f.Id)
@@ -821,4 +828,6 @@ public class LeaseService : ILeaseService
 
         return (stream, file.FileName, file.ContentType);
     }
+
+    private static string GeneratedAgreementFileName(int leaseId) => $"lease-{leaseId}-agreement.pdf";
 }
