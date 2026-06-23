@@ -1551,3 +1551,131 @@ Deferred:
 - `TSK-399` - User reported again that the Unit Command Center `Send renewal` link does nothing. Existing task `TSK-399` was updated with the 2026-06-23 repro note and screenshot; intentionally not fixed in this pass.
 
 Status: Pass after fixes for application scan copy, application filtered-empty copy, and scanned-source PDF-specific wording. Pause after this checkpoint commit, then continue the remaining non-banking/non-QuickBooks UI inventory.
+
+## Pass 24 Fresh-User True Image Lease Scan Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-24`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-24`
+
+Local stack:
+- Web: `https://localhost:6022`
+- API: `https://localhost:6021` (`http://localhost:6020`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass24-db`, database `rentalcommand_tsk397_pass24_clean`, host port `5581`
+- Assistant provider: `claude-cli`, model `sonnet`
+
+Synthetic account:
+- Casey Rowan Pass 24, `tsk397.pass24.202606230947@example.local`
+- Registered through `/register`, verified through the local outbox email link, logged in, selected `Set up my real portfolio`, and confirmed the live portfolio started with zero properties, units, tenants, leases, payments, expenses, applications, work orders, and scan drafts.
+
+Acceptance criteria:
+- A clean live user can create rental records from a camera-style lease image using the shared scan engine, without demo data.
+- New-rental single-photo uploads must preserve the original image file and content type so web testing exercises the same image extraction path expected from mobile camera capture.
+- The lease review wizard must transition from processing to review without reload, allow landlord corrections, create property/unit/tenant/lease records, and surface the scanned source document on the resulting lease detail.
+- Browser evidence and SQL proof must show persisted reviewed values, stored source-file content type, and no warning-or-higher console messages for the retested path.
+
+Evidence:
+- `/choose-setup` showed separate sample-data and real-portfolio paths. Selecting the real portfolio landed on `/onboarding`; core record counts stayed `0|0|0|0|0|0|0|0|0` before scanning.
+- `/onboarding` still starts at manual property setup; scan-first setup remains discoverable through the app shell `/scan` path, not the primary onboarding path.
+- `/scan` clean empty state showed `New rental from your lease`, `Bulk import leases`, document-type buttons, voice-note control, status tabs, and no scan drafts.
+- Uploaded `output/qa/production-scale-scans/01-leases-camera/lease-007-3c.jpg` through `/scan/new-rental`; the pre-fix path created draft `1`, transitioned to review without reload, and created lease `QA-2026-007-3C` for Oak Terrace, Unit `3C`, tenant Gray Chen.
+- Landlord edits during review set Unit `3C` to `2` beds / `1` bath, tenant email `gray.chen.pass24@example.local`, phone `614-555-2407`, emergency contact `Maya Chen, 614-555-2408`, and late fee `$50.00`.
+- Lease detail `/leases/1` rendered Active status, linked property/unit/tenant, `$1,575.00` rent, `$1,575.00` deposit, `$50.00` late fee, format-neutral note `Imported from scanned lease document.`, and `View scanned document`.
+- SQL proof after first confirm: Oak Terrace / Unit `3C` / Gray Chen / lease `QA-2026-007-3C` persisted with reviewed beds/baths, rent, deposit, and late fee.
+- Root-cause proof for the new image finding: draft `1` and its `StoredFiles` row persisted as `ContentType=application/pdf`; engine log said `claude-cli extraction: VISION read (application/pdf, no extractable text)` even though the browser selected a `.jpg`.
+- After the fix, uploaded `output/qa/production-scale-scans/01-leases-camera/lease-008-4d.jpg` through the same photo upload control. Draft `2` immediately persisted as `ContentType=image/jpeg` and `FileSize=152696`.
+- Engine proof after the fix: `claude-cli extraction: VISION read (image/jpeg, no extractable text)` and `Scan extraction succeeded for draft 2 ... Lease, Reviewing`.
+- Confirming draft `2` created lease `QA-2026-008-4D` for Summit Row, Unit `4D`, tenant Harper Foster. Landlord edits set beds/baths `3 / 2`, contact fields, and late fee `$50.00`.
+- Lease detail `/leases/2` rendered an inline scanned-document image preview and `Open full size`; SQL proof showed draft `2` confirmed with `StoredFiles.ContentType=image/jpeg`, while draft `1` remained the pre-fix `application/pdf` comparison row.
+- Browser console check after the fixed path returned zero warning-or-higher messages.
+
+Fixed in this pass:
+- `TSK397-B044` - New-rental single-photo lease uploads were converted to a generated PDF before upload, so web camera-image testing never actually exercised or preserved an image source file. Root cause: `onPhotos()` always called `stitchImagesToPdf(files)` even when exactly one photo was selected. Fix: added `prepareNewRentalPhotoUpload`; single-photo uploads now keep the original `File`, while multiple lease photos still stitch into one PDF. Regression: `web/src/lib/scan/new-rental-upload.test.ts`.
+
+Verification:
+- RED: `pnpm --dir web test:unit -- src/lib/scan/new-rental-upload.test.ts` failed before the helper existed.
+- GREEN: `pnpm --dir web test:unit -- src/lib/scan/new-rental-upload.test.ts` passed 136/136 after the fix.
+- Frontend check: `pnpm --dir web check` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+- Browser/SQL regression: draft `2` persisted as `image/jpeg`, engine logged `VISION read (image/jpeg...)`, `/leases/2` rendered an image preview, and console warnings/errors were zero.
+
+Status: Pass after fix for true single-image lease scan preservation and review/confirm. Continue next with application scans and the remaining non-banking/non-QuickBooks UI inventory.
+
+## Pass 24 Application Scan Requested-Home Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-24`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-24`
+
+Acceptance criteria:
+- A rental application camera image can be scanned, reviewed, confirmed, and opened as an application record.
+- The reviewer's `Applying for` correction should preserve the human-readable note and, when it unambiguously names an existing property/unit, link the created application to the queryable requested home.
+- Application requested-home matching must stay portfolio-scoped and DB-side; ambiguous or non-matching free text should remain unlinked rather than guessing.
+- The application detail page must show applicant fields, requested-home labels, the attached image scan, no-consent screening disabled state, and notes.
+
+Evidence:
+- Uploaded `output/qa/production-scale-scans/04-applications-camera/application-002.jpg` with `Rental Application` selected. Draft `3` processed as `image/jpeg` and became `Reviewing`.
+- Review extracted Harper Kim, email `qa.applicant.002@example.local`, phone `555-0102`, income `$4,100.00`, and requested home text. Landlord edits set DOB `1991-04-12`, current address, desired move-in `2026-08-01`, and `Applying for` to `Summit Row Unit 4D`.
+- Pre-fix result: `/applications/1` showed the note `Applying for: Summit Row Unit 4D. ID last-4: 1000.`, but the Requested home card still showed Property `No preference`, Unit `No preference`. SQL confirmed `PropertyId`/`UnitId` were null.
+- Root cause: `ScanService.ConfirmAsApplicationAsync` validated explicit extracted/override IDs but never resolved `ApplyingFor` text to an existing property/unit, so reviewer-entered requested-home text was only folded into Notes.
+- After the fix and API restart, confirmed draft `4` from `output/qa/production-scale-scans/04-applications-camera/application-003.jpg` as applicant Lena Park with `Applying for = Summit Row Unit 4D`.
+- Post-fix SQL proof: application `2` persisted `PropertyId=2`, `UnitId=2`, property `Summit Row`, unit `4D`, notes `Applying for: Summit Row Unit 4D. ID last-4: 1003.`
+- Browser proof: `/applications/2` rendered Requested home `Summit Row` / `4D`, applicant contact/income fields, no-consent screening disabled state, scanned application card, and notes. Screenshot: `output/qa/playwright/pass24-application-2-requested-home-fixed.png`.
+- Console observation: the login/navigation probe produced transient SignalR negotiation warnings from aborted requests, while the negotiate endpoint also returned `200` after the page settled. Treat as a watch item, not a blocker for this requested-home fix.
+
+Fixed in this pass:
+- `TSK397-B045` - Scanned rental applications did not link the requested home when the reviewer supplied only `Applying for` text. Fix: application scan confirm now resolves exact property-name + unit-number text such as `Summit Row Unit 4D`, or a unique unit-only reference, through portfolio-scoped DB queries before creating the application. Ambiguous text remains unlinked.
+
+Verification:
+- RED: `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ConfirmAndCreateAsync_ReviewingApplicationDraft_WithApplyingForText_LinksRequestedHome" --verbosity minimal` failed before the fix because `CreateApplicationRequest.PropertyId` was null.
+- GREEN: same targeted test passed after the fix.
+- Focused scan regression suite: `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ScanServiceTests" --verbosity minimal` passed 22/22 with only known `SQLitePCLRaw.lib.e_sqlite3` vulnerability warnings.
+- Browser/SQL regression: application `2` created from a camera JPEG scan linked to Summit Row / Unit 4D and rendered those labels on `/applications/2`.
+
+Status: Pass after fix for application requested-home linking from reviewed scan text. Continue next with payment, expense, work-order, maintenance, documents, timeline, and remaining non-banking/non-QuickBooks app surfaces.
+
+## Pass 24 Payment, Expense, and Work-Order Camera Scan Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-24`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-24`
+
+Acceptance criteria:
+- A rent-check camera image can be scanned, reviewed, manually associated to the correct lease when extracted text is ambiguous, confirmed, and opened as a payment record.
+- A receipt/invoice camera image can be scanned, reviewed, linked to a property/unit, confirmed with line items, and opened as an expense record.
+- A maintenance-request camera image can be scanned, reviewed, linked to a property, confirmed as a work order, and opened with the attached source image.
+- Reviewer-selected associations must win over conflicting extracted prose, but the extracted prose remains visible as provenance notes.
+- Unit inference from scan text must stay portfolio/property scoped and DB-side; ambiguous or non-matching unit references must remain unlinked rather than guessing.
+- Detail pages must expose the attached image source through the normal document/download path and complete with zero warning-or-higher browser console messages.
+
+Evidence:
+- Uploaded `output/qa/production-scale-scans/03-payments-camera/payment-003.jpg` as a Payment scan. Draft `5` processed as `image/jpeg`, extracted total `$1,275.00`, method `Check`, payer `Casey Kim`, bank `First QA Bank`, check/reference `8003`, transaction date `2026-04-03`, and notes for lease `QA-2026-003-3C`.
+- Before lease selection, the Payment review required an explicit lease. Selecting `#QA-2026-007-3C — Gray Chen · Unit 3C` and confirming created Payment `1`.
+- Payment SQL proof: `Payment 1 | LeaseId 1 | Amount 1275.00 | Status Paid | Method Check | ExternalReference 8003 | PayerName Casey Kim | CheckNumber 8003 | BankName First QA Bank | LeaseNumber QA-2026-007-3C`; source file row persisted as `Payment|1|image/jpeg`.
+- `/accounting/payments/1` rendered Gray Chen, Rent `$1,275.00`, Paid, lease `QA-2026-007-3C`, due/paid `Apr 3, 2026`, method Check, reference `8003`, provenance notes, scanned-document image link, and history. Screenshot: `output/qa/playwright/pass24-payment-1-detail.png`.
+- `/leases/1` Ledger tab rendered Charged `$1,275.00`, Paid `$1,275.00`, Balance `$0.00`, the rent line item, and the payment row. Screenshot: `output/qa/playwright/pass24-lease-1-ledger-after-payment-clicked.png`.
+- Uploaded `output/qa/production-scale-scans/02-expenses-camera/expense-004.jpg` as a Receipt/Bill scan. Draft `6` extracted vendor `Summit Roofing`, receipt `RCPT-0004`, subtotal `$115.00`, tax `$5.00`, total `$120.00`, Visa `4242`, transaction date `2026-05-05`, and notes that mentioned a different property/unit.
+- Review selected property `Summit Row`, category `Repairs & maintenance`, and line item amounts for materials `$55.00`, labor `$50.00`, and service fee `$10.00`. Confirming created Expense `1`.
+- Expense SQL proof: `Expense 1 | Summit Roofing | 120.00 | PropertyId 2 | UnitId 2 | Summit Row | 4D | Visa | 4242 | Receipt | Category Repairs & maintenance`; line items persisted with amounts and line numbers; source file row persisted as `Expense|1|image/jpeg`.
+- `/accounting/expenses/1` rendered Summit Row, Unit 4D, scanned document, receipt fields, line items, card/payment metadata, document kind, and history. Screenshot: `output/qa/playwright/pass24-expense-1-detail.png`.
+- Uploaded `output/qa/production-scale-scans/05-work-orders-camera/work-order-004.jpg` as a Work Order scan. Draft `7` extracted title `Toilet runs continuously`, priority `Normal`, and description `Tenant reports the toilet runs continuously without stopping. Issue located at Unit 4D, 91 Summit Dr. Tenant requests weekday afternoon entry window.`
+- Pre-fix review state required property selection but exposed no unit selector. The extracted notes said Unit `4D` matched a known unit but IDs were not assigned because the document property text did not match a known property.
+- After the fix and API restart, selecting `Summit Row`, category `Plumbing`, and estimated cost `$185.00` created WorkOrder `1` from draft `7` without page errors. Screenshot: `output/qa/playwright/pass24-workorder-scan-confirm-success.png`.
+- WorkOrder SQL proof: `WorkOrder 1 | Toilet runs continuously | PropertyId 2 | Summit Row | UnitId 2 | 4D | Priority Normal | Category Plumbing | EstimatedCost 185.00`.
+- `/maintenance/1` rendered title, New status, Normal priority, `Summit Row`, `Unit 4D`, category Plumbing, estimated cost `$185.00`, status history, Photos & documents, and history. Screenshot: `output/qa/playwright/pass24-workorder-1-detail.png`.
+- Opening the work-order document downloaded `scan-20260623101951.jpeg`; local file proof showed a real JPEG image, `1800x2400`, 136,547 bytes.
+- Browser console check after the work-order flow returned zero warning-or-higher messages. Network proof for the final flow showed `POST /api/v1/scans/7/confirm => 200`, `/api/v1/work-orders/1 => 200`, `/api/v1/documents?entityType=WorkOrder&entityId=1 => 200`, and `/api/v1/documents/12/file => 200`.
+
+Fixed in this pass:
+- `TSK397-B046` - Scanned work-order review let the reviewer select a property but had no unit selector, and backend confirmation did not ground `Unit 4D` from the description under the selected property. Fix: work-order scan confirmation now resolves unit references from description/notes only within the selected portfolio and property before creating the work order. Ambiguous or missing references remain unlinked.
+
+Verification:
+- RED: `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ConfirmAndCreateAsync_ReviewingWorkOrderDraft_WithSelectedPropertyAndUnitInDescription_GroundsUnit" --verbosity minimal` failed before the fix because `CreateWorkOrderRequest.UnitId` was null.
+- GREEN: same targeted test passed after the fix.
+- Focused scan regression suite: `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ScanServiceTests" --verbosity minimal` passed 23/23 with only known `SQLitePCLRaw.lib.e_sqlite3` vulnerability warnings.
+- Browser/SQL regression: draft `7` confirmed from a camera JPEG scan, created WorkOrder `1`, linked Summit Row / Unit 4D, retained the attached source JPEG, and completed with zero warning-or-higher console messages.
+
+Watch items:
+- Scan-upload thumbnails create separate `StoredFiles` rows with `EntityType` set and `EntityId` null; the user-facing document lists filter by `EntityId` and correctly show only the original source image. Keep this as a storage hygiene watch item unless it becomes visible in document counts or grids.
+- `TSK-404` - User-reported Unit Command Center `Send renewal` no-op remains captured with the 2026-06-23 screenshot and is intentionally deferred from this scan/data-spine lane.
+
+Status: Pass after fix for work-order unit grounding and browser proof for payment, expense, and work-order camera scan workflows. Continue next with maintenance actions, document/timeline surfaces, and the remaining non-banking/non-QuickBooks app inventory.
