@@ -167,6 +167,7 @@ ensure_database_exists
 #   dotnet user-secrets set "ConnectionStrings:DefaultConnection" "<conn>" --project RentalCommand.Api
 export ASPNETCORE_ENVIRONMENT=Development
 export DOTNET_ENVIRONMENT=Development
+export MSBUILDDISABLENODEREUSE="${MSBUILDDISABLENODEREUSE:-1}"
 # Serve the API's HTTPS endpoint with the locally-trusted mkcert cert.
 export Kestrel__Certificates__Default__Path="$CERT_DIR/api-cert.pem"
 export Kestrel__Certificates__Default__KeyPath="$CERT_DIR/api-key.pem"
@@ -176,14 +177,20 @@ export Kestrel__Certificates__Default__KeyPath="$CERT_DIR/api-key.pem"
 # Pin BOTH to one absolute path so the blob written on upload is the blob the worker reads.
 export Upload__BasePath="$ROOT_DIR/uploads"
 
+# Build the two .NET hosts serially before launching them. A fresh worktree can otherwise
+# run API + Engine first-builds at the same time and race on shared project outputs.
+echo "Building .NET hosts serially..."
+dotnet build RentalCommand.Engine
+dotnet build RentalCommand.Api
+
 # ─── Engine (background worker) ──────────────────────────────────────────────
 echo "Starting Engine (RentalCommand.Engine)..."
-dotnet run --project RentalCommand.Engine > /tmp/rentalcommand-engine.log 2>&1 &
+dotnet run --no-build --project RentalCommand.Engine > /tmp/rentalcommand-engine.log 2>&1 &
 ENGINE_PID=$!
 
 # ─── API ─────────────────────────────────────────────────────────────────────
 echo "Starting API on $API_HTTPS_URL..."
-dotnet run --project RentalCommand.Api -- --urls "$API_HTTPS_URL;$API_HTTP_URL" \
+dotnet run --no-build --project RentalCommand.Api -- --urls "$API_HTTPS_URL;$API_HTTP_URL" \
     > /tmp/rentalcommand-api.log 2>&1 &
 API_PID=$!
 
