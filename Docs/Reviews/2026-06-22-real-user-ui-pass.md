@@ -40,6 +40,7 @@ Fixed and verified:
 - `TSK397-B076` and `B077`: Unit Documents direct unit-file uploads/page-level receipt labeling, and audit amount diff currency formatting.
 - `TSK397-B078`: tenant delete dialogs now block active-lease deletes up front with dependency copy instead of sending users into a known server-side rejection.
 - `TSK397-B079`: active lease delete confirmations now explain that the action terminates the lease record, releases the unit from active occupancy, and should be used only for duplicate or mistaken leases.
+- `TSK397-B080`: completed native signing now keeps lease detail header/actions/status cards in sync with the fresh signed/active signature status while the main lease cache catches up.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2547,3 +2548,46 @@ Verification:
 - `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings.
 
 Status: Pass after fixing active lease delete copy. Continue next with the rest of lease lifecycle/signing follow-through, the tracked lifecycle no-op tasks, and the broader non-banking/non-QuickBooks inventory.
+
+## Pass 46 Lease Creation and Native Signing Follow-Through
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-46`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Harper Stone, `tsk397.pass39.202606231342@example.local`
+- Portfolio: Harper Stone's Portfolio, id `3`
+
+Acceptance criteria:
+- A landlord can create a lease from already-created property, vacant unit, and tenant records.
+- Empty required fields show validation before save, while a complete draft lease saves and appears in the lease grid.
+- Sending a draft lease for native signature generates the agreement if needed, creates only local/synthetic signing delivery, and moves the lease into pending-signature state.
+- The public signer can open the PDF, consent to electronic records, sign with a typed signature, and reach a terminal success page.
+- After signing, staff-side lease detail must show a coherent active/signed state, suppress send/resend controls, and allow signed PDF download.
+
+Evidence:
+- `/leases` New Lease validation showed required errors for property, unit, tenant, lease number, start/end dates, monthly rent, and security deposit.
+- Created draft lease `RC-2B-DRAFT-45` for `Riverside Courtyard`, `Unit 2B (Vacant)`, and tenant `Riley Draftsign` with `$1,325.00` rent, `$1,325.00` deposit, dates `8/1/2026` to `7/31/2027`, and status `Draft`; the row appeared in the lease grid and opened `/leases/7`.
+- Agreement & Signing direct `Send for signature` from a draft with no generated agreement created `lease-7-agreement.pdf`, changed the card to `Sent - waiting for signature`, and wrote a local outbox email to `riley.draftsign.pass45@example.local` with localhost signing link `https://localhost:6042/sign/...`.
+- Public signer page loaded without staff auth, exposed the PDF link, disabled signing until E-SIGN consent was checked, enabled typed signing for `Riley Draftsign`, and submitted to terminal copy `Signed - all done`.
+- Signed-document GET returned `application/pdf` for `lease-7-agreement.pdf`; after final signing, staff-side `Download signed lease` saved `.playwright-cli/signed-lease-7.pdf`, verified as a 3-page PDF.
+
+Bug `TSK397-B080`:
+- Repro: Send and complete native signing for a draft lease, then return to the already-open staff lease detail.
+- Observed: the Agreement card correctly showed `Signed` and `Download signed lease`, but the page header still showed `Pending signature` and top-level actions still offered pending-signature lifecycle controls until the main lease query caught up.
+- Root cause: the signature-status query was polling and returning the fresh signed/active status, but visible header/action/detail status surfaces read only the stale `lease.status` cache.
+- Fix: added `visibleLeaseStatus` helper and wired lease detail visible lifecycle surfaces and delete-state copy to the fresh signature status while invalidating the main lease cache whenever signature status and lease cache diverge.
+- Regression: `web/src/lib/leases/lease-esign.test.ts`.
+
+Verification:
+- GREEN: `rtk pnpm exec node --test --experimental-strip-types src/lib/leases/lease-esign.test.ts` passed 5/5.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- Browser regression: after login redirect to `/leases/7?tab=agreement`, the staff header rendered `Active`, top action rendered `Give Notice`, overview CTA rendered `View ledger`, the Agreement tab rendered `Signed` plus `Download signed lease`, and no send/resend action was present.
+
+Status: Pass after fixing completed-signing staff-side lifecycle coherence. Continue next with the remaining lease lifecycle controls, tracked Unit Command Center lifecycle no-ops, and the broader non-banking/non-QuickBooks inventory.
