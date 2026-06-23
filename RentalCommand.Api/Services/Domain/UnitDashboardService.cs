@@ -389,6 +389,10 @@ public class UnitDashboardService : IUnitDashboardService
         var workOrderIds = _db.WorkOrders.Where(w => w.UnitId == unitId && w.PortfolioId == portfolioId).Select(w => w.Id);
         var inspectionIds = _db.Inspections.Where(i => i.UnitId == unitId && i.PortfolioId == portfolioId).Select(i => i.Id);
         var paymentIds = _db.Payments.Where(p => p.PortfolioId == portfolioId && leaseIds.Contains(p.LeaseId)).Select(p => p.Id);
+        var expenseIds = _db.Expenses
+            .Where(e => e.PortfolioId == portfolioId
+                && (e.UnitId == unitId || (e.WorkOrderId != null && workOrderIds.Contains(e.WorkOrderId.Value))))
+            .Select(e => e.Id);
 
         return _db.StoredFiles
             .AsNoTracking()
@@ -396,6 +400,7 @@ public class UnitDashboardService : IUnitDashboardService
                 (f.EntityType == "Unit" && f.EntityId == unitId) ||
                 (f.EntityType == "Lease" && leaseIds.Contains(f.EntityId!.Value)) ||
                 (f.EntityType == "Payment" && paymentIds.Contains(f.EntityId!.Value)) ||
+                (f.EntityType == "Expense" && expenseIds.Contains(f.EntityId!.Value)) ||
                 (f.EntityType == "WorkOrder" && workOrderIds.Contains(f.EntityId!.Value)) ||
                 (f.EntityType == "Inspection" && inspectionIds.Contains(f.EntityId!.Value))));
     }

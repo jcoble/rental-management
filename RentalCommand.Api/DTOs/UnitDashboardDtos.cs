@@ -62,7 +62,7 @@ public class UnitDashboardHeader
     public int? LeaseEndsInDays { get; set; }
 
     /// <summary>
-    /// Documents on file for the unit and its child records (lease, work orders, payments, inspections).
+    /// Documents on file for the unit and its child records (lease, work orders, expenses, payments, inspections).
     /// NOTE: scan drafts are not unit-scoped until confirmed, so this is the unit's document count
     /// (what the Documents tab lists) rather than a strict "pending AI review" queue.
     /// </summary>

@@ -9,7 +9,7 @@
 		docs,
 		onScan,
 	}: {
-		/** The unit's document set (files on the unit + its lease/payment/work-order/inspection children). */
+		/** The unit's document set (files on the unit + its lease/payment/expense/work-order/inspection children). */
 		docs: UnitDocumentSummary[];
 		onScan: () => void;
 	} = $props();
@@ -31,7 +31,7 @@
 <div class="space-y-4" data-testid="unit-documents-tab">
 	<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
 		<p class="text-sm text-muted-foreground">
-			Documents on this unit and its lease, work orders, payments, and inspections.
+			Documents on this unit and its lease, work orders, expenses, payments, and inspections.
 		</p>
 		<Button class="gap-2" onclick={() => onScan()} data-testid="documents-scan">
 			<ScanLine class="h-4 w-4" /> Scan / upload
