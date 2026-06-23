@@ -12,6 +12,7 @@
 	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
@@ -25,6 +26,7 @@
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived', 'Failed', 'Refunded'];
 
 	let editing = $state(false);
+	let deleteTarget = $state<number | null>(null);
 	let form = $state({
 		leaseId: '',
 		amount: '',
@@ -128,6 +130,7 @@
 		mutationFn: () => payments.delete(paymentId),
 		onSuccess: () => {
 			showSuccess('Payment deleted.');
+			deleteTarget = null;
 			goto('/accounting');
 		},
 		onError: (err) => showError(apiErrorMessage(err))
@@ -182,7 +185,7 @@
 					<Button onclick={savePayment} disabled={saveMutation.isPending}><Save class="h-4 w-4" />{saveMutation.isPending ? 'Saving...' : 'Save'}</Button>
 				{:else}
 					<Button variant="outline" onclick={startEditing}><Pencil class="h-4 w-4" />Edit</Button>
-					<Button variant="destructive" onclick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}><Trash2 class="h-4 w-4" />Delete</Button>
+					<Button variant="destructive" onclick={() => (deleteTarget = paymentId)} disabled={deleteMutation.isPending}><Trash2 class="h-4 w-4" />Delete</Button>
 				{/if}
 			</div>
 		{/if}
@@ -288,3 +291,13 @@
 		</div>
 	{/if}
 </div>
+
+<ConfirmDialog
+	open={deleteTarget !== null}
+	title="Delete payment"
+	message={payment ? `Delete this ${heroAmount} ${paymentTypeLabel(payment.paymentType).toLowerCase()} payment? This cannot be undone.` : ''}
+	busy={deleteMutation.isPending}
+	testid="payment-detail-delete"
+	onconfirm={() => deleteTarget !== null && deleteMutation.mutate()}
+	oncancel={() => (deleteTarget = null)}
+/>
