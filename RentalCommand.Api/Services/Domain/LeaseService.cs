@@ -84,6 +84,7 @@ public class LeaseService : ILeaseService
         securityDeposit = l.SecurityDeposit,
         lateFeeAmount = l.LateFeeAmount,
         rentDueDay = l.RentDueDay,
+        notes = l.Notes,
         tenantId = l.TenantId,
         propertyId = l.PropertyId,
         unitId = l.UnitId,
@@ -564,6 +565,7 @@ public class LeaseService : ILeaseService
         var prevRent = entity.MonthlyRent;
         var prevEnd = entity.EndDate;
         var prevDeposit = entity.SecurityDeposit;
+        var prevNotes = entity.Notes;
 
         // Resolve the post-update status + date range up front (request value when supplied, else current)
         // so the integrity guards reason about what will ACTUALLY be persisted.
@@ -616,6 +618,7 @@ public class LeaseService : ILeaseService
         if (entity.MonthlyRent != prevRent) changes.Add($"rent {prevRent:0.##}→{entity.MonthlyRent:0.##}");
         if (entity.EndDate != prevEnd) changes.Add($"end date {prevEnd:yyyy-MM-dd}→{entity.EndDate:yyyy-MM-dd}");
         if (entity.SecurityDeposit != prevDeposit) changes.Add($"deposit {prevDeposit:0.##}→{entity.SecurityDeposit:0.##}");
+        if (!string.Equals(entity.Notes, prevNotes, StringComparison.Ordinal)) changes.Add("notes updated");
         var reason = changes.Count > 0
             ? $"Lease {entity.LeaseNumber}: {string.Join("; ", changes)}"
             : $"Lease {entity.LeaseNumber} details updated";
