@@ -13,6 +13,7 @@
 		canSendLeaseForSignature,
 		hasAgreementAfterSignatureSend,
 		signableStateMessage,
+		visibleLeaseStatus,
 	} from '$lib/leases/lease-esign';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
@@ -64,7 +65,6 @@
 	}));
 
 	const lease = $derived(leaseQuery.data);
-	const leaseDeleteState = $derived(getLeaseDeleteState(lease));
 
 	// Payments for this lease
 	const paymentsQuery = createQuery(() => ({
@@ -348,6 +348,15 @@
 	}));
 	const signature = $derived(signatureStatusQuery.data);
 	const canSendForSignature = $derived(canSendLeaseForSignature(signature?.leaseStatus, signature?.esignStatus));
+	const visibleStatus = $derived(visibleLeaseStatus(lease?.status, signature));
+	const visibleLease = $derived(lease && visibleStatus ? { ...lease, status: visibleStatus } : lease);
+	const leaseDeleteState = $derived(getLeaseDeleteState(visibleLease));
+
+	$effect(() => {
+		if (lease?.status && signature?.leaseStatus && lease.status !== signature.leaseStatus) {
+			invalidateLease();
+		}
+	});
 
 	const esignStatusLabel = $derived.by(() => {
 		switch (signature?.esignStatus) {
@@ -524,7 +533,7 @@
 
 	// Context tone for the hero wash — status-keyed (see HeroCard for the recipe).
 	const heroTone = $derived.by<HeroTone>(() => {
-		switch (lease?.status) {
+		switch (visibleStatus) {
 			case 'Active': return 'success';
 			case 'Expired':
 			case 'Terminated': return 'destructive';
@@ -615,7 +624,7 @@
 			<div class="flex-1">
 				<div class="flex flex-wrap items-center gap-2">
 					<h1 class="text-2xl font-bold" data-testid="lease-detail-number">{lease.leaseNumber}</h1>
-					<StatusBadge status={lease.status} />
+					<StatusBadge status={visibleStatus ?? lease.status} />
 				</div>
 				<p class="mt-1 text-sm text-muted-foreground">
 					{#if lease.propertyName}{lease.propertyName}{/if}
@@ -634,7 +643,7 @@
 						{saveMutation.isPending ? 'Saving…' : 'Save'}
 					</Button>
 				{:else}
-					{#if lease.status !== 'Active'}
+					{#if visibleStatus !== 'Active'}
 						<Button data-testid="lease-set-active" variant="outline" size="sm" onclick={() => (showSetActiveConfirm = true)} disabled={statusMutation.isPending}>
 							Set Active
 						</Button>
@@ -672,7 +681,7 @@
 								{formatCurrency(lease.monthlyRent)}
 							</p>
 							<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-								<StatusBadge status={lease.status} />
+								<StatusBadge status={visibleStatus ?? lease.status} />
 								{#if lease.tenantName}
 									<a href="/tenants/{lease.tenantId}" class="font-medium text-foreground underline-offset-4 hover:underline">{lease.tenantName}</a>
 								{/if}
@@ -690,7 +699,7 @@
 								</div>
 							{/if}
 							{#if !editing}
-								{#if lease.status === 'Active'}
+								{#if visibleStatus === 'Active'}
 									<Button data-testid="lease-hero-cta" size="sm" class="gap-1.5" onclick={() => activeTab = 'ledger'}>
 										<DollarSign class="h-4 w-4" />
 										View ledger
@@ -714,7 +723,7 @@
 						     and is optional/clearable, so it gets its own editable date field. -->
 						{@render dateField({ label: 'Move-In', value: form.moveInDate, setValue: (v) => (form.moveInDate = v), display: formatDate(lease.moveInDate), error: formErrors.moveInDate, testid: 'lease-detail-move-in' })}
 						<InlineField label="Rent Due Day" bind:value={form.rentDueDay} display={`Day ${lease.rentDueDay}`} {editing} type="number" error={formErrors.rentDueDay} testid="lease-detail-due-day" />
-						<InlineField label="Status" bind:value={form.status} display={formatStatusLabel(lease.status)} {editing} type="select" options={statusOptions} error={formErrors.status} testid="lease-detail-status" />
+						<InlineField label="Status" bind:value={form.status} display={formatStatusLabel(visibleStatus ?? lease.status)} {editing} type="select" options={statusOptions} error={formErrors.status} testid="lease-detail-status" />
 						{#if !editing && lease.moveOutDate}
 							<div>
 								<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Move-Out</dt>
