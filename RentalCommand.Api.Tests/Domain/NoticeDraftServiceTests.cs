@@ -50,10 +50,74 @@ public class NoticeDraftServiceTests : IDisposable
             d.NoticeType == "MoveOutReminder");
     }
 
-    private NoticeDraftService CreateService() => new(
+    [Fact]
+    public async Task GenerateAsync_ForcedRenewalFallsBackQuicklyWhenLlmIsSlow()
+    {
+        var (_, farLease) = SeedActiveLeases();
+        var slowLlm = new SlowLlmProvider();
+        var sut = CreateService(slowLlm);
+
+        using var testTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        var result = await sut.GenerateAsync(
+            1,
+            new GenerateNoticeDraftsRequest
+            {
+                TenantId = farLease.TenantId,
+                NoticeType = "RenewalOffer",
+            },
+            testTimeout.Token);
+
+        result.CreatedCount.Should().Be(1);
+        result.Drafts.Should().ContainSingle(d =>
+            d.LeaseId == farLease.Id &&
+            d.NoticeType == "RenewalOffer" &&
+            d.Subject == "Lease renewal for Maple Grove Duplex Unit B");
+        slowLlm.ChatCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_TenantScopedForcedRequestReturnsExistingDraftWhenAlreadyOpen()
+    {
+        var (_, farLease) = SeedActiveLeases();
+        var now = DateTime.UtcNow;
+        _ctx.Db.NoticeDrafts.Add(new NoticeDraft
+        {
+            PortfolioId = 1,
+            LeaseId = farLease.Id,
+            TenantId = farLease.TenantId,
+            PropertyId = farLease.PropertyId,
+            NoticeType = "RenewalOffer",
+            Status = "Draft",
+            Subject = "Existing renewal draft",
+            Body = "Existing body",
+            Reason = "Already generated.",
+            TriggerDate = farLease.EndDate.Date,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var sut = CreateService();
+
+        var result = await sut.GenerateAsync(
+            1,
+            new GenerateNoticeDraftsRequest
+            {
+                TenantId = farLease.TenantId,
+                NoticeType = "RenewalOffer",
+            });
+
+        result.CreatedCount.Should().Be(0);
+        result.Drafts.Should().ContainSingle(d =>
+            d.LeaseId == farLease.Id &&
+            d.NoticeType == "RenewalOffer" &&
+            d.Subject == "Existing renewal draft");
+    }
+
+    private NoticeDraftService CreateService(ILlmProvider? llm = null) => new(
         _ctx.Db,
         new NoopConversationService(),
-        new NoopLlmProvider(),
+        llm ?? new NoopLlmProvider(),
         NullLogger<NoticeDraftService>.Instance);
 
     private (Lease NearLease, Lease FarLease) SeedActiveLeases()
@@ -150,6 +214,33 @@ public class NoticeDraftServiceTests : IDisposable
     private sealed class NoopLlmProvider : ILlmProvider
     {
         public Task<string> ChatAsync(string prompt, CancellationToken ct = default) => Task.FromResult("");
+
+        public Task<ExtractedFields> ExtractAsync(
+            byte[] documentBytes,
+            string contentType,
+            string instructions,
+            IReadOnlyList<ExtractionFieldSpec> fields,
+            string? groundingContext = null,
+            CancellationToken ct = default) => Task.FromResult(new ExtractedFields());
+
+        public Task<LlmToolResult> ChatWithToolsAsync(
+            string systemPrompt,
+            IReadOnlyList<LlmChatMessage> messages,
+            IReadOnlyList<LlmToolSpec> tools,
+            CancellationToken ct = default) =>
+            Task.FromResult(new LlmToolResult("end", "", [], 0, 0, "noop"));
+    }
+
+    private sealed class SlowLlmProvider : ILlmProvider
+    {
+        public int ChatCalls { get; private set; }
+
+        public async Task<string> ChatAsync(string prompt, CancellationToken ct = default)
+        {
+            ChatCalls++;
+            await Task.Delay(TimeSpan.FromSeconds(30), ct);
+            return "{\"subject\":\"slow\",\"body\":\"slow\"}";
+        }
 
         public Task<ExtractedFields> ExtractAsync(
             byte[] documentBytes,
