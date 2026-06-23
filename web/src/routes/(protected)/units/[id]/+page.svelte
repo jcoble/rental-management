@@ -56,6 +56,10 @@
 
 	const dashboard = $derived(dashboardQuery.data);
 
+	function refreshUnitDashboard() {
+		queryClient.invalidateQueries({ queryKey: ['unit-dashboard', id] });
+	}
+
 	function openEditUnit() {
 		if (!dashboard) return;
 		unitForm = createUnitEditForm(dashboard.unit);
@@ -162,7 +166,12 @@
 							<MaintenanceTab {dashboard} onScan={goScan} />
 						</Tabs.Content>
 						<Tabs.Content value="documents" class="mt-4">
-							<DocumentsTab docs={dashboard.overview.pendingDocs} onScan={() => goScan({ returnTo: `/units/${dashboard.unit.id}?tab=documents` })} />
+							<DocumentsTab
+								unitId={dashboard.unit.id}
+								docs={dashboard.overview.pendingDocs}
+								onScan={() => goScan({ returnTo: `/units/${dashboard.unit.id}?tab=documents` })}
+								onDocumentsChanged={refreshUnitDashboard}
+							/>
 						</Tabs.Content>
 						<Tabs.Content value="expenses" class="mt-4">
 							<ExpensesTab {dashboard} onScan={goScan} />
