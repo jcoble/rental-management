@@ -11,6 +11,7 @@
 	import { formatDateOnly } from '$lib/utils/date';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { getTenantNoticeEmptyCopy } from '$lib/tenants/tenant-notice-state';
+	import { getTenantDeleteState } from '$lib/tenants/tenant-delete-state';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
@@ -46,6 +47,7 @@
 	const fullName = $derived(
 		tenant ? (tenant.fullName ?? `${tenant.firstName} ${tenant.lastName}`) : ''
 	);
+	const deleteState = $derived(tenant ? getTenantDeleteState(tenant) : null);
 
 	// ── Inline edit ────────────────────────────────────────────────────────────
 	const empty = { firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' };
@@ -409,10 +411,14 @@
 <ConfirmDialog
 	open={showDeleteConfirm}
 	title="Delete tenant"
-	message={tenant ? `Delete "${fullName}"? This cannot be undone.` : ''}
+	message={deleteState?.message ?? ''}
 	busy={deleteMutation.isPending}
+	confirmDisabled={deleteState?.confirmDisabled ?? false}
 	testid="tenant-detail-delete-confirm"
-	onconfirm={() => tenant && deleteMutation.mutate(tenant.id)}
+	onconfirm={() => {
+		if (!tenant || deleteState?.confirmDisabled) return;
+		deleteMutation.mutate(tenant.id);
+	}}
 	oncancel={() => (showDeleteConfirm = false)}
 />
 
