@@ -9,6 +9,7 @@
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
 	import { buildScanReviewFieldGroups, fieldDisplayLabel } from '$lib/scans/scan-review-fields';
+	import { createdRecordArticle, isTerminalScanReview, shouldDisableScanReviewControls } from '$lib/scans/scan-review-state';
 	import {
 		applyScanContextOverrides,
 		parseScanContext,
@@ -553,6 +554,8 @@
 	// instead of being dumped onto /accounting. (Lease drafts navigate straight to
 	// the new lease instead, so they don't use this card.)
 	let confirmedRecord = $state<{ type: 'Expense' | 'Payment' | 'WorkOrder'; id: number | null; amount: number | null } | null>(null);
+	const isTerminal = $derived(isTerminalScanReview(data?.status, !!confirmedRecord));
+	const reviewControlsDisabled = $derived(shouldDisableScanReviewControls(data?.status, !!confirmedRecord));
 	const linkedRecordHref = $derived((() => {
 		const type = confirmedRecord?.type ?? data?.createdEntityType;
 		const id = confirmedRecord?.id ?? data?.createdEntityId;
@@ -874,7 +877,7 @@
 					<div>
 						<p class="font-semibold">This scan was confirmed</p>
 						<p class="text-xs opacity-80">
-							It created a {createdTypeLabel}. This capture is read-only — make any edits on the record itself so your books stay the source of truth.
+							It created {createdRecordArticle(createdTypeLabel)} {createdTypeLabel}. This capture is read-only — make any edits on the record itself so your books stay the source of truth.
 						</p>
 					</div>
 				</div>
@@ -1012,158 +1015,162 @@
 						</p>
 					{:else if isPayment}
 						<!-- Lease selector — required for Payment drafts -->
-						<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
-							<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-select">
-								Which lease is this payment for? <span class="text-[var(--m3c-error)]">*</span>
-							</label>
-							<Select.Root type="single" bind:value={selectedLeaseId}>
-								<Select.Trigger id="scan-lease-select" data-testid="scan-lease-select" class="w-full">
-									{selectedLeaseLabel}
-								</Select.Trigger>
-								<Select.Content>
-									{#if leasesQuery.data}
-										{#each leasesQuery.data as lease (lease.id)}
-											<Select.Item value={String(lease.id)} label={leaseLabel(lease)}>
-												{leaseLabel(lease)}
-											</Select.Item>
-										{/each}
-									{/if}
-								</Select.Content>
-							</Select.Root>
-							{#if leasesQuery.isLoading}
-								<p class="mt-1 text-xs text-muted-foreground">Loading leases…</p>
-							{/if}
-						</div>
-					{:else if isLease}
-						<!-- Lease selectors — link an existing property/unit OR create them from the document. -->
-						<div class="mb-5 space-y-3 rounded-md border border-border bg-muted/30 p-3" data-testid="scan-lease-selectors">
-							<!-- "What this will do" summary from the import proposal, so the create-vs-link
-							     outcome (incl. the empty-portfolio bootstrap) is visible up front. -->
-							{#if leaseProposal}
-								<div class="rounded-md border border-accent/40 bg-accent/5 p-2.5 text-xs" data-testid="scan-lease-proposal">
-									<p class="mb-1 font-semibold text-foreground">When you confirm, this lease will:</p>
-									<ul class="space-y-0.5 text-muted-foreground">
-										<li data-testid="scan-lease-proposal-property">
-											{#if isCreatingLeaseProperty || leaseProposal.property.action === 'create'}
-												<span class="font-medium text-[var(--success)]">Create</span> a new property{leaseProposal.property.label ? ` — ${leaseProposal.property.label}` : ''}
-											{:else if leaseProposal.property.action === 'link'}
-												<span class="font-medium">Link</span> to {leaseProposal.property.label ?? 'an existing property'}
-											{:else}
-												Need you to choose a property
-											{/if}
-										</li>
-										<li data-testid="scan-lease-proposal-unit">
-											{#if isCreatingLeaseProperty || leaseProposal.unit.action === 'create'}
-												<span class="font-medium text-[var(--success)]">Create</span> {leaseProposal.unit.label ?? 'a unit'}
-											{:else if leaseProposal.unit.action === 'link'}
-												<span class="font-medium">Link</span> to {leaseProposal.unit.label ?? 'an existing unit'}
-											{:else}
-												Need you to choose a unit
-											{/if}
-										</li>
-									</ul>
-								</div>
-							{/if}
-
-							<div>
-								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-property-select">
-									Which property is this lease for? <span class="text-[var(--m3c-error)]">*</span>
+						{#if !isTerminal}
+							<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
+								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-select">
+									Which lease is this payment for? <span class="text-[var(--m3c-error)]">*</span>
 								</label>
-								<Select.Root type="single" bind:value={selectedLeasePropertyId}>
-									<Select.Trigger id="scan-lease-property-select" data-testid="scan-lease-property-select" class="w-full">
-										{selectedLeasePropertyLabel}
+								<Select.Root type="single" bind:value={selectedLeaseId} disabled={reviewControlsDisabled}>
+									<Select.Trigger id="scan-lease-select" data-testid="scan-lease-select" class="w-full" disabled={reviewControlsDisabled}>
+										{selectedLeaseLabel}
 									</Select.Trigger>
 									<Select.Content>
-										<Select.Item value={CREATE_PROPERTY} label={newPropertyLabel}>{newPropertyLabel}</Select.Item>
-										{#if propertiesQuery.data}
-											{#each propertiesQuery.data as prop (prop.id)}
-												<Select.Item value={String(prop.id)} label={prop.name}>
-													{prop.name}
+										{#if leasesQuery.data}
+											{#each leasesQuery.data as lease (lease.id)}
+												<Select.Item value={String(lease.id)} label={leaseLabel(lease)}>
+													{leaseLabel(lease)}
 												</Select.Item>
 											{/each}
 										{/if}
 									</Select.Content>
 								</Select.Root>
-								{#if propertiesQuery.isLoading}
-									<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
+								{#if leasesQuery.isLoading}
+									<p class="mt-1 text-xs text-muted-foreground">Loading leases…</p>
 								{/if}
 							</div>
-
-							{#if isCreatingLeaseProperty}
-								<!-- Create-new property: editable address (seeded from the document) so the
-								     reviewer can correct it before the property is created. -->
-								<div class="space-y-2 rounded-md border border-dashed border-border p-2.5" data-testid="scan-lease-new-property">
-									<p class="text-xs font-medium text-muted-foreground">New property details (from the document — edit if needed)</p>
-									<Input data-testid="scan-new-property-name" placeholder="Property name (optional)" bind:value={newPropertyName} />
-									<Input data-testid="scan-new-property-address" placeholder="Street address" bind:value={newPropertyAddress} />
-									<div class="grid grid-cols-3 gap-2">
-										<Input data-testid="scan-new-property-city" placeholder="City" bind:value={newPropertyCity} />
-										<Input data-testid="scan-new-property-state" placeholder="State" bind:value={newPropertyState} />
-										<Input data-testid="scan-new-property-postal" placeholder="ZIP" bind:value={newPropertyPostal} />
+						{/if}
+					{:else if isLease}
+						<!-- Lease selectors — link an existing property/unit OR create them from the document. -->
+						{#if !isTerminal}
+							<div class="mb-5 space-y-3 rounded-md border border-border bg-muted/30 p-3" data-testid="scan-lease-selectors">
+								<!-- "What this will do" summary from the import proposal, so the create-vs-link
+								     outcome (incl. the empty-portfolio bootstrap) is visible up front. -->
+								{#if leaseProposal}
+									<div class="rounded-md border border-accent/40 bg-accent/5 p-2.5 text-xs" data-testid="scan-lease-proposal">
+										<p class="mb-1 font-semibold text-foreground">When you confirm, this lease will:</p>
+										<ul class="space-y-0.5 text-muted-foreground">
+											<li data-testid="scan-lease-proposal-property">
+												{#if isCreatingLeaseProperty || leaseProposal.property.action === 'create'}
+													<span class="font-medium text-[var(--success)]">Create</span> a new property{leaseProposal.property.label ? ` — ${leaseProposal.property.label}` : ''}
+												{:else if leaseProposal.property.action === 'link'}
+													<span class="font-medium">Link</span> to {leaseProposal.property.label ?? 'an existing property'}
+												{:else}
+													Need you to choose a property
+												{/if}
+											</li>
+											<li data-testid="scan-lease-proposal-unit">
+												{#if isCreatingLeaseProperty || leaseProposal.unit.action === 'create'}
+													<span class="font-medium text-[var(--success)]">Create</span> {leaseProposal.unit.label ?? 'a unit'}
+												{:else if leaseProposal.unit.action === 'link'}
+													<span class="font-medium">Link</span> to {leaseProposal.unit.label ?? 'an existing unit'}
+												{:else}
+													Need you to choose a unit
+												{/if}
+											</li>
+										</ul>
 									</div>
-									<p class="text-[11px] text-muted-foreground">Enter a street address or a property name so the property can be created.</p>
-								</div>
+								{/if}
 
 								<div>
-									<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-new-unit">
-										Unit number <span class="text-[var(--m3c-error)]">*</span>
+									<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-property-select">
+										Which property is this lease for? <span class="text-[var(--m3c-error)]">*</span>
 									</label>
-									<Input id="scan-lease-new-unit" data-testid="scan-lease-new-unit" placeholder="e.g. 1 (single-family) or 2B" bind:value={newUnitNumber} />
-									<p class="mt-1 text-xs text-muted-foreground">A new unit with this number is created under the new property.</p>
-								</div>
-							{:else}
-								<div>
-									<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-unit-select">
-										Which unit? <span class="text-[var(--m3c-error)]">*</span>
-									</label>
-									<Select.Root type="single" bind:value={selectedLeaseUnitId} disabled={!selectedLeasePropertyId}>
-										<Select.Trigger id="scan-lease-unit-select" data-testid="scan-lease-unit-select" class="w-full">
-											{selectedLeaseUnitLabel}
+									<Select.Root type="single" bind:value={selectedLeasePropertyId} disabled={reviewControlsDisabled}>
+										<Select.Trigger id="scan-lease-property-select" data-testid="scan-lease-property-select" class="w-full" disabled={reviewControlsDisabled}>
+											{selectedLeasePropertyLabel}
 										</Select.Trigger>
 										<Select.Content>
-											{#if leaseUnitsQuery.data}
-												{#each leaseUnitsQuery.data as unit (unit.id)}
-													<Select.Item value={String(unit.id)} label={`Unit ${unit.unitNumber}`}>
-														Unit {unit.unitNumber} ({unit.status})
+											<Select.Item value={CREATE_PROPERTY} label={newPropertyLabel}>{newPropertyLabel}</Select.Item>
+											{#if propertiesQuery.data}
+												{#each propertiesQuery.data as prop (prop.id)}
+													<Select.Item value={String(prop.id)} label={prop.name}>
+														{prop.name}
 													</Select.Item>
 												{/each}
 											{/if}
 										</Select.Content>
 									</Select.Root>
-									{#if !selectedLeasePropertyId}
-										<p class="mt-1 text-xs text-muted-foreground">Pick a property first to see its units.</p>
-									{:else if leaseUnitsQuery.isLoading}
-										<p class="mt-1 text-xs text-muted-foreground">Loading units…</p>
-									{:else if (leaseUnitsQuery.data?.length ?? 0) === 0}
-										<p class="mt-1 text-xs text-[var(--warning)]">This property has no units yet — switch to "{newPropertyLabel}" above, or add a unit to this property first.</p>
+									{#if propertiesQuery.isLoading}
+										<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
 									{/if}
 								</div>
-							{/if}
 
-							<div>
-								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-tenant-select">
-									Tenant <span class="font-normal text-muted-foreground">(optional)</span>
-								</label>
-								<Select.Root type="single" bind:value={selectedTenantId}>
-									<Select.Trigger id="scan-lease-tenant-select" data-testid="scan-lease-tenant-select" class="w-full">
-										{selectedTenantLabel}
-									</Select.Trigger>
-									<Select.Content>
-										<Select.Item value={NO_TENANT} label={newTenantLabel}>{newTenantLabel}</Select.Item>
-										{#if tenantsQuery.data}
-											{#each tenantsQuery.data as t (t.id)}
-												<Select.Item value={String(t.id)} label={tenantLabel(t)}>
-													{tenantLabel(t)}
-												</Select.Item>
-											{/each}
+								{#if isCreatingLeaseProperty}
+									<!-- Create-new property: editable address (seeded from the document) so the
+									     reviewer can correct it before the property is created. -->
+									<div class="space-y-2 rounded-md border border-dashed border-border p-2.5" data-testid="scan-lease-new-property">
+										<p class="text-xs font-medium text-muted-foreground">New property details (from the document — edit if needed)</p>
+										<Input data-testid="scan-new-property-name" placeholder="Property name (optional)" bind:value={newPropertyName} disabled={reviewControlsDisabled} />
+										<Input data-testid="scan-new-property-address" placeholder="Street address" bind:value={newPropertyAddress} disabled={reviewControlsDisabled} />
+										<div class="grid grid-cols-3 gap-2">
+											<Input data-testid="scan-new-property-city" placeholder="City" bind:value={newPropertyCity} disabled={reviewControlsDisabled} />
+											<Input data-testid="scan-new-property-state" placeholder="State" bind:value={newPropertyState} disabled={reviewControlsDisabled} />
+											<Input data-testid="scan-new-property-postal" placeholder="ZIP" bind:value={newPropertyPostal} disabled={reviewControlsDisabled} />
+										</div>
+										<p class="text-[11px] text-muted-foreground">Enter a street address or a property name so the property can be created.</p>
+									</div>
+
+									<div>
+										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-new-unit">
+											Unit number <span class="text-[var(--m3c-error)]">*</span>
+										</label>
+										<Input id="scan-lease-new-unit" data-testid="scan-lease-new-unit" placeholder="e.g. 1 (single-family) or 2B" bind:value={newUnitNumber} disabled={reviewControlsDisabled} />
+										<p class="mt-1 text-xs text-muted-foreground">A new unit with this number is created under the new property.</p>
+									</div>
+								{:else}
+									<div>
+										<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-unit-select">
+											Which unit? <span class="text-[var(--m3c-error)]">*</span>
+										</label>
+										<Select.Root type="single" bind:value={selectedLeaseUnitId} disabled={!selectedLeasePropertyId || reviewControlsDisabled}>
+											<Select.Trigger id="scan-lease-unit-select" data-testid="scan-lease-unit-select" class="w-full" disabled={!selectedLeasePropertyId || reviewControlsDisabled}>
+												{selectedLeaseUnitLabel}
+											</Select.Trigger>
+											<Select.Content>
+												{#if leaseUnitsQuery.data}
+													{#each leaseUnitsQuery.data as unit (unit.id)}
+														<Select.Item value={String(unit.id)} label={`Unit ${unit.unitNumber}`}>
+															Unit {unit.unitNumber} ({unit.status})
+														</Select.Item>
+													{/each}
+												{/if}
+											</Select.Content>
+										</Select.Root>
+										{#if !selectedLeasePropertyId}
+											<p class="mt-1 text-xs text-muted-foreground">Pick a property first to see its units.</p>
+										{:else if leaseUnitsQuery.isLoading}
+											<p class="mt-1 text-xs text-muted-foreground">Loading units…</p>
+										{:else if (leaseUnitsQuery.data?.length ?? 0) === 0}
+											<p class="mt-1 text-xs text-[var(--warning)]">This property has no units yet — switch to "{newPropertyLabel}" above, or add a unit to this property first.</p>
 										{/if}
-									</Select.Content>
-								</Select.Root>
-								<p class="mt-1 text-xs text-muted-foreground">
-									Leave on "{newTenantLabel}" to use the name from the lease, or pick an existing tenant to match it.
-								</p>
+									</div>
+								{/if}
+
+								<div>
+									<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-lease-tenant-select">
+										Tenant <span class="font-normal text-muted-foreground">(optional)</span>
+									</label>
+									<Select.Root type="single" bind:value={selectedTenantId} disabled={reviewControlsDisabled}>
+										<Select.Trigger id="scan-lease-tenant-select" data-testid="scan-lease-tenant-select" class="w-full" disabled={reviewControlsDisabled}>
+											{selectedTenantLabel}
+										</Select.Trigger>
+										<Select.Content>
+											<Select.Item value={NO_TENANT} label={newTenantLabel}>{newTenantLabel}</Select.Item>
+											{#if tenantsQuery.data}
+												{#each tenantsQuery.data as t (t.id)}
+													<Select.Item value={String(t.id)} label={tenantLabel(t)}>
+														{tenantLabel(t)}
+													</Select.Item>
+												{/each}
+											{/if}
+										</Select.Content>
+									</Select.Root>
+									<p class="mt-1 text-xs text-muted-foreground">
+										Leave on "{newTenantLabel}" to use the name from the lease, or pick an existing tenant to match it.
+									</p>
+								</div>
 							</div>
-						</div>
+							{/if}
 
 						<!-- Lease terms — editable, mapped from the extracted fields -->
 						<div class="mb-5" data-testid="scan-lease-terms">
@@ -1188,6 +1195,7 @@
 											data-testid="scan-field-{term.name}"
 											type={term.type}
 											bind:value={editedFields[term.name]}
+											disabled={reviewControlsDisabled}
 										/>
 									</div>
 								{/each}
@@ -1219,6 +1227,7 @@
 											data-testid="scan-field-{appField.name}"
 											type={appField.type}
 											bind:value={editedFields[appField.name]}
+											disabled={reviewControlsDisabled}
 										/>
 									</div>
 								{/each}
@@ -1226,32 +1235,34 @@
 						</div>
 					{:else}
 						<!-- Property selector for Expense/WorkOrder drafts (sends propertyId override) -->
-						<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
-							<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-property-select">
-								Which property is this for? {#if isWorkOrder}<span class="text-[var(--m3c-error)]">*</span>{:else}<span class="font-normal text-muted-foreground">(optional)</span>{/if}
-							</label>
-							<Select.Root type="single" bind:value={selectedPropertyId}>
-								<Select.Trigger id="scan-property-select" data-testid="scan-property-select" class="w-full">
-									{selectedPropertyLabel}
-								</Select.Trigger>
-								<Select.Content>
-									<Select.Item value={NO_PROPERTY} label="— No property —">— No property —</Select.Item>
-									{#if propertiesQuery.data}
-										{#each propertiesQuery.data as prop (prop.id)}
-											<Select.Item value={String(prop.id)} label={prop.name}>
-												{prop.name}
-											</Select.Item>
-										{/each}
-									{/if}
-								</Select.Content>
-							</Select.Root>
-							{#if propertiesQuery.isLoading}
-								<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
+						{#if !isTerminal}
+							<div class="mb-5 rounded-md border border-border bg-muted/30 p-3">
+								<label class="mb-1 block text-xs font-semibold text-foreground" for="scan-property-select">
+									Which property is this for? {#if isWorkOrder}<span class="text-[var(--m3c-error)]">*</span>{:else}<span class="font-normal text-muted-foreground">(optional)</span>{/if}
+								</label>
+								<Select.Root type="single" bind:value={selectedPropertyId} disabled={reviewControlsDisabled}>
+									<Select.Trigger id="scan-property-select" data-testid="scan-property-select" class="w-full" disabled={reviewControlsDisabled}>
+										{selectedPropertyLabel}
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value={NO_PROPERTY} label="— No property —">— No property —</Select.Item>
+										{#if propertiesQuery.data}
+											{#each propertiesQuery.data as prop (prop.id)}
+												<Select.Item value={String(prop.id)} label={prop.name}>
+													{prop.name}
+												</Select.Item>
+											{/each}
+										{/if}
+									</Select.Content>
+								</Select.Root>
+								{#if propertiesQuery.isLoading}
+									<p class="mt-1 text-xs text-muted-foreground">Loading properties…</p>
+								{/if}
+								{#if isWorkOrder && selectedPropertyId === NO_PROPERTY}
+									<p class="mt-1 text-xs text-[var(--warning)]">Select a property to create this work order.</p>
+								{/if}
+							</div>
 							{/if}
-							{#if isWorkOrder && selectedPropertyId === NO_PROPERTY}
-								<p class="mt-1 text-xs text-[var(--warning)]">Select a property to create this work order.</p>
-							{/if}
-						</div>
 					{/if}
 					{#if isLease || isApplication}
 						<!-- Lease terms / applicant details are rendered above; the generic extracted-field
@@ -1274,8 +1285,8 @@
 									</label>
 									{#if fieldName === 'category'}
 										<!-- Category dropdown — friendly labels, enum value submitted -->
-										<Select.Root type="single" bind:value={editedFields[fieldName]}>
-											<Select.Trigger id="field-{fieldName}" data-testid="scan-field-{fieldName}" class="w-full">
+										<Select.Root type="single" bind:value={editedFields[fieldName]} disabled={reviewControlsDisabled}>
+											<Select.Trigger id="field-{fieldName}" data-testid="scan-field-{fieldName}" class="w-full" disabled={reviewControlsDisabled}>
 												{categoryLabel(editedFields[fieldName])}
 											</Select.Trigger>
 											<Select.Content>
@@ -1290,6 +1301,7 @@
 											data-testid="scan-field-{fieldName}"
 											type="text"
 											bind:value={editedFields[fieldName]}
+											disabled={reviewControlsDisabled}
 										/>
 									{/if}
 								</div>
@@ -1320,8 +1332,8 @@
 												</div>
 												{#if field.name === 'category'}
 													<!-- Category dropdown — friendly labels, enum value submitted -->
-													<Select.Root type="single" bind:value={editedFields[field.name]}>
-														<Select.Trigger id="field-{field.name}" data-testid="scan-field-{field.name}" class="w-full">
+													<Select.Root type="single" bind:value={editedFields[field.name]} disabled={reviewControlsDisabled}>
+														<Select.Trigger id="field-{field.name}" data-testid="scan-field-{field.name}" class="w-full" disabled={reviewControlsDisabled}>
 															{categoryLabel(editedFields[field.name])}
 														</Select.Trigger>
 														<Select.Content>
@@ -1337,8 +1349,9 @@
 														data-testid="scan-field-{field.name}"
 														type="text"
 														bind:value={editedFields[field.name]}
+														disabled={reviewControlsDisabled}
 														class="border-input bg-background selection:bg-primary dark:bg-input/30 selection:text-primary-foreground ring-offset-background placeholder:text-muted-foreground flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] {fieldInputClass(field)}"
-														use:focusFirstLow={level === 'low' && isFirstLowField(data.fields, field)}
+														use:focusFirstLow={!reviewControlsDisabled && level === 'low' && isFirstLowField(data.fields, field)}
 													/>
 												{/if}
 											</div>
@@ -1361,6 +1374,7 @@
 											class="h-7 gap-1 px-2 text-xs"
 											data-testid="scan-line-item-add"
 											onclick={addLineItem}
+											disabled={reviewControlsDisabled}
 										>
 											+ Add line item
 										</Button>
@@ -1368,7 +1382,7 @@
 									{#if editedLineItems.length === 0}
 										<p class="text-sm text-muted-foreground">
 											No line items.
-											<button type="button" class="text-accent underline-offset-2 hover:underline" onclick={addLineItem}>Add one</button>
+											<button type="button" class="text-accent underline-offset-2 hover:underline disabled:pointer-events-none disabled:opacity-50" onclick={addLineItem} disabled={reviewControlsDisabled}>Add one</button>
 											if the receipt itemizes charges.
 										</p>
 									{:else}
@@ -1393,6 +1407,7 @@
 																	bind:value={item.description}
 																	data-testid="scan-line-item-description-{i}"
 																	class="h-8 text-sm"
+																	disabled={reviewControlsDisabled}
 																/>
 															</Table.Cell>
 															<Table.Cell class="px-2 py-1.5">
@@ -1402,6 +1417,7 @@
 																	bind:value={item.quantity}
 																	data-testid="scan-line-item-quantity-{i}"
 																	class="h-8 text-right font-mono text-sm tabular-nums"
+																	disabled={reviewControlsDisabled}
 																/>
 															</Table.Cell>
 															<Table.Cell class="px-2 py-1.5">
@@ -1411,6 +1427,7 @@
 																	bind:value={item.unit_price}
 																	data-testid="scan-line-item-unit-price-{i}"
 																	class="h-8 text-right font-mono text-sm tabular-nums"
+																	disabled={reviewControlsDisabled}
 																/>
 															</Table.Cell>
 															<Table.Cell class="px-2 py-1.5">
@@ -1420,6 +1437,7 @@
 																	bind:value={item.amount}
 																	data-testid="scan-line-item-amount-{i}"
 																	class="h-8 text-right font-mono text-sm tabular-nums"
+																	disabled={reviewControlsDisabled}
 																/>
 															</Table.Cell>
 															<Table.Cell class="px-1 py-1.5 text-center">
@@ -1427,7 +1445,8 @@
 																	type="button"
 																	onclick={() => removeLineItem(item.key)}
 																	data-testid="scan-line-item-remove-{i}"
-																	class="text-muted-foreground transition-colors hover:text-destructive"
+																	class="text-muted-foreground transition-colors hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+																	disabled={reviewControlsDisabled}
 																	aria-label="Remove line item {i + 1}"
 																>✕</button>
 															</Table.Cell>
@@ -1458,7 +1477,7 @@
 				</Card.Content>
 
 				<!-- Paid / Unpaid toggle — hidden for Payment, WorkOrder, Lease, and Application drafts -->
-				{#if !isPayment && !isWorkOrder && !isLease && !isApplication}
+				{#if !isPayment && !isWorkOrder && !isLease && !isApplication && !isTerminal}
 				<div class="border-t border-border px-4 py-3" data-testid="scan-paid-toggle">
 					<span class="mb-1.5 block text-xs font-medium text-muted-foreground">Payment status</span>
 					<!-- Segmented control: a single bordered track with two equal segments -->
@@ -1468,6 +1487,7 @@
 							data-testid="scan-paid-yes"
 							aria-pressed={isPaid}
 							onclick={() => { isPaid = true; }}
+							disabled={reviewControlsDisabled}
 							class="flex-1 rounded-[5px] px-3 py-1.5 text-sm font-medium transition-colors {isPaid
 								? 'bg-background text-foreground shadow-sm'
 								: 'text-muted-foreground hover:text-foreground'}"
@@ -1479,6 +1499,7 @@
 							data-testid="scan-paid-no"
 							aria-pressed={!isPaid}
 							onclick={() => { isPaid = false; }}
+							disabled={reviewControlsDisabled}
 							class="flex-1 rounded-[5px] px-3 py-1.5 text-sm font-medium transition-colors {!isPaid
 								? 'bg-background text-foreground shadow-sm'
 								: 'text-muted-foreground hover:text-foreground'}"
@@ -1491,7 +1512,6 @@
 
 				<!-- Action buttons -->
 				<Card.Footer class="border-t border-border px-4 py-3 [.border-t]:pt-3">
-					{@const isTerminal = data.status === 'Rejected' || data.status === 'Confirmed' || !!confirmedRecord}
 					<div class="flex w-full flex-col gap-2">
 						<div class="flex gap-3">
 							<Button
