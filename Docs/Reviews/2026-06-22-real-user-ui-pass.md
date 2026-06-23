@@ -2103,3 +2103,47 @@ Verification:
 - Browser regression: Playwright CLI confirmed filtered lease empty copy, list status label `Notice given`, New Lease status label `Notice given`, source-scan-only agreement missing state, source document still present in `/documents`, and zero console warnings/errors.
 
 Status: Pass after fixes for lease filtered-empty copy, status-label presentation, and generated agreement/source scan separation. Continue next with remaining lease detail edit/delete/ledger/history workflows and then the tracked lifecycle no-op tasks (`TSK-401`, `TSK-404`) after the main inventory lanes.
+
+## Pass 37 Lease Detail Ledger, Documents, and History Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-37`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Acceptance criteria:
+- Lease detail edit/save must persist user-visible fields and give a visible success result.
+- Lease ledger must make charged/paid/balance math understandable and support opening balance create, edit, cancel, and removal paths.
+- Lease payment and deposit links must navigate to the corresponding real work surfaces.
+- Lease document controls must upload/download/delete both PDF and camera-image style files without losing source records.
+- Lease history must expose meaningful field-level changes for user edits, including note-only edits made after scan/import.
+
+Evidence:
+- `/leases/1` rendered lease `QA-2026-001-1A`, status Active, Cedar Point Flats `Unit 1A`, tenant Avery Ellis, rent `$1,125.00`, scanned document preview, and editable notes.
+- Edited only Notes to `Imported from scanned lease document. Pass 37 history diff proof.`; the page showed `Lease updated.` and the Overview rendered the new note.
+- Ledger opening balance validation blocked an empty amount with `Enter an amount of 0 or more.`.
+- Created tenant-owed opening balance `$25.50`; ledger updated to Charged `$66.50`, Paid `$41.00`, Balance `$25.50`, and rendered `Avery Ellis still owes $25.50.`.
+- Edited the same opening balance to tenant credit `$5.25`; ledger updated to Charged `$41.00`, Paid `$46.25`, Balance `-$5.25`, and rendered `Paid ahead by $5.25 (credit on the account).`.
+- Opening-balance removal confirmation Cancel preserved the credit; confirming removal returned the ledger to Charged `$41.00`, Paid `$41.00`, Balance `$0.00`. DB proof: `select ... from "OpeningBalances" where "LeaseId" = 1` returned zero rows.
+- Payment ledger row opened `/accounting/payments/2`, rendering Avery Ellis, Rent `$10`, Paid, lease backlink, charge fields, payment tracking, and history. The lease backlink returned to `/leases/1`.
+- `View deposits` navigated to `/deposits`, rendering the Security Deposits page and `New Holding`.
+- Overview `View scanned document` opened `/lease-file/1`; the raw file tab produced only the already-known `favicon.ico` 404 in that tab.
+- Downloaded generated `lease-1-agreement.pdf`; uploaded camera-image fixture `output/scan-fixtures/scan-rent-check-image.png`; the document panel showed the image with correct file metadata; downloaded it back; delete confirmation rendered `Delete "scan-rent-check-image.png"? This cannot be undone.`; confirming delete soft-deleted only that uploaded image. DB proof: `StoredFiles` kept source `scan-20260623112859`, generated `lease-1-agreement.pdf`, and marked uploaded `scan-rent-check-image.png` deleted.
+- Pre-fix History repro: the existing `Updated lease` row for the prior note edit was static/non-expandable because `GET /api/v1/audit?...` returned `changes: []`.
+- Post-fix browser proof: after the fresh note edit, History rendered the newest `Updated lease` row as an expandable button; expanding it showed field `Notes`, old value `Imported from scanned lease document. Pass 37 lease detail edit proof.`, and new value `Imported from scanned lease document. Pass 37 history diff proof.`.
+- Post-fix DB proof: latest `AuditLogs` row `43` has `ChangeReason = Lease QA-2026-001-1A: notes updated`; `OldValues` includes `notes = Imported from scanned lease document. Pass 37 lease detail edit proof.` and `NewValues` includes `notes = Imported from scanned lease document. Pass 37 history diff proof.`.
+- Console note: the Playwright console log retained 37 errors from the intentional API restart window (`17:00:59` through `17:03:30`, SignalR/unread-count/appointment calls while the API was stopped). The post-restart lease edit/history verification at `17:04` did not add new console entries in that log.
+
+Fixed in this pass:
+- `TSK397-B065` - Lease History did not expose a field-level diff for lease note edits because the explicit lease audit snapshot omitted `Notes`; note-only edits produced `Updated lease` rows with `changes: []` and no expandable detail. Fix: lease audit snapshots now include `notes`, and note changes add `notes updated` to the explicit change reason.
+
+Verification:
+- RED: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~LeaseServiceAuditTests.UpdateAsync_RecordsNotesChangeInAuditHistoryDiff --no-restore` failed before the snapshot fix because the audit diff collection was empty.
+- GREEN: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~LeaseServiceAuditTests.UpdateAsync_RecordsNotesChangeInAuditHistoryDiff --no-restore` passed 1/1, with the existing SQLite package advisory warning.
+- Browser regression: Playwright CLI confirmed lease note edit/save, History expandable row, and exact `Notes` old/new diff on the running local stack.
+
+Status: Pass for covered lease detail ledger, document, and history workflows after fixing note-only history diffs. Continue next with remaining lease detail lifecycle/delete/signing paths, then resume the broader real-user app inventory.
