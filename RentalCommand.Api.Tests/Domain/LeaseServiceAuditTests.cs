@@ -57,7 +57,42 @@ public sealed class LeaseServiceAuditTests : IDisposable
             && c.NewValue == "Imported from scanned lease document. Pass 37 lease detail edit proof.");
     }
 
-    private Lease SeedLease(string notes)
+    [Fact]
+    public async Task UpdateAsync_ClearsMoveOutDateWhenNoticeIsCancelled()
+    {
+        var moveOutDate = new DateTime(2026, 7, 31, 0, 0, 0, DateTimeKind.Utc);
+        var lease = SeedLease(
+            notes: "Notice was given by mistake.",
+            status: LeaseStatus.NoticeGiven,
+            moveOutDate: moveOutDate);
+
+        var result = await _sut.UpdateAsync(PortfolioId, lease.Id, new UpdateLeaseRequest
+        {
+            Status = LeaseStatus.Active,
+        });
+
+        result.Should().NotBeNull();
+        result!.Status.Should().Be(LeaseStatus.Active);
+        result.MoveOutDate.Should().BeNull();
+
+        var reloaded = await _ctx.Db.Leases.AsNoTracking().SingleAsync(l => l.Id == lease.Id);
+        reloaded.Status.Should().Be(LeaseStatus.Active);
+        reloaded.MoveOutDate.Should().BeNull();
+
+        var row = await _ctx.Db.AuditLogs
+            .AsNoTracking()
+            .Where(a => a.EntityType == "Lease"
+                && a.EntityId == lease.Id
+                && a.Operation == AuditLogOperation.Updated)
+            .SingleAsync();
+
+        row.ChangeReason.Should().Contain("move-out date 2026-07-31→none");
+    }
+
+    private Lease SeedLease(
+        string notes,
+        LeaseStatus status = LeaseStatus.Active,
+        DateTime? moveOutDate = null)
     {
         var now = new DateTime(2026, 6, 23, 12, 0, 0, DateTimeKind.Utc);
         var property = new Property
@@ -96,9 +131,10 @@ public sealed class LeaseServiceAuditTests : IDisposable
             Unit = unit,
             Tenant = tenant,
             LeaseNumber = "QA-2026-001-1A",
-            Status = LeaseStatus.Active,
+            Status = status,
             StartDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
             EndDate = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            MoveOutDate = moveOutDate,
             MonthlyRent = 1125m,
             SecurityDeposit = 1125m,
             RentDueDay = 1,

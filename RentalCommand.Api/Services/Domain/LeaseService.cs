@@ -90,6 +90,9 @@ public class LeaseService : ILeaseService
         unitId = l.UnitId,
     });
 
+    private static string FormatDateChange(DateTime? value)
+        => value.HasValue ? value.Value.ToString("yyyy-MM-dd") : "none";
+
     // Unit.Status is the canonical occupancy source ("Unit.Status everywhere, SQL-side"), so the lease
     // lifecycle owns keeping it correct. A lease that is Active occupies its unit; a unit under NoticeGiven
     // is still occupied (the tenant hasn't moved out yet), so only a genuine exit (Expired/Terminated/Void/
@@ -565,6 +568,7 @@ public class LeaseService : ILeaseService
         var prevRent = entity.MonthlyRent;
         var prevEnd = entity.EndDate;
         var prevDeposit = entity.SecurityDeposit;
+        var prevMoveOutDate = entity.MoveOutDate;
         var prevNotes = entity.Notes;
 
         // Resolve the post-update status + date range up front (request value when supplied, else current)
@@ -594,7 +598,14 @@ public class LeaseService : ILeaseService
         if (request.StartDate.HasValue) entity.StartDate = request.StartDate.Value.ToUtc();
         if (request.EndDate.HasValue) entity.EndDate = request.EndDate.Value.ToUtc();
         if (request.MoveInDate.HasValue) entity.MoveInDate = request.MoveInDate.ToUtc();
-        if (request.MoveOutDate.HasValue) entity.MoveOutDate = request.MoveOutDate.ToUtc();
+        if (prevStatus == LeaseStatus.NoticeGiven && request.Status == LeaseStatus.Active)
+        {
+            entity.MoveOutDate = null;
+        }
+        else if (request.MoveOutDate.HasValue)
+        {
+            entity.MoveOutDate = request.MoveOutDate.ToUtc();
+        }
         if (request.MonthlyRent.HasValue) entity.MonthlyRent = request.MonthlyRent.Value;
         if (request.SecurityDeposit.HasValue) entity.SecurityDeposit = request.SecurityDeposit.Value;
         if (request.LateFeeAmount.HasValue) entity.LateFeeAmount = request.LateFeeAmount.Value;
@@ -618,6 +629,7 @@ public class LeaseService : ILeaseService
         if (entity.MonthlyRent != prevRent) changes.Add($"rent {prevRent:0.##}→{entity.MonthlyRent:0.##}");
         if (entity.EndDate != prevEnd) changes.Add($"end date {prevEnd:yyyy-MM-dd}→{entity.EndDate:yyyy-MM-dd}");
         if (entity.SecurityDeposit != prevDeposit) changes.Add($"deposit {prevDeposit:0.##}→{entity.SecurityDeposit:0.##}");
+        if (entity.MoveOutDate != prevMoveOutDate) changes.Add($"move-out date {FormatDateChange(prevMoveOutDate)}→{FormatDateChange(entity.MoveOutDate)}");
         if (!string.Equals(entity.Notes, prevNotes, StringComparison.Ordinal)) changes.Add("notes updated");
         var reason = changes.Count > 0
             ? $"Lease {entity.LeaseNumber}: {string.Join("; ", changes)}"
