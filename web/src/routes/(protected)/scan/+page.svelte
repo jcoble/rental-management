@@ -16,16 +16,15 @@
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { appendScanContext, parseScanContext, type ScanDocType } from '$lib/scan/scan-context';
 	import { scanUploadCopy } from '$lib/scan/scan-copy';
+	import { SCAN_HISTORY_FILTERS, formatScanHistoryEmptyMessage, resolveScanHistoryFilter, type ScanHistoryFilter } from '$lib/scans/scan-history-filters';
 
 	const queryClient = useQueryClient();
 	const PAGE_SIZE = 20;
 
 	// Filter state
-	const FILTER_TABS = ['All', 'Pending', 'Reviewing', 'Confirmed'] as const;
-	type FilterTab = (typeof FILTER_TABS)[number];
 	const initialParams = page.url.searchParams;
 	const initialStatus = readGridParam(initialParams, 'status');
-	let activeFilter = $state<FilterTab>(FILTER_TABS.includes(initialStatus as FilterTab) ? initialStatus as FilterTab : 'All');
+	let activeFilter = $state<ScanHistoryFilter>(resolveScanHistoryFilter(initialStatus));
 	let gridSort = $state(readGridParam(initialParams, 'sort'));
 	let gridPage = $state(readGridParam(initialParams, 'page', 1));
 
@@ -184,6 +183,7 @@
 
 	const draftsList = $derived((scansQuery.data?.items ?? []) as ScanDraftResponse[]);
 	const draftsTotalCount = $derived(scansQuery.data?.totalCount ?? 0);
+	const scanHistoryEmptyMessage = $derived(formatScanHistoryEmptyMessage(activeFilter));
 
 	// Where a CONFIRMED draft's created record lives (Payment/Expense/WorkOrder/Lease). Mirrors the
 	// review page's linkedRecordHref. Returns null when there is no created record to link to (the
@@ -354,11 +354,11 @@
 	<!-- Filter tabs -->
 	<Tabs.Root
 		value={activeFilter}
-		onValueChange={(v) => { if (v) activeFilter = v as FilterTab; }}
+		onValueChange={(v) => { if (v) activeFilter = v as ScanHistoryFilter; }}
 		class="mb-4"
 	>
 		<Tabs.List>
-			{#each FILTER_TABS as tab}
+			{#each SCAN_HISTORY_FILTERS as tab}
 				<Tabs.Trigger value={tab}>{tab}</Tabs.Trigger>
 			{/each}
 		</Tabs.List>
@@ -369,7 +369,7 @@
 				data={draftsList}
 				{columns}
 				loading={scansQuery.isLoading || scansQuery.isFetching}
-				emptyMessage="No scan drafts found."
+				emptyMessage={scanHistoryEmptyMessage}
 				onRowClick={(draft) => goto(rowHref(draft))}
 				getRowKey={(draft) => draft.id}
 				getRowTestId={() => 'scan-row'}

@@ -18,6 +18,7 @@
 
 	let isDragging = $state(false);
 	let selectedFile = $state<File | null>(null);
+	let lastRejectedMessage = $state<string | null>(null);
 	let inputEl = $state<HTMLInputElement | null>(null);
 
 	function formatFileSize(bytes: number): string {
@@ -29,6 +30,8 @@
 	function handleFiles(files: File[]) {
 		if (files.length === 0) return;
 		const { accepted, rejected } = partitionSupportedFiles(files);
+
+		lastRejectedMessage = rejected.length > 0 ? unsupportedFileMessage(rejected[0]) : null;
 
 		for (const file of rejected) {
 			toast.warning(unsupportedFileMessage(file));
@@ -74,6 +77,7 @@
 	function clearFile(e: MouseEvent) {
 		e.stopPropagation();
 		selectedFile = null;
+		lastRejectedMessage = null;
 		if (inputEl) inputEl.value = '';
 	}
 </script>
@@ -128,5 +132,11 @@
 		</svg>
 		<p class="text-sm font-medium text-foreground">{title}</p>
 		<p class="mt-1 text-xs text-muted-foreground">{helperText}</p>
+	{/if}
+
+	{#if lastRejectedMessage}
+		<p data-testid="file-drop-error" role="alert" class="mt-3 max-w-md text-center text-xs font-medium text-destructive">
+			{lastRejectedMessage}
+		</p>
 	{/if}
 </div>
