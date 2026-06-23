@@ -2053,3 +2053,53 @@ Verification:
 - Browser regression: Playwright CLI confirmed filtered tenant empty copy, existing tenant notice draft retrieval, no-lease forced notice copy, tenant-to-lease handoff, and image upload with named document delete control.
 
 Status: Pass after fixes for tenant filtered-empty copy, notice timeout/draft visibility/no-eligible copy, document delete accessibility, and shared confirmation duplicate-submit guarding. Continue next with lease list/detail gaps and the tracked lifecycle no-op tasks (`TSK-401`, `TSK-404`) after the main inventory lanes.
+
+## Pass 36 Lease List and Agreement Document Corrections
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-36`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Acceptance criteria:
+- Lease list search, filter, and sort controls must preserve URL state and continue using the DB-backed paged lease endpoint.
+- Filtered/search empty states must explain the active filter context instead of looking like a first-run empty account.
+- User-facing lease status controls must render human labels such as `Notice given`, while preserving the API enum value `NoticeGiven`.
+- Manual New Lease status selection must use the same human labels.
+- Lease detail Agreement & Signing must distinguish generated lease agreements from source scan attachments, including source PDFs and camera images.
+- Scanned/source documents must remain visible through the document panels and overview preview, but must not appear as downloadable generated lease agreements.
+
+Evidence:
+- `/leases/1` rendered lease `QA-2026-001-1A`, status Active, property Cedar Point Flats, `Unit 1A`, tenant Avery Ellis, rent `$1,125.00`, term Jan 1 2026 to Jan 1 2027, financials, parties, notes, and scanned document preview.
+- Give Notice opened a modal, kept `Give notice` disabled with an empty Move-out date, enabled it after valid `09/01/2026`, and Cancel closed without mutation.
+- Pre-fix Agreement & Signing repro: before regenerating a true agreement for `/leases/1`, `Download agreement` saved `lease-agreement-1.pdf`, but `file` identified it as JPEG image data. Network proof: `GET /api/v1/leases/1/document => 200` with source scan content type `image/jpeg`.
+- Regenerating `/leases/1` created a true two-page PDF; the replacement download saved as `lease-agreement-1.pdf` and `file` identified it as `PDF document, version 1.4`.
+- `/leases` initial load and list controls used the paged endpoint, including `GET /api/v1/leases/page?take=20&portfolioId=2 => 200`, `GET /api/v1/leases/page?take=20&portfolioId=2&status=Draft => 200`, search with `NoLease397`, and tenant sort with `sort=tenantName`.
+- Pre-fix filtered empty state for `/leases?status=Draft` rendered first-run copy `No leases yet` and `Add your first lease`.
+- Post-fix browser proof for `/leases?status=Draft` rendered `No leases match your filters`, description `Try adjusting search or filters, or add a lease that matches this view.`, and action `Add lease`.
+- Post-fix lease status menu rendered All statuses, Draft, Active, `Notice given`, Expired, and Terminated. The New Lease modal status picker also rendered `Notice given`.
+- Source-scan-only lease `/leases/2` had database attachments `scan-20260623114451` / `image/jpeg` and no `lease-2-agreement.pdf`.
+- Post-fix `/leases/2` Agreement & Signing rendered `Generate lease agreement (PDF)` and `No agreement has been generated yet`, with no `Download agreement` action.
+- API proof for `/leases/2`: `GET /api/v1/leases/2/document-status => 200` returned `{"leaseId":2,"hasDocument":false,"storedFileId":null,"fileName":null,"fileSize":null,"downloadUrl":null,"generatedAt":null}` while `GET /api/v1/documents?entityType=Lease&entityId=2 => 200` still returned the source image attachment.
+- Console check on the post-fix regression route returned zero warning-or-error messages.
+- User-reported Unit Command Center `Send renewal` no-op is still intentionally deferred. Current task is `TSK-404`; it already contains the 2026-06-23 screenshot and reproduction notes.
+
+Fixed in this pass:
+- `TSK397-B062` - Filtered/search lease empty states reused first-run copy. Fix: lease list state now has tested first-run versus filtered-empty copy.
+- `TSK397-B063` - Lease status controls leaked raw enum text `NoticeGiven`. Fix: lease list and manual lease form status controls render human labels while preserving enum values.
+- `TSK397-B064` - Lease Agreement download/status counted source scan attachments as generated agreements. Fix: generated agreement lookup now requires the generated agreement filename `lease-{id}-agreement.pdf` and `application/pdf` content type, so source scans remain documents but not agreements.
+
+Verification:
+- RED: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/leases/lease-list-state.test.ts` failed before the helper existed.
+- RED: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~LeaseAgreementDocumentTests.SourceScanAttachment_DoesNotCountAsGeneratedAgreement" --logger "console;verbosity=normal"` failed before the backend filter because source scans counted as generated agreements.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/leases/lease-list-state.test.ts src/lib/utils/status-labels.test.ts` passed 7/7.
+- GREEN: `rtk pnpm --dir web test:unit` passed 160/160.
+- GREEN: `rtk pnpm --dir web check` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+- GREEN: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --no-restore --filter "FullyQualifiedName~LeaseAgreementDocumentTests" --logger "console;verbosity=normal"` passed 19/19, with the existing SQLite package advisory warning.
+- Browser regression: Playwright CLI confirmed filtered lease empty copy, list status label `Notice given`, New Lease status label `Notice given`, source-scan-only agreement missing state, source document still present in `/documents`, and zero console warnings/errors.
+
+Status: Pass after fixes for lease filtered-empty copy, status-label presentation, and generated agreement/source scan separation. Continue next with remaining lease detail edit/delete/ledger/history workflows and then the tracked lifecycle no-op tasks (`TSK-401`, `TSK-404`) after the main inventory lanes.
