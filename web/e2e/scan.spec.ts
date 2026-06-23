@@ -5,6 +5,7 @@ import { login } from './helpers';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RECEIPT_PATH = path.join(HERE, 'fixtures', 'receipt.png');
+const LEASE_PDF_PATH = path.join(HERE, 'fixtures', 'lease-batch-fixture.pdf');
 
 test.describe('Scan intake', () => {
 	/**
@@ -107,5 +108,25 @@ test.describe('Scan intake', () => {
 		// created record (the app intentionally no longer dumps you onto /accounting).
 		await expect(page.getByTestId('scan-confirm-success')).toBeVisible({ timeout: 15_000 });
 		await expect(page.getByTestId('scan-view-record')).toBeVisible();
+	});
+
+	test('removing a batch lease file clears the input so the same file can be selected again', async ({
+		page
+	}) => {
+		await login(page);
+		await page.goto('/scan/batch');
+
+		const fileInput = page.getByTestId('batch-file-input');
+		await fileInput.setInputFiles(LEASE_PDF_PATH);
+		await page.waitForTimeout(400);
+		await fileInput.dispatchEvent('change');
+
+		await expect(page.getByTestId('batch-file-row')).toHaveCount(1);
+		await page.getByTestId('batch-file-remove-0').click();
+
+		await expect(page.getByTestId('batch-file-row')).toHaveCount(0);
+		await expect
+			.poll(() => fileInput.evaluate((el) => (el as HTMLInputElement).value))
+			.toBe('');
 	});
 });
