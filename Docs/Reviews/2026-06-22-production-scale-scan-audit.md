@@ -464,6 +464,42 @@ Deferred findings captured outside this fix:
 
 - Unit Command Center `Send renewal` no-op is tracked as TSK-400; the user provided an FYI screenshot, which was attached to the existing task. It was not fixed in this pass.
 
+## Pass 21 Continuation Evidence
+
+Date: 2026-06-23
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-21`
+Local stack: `https://localhost:5992`, API `https://localhost:5991`, Postgres `localhost:5569/rentalcommand_tsk397_pass21_clean`
+
+Fresh local landlord account:
+
+- Name: Maya Patel
+- Email: `tsk397.pass21.202606230721@example.local`
+- Setup choice: live portfolio from zero domain data, not sandbox/demo
+
+Camera-style scan fixture confirmed in this pass:
+
+- Lease image: `output/qa/production-scale-scans/01-leases-camera/lease-001-1a.jpg`
+
+Verified local database counts after browser confirmation:
+
+- 1 property, 1 unit, 1 tenant, 1 lease, 0 payments, 0 expenses, 0 rental applications, 0 work orders, 1 scan draft.
+
+Browser states exercised:
+
+- `/register`, local email verification, `/login`, `/choose-setup`, and the live empty portfolio setup path.
+- `/scan/new-rental` camera upload through property/unit/tenant/lease/review confirmation, including manual correction of missing beds/baths before create.
+- `/leases/1` overview links, scanned source link, Agreement & Signing tab download/regenerate, Ledger tab opening-balance validation/save, and History tab.
+- `/leases/1` edit mode after scan-created records.
+
+Bug fixed during this pass:
+
+- Lease detail edit mode reused fresh empty `['properties', portfolioId]` and `['tenants', portfolioId]` lookup caches that were populated on the scan review page before an empty-portfolio lease confirm created the first property and tenant. The overview still displayed linked names from `/leases/1`, but the edit selectors rendered blank and their dropdowns contained only `Select property` / `Select tenant`.
+- Fix: scan-confirm success now invalidates the cache families for the created entity type. Lease confirmations invalidate scans, leases, properties, tenants, units, units-for-lease, and dashboard queries before navigating to the new lease detail page.
+- Regression coverage: `web/src/lib/scans/scan-confirm-invalidation.test.ts`.
+- Browser proof after fix: after reloading `/leases/1`, edit mode showed `Cedar Point Flats`, `Unit 1A (Occupied)`, and `Avery Ellis`; the property dropdown contained `Cedar Point Flats`, and the tenant dropdown contained `Avery Ellis`.
+- Artifacts: red `.playwright-cli/page-2026-06-23T07-34-06-150Z.yml`; green `.playwright-cli/page-2026-06-23T07-37-11-464Z.yml` and `.playwright-cli/page-2026-06-23T07-37-52-200Z.yml`.
+- Verification commands: `node --test --experimental-strip-types web/src/lib/scans/scan-confirm-invalidation.test.ts`; `pnpm --dir web test:unit`; `pnpm --dir web check`.
+
 ## Classified Inventory Matrix
 
 The route/control inventory now has a finite closure matrix instead of a raw tag-count table. `scripts/qa/inventory-web-surfaces.mjs` includes layout guards, error surfaces, redirects, server routes, file proxies, custom component controls, `data-testid` coverage, route scopes, route kinds, roles, acceptance criteria, and finite edge cases.
@@ -515,6 +551,7 @@ Read-only data-access audit found broad violations of the hard SQL-side rule. Th
 | TSK397-B017 | P1 | Unit documents | Fixed in this branch. Unit Documents linked rows by parent entity route instead of stored file id, so multiple files attached to the same lease or work order could open the same parent-level file rather than the clicked file. | Browser red: generated lease agreement and original lease scan both pointed at `/lease-file/1`; original work-order scan and uploaded work-order image both pointed at `/workorder-file/1`. Green: rows now point to `/document-file/{storedFileId}`; authenticated fetches for ids 1, 4, 8, 10, and 11 returned the expected original PDFs/images/agreement. Focused `unit-document-actions` test passed and inventory classified 87 routes with no unclassified routes. | Fixed |
 | TSK397-B018 | P1 | Expense scan unit grounding | Fixed in this branch. Generic receipt scans could capture a unit reference in notes but persist only `PropertyId`, leaving `UnitId` null and making the Unit Expenses tab look empty. | Browser red: first camera receipt scan created expense #1 with `PropertyId=1`, `UnitId=NULL`, and `/units/1?tab=expenses` showed no expenses. Red/green: `ConfirmAndCreateAsync_ExpenseDraft_WithSelectedPropertyAndUnitInNotes_GroundsUnit` failed, then passed. Browser green: second generic camera receipt scan selected only `Cedar Point Flats`, created expense #2 with `UnitId=1`, and the Unit Expenses tab displayed the paid Green Thumb Landscaping expense. | Fixed |
 | TSK397-B019 | P2 | Expense detail references | Fixed in this branch. Unit-grounded expenses showed Property and Vendor on the expense detail page but omitted Unit, forcing users to infer the unit from notes or navigate through the unit Expenses tab. | Browser red in pass 20: `/accounting/expenses/1` for a scan-created receipt had `Expenses.UnitId=1` and appeared in `/units/1?tab=expenses`, but the detail reference card lacked `Unit`. Green: `formatExpenseUnitReference` regression passed, `/accounting/expenses/1` now shows `Unit 1A` linked to `/units/1?tab=expenses`, `pnpm --dir web check` passed with only pre-existing PageHeader warnings, and `pnpm --dir web test:unit` passed 129/129. | Fixed |
+| TSK397-B020 | P1 | Lease scan cache invalidation | Fixed in this branch. Empty-portfolio lease scan confirmation left pre-confirm empty property/tenant lookup caches fresh, so the new lease detail page's edit selectors showed blank property and tenant values even though `/leases/1`, `/properties`, and `/tenants` all had the records. | Browser red: `/leases/1` edit mode showed blank Property and Tenant triggers and dropdowns with only `Select property` / `Select tenant`. Root cause: scan confirm invalidated only `['leases']`. Green: `invalidateQueriesAfterScanConfirm` regression passed; browser edit mode showed `Cedar Point Flats` and `Avery Ellis`, and both dropdowns contained the scan-created records. Full `pnpm --dir web test:unit` passed 130/130; `pnpm --dir web check` passed with only pre-existing PageHeader warnings. | Fixed |
 
 ## Regression Expectations
 
