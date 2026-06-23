@@ -28,6 +28,8 @@
 	import {
 		canDispatchToVendor,
 		dispatchVendorBlockReason,
+		formatStatusTransitionCopy,
+		shouldShowActiveDispatchHint,
 	} from '$lib/maintenance/work-order-dispatch';
 
 	const queryClient = useQueryClient();
@@ -429,7 +431,7 @@
 		</div>
 
 		<!-- Dispatched hint: the vendor was texted and will reply DONE to close it -->
-		{#if dispatched || (wo.vendorName && wo.status !== 'Completed' && wo.status !== 'Cancelled')}
+		{#if shouldShowActiveDispatchHint(wo.status, Boolean(wo.vendorName), dispatched)}
 			<div
 				class="mb-6 flex items-start gap-3 rounded-md border bg-[var(--m3c-info-container)] text-[var(--m3c-on-info-container)] border-[color-mix(in_srgb,var(--info)_45%,transparent)] p-4 text-sm"
 				data-testid="work-order-dispatched-hint"
@@ -548,8 +550,7 @@
 		</Dialog.Header>
 		{#if wo && pendingStatus}
 			<p class="text-sm text-muted-foreground">
-				Change status from <span class="font-medium text-foreground">{wo.status}</span> to
-				<span class="font-medium text-foreground">{formatStatusLabel(pendingStatus)}</span>.
+				{formatStatusTransitionCopy(wo.status, pendingStatus)}
 			</p>
 		{/if}
 		<div class="space-y-1.5">
@@ -589,9 +590,12 @@
 		{#if vendorsQuery.isLoading}
 			<p class="py-6 text-center text-sm text-muted-foreground" data-testid="work-order-dispatch-loading">Loading vendors…</p>
 		{:else if vendorList.length === 0}
-			<p class="py-6 text-center text-sm text-muted-foreground" data-testid="work-order-dispatch-empty">
-				No vendors yet. Add one under Owners &amp; Vendors first.
-			</p>
+			<div class="space-y-3 py-6 text-center" data-testid="work-order-dispatch-empty">
+				<p class="text-sm text-muted-foreground">No vendors yet. Add a vendor before texting this job.</p>
+				<Button variant="outline" size="sm" href="/vendors?create=1" data-testid="work-order-dispatch-add-vendor">
+					Add vendor
+				</Button>
+			</div>
 		{:else}
 			<div class="max-h-64 space-y-2 overflow-y-auto pr-1" data-testid="work-order-dispatch-vendor-list">
 				{#each vendorList as v (v.id)}
