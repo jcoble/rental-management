@@ -149,6 +149,31 @@ export const WIZARD_STEPS: WizardStepMeta[] = [
 /** Steps shown in the core first-run flow (portfolio → lease). */
 export const CORE_WIZARD_STEPS = WIZARD_STEPS.filter((s) => s.core);
 
+export interface OnboardingSetupShortcut {
+	key: 'scan-new-rental' | 'spreadsheet-import';
+	label: string;
+	description: string;
+	href: string;
+	primary: boolean;
+}
+
+export const ONBOARDING_SETUP_SHORTCUTS: OnboardingSetupShortcut[] = [
+	{
+		key: 'scan-new-rental',
+		label: 'Scan a lease',
+		description: 'Start from a signed lease photo or PDF and confirm the property, unit, tenant, and lease it finds.',
+		href: '/scan/new-rental',
+		primary: true,
+	},
+	{
+		key: 'spreadsheet-import',
+		label: 'Import from a spreadsheet',
+		description: 'Bring in existing properties, units, or tenants from a CSV file.',
+		href: '/import',
+		primary: false,
+	},
+];
+
 /**
  * Settings hub sections — the single source of plain-English copy for the tabbed Settings page
  * (`/settings`). Settings and the onboarding wizard speak with ONE voice: where a section has a

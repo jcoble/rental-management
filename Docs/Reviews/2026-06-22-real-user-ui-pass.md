@@ -1363,7 +1363,7 @@ Evidence:
 
 Notes:
 - The current pass8 lease fixture did not visibly include city/ZIP or beds/baths, so the missing city/ZIP/bed/bath extraction values are fixture coverage gaps, not evidence of a mapper failure.
-- `TSK397-B029` remains open: the live setup wizard still starts at manual Add Property while the scan-first path is discoverable through the sidebar Scan / Add route.
+- `TSK397-B029` was fixed in Pass 39: live onboarding now surfaces `Scan a lease` as the primary setup shortcut before spreadsheet import.
 
 ### Receipt and Invoice Scans to Expenses
 
@@ -2194,3 +2194,56 @@ Verification:
 - Browser regression: Playwright CLI confirmed `/leases/4` generated-agreement-only manual lease has no Overview source document, `/leases/4` Agreement tab still exposes the generated PDF, `/leases/5` send-for-signature immediately flips to generated/downloadable agreement state without reload, `/leases/5` Overview has no source document card, and console warnings/errors were zero.
 
 Status: Pass after fixes for manual-lease generated agreement/source scan separation and no-reload send-for-signature document state. Continue next with remaining lease lifecycle/delete paths and then resume broader non-banking/non-QuickBooks inventory.
+
+## Pass 39 Fresh-User Scan-First Onboarding
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-39`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Harper Stone, `tsk397.pass39.202606231342@example.local`
+- Portfolio: Harper Stone's Portfolio, id `3`
+
+Acceptance criteria:
+- A new live-mode user must be able to start from an empty portfolio and discover the scan-first rental setup path without knowing to use the sidebar.
+- Scan-first setup must accept an image source file, extract property, unit, tenant, and lease fields, and preserve image source attachment behavior.
+- Extracted tenant contact fields must be visible in the review step and persisted without forcing a second edit.
+- No production email/SMS/provider action is allowed.
+
+Synthetic image:
+- Source HTML: `output/qa/tsk397-pass39/riverside-courtyard-lease.html`
+- Uploaded image: `output/qa/tsk397-pass39/riverside-courtyard-lease-photo.jpg` (`image/jpeg`, 1800x2400)
+
+Evidence:
+- Public landing `Get started` reached `/register`; local email/password registration created Harper Stone and showed the email-verification state.
+- Local outbox contained the verification email for `tsk397.pass39.202606231342@example.local`. The embedded URL used the default `https://localhost:5667` because this manual API restart omitted `App__WebBaseUrl`; the normal start script derives `App__WebBaseUrl` from `WEB_PORT`, so this was treated as a local-stack note rather than a product bug in this slice.
+- After verifying on the active `6042` web port, login landed on `/choose-setup`; selecting `Set up my real portfolio` reached `/onboarding`.
+- DB empty-state proof for portfolio `3`: properties `0`, units `0`, tenants `0`, leases `0`, scan drafts `0`.
+- Pre-fix gap: onboarding headline promised "The computer does the typing" but only surfaced manual property fields and spreadsheet import; scan-first setup was discoverable only from the sidebar.
+- Post-fix browser proof: onboarding renders `Scan a lease` before `Import from a spreadsheet`; clicking it navigates to `/scan/new-rental`.
+- Uploaded the synthetic lease JPEG through `Photos of the lease`; draft `10` processed via `claude-cli:sonnet` and reached the five-step guided review automatically.
+- Extraction prefilled property `Riverside Courtyard`, address `812 Birch Avenue`, Columbus OH `43215`; unit `2A`, 2 beds, 1 bath, rent `1275.00`; tenant `Maya Ortiz`; lease `RC-2A-2026`, Jul 1 2026 to Jun 30 2027, rent/security deposit `$1,275.00`, late fee `$75.00`, due day `1`.
+- Pre-fix repro for `TSK397-B068`: scan draft `10` stored `tenant_email`, `tenant_phone`, and `tenant_emergency_contact` at confidence `1.0`, but the Tenant review step rendered Email, Phone, and Emergency contact blank.
+- Post-fix browser proof after reloading draft `10`: Tenant review step prefilled `maya.ortiz.pass39@example.local`, `614-555-0139`, and `Luis Ortiz, 614-555-0140`.
+- Confirming the review created lease `/leases/6`; detail rendered `RC-2A-2026`, Active, `Riverside Courtyard · Unit 2A · Maya Ortiz`, rent `$1,275.00`, term dates, financials, notes `Imported from scanned lease document.`, and an image `Scanned document` preview linking to `/lease-file/6`.
+- DB proof for lease `RC-2A-2026`: property `Riverside Courtyard`, unit `2A`, tenant `Maya Ortiz`, email `maya.ortiz.pass39@example.local`, phone `614-555-0139`, emergency contact `Luis Ortiz, 614-555-0140`, rent/deposit `1275.00`, dates `2026-07-01` to `2027-06-30`.
+- DB proof for portfolio `3` stored files: `Lease` entity `6`, file `scan-20260623174838`, content type `image/jpeg`; thumbnail `scan-thumb-20260623174838`, content type `image/jpeg`.
+- Browser console warning/error check after the completed flow returned zero messages.
+
+Fixed in this pass:
+- `TSK397-B029` - Clean live setup started with manual property entry while the flagship scan-first path was only discoverable through the sidebar. Fix: onboarding now renders shared setup shortcuts with primary `Scan a lease` linking to `/scan/new-rental`, followed by spreadsheet import. Regression: `web/src/lib/onboarding/setup-shortcuts.test.ts`.
+- `TSK397-B068` - New-rental image lease extraction returned tenant contact fields, but `toLeasePrefill` dropped them so the review UI showed blank tenant email/phone/emergency fields and would lose them unless the user manually retyped them. Fix: lease prefill now carries tenant email, phone, and emergency contact through to the tenant step and confirmation overrides. Regression: `web/src/lib/scan/lease-prefill.test.ts`.
+
+Verification:
+- RED: `rtk node --test --experimental-strip-types web/src/lib/onboarding/setup-shortcuts.test.ts` failed before the shortcut metadata existed.
+- RED: `rtk node --test --experimental-strip-types web/src/lib/scan/lease-prefill.test.ts` failed because `values.tenantEmail` was undefined.
+- GREEN: `rtk node --test --experimental-strip-types web/src/lib/scan/lease-prefill.test.ts web/src/lib/onboarding/setup-shortcuts.test.ts` passed 2/2.
+- Browser regression: Playwright CLI confirmed the new onboarding scan shortcut, image upload, extracted tenant contact prefill after reload, confirmation, lease detail source-image preview, DB persistence, and zero browser warnings/errors.
+
+Status: Pass for fresh-user scan-first onboarding discovery and the image lease scan path after fixes. Continue next with the newly created rental spine through dashboard, unit/property/tenant follow-through, lease lifecycle/delete paths, and remaining non-banking/non-QuickBooks inventory.
