@@ -994,7 +994,7 @@ Browser retest on `https://localhost:5817` as Taylor Brooks:
 
 Open pass-2 product gaps:
 
-- Application scan confirm creates the `RentalApplication`, but the application detail page does not expose the original scanned PDF; there is no persisted source-file relationship on the application record yet.
+- Application scan detail did not expose the attached scanned source document; fixed in Pass 10 by surfacing the stored `Application` file on the detail page.
 - Expense receipt scan stores extracted vendor details but does not auto-create or link a Vendor entity; the categorization screen can still show "No vendor".
 - Payment scan did not auto-match a clear rent check to the only matching lease; the user had to select the lease manually.
 - Maintenance scan review exposes raw numeric relationship IDs in editable "Other" fields. The final work-order detail also does not show the tenant even when the scan extracted a tenant id.
@@ -1439,3 +1439,57 @@ Deferred:
 - `TSK-399` - User-reported Unit Command Center `Send renewal` no-op remains captured and intentionally deferred.
 
 Status: Pass after fixes for unit-scoped payment scan context/return, expense document rollup, and rent-list newest-first ordering. Continue next with the remaining non-banking/non-QuickBooks app surfaces after this checkpoint.
+
+## Pass 10 Fresh-User Camera Scan Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-10`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-10`
+
+Local stack:
+- Web: `https://localhost:5882`
+- API: `https://localhost:5881` (`http://localhost:5880`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass8-db`, database `rentalcommand_tsk397_pass10_clean`, host port `5548`
+- Assistant provider: `claude-cli`, model `sonnet`
+
+Synthetic account:
+- Riley Morgan Pass 10, `tsk397.pass10.202606230052@example.local`
+- Registered through `/welcome`, verified through the local outbox email link, logged in, selected "Set up my real portfolio", and confirmed the live portfolio had zero properties, units, tenants, leases, and scan drafts before the first scan.
+
+Generated sanitized scan inputs:
+- `scripts/qa/generate-production-scale-scan-fixtures.py` wrote 480 local fixtures under `output/qa/production-scale-scans`: 40 lease PDFs, 40 lease camera JPEGs, 80 expense PDFs, 80 expense camera JPEGs, 40 payment PDFs, 40 payment camera JPEGs, 40 application PDFs, 40 application camera JPEGs, 40 work-order PDFs, and 40 work-order camera JPEGs.
+
+Acceptance criteria:
+- A clean live user can create the first rental spine from a camera-style lease image using the shared scan extraction engine.
+- A rental application camera image can be scanned, reviewed, confirmed, and opened as an application record.
+- The application detail page exposes the original attached scan source when the backing blob is available.
+- Application scan file availability must be portfolio-scoped and must not add list/grid N+1 storage checks.
+
+Evidence:
+- Uploaded `output/qa/production-scale-scans/01-leases-camera/lease-001-1a.jpg` through `/scan/new-rental`; the engine logged `VISION read` and created a reviewable Lease draft.
+- The review flow created `Cedar Point Flats`, Unit `1A`, tenant `Avery Ellis`, and lease `QA-2026-001-1A`; lease detail `/leases/1` rendered the linked property/unit/tenant, rent `$1,125.00`, and the scanned source document.
+- DB proof after lease confirm: `properties=1`, `units=1`, `tenants=1`, `leases=1`, `scan_drafts=1`, `stored_files=1`.
+- Uploaded `output/qa/production-scale-scans/04-applications-camera/application-001.jpg` with Rental Application selected; the engine logged `VISION read (image/jpeg...)` and draft `2` became `Reviewing`.
+- Review extracted applicant `Gray Johnson`, email `qa.applicant.001@example.local`, phone `555-0101`, employer `QA Employer 1`, income `$3,850.00`, requested home `Cedar Point Flats Unit 1A`, and ID last four `1000`.
+- Confirming created application `1`, redirected to `/applications`, and detail `/applications/1` rendered applicant data, requested property/unit labels, no-consent screening disabled state, and notes.
+- DB proof after application confirm: `ScanDrafts 2 | Confirmed | Application`; `StoredFiles` included `Application EntityId=1 image/jpeg` plus its thumbnail.
+- Browser proof after the fix: `/applications/1` rendered `Scanned application`, preview image `/application-file/1?thumb=true` with natural size `375x500`, and the proxy returned `200 image/jpeg` with a 12.7 KB thumbnail. Screenshot: `output/playwright/pass10-application-scan-card.png`.
+- Browser console check after the application detail proof returned zero error-level messages.
+
+New pass-10 findings:
+- `TSK397-B039` - Application scan upload/review still uses receipt-specific copy in places. Examples: the upload dropzone said "Drop a receipt, invoice, or maintenance photo here" while Rental Application was active, and the processing page said it was pulling out vendor, amounts, and dates.
+- `TSK397-B040` - Application scan processing stayed on the Processing page after the engine had marked the draft `Reviewing`; reloading showed the review screen. This reproduces the same scan transition family as `TSK397-B026` outside the new-rental flow.
+
+Fixed in this pass:
+- `TSK397-B041` - Application detail did not expose the attached scanned source image even though scan confirmation re-keyed the `StoredFile` to `EntityType=Application` and `EntityId=1`. Fix: application detail now returns `hasScan`/`scanIsImage` only after the stored blob can be opened, `/api/v1/applications/{id}/scan` streams the portfolio-scoped source file, and `/application-file/{id}` proxies it for the Svelte app. Regression: `ApplicationServiceTests.GetAsync_ExposesAttachedScannedApplicationImage`.
+
+Verification:
+- RED: `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ApplicationServiceTests.GetAsync_ExposesAttachedScannedApplicationImage" --verbosity minimal` failed before the fix because `ApplicationResponse` had no `HasScan`/`ScanIsImage` contract.
+- GREEN: same targeted test passed after the fix.
+- Focused regression suite: `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ApplicationServiceTests" --verbosity minimal` passed 15/15 with only the known `SQLitePCLRaw.lib.e_sqlite3` vulnerability warnings.
+- Frontend check: `pnpm --dir web check` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+
+Deferred:
+- `TSK-399` - User-reported Unit Command Center `Send renewal` no-op remains captured and intentionally deferred.
+
+Status: Pass after fix for the covered fresh-user lease camera scan, application camera scan, and application scanned-source detail proof. Continue next with the remaining scan transition/copy defects and non-banking/non-QuickBooks surfaces.

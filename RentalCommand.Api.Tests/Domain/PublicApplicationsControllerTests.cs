@@ -54,7 +54,11 @@ public class PublicApplicationsControllerTests : IDisposable
         });
         _db.SaveChanges();
 
-        var service = new ApplicationService(_db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>());
+        var service = new ApplicationService(
+            _db,
+            Mock.Of<IFileStorage>(),
+            Mock.Of<IDataUpdateService>(),
+            Mock.Of<IAuditTrailService>());
         var uploadSettings = Options.Create(new UploadSettings
         {
             MaxFileSizeBytes = 10_000_000,
