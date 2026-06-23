@@ -12,6 +12,7 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { getTenantNoticeEmptyCopy } from '$lib/tenants/tenant-notice-state';
 	import { getTenantDeleteState } from '$lib/tenants/tenant-delete-state';
+	import { readTenantNoticeAction } from '$lib/tenants/tenant-notice-action';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
@@ -113,6 +114,7 @@
 	let showNoticeDialog = $state(false);
 	let noticeDrafts = $state<NoticeDraft[]>([]);
 	let forcedNoticeLabel = $state<string | null>(null);
+	let noticeActionHandled = false;
 	// Per-draft channel selection (portal / email / sms), defaulting to all on.
 	let noticeChannels = $state<Record<number, { portal: boolean; email: boolean; sms: boolean }>>({});
 	const noticeEmptyCopy = $derived(getTenantNoticeEmptyCopy(forcedNoticeLabel));
@@ -145,13 +147,13 @@
 		{ type: 'MoveOutReminder', label: 'Move-out reminder' }
 	];
 
-	function openNoticeDialog() {
+	function openNoticeDialog(noticeType?: string) {
 		noticeDrafts = [];
 		noticeChannels = {};
 		forcedNoticeLabel = null;
 		showNoticeDialog = true;
 		// Default pass: generate whatever is actually due for this tenant.
-		generateNoticeMutation.mutate(undefined);
+		generateNoticeMutation.mutate(noticeType);
 	}
 
 	const generateNoticeMutation = createMutation(() => ({
@@ -196,6 +198,13 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+
+	$effect(() => {
+		const action = readTenantNoticeAction(page.url.searchParams);
+		if (noticeActionHandled || !action || !tenant) return;
+		noticeActionHandled = true;
+		openNoticeDialog(action.noticeType);
+	});
 
 	// ── Lease columns ──────────────────────────────────────────────────────────
 	const leaseColumns: ColumnDef<Lease>[] = [
@@ -318,7 +327,7 @@
 						{saveMutation.isPending ? 'Saving…' : 'Save'}
 					</Button>
 				{:else}
-					<Button variant="outline" class="gap-2" onclick={openNoticeDialog} data-testid="tenant-detail-create-notice">
+					<Button variant="outline" class="gap-2" onclick={() => openNoticeDialog()} data-testid="tenant-detail-create-notice">
 						<BellRing class="h-4 w-4" />
 						Create / Send notice
 					</Button>

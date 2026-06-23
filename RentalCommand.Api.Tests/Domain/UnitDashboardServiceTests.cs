@@ -137,6 +137,101 @@ public class UnitDashboardServiceTests : IDisposable
                 "unit document list/count queries must scope expense attachments in SQL, not after materialization");
     }
 
+    [Fact]
+    public async Task GetDashboardAsync_LinksReadyNextActionToUnitApplicationLinkFlow()
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Oak Ridge",
+            AddressLine1 = "100 Oak",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43219",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "3B",
+            Status = UnitStatus.Vacant,
+            MarketRent = 975m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.AddRange(property, unit);
+        _db.SaveChanges();
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Ready.ToString());
+        dashboard.NextBestAction.Label.Should().Be("List this unit");
+        dashboard.NextBestAction.Href.Should()
+            .Be($"/applications?action=list-unit&propertyId={property.Id}&unitId={unit.Id}");
+    }
+
+    [Fact]
+    public async Task GetDashboardAsync_LinksRenewalNextActionToTenantRenewalNoticeFlow()
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Oak Ridge",
+            AddressLine1 = "100 Oak",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43219",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "3B",
+            Status = UnitStatus.Occupied,
+            MarketRent = 975m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Riley",
+            LastName = "Tenant",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var lease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = "L-3B",
+            Status = LeaseStatus.Active,
+            StartDate = now.AddMonths(-10),
+            EndDate = now.AddDays(44),
+            MonthlyRent = 975m,
+            SecurityDeposit = 975m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.AddRange(property, unit, tenant, lease);
+        _db.SaveChanges();
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Renewal.ToString());
+        dashboard.NextBestAction.Label.Should().StartWith("Send renewal");
+        dashboard.NextBestAction.Href.Should()
+            .Be($"/tenants/{tenant.Id}?action=create-notice&noticeType=RenewalOffer");
+    }
+
     private static bool IsChildIdPreload(string command)
         => IsBareIdSelect(command, "Leases")
             || IsBareIdSelect(command, "Payments")
