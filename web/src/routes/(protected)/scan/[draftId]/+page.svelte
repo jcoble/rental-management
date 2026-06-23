@@ -1555,7 +1555,9 @@
 							</p>
 						{/if}
 						{#if data.status === 'Rejected'}
-							<p class="text-center text-xs text-muted-foreground">This scan has been rejected.</p>
+							<p class="text-center text-xs text-muted-foreground">
+								This scan has been rejected{data.failureReason ? `: ${data.failureReason}` : '.'}
+							</p>
 						{/if}
 					</div>
 				</Card.Footer>

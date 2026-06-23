@@ -937,9 +937,26 @@ public class ScanServiceTests : IDisposable
         var rejectedDraft = await _db.ScanDrafts.FindAsync(draft.Id);
         rejectedDraft!.Status.Should().Be("Rejected");
         rejectedDraft.ReviewedBy.Should().Be("3");
+        rejectedDraft.FailureReason.Should().Be("Not a valid receipt");
 
         _audit.Calls.Should().HaveCount(1);
         _audit.Calls[0].operation.Should().Be(AuditLogOperation.Rejected);
+    }
+
+    [Fact]
+    public async Task RejectDraftAsync_ReviewingDraft_WithBlankReason_PreservesExistingFailureReason()
+    {
+        var draft = SeedDraft("Reviewing", extractedFields: null);
+        draft.FailureReason = "Extraction timed out";
+        await _db.SaveChangesAsync();
+
+        var rejected = await _sut.RejectDraftAsync(PortfolioId, draft.Id, userId: 3, reason: "   ");
+
+        rejected.Should().BeTrue();
+
+        var rejectedDraft = await _db.ScanDrafts.FindAsync(draft.Id);
+        rejectedDraft!.Status.Should().Be("Rejected");
+        rejectedDraft.FailureReason.Should().Be("Extraction timed out");
     }
 
     // -------------------------------------------------------------------------
