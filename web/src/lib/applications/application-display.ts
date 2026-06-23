@@ -33,6 +33,19 @@ export function formatRequestedUnit(parts: ApplicationHomeParts): string {
 	return clean(parts.unitNumber) || (parts.unitId != null ? `#${parts.unitId}` : 'No preference');
 }
 
+export function formatApplicationsEmptyMessage(
+	search: string | null | undefined,
+	statusValue: string | null | undefined,
+	allStatusesValue = 'all',
+): string {
+	const hasSearch = Boolean(search?.trim());
+	const hasStatusFilter = Boolean(statusValue && statusValue !== allStatusesValue);
+
+	return hasSearch || hasStatusFilter
+		? 'No applications match your filters.'
+		: 'No applications yet. Share your application link to get started.';
+}
+
 export function canRunApplicationScreening(
 	status: string | null | undefined,
 	consentGiven: boolean | null | undefined,
