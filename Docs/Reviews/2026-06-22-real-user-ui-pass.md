@@ -1726,3 +1726,40 @@ Verification:
 - Browser/SQL regression: draft `9` rejected from a camera JPEG scan, displayed the stored rejection reason on `/scan/9`, and persisted the same reason in PostgreSQL.
 
 Status: Pass after fix for scan rejection reason persistence/display and DB-backed history tab/sort checks. Continue next with invalid upload handling, adjacent created-record pages, maintenance actions, document/timeline surfaces, and the remaining non-banking/non-QuickBooks app inventory.
+
+## Pass 28 Scan Front-Door Invalid Upload and Terminal Filters
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-28`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Acceptance criteria:
+- Unsupported files dropped on scan upload controls must be rejected before upload, must not create a draft, and must give durable visible feedback.
+- Every scan lifecycle state visible in history rows must also be filterable from the scan history tabs.
+- Filtered-empty scan history views must use status-specific copy rather than first-run empty copy.
+- Scan history filtering must continue to use the DB-backed `/api/v1/scans/page` endpoint.
+
+Evidence:
+- Pre-fix unsupported upload reproduction: dropped `output/qa/production-scale-scans/MANIFEST.txt` on the `/scan` drop zone. SQL count stayed at `9`, no upload request was sent, but the page had no visible `not supported` feedback.
+- Post-fix unsupported upload proof: dropping the same file rendered inline `role="alert"` text `File type "text/plain" is not supported. Upload a PDF or image.` and SQL count remained `9`.
+- Pre-fix terminal filter gap: `/scan` showed rejected rows in the All tab, but available tabs were only All, Pending, Reviewing, and Confirmed.
+- Post-fix filter proof: `/scan` rendered All, Pending, Reviewing, Confirmed, Rejected, and Failed tabs.
+- Clicking Rejected navigated to `/scan?status=Rejected`, rendered the two rejected rows, and network proof showed `GET /api/v1/scans/page?take=20&status=Rejected => 200`.
+- Clicking Failed navigated to `/scan?status=Failed`, rendered the status-specific empty state `No failed scans.`, and network proof showed `GET /api/v1/scans/page?take=20&status=Failed => 200`.
+- Browser console check after the terminal-filter pass returned zero warning-or-higher messages.
+
+Fixed in this pass:
+- `TSK397-B049` - Unsupported files dropped on the shared scan upload control were rejected without creating drafts, but there was no durable visible feedback in the page. Fix: `FileDrop` now renders the first unsupported-file message inline as a `role="alert"` while preserving the toast.
+- `TSK397-B050` - Scan history could show Rejected/Failed states but did not expose Rejected or Failed filter tabs, and filtered terminal empty states used generic first-run copy. Fix: added a tested scan-history filter helper, exposed Rejected/Failed tabs, and added status-specific empty messages.
+
+Verification:
+- `rtk pnpm --dir web test:unit -- src/lib/components/file-drop.test.ts src/lib/scans/scan-history-filters.test.ts` passed 141/141.
+- `rtk pnpm --dir web check` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+- Browser/SQL regression: unsupported text-file drop showed inline alert and did not increase `ScanDrafts` count; Rejected and Failed filters used DB-backed `/scans/page` requests and rendered the expected row/empty states.
+
+Status: Pass after fixes for invalid upload feedback and terminal scan history filters. Continue next with confirmed-record detail pages from scan history, maintenance actions, document/timeline surfaces, and the remaining non-banking/non-QuickBooks inventory.

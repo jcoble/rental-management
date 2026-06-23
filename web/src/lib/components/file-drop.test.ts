@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { partitionSupportedFiles } from './file-drop.ts';
+import { partitionSupportedFiles, unsupportedFileMessage } from './file-drop.ts';
 
 describe('partitionSupportedFiles', () => {
 	it('accepts supported images and PDFs by MIME type', () => {
@@ -32,5 +32,12 @@ describe('partitionSupportedFiles', () => {
 
 		assert.deepEqual(result.accepted.map((file) => file.name), ['lease.pdf']);
 		assert.deepEqual(result.rejected.map((file) => file.name), ['contacts.csv', 'script.sh']);
+	});
+
+	it('formats unsupported-file guidance for inline alerts and toast messages', () => {
+		assert.equal(
+			unsupportedFileMessage({ name: 'MANIFEST.txt', type: 'text/plain' }),
+			'File type "text/plain" is not supported. Upload a PDF or image.'
+		);
 	});
 });
