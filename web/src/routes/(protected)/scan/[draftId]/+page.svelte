@@ -7,6 +7,7 @@
 	import { leases } from '$lib/api/endpoints/leases';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
+	import { invalidateQueriesAfterScanConfirm } from '$lib/scans/scan-confirm-invalidation';
 	import { seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
 	import { buildScanReviewFieldGroups, fieldDisplayLabel } from '$lib/scans/scan-review-fields';
 	import { createdRecordArticle, isTerminalScanReview, shouldDisableScanReviewControls } from '$lib/scans/scan-review-state';
@@ -607,12 +608,11 @@
 			return scan.confirm(draftId, overrides);
 		},
 		onSuccess: (result) => {
-			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			queryClient.invalidateQueries({ queryKey: ['scan', draftId] });
+			invalidateQueriesAfterScanConfirm(queryClient, result.entityType);
 			// Lease drafts go straight to the new lease detail page.
 			if (isLease) {
 				const leaseId = result.leaseId ?? result.entityId ?? null;
-				queryClient.invalidateQueries({ queryKey: ['leases'] });
 				toast.success('Lease created');
 				if (leaseId) {
 					goto(`/leases/${leaseId}`);
@@ -621,7 +621,6 @@
 			}
 			// Application drafts land on the applications list, where the new applicant appears.
 			if (isApplication) {
-				queryClient.invalidateQueries({ queryKey: ['applications'] });
 				toast.success('Applicant created');
 				goto('/applications');
 				return;
