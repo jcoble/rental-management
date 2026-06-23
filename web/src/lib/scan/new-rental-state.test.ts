@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { parseForm, propertySchema } from '../schemas/index.ts';
 import {
+	beginNewRentalDraftNavigation,
 	createNewRentalPropertyForm,
 	findNewRentalExistingUnitId,
 	formatNewRentalStepLabel,
@@ -22,6 +23,14 @@ describe('new rental draft URL state', () => {
 
 	it('formats the stable guided-review URL used after upload', () => {
 		assert.equal(newRentalDraftUrl(42), '/scan/new-rental?draftId=42');
+	});
+
+	it('keeps polling inactive until the URL adopts the uploaded draft id', () => {
+		assert.deepEqual(beginNewRentalDraftNavigation(42), {
+			draftId: null,
+			phase: 'processing',
+			url: '/scan/new-rental?draftId=42'
+		});
 	});
 });
 
