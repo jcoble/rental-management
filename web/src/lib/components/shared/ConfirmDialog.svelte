@@ -9,6 +9,7 @@
 		confirmLabel = 'Delete',
 		cancelLabel = 'Cancel',
 		busy = false,
+		confirmDisabled = false,
 		testid = 'confirm',
 		onconfirm,
 		oncancel,
@@ -19,6 +20,7 @@
 		confirmLabel?: string;
 		cancelLabel?: string;
 		busy?: boolean;
+		confirmDisabled?: boolean;
 		testid?: string;
 		onconfirm?: () => void;
 		oncancel?: () => void;
@@ -43,7 +45,7 @@
 	});
 
 	function handleConfirm() {
-		if (busy || confirming) return;
+		if (busy || confirming || confirmDisabled) return;
 		confirming = true;
 		onconfirm?.();
 	}
@@ -71,7 +73,7 @@
 				variant="destructive"
 				data-testid="{testid}-confirm"
 				onclick={handleConfirm}
-				disabled={busy || confirming}
+				disabled={busy || confirming || confirmDisabled}
 			>
 				{busy || confirming ? 'Working…' : confirmLabel}
 			</Button>

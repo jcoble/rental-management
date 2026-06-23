@@ -8,8 +8,9 @@ describe('confirm dialog submit guard', () => {
 	it('uses a local latch so rapid repeat clicks cannot submit the same destructive action twice', () => {
 		assert.match(source, /let confirming = \$state\(false\)/);
 		assert.match(source, /function handleConfirm\(\)/);
-		assert.match(source, /if \(busy \|\| confirming\) return/);
+		assert.match(source, /confirmDisabled = false/);
+		assert.match(source, /if \(busy \|\| confirming \|\| confirmDisabled\) return/);
 		assert.match(source, /onclick=\{handleConfirm\}/);
-		assert.match(source, /disabled=\{busy \|\| confirming\}/);
+		assert.match(source, /disabled=\{busy \|\| confirming \|\| confirmDisabled\}/);
 	});
 });

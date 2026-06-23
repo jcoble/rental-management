@@ -38,6 +38,7 @@ Fixed and verified:
 - `TSK397-B039`, `B041` through `B047`, `B049` through `B069`: application scan copy/detail, neutral scanned-source labels, image preservation, application requested-home linking, work-order unit grounding, scan rejection persistence, invalid upload feedback, terminal scan filters, lease notice gating, work-order no-phone dispatch gating, payment delete confirmation, unit quick-post payment method/reference/notes, filtered empty states, tenant notice behavior, document delete accessibility, duplicate confirm guarding, lease agreement/source separation, lease history note diffs, no-reload signature state, scan-first setup shortcut, lease-prefill contact fields, and payment detail currency formatting.
 - `TSK397-B071` through `B075`: work-order status modal enum labels, stale completed-work-order dispatch hints/no-vendor dispatch recovery, scheduled/completed date ordering, reset-password lockout recovery, and dashboard work-order status labels.
 - `TSK397-B076` and `B077`: Unit Documents direct unit-file uploads/page-level receipt labeling, and audit amount diff currency formatting.
+- `TSK397-B078`: tenant delete dialogs now block active-lease deletes up front with dependency copy instead of sending users into a known server-side rejection.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2467,3 +2468,46 @@ Verification:
 - Browser regression: Playwright CLI confirmed Unit Documents direct upload/view/delete-confirm state, the corrected `Scan receipt` and `Scan a record` labels, Expense create/edit/scan-handoff, Unit Timeline deep links, and currency-formatted amount diffs in both Unit Timeline and expense History.
 
 Status: Pass after fixes for Unit Documents, Unit Expenses, and Unit Timeline/History money diffs. Continue next with tenant detail/list, lease lifecycle/delete/signing follow-through, the tracked lifecycle no-op tasks, and the broader non-banking/non-QuickBooks inventory.
+
+## Pass 44 Tenant List, Detail, Documents, and Notices Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-44`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Harper Stone, `tsk397.pass39.202606231342@example.local`
+- Portfolio: Harper Stone's Portfolio, id `3`
+
+Acceptance criteria:
+- Tenant list search, filtered empty state, create/edit validation, row actions, and detail navigation must behave like a real resident-contact workflow.
+- Tenant detail must show linked leases, editable contact fields, document upload/download/delete controls, readable audit history, and safe destructive-action behavior.
+- Tenant image uploads must preserve camera-style JPEG content through storage and download.
+- Tenant notice creation must expose due-state copy, forced local draft review, delivery-channel choices, dismiss behavior, and must not send externally unless the user explicitly presses Send.
+- Tenants with active leases must not present a clickable delete confirmation that is known to fail later.
+
+Evidence:
+- `/tenants?q=zz-no-match` rendered the filtered empty state `No tenants match your search`, with the action `Add tenant`. Creating a disposable tenant from that state kept the search context, validated required first/last name fields, saved `Zz-no-match Tenant`, and showed the new row inside the active search.
+- Opening the disposable tenant detail showed breadcrumb/title/contact fields, `Active Leases 0`, empty Leases/Documents states, and History with `Added tenant`. Editing with blank last name showed `Last name is required`; saving `Tenant Edited` showed `Tenant updated.` and the expanded History row displayed `Last name` diff `Tenant -> Tenant Edited`.
+- Tenant Documents uploaded camera-style fixture `output/qa/production-scale-scans/04-applications-camera/application-001.jpg`. The panel listed `application-001.jpg` at `141.0 KB`, downloading it through the UI produced a JPEG image at `1800x2400`, canceling delete preserved the row, and confirming delete returned to `No documents yet.`
+- Disposable tenant delete rendered `Delete "Zz-no-match Tenant Edited"? This cannot be undone.` Cancel preserved the record; confirm removed it and returned to `/tenants` with the remaining active tenant row intact.
+- Active tenant list edit opened the populated form for Maya Ortiz and cancel preserved the row. The list and detail delete confirmations now render `Maya Ortiz has 1 active lease. End or reassign the lease before deleting this tenant.` with the Delete button disabled.
+- Active tenant detail showed the linked lease row `RC-2A-2026`, unit `2A`, rent `$1,275.00`, dates, and status `Active`.
+- `Create / Send notice` for Maya Ortiz showed no automatic notices due and offered forced notice creation. Forcing `Lease renewal offer` produced a local draft with renewal copy, Portal/Email/SMS checkboxes, `Dismiss`, and `Send`; dismissing the draft showed `Draft dismissed.` No external send was submitted.
+
+Fixed in this pass:
+- `TSK397-B078` - Tenant list/detail delete confirmations allowed users to press Delete on tenants with active leases even though the API correctly blocks that dependency with a domain validation error. Fix: added shared tenant delete-state copy, added a disabled confirm state to `ConfirmDialog`, and wired tenant list/detail dialogs so active-lease tenants explain the dependency and disable the destructive action before submit. Regression: `web/src/lib/tenants/tenant-delete-state.test.ts` and `web/src/lib/components/shared/confirm-dialog-submit.test.ts`.
+
+Verification:
+- RED: `rtk pnpm exec node --test --experimental-strip-types src/lib/tenants/tenant-delete-state.test.ts src/lib/components/shared/confirm-dialog-submit.test.ts` failed before the fix because the helper did not exist and `ConfirmDialog` did not support `confirmDisabled`.
+- GREEN: the same focused command passed 3/3 after adding the helper and disabled confirm handling.
+- Browser regression: Playwright CLI confirmed the active tenant list and detail delete dialogs render the active-lease dependency message and disable Delete, while zero-lease disposable tenant delete still supports cancel and confirm.
+- Browser console checks for the tenant-to-lease path returned zero warning/error messages.
+- `rtk pnpm --dir web check`: 0 errors, 4 existing `PageHeader.svelte` unused-selector warnings.
+
+Status: Pass after fixes for tenant list/detail create, edit, documents, history, active-lease delete guard, and local notice draft review/dismiss. Continue next with lease lifecycle/delete/signing follow-through, the tracked lifecycle no-op tasks, and the broader non-banking/non-QuickBooks inventory.

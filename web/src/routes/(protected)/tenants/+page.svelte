@@ -17,6 +17,7 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { getTenantsEmptyStateCopy } from '$lib/tenants/tenant-list-state';
+	import { getTenantDeleteState } from '$lib/tenants/tenant-delete-state';
 	import { Plus, Pencil, Trash2, Users } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -66,6 +67,7 @@
 	let form = $state({ ...empty });
 	let formErrors = $state<Record<string, string>>({});
 	let deleteTarget = $state<Tenant | null>(null);
+	const deleteState = $derived(deleteTarget ? getTenantDeleteState(deleteTarget) : null);
 	let createParamHandled = $state(false);
 
 	function invalidate() {
@@ -279,9 +281,13 @@
 <ConfirmDialog
 	open={deleteTarget !== null}
 	title="Delete tenant"
-	message={deleteTarget ? `Delete "${deleteTarget.fullName || `${deleteTarget.firstName} ${deleteTarget.lastName}`}"?` : ''}
+	message={deleteState?.message ?? ''}
 	busy={deleteMutation.isPending}
+	confirmDisabled={deleteState?.confirmDisabled ?? false}
 	testid="tenant-delete"
-	onconfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.id)}
+	onconfirm={() => {
+		if (!deleteTarget || deleteState?.confirmDisabled) return;
+		deleteMutation.mutate(deleteTarget.id);
+	}}
 	oncancel={() => (deleteTarget = null)}
 />
