@@ -2147,3 +2147,50 @@ Verification:
 - Browser regression: Playwright CLI confirmed lease note edit/save, History expandable row, and exact `Notes` old/new diff on the running local stack.
 
 Status: Pass for covered lease detail ledger, document, and history workflows after fixing note-only history diffs. Continue next with remaining lease detail lifecycle/delete/signing paths, then resume the broader real-user app inventory.
+
+## Pass 38 Lease Signing Source-Document Separation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-38`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Acceptance criteria:
+- Manual lease creation must support the same dependency chain as a real user expects: property enables units, tenant selection works, required empty submit stays client-side, and created rows open from the grid.
+- Sending a Draft lease for signature must generate or reuse the agreement PDF and immediately show download/regenerate controls without a reload.
+- Generated and signed lease PDFs must stay in Agreement & Signing, not masquerade as the original scanned/source document on Overview.
+- Overview must still hide the scanned-source card for manual leases that have no actual uploaded scan source.
+- Local e-sign send may use only the local provider/outbox setup; no production provider action is allowed.
+
+Evidence:
+- `/leases` New Lease empty submit showed required validation for property, unit, tenant, lease number, start date, end date, monthly rent, and security deposit without a POST.
+- Created disposable UI data before this slice: property `Pass 38 Lifecycle Test`, unit `P38-1`, and tenant `Pass Thirtyeight`.
+- New Lease property selection enabled the unit picker and showed only `Unit P38-1 (Vacant)` for `Pass 38 Lifecycle Test`.
+- Created manual Draft lease `P38-LIFECYCLE-001` for `Pass Thirtyeight`, `Unit P38-1`, rent `$1,200.00`, dates Jul 1 2026 to Jun 30 2027; grid row opened `/leases/4`.
+- Pre-fix send repro on `/leases/4`: Agreement & Signing said `No agreement has been generated yet`; pressing `Send for signature` moved the lease to `Pending signature` but the same card still displayed `No agreement has been generated yet` and no `Download agreement` until reload.
+- Reload proof for the same row showed Agreement & Signing then correctly rendered `Regenerate lease agreement (PDF)`, `Download agreement`, `Sent — waiting for signature`, and `Lease pending signature`.
+- Pre-fix source-document repro: after reload, Overview for the manual lease showed `Scanned document` / `The original document this lease was created from.` even though the only lease attachment was the generated agreement.
+- DB proof for `/leases/4`: `StoredFiles` contained only `lease-4-agreement.pdf` (`application/pdf`) for `EntityType=Lease`, `EntityId=4`.
+- Post-fix browser proof on `/leases/4`: Overview no longer rendered a scanned-source card, while Agreement & Signing still showed `Regenerate lease agreement (PDF)` and `Download agreement`.
+- Created a second disposable manual Draft lease `P38-LIFECYCLE-002` (`/leases/5`) from the same UI flow to prove the no-reload send path from a clean state.
+- Pre-send `/leases/5` Agreement & Signing showed `Generate lease agreement (PDF)`, `No agreement has been generated yet`, `Not sent`, and `Send for signature`.
+- Post-fix browser proof: pressing `Send for signature` on `/leases/5` immediately rendered `Regenerate lease agreement (PDF)`, `Download agreement`, `Sent — waiting for signature`, and `Lease pending signature` without reload; console warning/error check returned zero messages.
+- Post-fix Overview proof on `/leases/5`: no scanned-source card rendered after send.
+- DB proof for disposable signing leases: `Leases` rows `4` and `5` were `PendingSignature`/`Sent`; `StoredFiles` contained only `lease-4-agreement.pdf` and `lease-5-agreement.pdf` for those manual leases.
+
+Fixed in this pass:
+- `TSK397-B066` - Manual leases with generated agreement PDFs showed those generated legal documents as Overview `Scanned document` source files because `LeaseService.GetAsync` used the generic latest lease attachment lookup. Fix: lease detail source-file lookup now filters out generated agreement and signed-lease filenames DB-side before checking storage availability.
+- `TSK397-B067` - `Send for signature` generated an agreement on demand, but the lease detail page left the Agreement card in the pre-send `No agreement has been generated yet` state until reload. Fix: the send mutation marks the agreement as available when the successful e-sign response returns `Sent`.
+
+Verification:
+- RED: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~LeaseAgreementDocumentTests.GetAsync_GeneratedAgreementOnly_DoesNotAdvertiseScannedSourceDocument --no-restore --logger "console;verbosity=normal"` failed before the source-file filter because `HasScan` was true.
+- RED: `rtk node --test --experimental-strip-types web/src/lib/leases/lease-esign.test.ts` failed before the helper export because the no-reload send state was not modeled.
+- GREEN: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~LeaseAgreementDocumentTests.GetAsync_GeneratedAgreementOnly_DoesNotAdvertiseScannedSourceDocument --no-restore --logger "console;verbosity=normal"` passed 1/1, with the existing SQLite package advisory warning.
+- GREEN: `rtk node --test --experimental-strip-types web/src/lib/leases/lease-esign.test.ts` passed 4/4.
+- Browser regression: Playwright CLI confirmed `/leases/4` generated-agreement-only manual lease has no Overview source document, `/leases/4` Agreement tab still exposes the generated PDF, `/leases/5` send-for-signature immediately flips to generated/downloadable agreement state without reload, `/leases/5` Overview has no source document card, and console warnings/errors were zero.
+
+Status: Pass after fixes for manual-lease generated agreement/source scan separation and no-reload send-for-signature document state. Continue next with remaining lease lifecycle/delete paths and then resume broader non-banking/non-QuickBooks inventory.

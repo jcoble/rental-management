@@ -301,7 +301,7 @@ public class LeaseService : ILeaseService
         }
 
         var response = LeaseResponse.FromEntity(entity, includeNavigations: true);
-        var scan = await _db.FindLatestAvailableEntityFileAsync(_storage, portfolioId, EntityType, id, ct);
+        var scan = await FindLatestAvailableLeaseSourceFileAsync(portfolioId, id, ct);
         if (scan is not null)
         {
             response.HasScan = true;
@@ -832,5 +832,40 @@ public class LeaseService : ILeaseService
         return (stream, file.FileName, file.ContentType);
     }
 
+    private async Task<StoredFile?> FindLatestAvailableLeaseSourceFileAsync(
+        int portfolioId,
+        int leaseId,
+        CancellationToken ct)
+    {
+        var agreementFileName = GeneratedAgreementFileName(leaseId);
+        var signedFileName = SignedAgreementFileName(leaseId);
+        var storedFile = await _db.StoredFiles
+            .AsNoTracking()
+            .Where(f => f.PortfolioId == portfolioId
+                && f.EntityType == EntityType
+                && f.EntityId == leaseId
+                && f.FileName != agreementFileName
+                && f.FileName != signedFileName
+                && f.DeletedAt == null)
+            .OrderByDescending(f => f.UploadedAt)
+            .ThenByDescending(f => f.Id)
+            .FirstOrDefaultAsync(ct);
+        if (storedFile is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            await using var stream = await _storage.DownloadAsync(storedFile.FilePath, ct);
+            return storedFile;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
     private static string GeneratedAgreementFileName(int leaseId) => $"lease-{leaseId}-agreement.pdf";
+    private static string SignedAgreementFileName(int leaseId) => $"lease-{leaseId}-signed.pdf";
 }
