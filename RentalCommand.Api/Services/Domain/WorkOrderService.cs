@@ -458,10 +458,12 @@ public class WorkOrderService : IWorkOrderService
         // the same request) is rejected. We deliberately do NOT compare a lone CompletedAt PATCH against
         // the stored RequestedAt: RequestedAt auto-defaults to creation time, so back-dating only the
         // completion date on an existing/closed order (a supported edit — there is no reopen workflow) is
-        // legitimate and must not be blocked. An out-of-order pair corrupts age/SLA reporting; the future
-        // bound catches typo'd far-future dates.
+        // legitimate and must not be blocked. ScheduledFor is different: a stored or submitted scheduled
+        // visit is user-authored timeline data, so a completion before that effective visit date is invalid.
+        // An out-of-order pair corrupts age/SLA reporting; the future bound catches typo'd far-future dates.
         EnsureCompletedAtInRange(
             request.RequestedAt.HasValue, entity.RequestedAt,
+            request.ScheduledFor.HasValue, entity.ScheduledFor,
             request.CompletedAt.HasValue, entity.CompletedAt,
             now);
 
@@ -509,6 +511,7 @@ public class WorkOrderService : IWorkOrderService
     // Throws a 400.
     private static void EnsureCompletedAtInRange(
         bool requestedProvided, DateTime effectiveRequestedAt,
+        bool scheduledProvided, DateTime? effectiveScheduledFor,
         bool completedProvided, DateTime? effectiveCompletedAt,
         DateTime nowUtc)
     {
@@ -527,6 +530,14 @@ public class WorkOrderService : IWorkOrderService
         {
             throw new DomainValidationException(
                 "The completion date can't be before the work order was requested.");
+        }
+
+        if ((scheduledProvided || completedProvided) &&
+            effectiveScheduledFor is { } scheduled &&
+            completed < scheduled)
+        {
+            throw new DomainValidationException(
+                "The completion date can't be before the scheduled visit.");
         }
     }
 
