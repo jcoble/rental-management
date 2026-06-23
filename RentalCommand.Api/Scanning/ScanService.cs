@@ -34,6 +34,10 @@ public sealed class ScanService : IScanService
         @"\b(?:unit|apt|apartment)\s*(?:#|:)?\s*([A-Za-z0-9][A-Za-z0-9-]*)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         TimeSpan.FromMilliseconds(100));
+    private static readonly Regex ApplicationUnitReferenceRegex = new(
+        @"\b(?:unit|apt|apartment)\s*(?:#|:)?\s*(?<unit>[A-Za-z0-9][A-Za-z0-9-]*)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(100));
 
     public ScanService(
         RentalCommandDbContext db,
@@ -678,6 +682,11 @@ public sealed class ScanService : IScanService
         if (string.IsNullOrWhiteSpace(fields.Description))
             return new ScanConfirmResult(false, null, "Work order description is required");
 
+        if (fields.UnitId is null && fields.PropertyId > 0)
+        {
+            fields.UnitId = await TryResolveWorkOrderUnitFromTextAsync(portfolioId, fields.PropertyId, fields, ct);
+        }
+
         var request = new CreateWorkOrderRequest
         {
             PropertyId = fields.PropertyId,
@@ -942,6 +951,17 @@ public sealed class ScanService : IScanService
                 unitId = fields.UnitId;
         }
 
+        if (propertyId is null || unitId is null)
+        {
+            var requestedHome = await TryResolveApplicationRequestedHomeAsync(
+                portfolioId, fields.ApplyingFor, propertyId, ct);
+            if (requestedHome is not null)
+            {
+                propertyId ??= requestedHome.PropertyId;
+                unitId ??= requestedHome.UnitId;
+            }
+        }
+
         // Fold the application-only details that have no dedicated RentalApplication column (the applied-for
         // property/unit text, the ID last-4 hint, and any co-signer) into the Notes so they aren't lost. The
         // structured property/unit selection (above) is the queryable link; this is the human-readable record.
@@ -1033,6 +1053,96 @@ public sealed class ScanService : IScanService
             return null;
         var note = string.Join(" ", parts);
         return note.Length > 2000 ? note[..2000] : note;
+    }
+
+    /// <summary>
+    /// Best-effort requested-home matcher for scanned paper applications. It only links existing rows:
+    /// "Summit Row Unit 4D" resolves by exact property-name + unit-number match, and "Unit 4D" resolves
+    /// only when that unit number is unique in the portfolio. Ambiguous/free-text cases remain unlinked.
+    /// </summary>
+    private async Task<ApplicationHomeMatch?> TryResolveApplicationRequestedHomeAsync(
+        int portfolioId,
+        string? applyingFor,
+        int? knownPropertyId,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(applyingFor))
+            return null;
+
+        var unitMatch = ApplicationUnitReferenceRegex.Match(applyingFor);
+        if (!unitMatch.Success)
+            return null;
+
+        var unitKey = CollapseWhitespace(unitMatch.Groups["unit"].Value).ToLowerInvariant();
+        if (unitKey.Length == 0)
+            return null;
+
+        if (knownPropertyId is > 0)
+        {
+            return await _db.Units
+                .AsNoTracking()
+                .Where(u => u.PropertyId == knownPropertyId.Value && u.DeletedAt == null)
+                .Where(u => u.Property != null && u.Property.PortfolioId == portfolioId && u.Property.DeletedAt == null)
+                .Where(u => (u.UnitNumber ?? "").Trim().ToLower() == unitKey)
+                .OrderBy(u => u.Id)
+                .Select(u => new ApplicationHomeMatch(u.PropertyId, u.Id))
+                .FirstOrDefaultAsync(ct);
+        }
+
+        var propertyHint = ExtractApplicationPropertyHint(applyingFor, unitMatch);
+        if (!string.IsNullOrWhiteSpace(propertyHint))
+        {
+            var propertyKey = CollapseWhitespace(propertyHint).ToLowerInvariant();
+            return await _db.Units
+                .AsNoTracking()
+                .Where(u => u.DeletedAt == null)
+                .Where(u => u.Property != null && u.Property.PortfolioId == portfolioId && u.Property.DeletedAt == null)
+                .Where(u => (u.UnitNumber ?? "").Trim().ToLower() == unitKey)
+                .Where(u => (u.Property!.Name ?? "").Trim().ToLower() == propertyKey)
+                .OrderBy(u => u.Id)
+                .Select(u => new ApplicationHomeMatch(u.PropertyId, u.Id))
+                .FirstOrDefaultAsync(ct);
+        }
+
+        var unitOnlyMatches = await _db.Units
+            .AsNoTracking()
+            .Where(u => u.DeletedAt == null)
+            .Where(u => u.Property != null && u.Property.PortfolioId == portfolioId && u.Property.DeletedAt == null)
+            .Where(u => (u.UnitNumber ?? "").Trim().ToLower() == unitKey)
+            .OrderBy(u => u.Id)
+            .Select(u => new ApplicationHomeMatch(u.PropertyId, u.Id))
+            .Take(2)
+            .ToListAsync(ct);
+
+        return unitOnlyMatches.Count == 1 ? unitOnlyMatches[0] : null;
+    }
+
+    private static string? ExtractApplicationPropertyHint(string applyingFor, Match unitMatch)
+    {
+        var beforeUnit = applyingFor[..unitMatch.Index];
+        var afterUnit = applyingFor[(unitMatch.Index + unitMatch.Length)..];
+
+        var hint = CleanApplicationPropertyHint(beforeUnit);
+        if (!string.IsNullOrWhiteSpace(hint))
+            return hint;
+
+        hint = CleanApplicationPropertyHint(afterUnit);
+        return string.IsNullOrWhiteSpace(hint) ? null : hint;
+    }
+
+    private static string? CleanApplicationPropertyHint(string value)
+    {
+        var hint = value.Trim(' ', '\t', '\r', '\n', ',', '-', ':', ';', '.', '#');
+        foreach (var prefix in new[] { "at ", "for " })
+        {
+            if (hint.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                hint = hint[prefix.Length..].Trim(' ', '\t', '\r', '\n', ',', '-', ':', ';', '.', '#');
+                break;
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(hint) ? null : hint;
     }
 
     /// <summary>
@@ -1171,6 +1281,9 @@ public sealed class ScanService : IScanService
     /// <summary>A unit the lease's extracted unit number matched under the property, or null.</summary>
     private sealed record UnitMatch(int Id, string Label);
 
+    /// <summary>An existing property/unit pair matched from a scanned application's requested-home text.</summary>
+    private sealed record ApplicationHomeMatch(int PropertyId, int UnitId);
+
     /// <summary>
     /// Finds the in-portfolio property the lease's extracted leased-premises address/name dedupes to,
     /// or null when none matches. Primary key is the normalized street address (+ city when both sides
@@ -1241,8 +1354,27 @@ public sealed class ScanService : IScanService
         int propertyId,
         string? notes,
         CancellationToken ct)
+        => await TryResolveUnitFromTextAsync(portfolioId, propertyId, notes, ct);
+
+    private async Task<int?> TryResolveWorkOrderUnitFromTextAsync(
+        int portfolioId,
+        int propertyId,
+        WorkOrderDraftFields fields,
+        CancellationToken ct)
     {
-        var unitNumber = ExtractUnitNumberFromExpenseNotes(notes);
+        var text = string.Join(
+            " ",
+            new[] { fields.Title, fields.Description, fields.Category }.Where(s => !string.IsNullOrWhiteSpace(s)));
+        return await TryResolveUnitFromTextAsync(portfolioId, propertyId, text, ct);
+    }
+
+    private async Task<int?> TryResolveUnitFromTextAsync(
+        int portfolioId,
+        int propertyId,
+        string? text,
+        CancellationToken ct)
+    {
+        var unitNumber = ExtractUnitNumberFromText(text);
         if (string.IsNullOrWhiteSpace(unitNumber))
             return null;
 
@@ -1257,12 +1389,12 @@ public sealed class ScanService : IScanService
             .FirstOrDefaultAsync(ct);
     }
 
-    private static string? ExtractUnitNumberFromExpenseNotes(string? notes)
+    private static string? ExtractUnitNumberFromText(string? text)
     {
-        if (string.IsNullOrWhiteSpace(notes))
+        if (string.IsNullOrWhiteSpace(text))
             return null;
 
-        var match = ExpenseUnitReferenceRegex.Match(notes);
+        var match = ExpenseUnitReferenceRegex.Match(text);
         return match.Success ? match.Groups[1].Value.Trim() : null;
     }
 

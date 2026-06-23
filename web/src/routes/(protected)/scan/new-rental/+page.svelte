@@ -19,7 +19,7 @@
 	import { propertySchema, unitSchema, tenantSchema, leaseSchema, parseForm } from '$lib/schemas';
 	import { toLeasePrefill, type PrefillConfidence } from '$lib/scan/lease-prefill';
 	import { createNewRentalPropertyForm, findNewRentalExistingUnitId, formatNewRentalStepLabel, formatNewRentalStepPosition, newRentalDraftUrl, parseNewRentalDraftId, seedNewRentalLateFeeAmount } from '$lib/scan/new-rental-state';
-	import { stitchImagesToPdf } from '$lib/scan/stitch-pdf';
+	import { prepareNewRentalPhotoUpload } from '$lib/scan/new-rental-upload';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 
 	const portfolioId = getCurrentPortfolioId();
@@ -116,8 +116,7 @@
 	}
 	async function onPhotos(files: File[]) {
 		try {
-			const pdf = await stitchImagesToPdf(files);
-			uploadOne.mutate(pdf);
+			uploadOne.mutate(await prepareNewRentalPhotoUpload(files));
 		} catch {
 			showError('Could not combine those photos. Try fewer, clearer shots or a PDF.');
 		}
