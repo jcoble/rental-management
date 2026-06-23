@@ -39,6 +39,8 @@ export const units = {
 
 	get: (id: number) => api.get<Unit>(`/units/${id}`),
 
+	update: (id: number, data: Record<string, unknown>) => api.patch<Unit>(`/units/${id}`, data),
+
 	/** The Unit Command Center at-a-glance aggregate (header, lease/tenant, stage, overview, timeline). */
 	dashboard: (id: number) => api.get<UnitDashboard>(`/units/${id}/dashboard`),
 
