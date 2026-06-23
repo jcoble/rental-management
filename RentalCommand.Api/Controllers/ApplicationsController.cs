@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Interfaces;
+using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -15,11 +17,19 @@ public class ApplicationsController : ManagementControllerBase
 {
     private readonly IApplicationService _service;
     private readonly IScreeningService _screening;
+    private readonly RentalCommandDbContext _db;
+    private readonly IFileStorage _files;
 
-    public ApplicationsController(IApplicationService service, IScreeningService screening)
+    public ApplicationsController(
+        IApplicationService service,
+        IScreeningService screening,
+        RentalCommandDbContext db,
+        IFileStorage files)
     {
         _service = service;
         _screening = screening;
+        _db = db;
+        _files = files;
     }
 
     /// <summary>Lists applications in the portfolio, newest first; optionally filtered by <c>?status=</c>.</summary>
@@ -49,6 +59,13 @@ public class ApplicationsController : ManagementControllerBase
         var item = await _service.GetAsync(GetPortfolioId(), id, ct);
         return item == null ? NotFound(new { error = "Application not found" }) : Ok(item);
     }
+
+    /// <summary>Streams the original scanned application document.</summary>
+    [HttpGet("{id:int}/scan")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public Task<IActionResult> GetScan(int id, [FromQuery] bool thumb = false, CancellationToken ct = default)
+        => ServeEntityScanAsync(_db, _files, "Application", id, thumb, ct);
 
     /// <summary>Approves the application and creates a Tenant from its data.</summary>
     [HttpPost("{id:int}/approve")]

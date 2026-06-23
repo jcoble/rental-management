@@ -28,6 +28,7 @@ public class ApplicationServiceTests : IDisposable
     private readonly SqliteConnection _conn;
     private readonly List<string> _commands = [];
     private readonly RentalCommandDbContext _db;
+    private readonly Mock<IFileStorage> _files = new();
     private readonly RecordingAuditService _audit = new();
     private readonly ApplicationService _sut;
 
@@ -67,7 +68,7 @@ public class ApplicationServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new ApplicationService(_db, Mock.Of<IDataUpdateService>(), _audit);
+        _sut = new ApplicationService(_db, _files.Object, Mock.Of<IDataUpdateService>(), _audit);
     }
 
     public void Dispose()
@@ -350,6 +351,45 @@ public class ApplicationServiceTests : IDisposable
         detail.Should().NotBeNull();
         detail!.PropertyName.Should().Be("Maple Grove Duplex");
         detail.UnitNumber.Should().Be("B");
+    }
+
+    [Fact]
+    public async Task GetAsync_ExposesAttachedScannedApplicationImage()
+    {
+        var app = new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Gray",
+            LastName = "Johnson",
+            Status = ApplicationStatus.Submitted,
+            SubmittedAtUtc = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.RentalApplications.Add(app);
+        await _db.SaveChangesAsync();
+
+        _db.StoredFiles.Add(new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            EntityType = "Application",
+            EntityId = app.Id,
+            FileName = "application-001.jpg",
+            FilePath = "applications/application-001.jpg",
+            ContentType = "image/jpeg",
+            FileSize = 12345,
+            UploadedAt = DateTime.UtcNow,
+        });
+        await _db.SaveChangesAsync();
+        _files
+            .Setup(f => f.DownloadAsync("applications/application-001.jpg", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MemoryStream([1, 2, 3]));
+
+        var detail = await _sut.GetAsync(PortfolioId, app.Id);
+
+        detail.Should().NotBeNull();
+        detail!.HasScan.Should().BeTrue();
+        detail.ScanIsImage.Should().BeTrue();
     }
 
     [Fact]
