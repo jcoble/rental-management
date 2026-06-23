@@ -11,12 +11,17 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { money } from '../money';
 	import { formatDateOnly } from '$lib/utils/date';
+	import {
+		defaultWorkOrderReceiptScanContext,
+		workOrderDetailHref,
+		workOrderReceiptScanContext
+	} from '$lib/components/unit/maintenance-actions';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import { Wrench, Receipt, Plus, X, ExternalLink, ChevronDown, ChevronRight } from '@lucide/svelte';
+	import { Wrench, Receipt, Plus, X, ExternalLink } from '@lucide/svelte';
 
 	let {
 		dashboard,
@@ -102,11 +107,6 @@
 	const hasMoreWorkOrders = $derived(workOrderItems.length < totalWorkOrders);
 	const hasMoreReceipts = $derived(receiptItems.length < totalReceipts);
 
-	let expandedId = $state<number | null>(null);
-	function toggleExpand(id: number) {
-		expandedId = expandedId === id ? null : id;
-	}
-
 	function invalidate() {
 		workOrderItems = [];
 		receiptItems = [];
@@ -127,6 +127,10 @@
 	function loadMoreReceipts() {
 		if (expensesQuery.isFetching || !hasMoreReceipts) return;
 		receiptPage += 1;
+	}
+
+	function openWorkOrder(id: number | string) {
+		goto(workOrderDetailHref(id));
 	}
 
 	// ── Inline "new work order" form (reuses workOrderSchema + the app's form conventions) ──
@@ -232,7 +236,7 @@
 		</div>
 	{/if}
 
-	<!-- Work orders as expandable cards; the full edit/assign/close lives on the WO detail page. -->
+	<!-- Work orders as compact cards; the full edit/assign/close lives on the WO detail page. -->
 	{#if workOrdersQuery.isLoading}
 		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">Loading work orders…</p>
 	{:else if workOrderList.length === 0}
@@ -243,28 +247,31 @@
 		<ul class="space-y-2" data-testid="maintenance-work-orders">
 			{#each workOrderList as w (w.id)}
 				<li class="rounded-xl border bg-card" data-testid="maintenance-wo-{w.id}">
-					<button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left" onclick={() => toggleExpand(w.id)}>
-						<span class="flex min-w-0 items-center gap-2 text-sm">
-							{#if expandedId === w.id}<ChevronDown class="h-4 w-4 shrink-0 text-muted-foreground" />{:else}<ChevronRight class="h-4 w-4 shrink-0 text-muted-foreground" />{/if}
-							<span class="truncate font-medium">{w.title}</span>
-						</span>
-						<span class="flex shrink-0 items-center gap-2"><StatusBadge status={w.priority} /><StatusBadge status={w.status} /></span>
-					</button>
-					{#if expandedId === w.id}
-						<div class="border-t p-3">
-							<p class="text-sm text-muted-foreground">{w.description}</p>
-							<dl class="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
-								<div><dt class="text-muted-foreground">Category</dt><dd>{w.category}</dd></div>
-								<div><dt class="text-muted-foreground">Requested</dt><dd>{formatDateOnly(w.requestedAt)}</dd></div>
-								<div><dt class="text-muted-foreground">Cost</dt><dd>{money(w.actualCost ?? w.estimatedCost ?? 0)}</dd></div>
-							</dl>
-							<div class="mt-3 flex justify-end">
-								<Button variant="outline" size="sm" class="gap-1" onclick={() => goto('/maintenance/' + w.id)} data-testid="maintenance-open-{w.id}">
-									Open work order <ExternalLink class="h-3 w-3" />
-								</Button>
-							</div>
+					<div class="p-3">
+						<div class="flex items-center justify-between gap-2">
+							<span class="min-w-0 truncate text-sm font-medium">{w.title}</span>
+							<span class="flex shrink-0 items-center gap-2"><StatusBadge status={w.priority} /><StatusBadge status={w.status} /></span>
 						</div>
-					{/if}
+						<p class="mt-2 line-clamp-2 text-sm text-muted-foreground">{w.description}</p>
+						<dl class="mt-2 grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
+							<div><dt class="text-muted-foreground">Category</dt><dd>{w.category}</dd></div>
+							<div><dt class="text-muted-foreground">Requested</dt><dd>{formatDateOnly(w.requestedAt)}</dd></div>
+							<div><dt class="text-muted-foreground">Cost</dt><dd>{money(w.actualCost ?? w.estimatedCost ?? 0)}</dd></div>
+						</dl>
+						<div class="mt-3 flex flex-wrap justify-end gap-2">
+							<Button
+								variant="outline"
+								size="sm"
+								onclick={() => onScan(workOrderReceiptScanContext(unitId, w.id))}
+								data-testid="maintenance-scan-receipt-{w.id}"
+							>
+								Scan receipt
+							</Button>
+							<Button variant="outline" size="sm" class="gap-1" onclick={() => openWorkOrder(w.id)} data-testid="maintenance-open-{w.id}">
+								Open work order <ExternalLink class="h-3 w-3" />
+							</Button>
+						</div>
+					</div>
 				</li>
 			{/each}
 		</ul>
@@ -282,11 +289,7 @@
 			<button
 				type="button"
 				class="text-xs text-primary hover:underline"
-				onclick={() => onScan({
-					type: 'Expense',
-					workOrderId: expandedId ?? (workOrderList.length === 1 ? workOrderList[0]?.id : undefined),
-					returnTo: `/units/${unitId}?tab=maintenance`
-				})}
+				onclick={() => onScan(defaultWorkOrderReceiptScanContext(unitId, workOrderList.map((w) => w.id)))}
 				data-testid="maintenance-scan-receipt"
 			>Scan receipt</button>
 		{/snippet}
