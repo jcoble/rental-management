@@ -8,6 +8,7 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
+	import { buildScanReviewFieldGroups, fieldDisplayLabel } from '$lib/scans/scan-review-fields';
 	import {
 		applyScanContextOverrides,
 		parseScanContext,
@@ -52,25 +53,6 @@
 		if (!value) return 'Select category';
 		return CATEGORY_LABELS[value] ?? value;
 	}
-
-	// Grouped scalar field definitions (in display order within each group)
-	const FIELD_GROUPS: { label: string; fields: string[] }[] = [
-		{
-			label: 'Vendor',
-			fields: ['vendor_name', 'vendor_address', 'vendor_phone', 'vendor_website', 'vendor_tax_id', 'receipt_number']
-		},
-		{
-			label: 'Amounts',
-			fields: ['subtotal', 'tax', 'tax_rate', 'tip', 'discount', 'shipping', 'total', 'payment_method', 'card_last4', 'due_date']
-		},
-		{
-			label: 'Details',
-			fields: ['document_kind', 'category', 'notes']
-		}
-	];
-
-	// All known scalar field names (excluding line_items)
-	const KNOWN_SCALAR_FIELDS = new Set(FIELD_GROUPS.flatMap((g) => g.fields));
 
 	const LINE_ITEMS_FIELD = 'line_items';
 
@@ -539,27 +521,6 @@
 	function isFirstLowField(fields: ScanFieldDto[], field: ScanFieldDto): boolean {
 		const firstLow = fields.filter((f) => f.name !== LINE_ITEMS_FIELD).find((f) => confidenceLevel(f.confidence) === 'low');
 		return firstLow?.name === field.name;
-	}
-
-	// Build grouped sections from the extracted fields
-	function buildGroups(fields: ScanFieldDto[]): { label: string; fields: ScanFieldDto[] }[] {
-		const fieldMap = new Map(fields.filter((f) => f.name !== LINE_ITEMS_FIELD).map((f) => [f.name, f]));
-		const result: { label: string; fields: ScanFieldDto[] }[] = [];
-
-		for (const group of FIELD_GROUPS) {
-			const present = group.fields.map((name) => fieldMap.get(name)).filter((f): f is ScanFieldDto => !!f);
-			if (present.length > 0) {
-				result.push({ label: group.label, fields: present });
-			}
-		}
-
-		// "Other" group: any scalar fields not in KNOWN_SCALAR_FIELDS
-		const otherFields = [...fieldMap.values()].filter((f) => !KNOWN_SCALAR_FIELDS.has(f.name));
-		if (otherFields.length > 0) {
-			result.push({ label: 'Other', fields: otherFields });
-		}
-
-		return result;
 	}
 
 	// Parse line_items field value
@@ -1308,8 +1269,8 @@
 							<!-- Suppressed while processing so fields don't appear then get replaced by the full extracted set -->
 							{#each (isProcessing ? [] : ['vendor_name', 'total', 'subtotal', 'tax', 'transaction_date', 'category', 'payment_method', 'notes']) as fieldName}
 								<div>
-									<label class="mb-1 block text-xs font-medium text-muted-foreground capitalize" for="field-{fieldName}">
-										{fieldName.replace(/_/g, ' ')}
+									<label class="mb-1 block text-xs font-medium text-muted-foreground" for="field-{fieldName}">
+										{fieldDisplayLabel(fieldName)}
 									</label>
 									{#if fieldName === 'category'}
 										<!-- Category dropdown — friendly labels, enum value submitted -->
@@ -1335,7 +1296,7 @@
 							{/each}
 						</div>
 					{:else}
-						{@const groups = buildGroups(data.fields)}
+						{@const groups = buildScanReviewFieldGroups(data.fields, data.targetEntityType)}
 						<div class="space-y-6">
 							{#each groups as group}
 								<section>
@@ -1346,10 +1307,10 @@
 											<div class="{field.name === 'vendor_address' || field.name === 'notes' ? 'col-span-2' : ''}">
 												<div class="mb-1 flex items-center justify-between">
 													<label
-														class="text-xs font-medium capitalize {level === 'medium' ? 'text-muted-foreground' : 'text-foreground'}"
+														class="text-xs font-medium {level === 'medium' ? 'text-muted-foreground' : 'text-foreground'}"
 														for="field-{field.name}"
 													>
-														{field.name.replace(/_/g, ' ')}
+														{fieldDisplayLabel(field.name)}
 													</label>
 													{#if level !== 'high'}
 														<span class="text-xs {level === 'low' ? 'text-[var(--m3c-error)]' : 'text-muted-foreground'}">
