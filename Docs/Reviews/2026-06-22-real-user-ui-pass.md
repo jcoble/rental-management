@@ -1801,3 +1801,45 @@ Verification:
 - Browser regression: blank Give Notice dialog showed disabled submit; entering `07/15/2026` and blurring enabled submit; Cancel left `/leases/3` unchanged.
 
 Status: Pass after fix for lease notice date gating and scanned document rendering. Continue next with application, maintenance, expense, and payment detail pages created from scan history, then remaining non-banking/non-QuickBooks inventory.
+
+## Pass 30 Application and Work-Order Detail Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-30`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Acceptance criteria:
+- Application detail should hide decision actions after approval, show the created-tenant handoff, preserve scan provenance, and expose the scanned camera image.
+- Applications list search/status/sort/page controls must call the DB-backed paged endpoint, not filter only the current client page.
+- Application-link generation must create a local apply URL, allow manual copy, and show copy feedback.
+- Work-order detail should expose valid status transitions, status note history, edit/cancel, delete confirmation, document download, and vendor dispatch controls.
+- Vendor dispatch should not allow a known-invalid text attempt when the selected vendor has no phone on file.
+
+Evidence:
+- `/applications/1` rendered approved applicant Gray Johnson, email `qa.applicant.001@example.local`, phone `555-0101`, requested Cedar Point Flats Unit 1A, scan notes, no decision buttons, and a banner saying a tenant record was created.
+- `View tenant` navigated to `/tenants/2`; the tenant page rendered Gray Johnson contact info and notes `Created from rental application #1...`.
+- The scanned application link opened `/application-file/1` as an image tab. Screenshot: `output/playwright/application-file-1-20260623.png`.
+- Applications list search for `Johnson` made `GET /api/v1/applications/page?take=20&search=Johnson => 200`. Selecting Approved added `status=Approved`, proving the current list search/filter path is DB-backed.
+- `Get application link` generated a local `https://localhost:6042/apply/...` URL; Copy changed the button to `Copied` and rendered toast `Link copied to clipboard.`
+- `/maintenance/1` rendered scan-created work order `Front door lock sticks`, property Cedar Point Flats, Unit 1A, status New, priority Normal, request description, status history, attached source scan, and record history.
+- Pre-fix dispatch reproduction: opening `Text a vendor`, selecting `Green Thumb Landscaping` (`no phone on file`) enabled `Text the job`; clicking it sent `POST /api/v1/work-orders/1/dispatch => 400`, showed toast `Vendor has no phone number on file; add one before dispatching.`, and produced a browser console error for the 400.
+- Post-fix dispatch proof: selecting the same no-phone vendor shows inline `Add a phone number before texting this vendor the job.` and keeps `Text the job` disabled, so no new dispatch request is sent.
+- Status transition proof: changed work order from New to Scheduled with note `QA pass scheduled from work-order detail`; header updated to Scheduled, available transitions became In progress / Waiting on parts / Cancelled, status history showed the note, and record history showed an update.
+- Edit mode exposed title, description, property, priority, category, requested/scheduled/completed dates, estimated cost, and actual cost; Cancel returned to read-only without mutation.
+- Delete opened a confirmation modal with copy `Delete "Front door lock sticks"?`; Cancel closed it without deleting.
+- Clicking attached document `scan-20260623113552` downloaded `.playwright-cli/scan-20260623113552.jpeg`; `file` identified it as a JPEG, `1800x2400`, 130.1 KB. Network proof showed `GET /api/v1/documents/7/file => 200`.
+
+Fixed in this pass:
+- `TSK397-B052` - Work-order dispatch picker let users select a vendor explicitly marked `no phone on file` and then press `Text the job`, causing an avoidable API 400 and console error. Fix: dispatch eligibility is now tested in a helper, the dialog shows an inline block reason, and the confirm button remains disabled until the selected vendor has a non-blank phone number.
+
+Verification:
+- `rtk pnpm --dir web test:unit -- src/lib/maintenance/work-order-dispatch.test.ts` passed 144/144.
+- `rtk pnpm --dir web check` passed with 0 errors and the known four unused-selector warnings in `web/src/lib/components/m3/PageHeader.svelte`.
+- Browser regression: no-phone vendor selection kept `Text the job` disabled and showed the inline phone-number requirement; status transition, edit cancel, delete cancel, and document download paths worked.
+
+Status: Pass after fix for work-order no-phone dispatch gating. Continue next with payment and expense detail pages created from scan history, then remaining non-banking/non-QuickBooks inventory.

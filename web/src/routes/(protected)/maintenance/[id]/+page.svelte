@@ -25,6 +25,10 @@
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 	import WorkOrderTimeline from '$lib/components/shared/WorkOrderTimeline.svelte';
+	import {
+		canDispatchToVendor,
+		dispatchVendorBlockReason,
+	} from '$lib/maintenance/work-order-dispatch';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -180,6 +184,11 @@
 		enabled: portfolioId > 0 && (showDispatch || (wo?.vendorId != null)),
 	}));
 	const vendorList = $derived(vendorsQuery.data ?? []);
+	const selectedDispatchVendor = $derived(
+		selectedVendorId == null ? null : (vendorList.find((v) => v.id === selectedVendorId) ?? null)
+	);
+	const canConfirmDispatch = $derived(canDispatchToVendor(selectedDispatchVendor));
+	const dispatchBlockReason = $derived(dispatchVendorBlockReason(selectedDispatchVendor));
 
 	// The vendor assigned to this work order (when any), resolved from the loaded list so we can offer
 	// call / text / email contact actions matching the mobile trio. tel:/sms: hrefs strip everything but
@@ -221,7 +230,7 @@
 	}));
 
 	function confirmDispatch() {
-		if (selectedVendorId == null) return;
+		if (selectedVendorId == null || !canConfirmDispatch) return;
 		dispatchMutation.mutate({ vendorId: selectedVendorId, note: dispatchNote.trim() || undefined });
 	}
 
@@ -611,6 +620,12 @@
 				{/each}
 			</div>
 
+			{#if dispatchBlockReason}
+				<p class="text-xs text-muted-foreground" data-testid="work-order-dispatch-block-reason">
+					{dispatchBlockReason}
+				</p>
+			{/if}
+
 			<div class="space-y-1.5">
 				<label for="dispatch-note" class="text-xs font-medium text-muted-foreground">Note for the vendor (optional)</label>
 				<textarea
@@ -631,7 +646,7 @@
 			</Button>
 			<Button
 				onclick={confirmDispatch}
-				disabled={selectedVendorId == null || dispatchMutation.isPending}
+				disabled={!canConfirmDispatch || dispatchMutation.isPending}
 				data-testid="work-order-dispatch-confirm"
 			>
 				{dispatchMutation.isPending ? 'Texting…' : 'Text the job'}
