@@ -22,4 +22,10 @@ describe('status display labels', () => {
 	it('does not rewrite non-status audit fields', () => {
 		assert.equal(formatAuditChangeValue('Lease Number', 'QA-2026-002-2B'), 'QA-2026-002-2B');
 	});
+
+	it('formats amount audit diffs as currency', () => {
+		assert.equal(formatAuditChangeValue('Amount', '21.49'), '$21.49');
+		assert.equal(formatAuditChangeValue('Charge Amount', '1275'), '$1,275.00');
+		assert.equal(formatAuditChangeValue('Original amount', '250000.5'), '$250,000.50');
+	});
 });

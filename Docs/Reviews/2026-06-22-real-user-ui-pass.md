@@ -37,6 +37,7 @@ Fixed and verified:
 - `TSK397-B035` through `B038`: unit-scoped payment scan lease inference, post-scan return actions, unit document rollup for expense files, and newest-first rent rows.
 - `TSK397-B039`, `B041` through `B047`, `B049` through `B069`: application scan copy/detail, neutral scanned-source labels, image preservation, application requested-home linking, work-order unit grounding, scan rejection persistence, invalid upload feedback, terminal scan filters, lease notice gating, work-order no-phone dispatch gating, payment delete confirmation, unit quick-post payment method/reference/notes, filtered empty states, tenant notice behavior, document delete accessibility, duplicate confirm guarding, lease agreement/source separation, lease history note diffs, no-reload signature state, scan-first setup shortcut, lease-prefill contact fields, and payment detail currency formatting.
 - `TSK397-B071` through `B075`: work-order status modal enum labels, stale completed-work-order dispatch hints/no-vendor dispatch recovery, scheduled/completed date ordering, reset-password lockout recovery, and dashboard work-order status labels.
+- `TSK397-B076` and `B077`: Unit Documents direct unit-file uploads/page-level receipt labeling, and audit amount diff currency formatting.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2422,3 +2423,47 @@ Verification:
 - Browser regression: Playwright CLI snapshot confirmed the Dashboard latest-work-order row now shows `In progress` instead of `InProgress`.
 
 Status: Pass after fixes for reset-password lockout recovery and the dashboard work-order status label. Continue next with Unit Documents/Expenses/Timeline follow-through, tenant detail/list, lease lifecycle/delete/signing follow-through, and the broader non-banking/non-QuickBooks inventory.
+
+## Pass 43 Unit Documents, Expenses, and Timeline Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-43`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Harper Stone, `tsk397.pass39.202606231342@example.local`
+- Portfolio: Harper Stone's Portfolio, id `3`
+
+Acceptance criteria:
+- Unit Documents must distinguish generic unit-file uploads from scan-to-record workflows.
+- Unit camera/image uploads must attach to the unit, refresh the header document count and cross-entity rollup, expose view/delete controls, and preserve image content through the stored-file proxy.
+- Unit Expenses must support create validation, create, inline edit, receipt-scan handoff, and deep links to the expense detail page.
+- Unit Timeline and record History must show user-facing formatted audit diffs for money fields.
+
+Evidence:
+- Pre-fix Unit Documents repro: the tab said `Scan / upload`, but pressing it navigated to `/scan?type=Expense&propertyId=6&unitId=6&returnTo=%2Funits%2F6%3Ftab%3Ddocuments`, so a generic document upload action silently became a receipt/bill scan.
+- Post-fix `/units/6?tab=documents` renders `Scan a record` plus a direct `Unit files` panel with an `Upload` action. The page-level header button now says `Scan receipt` because it routes to the default expense scan flow.
+- Uploaded camera-style image fixture `output/qa/production-scale-scans/03-payments-camera/payment-001.jpg` through the Unit files uploader. The unit header updated to `3 docs`, the direct Unit files panel listed `payment-001.jpg` with size/date/delete controls, and the cross-entity rollup listed `Unit -> payment-001.jpg` with `View` linking to `/document-file/30`.
+- Browser proof for `/document-file/30` showed the uploaded file as a real `1800x2400` image. Delete confirmation rendered `Delete "payment-001.jpg"? This cannot be undone.` and was cancelled to preserve the proof file.
+- Unit Expenses empty submit showed `Description is required` and `Amount is required`; a synthetic expense `Replacement smoke detector batteries` saved at `$18.97`, then inline edit changed Amount to `$21.49` with `Expense updated.` toast.
+- `Scan receipt` from the Expenses tab reached `/scan?type=Expense&propertyId=6&unitId=6&returnTo=%2Funits%2F6%3Ftab%3Dexpenses`, keeping the correct unit/property context for receipt extraction.
+- Unit Timeline rendered newest-first activity rows. Expanding the updated expense row showed the amount diff; pre-fix it showed raw `18.97 -> 21.49`, and post-fix it showed `$18.97 -> $21.49`.
+- Following the Timeline `Recorded an expense` link reached `/accounting/expenses/3`; the detail page showed title `Replacement smoke detector batteries`, amount `$21.49`, property `Riverside Courtyard`, unit link back to `/units/6?tab=expenses`, and the same History diff formatted as `$18.97 -> $21.49`.
+
+Fixed in this pass:
+- `TSK397-B076` - Unit Documents presented a generic `Scan / upload` action but routed users into the Expense scan flow, and the page-level unit header used the same generic label for its default receipt scan. Fix: the Documents tab now includes a direct `DocumentsPanel` for `entityType="Unit"` uploads, relabels the document scan action to `Scan a record`, refreshes the unit dashboard after upload/delete, and relabels the page-level default action to `Scan receipt`. Regression: `web/src/lib/components/unit/document-actions.test.ts`.
+- `TSK397-B077` - Unit Timeline and record History amount diffs rendered raw decimal strings such as `18.97 -> 21.49`. Fix: shared `formatAuditChangeValue` now formats amount-like audit fields as USD currency. Regression: `web/src/lib/utils/status-labels.test.ts`.
+
+Verification:
+- RED: `rtk pnpm exec node --test --experimental-strip-types src/lib/components/unit/document-actions.test.ts` failed before the header label fix because `UnitHeader.svelte` still contained `Scan / Upload`.
+- GREEN: the same focused unit document/action command passed 3/3 after the direct unit uploader and label changes.
+- RED: `rtk pnpm exec node --test --experimental-strip-types src/lib/utils/status-labels.test.ts` failed before the audit formatter fix because `formatAuditChangeValue('Amount', '21.49')` returned `21.49`.
+- GREEN: the same focused status-label command passed 5/5 after currency formatting amount-like audit fields.
+- Browser regression: Playwright CLI confirmed Unit Documents direct upload/view/delete-confirm state, the corrected `Scan receipt` and `Scan a record` labels, Expense create/edit/scan-handoff, Unit Timeline deep links, and currency-formatted amount diffs in both Unit Timeline and expense History.
+
+Status: Pass after fixes for Unit Documents, Unit Expenses, and Unit Timeline/History money diffs. Continue next with tenant detail/list, lease lifecycle/delete/signing follow-through, the tracked lifecycle no-op tasks, and the broader non-banking/non-QuickBooks inventory.

@@ -8,6 +8,13 @@ const STATUS_LABELS = new Map<string, string>([
 	['WaitingParts', 'Waiting on parts'],
 ]);
 
+const currencyFormatter = new Intl.NumberFormat('en-US', {
+	style: 'currency',
+	currency: 'USD',
+	minimumFractionDigits: 2,
+	maximumFractionDigits: 2,
+});
+
 function fallbackLabel(value: string): string {
 	const words = value
 		.replace(/[_-]+/g, ' ')
@@ -27,6 +34,12 @@ export function formatAuditChangeValue(field: string | undefined | null, value: 
 	const fieldName = (field ?? '').trim().toLowerCase();
 	if (fieldName === 'status' || fieldName.endsWith(' status')) {
 		return formatStatusLabel(value);
+	}
+	if (fieldName === 'amount' || fieldName.endsWith(' amount') || fieldName.endsWith('amount')) {
+		const amount = Number(value);
+		if (Number.isFinite(amount)) {
+			return currencyFormatter.format(amount);
+		}
 	}
 	return value;
 }
