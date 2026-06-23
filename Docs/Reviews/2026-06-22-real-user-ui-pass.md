@@ -2247,3 +2247,62 @@ Verification:
 - Browser regression: Playwright CLI confirmed the new onboarding scan shortcut, image upload, extracted tenant contact prefill after reload, confirmation, lease detail source-image preview, DB persistence, and zero browser warnings/errors.
 
 Status: Pass for fresh-user scan-first onboarding discovery and the image lease scan path after fixes. Continue next with the newly created rental spine through dashboard, unit/property/tenant follow-through, lease lifecycle/delete paths, and remaining non-banking/non-QuickBooks inventory.
+
+## Pass 40 Fresh-User Dashboard, Settings, Property, Unit, and Payment Continuation
+
+Date: 2026-06-23
+Branch: `tsk-397-full-ui-pass-40`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Harper Stone, `tsk397.pass39.202606231342@example.local`
+- Portfolio: Harper Stone's Portfolio, id `3`
+
+Acceptance criteria:
+- A new user who created the first rental by scanning a lease must be able to continue naturally from the dashboard into setup, settings, property financial setup, unit command center, and payment tracking.
+- Dashboard setup checklist links must land on actionable settings sections and mark themselves complete when settings are saved.
+- Property detail must support real owner setup work: mortgage/loan entry, recurring expense entry, validation, readable saved rows, and schedule visibility.
+- Unit Rent must support quick payment posting with method/reference/notes and provide a full payment detail path.
+- Payment detail must format money consistently anywhere the same amount appears.
+
+Evidence:
+- Login as Harper Stone rendered Dashboard for the scan-created portfolio: 100% occupied, 1/1 occupied, no open work orders, no overdue balance, active lease mix, and recent activity for owner/property/tenant/lease creation.
+- Dashboard `See the checklist` opened `/get-started?view=checklist`; the scan-created records checked off the six core setup steps.
+- Checklist `Set where alerts go` reached Settings Notifications. Saving `owner.alerts.pass39@example.local` with the dedicated alert-email Save persisted after reload and moved the checklist to 7 of 8. Daily briefing in-app toggle also persisted after reload.
+- Checklist `Turn on automatic reminders` reached Settings Automations. Turning on auto-post rent charges and auto-assess late fees, changing rent lead days to `7`, and saving persisted after reload.
+- Returning to Dashboard after the last checklist step removed the checklist card and showed the operational portfolio dashboard.
+- Dashboard `View properties` opened `/properties`; the properties grid showed `Riverside Courtyard`, address `812 Birch Avenue, Columbus, OH`, status Active, 1 unit, 1 occupied, with search/type/status filters plus New/Edit/Delete controls visible.
+- Property detail `/properties/6` rendered identity/address/cost-basis, unit row `2A`, empty loans, empty recurring expenses, lease `RC-2A-2026`, and property history.
+- Empty Add Loan submit showed inline required validation for lender, original amount, interest rate, start date, and monthly P&I.
+- Added loan `First City Bank`, original `215000`, balance `212500`, rate `6.25`, start `2025-07-01`, P&I `$1,300.42`, escrow `$425.00`, taxes/insurance escrow flags; saved row rendered `$212,500.00`, `6.25`, `$1,300.42`, `$425.00`, Active, Schedule/Edit/Delete controls.
+- Loan Schedule expanded inline with `Amortization schedule` and `No payments generated yet. The debt-service worker fills this in monthly.`
+- Empty Add Recurring Expense submit showed required validation for description, amount, and start date.
+- Added recurring expense `Building insurance`, category Insurance, amount `$185.50`, frequency Monthly, next run `7/1/2026`; saved row used friendly category/frequency labels and exposed Edit/Delete controls.
+- Unit detail `/units/6` rendered the scan-created unit command center: occupied header, tenant contact info, lease summary, rent current, 1 document, lifecycle rail, tabs, and recent activity.
+- Unit Overview `View lease` switched to the Lease tab; Lease tab exposed current lease `RC-2A-2026`, tenant Maya Ortiz, rent/deposit `$1,275.00`, dates, `Open lease`, and `Scan / upload lease`.
+- Unit Rent empty state exposed `Post payment` and `Scan receipt`. Empty payment submit showed `Amount is required`.
+- Posted rent payment amount `1275`, method Check, reference `CHK-1001`, notes `First rent payment received at move-in walkthrough.`; the Rent tab immediately showed `Jun 23, 2026 - Rent - Paid - $1,275.00`, outstanding `$0.00`, and recent activity linked to `/accounting/payments/5`.
+- Payment row expanded inline with amount, due/paid dates, type, status, and method. Full payment detail showed the reference and notes.
+- Pre-fix repro for `TSK397-B069`: payment detail title subtitle rendered `Rent - $1275 - Paid` and Charge Amount rendered `$1275` while the hero rendered `$1,275.00`.
+- Post-fix browser proof on `/accounting/payments/5`: subtitle rendered `Rent - $1,275.00 - Paid`, hero amount `$1,275.00`, Charge Amount `$1,275.00`, method Check, reference `CHK-1001`, and notes. Console warning/error check returned zero.
+- Browser console warning/error checks returned zero after property financial setup and after the payment detail reload.
+
+Open findings:
+- `TSK397-B070` - Property History says "Every recorded change to this property", but loan creation and recurring expense creation did not appear after the property-level financial setup. This appears related to the already-open child-history scope issue `TSK397-B022`, but for property child records.
+
+Fixed in this pass:
+- `TSK397-B069` - Payment detail used raw amount interpolation in the page subtitle and Charge Amount field, rendering values like `$1275` instead of `$1,275.00`. Fix: added a focused payment-detail display formatter and used it for hero, subtitle, charge amount, and partial amount-paid display. Regression: `web/src/lib/accounting/payment-detail-display.test.ts`.
+
+Verification:
+- RED: `rtk node --test --experimental-strip-types web/src/lib/accounting/payment-detail-display.test.ts` failed before the helper existed.
+- GREEN: `rtk node --test --experimental-strip-types web/src/lib/accounting/payment-detail-display.test.ts` passed 1/1.
+- Related regression: `rtk node --test --experimental-strip-types web/src/lib/accounting/payment-detail-display.test.ts web/src/lib/accounting/payment-detail-delete.test.ts web/src/lib/accounting/expense-detail-actions.test.ts` passed 7/7.
+- `rtk pnpm --dir web check` passed with 0 errors and the known four `PageHeader.svelte` unused-selector warnings.
+- Browser regression: Playwright CLI confirmed the full payment detail formatting fix on the running local stack and zero browser warnings/errors.
+
+Status: Pass for the covered fresh-user dashboard checklist, settings notification/automation, property loan/recurring-expense, unit rent, and payment-detail workflows after fixing payment amount formatting. Continue next with remaining unit Maintenance/Documents/Expenses/Timeline, tenant detail/list, lease lifecycle/delete/signing follow-through, and the broader non-banking/non-QuickBooks inventory.
