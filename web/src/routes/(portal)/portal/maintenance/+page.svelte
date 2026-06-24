@@ -9,6 +9,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import WorkOrderTimeline from '$lib/components/shared/WorkOrderTimeline.svelte';
+	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import { Camera, ChevronRight, Wrench, X } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -198,6 +199,8 @@
 				{#if detail.description}
 					<p class="whitespace-pre-line text-sm text-foreground">{detail.description}</p>
 				{/if}
+
+				<DocumentsPanel title="Photos & documents" entityType="WorkOrder" entityId={detail.id} />
 
 				<div>
 					<h3 class="mb-2 text-sm font-semibold">Progress</h3>
