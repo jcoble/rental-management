@@ -6,6 +6,7 @@
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { conversationReadKey, markConversationRead } from '$lib/messages/conversation-read-state';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatRelative } from '$lib/utils/date';
 	import { ApiError, type FairHousingConcern } from '$lib/api/client';
@@ -77,18 +78,19 @@
 
 	const conversation = $derived(conversationQuery.data ?? null);
 
-	// Opening a thread fetches it (server marks it read) → clear the unread badge
-	// in the list by invalidating once the detail load resolves.
-	let lastMarkedReadId = $state<number | null>(null);
+	// Opening a thread fetches it (server marks it read). Track the current
+	// message version, not just the id, so a new tenant reply in an already-open
+	// thread clears the list and shell unread state after the detail refetch.
+	let lastMarkedReadKey = $state<string | null>(null);
 	$effect(() => {
 		const data = conversationQuery.data;
-		if (data && data.id !== lastMarkedReadId) {
-			lastMarkedReadId = data.id;
+		const readKey = conversationReadKey(data);
+		if (data && readKey !== lastMarkedReadKey) {
+			lastMarkedReadKey = readKey;
 			const currentItems = untrack(() => conversationItems);
-			conversationItems = currentItems.map((c) =>
-				c.id === data.id ? { ...c, unreadCount: 0 } : c
-			);
+			conversationItems = markConversationRead(currentItems, data.id);
 			queryClient.invalidateQueries({ queryKey: ['conversations'] });
+			queryClient.invalidateQueries({ queryKey: ['header-unread-messages'] });
 		}
 	});
 

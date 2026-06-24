@@ -7,6 +7,7 @@
 		type ConversationSummary,
 		type ConversationMessage
 	} from '$lib/api/endpoints/portal';
+	import { conversationReadKey, markConversationRead } from '$lib/messages/conversation-read-state';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatRelative } from '$lib/utils/date';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -43,14 +44,23 @@
 
 	const conversation = $derived(conversationQuery.data ?? null);
 
-	// Opening a thread fetches it (server marks it read for the tenant) → clear the
-	// unread badge in the list by invalidating once the detail load resolves.
-	let lastMarkedReadId = $state<number | null>(null);
+	function markPortalConversationRead(id: number) {
+		queryClient.setQueryData(['portal-conversations'], (items: ConversationSummary[] | undefined) =>
+			markConversationRead(items ?? [], id)
+		);
+		queryClient.invalidateQueries({ queryKey: ['portal-conversations'] });
+	}
+
+	// Opening a thread fetches it (server marks it read for the tenant). Track the
+	// current message version, not just the id, so a new live reply in the already-open
+	// thread clears the list/dashboard unread state after the detail refetch marks it read.
+	let lastMarkedReadKey = $state<string | null>(null);
 	$effect(() => {
 		const data = conversationQuery.data;
-		if (data && data.id !== lastMarkedReadId) {
-			lastMarkedReadId = data.id;
-			queryClient.invalidateQueries({ queryKey: ['portal-conversations'] });
+		const readKey = conversationReadKey(data);
+		if (data && readKey !== lastMarkedReadKey) {
+			lastMarkedReadKey = readKey;
+			markPortalConversationRead(data.id);
 		}
 	});
 
