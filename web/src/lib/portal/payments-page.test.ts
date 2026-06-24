@@ -18,4 +18,15 @@ describe('portal payments page', () => {
 		assert.match(pageSource, /data-testid="portal-autopay-unavailable"/);
 		assert.match(pageSource, /disabled=\{onlinePaymentsUnavailable \|\| enrollMutation\.isPending \|\| leaseId == null\}/);
 	});
+
+	it('disables row-level pay now actions when online payments are unavailable', () => {
+		const pageSource = readFileSync(
+			new URL('../../routes/(portal)/portal/payments/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(pageSource, /data-testid="portal-payment-unavailable"/);
+		assert.match(pageSource, /disabled=\{onlinePaymentsUnavailable \|\| \(payMutation\.isPending && payingId === payment\.id\)\}/);
+		assert.match(pageSource, /onlinePaymentsUnavailable \? 'Pay unavailable' :/);
+	});
 });
