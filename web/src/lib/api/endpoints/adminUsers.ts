@@ -6,6 +6,7 @@ export interface CreateTeamMemberBody {
 	email: string;
 	displayName?: string;
 	role: UserRole;
+	tenantId?: number;
 	temporaryPassword?: string;
 }
 

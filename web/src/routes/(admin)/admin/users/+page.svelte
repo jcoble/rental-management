@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { adminUsers } from '$lib/api/endpoints/adminUsers';
-	import type { TeamMember, UserRole, CreateTeamMemberResponse } from '$lib/types';
+	import { tenants } from '$lib/api/endpoints/tenants';
+	import type { TeamMember, UserRole, CreateTeamMemberResponse, Tenant } from '$lib/types';
 	import { getAuthState, getCurrentUser } from '$lib/stores/auth.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -10,12 +11,19 @@
 	import { Input } from '$lib/components/ui/input';
 	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import { Loader2, Plus, Copy, Check, TriangleAlert } from '@lucide/svelte';
+	import {
+		buildCreateTeamMemberBody,
+		createEmptyInviteMemberForm,
+		inviteMemberSubmitDisabled,
+		type InviteMemberForm,
+	} from './invite-member-form';
 
 	const ROLES: UserRole[] = ['Admin', 'Manager', 'Agent', 'Owner', 'Tenant'];
 	const PAGE_SIZE = 20;
 
 	const queryClient = useQueryClient();
 	const currentUser = $derived(getCurrentUser());
+	const portfolioId = $derived(currentUser?.portfolioId ?? null);
 	const authState = getAuthState();
 	let skip = $state(0);
 
@@ -59,18 +67,26 @@
 
 	// ---- Invite / add member dialog ----
 
-	const emptyForm = { email: '', displayName: '', role: 'Manager' as UserRole, temporaryPassword: '' };
+	const emptyForm = createEmptyInviteMemberForm();
 	let showInviteDialog = $state(false);
-	let inviteForm = $state({ ...emptyForm });
+	let inviteForm = $state<InviteMemberForm>({ ...emptyForm });
+
+	const tenantOptionsQuery = createQuery(() => ({
+		queryKey: ['admin-users', 'tenant-options', portfolioId],
+		enabled: authState.isAuthenticated && inviteForm.role === 'Tenant' && portfolioId != null,
+		queryFn: () => tenants.listPage(portfolioId as number, { take: 100, sort: 'name' }),
+	}));
+
+	const tenantOptions = $derived((tenantOptionsQuery.data?.items ?? []) as Tenant[]);
+
+	$effect(() => {
+		if (inviteForm.role !== 'Tenant' && inviteForm.tenantId) {
+			inviteForm.tenantId = '';
+		}
+	});
 
 	const createMemberMutation = createMutation(() => ({
-		mutationFn: () =>
-			adminUsers.create({
-				email: inviteForm.email,
-				displayName: inviteForm.displayName || undefined,
-				role: inviteForm.role,
-				temporaryPassword: inviteForm.temporaryPassword || undefined
-			}),
+		mutationFn: () => adminUsers.create(buildCreateTeamMemberBody(inviteForm)),
 		onSuccess: (result: CreateTeamMemberResponse) => {
 			showSuccess(`${result.member.email} added to the team.`);
 			inviteForm = { ...emptyForm };
@@ -90,7 +106,7 @@
 	}));
 
 	function submitInvite() {
-		if (!inviteForm.email) return;
+		if (inviteMemberSubmitDisabled(inviteForm, createMemberMutation.isPending)) return;
 		createMemberMutation.mutate();
 	}
 
@@ -133,6 +149,18 @@
 	function formatDate(date: string): string {
 		const parsed = new Date(date);
 		return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleDateString(undefined, { timeZone: 'UTC' });
+	}
+
+	function tenantLabel(tenant: Tenant): string {
+		return tenant.fullName || `${tenant.firstName} ${tenant.lastName}`.trim() || tenant.email || `Tenant ${tenant.id}`;
+	}
+
+	function selectedTenantLabel(): string {
+		if (tenantOptionsQuery.isPending) return 'Loading tenants...';
+		const selected = tenantOptions.find((tenant) => String(tenant.id) === inviteForm.tenantId);
+		if (selected) return tenantLabel(selected);
+		if (tenantOptions.length === 0) return 'No tenants available';
+		return 'Select tenant';
 	}
 </script>
 
@@ -318,6 +346,42 @@
 					</Select.Content>
 				</Select.Root>
 			</div>
+			{#if inviteForm.role === 'Tenant'}
+				<div data-testid="invite-tenant-field">
+					<span class="mb-1 block text-xs text-muted-foreground">
+						Tenant <span class="text-destructive">*</span>
+					</span>
+					<Select.Root
+						type="single"
+						bind:value={inviteForm.tenantId}
+						disabled={tenantOptionsQuery.isPending || tenantOptions.length === 0}
+					>
+						<Select.Trigger class="w-full" data-testid="invite-tenant-select">
+							{selectedTenantLabel()}
+						</Select.Trigger>
+						<Select.Content>
+							{#each tenantOptions as tenant (tenant.id)}
+								<Select.Item value={String(tenant.id)} label={tenantLabel(tenant)}>
+									{tenantLabel(tenant)}
+								</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+					{#if tenantOptionsQuery.isPending}
+						<p class="mt-1 text-xs text-muted-foreground" data-testid="invite-tenant-loading">
+							Loading tenants...
+						</p>
+					{:else if tenantOptions.length === 0}
+						<p class="mt-1 text-xs text-destructive" data-testid="invite-tenant-empty">
+							Add a tenant before creating a tenant portal login.
+						</p>
+					{:else if !inviteForm.tenantId}
+						<p class="mt-1 text-xs text-muted-foreground" data-testid="invite-tenant-required">
+							Choose which tenant this portal login belongs to.
+						</p>
+					{/if}
+				</div>
+			{/if}
 			<div>
 				<span class="mb-1 block text-xs text-muted-foreground">
 					Temporary password <span class="text-muted-foreground">(leave blank to auto-generate)</span>
@@ -345,7 +409,7 @@
 			</Button>
 			<Button
 				data-testid="invite-submit"
-				disabled={!inviteForm.email || createMemberMutation.isPending}
+				disabled={inviteMemberSubmitDisabled(inviteForm, createMemberMutation.isPending)}
 				onclick={submitInvite}
 			>
 				{createMemberMutation.isPending ? 'Adding…' : 'Add member'}
