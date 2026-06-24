@@ -57,6 +57,7 @@ Fixed and verified:
 - `TSK-415`: clicking notifications from the full tenant portal notifications page now marks them read and refreshes the app-shell unread count before navigating to the target workflow.
 - `TSK-416`: tenant portal payments now learn online-payment availability from `/portal/autopay` and show a disabled upfront autopay-unavailable state when Stripe is off, instead of inviting a setup click that only then fails with 503.
 - `TSK-417` and `TSK-418`: tenant portal Pay now rows now respect online-payment availability before checkout, and the Unit Rent tab shows a just-posted payment immediately while shared payment/unit caches refresh.
+- `TSK-419`: tenant portal lease Q&A answers now strip raw Markdown emphasis markers before rendering safe visible text.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3238,3 +3239,39 @@ Verification:
 - Browser proof for `TSK-417`: Playwright CLI logged in as Blake Hayes Portal and opened `https://localhost:6042/portal/payments`. The page rendered the unavailable banner, disabled Autopay setup, both scheduled rent rows showed disabled `Pay unavailable` buttons, and each row rendered the unavailable-provider explanation. Console check returned 0 errors. Snapshot: `.playwright-cli/page-2026-06-24T04-47-10-759Z.yml`; screenshot: `.playwright-cli/page-2026-06-24T04-47-12-510Z.png`.
 
 Status: Pass after fixing row-level tenant Pay now availability and same-page Unit Rent payment creation refresh. Continue the real-user pass with the remaining tenant portal lease follow-up actions, maintenance/message variants, and then the broader non-banking/non-QuickBooks workflows.
+
+## Pass 63 Tenant Portal Lease Q&A Display
+
+Date: 2026-06-24
+Branch: `tsk-397-419-portal-lease-qa-pass-63`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+- Lease under test: `QA-2026-002-2B`, Riverside Flats Unit 2B
+
+Acceptance criteria:
+- The tenant Lease page should render the tenant's real lease number, property, unit, rent, and end date.
+- Suggestion chips and typed questions should submit the selected question and render a useful answer.
+- LLM-enhanced or fallback answers must render as safe visible text and must not leak raw Markdown emphasis markers.
+- The lease Q&A should continue to show source facts when returned.
+
+Bug `TSK-419`:
+- Repro: As Blake Hayes Portal, open `/portal/lease`, click the built-in `When is rent due?` suggestion, and read the answer.
+- Observed before fix: the Q&A succeeded but visible text rendered `Rent is due on the **1st of each month**.`
+- Root cause: the page rendered answer text directly in a plain paragraph. When the local provider returned Markdown-style emphasis, Svelte safely escaped it as text, which avoided unsafe HTML but leaked the formatting markers to the tenant.
+- Fix: added `formatLeaseAnswerText` for tenant portal lease answers. It strips common emphasis/code markers while continuing to render the result as safe text, not unsanitized HTML.
+- Regression: `web/src/lib/portal/lease-answer-display.test.ts`.
+
+Verification:
+- RED: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/lease-answer-display.test.ts` failed because `lease-answer-display.ts` did not exist and the route did not use a formatter.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/lease-answer-display.test.ts` passed 2/2.
+- Browser proof before fix: Playwright CLI logged in as Blake Hayes Portal, opened `https://localhost:6042/portal/lease`, clicked `When is rent due?`, and saw `Rent is due on the **1st of each month**.` with 0 console errors. Snapshot: `.playwright-cli/page-2026-06-24T05-03-22-147Z.yml`.
+- Browser proof after fix: after reloading the page and clicking the same suggestion, the answer rendered `Rent is due on the 1st of each month.` with 0 console errors. Snapshot: `.playwright-cli/page-2026-06-24T05-04-54-812Z.yml`; screenshot: `.playwright-cli/page-2026-06-24T05-04-56-358Z.png`.
+
+Status: Pass after stripping raw Markdown emphasis from tenant lease Q&A answers. Continue the real-user tenant portal pass with remaining maintenance/message variants, then resume the broader non-banking/non-QuickBooks workflows.
