@@ -87,6 +87,7 @@ public class AutopayStatusResponse
     public int LeaseId { get; set; }
     public bool Active { get; set; }
     public DateTime? EnrolledAt { get; set; }
+    public bool OnlinePaymentsAvailable { get; set; }
 }
 
 public class CreateTenantWorkOrderRequest
