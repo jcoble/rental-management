@@ -54,6 +54,7 @@ Fixed and verified:
 - `TSK-412`: tenant portal maintenance detail now shows the photos/documents attached to a tenant-created work order, and the tenant can open the camera-image attachment from the detail dialog.
 - `TSK-413`: tenant portal lease cards now show the real property and unit labels from a single DB-side lease projection instead of falling back to `Linked property`.
 - `TSK-414`: tenant portal appointments now load the signed-in tenant's upcoming scheduled/confirmed appointments from a tenant-scoped, limited DB-side projection instead of showing placeholder-only copy.
+- `TSK-415`: clicking notifications from the full tenant portal notifications page now marks them read and refreshes the app-shell unread count before navigating to the target workflow.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3113,3 +3114,41 @@ Verification:
 - DB proof: `Appointments.Id = 1`, title `Pass 51 service visit date fixed`, `TenantId = 10`, `PropertyId = 7`, `ScheduledStart = 2026-06-27 13:30:00+00`, `ScheduledEnd = 2026-06-27 14:15:00+00`, `Status = 0`.
 
 Status: Pass after replacing the tenant portal appointments placeholder with tenant-scoped upcoming appointments. Continue the real-user portal pass with notifications and payments/autopay unavailable states, then resume remaining non-banking/non-QuickBooks workflows.
+
+## Pass 60 Tenant Portal Notification Read-State Continuation
+
+Date: 2026-06-24
+Branch: `tsk-397-full-ui-pass-60`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+
+Acceptance criteria:
+- A tenant can open `/portal/notifications` and use a notification as the next action into the intended workflow.
+- Opening an unread notification from the full notifications page marks that notification read.
+- The app-shell unread count reconciles immediately, including notifications that are visible on the 50-row page but outside the header dropdown's 20-row recent list.
+- The target workflow still opens through the tenant-scoped portal URL normalizer.
+
+Bug `TSK-415`:
+- Repro: As Blake Hayes Portal, open `/portal/notifications` with two unread message notifications, then click the first notification.
+- Observed before fix: the app navigated to `/portal/messages?conversation=1`, but the header still rendered `2 unread notifications`.
+- Root cause: the dropdown notification item used `notificationStore.markAsRead(id)` before `goto()`, but the full portal notifications page rendered plain anchor links and bypassed the read action entirely.
+- Fix: the full portal notifications page now opens rows through a button handler, marks unread notifications read, refreshes the notification store, and then navigates with `goto(portalActionUrl(...), { invalidateAll: true })`.
+- Regression: `web/src/lib/portal/notifications-page.test.ts`.
+
+Verification:
+- RED: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/notifications-page.test.ts` failed because the route had no `notificationStore.markAsRead(item.id)` call and still rendered `<a href={portalActionUrl(item.actionUrl)}>`.
+- RED: after the first fix, the same test failed on the new older-notification edge because the route did not refresh the notification store.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/notifications-page.test.ts src/lib/portal/appointments-page.test.ts src/lib/portal/maintenance-detail-documents.test.ts` passed 3/3.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- Browser proof: Playwright CLI logged in as Blake Hayes Portal, opened `https://localhost:6042/portal/notifications`, and the patched page rendered notification rows as buttons with `2 unread notifications`. Snapshot: `.playwright-cli/page-2026-06-24T03-50-32-393Z.yml`.
+- Browser proof: clicking the first notification navigated to `/portal/messages?conversation=1` and the header count dropped to `1 unread notification`. Snapshot: `.playwright-cli/page-2026-06-24T03-50-50-694Z.yml`.
+- Browser proof: returning to `/portal/notifications` and clicking the second notification navigated back to `/portal/messages?conversation=1` and the header rendered `0 unread notifications`. Snapshot: `.playwright-cli/page-2026-06-24T03-51-30-727Z.yml`.
+
+Status: Pass after fixing full-page tenant portal notification read-state. Continue the real-user portal pass with payments/autopay unavailable states, lease follow-up actions, and remaining non-banking/non-QuickBooks workflows.
