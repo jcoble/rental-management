@@ -52,6 +52,7 @@ Fixed and verified:
 - `TSK-410`: Admin Team invite now collects the required tenant link for Tenant-role users, creates a real tenant portal login, and leaves staff invites free of stale tenant ids.
 - `TSK-411`: portal and staff message unread state now clears again when a live reply arrives in an already-open thread, keeping list badges and the staff message header in sync with the server read counters.
 - `TSK-412`: tenant portal maintenance detail now shows the photos/documents attached to a tenant-created work order, and the tenant can open the camera-image attachment from the detail dialog.
+- `TSK-413`: tenant portal lease cards now show the real property and unit labels from a single DB-side lease projection instead of falling back to `Linked property`.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3034,3 +3035,39 @@ Verification:
 - GREEN: `rtk pnpm --dir web test:unit` passed 212/212 frontend unit tests.
 
 Status: Pass after exposing tenant-owned work-order photos/documents in portal maintenance detail. Continue the real-user portal pass with payments/autopay unavailable states, lease view, notifications, appointments, and remaining non-banking/non-QuickBooks workflows.
+
+## Pass 58 Tenant Portal Lease Label Continuation
+
+Date: 2026-06-24
+Branch: `tsk-397-413-portal-lease-labels-pass-58`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Staff user: Jordan Vale, `tsk397.pass51.202606231856@example.local`, portfolio id `4`
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+
+Acceptance criteria:
+- A tenant can open `/portal/lease` and identify which property/unit the displayed lease belongs to.
+- Lease card labels must be returned from the server for the authenticated tenant's lease, not inferred from stale client state.
+- The portal lease query must remain DB-side and scoped to the tenant/portfolio in a single SQL projection.
+- The lease Q&A card still answers common questions after the lease-card data shape changes.
+
+Bug `TSK-413`:
+- Repro: As Blake Hayes Portal, open `/portal/lease`.
+- Observed before fix: the lease card showed `QA-2026-002-2B`, `Linked property`, and `Rent $1,200.00 · Ends Feb 1, 2027`, even though the lease belongs to Riverside Flats / Unit 2B.
+- Root cause: `PortalService.GetLeasesAsync` materialized bare `Lease` entities without loading or projecting related property/unit/tenant labels, then mapped through `LeaseResponse.FromEntity`.
+- Fix: `GetLeasesAsync` now projects `LeaseResponse` directly from the EF query, including tenant, unit, and property labels.
+- Regression: `RentalCommand.Api.Tests/Domain/PortalServiceLeaseTests.cs`.
+
+Verification:
+- RED: the focused test failed before implementation because `LeaseResponse.PropertyName` was `null`.
+- GREEN: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~PortalServiceLeaseTests.GetLeasesAsync_ReturnsTenantLeaseLabelsFromSingleSqlProjection" --logger "console;verbosity=normal"` passed 1/1 after the fix.
+- Browser proof: Playwright CLI logged in as Blake Hayes Portal, opened `https://localhost:6042/portal/lease`, and the lease card rendered `QA-2026-002-2B`, `Riverside Flats Unit 2B`, and `Rent $1,200.00 · Ends Feb 1, 2027`. Snapshot: `.playwright-cli/page-2026-06-24T02-49-08-131Z.yml`.
+- Q&A proof: clicking `When is rent due?` returned `Rent is due on the **1st of each month**.` and the network log showed `POST /api/v1/portal/lease/ask?leaseId=8 => 200`. Snapshot: `.playwright-cli/page-2026-06-24T02-49-25-271Z.yml`.
+
+Status: Pass after showing tenant portal lease property/unit labels from the server-side projection. Continue the real-user portal pass with notifications and appointments; `/portal/appointments` currently needs scrutiny because the tenant has a linked appointment but the route appears placeholder-only.

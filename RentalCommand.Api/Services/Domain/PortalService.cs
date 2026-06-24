@@ -20,13 +20,35 @@ public class PortalService : IPortalService
 
     public async Task<IReadOnlyList<LeaseResponse>> GetLeasesAsync(int portfolioId, int tenantId, CancellationToken ct = default)
     {
-        var leases = await _db.Leases
+        return await _db.Leases
             .AsNoTracking()
             .Where(l => l.PortfolioId == portfolioId && l.TenantId == tenantId)
             .OrderByDescending(l => l.StartDate)
+            .Select(l => new LeaseResponse
+            {
+                Id = l.Id,
+                PortfolioId = l.PortfolioId,
+                PropertyId = l.PropertyId,
+                UnitId = l.UnitId,
+                TenantId = l.TenantId,
+                LeaseNumber = l.LeaseNumber,
+                Status = l.Status,
+                StartDate = l.StartDate,
+                EndDate = l.EndDate,
+                MoveInDate = l.MoveInDate,
+                MoveOutDate = l.MoveOutDate,
+                MonthlyRent = l.MonthlyRent,
+                SecurityDeposit = l.SecurityDeposit,
+                LateFeeAmount = l.LateFeeAmount,
+                RentDueDay = l.RentDueDay,
+                Notes = l.Notes,
+                CreatedAt = l.CreatedAt,
+                UpdatedAt = l.UpdatedAt,
+                TenantName = l.Tenant == null ? null : (l.Tenant.FirstName + " " + l.Tenant.LastName).Trim(),
+                UnitNumber = l.Unit == null ? null : l.Unit.UnitNumber,
+                PropertyName = l.Property == null ? null : l.Property.Name,
+            })
             .ToListAsync(ct);
-
-        return leases.Select(l => LeaseResponse.FromEntity(l)).ToList();
     }
 
     public async Task<PortalBalanceResponse> GetBalanceAsync(int portfolioId, int tenantId, CancellationToken ct = default)
