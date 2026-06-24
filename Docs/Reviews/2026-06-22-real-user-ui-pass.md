@@ -51,6 +51,7 @@ Fixed and verified:
 - `TSK-409`: appointment no-show detail now uses human status labels, treats no-show as a terminal status for active transition actions, and appointment mutations refresh the app-shell upcoming badge.
 - `TSK-410`: Admin Team invite now collects the required tenant link for Tenant-role users, creates a real tenant portal login, and leaves staff invites free of stale tenant ids.
 - `TSK-411`: portal and staff message unread state now clears again when a live reply arrives in an already-open thread, keeping list badges and the staff message header in sync with the server read counters.
+- `TSK-412`: tenant portal maintenance detail now shows the photos/documents attached to a tenant-created work order, and the tenant can open the camera-image attachment from the detail dialog.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2993,3 +2994,43 @@ Verification:
 - DB proof: the conversation row for `TSK-397 Pass 56 portal question` ended with `LandlordUnreadCount = 0`, `TenantUnreadCount = 0`, `LastMessagePreview = Second portal reply for TSK-411: this should not leave Blake's open thread marked unread.`, and 3 messages.
 
 Status: Pass after fixing live open-thread unread coherence for portal and staff messages. Continue the real-user portal pass with tenant maintenance and camera-image attachment, payments/autopay unavailable states, lease view, notifications, and appointments.
+
+## Pass 57 Tenant Maintenance Photo Detail Continuation
+
+Date: 2026-06-24
+Branch: `tsk-397-412-portal-maintenance-photos-pass-57`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Staff user: Jordan Vale, `tsk397.pass51.202606231856@example.local`, portfolio id `4`
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+
+Acceptance criteria:
+- A tenant can create a maintenance request from `/portal/maintenance` with a camera-style image.
+- Staff can see and download the same image on the staff maintenance detail page.
+- The tenant can reopen the maintenance request detail and see the attached photo/document without switching to the staff app.
+- Opening the document from the tenant detail downloads the same image through the authenticated document flow.
+
+Bug `TSK-412`:
+- Repro: As Blake Hayes Portal, open `/portal/maintenance`, attach `output/qa/production-scale-scans/02-expenses-camera/expense-001.jpg`, submit `TSK-397 Pass 57 bathroom ceiling leak`, then open the created tenant request detail.
+- Observed before fix: staff `/maintenance/5` showed and downloaded the attached `expense-001.jpg`, but tenant portal detail showed only the description and progress timeline. The tenant could not inspect the photo they had just attached.
+- Root cause: the portal maintenance detail omitted the shared work-order document panel even though the tenant-owned WorkOrder document authorization path already supports listing and downloading those files.
+- Fix: portal maintenance detail now renders `DocumentsPanel` with `entityType="WorkOrder"` and `entityId={detail.id}` under a `Photos & documents` heading.
+- Regression: `web/src/lib/portal/maintenance-detail-documents.test.ts`.
+
+Verification:
+- Tenant create proof: Playwright CLI submitted `TSK-397 Pass 57 bathroom ceiling leak` with priority `High`, description `Water stain appeared above the shower after the last rain. Photo attached from the bathroom ceiling.`, and camera-style JPEG `output/qa/production-scale-scans/02-expenses-camera/expense-001.jpg`.
+- Staff proof before portal fix: `/maintenance/5` showed the work order at `Riverside Flats`, `Unit 2B`, priority `High`, status `New`, and `Photos & documents` with `expense-001.jpg`; clicking the file downloaded a valid 1800x2400 JPEG.
+- Tenant proof after fix: `/portal/maintenance` opened the `TSK-397 Pass 57 bathroom ceiling leak` detail and rendered `Photos & documents`, `expense-001.jpg`, `140.4 KB`, `Upload`, and a document-specific delete button. Snapshot: `.playwright-cli/page-2026-06-24T02-16-14-171Z.yml`.
+- Tenant download proof after fix: clicking `expense-001.jpg` from the tenant detail downloaded `.playwright-cli/expense-001.jpg`; `file` reported `JPEG image data ... 1800x2400`, size `143793`.
+- DB proof: `WorkOrders.Id = 5` for `TSK-397 Pass 57 bathroom ceiling leak` has `Priority = 2`, `Status = 0`, and `StoredFiles.Id = 42`, `FileName = expense-001.jpg`, `ContentType = image/jpeg`, `FileSize = 143793`, `DeletedAt = null`.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/maintenance-detail-documents.test.ts` passed 1/1.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- GREEN: `rtk pnpm --dir web test:unit` passed 212/212 frontend unit tests.
+
+Status: Pass after exposing tenant-owned work-order photos/documents in portal maintenance detail. Continue the real-user portal pass with payments/autopay unavailable states, lease view, notifications, appointments, and remaining non-banking/non-QuickBooks workflows.
