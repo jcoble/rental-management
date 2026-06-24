@@ -50,6 +50,7 @@ Fixed and verified:
 - `TSK-408`: appointment detail edit mode now seeds native datetime-local fields from local wall-clock time and converts them back to UTC on save, so an unchanged detail save does not shift the appointment.
 - `TSK-409`: appointment no-show detail now uses human status labels, treats no-show as a terminal status for active transition actions, and appointment mutations refresh the app-shell upcoming badge.
 - `TSK-410`: Admin Team invite now collects the required tenant link for Tenant-role users, creates a real tenant portal login, and leaves staff invites free of stale tenant ids.
+- `TSK-411`: portal and staff message unread state now clears again when a live reply arrives in an already-open thread, keeping list badges and the staff message header in sync with the server read counters.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2953,3 +2954,42 @@ Verification:
 - Portal dashboard proof: the tenant saw only Blake Hayes data, including lease `QA-2026-002-2B`, rent `$1,200.00`, end date `Feb 1, 2027`, no outstanding payments, and no open requests.
 
 Status: Pass for tenant portal user creation. Continue the real-user portal pass from `/portal/messages`, then tenant maintenance with camera-image attachment, payments/autopay unavailable states, lease view, notifications, and appointments.
+
+## Pass 56 Portal Message Live Unread Continuation
+
+Date: 2026-06-24
+Branch: `tsk-397-411-portal-unread-pass-56`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Staff user: Jordan Vale, `tsk397.pass51.202606231856@example.local`, portfolio id `4`
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+
+Acceptance criteria:
+- A tenant can start a portal message thread and a staff user can reply through portal-only delivery.
+- If the tenant has the thread open when staff replies, the new message appears live without reload.
+- The open-thread read action must clear tenant-side conversation-list unread badges for the new message version, not only the first time the thread id is opened.
+- Staff-side conversation unread badges and the app-shell Messages unread header must refresh when conversation events or read effects change server unread counts.
+
+Bug `TSK-411`:
+- Repro: As Blake Hayes Portal, open `/portal/messages`, start `TSK-397 Pass 56 portal question`, then leave the thread open. As Jordan Vale, open `/messages`, reply portal-only. Return to the still-open tenant session without reloading.
+- Observed before fix: the tenant detail pane received the staff reply live, and the database had `TenantUnreadCount = 0`, but the portal conversation-list row still showed unread badge `1` until a reload. Staff header unread state could also remain stale because conversation events did not invalidate `['header-unread-messages']`.
+- Root cause: both staff and portal message pages tracked only the selected conversation id for "marked read" cleanup. A live reply in the same selected thread refetched the detail and marked the thread read server-side, but the effect did not rerun because the id had not changed.
+- Fix: added shared conversation read-state helpers that key read cleanup by `conversation id + message count + last message time`, reused them in staff and portal message pages, patched the portal conversation-list cache immediately after a detail read, and invalidated the staff header unread query on conversation events and read effects.
+- Regression: `web/src/lib/messages/conversation-read-state.test.ts` and `web/src/lib/realtime/invalidate.test.ts`.
+
+Verification:
+- RED: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/messages/conversation-read-state.test.ts` failed before implementation with `ERR_MODULE_NOT_FOUND` for the new helper.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/messages/conversation-read-state.test.ts src/lib/realtime/invalidate.test.ts` passed 5/5 focused tests.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- GREEN: `rtk pnpm --dir web test:unit` passed 211/211 frontend unit tests.
+- Browser proof: Blake's portal session opened the thread, Jordan's staff session sent `Second portal reply for TSK-411: this should not leave Blake's open thread marked unread.` through portal-only delivery, and Blake's still-open portal thread rendered the new Management bubble without reload.
+- DOM proof: Playwright CLI evaluated `document.querySelectorAll('[data-testid=portal-conversation-unread-badge]').length` in the tenant session and `document.querySelectorAll('[data-testid=conversation-unread-badge]').length` in the staff session; both returned `0`.
+- DB proof: the conversation row for `TSK-397 Pass 56 portal question` ended with `LandlordUnreadCount = 0`, `TenantUnreadCount = 0`, `LastMessagePreview = Second portal reply for TSK-411: this should not leave Blake's open thread marked unread.`, and 3 messages.
+
+Status: Pass after fixing live open-thread unread coherence for portal and staff messages. Continue the real-user portal pass with tenant maintenance and camera-image attachment, payments/autopay unavailable states, lease view, notifications, and appointments.
