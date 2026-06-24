@@ -69,7 +69,7 @@
 		Declined: { class: TONE.error },
 		Rejected: { class: TONE.error },
 		Failed: { class: TONE.error },
-		NoShow: { label: 'No Show', class: TONE.error },
+		NoShow: { label: 'No show', class: TONE.error },
 		// Neutral
 		Draft: { class: TONE.neutral },
 		Archived: { class: TONE.neutral },
