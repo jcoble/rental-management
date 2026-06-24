@@ -49,6 +49,7 @@ Fixed and verified:
 - `TSK-407`: appointment edit modals now preserve a typed replacement date when the user edits the time afterward, so rescheduling does not mix the old date with the new time.
 - `TSK-408`: appointment detail edit mode now seeds native datetime-local fields from local wall-clock time and converts them back to UTC on save, so an unchanged detail save does not shift the appointment.
 - `TSK-409`: appointment no-show detail now uses human status labels, treats no-show as a terminal status for active transition actions, and appointment mutations refresh the app-shell upcoming badge.
+- `TSK-410`: Admin Team invite now collects the required tenant link for Tenant-role users, creates a real tenant portal login, and leaves staff invites free of stale tenant ids.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2912,3 +2913,43 @@ Verification:
 - Badge invalidation proof after fix: creating `/appointments/5` as `TSK-397 Pass 54 badge refresh retest` immediately moved the app-shell badge from `1 upcoming` to `2 upcoming`; clicking `No-show` on `/appointments/5` immediately moved it back to `1 upcoming` without reload, and DB row `5` stored status `4`.
 
 Status: Pass after fixing no-show detail presentation, terminal status action eligibility, and upcoming appointment badge invalidation. Continue next with messages, notices, portal workflows, and the remaining non-banking/non-QuickBooks inventory.
+
+## Pass 55 Tenant Portal User Invite Continuation
+
+Date: 2026-06-24
+Branch: `tsk-397-410-portal-user-invite-pass-55`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Staff user: Jordan Vale, `tsk397.pass51.202606231856@example.local`, portfolio id `4`
+- Tenant record from scan-created rental spine: Blake Hayes, tenant id `10`, active lease `QA-2026-002-2B`
+- Tenant portal user created during this pass: `blake.hayes.portal.pass55@example.local`
+
+Acceptance criteria:
+- A real landlord can create a Tenant-role login from `/admin/users` without calling a seed script or editing the database.
+- Choosing role `Tenant` requires selecting an in-portfolio tenant before submit.
+- The create request includes `tenantId` only for Tenant-role users, and clears stale tenant linkage when switching back to staff roles.
+- The created tenant identity receives the JWT tenant claim and can sign into `/portal` with portal-only navigation and tenant-scoped dashboard data.
+
+Bug `TSK-410`:
+- Repro: Open `/admin/users`, click `Invite member`, choose role `Tenant`, fill email/display name/password, and submit.
+- Observed before fix: the UI exposed `Tenant` in the role menu but never collected `tenantId`; the backend correctly rejected Tenant-role creation unless `TenantId` was supplied.
+- Root cause: `AdminUsersController.Create` and `CreateTeamMemberRequest` already had the tenant-link contract, but the Team dialog still treated every role as staff-like and posted only email, display name, role, and optional password.
+- Fix: extracted tested invite-form helpers, added a Tenant selector backed by the existing paged tenant endpoint, disabled submit until a tenant is selected for Tenant-role invites, and sends `tenantId` only when the role is `Tenant`.
+- Regression: `web/src/routes/(admin)/admin/users/invite-member-form.test.ts`.
+
+Verification:
+- RED: `rtk pnpm --dir web test:unit -- 'src/routes/(admin)/admin/users/invite-member-form.test.ts'` failed before implementation with `ERR_MODULE_NOT_FOUND` for the new form helper.
+- GREEN: the same focused frontend command passed after implementation, with the full current web unit suite passing 208/208 through the project test script.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- Browser proof on `/admin/users`: Playwright CLI opened the Invite member dialog, selected role `Tenant`, saw the required tenant selector, confirmed `Add member` stayed disabled before tenant selection, selected `Blake Hayes`, filled `blake.hayes.portal.pass55@example.local`, submitted, and saw the new Team row `Blake Hayes Portal ... Tenant Active 6/24/2026`.
+- DB proof: `AspNetUsers.Id = 5` for `blake.hayes.portal.pass55@example.local` has `PortfolioId = 4`, `TenantId = 10`, display name `Blake Hayes Portal`; matching `UserAccounts` row is active with role `Tenant`.
+- Tenant portal proof: Playwright CLI signed in as `blake.hayes.portal.pass55@example.local`, reached `/portal`, and rendered portal-only navigation for Dashboard, Messages, Notifications, Maintenance, Payments, Lease, and Appointments with the user chip `BH Blake Hayes Portal`.
+- Portal dashboard proof: the tenant saw only Blake Hayes data, including lease `QA-2026-002-2B`, rent `$1,200.00`, end date `Feb 1, 2027`, no outstanding payments, and no open requests.
+
+Status: Pass for tenant portal user creation. Continue the real-user portal pass from `/portal/messages`, then tenant maintenance with camera-image attachment, payments/autopay unavailable states, lease view, notifications, and appointments.
