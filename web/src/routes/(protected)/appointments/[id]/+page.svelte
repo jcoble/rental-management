@@ -18,11 +18,12 @@
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import { buildAppointmentDetailSavePayload, createAppointmentDetailEditForm } from '../appointment-detail-form';
 	import { labelForType } from '../calendar-utils';
+	import { appointmentDetailStatusActions, appointmentDetailStatusLabel, appointmentStatusOptions } from '../appointment-detail-state';
+	import { invalidateAppointmentQueries } from '../appointment-query-keys';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const APPT_TYPES = ['Showing', 'MoveIn', 'MoveOut', 'Inspection', 'MaintenanceVisit', 'OwnerMeeting'];
-	const APPT_STATUSES = ['Scheduled', 'Confirmed', 'Completed', 'Cancelled', 'NoShow'];
 
 	const id = $derived(Number(page.params.id));
 
@@ -43,7 +44,8 @@
 	const appt = $derived(appointmentQuery.data);
 
 	const typeOptions = $derived(APPT_TYPES.map((value) => ({ value, label: labelForType(value) })));
-	const statusOptions = $derived(APPT_STATUSES.map((value) => ({ value, label: value })));
+	const statusOptions = appointmentStatusOptions();
+	const statusActions = $derived(appt ? appointmentDetailStatusActions(appt.status) : null);
 	const propertyOptions = $derived([
 		{ value: '', label: 'No property' },
 		...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
@@ -57,8 +59,7 @@
 	]);
 
 	function invalidate() {
-		queryClient.invalidateQueries({ queryKey: ['appointment', id] });
-		queryClient.invalidateQueries({ queryKey: ['appointments', portfolioId] });
+		invalidateAppointmentQueries(queryClient, portfolioId, id);
 	}
 
 	// ── Inline edit ─────────────────────────────────────────────────────────────
@@ -188,7 +189,7 @@
 					</Button>
 				{:else}
 					<!-- Status actions -->
-					{#if appt.status === 'Scheduled'}
+					{#if statusActions?.canConfirm}
 						<Button
 							variant="outline"
 							size="sm"
@@ -200,7 +201,7 @@
 							Confirm
 						</Button>
 					{/if}
-					{#if appt.status !== 'Completed' && appt.status !== 'Cancelled' && appt.status !== 'NoShow'}
+					{#if statusActions?.canComplete}
 						<Button
 							variant="outline"
 							size="sm"
@@ -212,7 +213,7 @@
 							Mark complete
 						</Button>
 					{/if}
-					{#if appt.status !== 'Cancelled' && appt.status !== 'Completed'}
+					{#if statusActions?.canCancel}
 						<Button
 							variant="outline"
 							size="sm"
@@ -223,7 +224,7 @@
 							Cancel
 						</Button>
 					{/if}
-					{#if appt.status === 'Scheduled' || appt.status === 'Confirmed'}
+					{#if statusActions?.canNoShow}
 						<Button
 							variant="outline"
 							size="sm"
@@ -252,7 +253,7 @@
 			<DetailCard title="What & when" icon={CalendarClock} accent="primary" testid="appointment-detail-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Title" bind:value={form.title} display={appt.title} {editing} error={formErrors.title} testid="appointment-detail-title-field" class="sm:col-span-2" />
 				<InlineField label="Type" bind:value={form.type} display={labelForType(appt.type)} {editing} type="select" options={typeOptions} testid="appointment-detail-type-field" />
-				<InlineField label="Status" bind:value={form.status} display={appt.status} {editing} type="select" options={statusOptions} testid="appointment-detail-status-field" />
+				<InlineField label="Status" bind:value={form.status} display={appointmentDetailStatusLabel(appt.status)} {editing} type="select" options={statusOptions} testid="appointment-detail-status-field" />
 				<InlineField label="Start" bind:value={form.scheduledStart} display={fmtDateTime(appt.scheduledStart)} {editing} type="datetime-local" error={formErrors.scheduledStart} testid="appointment-detail-start" />
 				<InlineField label="End" bind:value={form.scheduledEnd} display={appt.scheduledEnd ? fmtDateTime(appt.scheduledEnd) : ''} {editing} type="datetime-local" error={formErrors.scheduledEnd} testid="appointment-detail-end" />
 			</DetailCard>
