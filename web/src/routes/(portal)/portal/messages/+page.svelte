@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { tick } from 'svelte';
 	import {
@@ -8,6 +9,7 @@
 		type ConversationMessage
 	} from '$lib/api/endpoints/portal';
 	import { conversationReadKey, markConversationRead } from '$lib/messages/conversation-read-state';
+	import { conversationSelectionUrl, readConversationId } from '$lib/messages/conversation-url-state';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatRelative } from '$lib/utils/date';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -21,10 +23,8 @@
 	let selectedId = $state<number | null>(null);
 
 	$effect(() => {
-		const fromUrl = page.url.searchParams.get('conversation');
-		if (fromUrl && Number.isFinite(Number(fromUrl))) {
-			selectedId = Number(fromUrl);
-		}
+		const fromUrl = readConversationId(page.url.searchParams);
+		if (selectedId !== fromUrl) selectedId = fromUrl;
 	});
 
 	// --- Conversation list (left pane) -----------------------------------------
@@ -66,10 +66,20 @@
 
 	function openConversation(id: number) {
 		selectedId = id;
+		void goto(conversationSelectionUrl(page.url, id), {
+			replaceState: true,
+			noScroll: true,
+			keepFocus: true
+		});
 	}
 
 	function backToList() {
 		selectedId = null;
+		void goto(conversationSelectionUrl(page.url, null), {
+			replaceState: true,
+			noScroll: true,
+			keepFocus: true
+		});
 	}
 
 	// --- Reply compose (right pane, pinned bottom) -----------------------------

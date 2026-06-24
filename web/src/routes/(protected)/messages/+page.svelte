@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { tick, untrack } from 'svelte';
@@ -7,6 +8,7 @@
 	import { portfolios } from '$lib/api/endpoints/portfolios';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { conversationReadKey, markConversationRead } from '$lib/messages/conversation-read-state';
+	import { conversationSelectionUrl, readConversationId } from '$lib/messages/conversation-url-state';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 	import { formatRelative } from '$lib/utils/date';
 	import { ApiError, type FairHousingConcern } from '$lib/api/client';
@@ -25,10 +27,8 @@
 	// --- Selected thread --------------------------------------------------------
 	let selectedId = $state<number | null>(null);
 	$effect(() => {
-		const queryId = Number(page.url.searchParams.get('conversation'));
-		if (Number.isInteger(queryId) && queryId > 0 && selectedId !== queryId) {
-			selectedId = queryId;
-		}
+		const queryId = readConversationId(page.url.searchParams);
+		if (selectedId !== queryId) selectedId = queryId;
 	});
 
 	// --- Conversation list (left pane) -----------------------------------------
@@ -96,10 +96,20 @@
 
 	function openConversation(id: number) {
 		selectedId = id;
+		void goto(conversationSelectionUrl(page.url, id), {
+			replaceState: true,
+			noScroll: true,
+			keepFocus: true
+		});
 	}
 
 	function backToList() {
 		selectedId = null;
+		void goto(conversationSelectionUrl(page.url, null), {
+			replaceState: true,
+			noScroll: true,
+			keepFocus: true
+		});
 	}
 
 	// --- Portfolio + tenant search (for compose) -------------------------------
