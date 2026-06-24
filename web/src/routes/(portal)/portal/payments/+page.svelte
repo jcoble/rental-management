@@ -212,16 +212,21 @@
 						{#if isPayable(payment)}
 							<Button
 								size="sm"
-								disabled={payMutation.isPending && payingId === payment.id}
+								disabled={onlinePaymentsUnavailable || (payMutation.isPending && payingId === payment.id)}
 								onclick={() => payNow(payment.id)}
 								data-testid="portal-payment-pay-now"
 							>
-								{payMutation.isPending && payingId === payment.id ? 'Opening…' : 'Pay now'}
+								{onlinePaymentsUnavailable ? 'Pay unavailable' : payMutation.isPending && payingId === payment.id ? 'Opening…' : 'Pay now'}
 							</Button>
 						{/if}
 					</div>
 					<p class="mt-1 text-sm text-muted-foreground">Due {dueDate(payment.dueDate)} · {payment.status}</p>
 					<p class="mt-1.5 text-sm leading-snug text-muted-foreground" data-testid="portal-payment-explanation">{explain(payment)}</p>
+					{#if isPayable(payment) && onlinePaymentsUnavailable}
+						<p class="mt-1.5 text-sm leading-snug text-muted-foreground" data-testid="portal-payment-unavailable">
+							Online payments are not available for this charge yet. Please keep paying rent the way you do today.
+						</p>
+					{/if}
 				</div>
 			{:else}
 				<p class="text-sm text-muted-foreground">No payments found.</p>

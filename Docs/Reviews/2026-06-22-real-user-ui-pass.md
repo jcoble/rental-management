@@ -56,6 +56,7 @@ Fixed and verified:
 - `TSK-414`: tenant portal appointments now load the signed-in tenant's upcoming scheduled/confirmed appointments from a tenant-scoped, limited DB-side projection instead of showing placeholder-only copy.
 - `TSK-415`: clicking notifications from the full tenant portal notifications page now marks them read and refreshes the app-shell unread count before navigating to the target workflow.
 - `TSK-416`: tenant portal payments now learn online-payment availability from `/portal/autopay` and show a disabled upfront autopay-unavailable state when Stripe is off, instead of inviting a setup click that only then fails with 503.
+- `TSK-417` and `TSK-418`: tenant portal Pay now rows now respect online-payment availability before checkout, and the Unit Rent tab shows a just-posted payment immediately while shared payment/unit caches refresh.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3191,3 +3192,49 @@ Verification:
 - API proof: the patched local API log showed `GET /api/v1/portal/autopay => 200` and `GET /api/v1/portal/payments => 200` after login; no enroll POST was needed to render the unavailable state.
 
 Status: Pass after surfacing online-payment availability up front for tenant portal autopay. Continue the real-user portal pass with payment row/pay-now data coverage, lease follow-up actions, maintenance/message variants, and remaining non-banking/non-QuickBooks workflows.
+
+## Pass 62 Tenant Portal Pay-Now Availability and Unit Rent Refresh
+
+Date: 2026-06-24
+Branch: `tsk-397-417-418-portal-payments-pass-62`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Staff user: Jordan Vale, `tsk397.pass51.202606231856@example.local`
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+- Unit/lease under test: Riverside Flats Unit 2B, lease `QA-2026-002-2B`, lease id `8`
+
+Acceptance criteria:
+- A tenant with scheduled rent charges should not be invited into a dead checkout path when online payments are unavailable.
+- Payable tenant payment rows should render unavailable provider copy and an inert disabled action before any checkout POST.
+- Staff posting a payment from the Unit Rent tab should see the new row immediately, without reloading the unit page or relying on a later navigation.
+- The Unit Rent tab should still refresh shared payment, unit dashboard, and unit timeline caches after create/edit mutations.
+
+Bug `TSK-417`:
+- Repro: As Blake Hayes Portal, open `/portal/payments` with Stripe unset and a scheduled rent charge visible, then click `Pay now`.
+- Observed before fix: the page-level Autopay card was disabled by `TSK-416`, but each payment row still rendered an active `Pay now` button. Clicking it POSTed `/api/v1/portal/payments/6/checkout`, returned 503, and logged a browser resource error.
+- Root cause: the portal payment row actions still keyed only off `isPayable(payment)` and the pending payment id, not the page's online-payment availability state.
+- Fix: payable row actions now disable when `onlinePaymentsUnavailable` is true, render `Pay unavailable`, and show row-level copy telling the tenant to keep paying rent the current way.
+- Regression: `web/src/lib/portal/payments-page.test.ts`.
+
+Bug `TSK-418`:
+- Repro: As Jordan Vale, open `/units/9?tab=rent`, post a scheduled payment through the Unit Rent tab, and stay on the same page.
+- Observed before fix: the toast said `Payment posted.` and the header/outstanding balance updated, but the tab still showed the stale empty/list state until the payment page data caught up through a reload or later navigation.
+- Root cause: the create success handler cleared local `paymentItems` and invalidated the query, but did not render the `Payment` returned by `POST /api/v1/payments` while the cached list refetched.
+- Fix: the create success handler now prepends the returned payment into the current Unit Rent list immediately, then invalidates the payment, unit dashboard, and unit timeline query prefixes without clearing the just-created row.
+- Regression: `web/src/lib/components/unit/rent-tab-create.test.ts`.
+
+Verification:
+- RED: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/payments-page.test.ts` failed because the portal payments page had no row-level unavailable copy/action guard.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/payments-page.test.ts` passed 2/2.
+- RED: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/components/unit/rent-tab-create.test.ts` failed because the Unit Rent create success handler did not accept/use the returned `Payment`.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/components/unit/rent-tab-create.test.ts` passed 2/2.
+- Browser proof for `TSK-418`: Playwright CLI logged in as Jordan Vale, opened `https://localhost:6042/units/9?tab=rent`, posted a scheduled `$12.34` synthetic rent row through the real Unit Rent form, and without reloading saw `Payment posted.`, an updated outstanding balance of `$1,212.34`, and a visible `Jun 24, 2026 · Rent Scheduled $12.34` row. Snapshot: `.playwright-cli/page-2026-06-24T04-46-38-127Z.yml`; screenshot: `.playwright-cli/page-2026-06-24T04-46-48-483Z.png`.
+- Browser proof for `TSK-417`: Playwright CLI logged in as Blake Hayes Portal and opened `https://localhost:6042/portal/payments`. The page rendered the unavailable banner, disabled Autopay setup, both scheduled rent rows showed disabled `Pay unavailable` buttons, and each row rendered the unavailable-provider explanation. Console check returned 0 errors. Snapshot: `.playwright-cli/page-2026-06-24T04-47-10-759Z.yml`; screenshot: `.playwright-cli/page-2026-06-24T04-47-12-510Z.png`.
+
+Status: Pass after fixing row-level tenant Pay now availability and same-page Unit Rent payment creation refresh. Continue the real-user pass with the remaining tenant portal lease follow-up actions, maintenance/message variants, and then the broader non-banking/non-QuickBooks workflows.

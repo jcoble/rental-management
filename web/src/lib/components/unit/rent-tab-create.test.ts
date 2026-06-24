@@ -16,4 +16,9 @@ describe('unit rent quick payment create form', () => {
 		assert.match(source, /data-testid="rent-reference-input"/);
 		assert.match(source, /data-testid="rent-notes-input"/);
 	});
+
+	it('renders the created payment immediately after the post succeeds', () => {
+		assert.match(source, /onSuccess: \(payment: Payment\) =>/);
+		assert.match(source, /paymentItems = \[payment, \.\.\.paymentItems\.filter\(\(item\) => item\.id !== payment\.id\)\]/);
+	});
 });

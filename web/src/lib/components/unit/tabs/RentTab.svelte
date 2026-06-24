@@ -69,9 +69,11 @@
 	const totalPayments = $derived(paymentsQuery.data?.totalCount ?? paymentItems.length);
 	const hasMorePayments = $derived(paymentItems.length < totalPayments);
 
-	function invalidate() {
-		paymentItems = [];
-		paymentPage = 1;
+	function invalidate({ resetPayments = true }: { resetPayments?: boolean } = {}) {
+		if (resetPayments) {
+			paymentItems = [];
+			paymentPage = 1;
+		}
 		queryClient.invalidateQueries({ queryKey: ['payments', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['unit-dashboard', dashboard.unit.id] });
 		queryClient.invalidateQueries({ queryKey: ['unit-timeline', dashboard.unit.id] });
@@ -108,10 +110,12 @@
 
 	const createMut = createMutation(() => ({
 		mutationFn: (data: Record<string, unknown>) => paymentsApi.create(data),
-		onSuccess: () => {
+		onSuccess: (payment: Payment) => {
 			showSuccess('Payment posted.');
 			closeCreate();
-			invalidate();
+			paymentPage = 1;
+			paymentItems = [payment, ...paymentItems.filter((item) => item.id !== payment.id)];
+			invalidate({ resetPayments: false });
 		},
 		onError: (e) => showError(apiErrorMessage(e)),
 	}));
