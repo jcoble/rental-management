@@ -119,6 +119,45 @@ public class PortalService : IPortalService
         return payments;
     }
 
+    public async Task<IReadOnlyList<AppointmentResponse>> GetAppointmentsAsync(int portfolioId, int tenantId, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+
+        return await _db.Appointments
+            .AsNoTracking()
+            .Where(a => a.PortfolioId == portfolioId
+                && a.TenantId == tenantId
+                && a.ScheduledStart >= now
+                && (a.Status == AppointmentStatus.Scheduled || a.Status == AppointmentStatus.Confirmed))
+            .OrderBy(a => a.ScheduledStart)
+            .ThenBy(a => a.Id)
+            .Take(50)
+            .Select(a => new AppointmentResponse
+            {
+                Id = a.Id,
+                PortfolioId = a.PortfolioId,
+                PropertyId = a.PropertyId,
+                UnitId = a.UnitId,
+                LeaseId = a.LeaseId,
+                TenantId = a.TenantId,
+                Title = a.Title,
+                ProspectName = a.ProspectName,
+                ProspectEmail = a.ProspectEmail,
+                Type = a.Type,
+                Status = a.Status,
+                ScheduledStart = a.ScheduledStart,
+                ScheduledEnd = a.ScheduledEnd,
+                AssignedTo = a.AssignedTo,
+                Notes = a.Notes,
+                CreatedAt = a.CreatedAt,
+                UpdatedAt = a.UpdatedAt,
+                PropertyName = a.Property == null ? null : a.Property.Name,
+                UnitNumber = a.Unit == null ? null : a.Unit.UnitNumber,
+                TenantName = a.Tenant == null ? null : (a.Tenant.FirstName + " " + a.Tenant.LastName).Trim(),
+            })
+            .ToListAsync(ct);
+    }
+
     public async Task<IReadOnlyList<WorkOrderResponse>> GetWorkOrdersAsync(int portfolioId, int tenantId, CancellationToken ct = default)
     {
         var workOrders = await _db.WorkOrders
