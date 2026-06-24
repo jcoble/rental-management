@@ -1,6 +1,9 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { createQuery } from '@tanstack/svelte-query';
 	import { notifications } from '$lib/api/endpoints/notifications';
+	import type { NotificationItem } from '$lib/api/types/notification';
+	import { notificationStore } from '$lib/stores/notifications.svelte';
 	import { portalActionUrl } from '$lib/utils/portalLinks';
 	import { BellRing } from '@lucide/svelte';
 
@@ -8,6 +11,14 @@
 		queryKey: ['portal-notifications-page'],
 		queryFn: () => notifications.list({ take: 50 })
 	}));
+
+	async function openNotification(item: NotificationItem) {
+		if (!item.isRead) {
+			await notificationStore.markAsRead(item.id);
+			await notificationStore.refresh();
+		}
+		await goto(portalActionUrl(item.actionUrl), { invalidateAll: true });
+	}
 </script>
 
 <svelte:head><title>Notifications - Rental Command</title></svelte:head>
@@ -19,10 +30,14 @@
 	</div>
 	<div class="space-y-3">
 		{#each notificationsQuery.data ?? [] as item}
-			<a href={portalActionUrl(item.actionUrl)} class="block rounded-lg border border-border bg-card p-4 hover:bg-muted/40">
+			<button
+				type="button"
+				class="block w-full rounded-lg border border-border bg-card p-4 text-left hover:bg-muted/40"
+				onclick={() => openNotification(item)}
+			>
 				<p class="font-medium">{item.title}</p>
 				<p class="mt-1 text-sm text-muted-foreground">{item.message}</p>
-			</a>
+			</button>
 		{:else}
 			<p class="text-sm text-muted-foreground">No notifications yet.</p>
 		{/each}
