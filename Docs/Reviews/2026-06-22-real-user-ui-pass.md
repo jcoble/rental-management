@@ -59,6 +59,7 @@ Fixed and verified:
 - `TSK-417` and `TSK-418`: tenant portal Pay now rows now respect online-payment availability before checkout, and the Unit Rent tab shows a just-posted payment immediately while shared payment/unit caches refresh.
 - `TSK-419`: tenant portal lease Q&A answers now strip raw Markdown emphasis markers before rendering safe visible text.
 - `TSK-420`: staff and tenant Messages now keep the selected conversation URL in sync when a user clicks a thread or returns to the list, so stale notification/deep-link query strings no longer survive after visible thread changes.
+- `TSK-421`: tenant portal dashboard notification links now mark unread notifications read, refresh the app-shell unread badge, and then navigate to the target workflow.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3381,3 +3382,40 @@ Verification:
 - Console proof: Playwright CLI console check returned 0 warning-or-higher messages for the notification click/navigation flow.
 
 Status: Pass with no code changes. Continue the real-user pass with remaining tenant portal surfaces, then resume the broader non-banking/non-QuickBooks workflows.
+
+## Pass 67 Tenant Dashboard Notification Summary Read-State
+
+Date: 2026-06-24
+Branch: `tsk-397-full-ui-pass-67`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh accounts:
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+- Staff user: Jordan Vale, `tsk397.pass51.202606231856@example.local`
+
+Acceptance criteria:
+- The tenant dashboard notification summary should show unread message notifications and the same unread count as the app shell.
+- Clicking an unread dashboard notification should mark it read before/while navigating to the target workflow.
+- The app-shell unread notification badge should refresh to zero after the click.
+- Already-read dashboard notifications should still navigate without issuing unnecessary read calls.
+
+Bug `TSK-421`:
+- Repro: As Jordan, send portal-only reply `Dashboard notification read-state proof for Pass 67.` in conversation 2. As Blake, open `/portal` and click the unread dashboard notification link.
+- Observed before fix: the dashboard navigated to `/portal/messages?conversation=2`, but the app shell still showed `1 unread notification` and `Notifications.Id = 8` kept `ReadAt = NULL`.
+- Scope check: `/portal/notifications` already used `notificationStore.markAsRead()` and refreshed before `goto()`, but `/portal` rendered the summary notifications as plain anchors.
+- Fix: the tenant dashboard notification summary now uses `openDashboardNotification()`, marks unread items read through `notificationStore`, refreshes the store and local notification queries, then navigates with `goto(portalActionUrl(...))`.
+- Regression: `web/src/lib/portal/notifications-page.test.ts`.
+
+Verification:
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/notifications-page.test.ts` passed 2/2.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- Browser proof before fix: Blake's dashboard rendered `1 unread notification` and the unread `TSK-397 Pass 65 lease portal question` item. Clicking it loaded `/portal/messages?conversation=2`, but the shell still rendered `1 unread notification`. DB proof showed `Notifications.Id = 8` had `ReadAt = NULL`.
+- Browser proof after fix: Blake's dashboard rendered the same unread item as a button. Clicking it loaded `/portal/messages?conversation=2`, rendered the message thread, and refreshed the app shell to `0 unread notifications`. Snapshot: `.playwright-cli/page-2026-06-24T05-51-02-560Z.yml`.
+- DB proof after fix: `Notifications.Id = 8` for `TSK-397 Pass 65 lease portal question` has `ActionUrl = /portal/messages?conversation=2` and `ReadAt = 2026-06-24 05:50:56.5406+00`.
+
+Status: Pass after fixing tenant dashboard notification read-state. Continue the real-user tenant portal dashboard pass with the remaining dashboard cards and form states, then resume the broader non-banking/non-QuickBooks workflows.
