@@ -53,6 +53,7 @@ Fixed and verified:
 - `TSK-411`: portal and staff message unread state now clears again when a live reply arrives in an already-open thread, keeping list badges and the staff message header in sync with the server read counters.
 - `TSK-412`: tenant portal maintenance detail now shows the photos/documents attached to a tenant-created work order, and the tenant can open the camera-image attachment from the detail dialog.
 - `TSK-413`: tenant portal lease cards now show the real property and unit labels from a single DB-side lease projection instead of falling back to `Linked property`.
+- `TSK-414`: tenant portal appointments now load the signed-in tenant's upcoming scheduled/confirmed appointments from a tenant-scoped, limited DB-side projection instead of showing placeholder-only copy.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3071,3 +3072,44 @@ Verification:
 - Q&A proof: clicking `When is rent due?` returned `Rent is due on the **1st of each month**.` and the network log showed `POST /api/v1/portal/lease/ask?leaseId=8 => 200`. Snapshot: `.playwright-cli/page-2026-06-24T02-49-25-271Z.yml`.
 
 Status: Pass after showing tenant portal lease property/unit labels from the server-side projection. Continue the real-user portal pass with notifications and appointments; `/portal/appointments` currently needs scrutiny because the tenant has a linked appointment but the route appears placeholder-only.
+
+## Pass 59 Tenant Portal Appointments Continuation
+
+Date: 2026-06-24
+Branch: `tsk-397-414-portal-appointments-pass-59`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Staff user: Jordan Vale, `tsk397.pass51.202606231856@example.local`, portfolio id `4`
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+- Local-only credential note: the tenant password was not recorded in the prior evidence, so the synthetic local tenant password was reset through `/auth/forgot-password` + `/auth/reset-password` with `Auth__ExposeDevTokens=true` on a Development-only API process. The API was then restarted without `Auth__ExposeDevTokens` before browser proof.
+
+Acceptance criteria:
+- A tenant can open `/portal/appointments` and see their own upcoming appointment rows instead of placeholder-only copy.
+- The portal appointments endpoint must be scoped to the JWT tenant id and portfolio id, not request parameters.
+- Cancelled, past, and other-tenant appointments must be excluded from the tenant result.
+- The query must remain DB-side with filtering, ordering, and a finite limit before projection.
+
+Bug `TSK-414`:
+- Repro: As Blake Hayes Portal, open `/portal/appointments`.
+- Observed before fix: the route rendered only `Upcoming visits, inspections, and maintenance appointments will appear here.` even though `Appointments.Id = 1` exists for tenant `10`.
+- Root cause: the portal appointments route was static placeholder UI and the portal API/client had no tenant appointments endpoint.
+- Fix: added `GET /api/v1/portal/appointments`, `IPortalService.GetAppointmentsAsync`, a tenant/portfolio-scoped EF projection limited to 50 future scheduled/confirmed appointments, a `portal.appointments()` client helper, and a real portal appointments page with loading/error/empty/list states.
+- Regression: `RentalCommand.Api.Tests/Domain/PortalServiceAppointmentTests.cs` and `web/src/lib/portal/appointments-page.test.ts`.
+
+Verification:
+- RED: focused backend test failed before implementation because `PortalService` had no `GetAppointmentsAsync`.
+- RED: focused frontend route test failed before implementation because the placeholder route did not call `portal.appointments()`.
+- GREEN: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~PortalServiceAppointmentTests.GetAppointmentsAsync_ReturnsUpcomingTenantAppointmentsFromSingleLimitedSqlProjection" --logger "console;verbosity=normal"` passed 1/1.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/appointments-page.test.ts` passed 1/1.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- Browser proof: Playwright CLI logged in as Blake Hayes Portal, opened `https://localhost:6042/portal/appointments`, and the page rendered `Pass 51 service visit date fixed`, `Sat, Jun 27, 9:30 AM - 10:15 AM`, `Riverside Flats`, `Maintenance`, and `Scheduled`. Snapshot: `.playwright-cli/page-2026-06-24T03-25-23-623Z.yml`; screenshot: `output/playwright/pass59-portal-appointments.png`.
+- API/SQL proof: the local API log showed `GET /api/v1/portal/appointments => 200` and a single SQL query filtering by `a."PortfolioId" = @portfolioId`, `a."TenantId" = @tenantId`, `a."ScheduledStart" >= @now`, `a."Status" IN (0, 1)`, ordered by scheduled start/id, with `LIMIT @p`.
+- DB proof: `Appointments.Id = 1`, title `Pass 51 service visit date fixed`, `TenantId = 10`, `PropertyId = 7`, `ScheduledStart = 2026-06-27 13:30:00+00`, `ScheduledEnd = 2026-06-27 14:15:00+00`, `Status = 0`.
+
+Status: Pass after replacing the tenant portal appointments placeholder with tenant-scoped upcoming appointments. Continue the real-user portal pass with notifications and payments/autopay unavailable states, then resume remaining non-banking/non-QuickBooks workflows.

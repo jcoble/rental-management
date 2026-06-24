@@ -1,5 +1,5 @@
 import { api } from '../client';
-import type { Lease, LeaseQuestionResponse, Payment, WorkOrder, WorkOrderDetail } from '$lib/types';
+import type { Appointment, Lease, LeaseQuestionResponse, Payment, WorkOrder, WorkOrderDetail } from '$lib/types';
 import type {
 	Conversation,
 	ConversationMessage,
@@ -57,6 +57,7 @@ export const portal = {
 		),
 	balance: () => api.get('/portal/balance'),
 	payments: () => api.get<Payment[]>('/portal/payments'),
+	appointments: () => api.get<Appointment[]>('/portal/appointments'),
 	workOrders: () => api.get<WorkOrder[]>('/portal/work-orders'),
 	/** One of the tenant's own work orders plus its status timeline (404 if not theirs). */
 	workOrder: (id: number) => api.get<WorkOrderDetail>(`/portal/work-orders/${id}`),
