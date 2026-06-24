@@ -55,6 +55,7 @@ Fixed and verified:
 - `TSK-413`: tenant portal lease cards now show the real property and unit labels from a single DB-side lease projection instead of falling back to `Linked property`.
 - `TSK-414`: tenant portal appointments now load the signed-in tenant's upcoming scheduled/confirmed appointments from a tenant-scoped, limited DB-side projection instead of showing placeholder-only copy.
 - `TSK-415`: clicking notifications from the full tenant portal notifications page now marks them read and refreshes the app-shell unread count before navigating to the target workflow.
+- `TSK-416`: tenant portal payments now learn online-payment availability from `/portal/autopay` and show a disabled upfront autopay-unavailable state when Stripe is off, instead of inviting a setup click that only then fails with 503.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3152,3 +3153,41 @@ Verification:
 - Browser proof: returning to `/portal/notifications` and clicking the second notification navigated back to `/portal/messages?conversation=1` and the header rendered `0 unread notifications`. Snapshot: `.playwright-cli/page-2026-06-24T03-51-30-727Z.yml`.
 
 Status: Pass after fixing full-page tenant portal notification read-state. Continue the real-user portal pass with payments/autopay unavailable states, lease follow-up actions, and remaining non-banking/non-QuickBooks workflows.
+
+## Pass 61 Tenant Portal Payments Autopay Availability Continuation
+
+Date: 2026-06-24
+Branch: `tsk-397-full-ui-pass-61`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+
+Acceptance criteria:
+- A tenant opening `/portal/payments` should know immediately when online payments/autopay are unavailable.
+- The autopay setup action must not invite a tenant into a dead 503 path when Stripe is disabled or suppressed for sandbox.
+- The API should expose online-payment availability through an existing tenant-scoped status call, without requiring a checkout/enroll POST.
+- The page should preserve the gentle unavailable-provider copy for both up-front status and defensive 503 fallback.
+
+Bug `TSK-416`:
+- Repro: As Blake Hayes Portal, open `/portal/payments` on the local stack with Stripe unset.
+- Observed before fix: the page showed an active `Set up autopay` button. Clicking it POSTed `/api/v1/portal/autopay/enroll`, returned 503, logged a browser resource error, and only then showed `Online payments aren't set up yet`.
+- Root cause: `/api/v1/portal/autopay` returned only `leaseId`, `active`, and `enrolledAt`, so the frontend could not render provider availability until an enroll/payment mutation failed.
+- Fix: `IStripePaymentService` now exposes `IsOnlinePaymentsAvailableAsync`, reusing the Stripe config and sandbox gates already used by Checkout creation. `GET /api/v1/portal/autopay` and cancel responses now include `onlinePaymentsAvailable`; the portal payments page uses that field to show the unavailable banner and an inert disabled setup button before any enroll POST.
+- Regression: `RentalCommand.Api.Tests/Domain/StripeCheckoutTests.cs` and `web/src/lib/portal/payments-page.test.ts`.
+
+Verification:
+- RED: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~StripeCheckoutTests.IsOnlinePaymentsAvailableAsync_ReflectsStripeConfiguration" --logger "console;verbosity=normal"` failed because `StripePaymentService` did not contain `IsOnlinePaymentsAvailableAsync`.
+- RED: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/payments-page.test.ts` failed because `AutopayStatus` had no `onlinePaymentsAvailable` field and the page did not use it.
+- GREEN: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~AutopayPortalServiceTests|FullyQualifiedName~StripeCheckoutTests" --no-build --logger "console;verbosity=normal"` passed 12/12.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/payments-page.test.ts src/lib/portal/notifications-page.test.ts src/lib/portal/appointments-page.test.ts src/lib/portal/maintenance-detail-documents.test.ts` passed 4/4.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- Browser proof: after restarting the patched API, Playwright CLI logged in as Blake Hayes Portal and opened `https://localhost:6042/portal/payments`. The page rendered the upfront unavailable banner, the Autopay card rendered `Online payments aren't set up yet, so autopay is not available right now. Please keep paying rent the way you do today.`, and the `Set up autopay` button was disabled. Screenshot: `output/playwright/pass61-portal-payments-autopay-unavailable.png`.
+- API proof: the patched local API log showed `GET /api/v1/portal/autopay => 200` and `GET /api/v1/portal/payments => 200` after login; no enroll POST was needed to render the unavailable state.
+
+Status: Pass after surfacing online-payment availability up front for tenant portal autopay. Continue the real-user portal pass with payment row/pay-now data coverage, lease follow-up actions, maintenance/message variants, and remaining non-banking/non-QuickBooks workflows.

@@ -176,8 +176,15 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             return Forbid();
         }
 
-        var status = await _service.GetAutopayStatusAsync(GetPortfolioId(), tenantId.Value, leaseId, ct);
-        return status == null ? NotFound(new { error = "Lease not found" }) : Ok(status);
+        var portfolioId = GetPortfolioId();
+        var status = await _service.GetAutopayStatusAsync(portfolioId, tenantId.Value, leaseId, ct);
+        if (status == null)
+        {
+            return NotFound(new { error = "Lease not found" });
+        }
+
+        status.OnlinePaymentsAvailable = await _stripe.IsOnlinePaymentsAvailableAsync(portfolioId, ct);
+        return Ok(status);
     }
 
     /// <summary>
@@ -228,8 +235,15 @@ public class PortalController : AuthenticatedPortfolioControllerBase
             return Forbid();
         }
 
-        var status = await _service.CancelAutopayAsync(GetPortfolioId(), tenantId.Value, request.LeaseId, ct);
-        return status == null ? NotFound(new { error = "Lease not found" }) : Ok(status);
+        var portfolioId = GetPortfolioId();
+        var status = await _service.CancelAutopayAsync(portfolioId, tenantId.Value, request.LeaseId, ct);
+        if (status == null)
+        {
+            return NotFound(new { error = "Lease not found" });
+        }
+
+        status.OnlinePaymentsAvailable = await _stripe.IsOnlinePaymentsAvailableAsync(portfolioId, ct);
+        return Ok(status);
     }
 
     [HttpGet("work-orders")]
