@@ -3275,3 +3275,35 @@ Verification:
 - Browser proof after fix: after reloading the page and clicking the same suggestion, the answer rendered `Rent is due on the 1st of each month.` with 0 console errors. Snapshot: `.playwright-cli/page-2026-06-24T05-04-54-812Z.yml`; screenshot: `.playwright-cli/page-2026-06-24T05-04-56-358Z.png`.
 
 Status: Pass after stripping raw Markdown emphasis from tenant lease Q&A answers. Continue the real-user tenant portal pass with remaining maintenance/message variants, then resume the broader non-banking/non-QuickBooks workflows.
+
+## Pass 64 Tenant Portal Maintenance Camera-Image Request
+
+Date: 2026-06-24
+Branch: `tsk-397-full-ui-pass-64`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+
+Acceptance criteria:
+- A tenant should be able to submit a new maintenance request from `/portal/maintenance` with title, description, category, priority, and an optional camera-style image.
+- The selected image should show a visible preview and remove action before submission.
+- Submitting should create the tenant-scoped work order and best-effort document upload without a reload or hidden error.
+- The newly created request should appear at the top of the tenant's request list.
+- Opening the new request should show the request body, current status/priority, attached photo in `Photos & documents`, a document-specific delete action, and a progress timeline.
+- Clicking the attached image should open/download the original JPEG bytes.
+
+Verification:
+- Browser proof: Playwright CLI opened `https://localhost:6042/portal/maintenance` as Blake Hayes Portal, filled `TSK-397 Pass 64 garbage disposal leak`, attached `output/qa/production-scale-scans/05-work-orders-camera/work-order-001.jpg`, and saw the attached-image preview plus `Remove photo`. Snapshot: `.playwright-cli/page-2026-06-24T05-23-21-888Z.yml`.
+- Browser proof: clicking `Submit Request` created the new request, reset the form, and showed `TSK-397 Pass 64 garbage disposal leak` as the newest list row. Network proof showed `POST /api/v1/portal/tenant/work-orders => 201`, `POST /api/v1/documents => 201`, and the refreshed `GET /api/v1/portal/work-orders => 200`.
+- Browser proof: opening the new request detail rendered status `New`, priority `Normal`, the submitted description, `Photos & documents`, `work-order-001.jpg`, `130.1 KB`, `Upload`, `Delete work-order-001.jpg`, and Progress timeline row `New / Created / Tenant / just now`. Snapshot: `.playwright-cli/page-2026-06-24T05-23-54-171Z.yml`; screenshot: `.playwright-cli/page-2026-06-24T05-24-34-865Z.png`.
+- Browser proof: clicking `work-order-001.jpg` downloaded `.playwright-cli/work-order-001.jpg`. `shasum -a 256` matched the source fixture exactly: `1216ae38e630e6b6d69ce8044843ce14556eafd361ad1c55012bb137cc0976cd`.
+- DB proof: `WorkOrders.Id = 6`, title `TSK-397 Pass 64 garbage disposal leak`, `Status = 0`, `Priority = 1`, `TenantId = 10`; `StoredFiles.Id = 43`, `FileName = work-order-001.jpg`, `ContentType = image/jpeg`, `FileSize = 133260`, `DeletedAt = null`.
+- Console proof: Playwright CLI console check returned 0 warning-or-higher messages after create, detail open, and document download.
+
+Status: Pass with no code changes. Continue the real-user tenant portal pass with message variants and then resume the broader non-banking/non-QuickBooks workflows.
