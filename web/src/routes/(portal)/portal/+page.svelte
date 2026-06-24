@@ -1,8 +1,11 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { portal } from '$lib/api/endpoints/portal';
 	import { notifications } from '$lib/api/endpoints/notifications';
+	import type { NotificationItem } from '$lib/api/types/notification';
 	import { getCurrentUser } from '$lib/stores/auth.svelte';
+	import { notificationStore } from '$lib/stores/notifications.svelte';
 	import { portalActionUrl } from '$lib/utils/portalLinks';
 	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import { formatDateOnly, daysFromTodayUtc, isPastDueUtc } from '$lib/utils/date';
@@ -122,6 +125,18 @@
 		createWorkOrderMutation.mutate();
 	}
 
+	async function openDashboardNotification(item: NotificationItem) {
+		if (!item.isRead) {
+			await notificationStore.markAsRead(item.id);
+			await notificationStore.refresh();
+			await Promise.all([
+				queryClient.invalidateQueries({ queryKey: ['notifications', 'tenant-dashboard'] }),
+				queryClient.invalidateQueries({ queryKey: ['notifications-unread-count'] })
+			]);
+		}
+		await goto(portalActionUrl(item.actionUrl), { invalidateAll: true });
+	}
+
 	function money(value: number | string | null | undefined) {
 		const amount = Number(value ?? 0);
 		return amount.toLocaleString(undefined, { style: 'currency', currency: 'USD' });
@@ -167,10 +182,14 @@
 			{:else}
 				<div class="divide-y divide-border">
 					{#each notificationItems.slice(0, 3) as item}
-						<a href={portalActionUrl(item.actionUrl)} class="block py-3 first:pt-0 last:pb-0">
+						<button
+							type="button"
+							class="block w-full py-3 text-left first:pt-0 last:pb-0"
+							onclick={() => openDashboardNotification(item)}
+						>
 							<p class="text-sm font-medium text-foreground">{item.title}</p>
 							<p class="mt-1 line-clamp-2 text-sm text-muted-foreground">{item.message}</p>
-						</a>
+						</button>
 					{/each}
 				</div>
 			{/if}

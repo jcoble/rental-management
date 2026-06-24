@@ -14,4 +14,17 @@ describe('portal notifications page', () => {
 		assert.match(source, /goto\(portalActionUrl\(item\.actionUrl\)/);
 		assert.doesNotMatch(source, /<a\s+href=\{portalActionUrl\(item\.actionUrl\)\}/);
 	});
+
+	it('marks notifications read when a tenant opens them from the dashboard summary', () => {
+		const source = readFileSync(
+			new URL('../../routes/(portal)/portal/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(source, /function openDashboardNotification\(item: NotificationItem\)/);
+		assert.match(source, /notificationStore\.markAsRead\(item\.id\)/);
+		assert.match(source, /notificationStore\.refresh\(\)/);
+		assert.match(source, /goto\(portalActionUrl\(item\.actionUrl\)/);
+		assert.doesNotMatch(source, /<a\s+href=\{portalActionUrl\(item\.actionUrl\)\}/);
+	});
 });
