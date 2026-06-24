@@ -46,7 +46,8 @@ const entityQueryKeys: Record<string, string[][]> = {
 		['conversations'],
 		['conversation'],
 		['portal-conversations'],
-		['portal-conversation']
+		['portal-conversation'],
+		['header-unread-messages']
 	]
 };
 

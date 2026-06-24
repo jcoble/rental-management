@@ -50,4 +50,23 @@ describe('invalidateQueriesForDataUpdate', () => {
 		assert.deepEqual(removed, [['unit', 42]]);
 		assert.equal(invalidated.some((key) => key[0] === 'property'), false);
 	});
+
+	it('refreshes conversation lists, open details, tenant portal messages, and staff header unread count', () => {
+		const { client, invalidated, removed } = createQueryClientSpy();
+
+		invalidateQueriesForDataUpdate(client as never, 'EntityUpdated', {
+			entityType: 'Conversation',
+			entityId: 9,
+			timestamp: '2026-06-24T01:00:00Z'
+		});
+
+		assert.deepEqual(removed, []);
+		assert.deepEqual(invalidated, [
+			['conversations'],
+			['conversation'],
+			['portal-conversations'],
+			['portal-conversation'],
+			['header-unread-messages']
+		]);
+	});
 });
