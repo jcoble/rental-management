@@ -3351,3 +3351,33 @@ Verification:
 - End-to-end message proof: Blake created `TSK-397 Pass 65 lease portal question`, replied with Enter-to-send, Jordan opened the staff thread and replied via Portal, and Blake's portal session received the updated preview/thread. DB proof showed three ordered messages, final `LastMessagePreview = Yes, keep paying by check for now. We will message you here before online payments are enabled.`, `LandlordUnreadCount = 0`, and `TenantUnreadCount = 0` after the tenant opened the thread.
 
 Status: Pass after fixing stale selected-message URLs across tenant and staff Messages. Continue the real-user pass with remaining tenant portal notification/message variants, then resume the broader non-banking/non-QuickBooks workflows.
+
+## Pass 66 Tenant Portal Message Notification Follow-Through
+
+Date: 2026-06-24
+Branch: `tsk-397-full-ui-pass-66`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+
+Acceptance criteria:
+- A staff Portal-channel reply should create a tenant-visible notification with the message subject, preview, and `/portal/messages?conversation=<id>` action URL.
+- The tenant portal notification list should show the unread message notification and the app shell unread notification badge.
+- Clicking the notification should mark it read before/while navigating to the target message thread.
+- The target message thread should render with the correct `conversation` query parameter and visible management reply.
+- The app shell notification badge should refresh to zero after the click, and conversation unread counters should remain clear after the tenant opens the thread.
+
+Verification:
+- Browser proof: in Blake's tenant portal session, `/portal/notifications` rendered shell status `1 unread notification` and the unread `TSK-397 Pass 65 lease portal question` notification with preview `Yes, keep paying by check for now. We will message you here before online payments are enabled.` Snapshot: `.playwright-cli/page-2026-06-24T05-37-56-868Z.yml`.
+- Browser proof: clicking that notification navigated to `https://localhost:6042/portal/messages?conversation=2`, rendered the selected message thread and the management reply, and refreshed the app shell to `0 unread notifications`. Snapshot: `.playwright-cli/page-2026-06-24T05-38-11-586Z.yml`.
+- Network proof: the click issued `POST /api/v1/notifications/7/read => 204`, refreshed `GET /api/v1/notifications/unread-count => 200`, loaded SvelteKit data for `/portal/messages?conversation=2`, and fetched `GET /api/v1/portal/conversations/2 => 200`.
+- DB proof: `Notifications.Id = 7` for `TSK-397 Pass 65 lease portal question` has `ActionUrl = /portal/messages?conversation=2` and a non-null `ReadAt = 2026-06-24 05:38:05.601709+00`; `Conversations.Id = 2` has `LandlordUnreadCount = 0` and `TenantUnreadCount = 0`.
+- Console proof: Playwright CLI console check returned 0 warning-or-higher messages for the notification click/navigation flow.
+
+Status: Pass with no code changes. Continue the real-user pass with remaining tenant portal surfaces, then resume the broader non-banking/non-QuickBooks workflows.
