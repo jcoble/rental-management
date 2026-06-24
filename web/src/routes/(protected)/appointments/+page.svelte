@@ -21,6 +21,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import AppointmentCalendar from './AppointmentCalendar.svelte';
+	import { invalidateAppointmentQueries } from './appointment-query-keys';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import {
@@ -100,7 +101,7 @@
 	let deleteTarget = $state<Appointment | null>(null);
 
 	function invalidate() {
-		queryClient.invalidateQueries({ queryKey: ['appointments', portfolioId] });
+		invalidateAppointmentQueries(queryClient, portfolioId);
 	}
 
 	const saveMutation = createMutation(() => ({
