@@ -82,6 +82,21 @@ public class PortalController : AuthenticatedPortfolioControllerBase
         return Ok(items);
     }
 
+    [HttpGet("appointments")]
+    [ProducesResponseType(typeof(IReadOnlyList<AppointmentResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult<IReadOnlyList<AppointmentResponse>>> Appointments(CancellationToken ct)
+    {
+        var tenantId = GetTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
+
+        var items = await _service.GetAppointmentsAsync(GetPortfolioId(), tenantId.Value, ct);
+        return Ok(items);
+    }
+
     /// <summary>
     /// Answers a tenant's plain-English question grounded in their OWN lease (rent, dates, deposit,
     /// late fee, notes). Scope is the tenant's lease only: an explicit <c>leaseId</c> that isn't theirs
