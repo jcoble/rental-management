@@ -47,6 +47,7 @@ Fixed and verified:
 - `TSK-401` and `TSK-404`: Unit Command Center `List this unit` now continues into a unit-scoped public application link with property/unit preselection, and `Send renewal` now opens the tenant renewal-offer notice workflow without sending automatically.
 - `TSK-406`: local API and Engine scan workers now share one upload directory by default and in local Docker Compose, so camera-image scans created by the web app are readable by the Engine.
 - `TSK-407`: appointment edit modals now preserve a typed replacement date when the user edits the time afterward, so rescheduling does not mix the old date with the new time.
+- `TSK-408`: appointment detail edit mode now seeds native datetime-local fields from local wall-clock time and converts them back to UTC on save, so an unchanged detail save does not shift the appointment.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -2828,3 +2829,42 @@ Verification:
 - Screenshot proof: `output/playwright/pass52-appointment-date-edit-fixed.png`.
 
 Status: Pass after fixing typed date/time edits in the shared appointment DateTimePicker. Continue next with appointment list/detail workflows, messages, notices, and portal workflows from the scan-created rental spine.
+
+## Pass 53 Appointment Detail Timezone Continuation
+
+Date: 2026-06-24
+Branch: `tsk-397-408-appointment-detail-timezone`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- User: Jordan Vale, `tsk397.pass51.202606231856@example.local`
+- Portfolio: Jordan Vale's Portfolio, id `4`
+
+Acceptance criteria:
+- Opening appointment detail edit mode seeds native `datetime-local` fields from the local wall-clock time shown in read-only mode.
+- Saving an unchanged appointment detail edit keeps the same UTC instants in the database.
+- End-before-start edits remain rejected with visible user feedback and no stored row corruption.
+
+Bug `TSK-408`:
+- Repro: Open `/appointments/1`, confirm the read-only header shows `6/27/2026, 9:30:00 AM - 6/27/2026, 10:15:00 AM`, then click `Edit`.
+- Observed before fix: edit mode displayed raw UTC values `2026-06-27T13:30` and `2026-06-27T14:15` in the native datetime fields. A no-op save would reinterpret those as local wall-clock values and shift the appointment four hours later.
+- Root cause: appointment detail `startEditing()` used `appt.scheduledStart?.slice(0, 16)` / `appt.scheduledEnd?.slice(0, 16)` while the calendar modal already used the correct UTC-to-local and local-to-UTC conversion helpers.
+- Fix: added tested appointment detail form helpers that convert UTC ISO values to local wall-clock edit values and convert local wall-clock edit values back to UTC before calling the update API. The detail page now uses those helpers instead of raw string slicing.
+- Regression: `web/src/routes/(protected)/appointments/appointment-detail-form.test.ts`.
+
+Verification:
+- RED: `rtk pnpm --dir web test:unit -- 'src/routes/(protected)/appointments/appointment-detail-form.test.ts'` failed before implementation with `ERR_MODULE_NOT_FOUND` for the new detail form helper.
+- GREEN: the same command passed after adding the helper and route wiring, with 200/200 frontend unit tests passing.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- Browser proof: Playwright CLI logged in as Jordan Vale, opened `/appointments/1`, clicked `Edit`, and the Start/End inputs showed `2026-06-27T09:30` and `2026-06-27T10:15` instead of UTC `13:30`/`14:15`.
+- No-op save proof: clicking `Save` unchanged showed `Appointment updated.` and returned to read-only detail with `6/27/2026, 9:30:00 AM - 6/27/2026, 10:15:00 AM`.
+- DB proof after no-op save: `Appointments` row `1` still stored `ScheduledStart = 2026-06-27 13:30:00+00` and `ScheduledEnd = 2026-06-27 14:15:00+00`; only `UpdatedAt` changed.
+- Unhappy-path proof: editing End to `2026-06-27T09:00` and saving showed the toast `The appointment end time must be after its start time.`; the resulting 400 network console entry was expected for the rejected API request, and the DB row remained at `13:30:00+00` / `14:15:00+00`.
+- Screenshot proof: `output/playwright/pass53-appointment-detail-timezone-fixed.png`.
+
+Status: Pass after fixing appointment detail datetime-local timezone handling. Continue next with the remaining appointment detail actions, messages, notices, and portal workflows from the scan-created rental spine.
