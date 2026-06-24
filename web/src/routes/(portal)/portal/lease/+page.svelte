@@ -5,6 +5,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import { formatLeaseAnswerText } from '$lib/portal/lease-answer-display';
 	import { formatDateOnly } from '$lib/utils/date';
 
 	const leasesQuery = createQuery(() => ({ queryKey: ['portal-lease-page'], queryFn: () => portal.leases() }));
@@ -114,7 +115,7 @@
 
 				{#if leaseAnswer}
 					<div class="rounded-md border border-border bg-muted/30 p-3" data-testid="portal-lease-question-answer">
-						<p class="text-sm leading-6">{leaseAnswer}</p>
+						<p class="text-sm leading-6">{formatLeaseAnswerText(leaseAnswer)}</p>
 						{#if leaseAnswerSources.length > 0}
 							<details class="mt-2 text-xs text-muted-foreground">
 								<summary class="cursor-pointer">Lease facts used</summary>
