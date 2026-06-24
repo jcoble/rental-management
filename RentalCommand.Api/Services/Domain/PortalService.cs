@@ -286,6 +286,7 @@ public class PortalService : IPortalService
             LeaseId = resolvedLeaseId.Value,
             Active = enrollment != null,
             EnrolledAt = enrollment?.CreatedAt,
+            OnlinePaymentsAvailable = true,
         };
     }
 
@@ -309,7 +310,7 @@ public class PortalService : IPortalService
             await _db.SaveChangesAsync(ct);
         }
 
-        return new AutopayStatusResponse { LeaseId = leaseId, Active = false };
+        return new AutopayStatusResponse { LeaseId = leaseId, Active = false, OnlinePaymentsAvailable = true };
     }
 
     /// <summary>

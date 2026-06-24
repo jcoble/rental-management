@@ -56,6 +56,16 @@ public class StripeCheckoutTests : IDisposable
         result.Result.Should().Be(CheckoutResult.Outcome.NotEnabled);
     }
 
+    [Fact]
+    public async Task IsOnlinePaymentsAvailableAsync_ReflectsStripeConfiguration()
+    {
+        var disabled = BuildService(enabled: false);
+        var enabled = BuildService(enabled: true);
+
+        (await disabled.IsOnlinePaymentsAvailableAsync(PortfolioId, CancellationToken.None)).Should().BeFalse();
+        (await enabled.IsOnlinePaymentsAvailableAsync(PortfolioId, CancellationToken.None)).Should().BeTrue();
+    }
+
     // -----------------------------------------------------------------------
     // Ownership / IDOR guard (these run with Stripe ENABLED so the ownership check is the only
     // thing that can short-circuit; a foreign payment must 404 BEFORE any Stripe API call).
