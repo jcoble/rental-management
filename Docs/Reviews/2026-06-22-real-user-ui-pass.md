@@ -58,6 +58,7 @@ Fixed and verified:
 - `TSK-416`: tenant portal payments now learn online-payment availability from `/portal/autopay` and show a disabled upfront autopay-unavailable state when Stripe is off, instead of inviting a setup click that only then fails with 503.
 - `TSK-417` and `TSK-418`: tenant portal Pay now rows now respect online-payment availability before checkout, and the Unit Rent tab shows a just-posted payment immediately while shared payment/unit caches refresh.
 - `TSK-419`: tenant portal lease Q&A answers now strip raw Markdown emphasis markers before rendering safe visible text.
+- `TSK-420`: staff and tenant Messages now keep the selected conversation URL in sync when a user clicks a thread or returns to the list, so stale notification/deep-link query strings no longer survive after visible thread changes.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3307,3 +3308,46 @@ Verification:
 - Console proof: Playwright CLI console check returned 0 warning-or-higher messages after create, detail open, and document download.
 
 Status: Pass with no code changes. Continue the real-user tenant portal pass with message variants and then resume the broader non-banking/non-QuickBooks workflows.
+
+## Pass 65 Tenant Portal and Staff Message Thread URL Sync
+
+Date: 2026-06-24
+Branch: `tsk-397-420-message-url-sync-pass-65`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh accounts:
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+- Staff user: Jordan Vale, `tsk397.pass51.202606231856@example.local`
+
+Acceptance criteria:
+- A tenant can start a new portal conversation with subject/body, but cannot submit an empty conversation.
+- A tenant can reply with Enter-to-send and see the sent message immediately without reload.
+- Staff sees tenant-created messages with unread counts, opening a thread clears the landlord unread count, and staff can reply through the Portal channel.
+- The tenant sees the staff reply and opening the thread clears the tenant conversation unread count.
+- Inbound `?conversation=<id>` deep links still open the selected thread for both staff and tenant routes.
+- Selecting a different conversation row updates the browser URL to the visible thread id; selecting a valid row from a stale/bogus deep link replaces the stale query parameter.
+- Mobile back-to-list clears the `conversation` query parameter and returns to the thread list.
+
+Bug `TSK-420`:
+- Repro: As Blake Hayes Portal, open `https://localhost:6042/portal/messages?conversation=999999`. The page shows `Couldn't load this conversation.` as expected. Click the valid `TSK-397 Pass 65 lease portal question` row.
+- Observed before fix: the valid thread opened and `GET /api/v1/portal/conversations/2 => 200`, but the browser URL stayed `/portal/messages?conversation=999999`. Reloading would return the tenant to the stale 404 state even though the visible selected thread had changed.
+- Scope check: staff Messages used the same component-state-only row selection pattern while also accepting inbound `?conversation=` deep links.
+- Fix: added shared `conversation-url-state` helpers to parse positive integer conversation ids and build query-preserving selected-thread URLs. Staff and tenant Messages now replace the URL on row selection and clear it when returning to the list.
+- Regression: `web/src/lib/messages/conversation-url-state.test.ts`.
+
+Verification:
+- RED: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/messages/conversation-url-state.test.ts` failed before the helper existed.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/messages/conversation-url-state.test.ts src/lib/messages/conversation-read-state.test.ts` passed 5/5.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- Browser proof before fix: tenant session on `/portal/messages?conversation=999999` clicked the valid `TSK-397 Pass 65 lease portal question` row; the thread opened, but the URL remained `?conversation=999999`. Snapshot: `.playwright-cli/page-2026-06-24T05-31-01-774Z.yml`.
+- Browser proof after fix, tenant route: clean Blake session opened `/portal/messages?conversation=999999`, clicked the valid thread row, and the URL replaced to `/portal/messages?conversation=2` while rendering the selected thread. Snapshot: `.playwright-cli/page-2026-06-24T05-34-23-162Z.yml`.
+- Browser proof after fix, tenant mobile back: at 390px wide on `/portal/messages?conversation=2`, clicking `Back to messages` cleared the URL to `/portal/messages` and returned to the list. Snapshot: `.playwright-cli/page-2026-06-24T05-35-09-699Z.yml`.
+- Browser proof after fix, staff route: Jordan session opened `/messages?conversation=999999`, clicked the valid `TSK-397 Pass 65 lease portal question` row, and the URL replaced to `/messages?conversation=2` while rendering the selected thread. Snapshot: `.playwright-cli/page-2026-06-24T05-34-46-355Z.yml`.
+- End-to-end message proof: Blake created `TSK-397 Pass 65 lease portal question`, replied with Enter-to-send, Jordan opened the staff thread and replied via Portal, and Blake's portal session received the updated preview/thread. DB proof showed three ordered messages, final `LastMessagePreview = Yes, keep paying by check for now. We will message you here before online payments are enabled.`, `LandlordUnreadCount = 0`, and `TenantUnreadCount = 0` after the tenant opened the thread.
+
+Status: Pass after fixing stale selected-message URLs across tenant and staff Messages. Continue the real-user pass with remaining tenant portal notification/message variants, then resume the broader non-banking/non-QuickBooks workflows.
