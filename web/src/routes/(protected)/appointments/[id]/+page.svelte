@@ -16,6 +16,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Pencil, Save, Trash2, X, CalendarCheck, CheckCircle, XCircle, UserX, CalendarClock, Users } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
+	import { buildAppointmentDetailSavePayload, createAppointmentDetailEditForm } from '../appointment-detail-form';
 	import { labelForType } from '../calendar-utils';
 
 	const queryClient = useQueryClient();
@@ -70,14 +71,7 @@
 
 	function startEditing() {
 		if (!appt) return;
-		form = {
-			title: appt.title, type: appt.type, status: appt.status,
-			scheduledStart: appt.scheduledStart?.slice(0, 16) ?? '',
-			scheduledEnd: appt.scheduledEnd?.slice(0, 16) ?? '',
-			propertyId: appt.propertyId != null ? String(appt.propertyId) : '',
-			tenantId: appt.tenantId != null ? String(appt.tenantId) : '',
-			prospectName: appt.prospectName ?? '', prospectEmail: appt.prospectEmail ?? '', assignedTo: appt.assignedTo ?? '',
-		};
+		form = createAppointmentDetailEditForm(appt);
 		formErrors = {};
 		editing = true;
 	}
@@ -92,7 +86,7 @@
 			return;
 		}
 		formErrors = {};
-		saveMutation.mutate({ portfolioId, ...result.data });
+		saveMutation.mutate(buildAppointmentDetailSavePayload(result.data, form, portfolioId));
 	}
 
 	const saveMutation = createMutation(() => ({
