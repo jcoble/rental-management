@@ -8,6 +8,12 @@ namespace RentalCommand.Api.Services.Payments;
 public interface IStripePaymentService
 {
     /// <summary>
+    /// True when hosted online payments may be offered for the portfolio. This includes the global
+    /// Stripe configuration gate and the portfolio sandbox guard used by Checkout creation.
+    /// </summary>
+    Task<bool> IsOnlinePaymentsAvailableAsync(int portfolioId, CancellationToken ct);
+
+    /// <summary>
     /// Creates a Stripe PaymentIntent for the given payment and persists a pending
     /// <c>PaymentTransaction</c>. Returns <see cref="CreateIntentResult"/> — check
     /// <see cref="CreateIntentResult.Result"/> before using the client secret.

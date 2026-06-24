@@ -39,6 +39,7 @@ export interface CheckoutSession {
 export interface AutopayStatus {
 	leaseId: number;
 	active: boolean;
+	onlinePaymentsAvailable: boolean;
 	enrolledAt?: string | null;
 }
 

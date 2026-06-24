@@ -42,6 +42,17 @@ public class StripePaymentService : IStripePaymentService
     }
 
     /// <inheritdoc/>
+    public async Task<bool> IsOnlinePaymentsAvailableAsync(int portfolioId, CancellationToken ct)
+    {
+        if (!_config.Enabled)
+        {
+            return false;
+        }
+
+        return !await _sandbox.IsSandboxAsync(portfolioId, ct);
+    }
+
+    /// <inheritdoc/>
     public async Task<CreateIntentResult> CreatePaymentIntentAsync(int portfolioId, int paymentId, CancellationToken ct)
     {
         if (!_config.Enabled)

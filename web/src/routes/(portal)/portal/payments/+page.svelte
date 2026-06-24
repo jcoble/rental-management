@@ -23,7 +23,10 @@
 	const leaseId = $derived(autopayQuery.data?.leaseId ?? paymentsQuery.data?.[0]?.leaseId ?? null);
 
 	// When Stripe is off the API returns 503; we keep that gentle (not a red error toast).
-	let onlinePaymentsUnavailable = $state(false);
+	let paymentProviderUnavailable = $state(false);
+	const onlinePaymentsUnavailable = $derived(
+		autopayQuery.data?.onlinePaymentsAvailable === false || paymentProviderUnavailable
+	);
 
 	function isStripeOff(err: unknown): boolean {
 		return err instanceof ApiError && err.status === 503;
@@ -50,7 +53,7 @@
 		},
 		onError: (err) => {
 			if (isStripeOff(err)) {
-				onlinePaymentsUnavailable = true;
+				paymentProviderUnavailable = true;
 			} else {
 				showError(apiErrorMessage(err, "We couldn't start the payment. Please try again."));
 			}
@@ -69,7 +72,7 @@
 		},
 		onError: (err) => {
 			if (isStripeOff(err)) {
-				onlinePaymentsUnavailable = true;
+				paymentProviderUnavailable = true;
 			} else {
 				showError(apiErrorMessage(err, "We couldn't set up autopay. Please try again."));
 			}
@@ -175,13 +178,20 @@
 			>
 				{cancelMutation.isPending ? 'Turning off…' : 'Turn off autopay'}
 			</Button>
+		{:else if onlinePaymentsUnavailable}
+			<p class="mt-1.5 text-sm leading-snug text-muted-foreground" data-testid="portal-autopay-unavailable">
+				Online payments aren't set up yet, so autopay is not available right now. Please keep paying rent the way you do today.
+			</p>
+			<Button class="mt-3" disabled data-testid="portal-autopay-enroll">
+				Set up autopay
+			</Button>
 		{:else}
 			<p class="mt-1.5 text-sm leading-snug text-muted-foreground">
 				We'll automatically charge your saved card or bank account when rent is due, so you never miss a payment.
 			</p>
 			<Button
 				class="mt-3"
-				disabled={enrollMutation.isPending || leaseId == null}
+				disabled={onlinePaymentsUnavailable || enrollMutation.isPending || leaseId == null}
 				onclick={() => enrollMutation.mutate()}
 				data-testid="portal-autopay-enroll"
 			>
