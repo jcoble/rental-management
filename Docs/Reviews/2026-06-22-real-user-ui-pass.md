@@ -61,6 +61,7 @@ Fixed and verified:
 - `TSK-420`: staff and tenant Messages now keep the selected conversation URL in sync when a user clicks a thread or returns to the list, so stale notification/deep-link query strings no longer survive after visible thread changes.
 - `TSK-421`: tenant portal dashboard notification links now mark unread notifications read, refresh the app-shell unread badge, and then navigate to the target workflow.
 - `TSK-422`, `TSK-423`, and `TSK-424`: tenant portal dashboard now shows upcoming tenant appointments, treats due-today rent as due today instead of overdue, and fills tenant-scoped appointment unit labels from the active/latest lease when the appointment itself has no direct unit.
+- `TSK-425`: tenant dashboard quick maintenance submit now shows inline title/description validation instead of silently doing nothing on an empty submit.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3472,3 +3473,40 @@ Verification:
 - DB proof: inserted a synthetic local scheduled rent row only for browser setup, `Payments.Id = 8`, amount `$22.25`, due `2026-06-25 00:00:00+00`, note `TSK-423 due-today browser proof`; older June 24 scheduled rows remained overdue and unchanged. Appointment `Id = 1` has `TenantId = 10`, `PropertyId = 7`, `UnitId = NULL`, while tenant lease `Id = 8` has `UnitId = 9`, `UnitNumber = 2B`.
 
 Status: Pass after fixing tenant dashboard appointment visibility, due-today rent classification, and appointment unit fallback. Continue the real-user pass with remaining tenant dashboard form states and then broader non-banking/non-QuickBooks workflows.
+
+## Pass 69 Tenant Dashboard Quick Maintenance Validation
+
+Date: 2026-06-25
+Branch: `tsk-397-425-dashboard-maintenance-validation-pass-69`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+
+Acceptance criteria:
+- Empty dashboard quick maintenance submit should show visible field-level validation for missing issue title and description.
+- Valid dashboard quick maintenance submit should continue creating a tenant work order through the existing tenant-scoped API path.
+- Successful submit should clear the validation state and reset the form.
+- The dashboard maintenance card and request list should refresh after a successful quick request.
+
+Bug `TSK-425`:
+- Repro: As Blake Hayes Portal, open `/portal` and click `Submit Request` in the Maintenance Requests card with title and description blank.
+- Observed before fix: the button was active, but `submitWorkOrder()` returned early with no toast, no inline error, no field invalid state, and no focus-changing feedback.
+- Fix: the dashboard quick maintenance form now tracks attempted submit state, renders inline errors for missing title and description, marks invalid fields with `aria-invalid`, keeps `aria-required`, and clears validation state after a successful submit.
+- Regression: `web/src/lib/portal/dashboard-page.test.ts`.
+
+Verification:
+- RED: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/dashboard-page.test.ts` failed before the fix because the dashboard route had no `workOrderSubmitted`, title error, or description error state.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/dashboard-page.test.ts` passed 2/2 after the fix.
+- UI guide: `Docs/Testing/UI/tsk-397-pass-69-dashboard-maintenance-validation.md`.
+- Browser proof before fix: Blake clicked empty `Submit Request`; the dashboard remained unchanged with no visible validation. Snapshot: `.playwright-cli/page-2026-06-25T01-13-06-269Z.yml`.
+- Browser proof after fix: empty `Submit Request` rendered `Issue title is required.` and `Describe the issue before submitting.`, with both fields marked invalid. Snapshot: `.playwright-cli/page-2026-06-25T01-15-27-326Z.yml`; screenshot: `output/playwright/pass69-dashboard-maintenance-validation.png`.
+- Browser happy-path proof: filling title `TSK-397 Pass 69 dashboard quick maintenance validation proof` and the cabinet-hinge description submitted successfully, incremented the Maintenance card from `2` to `3`, and rendered the new request first as `New · Normal`. Snapshot: `.playwright-cli/page-2026-06-25T01-15-42-654Z.yml`; screenshot: `output/playwright/pass69-dashboard-maintenance-submit.png`.
+- DB proof: `WorkOrders.Id = 7`, title `TSK-397 Pass 69 dashboard quick maintenance validation proof`, `TenantId = 10`, `UnitId = 9`, `LeaseId = 8`, `Status = 0`, `Priority = 1`, `CreatedBy = Tenant`.
+
+Status: Pass after fixing tenant dashboard quick maintenance validation and proving the submit path still creates a tenant-scoped work order. Continue the real-user pass with tenant portal maintenance list/detail follow-through and remaining non-banking/non-QuickBooks workflows.
