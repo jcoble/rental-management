@@ -445,13 +445,22 @@ public class WorkOrderService : IWorkOrderService
         }
         if (request.Status.HasValue) entity.Status = request.Status.Value;
 
+        var now = DateTime.UtcNow;
+
         if (request.RequestedAt.HasValue) entity.RequestedAt = request.RequestedAt.Value.ToUtc();
         if (request.ScheduledFor.HasValue) entity.ScheduledFor = request.ScheduledFor.ToUtcDateTime();
         if (request.ScheduledWindowEnd.HasValue) entity.ScheduledWindowEnd = request.ScheduledWindowEnd.ToUtcDateTime();
         if (request.CompletedAt.HasValue) entity.CompletedAt = request.CompletedAt.ToUtc();
+        var completedAtStampedFromStatus =
+            statusChanged &&
+            entity.Status == WorkOrderStatus.Completed &&
+            !request.CompletedAt.HasValue;
+        if (completedAtStampedFromStatus)
+        {
+            entity.CompletedAt = now;
+        }
         if (request.EstimatedCost.HasValue) entity.EstimatedCost = request.EstimatedCost;
         if (request.ActualCost.HasValue) entity.ActualCost = request.ActualCost;
-        var now = DateTime.UtcNow;
 
         // A supplied completion timestamp can't sit unreasonably far in the future, and an explicitly
         // inverted pair (the client sends BOTH RequestedAt and CompletedAt with completed < requested in
@@ -464,7 +473,7 @@ public class WorkOrderService : IWorkOrderService
         EnsureCompletedAtInRange(
             request.RequestedAt.HasValue, entity.RequestedAt,
             request.ScheduledFor.HasValue, entity.ScheduledFor,
-            request.CompletedAt.HasValue, entity.CompletedAt,
+            request.CompletedAt.HasValue || completedAtStampedFromStatus, entity.CompletedAt,
             now);
 
         entity.UpdatedAt = now;
