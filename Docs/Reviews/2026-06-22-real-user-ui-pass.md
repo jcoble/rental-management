@@ -67,6 +67,7 @@ Fixed and verified:
 - `TSK-425`: tenant dashboard quick maintenance submit now shows inline title/description validation instead of silently doing nothing on an empty submit.
 - `TSK-426`: tenant portal maintenance page submit now shows inline title/description validation instead of silently doing nothing on an empty submit, while preserving valid tenant work-order creation.
 - `TSK-427`: tenant-only users now land on a tenant-accessible `/portal/security` account security route from the user menu instead of bouncing away from the protected staff `/settings/security` route.
+- `TSK-429`: Unit Command Center renewal next action now detects existing renewal notice state, routing sent renewals to the existing Messages conversation and open renewal drafts back to review instead of repeatedly offering a stale duplicate send.
 - Pass 80 auth/setup front door: anonymous welcome/register/verify/login/logout/forgot/reset, live setup handoff, anonymous route guard, and sandbox sample-data setup all pass through real UI interactions on local sanitized data.
 - Pass 81 access guards: owner-admin self-row lockout, tenant direct-access denial/redirects for staff/admin/superadmin routes, and stale-session return-to-portal behavior are browser-proven.
 
