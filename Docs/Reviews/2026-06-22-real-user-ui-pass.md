@@ -4046,3 +4046,52 @@ Verification:
 - Network proof: no failed dynamic app requests on the clean docs index load. The deliberate missing-article case produced only the expected browser 404 resource-load line for `/docs/qx-missing-doc-1782364211`.
 
 Status: Pass with documentation-only verification. No code fix or regression test was added in this slice. Deferred boundaries remain production/sensitive data, real SMS/email delivery, Plaid banking, connected QuickBooks/provider accounting, and final Go Live.
+
+## Pass 83 Public Apply And Signing Edge States
+
+Date: 2026-06-25
+Branch: `tsk-397-real-user-pass-83`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Guide:
+- `Docs/Testing/UI/tsk-397-pass-83-public-apply-sign.md`
+
+Acceptance criteria:
+- Invalid public application links must show a terminal error and not render the form.
+- Valid public application links must render scan, applicant, address, employment, consent, and submit controls for anonymous users.
+- Camera/image upload must accept an image and show a manual-entry fallback when extraction returns no fields.
+- Empty submit must show finite required-field/consent validation.
+- Duplicate application conflicts must show the backend domain reason, not only a generic HTTP title.
+- Already-signed signing links must render a signed terminal state with document access and no sign/decline controls.
+- Active signing links must support decline, persist the declined terminal state after reload, and reject terminal-token reuse with 410.
+- Clean public apply load must have no console warnings/errors and no failed dynamic app requests.
+
+Bug `TSK397-B087`:
+- Repro before fix: submitting duplicate public application email `qa.applicant.001@example.local` returned `409` but the UI showed only `Conflict`.
+- Root cause: `web/src/lib/api/public-applications.ts` used a public-only error parser that did not read ASP.NET `ProblemDetails.detail`; it fell through to the generic `title`.
+- Fix: extracted `readPublicError()` to `web/src/lib/api/public-error.ts`, updated public application context/scan/submit calls to use it, and prefer nested `error.message`, then `detail`, then `message`, then `title`.
+
+Regression:
+- RED before fix: `node --test --experimental-strip-types src/lib/api/public-error.test.ts` failed because the parser module did not exist.
+- GREEN after fix: the same focused test passed and verified `ProblemDetails.detail` beats generic `title`.
+- Broader verification: `pnpm --dir web check` passed with 0 errors and 4 existing unused-CSS warnings in `web/src/lib/components/m3/PageHeader.svelte`; `pnpm --dir web test:unit` passed 235/235; `git diff --check` passed.
+
+Verification:
+- `/apply/not-a-real-token-pass83` showed `This link isn't working`; screenshot proof `output/playwright/pass83-public-apply-invalid-link.png`.
+- Valid `/apply/{token}` showed the full anonymous application form.
+- Uploaded `output/playwright/pass83-unreadable-id.png` through the scan control; `POST /api/v1/public/applications/{token}/scan-id => 200`; UI showed `We couldn't read details from that image automatically. No problem - just fill in the form below.` Screenshot proof `output/playwright/pass83-public-apply-scan-fallback.png`.
+- Empty submit showed missing first name, last name, email, phone, and consent validation.
+- Duplicate submit after fix showed `An application for qa.applicant.001@example.local already exists as application #1. Review the existing application before creating another.` Screenshot proof `output/playwright/pass83-public-apply-duplicate-fixed.png`.
+- Already-signed token `/sign/4TldKZPIcxUNB1ovGGcsiXR4BLSy8ABIyyHl5j-zkd0` showed signed terminal copy and document link, with no sign/decline controls. Screenshot proof `output/playwright/pass83-sign-already-signed.png`.
+- Pending token `/sign/wE9rVlM56Sv8nF3SjL-zwbZvVR_arNyQ8BXVhEmmccA` exposed active controls, accepted decline reason `TSK-397 Pass 83 decline terminal proof.`, returned `POST /api/v1/sign/{token}/decline => 200`, and showed `You declined to sign`; reload preserved the terminal state. Screenshot proof `output/playwright/pass83-sign-declined-terminal.png`.
+- Local terminal-token reuse POST returned `HTTP/2 410` with `{"error":"This signing request was declined."}`.
+- DB proof: signer `2` and its signature request both stored status `Declined`; latest audit events include the decline reason and prior viewed event.
+- Clean final console proof after reopening only the valid public application link: two Vite debug messages only, `Errors: 0`, `Warnings: 0`.
+- Network proof: clean dynamic requests were only `GET /apply/{token}/__data.json => 200` and `GET /api/v1/public/applications/{token} => 200`.
+
+Status: Pass after fixing `TSK397-B087`. Deferred boundaries remain production/sensitive data, real SMS/email delivery, Plaid banking, connected QuickBooks/provider accounting, and final Go Live.

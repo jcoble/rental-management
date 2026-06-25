@@ -12,6 +12,7 @@
  */
 
 import { API_BASE_URL } from '$lib/config';
+import { readPublicError } from './public-error.ts';
 
 const PUBLIC_FETCH_TIMEOUT_MS = 30_000;
 
@@ -112,25 +113,6 @@ async function publicFetch(
 	}
 }
 
-async function readError(response: Response): Promise<string> {
-	try {
-		const body = await response.json();
-		if (body && typeof body === 'object') {
-			const b = body as Record<string, unknown>;
-			if (typeof b.error === 'string') return b.error;
-			if (b.error && typeof b.error === 'object' && typeof (b.error as Record<string, unknown>).message === 'string') {
-				return (b.error as Record<string, string>).message;
-			}
-			if (typeof b.message === 'string') return b.message;
-			if (typeof b.title === 'string') return b.title;
-		}
-	} catch {
-		// non-JSON body
-	}
-	if (response.status === 404) return 'This application link is invalid or has expired.';
-	return `Request failed (${response.status}).`;
-}
-
 /** GET the public context (company name + properties/units) for an apply token. */
 export async function getApplicationContext(token: string): Promise<PublicApplicationContext> {
 	const response = await publicFetch(`/public/applications/${encodeURIComponent(token)}`, {
@@ -138,7 +120,7 @@ export async function getApplicationContext(token: string): Promise<PublicApplic
 		headers: { Accept: 'application/json' },
 	});
 	if (!response.ok) {
-		throw new PublicApiError(response.status, await readError(response));
+		throw new PublicApiError(response.status, await readPublicError(response));
 	}
 	return response.json() as Promise<PublicApplicationContext>;
 }
@@ -152,7 +134,7 @@ export async function scanApplicationId(token: string, file: File): Promise<Scan
 		{ method: 'POST', body: formData }
 	);
 	if (!response.ok) {
-		throw new PublicApiError(response.status, await readError(response));
+		throw new PublicApiError(response.status, await readPublicError(response));
 	}
 	return response.json() as Promise<ScanIdResult>;
 }
@@ -168,7 +150,7 @@ export async function submitApplication(
 		body: JSON.stringify(body),
 	});
 	if (!response.ok) {
-		throw new PublicApiError(response.status, await readError(response));
+		throw new PublicApiError(response.status, await readPublicError(response));
 	}
 	return response.json() as Promise<SubmitApplicationResult>;
 }
