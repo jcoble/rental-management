@@ -45,6 +45,7 @@ Fixed and verified:
 - `TSK397-B082` and `B083`: typed DatePicker dates now immediately update modal-gated actions, and Give Notice keeps lease/signature lifecycle state coherent so Notice given status, actions, and move-out date render together.
 - `TSK397-B084`: cancelling a Notice given lease back to Active now clears the expected move-out date so the active lease no longer shows stale move-out workflow data.
 - `TSK-401`: Unit Command Center `List this unit` now continues into a unit-scoped public application link with property/unit preselection.
+- `TSK-404`: Unit Command Center `Send renewal` current-state retest no longer reproduces the no-op; both sample renewal units link into the tenant notice workflow and open a renewal-offer draft without sending.
 - `TSK-406`: local API and Engine scan workers now share one upload directory by default and in local Docker Compose, so camera-image scans created by the web app are readable by the Engine.
 - `TSK-407`: appointment edit modals now preserve a typed replacement date when the user edits the time afterward, so rescheduling does not mix the old date with the new time.
 - `TSK-408`: appointment detail edit mode now seeds native datetime-local fields from local wall-clock time and converts them back to UTC on save, so an unchanged detail save does not shift the appointment.
@@ -66,7 +67,6 @@ Fixed and verified:
 - `TSK-427`: tenant-only users now land on a tenant-accessible `/portal/security` account security route from the user menu instead of bouncing away from the protected staff `/settings/security` route.
 
 Open, watch, or deferred:
-- `TSK-404`: Unit Command Center `Send renewal` is reopened from user browser evidence as a no-op until retested and fixed.
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
 - `TSK397-B022` and `TSK397-B070`: lease/property history copy promises every change, but child records such as opening balances, generated agreements, document uploads, loans, and recurring expenses do not all appear in the parent history. This needs a product decision on parent-history scope.
 - `TSK397-B026` / `B040`: scan processing stuck-state family. It did not reproduce in later application-scan proof after scan-review cleanup, but stays on the watch list until more scan types are rerun.
@@ -3629,3 +3629,41 @@ Verification:
 - App console proof: Playwright CLI `console error` and `console warning` returned 0 app errors/warnings.
 
 Status: Pass after fixing tenant Security menu routing and preserving the staff security route through shared account-security components/actions. Continue the real-user tenant portal pass, then resume remaining non-banking/non-QuickBooks workflows.
+
+## Pass 73 Unit Command Center Send Renewal Retest
+
+Date: 2026-06-25
+Branch: `tsk-397-404-renewal-pass-73`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Dev admin sample-data user: Rental Command Admin, `admin@rentalcommand.local`
+- Setup path: logged in through the dev-admin helper, chose sample/example data, and verified the app banner states example data does not send real emails/texts or charge cards.
+
+Acceptance criteria:
+- A renewal-stage unit must expose `Send renewal -- lease ends in ... days` as a real link, not a button with no action.
+- Clicking the link must navigate to the active tenant with `action=create-notice&noticeType=RenewalOffer`.
+- The tenant page must open `Create / Send notice` automatically and show a `Renewal offer` draft grounded in the selected unit/lease.
+- Browser proof must stop before pressing `Send`; no notice delivery should occur during this retest.
+
+Bug `TSK-404` current-state retest:
+- User-reported evidence showed the Unit Command Center `Send renewal` action appearing to do nothing. Retesting on current `main` did not reproduce the no-op for either renewal-stage sample unit.
+- Eastland 8-Plex Unit 1 rendered `Send renewal -- lease ends in 61 days` with target `/tenants/19?action=create-notice&noticeType=RenewalOffer`; clicking it opened Kevin Brown's tenant detail and the `Create / Send notice` dialog with `Renewal offer`, `Lease renewal for Eastland 8-Plex Unit 1`, and checked Portal/Email/SMS delivery choices.
+- Short North Condo Unit 4B rendered `Send renewal -- lease ends in 30 days` with target `/tenants/18?action=create-notice&noticeType=RenewalOffer`; clicking it opened Emily Chen's tenant detail and the `Create / Send notice` dialog with `Renewal offer`, `Lease renewal for Short North Condo Unit 4B`, and checked Portal/Email/SMS delivery choices.
+- No code patch was made in this slice because the current app already satisfied the workflow and no failing behavior was found to protect.
+
+Verification:
+- Browser proof, Unit 1 before click: `.playwright-cli/page-2026-06-25T01-59-10-373Z.yml`.
+- Browser proof, Unit 1 after click: `.playwright-cli/page-2026-06-25T01-59-22-712Z.yml`.
+- Browser proof, Unit 4B before click: `.playwright-cli/page-2026-06-25T02-00-40-502Z.yml`.
+- Browser proof, Unit 4B after click: `.playwright-cli/page-2026-06-25T02-00-58-294Z.yml`.
+- Screenshot proof, Unit 4B renewal draft: `.playwright-cli/page-2026-06-25T02-01-32-064Z.png`.
+- Network proof for Unit 4B: the click loaded `/tenants/18/__data.json?action=create-notice&noticeType=RenewalOffer`, fetched the tenant/lease/document/audit data, and `POST /api/v1/notices/generate` returned `200`.
+- App console proof: Playwright CLI `console warning` returned 0 warnings and 0 errors.
+
+Status: Pass with documentation-only current-state verification. Continue the full real-user audit from the next unverified non-banking/non-QuickBooks workflow.
