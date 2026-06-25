@@ -26,6 +26,7 @@
 		requestExpenseDelete,
 		type ExpenseDeleteTarget
 	} from '$lib/accounting/expense-detail-actions';
+	import { buildExpenseReceiptDataForSave } from '$lib/accounting/expense-receipt-data';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Table from '$lib/components/ui/table';
@@ -263,12 +264,11 @@
 					li.amount != null
 			);
 
-		// receiptData is edited via the raw-JSON textarea but is intentionally NOT part of
-		// expenseDetailSchema (a string blob, not a validated field). Forward it explicitly so
-		// edits to the raw receipt JSON actually persist; '' → null clears it. It is seeded from
-		// the current value on edit, so an untouched save round-trips it unchanged.
-		const receiptData = form.receiptData.trim() === '' ? null : form.receiptData;
-		saveMutation.mutate({ portfolioId, ...result.data, receiptData, lineItems });
+		const receiptPayload = buildExpenseReceiptDataForSave({
+			rawReceiptData: form.receiptData,
+			lineItems: editedLineItems,
+		});
+		saveMutation.mutate({ portfolioId, ...result.data, ...receiptPayload, lineItems });
 	}
 
 	const deleteMutation = createMutation(() => ({

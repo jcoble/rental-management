@@ -275,7 +275,7 @@
 			setActiveMutation.mutate({ id: t.id, isActive: !t.isActive });
 		}}
 		class="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 {t.isActive ? 'bg-primary' : 'bg-input'}"
-		aria-label={t.isActive ? 'Turn off' : 'Turn on'}
+		aria-label={t.isActive ? `Pause recurring task ${t.title}` : `Resume recurring task ${t.title}`}
 	>
 		<span class="inline-block h-4 w-4 transform rounded-full bg-background shadow transition-transform {t.isActive ? 'translate-x-4' : 'translate-x-0.5'}"></span>
 	</button>
@@ -287,6 +287,7 @@
 			variant="ghost"
 			size="icon"
 			data-testid="recurring-task-edit-{t.id}"
+			aria-label={`Edit recurring task ${t.title}`}
 			onclick={(e) => { e.stopPropagation(); openEdit(t); }}
 		>
 			<Pencil class="h-4 w-4" />
@@ -295,6 +296,7 @@
 			variant="ghost"
 			size="icon"
 			data-testid="recurring-task-delete-{t.id}"
+			aria-label={`Delete recurring task ${t.title}`}
 			onclick={(e) => { e.stopPropagation(); deleteTarget = t; }}
 		>
 			<Trash2 class="h-4 w-4 text-destructive" />

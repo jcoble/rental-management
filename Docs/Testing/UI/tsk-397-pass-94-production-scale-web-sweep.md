@@ -92,18 +92,18 @@ Completed in browser with Playwright CLI against the local stack.
 | P94-006 | Tax | Year-end packet had a separate prior-year selector that could disagree with the visible summary year. | Packet download uses the selected tax summary year and shows it read-only. | `pass27-ui-regressions.test.ts` |
 | P94-007 | Lease detail | `View ledger` changed local state directly and URL/tab sync reset it. | Hero CTA now uses the shared `setTab('ledger')` router path. | `lease-detail-state.test.ts` |
 | P94-008 | Public application | After a blank submit, scan/manual fill left stale first name, last name, phone/email, and consent errors visible. | Field input, address/date controls, consent, and scan autofill now clear errors for changed fields. | `public-application-form.test.ts` |
+| P94-009 | Expense detail | Editing extracted line items could leave the raw receipt JSON panel stale, and clearing the raw JSON did not clear stored receipt data. | Expense saves now rebuild `receiptData.lineItems` from typed rows and send an explicit `clearReceiptData` flag when the raw panel is emptied. | `ExpenseServiceTests.UpdateAsync_WithClearReceiptData_ClearsStoredReceiptJson`, `expense-receipt-data.test.ts` |
+| P94-010 | Recurring maintenance | Row edit/delete/pause icon controls did not have task-specific accessible names. | Row actions now expose task-specific pause/resume, edit, and delete labels. | `recurring-maintenance-accessibility.test.ts` |
+| P94-011 | Generic document files | Generic document downloads and previews bypassed the same-origin file proxy path and preview images fetched full-size blobs. | Document downloads/previews now use `/document-file/{id}`, the proxy forwards `thumb=true`, the API serves inline JPEG thumbnails for image documents, and deposit/inspection previews request thumbnails. | `DocumentsControllerTests.GetFile_WithThumbForImage_ReturnsJpegThumbnail`, `documents.test.ts` |
 
 ## Remaining Bugs And Blocked Lanes
 
 | ID | Surface | Evidence | Status |
 | --- | --- | --- | --- |
-| P94-R01 | Expense detail | Editing normalized expense fields does not refresh the raw receipt JSON panel consistently. | Open |
 | P94-R02 | Applications | After approving an application, the detail page does not provide an obvious create-lease continuation. | Open |
 | P94-R03 | Tenant notices | Forced notice path can loop on `Create one anyway` when no eligible lease exists. | Open |
-| P94-R04 | Recurring maintenance | Row edit/delete icon buttons are not clearly labeled for assistive tech. | Open |
 | P94-R05 | Tenants search | Hyphenated search terms do not tokenize as a user would expect. | Open |
 | P94-R06 | Onboarding | Existing active lease can still land the owner on a create-first-lease step; email-alert setup can loop into onboarding. | Open |
-| P94-R07 | Document downloads | Generic document downloads are less consistent than the typed scan/payment/expense/work-order/application file proxies. | Open |
 | P94-R08 | Accounting/banking DB-side rule | Several report/accounting/banking endpoints still materialize rows and then filter/group/sort/aggregate in memory. This includes the general ledger running-balance lane and banking review candidate lane. | Larger refactor lane |
 | P94-R09 | External banking/accounting providers | Plaid Link and QuickBooks OAuth were not exercised because production/sensitive provider access requires user approval. | Blocked by credential/provider policy |
 
@@ -113,6 +113,7 @@ Backend focused tests:
 
 ```bash
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~AuditDetailHrefTests|FullyQualifiedName~PortfolioQaServiceTests.WorkOrdersTool_OrdersByRequestedAtInSql_ThenFormatsDatesForAnswer|FullyQualifiedName~ReportsServiceTests.GetSecurityDepositRegisterAsync_ComputesCurrentBalanceFromDeductionsAndReturned" --no-restore --logger "console;verbosity=normal"
+MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ExpenseServiceTests.UpdateAsync_WithClearReceiptData_ClearsStoredReceiptJson|FullyQualifiedName~DocumentsControllerTests.GetFile_WithThumbForImage_ReturnsJpegThumbnail" --no-restore --logger "console;verbosity=normal"
 ```
 
 Frontend unit tests:
@@ -121,6 +122,7 @@ Frontend unit tests:
 pnpm --dir web test:unit -- src/lib/qa/pass27-ui-regressions.test.ts
 pnpm --dir web test:unit -- src/lib/leases/lease-detail-state.test.ts
 pnpm --dir web test:unit -- src/lib/applications/public-application-form.test.ts
+pnpm --dir web test:unit -- src/lib/accounting/expense-receipt-data.test.ts src/lib/maintenance/recurring-maintenance-accessibility.test.ts src/lib/api/endpoints/documents.test.ts
 ```
 
 Browser retests after fixes:
@@ -132,4 +134,3 @@ Browser retests after fixes:
 - `/tax`: packet year followed selected summary year and downloaded `year-end-2026.pdf`.
 - `/leases/1`: `View ledger` moved to `?tab=ledger` and rendered the ledger tab.
 - `/apply/{token}`: blank-submit errors cleared immediately as required fields and consent were filled.
-

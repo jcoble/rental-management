@@ -166,7 +166,7 @@
 		for (const doc of photos) {
 			if (!doc.isImage || loadedUrls[doc.id]) continue;
 			loadedUrls[doc.id] = ''; // mark in-flight so we don't double-fetch
-			fileObjectUrl(doc.id)
+			fileObjectUrl(doc.id, { thumb: true })
 				.then((url) => {
 					loadedUrls[doc.id] = url;
 					thumbUrls = { ...thumbUrls, [doc.id]: url };

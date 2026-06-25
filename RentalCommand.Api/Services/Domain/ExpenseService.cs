@@ -312,7 +312,8 @@ public class ExpenseService : IExpenseService
         if (request.Notes != null) entity.Notes = request.Notes;
         if (request.Subtotal.HasValue) entity.Subtotal = request.Subtotal;
         if (request.TaxAmount.HasValue) entity.TaxAmount = request.TaxAmount;
-        if (request.ReceiptData != null) entity.ReceiptData = request.ReceiptData;
+        if (request.ClearReceiptData == true) entity.ReceiptData = null;
+        else if (request.ReceiptData != null) entity.ReceiptData = request.ReceiptData;
 
         // When the caller provides a LineItems list (even empty), REPLACE all existing rows.
         // A null LineItems means "leave existing rows untouched".
