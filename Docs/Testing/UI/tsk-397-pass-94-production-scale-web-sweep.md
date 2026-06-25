@@ -106,12 +106,13 @@ Completed in browser with Playwright CLI against the local stack.
 | P94-017 | Banking summary | Connection count used the already materialized ordered connection list. | Banking summary now uses a SQL `COUNT(*)` for connection count and separately materializes the ordered connection list. | `BankingServiceTests.GetSummaryAsync_ComputesConnectionCountInSql` |
 | P94-018 | General ledger report | General ledger rows were filtered/sorted in SQL, then `RunningBalance` was calculated in a post-materialization loop. | General ledger now projects running balance with a correlated SQL sum in the ordered ledger-row query. | `ReportsServiceTests.GetGeneralLedgerAsync_ComputesRunningBalanceInSql` |
 | P94-019 | Dashboard net KPI | Dashboard hero/KPI showed `$25` net this month while the detailed money snapshot showed `$16.25` kept after an unmatched `$8.75` bank withdrawal. | Dashboard accounting now uses the same cash-movement definition as the money snapshot: all paid payment types plus unmatched bank deposits, minus paid/incurred expenses and unmatched bank withdrawals, all computed DB-side. | `SoftDeleteKpiTests.DashboardNetThisMonth_UsesExpensePaidDateFallbackLikeMoneySnapshot`, `SoftDeleteKpiTests.DashboardNetThisMonth_IncludesUnmatchedBankCashMovementAndNonRentPaymentsLikeMoneySnapshot` |
+| P94-020 | Banking review queue | `/banking` review queue counted suggestible unmatched bank lines in SQL, then loaded every suggestible row before rendering review items. | Review queue now accepts `skip/take`, clamps page size, orders/pages suggestible rows in SQL before suggestion mapping, returns pagination metadata, and the web page requests bounded pages with Previous/Next controls. | `BankingServiceTests.ReviewQueue_PagesSuggestibleTransactionsInSql` |
 
 ## Remaining Bugs And Blocked Lanes
 
 | ID | Surface | Evidence | Status |
 | --- | --- | --- | --- |
-| P94-R08 | Accounting/banking DB-side rule | The accounting summary, banking summary, and general-ledger running-balance violations were fixed in this checkpoint. A narrower follow-up audit is still needed for remaining accounting/banking page-row enrichment and provider-payload reconciliation paths, such as banking review candidate shaping and accounting reconciliation enrichment, before calling the DB-side sweep fully clean. | Follow-up classification/refactor lane |
+| P94-R08 | Accounting/banking/reporting DB-side rule | Accounting summary, banking summary, general-ledger running balance, dashboard net cash movement, and banking review-queue paging are fixed. Remaining confirmed violations are larger reporting/accounting refactor lanes: Schedule E row facts, year-end packet P&L, year-end rent roll past-due enrichment, property P&L property-total joins, money snapshot past-due drill-down metadata joins, and provider-payload mapping/retry matching. | Follow-up refactor lane |
 | P94-R09 | External banking/accounting providers | Plaid Link and QuickBooks OAuth were not exercised because production/sensitive provider access requires user approval. | Blocked by credential/provider policy |
 
 ## Verification Commands
@@ -124,6 +125,7 @@ MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~TenantServiceTests" --no-restore --logger "console;verbosity=normal"
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~AccountingServiceTests.GetSummaryAsync_OrdersAndTotalsExpenseCategoriesInSql|FullyQualifiedName~BankingServiceTests.GetSummaryAsync_ComputesConnectionCountInSql|FullyQualifiedName~ReportsServiceTests.GetGeneralLedgerAsync_ComputesRunningBalanceInSql" --no-restore --logger "console;verbosity=normal"
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~SoftDeleteKpiTests|FullyQualifiedName~DashboardOccupancyDefinitionTests|FullyQualifiedName~AccountingServiceTests.GetSnapshotAsync" --no-restore --logger "console;verbosity=normal"
+MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~BankingServiceTests" --no-restore --logger "console;verbosity=normal"
 ```
 
 Frontend unit tests:
@@ -136,6 +138,7 @@ pnpm --dir web test:unit -- src/lib/accounting/expense-receipt-data.test.ts src/
 pnpm --dir web test:unit -- src/lib/applications/application-approval-continuation.test.ts
 pnpm --dir web test:unit -- src/lib/tenants/tenant-notice-state.test.ts
 pnpm --dir web test:unit -- src/lib/onboarding/onboarding-flow-state.test.ts
+pnpm --dir web check
 ```
 
 Browser retests after fixes:
@@ -173,3 +176,4 @@ Browser retests after fixes:
 - `/leases/3?tab=agreement` and `/sign/{token}` decline path: created draft lease `QA-DECLINE-2026-001` from the owner UI for `CSV ImportOne`, generated the agreement PDF, sent it for signature, opened the public signer link, used `Decline to sign`, filled `Need the move-in date corrected before signing.`, and submitted the decline. The public page rendered terminal `You declined to sign`; the database stored request and signer status `Declined`, and `SignatureAuditEvents` stored `Declined` with the supplied reason. The owner e-sign card showed `Declined` and offered `Send for signature` again with 0 console warnings/errors.
 - `/sign/{expired-token}`: resent `QA-DECLINE-2026-001`, then moved the new local QA signer expiry into the past to create a deterministic expired-link edge case. Opening the public link rendered `This signing link is no longer active` with safe copy and no signer details; console warnings/errors stayed at 0.
 - `/sign/{drawn-token}` drawn signing: resent `QA-DECLINE-2026-001` again, opened the new public link, switched to `Draw it`, drew a real pointer stroke on `sign-canvas`, checked E-SIGN consent, and submitted. The public page rendered terminal `Signed — all done`; the database stored request `Completed`, signer `Signed`, `SignatureType=Drawn`, `drawn_bytes=15781`, consent true, and generated `lease-3-executed.pdf`/`lease-3-signed.pdf`. Returning as owner showed the lease `Active`, e-sign card `Signed`, and downloaded `.playwright-cli/signed-lease-3.pdf` as a valid 3-page PDF with 0 console warnings/errors.
+- `/banking`: after restarting the local stack on the rebuilt API, signed in with the seeded local dev admin through the visible dev-login helper, chose the clean real-portfolio setup path, opened `/banking`, and verified the review queue requested `GET /api/v1/banking/review-queue?skip=0&take=50 => 200` with response `{"count":0,"skip":0,"take":50,"items":[]}`. The page rendered `Nothing to review.` and console errors/warnings stayed at 0.
