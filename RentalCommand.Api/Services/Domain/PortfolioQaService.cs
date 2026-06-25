@@ -33,8 +33,9 @@ public class PortfolioQaService : IPortfolioQaService
     [
         new LlmToolSpec(
             "get_financial_summary",
-            "Returns collected rent, outstanding rent, overdue rent (amount + count), " +
-            "and total expenses broken down by IRS Schedule E category for the portfolio.",
+            "Returns current ledger totals plus month-to-date and trailing-30-day money snapshots. " +
+            "Use the returned period labels; do not describe all-time/current-ledger totals as this month. " +
+            "Unmatched bank deposits are included in collected cash and must be mentioned separately.",
             """{"type":"object","properties":{},"required":[]}"""),
 
         new LlmToolSpec(
@@ -562,13 +563,60 @@ public class PortfolioQaService : IPortfolioQaService
     private async Task<string> GetFinancialSummaryAsync(int portfolioId, CancellationToken ct)
     {
         var summary = await _accounting.GetSummaryAsync(portfolioId, ct);
+        var snapshot = await _accounting.GetSnapshotAsync(portfolioId, ct);
+
+        var unmatchedBankDeposits = await _db.BankTransactions
+            .AsNoTracking()
+            .Where(t =>
+                t.PortfolioId == portfolioId &&
+                t.MatchStatus != "Removed" &&
+                t.Amount > 0 &&
+                t.MatchedPaymentId == null)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Count = g.Count(),
+                Total = g.Sum(t => t.Amount),
+            })
+            .FirstOrDefaultAsync(ct);
 
         var result = new
         {
-            collected = summary.Payments.Collected,
-            outstanding = summary.Payments.Outstanding,
-            overdue = summary.Payments.Overdue,
-            overdueCount = summary.Payments.OverdueCount,
+            currentLedger = new
+            {
+                scope = "All current recorded payments plus unmatched positive bank deposits; not limited to this month.",
+                collected = summary.Payments.Collected,
+                outstanding = summary.Payments.Outstanding,
+                overdue = summary.Payments.Overdue,
+                overdueCount = summary.Payments.OverdueCount,
+                totalExpenses = summary.TotalExpenses,
+            },
+            monthToDate = new
+            {
+                snapshot.PeriodLabel,
+                periodStart = snapshot.PeriodStart.ToString("yyyy-MM-dd"),
+                periodEnd = snapshot.PeriodEnd.ToString("yyyy-MM-dd"),
+                collected = snapshot.Collected,
+                spent = snapshot.Spent,
+                net = snapshot.Net,
+            },
+            last30Days = new
+            {
+                collected = snapshot.CollectedLast30Days,
+                spent = snapshot.SpentLast30Days,
+                net = snapshot.NetLast30Days,
+            },
+            pastDue = new
+            {
+                amount = snapshot.PastDueAmount,
+                count = snapshot.PastDueCount,
+            },
+            unmatchedBankDeposits = new
+            {
+                count = unmatchedBankDeposits?.Count ?? 0,
+                total = unmatchedBankDeposits?.Total ?? 0m,
+                note = "These deposits are included in collected cash until matched or removed; mention separately so users do not mistake them for rent-payment totals.",
+            },
             totalExpenses = summary.TotalExpenses,
             expensesByCategory = summary.ExpensesByCategory
                 .Select(e => new { category = e.CategoryName, total = e.Total, count = e.Count })
