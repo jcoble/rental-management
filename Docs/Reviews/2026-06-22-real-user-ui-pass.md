@@ -45,6 +45,7 @@ Fixed and verified:
 - `TSK397-B082` and `B083`: typed DatePicker dates now immediately update modal-gated actions, and Give Notice keeps lease/signature lifecycle state coherent so Notice given status, actions, and move-out date render together.
 - `TSK397-B084`: cancelling a Notice given lease back to Active now clears the expected move-out date so the active lease no longer shows stale move-out workflow data.
 - `TSK397-B085`: app-shell query retry now treats request abort/timeouts as transient, so Command Center unit navigation does not leave valid unit detail pages in a false `This unit could not be loaded` state while preserving fast non-retry behavior for deterministic 4xx errors.
+- `TSK397-B086`: Activity history and Admin forensic audit inspection rows now link to `/maintenance/inspections/{id}` instead of the dead `/inspections/{id}` route.
 - `TSK-401`: Unit Command Center `List this unit` now continues into a unit-scoped public application link with property/unit preselection.
 - `TSK-404`: Unit Command Center `Send renewal` current-state retest no longer reproduces the no-op; both sample renewal units link into the tenant notice workflow and open a renewal-offer draft without sending.
 - `TSK-406`: local API and Engine scan workers now share one upload directory by default and in local Docker Compose, so camera-image scans created by the web app are readable by the Engine.
@@ -1072,7 +1073,7 @@ The current pass is not a complete every-control inventory. The next new-user pa
 - `/docs`, public `/apply/[token]`, and public `/sign/[token]`: docs search/no-results/article/navigation/404, valid/invalid application links, required/invalid-email validation, synthetic image scan success, application submit success, valid/invalid/expired signing links, expired direct document rejection, active PDF open/download, typed/drawn signature, clear, decline modal, and signed/declined terminal states are browser-proven. Remaining variants include duplicate applications, public application scan failure/no extracted fields, staff-side signing send/resend, provider-backed delivery, larger signing envelopes with multiple signers, and stale/reused token reload states after terminal actions.
 - App shell/navigation: staff versus portal role menus, collapsible groups, collapsed rail, mobile drawer/overlay, command-center search/no matches, header badges, account menu/logout, theme toggle, and role-hidden route gates.
 - Shared controls in composed routes: data grids, pagination, search inputs, confirm dialogs, app-shell navigation, command-center navigation, notification bell/list interactions, keyboard/focus/escape behavior, and select-all/bulk states. FileDrop unsupported-file rejection is fixed and browser-proven for drag/drop on `/scan`; upload failure states still need route-specific coverage.
-- `/activity/*` and `/analytics/*`: route-level matrix with evidence for each visible control cluster and empty/error/loading state.
+- `/activity/*` and `/analytics/*`: route redirects are browser-proven in Pass 78. Remaining audit/admin-audit role-denied and service-error variants stay open with the broader admin/error-state lane.
 
 ## DB-Side Rule Findings
 
@@ -3830,3 +3831,52 @@ Verification:
 - Local recovery note: a mid-pass Vite outage and API self-signed TLS trust issue were resolved by restarting web with the API cert trusted via `NODE_EXTRA_CA_CERTS=/tmp/rentalcommand-api-6041.pem`. After re-login, Settings returned to the example-data state. This was test-harness recovery, not a product bug.
 
 Status: Pass with documentation-only verification for the Settings Hub. Continue the real-user audit with the next remaining non-banking/non-QuickBooks route group. Deferred boundaries remain final Go Live, real SMS delivery, QuickBooks/accounting connect/import/disconnect, Plaid banking, and production/sensitive data.
+
+## Pass 78 Activity And Audit Route Matrix
+
+Date: 2026-06-25
+Branch: `tsk-397-real-user-pass-78`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Dev admin sample-data user: Rental Command Admin, `admin@rentalcommand.local`
+- Data mode: local example/sample data only; the app banner states example data does not send real emails/texts or charge cards.
+
+Guide:
+- `Docs/Testing/UI/tsk-397-pass-78-activity-audit.md`
+
+Acceptance criteria:
+- `/audit` must load landlord-facing activity history without raw forensic JSON/IP labels.
+- Search, no-results, action/entity filters, refresh, overfetch pagination, and detail links must behave as a real user expects.
+- Admin users must reach `/admin/audit`, see IP/raw old-new panels, filter rows, open entity records, and export the filtered CSV set.
+- Legacy `/activity` and `/analytics` route aliases must redirect to their current surfaces without 404s.
+
+Bug `TSK397-B086` / Notion `Fix audit inspection row detail links`:
+- Repro before fix: from `/audit`, the first inspection row rendered href `/inspections/1`. Clicking it loaded `https://localhost:6042/inspections/1` with page title `Page not found - Rental Command`.
+- Root cause: `AuditEntryResponse.BuildDetailHref("Inspection", id)` emitted the API/mobile-shaped `/inspections/{id}` path, but the web inspection detail page lives at `/maintenance/inspections/{id}`.
+- Fix: the shared audit detail-href mapper now emits `/maintenance/inspections/{id}` for `Inspection`.
+
+Regression:
+- RED before fix: `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~AuditDetailHrefTests --no-restore` failed because inspection hrefs returned `/inspections/7`.
+- GREEN after fix: the same focused test passed 2/2. The existing `SQLitePCLRaw.lib.e_sqlite3` NU1903 warning is unrelated.
+- API build after fix: `MSBUILDDISABLENODEREUSE=1 dotnet build RentalCommand.Api/RentalCommand.Api.csproj --no-restore` succeeded with 0 warnings and 0 errors.
+
+Verification:
+- `/audit` loaded `Activity history - Rental Command`, showed the example-data banner, Admin `Advanced`, `Refresh`, search, action/entity filters, `Page 1 · 50 shown`, disabled Prev, enabled Next, and 50 rows.
+- Post-fix row proof: first inspection row rendered `/maintenance/inspections/1`; clicking it loaded `https://localhost:6042/maintenance/inspections/1` with page title `Inspection - Rental Command` / `MoveIn inspection - Rental Command`, not a 404.
+- Search proof: `Inspection` narrowed to six inspection rows; `qx-empty-never-match-omega` showed `No audit entries found.` with disabled Prev/Next.
+- Filter proof: `Created` + `Expense` narrowed to 35 rows, and Refresh preserved both selected filters.
+- Pagination proof: unfiltered `/audit` moved from `Page 1 · 50 shown` to `Page 2 · 50 shown` and back.
+- `/admin/audit` loaded `Audit (forensic) - Rental Command` with export/refresh/search/filter controls, IP display, raw old/new JSON disclosure, entity links, and `Page 1 · 50 shown`.
+- Admin filter/export proof: `Created` + `Inspection` narrowed to six rows, entity links stayed `/maintenance/inspections/{id}`, and filtered export requested `/api/v1/admin/audit/export?sort=-timestamp&operation=Created&entityType=Inspection`, returned `200`, and downloaded `audit-2026-06-25-03-45-50.csv`.
+- CSV artifact: `output/playwright/pass78-audit-export.csv` has header `Timestamp,Action,Description,Actor,UserId,EntityType,EntityId,IpAddress,ChangeReason` plus six Created/Inspection rows.
+- Redirect proof: `/activity` redirected to `/audit`; `/analytics` redirected to `/` Dashboard without 404.
+- Screenshot proof: `output/playwright/pass78-admin-audit-proof.png`.
+- Console proof: final Playwright `console error` returned `Total messages: 2 (Errors: 0, Warnings: 0)`.
+
+Status: Pass after fixing audit inspection detail links. Remaining related variants are admin/role-denied and service-error states; provider-bound QuickBooks/Plaid work stays deferred.
