@@ -1,7 +1,5 @@
 import type { DocumentItem } from '$lib/types';
-import { api, refreshToken } from '../client';
-import { CLIENT_API_BASE_URL } from '$lib/config';
-import { getAuthState, isTokenExpired } from '$lib/stores/auth.svelte';
+import { api } from '../client';
 import { browser } from '$app/environment';
 
 export const documents = {
@@ -33,27 +31,22 @@ export const documents = {
 };
 
 /**
- * Fetch the document blob with a bearer token and trigger a browser download.
- * Mirrors downloadScheduleECsv from accounting.ts.
+ * Same-origin proxy URL for a stored document blob. The SvelteKit route forwards
+ * the user's auth cookie to the API so document downloads work under the same
+ * browser contract as scanned lease/payment/expense files.
+ */
+export function documentFileHref(id: number, options?: { thumb?: boolean }): string {
+	const base = `/document-file/${id}`;
+	return options?.thumb ? `${base}?thumb=true` : base;
+}
+
+/**
+ * Fetch the document blob through the cookie-authenticated proxy and trigger a browser download.
  */
 export async function downloadDocument(id: number, fileName: string): Promise<void> {
 	if (!browser) return;
 
-	if (isTokenExpired(120)) {
-		try {
-			await refreshToken();
-		} catch {
-			// Proceed; bearer may still be usable.
-		}
-	}
-
-	const { accessToken } = getAuthState();
-	const url = `${CLIENT_API_BASE_URL}/documents/${id}/file`;
-
-	const response = await fetch(url, {
-		credentials: 'include',
-		headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
-	});
+	const response = await fetch(documentFileHref(id), { credentials: 'include' });
 
 	if (!response.ok) {
 		throw new Error(`Document download failed (${response.status})`);
@@ -71,26 +64,12 @@ export async function downloadDocument(id: number, fileName: string): Promise<vo
 }
 
 /**
- * Fetch the document blob with a bearer token and return a temporary object URL
+ * Fetch the document blob through the cookie-authenticated proxy and return a temporary object URL
  * suitable for inline preview (images, PDFs). Caller is responsible for calling
  * URL.revokeObjectURL when done.
  */
-export async function fileObjectUrl(id: number): Promise<string> {
-	if (isTokenExpired(120)) {
-		try {
-			await refreshToken();
-		} catch {
-			// Proceed.
-		}
-	}
-
-	const { accessToken } = getAuthState();
-	const url = `${CLIENT_API_BASE_URL}/documents/${id}/file`;
-
-	const response = await fetch(url, {
-		credentials: 'include',
-		headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {}
-	});
+export async function fileObjectUrl(id: number, options?: { thumb?: boolean }): Promise<string> {
+	const response = await fetch(documentFileHref(id, options), { credentials: 'include' });
 
 	if (!response.ok) {
 		throw new Error(`Document fetch failed (${response.status})`);
