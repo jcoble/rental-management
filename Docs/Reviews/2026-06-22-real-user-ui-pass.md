@@ -4006,3 +4006,43 @@ Verification:
 - Final console proof after returning to `/portal/messages`: Vite debug messages only, `Errors: 0`, `Warnings: 0`.
 
 Status: Pass with documentation-only verification. No code fix or regression test was added in this slice. Remaining related variants are service-error simulation and platform-admin allowlist Engine health; provider-bound QuickBooks/Plaid work stays deferred.
+
+## Pass 82 Docs And Help Surface
+
+Date: 2026-06-25
+Branch: `tsk-397-real-user-pass-82`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Accounts:
+- Anonymous visitor
+- Tenant-only account: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`
+
+Guide:
+- `Docs/Testing/UI/tsk-397-pass-82-docs-help.md`
+
+Acceptance criteria:
+- Public docs index/articles must load anonymously with public auth CTAs, while signed-in users entering from Help must see `Back to app`.
+- Docs search must filter the finite docs index, update the result count, and show a no-results state.
+- Article pages must render breadcrumb context, article markdown, left nav, right-rail TOC anchors, and prev/next navigation.
+- Missing article slugs must show a recoverable docs 404 page.
+- Tenant users must return from docs to `/portal` through the normal app route.
+
+Verification:
+- Anonymous `/docs` rendered the public docs shell with 30 articles across all categories, `Sign in`, `Get started`, persistent left docs nav, search, and the start-here card.
+- Search `lease` returned `9 of 30 articles match "lease"` and filtered the visible cards to the matching categories/counts.
+- Search `qx-no-doc-match-1782364200` returned `0 of 30 articles match ...` and showed the no-results recovery copy.
+- `/docs/welcome` rendered breadcrumb `Docs / Getting Started / Welcome to Rental Command`, article title/summary/body, left nav, right-rail `On this page`, and `Next Getting Started`.
+- Prev/next navigation opened `/docs/getting-started`, which rendered `Previous Welcome to Rental Command`, `Next How Scanning Works`, and a regenerated TOC.
+- TOC anchor `Set up your real portfolio` updated the URL hash and scrolled the heading below the sticky docs header.
+- `/docs/qx-missing-doc-1782364211` showed `Article not found`, `That documentation article could not be found.`, and `Back to docs`; clicking recovery returned to `/docs`.
+- Tenant Help entry from `/portal` opened `/docs` with `Back to app`; clicking it returned Blake Hayes Portal to `/portal`.
+- Screenshot proof: `output/playwright/pass82-docs-index.png`.
+- Clean final console proof after reopening `/docs`: two Vite debug messages only, `Errors: 0`, `Warnings: 0`.
+- Network proof: no failed dynamic app requests on the clean docs index load. The deliberate missing-article case produced only the expected browser 404 resource-load line for `/docs/qx-missing-doc-1782364211`.
+
+Status: Pass with documentation-only verification. No code fix or regression test was added in this slice. Deferred boundaries remain production/sensitive data, real SMS/email delivery, Plaid banking, connected QuickBooks/provider accounting, and final Go Live.
