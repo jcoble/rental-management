@@ -1161,45 +1161,22 @@ public class AccountingService : IAccountingService
         var scheduleE = await _scheduleE.GetReportAsync(portfolioId, year, ct: ct);
 
         // ── Per-property P&L for the year ─────────────────────────────────────────────────────────
-        // Income: Rent cash received (Paid full Amount + Partial AmountPaid) whose PaidDate falls in the
-        // year, keyed by property via Lease — matching the Schedule E rental-income definition so the
-        // packet reconciles with it. Grouped + summed SQL-side (one row per property), never by grouping
-        // materialized rows.
-        var incomeByProperty = (await _db.Payments
-            .AsNoTracking()
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                p.PaymentType == PaymentType.Rent &&
-                (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
-                p.PaidDate != null &&
-                p.PaidDate.Value.Year == year &&
-                p.Lease != null)
-            .GroupBy(p => p.Lease!.PropertyId)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p =>
-                p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) })
-            .ToListAsync(ct))
-            .ToDictionary(g => g.PropertyId, g => g.Total);
+        var yearStart = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var yearEndExclusive = yearStart.AddYears(1);
 
-        // Expenses for the year, keyed by property + Schedule E category — grouped on both keys
-        // SQL-side. Cash basis (matching the cash-basis income above and the packet's monthly cash-flow
-        // block below): only Paid expenses count, dated by PaidAt (falling back to IncurredAt) — the same
-        // COALESCE(PaidAt, IncurredAt) convention used elsewhere. The result (one row per
-        // property/category pair) is reshaped into the nested map in memory, but no SUM is computed in
-        // memory.
+        // Category rows are grouped SQL-side and only reshaped into the packet's nested DTO structure
+        // after materialization. Property-level income, total expense, and net are projected below with
+        // the property rows themselves, avoiding in-memory joins from aggregate dictionaries.
         var expenseCategoryTotals = await _db.Expenses
             .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId && e.Status == ExpenseStatus.Paid && (e.PaidAt ?? e.IncurredAt).Year == year && e.PropertyId != null)
+            .Where(e => e.PortfolioId == portfolioId &&
+                        e.Status == ExpenseStatus.Paid &&
+                        (e.PaidAt ?? e.IncurredAt) >= yearStart &&
+                        (e.PaidAt ?? e.IncurredAt) < yearEndExclusive &&
+                        e.PropertyId != null)
             .GroupBy(e => new { PropertyId = e.PropertyId!.Value, e.Category })
             .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct);
-
-        var expenseTotalsByProperty = (await _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId && e.Status == ExpenseStatus.Paid && (e.PaidAt ?? e.IncurredAt).Year == year && e.PropertyId != null)
-            .GroupBy(e => e.PropertyId!.Value)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) })
-            .ToListAsync(ct))
-            .ToDictionary(g => g.PropertyId, g => g.Total);
 
         var expensesByProperty = new Dictionary<int, Dictionary<ScheduleECategory, decimal>>();
         foreach (var row in expenseCategoryTotals)
@@ -1222,22 +1199,50 @@ public class AccountingService : IAccountingService
                     pay.PaymentType == PaymentType.Rent &&
                     (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial) &&
                     pay.PaidDate != null &&
-                    pay.PaidDate.Value.Year == year &&
+                    pay.PaidDate.Value >= yearStart &&
+                    pay.PaidDate.Value < yearEndExclusive &&
                     pay.Lease != null &&
                     pay.Lease.PropertyId == p.Id) ||
                  _db.Expenses.Any(e =>
                     e.PortfolioId == portfolioId &&
                     e.Status == ExpenseStatus.Paid &&
-                    (e.PaidAt ?? e.IncurredAt).Year == year &&
+                    (e.PaidAt ?? e.IncurredAt) >= yearStart &&
+                    (e.PaidAt ?? e.IncurredAt) < yearEndExclusive &&
                     e.PropertyId == p.Id)))
             .OrderBy(p => p.Name)
-            .Select(p => new { p.Id, p.Name })
+            .Select(p => new
+            {
+                p.Id,
+                p.Name,
+                Income = _db.Payments
+                    .AsNoTracking()
+                    .Where(pay =>
+                        pay.PortfolioId == portfolioId &&
+                        pay.PaymentType == PaymentType.Rent &&
+                        (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial) &&
+                        pay.PaidDate != null &&
+                        pay.PaidDate.Value >= yearStart &&
+                        pay.PaidDate.Value < yearEndExclusive &&
+                        pay.Lease != null &&
+                        pay.Lease.PropertyId == p.Id)
+                    .Sum(pay => (decimal?)(pay.Status == PaymentStatus.Partial
+                        ? (pay.AmountPaid ?? 0m)
+                        : pay.Amount)) ?? 0m,
+                TotalExpenses = _db.Expenses
+                    .AsNoTracking()
+                    .Where(e =>
+                        e.PortfolioId == portfolioId &&
+                        e.Status == ExpenseStatus.Paid &&
+                        (e.PaidAt ?? e.IncurredAt) >= yearStart &&
+                        (e.PaidAt ?? e.IncurredAt) < yearEndExclusive &&
+                        e.PropertyId == p.Id)
+                    .Sum(e => (decimal?)e.Amount) ?? 0m,
+            })
             .ToListAsync(ct);
 
         var propertyPnL = new List<YearEndPropertyPnL>(properties.Count);
         foreach (var prop in properties)
         {
-            var income = incomeByProperty.GetValueOrDefault(prop.Id, 0m);
             var catMap = expensesByProperty.GetValueOrDefault(prop.Id);
 
             var categories = new List<ScheduleECategoryAmount>();
@@ -1251,16 +1256,14 @@ public class AccountingService : IAccountingService
                 }
             }
 
-            var totalExpenses = expenseTotalsByProperty.GetValueOrDefault(prop.Id, 0m);
-
             propertyPnL.Add(new YearEndPropertyPnL
             {
                 PropertyId = prop.Id,
                 PropertyName = prop.Name,
-                Income = income,
+                Income = prop.Income,
                 ExpensesByCategory = categories,
-                TotalExpenses = totalExpenses,
-                Net = income - totalExpenses,
+                TotalExpenses = prop.TotalExpenses,
+                Net = prop.Income - prop.TotalExpenses,
             });
         }
 
