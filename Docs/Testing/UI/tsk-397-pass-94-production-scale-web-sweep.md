@@ -95,12 +95,12 @@ Completed in browser with Playwright CLI against the local stack.
 | P94-009 | Expense detail | Editing extracted line items could leave the raw receipt JSON panel stale, and clearing the raw JSON did not clear stored receipt data. | Expense saves now rebuild `receiptData.lineItems` from typed rows and send an explicit `clearReceiptData` flag when the raw panel is emptied. | `ExpenseServiceTests.UpdateAsync_WithClearReceiptData_ClearsStoredReceiptJson`, `expense-receipt-data.test.ts` |
 | P94-010 | Recurring maintenance | Row edit/delete/pause icon controls did not have task-specific accessible names. | Row actions now expose task-specific pause/resume, edit, and delete labels. | `recurring-maintenance-accessibility.test.ts` |
 | P94-011 | Generic document files | Generic document downloads and previews bypassed the same-origin file proxy path and preview images fetched full-size blobs. | Document downloads/previews now use `/document-file/{id}`, the proxy forwards `thumb=true`, the API serves inline JPEG thumbnails for image documents, and deposit/inspection previews request thumbnails. | `DocumentsControllerTests.GetFile_WithThumbForImage_ReturnsJpegThumbnail`, `documents.test.ts` |
+| P94-012 | Application approval | After approving an application, the detail page only linked to the created tenant and did not continue the applicant into lease setup. | Approved application banners now include `Create lease`, linking to `/leases?create=1&tenantId={tenantId}`; the leases page opens the create modal with that tenant selected. | `application-approval-continuation.test.ts` |
 
 ## Remaining Bugs And Blocked Lanes
 
 | ID | Surface | Evidence | Status |
 | --- | --- | --- | --- |
-| P94-R02 | Applications | After approving an application, the detail page does not provide an obvious create-lease continuation. | Open |
 | P94-R03 | Tenant notices | Forced notice path can loop on `Create one anyway` when no eligible lease exists. | Open |
 | P94-R05 | Tenants search | Hyphenated search terms do not tokenize as a user would expect. | Open |
 | P94-R06 | Onboarding | Existing active lease can still land the owner on a create-first-lease step; email-alert setup can loop into onboarding. | Open |
@@ -123,6 +123,7 @@ pnpm --dir web test:unit -- src/lib/qa/pass27-ui-regressions.test.ts
 pnpm --dir web test:unit -- src/lib/leases/lease-detail-state.test.ts
 pnpm --dir web test:unit -- src/lib/applications/public-application-form.test.ts
 pnpm --dir web test:unit -- src/lib/accounting/expense-receipt-data.test.ts src/lib/maintenance/recurring-maintenance-accessibility.test.ts src/lib/api/endpoints/documents.test.ts
+pnpm --dir web test:unit -- src/lib/applications/application-approval-continuation.test.ts
 ```
 
 Browser retests after fixes:

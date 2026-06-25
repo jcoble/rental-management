@@ -21,6 +21,7 @@
 		getLeaseStatusOptions,
 		getLeasesEmptyStateCopy,
 	} from '$lib/leases/lease-list-state';
+	import { readLeaseCreatePrefill } from '$lib/leases/lease-create-prefill';
 	import { Plus, FileText } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Select from '$lib/components/ui/select';
@@ -94,6 +95,7 @@
 	let form = $state({ ...empty });
 	let formErrors = $state<Record<string, string>>({});
 	let deleteTarget = $state<Lease | null>(null);
+	let appliedCreatePrefillKey = $state('');
 
 	$effect(() => {
 		if (form.propertyId !== formPropertyId) {
@@ -135,9 +137,22 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	function openCreate() {
+	$effect(() => {
+		const prefill = readLeaseCreatePrefill(page.url.searchParams);
+		if (!prefill) {
+			appliedCreatePrefillKey = '';
+			return;
+		}
+
+		const key = `create:${prefill.tenantId}`;
+		if (appliedCreatePrefillKey === key) return;
+		appliedCreatePrefillKey = key;
+		openCreate({ tenantId: prefill.tenantId });
+	});
+
+	function openCreate(defaults: { tenantId?: string } = {}) {
 		editingId = null;
-		form = { ...empty };
+		form = { ...empty, tenantId: defaults.tenantId ?? '' };
 		formPropertyId = '';
 		formErrors = {};
 		showForm = true;
