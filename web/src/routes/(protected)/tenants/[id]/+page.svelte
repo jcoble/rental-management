@@ -10,7 +10,7 @@
 	import { tenantSchema, parseForm } from '$lib/schemas';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { getTenantNoticeEmptyCopy } from '$lib/tenants/tenant-notice-state';
+	import { getTenantNoticeEmptyCopy, getTenantNoticeEmptyState } from '$lib/tenants/tenant-notice-state';
 	import { getTenantDeleteState } from '$lib/tenants/tenant-delete-state';
 	import { readTenantNoticeAction } from '$lib/tenants/tenant-notice-action';
 	import { DataGrid } from '$lib/components/data-grid';
@@ -45,6 +45,9 @@
 
 	const tenant = $derived(tenantQuery.data);
 	const tenantLeases = $derived(leasesQuery.data ?? []);
+	const activeTenantLeaseCount = $derived(
+		tenant?.activeLeaseCount ?? tenantLeases.filter((lease) => lease.status === 'Active').length
+	);
 	const fullName = $derived(
 		tenant ? (tenant.fullName ?? `${tenant.firstName} ${tenant.lastName}`) : ''
 	);
@@ -117,7 +120,13 @@
 	let noticeActionHandled = false;
 	// Per-draft channel selection (portal / email / sms), defaulting to all on.
 	let noticeChannels = $state<Record<number, { portal: boolean; email: boolean; sms: boolean }>>({});
-	const noticeEmptyCopy = $derived(getTenantNoticeEmptyCopy(forcedNoticeLabel));
+	const noticeEmptyState = $derived(
+		getTenantNoticeEmptyState({
+			forcedNoticeLabel,
+			activeLeaseCount: activeTenantLeaseCount,
+			tenantId: id,
+		})
+	);
 
 	function noticeTypeLabel(type: string) {
 		switch (type) {
@@ -170,7 +179,13 @@
 			noticeChannels = seeded;
 			queryClient.invalidateQueries({ queryKey: ['notice-drafts', portfolioId] });
 			if (noticeDrafts.length === 0) {
-				showSuccess(getTenantNoticeEmptyCopy(selectedForcedNoticeLabel).message);
+				showSuccess(
+					getTenantNoticeEmptyState({
+						forcedNoticeLabel: selectedForcedNoticeLabel,
+						activeLeaseCount: activeTenantLeaseCount,
+						tenantId: id,
+					}).message
+				);
 			}
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -458,25 +473,37 @@
 		{:else if noticeDrafts.length === 0}
 			<div class="rounded-lg border border-border p-6 text-center" data-testid="tenant-notice-empty">
 				<BellRing class="mx-auto mb-2 h-6 w-6 text-muted-foreground" />
-				<p class="text-sm font-medium">{noticeEmptyCopy.message}</p>
+				<p class="text-sm font-medium">{noticeEmptyState.message}</p>
 				<p class="mt-1 text-xs text-muted-foreground">
-					{noticeEmptyCopy.description}
+					{noticeEmptyState.description}
 				</p>
 				<!-- Force a specific notice even outside the trigger window (e.g. an early renewal offer). -->
-				<p class="mt-4 text-xs font-medium uppercase tracking-wide text-muted-foreground">Create one anyway</p>
-				<div class="mt-2 flex flex-wrap items-center justify-center gap-2">
-					{#each FORCEABLE_NOTICE_TYPES as nt (nt.type)}
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={generateNoticeMutation.isPending}
-							onclick={() => generateNoticeMutation.mutate(nt.type)}
-							data-testid="tenant-notice-force-{nt.type}"
-						>
-							{nt.label}
-						</Button>
-					{/each}
-				</div>
+				{#if noticeEmptyState.showForceControls}
+					<p class="mt-4 text-xs font-medium uppercase tracking-wide text-muted-foreground">Create one anyway</p>
+					<div class="mt-2 flex flex-wrap items-center justify-center gap-2">
+						{#each FORCEABLE_NOTICE_TYPES as nt (nt.type)}
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={generateNoticeMutation.isPending}
+								onclick={() => generateNoticeMutation.mutate(nt.type)}
+								data-testid="tenant-notice-force-{nt.type}"
+							>
+								{nt.label}
+							</Button>
+						{/each}
+					</div>
+				{:else if noticeEmptyState.leaseActionHref}
+					<Button
+						variant="outline"
+						size="sm"
+						class="mt-4"
+						href={noticeEmptyState.leaseActionHref}
+						data-testid="tenant-notice-create-lease"
+					>
+						{noticeEmptyState.leaseActionLabel}
+					</Button>
+				{/if}
 			</div>
 		{:else}
 			<div class="space-y-4" data-testid="tenant-notice-drafts">
