@@ -60,6 +60,7 @@ Fixed and verified:
 - `TSK-419`: tenant portal lease Q&A answers now strip raw Markdown emphasis markers before rendering safe visible text.
 - `TSK-420`: staff and tenant Messages now keep the selected conversation URL in sync when a user clicks a thread or returns to the list, so stale notification/deep-link query strings no longer survive after visible thread changes.
 - `TSK-421`: tenant portal dashboard notification links now mark unread notifications read, refresh the app-shell unread badge, and then navigate to the target workflow.
+- `TSK-422`, `TSK-423`, and `TSK-424`: tenant portal dashboard now shows upcoming tenant appointments, treats due-today rent as due today instead of overdue, and fills tenant-scoped appointment unit labels from the active/latest lease when the appointment itself has no direct unit.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3419,3 +3420,55 @@ Verification:
 - DB proof after fix: `Notifications.Id = 8` for `TSK-397 Pass 65 lease portal question` has `ActionUrl = /portal/messages?conversation=2` and `ReadAt = 2026-06-24 05:50:56.5406+00`.
 
 Status: Pass after fixing tenant dashboard notification read-state. Continue the real-user tenant portal dashboard pass with the remaining dashboard cards and form states, then resume the broader non-banking/non-QuickBooks workflows.
+
+## Pass 68 Tenant Dashboard Cards and Appointments Continuation
+
+Date: 2026-06-25
+Branch: `tsk-397-422-423-424-portal-dashboard-cards-pass-68`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+
+Acceptance criteria:
+- The tenant dashboard should load the signed-in tenant's real upcoming appointments instead of static placeholder copy.
+- Dashboard appointment cards should show title, time window, location, appointment type, and status, then navigate to `/portal/appointments`.
+- Due-today scheduled rent should remain outstanding and visible as `0 days`, but should not be counted in the Overdue card or overdue item count.
+- Tenant-scoped appointments without a direct `UnitId` should still show the tenant's active/latest lease unit label so the tenant sees the expected home location.
+
+Bug `TSK-422`:
+- Repro: As Blake Hayes Portal, open `/portal`. `Appointments.Id = 1` exists for tenant `10`, title `Pass 51 service visit date fixed`, scheduled June 27, 2026, but the dashboard appointments panel rendered placeholder-only copy.
+- Observed before fix: the tenant dashboard did not call `portal.appointments()` and showed no appointment rows.
+- Fix: `/portal` now loads `['portal-appointments']`, renders loading/error/empty states, displays up to three appointment cards, and links each card to `/portal/appointments`.
+- Regression: `web/src/lib/portal/dashboard-page.test.ts`.
+
+Bug `TSK-423`:
+- Repro: scheduled rent due on the current UTC calendar date was counted as overdue because `PortalService.GetBalanceAsync` compared `DueDate < DateTime.UtcNow`.
+- Observed before fix: a payment due today could be marked overdue for most of the due date after midnight UTC.
+- Fix: `GetBalanceAsync` now uses `DateTime.UtcNow.Date` as the overdue cutoff. Scheduled or partial payments are overdue only if explicitly `Late` or due before the current UTC calendar day.
+- Regression: `RentalCommand.Api.Tests/Domain/PortalServiceBalanceTests.cs`.
+
+Bug `TSK-424`:
+- Repro: the live tenant appointment `Pass 51 service visit date fixed` is tenant-scoped and property-scoped, but `Appointments.UnitId` is null. The tenant has an active lease on Riverside Flats Unit 2B.
+- Observed before fix: the dashboard appointment card showed `Riverside Flats` without `Unit 2B`.
+- Fix: the portal appointment projection now falls back to the tenant's active/latest lease unit when an appointment itself has no direct unit, keeping the fallback inside the SQL projection.
+- Regression: `PortalServiceAppointmentTests.GetAppointmentsAsync_FallsBackToActiveLeaseUnitForTenantScopedAppointments`.
+
+Verification:
+- RED: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/dashboard-page.test.ts` failed before the dashboard appointments query existed.
+- RED: `MSBUILDDISABLENODEREUSE=1 rtk dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~PortalServiceBalanceTests --no-restore` failed before the due-today cutoff fix with due-today rent counted overdue.
+- RED: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~PortalServiceAppointmentTests --no-restore --logger "console;verbosity=normal"` failed before the unit fallback with `Expected appointment.UnitNumber to be "2B", but found <null>.`
+- GREEN: `rtk env MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~PortalServiceBalanceTests|FullyQualifiedName~PortalServiceAppointmentTests" --no-restore --logger "console;verbosity=normal"` passed 3/3 with the existing `SQLitePCLRaw.lib.e_sqlite3` NU1903 warning.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/dashboard-page.test.ts src/lib/portal/notifications-page.test.ts` passed 3/3.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- UI guide: `Docs/Testing/UI/tsk-397-pass-68-portal-dashboard-cards.md`.
+- Browser proof: Playwright CLI signed in as Blake, opened `/portal`, and rendered Overdue `$1,212.34` / `2 overdue items`, Next Rent `0` / `days until $22.25 is due`, the `$22.25` rent row due June 25, 2026 as `0 days`, and the appointment `Pass 51 service visit date fixed` with `Riverside Flats Unit 2B`, `Maintenance`, and `Scheduled`. Screenshot: `output/playwright/pass68-portal-dashboard-cards.png`.
+- Browser navigation proof: clicking the dashboard appointment row navigated to `https://localhost:6042/portal/appointments`; the page rendered the same appointment and `Riverside Flats Unit 2B`. Snapshot: `.playwright-cli/page-2026-06-25T01-04-56-411Z.yml`; screenshot: `output/playwright/pass68-portal-appointments-target.png`.
+- DB proof: inserted a synthetic local scheduled rent row only for browser setup, `Payments.Id = 8`, amount `$22.25`, due `2026-06-25 00:00:00+00`, note `TSK-423 due-today browser proof`; older June 24 scheduled rows remained overdue and unchanged. Appointment `Id = 1` has `TenantId = 10`, `PropertyId = 7`, `UnitId = NULL`, while tenant lease `Id = 8` has `UnitId = 9`, `UnitNumber = 2B`.
+
+Status: Pass after fixing tenant dashboard appointment visibility, due-today rent classification, and appointment unit fallback. Continue the real-user pass with remaining tenant dashboard form states and then broader non-banking/non-QuickBooks workflows.

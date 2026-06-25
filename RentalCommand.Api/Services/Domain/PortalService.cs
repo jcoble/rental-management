@@ -53,13 +53,14 @@ public class PortalService : IPortalService
 
     public async Task<PortalBalanceResponse> GetBalanceAsync(int portfolioId, int tenantId, CancellationToken ct = default)
     {
-        var now = DateTime.UtcNow;
+        var overdueCutoffUtc = DateTime.UtcNow.Date;
 
         // All four figures are conditional SUM/COUNT aggregates computed SQL-side in a single grouped
         // round-trip — no payment rows are pulled into memory. Partial-aware: a Paid payment contributes
         // its full Amount to Collected; a Partial contributes its collected AmountPaid to Collected and
         // only its unpaid remainder (Amount − AmountPaid) to Outstanding/Overdue; Scheduled/Late owe in
-        // full. Waived/Failed/Refunded are not money currently owed.
+        // full. Due-today payments are outstanding, not overdue; overdue starts at the next UTC calendar
+        // day boundary. Waived/Failed/Refunded are not money currently owed.
         var rollup = await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId &&
@@ -77,12 +78,12 @@ public class PortalService : IPortalService
                     : 0m),
                 Overdue = g.Sum(p =>
                     (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
-                    && (p.Status == PaymentStatus.Late || p.DueDate < now)
+                    && (p.Status == PaymentStatus.Late || p.DueDate < overdueCutoffUtc)
                         ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount)
                         : 0m),
                 OverdueCount = g.Count(p =>
                     (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
-                    && (p.Status == PaymentStatus.Late || p.DueDate < now)),
+                    && (p.Status == PaymentStatus.Late || p.DueDate < overdueCutoffUtc)),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -152,7 +153,15 @@ public class PortalService : IPortalService
                 CreatedAt = a.CreatedAt,
                 UpdatedAt = a.UpdatedAt,
                 PropertyName = a.Property == null ? null : a.Property.Name,
-                UnitNumber = a.Unit == null ? null : a.Unit.UnitNumber,
+                UnitNumber = a.Unit == null
+                    ? _db.Leases
+                        .Where(l => l.PortfolioId == portfolioId && l.TenantId == tenantId)
+                        .OrderByDescending(l => l.Status == LeaseStatus.Active)
+                        .ThenByDescending(l => l.EndDate)
+                        .ThenByDescending(l => l.Id)
+                        .Select(l => l.Unit == null ? null : l.Unit.UnitNumber)
+                        .FirstOrDefault()
+                    : a.Unit.UnitNumber,
                 TenantName = a.Tenant == null ? null : (a.Tenant.FirstName + " " + a.Tenant.LastName).Trim(),
             })
             .ToListAsync(ct);
