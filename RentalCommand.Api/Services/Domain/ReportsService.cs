@@ -890,6 +890,9 @@ public class ReportsService : IReportsService
         var (from, to) = ResolveRange(query);
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
+        const int expenseEntryKind = 0;
+        const int paymentEntryKind = 1;
+
         // Income: paid payments dated on PaidDate (fall back to DueDate). Expense: expenses dated on
         // PaidAt (fall back to IncurredAt). Income is positive, expense negative; running balance is the
         // cumulative net.
@@ -901,9 +904,10 @@ public class ReportsService : IReportsService
             paymentQuery = paymentQuery.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));
 
         var paymentEntries = paymentQuery
-            .Select(p => new GeneralLedgerEntry
+            .Select(p => new GeneralLedgerQueryRow
             {
                 Date = p.PaidDate ?? p.DueDate,
+                EntryKind = paymentEntryKind,
                 Type = "Payment",
                 Id = p.Id,
                 Description = p.PaymentType.ToString() + " — " + p.Lease!.Tenant!.FirstName + " " + p.Lease!.Tenant!.LastName,
@@ -922,9 +926,10 @@ public class ReportsService : IReportsService
             expenseQuery = expenseQuery.Where(e => e.PropertyId != null && propertyFilter.Contains(e.PropertyId.Value));
 
         var expenseEntries = expenseQuery
-            .Select(e => new GeneralLedgerEntry
+            .Select(e => new GeneralLedgerQueryRow
             {
                 Date = e.PaidAt ?? e.IncurredAt,
+                EntryKind = expenseEntryKind,
                 Type = "Expense",
                 Id = e.Id,
                 Description = e.Description,
@@ -940,6 +945,23 @@ public class ReportsService : IReportsService
             .Where(e => e.Date >= from && e.Date <= to);
 
         var entries = await ledgerQuery
+            .Select(e => new GeneralLedgerEntry
+            {
+                Date = e.Date,
+                Type = e.Type,
+                Id = e.Id,
+                Description = e.Description,
+                Category = e.Category,
+                PropertyId = e.PropertyId,
+                PropertyName = e.PropertyName,
+                Counterparty = e.Counterparty,
+                Amount = e.Amount,
+                RunningBalance = ledgerQuery
+                    .Where(x => x.Date < e.Date ||
+                                (x.Date == e.Date && x.EntryKind < e.EntryKind) ||
+                                (x.Date == e.Date && x.EntryKind == e.EntryKind && x.Id <= e.Id))
+                    .Sum(x => (decimal?)x.Amount) ?? 0m,
+            })
             .OrderBy(e => e.Date)
             .ThenBy(e => e.Type)
             .ThenBy(e => e.Id)
@@ -953,13 +975,6 @@ public class ReportsService : IReportsService
                 TotalExpense = g.Sum(e => e.Amount < 0m ? -e.Amount : 0m),
             })
             .SingleOrDefaultAsync(ct);
-
-        var running = 0m;
-        foreach (var e in entries)
-        {
-            running += e.Amount;
-            e.RunningBalance = running;
-        }
 
         var totalIncome = totals?.TotalIncome ?? 0m;
         var totalExpense = totals?.TotalExpense ?? 0m;
@@ -1220,6 +1235,20 @@ public class ReportsService : IReportsService
         public decimal Amount { get; set; }
         public PaymentType PaymentType { get; set; }
         public decimal RunningBalance { get; set; }
+    }
+
+    private sealed class GeneralLedgerQueryRow
+    {
+        public DateTime Date { get; set; }
+        public int EntryKind { get; set; }
+        public string Type { get; set; } = string.Empty;
+        public int Id { get; set; }
+        public string Description { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public int? PropertyId { get; set; }
+        public string? PropertyName { get; set; }
+        public string? Counterparty { get; set; }
+        public decimal Amount { get; set; }
     }
 
     // ── Security Deposit Register ──────────────────────────────────────────────────────────────────

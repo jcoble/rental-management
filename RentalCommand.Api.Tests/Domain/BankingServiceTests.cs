@@ -441,6 +441,47 @@ public class BankingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetSummaryAsync_ComputesConnectionCountInSql()
+    {
+        var executedSql = new List<string>();
+        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        var sut = CreateServiceFor(ctx);
+        var now = new DateTime(2026, 06, 03, 0, 0, 0, DateTimeKind.Utc);
+        ctx.Db.BankConnections.AddRange(
+            new BankConnection
+            {
+                PortfolioId = 1,
+                Provider = "Plaid",
+                InstitutionName = "Bank A",
+                AccountName = "Checking",
+                Status = "Active",
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new BankConnection
+            {
+                PortfolioId = 1,
+                Provider = "Plaid",
+                InstitutionName = "Bank B",
+                AccountName = "Savings",
+                Status = "Active",
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await ctx.Db.SaveChangesAsync();
+        executedSql.Clear();
+
+        var summary = await sut.GetSummaryAsync(1);
+
+        summary.ConnectionCount.Should().Be(2);
+        executedSql.Should().Contain(sql =>
+            sql.Contains("SELECT COUNT(*)", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"BankConnections\" AS", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("BankTransactions", StringComparison.OrdinalIgnoreCase),
+            "the summary must count connections in SQL instead of using the materialized connection list");
+    }
+
+    [Fact]
     public async Task ReviewQueue_PrefiltersPaymentSuggestionCandidatesInSql()
     {
         var executedSql = new List<string>();

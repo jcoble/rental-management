@@ -99,12 +99,15 @@ Completed in browser with Playwright CLI against the local stack.
 | P94-013 | Tenant notices | Forced notice path could keep offering `Create one anyway` after proving no eligible lease/draft existed. | Tenant notice empty state now hides force controls when there is no active lease and after a forced no-draft result; tenants without active leases get a `Create lease` action instead. | `tenant-notice-state.test.ts` |
 | P94-014 | Tenants search | Searching for a tenant with punctuation between name tokens, such as `Avery-Ellis`, did not match `Avery Ellis`. | Tenant search now tokenizes punctuation/space-separated input and applies each token as a DB-side lowered `LIKE` predicate before count, sort, and paging. | `TenantServiceTests.ListPageAsync_TokenizesHyphenatedSearchTermsInSql` |
 | P94-015 | Onboarding | Completed owner accounts with an active lease could reopen a stale create-lease onboarding step, and optional email/text setup from the finished card could continue into unrelated onboarding steps. | Initial onboarding state now finishes when all core steps are complete, ignores completed persisted core steps, and returns from optional finished-card setup actions back to the finished card. | `onboarding-flow-state.test.ts` |
+| P94-016 | Accounting summary | Expense categories were grouped in SQL, then sorted and totaled from the materialized category rows. | Category ordering now happens in SQL, and total expenses are computed by a separate SQL aggregate before snapshot assembly. | `AccountingServiceTests.GetSummaryAsync_OrdersAndTotalsExpenseCategoriesInSql` |
+| P94-017 | Banking summary | Connection count used the already materialized ordered connection list. | Banking summary now uses a SQL `COUNT(*)` for connection count and separately materializes the ordered connection list. | `BankingServiceTests.GetSummaryAsync_ComputesConnectionCountInSql` |
+| P94-018 | General ledger report | General ledger rows were filtered/sorted in SQL, then `RunningBalance` was calculated in a post-materialization loop. | General ledger now projects running balance with a correlated SQL sum in the ordered ledger-row query. | `ReportsServiceTests.GetGeneralLedgerAsync_ComputesRunningBalanceInSql` |
 
 ## Remaining Bugs And Blocked Lanes
 
 | ID | Surface | Evidence | Status |
 | --- | --- | --- | --- |
-| P94-R08 | Accounting/banking DB-side rule | Several report/accounting/banking endpoints still materialize rows and then filter/group/sort/aggregate in memory. This includes the general ledger running-balance lane and banking review candidate lane. | Larger refactor lane |
+| P94-R08 | Accounting/banking DB-side rule | The accounting summary, banking summary, and general-ledger running-balance violations were fixed in this checkpoint. A narrower follow-up audit is still needed for remaining accounting/banking page-row enrichment and provider-payload reconciliation paths, such as banking review candidate shaping and accounting reconciliation enrichment, before calling the DB-side sweep fully clean. | Follow-up classification/refactor lane |
 | P94-R09 | External banking/accounting providers | Plaid Link and QuickBooks OAuth were not exercised because production/sensitive provider access requires user approval. | Blocked by credential/provider policy |
 
 ## Verification Commands
@@ -115,6 +118,7 @@ Backend focused tests:
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~AuditDetailHrefTests|FullyQualifiedName~PortfolioQaServiceTests.WorkOrdersTool_OrdersByRequestedAtInSql_ThenFormatsDatesForAnswer|FullyQualifiedName~ReportsServiceTests.GetSecurityDepositRegisterAsync_ComputesCurrentBalanceFromDeductionsAndReturned" --no-restore --logger "console;verbosity=normal"
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ExpenseServiceTests.UpdateAsync_WithClearReceiptData_ClearsStoredReceiptJson|FullyQualifiedName~DocumentsControllerTests.GetFile_WithThumbForImage_ReturnsJpegThumbnail" --no-restore --logger "console;verbosity=normal"
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~TenantServiceTests" --no-restore --logger "console;verbosity=normal"
+MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~AccountingServiceTests.GetSummaryAsync_OrdersAndTotalsExpenseCategoriesInSql|FullyQualifiedName~BankingServiceTests.GetSummaryAsync_ComputesConnectionCountInSql|FullyQualifiedName~ReportsServiceTests.GetGeneralLedgerAsync_ComputesRunningBalanceInSql" --no-restore --logger "console;verbosity=normal"
 ```
 
 Frontend unit tests:
