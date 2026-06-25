@@ -13,6 +13,9 @@ namespace RentalCommand.Api.Services.Domain;
 
 public class BankingService : IBankingService
 {
+    private const int DefaultReviewQueueTake = 50;
+    private const int MaxReviewQueueTake = 100;
+
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
     private readonly IPlaidBankingProvider _plaid;
@@ -460,8 +463,15 @@ public class BankingService : IBankingService
         return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
     }
 
-    public async Task<BankReviewQueueResponse> GetReviewQueueAsync(int portfolioId, CancellationToken ct = default)
+    public async Task<BankReviewQueueResponse> GetReviewQueueAsync(
+        int portfolioId,
+        int skip = 0,
+        int take = DefaultReviewQueueTake,
+        CancellationToken ct = default)
     {
+        skip = Math.Max(0, skip);
+        take = take <= 0 ? DefaultReviewQueueTake : Math.Min(take, MaxReviewQueueTake);
+
         // The review queue is every imported line that still needs a human decision: it is
         // Unmatched (not yet confirmed, dismissed, or removed) AND the matcher currently has a
         // payment/expense candidate for it. These are the lines at risk of double-counting a
@@ -471,6 +481,8 @@ public class BankingService : IBankingService
         var transactions = await candidateQuery
             .OrderByDescending(t => t.PostedAt)
             .ThenByDescending(t => t.Id)
+            .Skip(skip)
+            .Take(take)
             .ToListAsync(ct);
 
         var mapped = await MapTransactionsWithSuggestionsAsync(portfolioId, transactions, ct);
@@ -486,6 +498,8 @@ public class BankingService : IBankingService
         return new BankReviewQueueResponse
         {
             Count = count,
+            Skip = skip,
+            Take = take,
             Items = items,
         };
     }

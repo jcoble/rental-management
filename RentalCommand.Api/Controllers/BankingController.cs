@@ -127,9 +127,12 @@ public class BankingController : ManagementControllerBase
     /// </summary>
     [HttpGet("review-queue")]
     [ProducesResponseType(typeof(BankReviewQueueResponse), StatusCodes.Status200OK)]
-    public async Task<ActionResult<BankReviewQueueResponse>> ReviewQueue(CancellationToken ct)
+    public async Task<ActionResult<BankReviewQueueResponse>> ReviewQueue(
+        CancellationToken ct,
+        [FromQuery] int skip = 0,
+        [FromQuery] int take = 50)
     {
-        return Ok(await _service.GetReviewQueueAsync(GetPortfolioId(), ct));
+        return Ok(await _service.GetReviewQueueAsync(GetPortfolioId(), skip, take, ct));
     }
 
     /// <summary>

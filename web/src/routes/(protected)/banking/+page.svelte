@@ -40,9 +40,11 @@
 		// Ignored/personal lines are stored server-side as MatchStatus="Removed".
 		{ value: 'Removed', label: 'Ignored' }
 	];
+	const REVIEW_QUEUE_PAGE_SIZE = 50;
 	const statusFilterLabel = $derived(
 		STATUS_FILTER_OPTIONS.find((o) => o.value === statusValue)?.label ?? 'All'
 	);
+	let reviewSkip = $state(0);
 	let exchangePublicToken = $state('');
 	let exchangeInstitutionName = $state('Plaid Sandbox Bank');
 	let exchangeAccountId = $state('');
@@ -85,8 +87,8 @@
 	}));
 
 	const reviewQueueQuery = createQuery(() => ({
-		queryKey: ['banking-review-queue', portfolioId],
-		queryFn: () => banking.reviewQueue(),
+		queryKey: ['banking-review-queue', portfolioId, reviewSkip],
+		queryFn: () => banking.reviewQueue({ skip: reviewSkip, take: REVIEW_QUEUE_PAGE_SIZE }),
 		enabled: !!portfolioId
 	}));
 
@@ -96,6 +98,10 @@
 	const reviewQueue = $derived(reviewQueueQuery.data as BankReviewQueueResponse | undefined);
 	const reviewItems = $derived(reviewQueue?.items ?? []);
 	const reviewCount = $derived(reviewQueue?.count ?? reviewItems.length);
+	const reviewPageStart = $derived(reviewCount === 0 ? 0 : (reviewQueue?.skip ?? reviewSkip) + 1);
+	const reviewPageEnd = $derived((reviewQueue?.skip ?? reviewSkip) + reviewItems.length);
+	const canReviewPrevious = $derived((reviewQueue?.skip ?? reviewSkip) > 0);
+	const canReviewNext = $derived(reviewPageEnd < reviewCount);
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
@@ -205,6 +211,7 @@
 		},
 		onSuccess: () => {
 			showSuccess('Confirmed. We won’t count this one twice.');
+			reviewSkip = 0;
 			refreshBanking();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -220,6 +227,7 @@
 		},
 		onSuccess: () => {
 			showSuccess('Got it — not a match.');
+			reviewSkip = 0;
 			refreshBanking();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -440,6 +448,31 @@
 						</li>
 					{/each}
 				</ul>
+				{#if reviewCount > REVIEW_QUEUE_PAGE_SIZE}
+					<div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
+						<p class="text-sm text-muted-foreground" data-testid="bank-review-page-status">
+							Showing {reviewPageStart}-{reviewPageEnd} of {reviewCount}
+						</p>
+						<div class="flex gap-2">
+							<Button
+								size="sm"
+								variant="outline"
+								onclick={() => (reviewSkip = Math.max(0, reviewSkip - REVIEW_QUEUE_PAGE_SIZE))}
+								disabled={!canReviewPrevious || reviewQueueQuery.isFetching}
+							>
+								Previous
+							</Button>
+							<Button
+								size="sm"
+								variant="outline"
+								onclick={() => (reviewSkip += REVIEW_QUEUE_PAGE_SIZE)}
+								disabled={!canReviewNext || reviewQueueQuery.isFetching}
+							>
+								Next
+							</Button>
+						</div>
+					</div>
+				{/if}
 			{/if}
 		</Card.Content>
 	</Card.Root>

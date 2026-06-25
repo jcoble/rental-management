@@ -754,6 +754,8 @@ export interface BankReviewQueueItem {
 
 export interface BankReviewQueueResponse {
 	count: number;
+	skip: number;
+	take: number;
 	items: BankReviewQueueItem[];
 }
 

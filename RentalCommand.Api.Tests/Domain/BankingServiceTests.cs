@@ -560,6 +560,39 @@ public class BankingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ReviewQueue_PagesSuggestibleTransactionsInSql()
+    {
+        var executedSql = new List<string>();
+        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        var sut = CreateServiceFor(ctx);
+        var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
+        SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily");
+        SeedRentPaymentInto(ctx, "Carlos", "Reyes", 1450m, postedAt.AddDays(1), "L-carlos");
+        SeedRentPaymentInto(ctx, "Maya", "Patel", 1500m, postedAt.AddDays(2), "L-maya");
+
+        await sut.ImportAsync(1, BankImport("queue-page-1", postedAt, "Emily Chen", 1400m));
+        await sut.ImportAsync(1, BankImport("queue-page-2", postedAt.AddDays(1), "Carlos Reyes", 1450m));
+        await sut.ImportAsync(1, BankImport("queue-page-3", postedAt.AddDays(2), "Maya Patel", 1500m));
+        executedSql.Clear();
+
+        var queue = await sut.GetReviewQueueAsync(1, skip: 1, take: 1);
+
+        queue.Count.Should().Be(3);
+        queue.Skip.Should().Be(1);
+        queue.Take.Should().Be(1);
+        queue.Items.Should().ContainSingle();
+        queue.Items.Single().Transaction.MerchantName.Should().Be("Carlos Reyes");
+
+        executedSql.Should().Contain(sql =>
+            sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase),
+            "the review queue must page suggestible rows in SQL before mapping suggestions");
+    }
+
+    [Fact]
     public async Task GetPlaidSettingsAsync_ReturnsSafeConfigStatus()
     {
         var settings = await _sut.GetPlaidSettingsAsync(1);
