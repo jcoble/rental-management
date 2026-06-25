@@ -67,6 +67,7 @@ Fixed and verified:
 - `TSK-425`: tenant dashboard quick maintenance submit now shows inline title/description validation instead of silently doing nothing on an empty submit.
 - `TSK-426`: tenant portal maintenance page submit now shows inline title/description validation instead of silently doing nothing on an empty submit, while preserving valid tenant work-order creation.
 - `TSK-427`: tenant-only users now land on a tenant-accessible `/portal/security` account security route from the user menu instead of bouncing away from the protected staff `/settings/security` route.
+- Pass 80 auth/setup front door: anonymous welcome/register/verify/login/logout/forgot/reset, live setup handoff, anonymous route guard, and sandbox sample-data setup all pass through real UI interactions on local sanitized data.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3920,3 +3921,48 @@ Verification:
 - Screenshot proof: `output/playwright/pass79-tenant-portal-messages-final.png`.
 
 Status: Pass with documentation-only verification. No new product bug was found in this tenant portal regression slice, so no code fix or regression test was added. Deferred boundaries remain Plaid banking, connected QuickBooks/accounting provider workflows, production/sensitive data, real SMS, and final Go Live.
+
+## Pass 80 Auth And Setup Front Door
+
+Date: 2026-06-25
+Branch: `tsk-397-real-user-pass-80`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Synthetic accounts:
+- Live setup/reset user: `tsk397.pass80.1782362263@example.local`
+- Missing reset email: `tsk397.pass80.missing.1782362263@example.local`
+- Sandbox setup user: `tsk397.pass80.sandbox.1782362697@example.local`
+
+Guide:
+- `Docs/Testing/UI/tsk-397-pass-80-auth-setup.md`
+
+Acceptance criteria:
+- Anonymous `/welcome`, `/register`, `/login`, `/forgot-password`, `/reset-password`, and route guards must behave without showing the authenticated shell.
+- New user registration must validate weak/mismatched passwords, create a local account, show email-verification copy, and activate only through a local `OutboxMessages` verification link.
+- Login must reject wrong passwords, accept verified credentials, and land a first-login staff/owner account at the setup boundary.
+- Forgot/reset password must avoid email-enumeration leaks, use local outbox reset links, reject invalid tokens and weak/mismatched inputs, and allow login only with the new password.
+- Setup choices must cover both live onboarding handoff and sandbox sample-data setup without production data, real email/SMS, charges, Plaid, QuickBooks, or final Go Live.
+
+Verification:
+- `/welcome` loaded anonymously with visible brand, get-started/sign-in entry points, and no authenticated shell.
+- `/register` rejected weak/mismatched passwords, then created the local live account and showed `Check your email` with the exact registered address.
+- Local outbox verification activated user `30`; DB proof showed `EmailConfirmed = true`.
+- Login wrong-password stayed on `/login` with `Invalid email or password`; correct credentials landed at `/choose-setup`.
+- Live setup choice routed to `/onboarding` with a clean empty portfolio and the scan-first/spreadsheet-import handoff actions. After choosing live setup, signing in through `/login?redirectTo=/choose-setup` landed on Dashboard rather than trapping the setup-complete user.
+- `/logout` returned to `/login` and `cookie-list` showed `No cookies found`.
+- Forgot password returned identical generic success copy for the missing and registered local emails.
+- Bogus reset token showed the reset form and then `Invalid token.` after submit; valid reset link rejected mismatched and weak passwords, accepted `Pass80Reset!23`, and showed `Password updated`.
+- The old password failed after reset; the new password signed in and loaded the live Dashboard.
+- Anonymous `/choose-setup` redirected to `/login?redirectTo=/choose-setup`.
+- The sandbox account registered and verified through local outbox, chose `Explore with sample data`, saw `/setting-up` staged progress, and landed on Dashboard with the example-data safety banner.
+- DB proof: live account portfolio `5` has `IsSandbox=false` and zero properties/units/tenants/leases/work orders; sandbox account portfolio `6` has `IsSandbox=true`, 8 properties, 20 units, 22 tenants, 20 leases, and 15 work orders.
+- Screenshot proof: `output/playwright/pass80-auth-setup-sandbox-dashboard.png`.
+- Console proof: two Vite debug messages only, `Errors: 0`, `Warnings: 0`.
+- Network proof: final Dashboard load returned `200` for route/API requests. Two `/api/v1/ai/briefing` requests aborted during load and were followed by `/api/v1/ai/briefing => 200`, so no user-visible failure was observed.
+
+Status: Pass with documentation-only verification. No code fix or regression test was added in this slice. Deferred boundaries remain production/sensitive data, real email/SMS delivery, Plaid banking, connected QuickBooks/provider accounting, and final Go Live.
