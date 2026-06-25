@@ -44,6 +44,7 @@ Fixed and verified:
 - `TSK397-B081`: lease detail tabs now honor and maintain `?tab=` deep links through reload/login redirect, direct tab clicks, and edit-mode redirection back to Overview.
 - `TSK397-B082` and `B083`: typed DatePicker dates now immediately update modal-gated actions, and Give Notice keeps lease/signature lifecycle state coherent so Notice given status, actions, and move-out date render together.
 - `TSK397-B084`: cancelling a Notice given lease back to Active now clears the expected move-out date so the active lease no longer shows stale move-out workflow data.
+- `TSK397-B085`: app-shell query retry now treats request abort/timeouts as transient, so Command Center unit navigation does not leave valid unit detail pages in a false `This unit could not be loaded` state while preserving fast non-retry behavior for deterministic 4xx errors.
 - `TSK-401`: Unit Command Center `List this unit` now continues into a unit-scoped public application link with property/unit preselection.
 - `TSK-404`: Unit Command Center `Send renewal` current-state retest no longer reproduces the no-op; both sample renewal units link into the tenant notice workflow and open a renewal-offer draft without sending.
 - `TSK-406`: local API and Engine scan workers now share one upload directory by default and in local Docker Compose, so camera-image scans created by the web app are readable by the Engine.
@@ -3703,3 +3704,46 @@ Verification:
 - Console proof: the only browser console error after this pass is the expected failed-resource entry from the intentional duplicate-email `400` response.
 
 Status: Pass with no code changes. Continue the non-banking/non-QuickBooks audit with the remaining settings/admin/support variants or the next route group from the inventory.
+
+## Pass 75 App Shell and Command Center Navigation
+
+Date: 2026-06-25
+Branch: `tsk-397-real-user-pass-75`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Dev admin sample-data user: Rental Command Admin, `admin@rentalcommand.local`
+- Setup path: cleared Playwright browser data, opened `/welcome`, signed in with the visible dev-admin helper, and stayed inside local example/sample data.
+
+Acceptance criteria:
+- Command Center expands from the app shell and loads the first page of unit health rows through the paged server contract.
+- Search narrows results to matching units and no-match search shows `No matches.` while preserving `Browse all units`.
+- Clicking a Command Center unit result must land on the unit detail page and load dashboard/work-tab data without a false hard error.
+- Transient request abort/timeouts should retry a bounded number of times, but deterministic 400/404 client errors must still fail fast.
+
+Bug `TSK397-B085` / Notion `Fix transient unit detail hard-error after Command Center navigation`:
+- Repro before fix: from the dashboard, expand Command Center, search `Short`, and click `Short North Condo · Unit 4B`. The app navigated to `/units/18`, but the detail page showed `This unit could not be loaded.`
+- Request evidence before fix: `/units/18/__data.json` returned `200`, while `/api/v1/units/18/dashboard` aborted twice with `net::ERR_ABORTED`.
+- DB/API proof before fix: `Units.Id = 18` existed for `Short North Condo` / `Unit 4B`, was not deleted, belonged to the current portfolio, and a direct authenticated API request to `/api/v1/units/18/dashboard` returned `200`.
+- Root cause: the global TanStack Query retry policy treated `ApiError(408)` from client abort/timeouts as a deterministic 4xx and skipped retry. That made a recoverable navigation/auth-hydration race look like a permanent not-found unit until reload.
+- Fix: added `shouldRetryQuery` in `web/src/lib/api/query-retry.ts` and wired the root layout query client to it. The policy retries status `408` and network/server errors while keeping ordinary 4xx responses non-retried.
+
+Regression:
+- Red proof before implementation: `pnpm --dir web exec node --test --experimental-strip-types src/lib/api/query-retry.test.ts` failed because `query-retry.ts` did not exist.
+- Green proof after fix: the same focused command passed 3/3 tests.
+- `pnpm --dir web test:unit` passed 234/234 tests.
+- `pnpm --dir web check` passed with 0 errors and the existing 4 PageHeader unused-selector warnings.
+
+Verification:
+- Browser proof after fix: cleared Playwright browser data, opened `https://localhost:6042`, signed in through the visible dev-admin helper, expanded Command Center, searched `Short`, and clicked `Short North Condo · Unit 4B`. The app landed on `/units/18` with page title `Unit 4B - Rental Command` and rendered the Overview tab instead of `This unit could not be loaded.` Snapshot: `.playwright-cli/page-2026-06-25T02-29-35-204Z.yml`.
+- Search proof: `Short` narrowed to `Short North Condo · Unit 4B`; `zzzz-no-unit` showed `No matches.` and kept `Browse all units`.
+- Network proof after fix: `GET /api/v1/units/list-with-health/page?take=20&search=Short&sort=propertyName => 200`, `GET /api/v1/units/list-with-health/page?take=20&search=zzzz-no-unit&sort=propertyName => 200`, `GET /api/v1/units/18/dashboard => 200`, and the unit payments/work-orders/expenses/documents/timeline tab requests all returned `200`.
+- Screenshot proof: `output/playwright/pass75-command-center-unit-navigation-fixed.png`.
+- App console proof: Playwright CLI `console error` and `console warning` both returned 0 messages.
+
+Status: Pass after fixing transient app-shell query retry for Command Center unit navigation. Continue the app-shell route group with remaining navigation/header controls: collapsed rail, mobile drawer, theme toggle, notifications, account menu/logout, and the Money/Rentals/Work/Inbox/Settings nav groups.
