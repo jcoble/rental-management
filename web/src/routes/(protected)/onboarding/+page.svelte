@@ -44,6 +44,10 @@
 		type WizardStepMeta,
 	} from '$lib/onboarding/wizard-steps';
 	import {
+		resolveInitialOnboardingState,
+		shouldFinishAfterOptionalStep,
+	} from '$lib/onboarding/onboarding-flow-state';
+	import {
 		buildOnboardingLeaseScanOverrides,
 		type OnboardingLeaseConfirmInput,
 	} from '$lib/onboarding/lease-scan-confirm';
@@ -99,6 +103,7 @@
 	let portfolioSaved = $state(false);
 	let notificationsSaved = $state(false);
 	let textingSaved = $state(false);
+	let returnToFinishAfterOptional = $state(false);
 
 	// ---------------------------------------------------------------------------
 	// Resumable progress — persisted per portfolio so a reload resumes in place.
@@ -221,27 +226,18 @@
 		autoAdvanced = true;
 
 		fromParam = page.url.searchParams.get('from');
-		const requested = page.url.searchParams.get('step') as WizardStepKey | null;
-		if (requested && STEPS.some((s) => s.key === requested)) {
-			stepIndex = STEPS.findIndex((s) => s.key === requested);
-			return;
-		}
-
-		const persisted = readPersistedStep();
-		if (persisted && !stepDone[persisted]) {
-			stepIndex = STEPS.findIndex((s) => s.key === persisted);
-			return;
-		}
-
-		const firstIncomplete = CORE_WIZARD_STEPS.findIndex((s) => !stepDone[s.key]);
-		stepIndex = firstIncomplete === -1
-			? STEPS.findIndex((s) => s.key === 'lease')
-			: STEPS.findIndex((s) => s.key === CORE_WIZARD_STEPS[firstIncomplete].key);
+		const resolved = resolveInitialOnboardingState({
+			requested: page.url.searchParams.get('step') as WizardStepKey | null,
+			persisted: readPersistedStep(),
+			stepDone,
+		});
+		stepIndex = STEPS.findIndex((s) => s.key === resolved.stepKey);
+		if (resolved.finished) finishFlow();
 	});
 
 	// Persist whenever the step changes (after the initial positioning has run).
 	$effect(() => {
-		if (autoAdvanced && currentStep) persistStep(currentStep.key);
+		if (autoAdvanced && !finished && currentStep) persistStep(currentStep.key);
 	});
 
 	// ---------------------------------------------------------------------------
@@ -727,6 +723,7 @@
 	// ---------------------------------------------------------------------------
 	function finishFlow() {
 		finished = true;
+		returnToFinishAfterOptional = false;
 		if (browser && portfolioId > 0) {
 			try {
 				localStorage.removeItem(progressKey);
@@ -748,6 +745,13 @@
 			finishFlow();
 			return;
 		}
+		if (shouldFinishAfterOptionalStep({
+			currentStepKey: currentStep.key,
+			returnToFinishAfterOptional,
+		})) {
+			finishFlow();
+			return;
+		}
 		if (stepIndex < STEPS.length - 1) {
 			stepIndex += 1;
 		} else {
@@ -766,6 +770,11 @@
 	}
 	function goToStep(key: WizardStepKey) {
 		stepIndex = STEPS.findIndex((s) => s.key === key);
+	}
+	function openOptionalStepFromFinished(key: WizardStepKey) {
+		returnToFinishAfterOptional = true;
+		finished = false;
+		goToStep(key);
 	}
 
 	const anyPending = $derived(
@@ -852,13 +861,13 @@
 					<!-- Optional add-ons the user can still set up, clearly marked optional. -->
 					<div class="mt-2 flex flex-col items-stretch gap-2 sm:flex-row">
 						{#if !stepDone.notifications}
-							<Button variant="outline" class="gap-2" data-testid="onboarding-setup-notifications" onclick={() => { finished = false; goToStep('notifications'); }}>
+							<Button variant="outline" class="gap-2" data-testid="onboarding-setup-notifications" onclick={() => openOptionalStepFromFinished('notifications')}>
 								<Bell class="h-4 w-4" />
 								Set up email alerts
 							</Button>
 						{/if}
 						{#if !stepDone.texting}
-							<Button variant="outline" class="gap-2" data-testid="onboarding-setup-texting" onclick={() => { finished = false; goToStep('texting'); }}>
+							<Button variant="outline" class="gap-2" data-testid="onboarding-setup-texting" onclick={() => openOptionalStepFromFinished('texting')}>
 								<MessageSquare class="h-4 w-4" />
 								Turn on texting
 							</Button>

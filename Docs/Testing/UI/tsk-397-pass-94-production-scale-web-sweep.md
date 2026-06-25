@@ -98,12 +98,12 @@ Completed in browser with Playwright CLI against the local stack.
 | P94-012 | Application approval | After approving an application, the detail page only linked to the created tenant and did not continue the applicant into lease setup. | Approved application banners now include `Create lease`, linking to `/leases?create=1&tenantId={tenantId}`; the leases page opens the create modal with that tenant selected. | `application-approval-continuation.test.ts` |
 | P94-013 | Tenant notices | Forced notice path could keep offering `Create one anyway` after proving no eligible lease/draft existed. | Tenant notice empty state now hides force controls when there is no active lease and after a forced no-draft result; tenants without active leases get a `Create lease` action instead. | `tenant-notice-state.test.ts` |
 | P94-014 | Tenants search | Searching for a tenant with punctuation between name tokens, such as `Avery-Ellis`, did not match `Avery Ellis`. | Tenant search now tokenizes punctuation/space-separated input and applies each token as a DB-side lowered `LIKE` predicate before count, sort, and paging. | `TenantServiceTests.ListPageAsync_TokenizesHyphenatedSearchTermsInSql` |
+| P94-015 | Onboarding | Completed owner accounts with an active lease could reopen a stale create-lease onboarding step, and optional email/text setup from the finished card could continue into unrelated onboarding steps. | Initial onboarding state now finishes when all core steps are complete, ignores completed persisted core steps, and returns from optional finished-card setup actions back to the finished card. | `onboarding-flow-state.test.ts` |
 
 ## Remaining Bugs And Blocked Lanes
 
 | ID | Surface | Evidence | Status |
 | --- | --- | --- | --- |
-| P94-R06 | Onboarding | Existing active lease can still land the owner on a create-first-lease step; email-alert setup can loop into onboarding. | Open |
 | P94-R08 | Accounting/banking DB-side rule | Several report/accounting/banking endpoints still materialize rows and then filter/group/sort/aggregate in memory. This includes the general ledger running-balance lane and banking review candidate lane. | Larger refactor lane |
 | P94-R09 | External banking/accounting providers | Plaid Link and QuickBooks OAuth were not exercised because production/sensitive provider access requires user approval. | Blocked by credential/provider policy |
 
@@ -126,6 +126,7 @@ pnpm --dir web test:unit -- src/lib/applications/public-application-form.test.ts
 pnpm --dir web test:unit -- src/lib/accounting/expense-receipt-data.test.ts src/lib/maintenance/recurring-maintenance-accessibility.test.ts src/lib/api/endpoints/documents.test.ts
 pnpm --dir web test:unit -- src/lib/applications/application-approval-continuation.test.ts
 pnpm --dir web test:unit -- src/lib/tenants/tenant-notice-state.test.ts
+pnpm --dir web test:unit -- src/lib/onboarding/onboarding-flow-state.test.ts
 ```
 
 Browser retests after fixes:
@@ -138,3 +139,4 @@ Browser retests after fixes:
 - `/leases/1`: `View ledger` moved to `?tab=ledger` and rendered the ledger tab.
 - `/apply/{token}`: blank-submit errors cleared immediately as required fields and consent were filled.
 - `/tenants?q=Avery-Ellis`: returned the single `Avery Ellis` row with no console errors.
+- `/onboarding`: completed core setup opened the `You're all set!` finished card. `Set up email alerts` saved with a blank email and returned to the finished card. `Turn on texting` opened optional SMS setup, `Skip` returned to the finished card, and console errors stayed at 0.
