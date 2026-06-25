@@ -10,4 +10,10 @@ public sealed class AuditDetailHrefTests
     {
         AuditEntryResponse.BuildDetailHref("WorkOrder", 42).Should().Be("/maintenance/42");
     }
+
+    [Fact]
+    public void BuildDetailHref_UsesCanonicalMaintenanceRouteForInspections()
+    {
+        AuditEntryResponse.BuildDetailHref("Inspection", 7).Should().Be("/maintenance/inspections/7");
+    }
 }
