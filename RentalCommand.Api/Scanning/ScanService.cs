@@ -8,6 +8,7 @@ using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
+using RentalCommand.Core.Models.Accounting;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Scanning;
@@ -1603,12 +1604,7 @@ public sealed class ScanService : IScanService
             dto.CardLast4     = ReadFieldValue(root, "card_last4");
 
             // ---- Classification ----
-            var categoryStr = ReadFieldValue(root, "category");
-            if (!string.IsNullOrWhiteSpace(categoryStr) &&
-                Enum.TryParse<ScheduleECategory>(categoryStr, ignoreCase: true, out var category))
-            {
-                dto.Category = category;
-            }
+            dto.Category = ParseScheduleECategory(ReadFieldValue(root, "category"));
 
             dto.DocumentKind = ReadFieldValue(root, "document_kind");
 
@@ -1647,6 +1643,17 @@ public sealed class ScanService : IScanService
         if (string.IsNullOrWhiteSpace(str)) return null;
         return decimal.TryParse(str, System.Globalization.NumberStyles.Any,
             System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : null;
+    }
+
+    private static ScheduleECategory? ParseScheduleECategory(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        if (Enum.TryParse<ScheduleECategory>(value, ignoreCase: true, out var category))
+            return category;
+
+        return ScheduleECategoryMap.FromAccountName(value);
     }
 
     /// <summary>
@@ -1869,11 +1876,8 @@ public sealed class ScanService : IScanService
             if (TryGetOverrideString(root, out var notes, "notes"))
                 dto.Notes = notes;
 
-            if (TryGetOverrideString(root, out var catStr, "category") &&
-                Enum.TryParse<ScheduleECategory>(catStr, ignoreCase: true, out var parsedCat))
-            {
-                dto.Category = parsedCat;
-            }
+            if (TryGetOverrideString(root, out var catStr, "category"))
+                dto.Category = ParseScheduleECategory(catStr);
 
             if (TryGetOverrideString(root, out var dueDateStr2, "dueDate", "due_date") &&
                 DateTime.TryParse(dueDateStr2, System.Globalization.CultureInfo.InvariantCulture,
