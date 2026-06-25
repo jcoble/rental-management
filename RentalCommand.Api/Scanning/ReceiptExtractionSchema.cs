@@ -9,6 +9,10 @@ public static class ReceiptExtractionSchema
     public const string Instructions =
         "You are extracting fields from a vendor receipt, bill, invoice, or tenant payment document for a US residential-rental " +
         "bookkeeping system. Read the document and fill every field you can. " +
+        "The grounding context lists this portfolio's known properties and units, each with its exact numeric id. " +
+        "For property_id and unit_id, return the matching id COPIED VERBATIM from that grounding list, and only when the document " +
+        "strongly names or references that property/unit; otherwise leave the id empty for human review. " +
+        "Never return an id that is not present in the grounding list, and never guess or fabricate an id. " +
         "If the document is a tenant's rent check / cheque / payment stub, set document_kind=RentCheck and fill payer_name, check_number, bank_name, amount, transaction_date. " +
         "For other documents, classify using 'document_kind': use 'Receipt' for a paid receipt, 'Bill' or 'Invoice' for an unpaid bill or invoice, " +
         "'UtilityBill' for a utility bill, 'PropertyTax' for a property-tax bill, or 'Other' if none of the above apply. " +
@@ -25,6 +29,10 @@ public static class ReceiptExtractionSchema
         new ExtractionFieldSpec("vendor_website", "string", "Vendor website URL as printed."),
         new ExtractionFieldSpec("vendor_tax_id",  "string", "Vendor EIN or tax ID number."),
         new ExtractionFieldSpec("receipt_number", "string", "Receipt, invoice, or transaction number."),
+        new ExtractionFieldSpec("property_id", "integer",
+            "Exact id of the matching property, copied from the grounding list's properties[].id, only when strongly matched. Empty otherwise."),
+        new ExtractionFieldSpec("unit_id", "integer",
+            "Exact id of the matching unit, copied from the grounding list's units[].id, only when strongly matched. Empty otherwise."),
         new ExtractionFieldSpec("transaction_date", "date",
             "Date of the transaction in ISO 8601 (YYYY-MM-DD).", Required: true),
         new ExtractionFieldSpec("subtotal", "number",

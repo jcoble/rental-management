@@ -279,6 +279,23 @@ public class ScanServiceTests : IDisposable
         _expenses.LastRequest.UnitId.Should().Be(20);
     }
 
+    [Fact]
+    public async Task ConfirmAndCreateAsync_ExpenseDraft_WithCategoryLabel_MapsScheduleECategory()
+    {
+        const string extractedJson =
+            """{"vendor_name":{"value":"Green Thumb Landscaping","confidence":0.99},"total":{"value":"63.75","confidence":0.99},"transaction_date":{"value":"2026-02-02","confidence":0.95},"document_kind":{"value":"Receipt","confidence":0.9},"category":{"value":"Repairs & maintenance","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson);
+        SeedStoredFile(draft.FilePath);
+        _expenses.SetupResponse(new ExpenseResponse { Id = 104, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _expenses.LastRequest.Should().NotBeNull();
+        _expenses.LastRequest!.Category.Should().Be(ScheduleECategory.Repairs);
+    }
+
     // -------------------------------------------------------------------------
     // Confirm: snake_case vendor/date overrides are honored (regression guard)
     // The review UI keys edits by the extraction field names (vendor_name,
