@@ -10,6 +10,10 @@ namespace RentalCommand.Api.Services.Domain;
 /// <inheritdoc cref="IUnitDashboardService"/>
 public class UnitDashboardService : IUnitDashboardService
 {
+    private const string RenewalNoticeType = "RenewalOffer";
+    private const string NoticeStatusApproved = "Approved";
+    private const string NoticeStatusDraft = "Draft";
+
     /// <summary>Cap for each Overview list (recent payments, open WOs, pending docs, upcoming appts).</summary>
     private const int OverviewTake = 5;
 
@@ -245,6 +249,15 @@ public class UnitDashboardService : IUnitDashboardService
             outstanding);
 
         var (stage, nextActionLabel) = UnitLifecycleStageResolver.Resolve(stageInputs, now);
+        var nextBestAction = await ResolveNextBestActionAsync(
+            portfolioId,
+            unitId,
+            unitRow.Unit.PropertyId,
+            stage,
+            nextActionLabel,
+            currentLease?.Id,
+            currentLease?.TenantId,
+            ct);
 
         // Header rent state + lease-ends-in.
         var isActiveLease = currentLease is { Status: LeaseStatus.Active };
@@ -267,11 +280,7 @@ public class UnitDashboardService : IUnitDashboardService
             Unit = UnitResponse.FromEntity(unitRow.Unit),
             PropertyName = unitRow.PropertyName,
             LifecycleStage = stage.ToString(),
-            NextBestAction = new UnitNextBestAction
-            {
-                Label = nextActionLabel,
-                Href = NextBestActionHref(stage, unitId, unitRow.Unit.PropertyId, currentLease?.TenantId),
-            },
+            NextBestAction = nextBestAction,
             Header = new UnitDashboardHeader
             {
                 RentState = rentState,
@@ -403,6 +412,62 @@ public class UnitDashboardService : IUnitDashboardService
                 (f.EntityType == "Expense" && expenseIds.Contains(f.EntityId!.Value)) ||
                 (f.EntityType == "WorkOrder" && workOrderIds.Contains(f.EntityId!.Value)) ||
                 (f.EntityType == "Inspection" && inspectionIds.Contains(f.EntityId!.Value))));
+    }
+
+    private async Task<UnitNextBestAction> ResolveNextBestActionAsync(
+        int portfolioId,
+        int unitId,
+        int propertyId,
+        UnitLifecycleStage stage,
+        string defaultLabel,
+        int? currentLeaseId,
+        int? currentTenantId,
+        CancellationToken ct)
+    {
+        var defaultHref = NextBestActionHref(stage, unitId, propertyId, currentTenantId);
+        if (stage != UnitLifecycleStage.Renewal
+            || currentLeaseId is not int leaseId
+            || currentTenantId is not int tenantId)
+        {
+            return new UnitNextBestAction { Label = defaultLabel, Href = defaultHref };
+        }
+
+        var renewalNotice = await _db.NoticeDrafts
+            .AsNoTracking()
+            .Where(d => d.PortfolioId == portfolioId
+                && d.LeaseId == leaseId
+                && d.TenantId == tenantId
+                && d.NoticeType == RenewalNoticeType
+                && (d.Status == NoticeStatusApproved || d.Status == NoticeStatusDraft))
+            .OrderByDescending(d => d.Status == NoticeStatusApproved)
+            .ThenByDescending(d => d.ApprovedAt ?? d.UpdatedAt)
+            .ThenByDescending(d => d.Id)
+            .Select(d => new
+            {
+                d.Status,
+                d.ConversationId,
+            })
+            .FirstOrDefaultAsync(ct);
+
+        return renewalNotice?.Status switch
+        {
+            NoticeStatusApproved when renewalNotice.ConversationId is int conversationId => new UnitNextBestAction
+            {
+                Label = "Renewal sent - open conversation",
+                Href = $"/messages?conversation={conversationId}",
+            },
+            NoticeStatusApproved => new UnitNextBestAction
+            {
+                Label = "Renewal sent",
+                Href = $"/units/{unitId}?tab=lease",
+            },
+            NoticeStatusDraft => new UnitNextBestAction
+            {
+                Label = "Review renewal draft",
+                Href = defaultHref,
+            },
+            _ => new UnitNextBestAction { Label = defaultLabel, Href = defaultHref },
+        };
     }
 
     /// <summary>Batched lookup of display names for the user-attributed audit rows (mirrors AuditQueryService).</summary>

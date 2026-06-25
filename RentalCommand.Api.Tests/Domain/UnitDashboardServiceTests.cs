@@ -177,6 +177,143 @@ public class UnitDashboardServiceTests : IDisposable
     public async Task GetDashboardAsync_LinksRenewalNextActionToTenantRenewalNoticeFlow()
     {
         var now = DateTime.UtcNow;
+        var (property, unit, tenant, _) = SeedRenewalUnit(now);
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Renewal.ToString());
+        dashboard.NextBestAction.Label.Should().StartWith("Send renewal");
+        dashboard.NextBestAction.Href.Should()
+            .Be($"/tenants/{tenant.Id}?action=create-notice&noticeType=RenewalOffer");
+    }
+
+    [Fact]
+    public async Task GetDashboardAsync_LinksApprovedRenewalNoticeToConversation()
+    {
+        var now = DateTime.UtcNow;
+        var (property, unit, tenant, lease) = SeedRenewalUnit(now);
+        var conversation = new Conversation
+        {
+            PortfolioId = PortfolioId,
+            Tenant = tenant,
+            Subject = "Lease renewal for Oak Ridge 3B",
+            Property = property,
+            StartedByLandlord = true,
+            CreatedAt = now.AddMinutes(-2),
+            LastMessageAt = now.AddMinutes(-2),
+            LastMessagePreview = "Renewal offer",
+            TenantUnreadCount = 1,
+        };
+        _db.Conversations.Add(conversation);
+        _db.SaveChanges();
+
+        _db.NoticeDrafts.Add(new NoticeDraft
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            Tenant = tenant,
+            Property = property,
+            NoticeType = "RenewalOffer",
+            Status = "Approved",
+            Subject = conversation.Subject,
+            Body = "Please review your renewal offer.",
+            Reason = "Lease ending soon",
+            TriggerDate = now.Date,
+            Conversation = conversation,
+            ApprovedChannels = "Portal",
+            CreatedAt = now.AddMinutes(-5),
+            UpdatedAt = now.AddMinutes(-2),
+            ApprovedAt = now.AddMinutes(-2),
+        });
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Renewal.ToString());
+        dashboard.NextBestAction.Label.Should().Be("Renewal sent - open conversation");
+        dashboard.NextBestAction.Href.Should().Be($"/messages?conversation={conversation.Id}");
+
+        var noticeSql = _executedSql.Single(command =>
+            command.Contains("FROM \"NoticeDrafts\"", StringComparison.OrdinalIgnoreCase));
+        noticeSql.Should().Contain("ORDER BY", "the renewal notice lookup must choose the latest relevant row in SQL");
+        noticeSql.Should().Contain("LIMIT", "the renewal notice lookup must not materialize all matching notices");
+    }
+
+    [Fact]
+    public async Task GetDashboardAsync_LinksDraftRenewalNoticeToReviewFlow()
+    {
+        var now = DateTime.UtcNow;
+        var (_, unit, tenant, lease) = SeedRenewalUnit(now);
+        _db.NoticeDrafts.Add(new NoticeDraft
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            Tenant = tenant,
+            NoticeType = "RenewalOffer",
+            Status = "Draft",
+            Subject = "Lease renewal",
+            Body = "Draft renewal offer",
+            Reason = "Lease ending soon",
+            TriggerDate = now.Date,
+            CreatedAt = now.AddMinutes(-5),
+            UpdatedAt = now.AddMinutes(-5),
+        });
+        _db.SaveChanges();
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Renewal.ToString());
+        dashboard.NextBestAction.Label.Should().Be("Review renewal draft");
+        dashboard.NextBestAction.Href.Should()
+            .Be($"/tenants/{tenant.Id}?action=create-notice&noticeType=RenewalOffer");
+    }
+
+    private static bool IsChildIdPreload(string command)
+        => IsBareIdSelect(command, "Leases")
+            || IsBareIdSelect(command, "Payments")
+            || IsBareIdSelect(command, "WorkOrders")
+            || IsBareIdSelect(command, "Inspections")
+            || IsBareIdSelect(command, "Appointments")
+            || IsBareIdSelect(command, "Expenses");
+
+    private static bool IsBareIdSelect(string command, string table)
+        => command.Contains($"SELECT \"", StringComparison.OrdinalIgnoreCase)
+            && command.Contains($"\".\"Id\"", StringComparison.OrdinalIgnoreCase)
+            && command.Contains($"FROM \"{table}\"", StringComparison.OrdinalIgnoreCase)
+            && !command.Contains("FROM \"AuditLogs\"", StringComparison.OrdinalIgnoreCase)
+            && !command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
+            && !command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase);
+
+    private AuditLog Audit(string entityType, int entityId, int minutesAgo)
+        => new()
+        {
+            PortfolioId = PortfolioId,
+            EntityType = entityType,
+            EntityId = entityId,
+            Operation = AuditLogOperation.Created,
+            ActorLabel = "test",
+            Timestamp = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc).AddMinutes(-minutesAgo),
+        };
+
+    private static StoredFile File(string entityType, int entityId, string fileName, DateTime uploadedAt)
+        => new()
+        {
+            PortfolioId = PortfolioId,
+            EntityType = entityType,
+            EntityId = entityId,
+            FileName = fileName,
+            FilePath = fileName,
+            ContentType = fileName.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "application/pdf",
+            FileSize = 1024,
+            UploadedAt = uploadedAt,
+        };
+
+    private (Property Property, Unit Unit, Tenant Tenant, Lease Lease) SeedRenewalUnit(DateTime now)
+    {
         var property = new Property
         {
             PortfolioId = PortfolioId,
@@ -223,54 +360,8 @@ public class UnitDashboardServiceTests : IDisposable
         _db.AddRange(property, unit, tenant, lease);
         _db.SaveChanges();
 
-        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
-
-        dashboard.Should().NotBeNull();
-        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Renewal.ToString());
-        dashboard.NextBestAction.Label.Should().StartWith("Send renewal");
-        dashboard.NextBestAction.Href.Should()
-            .Be($"/tenants/{tenant.Id}?action=create-notice&noticeType=RenewalOffer");
+        return (property, unit, tenant, lease);
     }
-
-    private static bool IsChildIdPreload(string command)
-        => IsBareIdSelect(command, "Leases")
-            || IsBareIdSelect(command, "Payments")
-            || IsBareIdSelect(command, "WorkOrders")
-            || IsBareIdSelect(command, "Inspections")
-            || IsBareIdSelect(command, "Appointments")
-            || IsBareIdSelect(command, "Expenses");
-
-    private static bool IsBareIdSelect(string command, string table)
-        => command.Contains($"SELECT \"", StringComparison.OrdinalIgnoreCase)
-            && command.Contains($"\".\"Id\"", StringComparison.OrdinalIgnoreCase)
-            && command.Contains($"FROM \"{table}\"", StringComparison.OrdinalIgnoreCase)
-            && !command.Contains("FROM \"AuditLogs\"", StringComparison.OrdinalIgnoreCase)
-            && !command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase)
-            && !command.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase);
-
-    private AuditLog Audit(string entityType, int entityId, int minutesAgo)
-        => new()
-        {
-            PortfolioId = PortfolioId,
-            EntityType = entityType,
-            EntityId = entityId,
-            Operation = AuditLogOperation.Created,
-            ActorLabel = "test",
-            Timestamp = new DateTime(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc).AddMinutes(-minutesAgo),
-        };
-
-    private static StoredFile File(string entityType, int entityId, string fileName, DateTime uploadedAt)
-        => new()
-        {
-            PortfolioId = PortfolioId,
-            EntityType = entityType,
-            EntityId = entityId,
-            FileName = fileName,
-            FilePath = fileName,
-            ContentType = fileName.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "application/pdf",
-            FileSize = 1024,
-            UploadedAt = uploadedAt,
-        };
 
     private SeededTimelineGraph SeedUnitWithTimelineChildren()
     {
