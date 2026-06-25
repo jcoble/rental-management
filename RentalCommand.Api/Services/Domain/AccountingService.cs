@@ -42,10 +42,10 @@ public class AccountingService : IAccountingService
                 Total = g.Sum(e => e.Amount),
                 Count = g.Count(),
             })
+            .OrderByDescending(g => g.Total)
             .ToListAsync(ct);
 
         var expensesByCategory = categoryGroups
-            .OrderByDescending(g => g.Total)
             .Select(g => new ScheduleECategoryTotal
             {
                 Category = g.Category,
@@ -64,7 +64,12 @@ public class AccountingService : IAccountingService
                 t.MatchedExpenseId == null)
             .SumAsync(t => (decimal?)-t.Amount, ct) ?? 0m;
 
-        var totalExpenses = categoryGroups.Sum(g => g.Total) + unmatchedBankWithdrawals;
+        var expenseTotal = await _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId)
+            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
+
+        var totalExpenses = expenseTotal + unmatchedBankWithdrawals;
 
         // Payment collection rollup. "Outstanding" is anything not yet collected/written off; "overdue"
         // is the subset of that which is past its due date. All four figures are computed SQL-side as
@@ -387,7 +392,7 @@ public class AccountingService : IAccountingService
         IReadOnlyList<ScheduleECategoryTotal> expensesByCategory)
     {
         var netCollectedAfterExpenses = rollup.Collected - totalExpenses;
-        var topExpense = expensesByCategory.OrderByDescending(c => c.Total).FirstOrDefault();
+        var topExpense = expensesByCategory.FirstOrDefault();
         var title = rollup.Overdue > 0
             ? "Overdue rent needs attention"
             : rollup.Outstanding > 0

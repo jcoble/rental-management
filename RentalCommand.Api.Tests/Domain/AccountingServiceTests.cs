@@ -81,6 +81,36 @@ public class AccountingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetSummaryAsync_OrdersAndTotalsExpenseCategoriesInSql()
+    {
+        var now = new DateTime(2026, 05, 25, 12, 0, 0, DateTimeKind.Utc);
+        SeedExpense("Minor repair", 40m, now, ScheduleECategory.Repairs, ExpenseStatus.Paid);
+        SeedExpense("Insurance premium", 125m, now, ScheduleECategory.Insurance, ExpenseStatus.Paid);
+        SeedExpense("Cleaning", 75m, now, ScheduleECategory.CleaningMaintenance, ExpenseStatus.Paid);
+
+        _commands.Clear();
+
+        var summary = await _sut.GetSummaryAsync(PortfolioId, CancellationToken.None);
+
+        summary.ExpensesByCategory.Select(c => c.Category).Should().Equal(
+            ScheduleECategory.Insurance,
+            ScheduleECategory.CleaningMaintenance,
+            ScheduleECategory.Repairs);
+        summary.TotalExpenses.Should().Be(240m);
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase),
+            "expense category ordering must run in SQL before materialization");
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("SUM", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),
+            "the total expense aggregate must be computed by SQL instead of summing the materialized category rows");
+    }
+
+    [Fact]
     public async Task GetSnapshotAsync_AggregatesMonthToDateWithPlainEnglishExplanations()
     {
         // Anchor everything to "now" so the figures land inside the current month-to-date window

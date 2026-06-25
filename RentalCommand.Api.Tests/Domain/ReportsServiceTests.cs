@@ -268,6 +268,32 @@ public class ReportsServiceTests : IDisposable
             .Should().BeTrue("ledger totals must be summed in SQL");
     }
 
+    [Fact]
+    public async Task GetGeneralLedgerAsync_ComputesRunningBalanceInSql()
+    {
+        var property = SeedProperty("Maple");
+        var lease = SeedLease(property, SeedUnit("1", property.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+
+        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedExpense(property.Id, 300m, paidAt: D(2026, 1, 10));
+        SeedPayment(lease, 200m, dueDate: D(2026, 1, 15), PaymentStatus.Paid, paidDate: D(2026, 1, 20));
+
+        _executedSql.Clear();
+
+        var report = await _sut.GetGeneralLedgerAsync(PortfolioId, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+        }, CancellationToken.None);
+
+        report.Entries.Select(e => e.RunningBalance).Should().Equal(1000m, 700m, 900m);
+        _executedSql.Should().Contain(sql =>
+            sql.Contains("UNION", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase)),
+            "the ordered ledger row query must compute running balance in SQL before materialization");
+    }
+
     // ── Rent Ledger running balance (DB) ───────────────────────────────────────────────────────────
 
     [Fact]

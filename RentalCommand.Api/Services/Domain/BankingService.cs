@@ -32,8 +32,13 @@ public class BankingService : IBankingService
 
     public async Task<BankingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default)
     {
-        var connections = await _db.BankConnections
-            .Where(c => c.PortfolioId == portfolioId)
+        var connectionsQuery = _db.BankConnections
+            .AsNoTracking()
+            .Where(c => c.PortfolioId == portfolioId);
+
+        var connectionCount = await connectionsQuery.CountAsync(ct);
+
+        var connections = await connectionsQuery
             .OrderBy(c => c.InstitutionName)
             .ThenBy(c => c.AccountName)
             .ToListAsync(ct);
@@ -57,7 +62,7 @@ public class BankingService : IBankingService
 
         return new BankingSummaryResponse
         {
-            ConnectionCount = connections.Count,
+            ConnectionCount = connectionCount,
             TransactionCount = await _db.BankTransactions.CountAsync(t => t.PortfolioId == portfolioId, ct),
             UnmatchedCount = unmatchedCount,
             SuggestedMatchCount = suggestedMatchCount,
