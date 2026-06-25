@@ -44,7 +44,7 @@ Fixed and verified:
 - `TSK397-B081`: lease detail tabs now honor and maintain `?tab=` deep links through reload/login redirect, direct tab clicks, and edit-mode redirection back to Overview.
 - `TSK397-B082` and `B083`: typed DatePicker dates now immediately update modal-gated actions, and Give Notice keeps lease/signature lifecycle state coherent so Notice given status, actions, and move-out date render together.
 - `TSK397-B084`: cancelling a Notice given lease back to Active now clears the expected move-out date so the active lease no longer shows stale move-out workflow data.
-- `TSK-401` and `TSK-404`: Unit Command Center `List this unit` now continues into a unit-scoped public application link with property/unit preselection, and `Send renewal` now opens the tenant renewal-offer notice workflow without sending automatically.
+- `TSK-401`: Unit Command Center `List this unit` now continues into a unit-scoped public application link with property/unit preselection.
 - `TSK-406`: local API and Engine scan workers now share one upload directory by default and in local Docker Compose, so camera-image scans created by the web app are readable by the Engine.
 - `TSK-407`: appointment edit modals now preserve a typed replacement date when the user edits the time afterward, so rescheduling does not mix the old date with the new time.
 - `TSK-408`: appointment detail edit mode now seeds native datetime-local fields from local wall-clock time and converts them back to UTC on save, so an unchanged detail save does not shift the appointment.
@@ -63,8 +63,10 @@ Fixed and verified:
 - `TSK-422`, `TSK-423`, and `TSK-424`: tenant portal dashboard now shows upcoming tenant appointments, treats due-today rent as due today instead of overdue, and fills tenant-scoped appointment unit labels from the active/latest lease when the appointment itself has no direct unit.
 - `TSK-425`: tenant dashboard quick maintenance submit now shows inline title/description validation instead of silently doing nothing on an empty submit.
 - `TSK-426`: tenant portal maintenance page submit now shows inline title/description validation instead of silently doing nothing on an empty submit, while preserving valid tenant work-order creation.
+- `TSK-427`: tenant-only users now land on a tenant-accessible `/portal/security` account security route from the user menu instead of bouncing away from the protected staff `/settings/security` route.
 
 Open, watch, or deferred:
+- `TSK-404`: Unit Command Center `Send renewal` is reopened from user browser evidence as a no-op until retested and fixed.
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
 - `TSK397-B022` and `TSK397-B070`: lease/property history copy promises every change, but child records such as opening balances, generated agreements, document uploads, loans, and recurring expenses do not all appear in the parent history. This needs a product decision on parent-history scope.
 - `TSK397-B026` / `B040`: scan processing stuck-state family. It did not reproduce in later application-scan proof after scan-review cleanup, but stays on the watch list until more scan types are rerun.
@@ -3559,3 +3561,71 @@ Verification:
 - App console proof: Playwright CLI `console warning` and `console error` returned 0 app warnings/errors.
 
 Status: Pass after fixing full tenant maintenance page validation and preserving valid request creation. Continue the real-user tenant portal pass with remaining maintenance close/delete behaviors, then resume remaining non-banking/non-QuickBooks workflows.
+
+## Pass 71 Tenant Portal Maintenance Delete-Cancel Guard
+
+Date: 2026-06-25
+Branch: `tsk-397-full-ui-pass-71`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+
+Acceptance criteria:
+- Tenant maintenance document delete must be guarded by an explicit confirmation dialog.
+- Canceling the confirmation must leave the attachment visible in the detail modal and unchanged in storage metadata.
+- Destructive delete confirm remains intentionally unsubmitted without explicit approval.
+
+Verification:
+- Browser proof: opened `/portal/maintenance` as Blake Hayes Portal, opened `TSK-397 Pass 69 dashboard quick maintenance validation proof`, and clicked `Delete work-order-002.jpg`. The app showed a `Delete document` confirmation dialog with copy `Delete "work-order-002.jpg"? This cannot be undone.` plus `Cancel` and `Delete` actions. Snapshot: `.playwright-cli/page-2026-06-25T01-31-32-858Z.yml`.
+- Browser cancel proof: clicked `Cancel`; the confirmation dialog closed and `work-order-002.jpg` remained visible in the Photos & documents list. Snapshot: `.playwright-cli/page-2026-06-25T01-31-43-471Z.yml`.
+- Browser close proof: clicked the detail modal `Close` action and returned to the `/portal/maintenance` request list with the same four visible open requests. Snapshot: `.playwright-cli/page-2026-06-25T01-32-20-158Z.yml`.
+- DB proof after cancel: `StoredFiles.Id = 44`, `FileName = work-order-002.jpg`, `EntityType = WorkOrder`, `EntityId = 7`, `DeletedAt = NULL`.
+- App console proof: Playwright CLI `console warning` and `console error` returned 0 app warnings/errors.
+
+Status: Pass with no code changes. Continue the tenant portal pass with remaining non-destructive maintenance detail behavior, then resume remaining non-banking/non-QuickBooks workflows.
+
+## Pass 72 Tenant Account Security Menu
+
+Date: 2026-06-25
+Branch: `tsk-397-427-tenant-security-menu-pass-71`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+
+Acceptance criteria:
+- Tenant-only users clicking the account-menu `Security` item must land on a tenant-accessible account security page instead of the staff protected `/settings/security` route.
+- Staff `/settings/security` must keep the same change-password controls and server action.
+- The tenant security page must show portal-specific shell/page context and a `Back to portal` escape path.
+- Non-destructive password validation states must still work without changing the tenant password.
+
+Bug `TSK-427`:
+- Repro before fix: as Blake Hayes Portal on `/portal/maintenance`, open the user menu and click `Security`. The link targeted `/settings/security`; the tenant-only protected-layout guard redirected back to `/portal`, leaving Security as a dead menu item.
+- Root cause: `AppShell.svelte` hardcoded `/settings/security` for both staff and tenant user-menu variants, while `(protected)/+layout.server.ts` correctly blocks tenant-only users from protected staff routes.
+- Fix: the AppShell security href is now conditional (`/portal/security` for tenant-only users, `/settings/security` for staff). The password form and server action were factored into shared account-security component/action modules. A new `(portal)/portal/security` route reuses them with a portal back link, and the shell title resolver now knows `/portal/security` as a non-sidebar utility route.
+- Destructive password-change submit was intentionally not performed in browser proof; the tenant password remained unchanged.
+
+Regression:
+- Red proof before fix: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/components/app-shell-security-menu.test.ts src/lib/account/security-page-routes.test.ts` failed because `/portal/security`, shared route wrappers, the shared account action, and the conditional AppShell security href did not exist.
+- Green proof after fix: the same targeted command passed 5/5 tests.
+- `rtk pnpm --dir web check` passed with 0 errors and the existing 4 PageHeader unused-selector warnings.
+
+Verification:
+- Browser proof before fix: Blake clicked account-menu `Security`; the app navigated to `/settings/security` and bounced to `/portal`. Snapshot: `.playwright-cli/page-2026-06-25T01-33-05-328Z.yml`.
+- Browser proof after fix: Blake opened the account menu on `/portal/maintenance`; the `Security` menu item exposed `/portal/security`. Snapshot: `.playwright-cli/page-2026-06-25T01-41-30-763Z.yml`.
+- Browser route proof after fix: clicking `Security` landed on `/portal/security` with page title `Security - Rental Command`, shell header `Security`, `Back to portal`, and the shared change-password card. Snapshot: `.playwright-cli/page-2026-06-25T01-43-38-209Z.yml`.
+- Browser validation proof after fix: filling current password, mismatched new/confirm passwords rendered the password rules, `Passwords do not match.`, and left `Change password` disabled; no submit occurred. Screenshot: `.playwright-cli/page-2026-06-25T01-45-29-756Z.png`.
+- App console proof: Playwright CLI `console error` and `console warning` returned 0 app errors/warnings.
+
+Status: Pass after fixing tenant Security menu routing and preserving the staff security route through shared account-security components/actions. Continue the real-user tenant portal pass, then resume remaining non-banking/non-QuickBooks workflows.
