@@ -17,6 +17,7 @@
 		formatRequestedProperty,
 		formatRequestedUnit,
 	} from '$lib/applications/application-display';
+	import { leaseCreateHrefForApprovedTenant } from '$lib/leases/lease-create-prefill';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
@@ -288,9 +289,14 @@
 					<CheckCircle2 class="h-5 w-5" />
 					<span>This applicant was approved and a tenant record was created.</span>
 				</div>
-				<Button variant="outline" class="gap-2" onclick={() => goto(`/tenants/${tenantLinkId}`)} data-testid="application-view-tenant">
-					<User class="h-4 w-4" /> View tenant <ArrowRight class="h-4 w-4" />
-				</Button>
+				<div class="flex flex-wrap items-center gap-2">
+					<Button class="gap-2" href={leaseCreateHrefForApprovedTenant(tenantLinkId)} data-testid="application-create-lease">
+						<Home class="h-4 w-4" /> Create lease <ArrowRight class="h-4 w-4" />
+					</Button>
+					<Button variant="outline" class="gap-2" onclick={() => goto(`/tenants/${tenantLinkId}`)} data-testid="application-view-tenant">
+						<User class="h-4 w-4" /> View tenant <ArrowRight class="h-4 w-4" />
+					</Button>
+				</div>
 			</div>
 		{/if}
 

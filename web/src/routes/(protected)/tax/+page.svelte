@@ -16,13 +16,10 @@
 
 	const CURRENT_YEAR = new Date().getFullYear();
 	const YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - i);
-	// Default the year-end packet to the previous calendar year — the filing year.
-	const PACKET_YEAR_OPTIONS = Array.from({ length: 5 }, (_, i) => CURRENT_YEAR - 1 - i);
 
 	const portfolioId = $derived(getCurrentPortfolioId());
 	let selectedYear = $state(String(CURRENT_YEAR));
 	let downloading = $state(false);
-	let packetYear = $state(String(CURRENT_YEAR - 1));
 	let downloadingPacket = $state(false);
 
 	const scheduleEQuery = createQuery(() => ({
@@ -73,7 +70,7 @@
 	async function handlePacketDownload() {
 		downloadingPacket = true;
 		try {
-			await downloadYearEndPacket(Number(packetYear));
+			await downloadYearEndPacket(Number(selectedYear));
 		} catch {
 			showError('Could not download the year-end packet. Please try again.');
 		} finally {
@@ -135,16 +132,9 @@
 					</div>
 				</div>
 				<div class="flex items-center gap-2">
-					<Select.Root type="single" bind:value={packetYear}>
-						<Select.Trigger class="w-28" data-testid="packet-year-select">
-							{packetYear}
-						</Select.Trigger>
-						<Select.Content>
-							{#each PACKET_YEAR_OPTIONS as year}
-								<Select.Item value={String(year)} label={String(year)}>{year}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
+					<span class="text-sm text-muted-foreground" data-testid="packet-year-label">
+						{selectedYear}
+					</span>
 					<Button
 						variant="outline"
 						onclick={handlePacketDownload}

@@ -17,13 +17,16 @@ const INLINE_SAFE = new Set([
  * Unit document lists can contain several files attached to the same lease/work-order,
  * so record-level proxies such as /lease-file/{leaseId} cannot identify the selected file.
  */
-export const GET: RequestHandler = async ({ params, cookies }) => {
+export const GET: RequestHandler = async ({ params, cookies, url }) => {
 	const token = getAccessToken(cookies);
 	if (!token) {
 		throw error(401, 'Unauthorized');
 	}
 
-	const upstream = await fetch(`${SERVER_API_BASE_URL}/documents/${params.id}/file`, {
+	const thumb = url.searchParams.get('thumb');
+	const upstreamUrl = `${SERVER_API_BASE_URL}/documents/${params.id}/file${thumb ? '?thumb=true' : ''}`;
+
+	const upstream = await fetch(upstreamUrl, {
 		headers: { Authorization: `Bearer ${token}` }
 	});
 

@@ -715,7 +715,7 @@
 							{/if}
 							{#if !editing}
 								{#if visibleStatus === 'Active'}
-									<Button data-testid="lease-hero-cta" size="sm" class="gap-1.5" onclick={() => activeTab = 'ledger'}>
+									<Button data-testid="lease-hero-cta" size="sm" class="gap-1.5" onclick={() => setTab('ledger')}>
 										<DollarSign class="h-4 w-4" />
 										View ledger
 									</Button>

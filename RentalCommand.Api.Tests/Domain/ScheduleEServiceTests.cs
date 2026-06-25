@@ -196,6 +196,149 @@ public class ScheduleEServiceTests : IDisposable
             command.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
         orderedPropertySql.Should().NotBeNull("Schedule E property ordering must come from SQL before DTO shaping");
     }
+
+    [Fact]
+    public async Task GetReportAsync_ProjectsPropertyRowFactsInSql()
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Cedar",
+            AddressLine1 = "3 Cedar",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            PurchasePrice = 300_000m,
+            LandValue = 60_000m,
+            InServiceDate = D(2020, 1, 1),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Properties.Add(property);
+        _db.SaveChanges();
+
+        var unit = new Unit { PropertyId = property.Id, UnitNumber = "1", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        var tenant = new Tenant { PortfolioId = PortfolioId, FirstName = "Cal", LastName = "Cedar", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+        _db.Units.Add(unit);
+        _db.Tenants.Add(tenant);
+        _db.SaveChanges();
+
+        var lease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-3",
+            Status = LeaseStatus.Active,
+            StartDate = D(Year, 1, 1),
+            EndDate = D(Year + 1, 1, 1),
+            MonthlyRent = 1_000m,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Leases.Add(lease);
+        _db.SaveChanges();
+
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            LeaseId = lease.Id,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1_000m,
+            DueDate = D(Year, 1, 1),
+            PaidDate = D(Year, 1, 5),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.Expenses.Add(new Expense
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            Category = ScheduleECategory.Repairs,
+            Description = "Repair",
+            Status = ExpenseStatus.Paid,
+            Amount = 250m,
+            IncurredAt = D(Year, 2, 1),
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        var loan = new Loan
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            Lender = "Bank",
+            OriginalAmount = 100_000m,
+            CurrentBalance = 100_000m,
+            AnnualInterestRatePct = 6m,
+            TermMonths = 360,
+            StartDate = D(Year, 1, 1),
+            DayOfMonthDue = 1,
+            MonthlyPrincipalInterest = 600m,
+            Status = LoanStatus.Active,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Loans.Add(loan);
+        _db.SaveChanges();
+        _db.LoanPayments.Add(new LoanPayment
+        {
+            PortfolioId = PortfolioId,
+            LoanId = loan.Id,
+            PeriodKey = $"{Year}-01",
+            DueDate = D(Year, 1, 1),
+            InterestAmount = 400m,
+            PrincipalAmount = 100m,
+            EscrowAmount = 0m,
+            TotalAmount = 500m,
+            BalanceAfter = 99_900m,
+            Status = LoanPaymentStatus.Scheduled,
+            CreatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
+        _commands.Clear();
+
+        var report = await _sut.GetReportAsync(PortfolioId, Year, ct: CancellationToken.None);
+
+        var row = report.Properties.Should().ContainSingle().Subject;
+        row.RentalIncome.Should().Be(1_000m);
+        row.MortgageInterest.Should().Be(400m);
+        row.TotalExpenses.Should().Be(250m + 400m + 8_727.27m);
+
+        _commands.Where(IsStandaloneIncomeByPropertyAggregate)
+            .Should()
+            .BeEmpty("Schedule E property income should be projected with each property row instead of joined from a materialized aggregate dictionary");
+        _commands.Where(IsStandaloneInterestByPropertyAggregate)
+            .Should()
+            .BeEmpty("modeled interest should be projected with each property row instead of joined from a materialized aggregate dictionary");
+        _commands.Where(IsStandaloneDeductibleExpenseByPropertyAggregate)
+            .Should()
+            .BeEmpty("deductible expenses should be projected with each property row instead of joined from a materialized aggregate dictionary");
+        _commands.Where(IsStandaloneLoanPropertyIdScan)
+            .Should()
+            .BeEmpty("loan-backed mortgage-interest exclusions should stay as a SQL subquery instead of a materialized property-id set");
+    }
+
+    private static bool IsStandaloneIncomeByPropertyAggregate(string sql) =>
+        sql.TrimStart().StartsWith("SELECT \"s\".\"Key\" AS \"PropertyId\"", StringComparison.Ordinal) &&
+        sql.Contains("FROM \"Payments\" AS \"p\"", StringComparison.Ordinal) &&
+        sql.Contains("GROUP BY \"s\".\"Key\"", StringComparison.Ordinal);
+
+    private static bool IsStandaloneInterestByPropertyAggregate(string sql) =>
+        sql.TrimStart().StartsWith("SELECT \"l1\".\"PropertyId\"", StringComparison.Ordinal) &&
+        sql.Contains("FROM \"LoanPayments\" AS \"l\"", StringComparison.Ordinal) &&
+        sql.Contains("GROUP BY \"l1\".\"PropertyId\"", StringComparison.Ordinal);
+
+    private static bool IsStandaloneDeductibleExpenseByPropertyAggregate(string sql) =>
+        sql.TrimStart().StartsWith("SELECT \"e0\".\"Key\" AS \"PropertyId\"", StringComparison.Ordinal) &&
+        sql.Contains("FROM \"Expenses\" AS \"e\"", StringComparison.Ordinal) &&
+        sql.Contains("GROUP BY \"e0\".\"Key\"", StringComparison.Ordinal) &&
+        !sql.Contains("\"e\".\"Category\"", StringComparison.Ordinal);
+
+    private static bool IsStandaloneLoanPropertyIdScan(string sql) =>
+        sql.TrimStart().StartsWith("SELECT DISTINCT \"l\".\"PropertyId\"", StringComparison.Ordinal) &&
+        sql.Contains("FROM \"Loans\" AS \"l\"", StringComparison.Ordinal);
 }
 
 internal sealed class ScheduleERecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor

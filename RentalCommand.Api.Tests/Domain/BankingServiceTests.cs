@@ -441,6 +441,47 @@ public class BankingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetSummaryAsync_ComputesConnectionCountInSql()
+    {
+        var executedSql = new List<string>();
+        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        var sut = CreateServiceFor(ctx);
+        var now = new DateTime(2026, 06, 03, 0, 0, 0, DateTimeKind.Utc);
+        ctx.Db.BankConnections.AddRange(
+            new BankConnection
+            {
+                PortfolioId = 1,
+                Provider = "Plaid",
+                InstitutionName = "Bank A",
+                AccountName = "Checking",
+                Status = "Active",
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new BankConnection
+            {
+                PortfolioId = 1,
+                Provider = "Plaid",
+                InstitutionName = "Bank B",
+                AccountName = "Savings",
+                Status = "Active",
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await ctx.Db.SaveChangesAsync();
+        executedSql.Clear();
+
+        var summary = await sut.GetSummaryAsync(1);
+
+        summary.ConnectionCount.Should().Be(2);
+        executedSql.Should().Contain(sql =>
+            sql.Contains("SELECT COUNT(*)", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("FROM \"BankConnections\" AS", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("BankTransactions", StringComparison.OrdinalIgnoreCase),
+            "the summary must count connections in SQL instead of using the materialized connection list");
+    }
+
+    [Fact]
     public async Task ReviewQueue_PrefiltersPaymentSuggestionCandidatesInSql()
     {
         var executedSql = new List<string>();
@@ -516,6 +557,39 @@ public class BankingServiceTests : IDisposable
             sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("CASE", StringComparison.OrdinalIgnoreCase),
             "bank suggestion candidate ranking must run in SQL, not after materializing every same-amount/date candidate");
+    }
+
+    [Fact]
+    public async Task ReviewQueue_PagesSuggestibleTransactionsInSql()
+    {
+        var executedSql = new List<string>();
+        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        var sut = CreateServiceFor(ctx);
+        var postedAt = new DateTime(2026, 06, 10, 0, 0, 0, DateTimeKind.Utc);
+        SeedRentPaymentInto(ctx, "Emily", "Chen", 1400m, postedAt, "L-emily");
+        SeedRentPaymentInto(ctx, "Carlos", "Reyes", 1450m, postedAt.AddDays(1), "L-carlos");
+        SeedRentPaymentInto(ctx, "Maya", "Patel", 1500m, postedAt.AddDays(2), "L-maya");
+
+        await sut.ImportAsync(1, BankImport("queue-page-1", postedAt, "Emily Chen", 1400m));
+        await sut.ImportAsync(1, BankImport("queue-page-2", postedAt.AddDays(1), "Carlos Reyes", 1450m));
+        await sut.ImportAsync(1, BankImport("queue-page-3", postedAt.AddDays(2), "Maya Patel", 1500m));
+        executedSql.Clear();
+
+        var queue = await sut.GetReviewQueueAsync(1, skip: 1, take: 1);
+
+        queue.Count.Should().Be(3);
+        queue.Skip.Should().Be(1);
+        queue.Take.Should().Be(1);
+        queue.Items.Should().ContainSingle();
+        queue.Items.Single().Transaction.MerchantName.Should().Be("Carlos Reyes");
+
+        executedSql.Should().Contain(sql =>
+            sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("EXISTS", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase),
+            "the review queue must page suggestible rows in SQL before mapping suggestions");
     }
 
     [Fact]

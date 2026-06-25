@@ -217,6 +217,24 @@ public class ExpenseServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task UpdateAsync_WithClearReceiptData_ClearsStoredReceiptJson()
+    {
+        var expense = SeedExpense();
+        var request = new UpdateExpenseRequest
+        {
+            ClearReceiptData = true,
+        };
+
+        var updated = await _sut.UpdateAsync(PortfolioId, expense.Id, request);
+
+        updated.Should().NotBeNull();
+        updated!.ReceiptData.Should().BeNull();
+
+        var fromDb = await _db.Expenses.AsNoTracking().SingleAsync(e => e.Id == expense.Id);
+        fromDb.ReceiptData.Should().BeNull();
+    }
+
+    [Fact]
     public async Task CreateAsync_FromScanDraft_PersistsTypedColumnsAndLineItems()
     {
         var now = DateTime.UtcNow;

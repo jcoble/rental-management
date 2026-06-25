@@ -131,12 +131,12 @@
 		}
 		const filled: string[] = [];
 		const f = result.fields;
-		if (f.firstName?.value) { firstName = f.firstName.value; autoFilled.firstName = true; filled.push('first name'); }
-		if (f.lastName?.value) { lastName = f.lastName.value; autoFilled.lastName = true; filled.push('last name'); }
-		if (f.dateOfBirth?.value) { dateOfBirth = normalizeDate(f.dateOfBirth.value); autoFilled.dateOfBirth = true; filled.push('date of birth'); }
-		if (f.currentAddress?.value) { currentAddressLine1 = f.currentAddress.value; autoFilled.currentAddressLine1 = true; filled.push('current address'); }
-		if (f.employer?.value) { employer = f.employer.value; autoFilled.employer = true; filled.push('employer'); }
-		if (f.monthlyIncome?.value) { monthlyIncome = f.monthlyIncome.value; autoFilled.monthlyIncome = true; filled.push('monthly income'); }
+		if (f.firstName?.value) { firstName = f.firstName.value; autoFilled.firstName = true; clearFieldError('firstName'); filled.push('first name'); }
+		if (f.lastName?.value) { lastName = f.lastName.value; autoFilled.lastName = true; clearFieldError('lastName'); filled.push('last name'); }
+		if (f.dateOfBirth?.value) { dateOfBirth = normalizeDate(f.dateOfBirth.value); autoFilled.dateOfBirth = true; clearFieldError('dateOfBirth'); filled.push('date of birth'); }
+		if (f.currentAddress?.value) { currentAddressLine1 = f.currentAddress.value; autoFilled.currentAddressLine1 = true; clearFieldError('currentAddressLine1'); filled.push('current address'); }
+		if (f.employer?.value) { employer = f.employer.value; autoFilled.employer = true; clearFieldError('employer'); filled.push('employer'); }
+		if (f.monthlyIncome?.value) { monthlyIncome = f.monthlyIncome.value; autoFilled.monthlyIncome = true; clearFieldError('monthlyIncome'); filled.push('monthly income'); }
 		autoFilled = { ...autoFilled };
 		scanMessage = filled.length
 			? `We filled in your ${filled.join(', ')}. Please check that everything looks right.`
@@ -167,6 +167,13 @@
 		if (autoFilled[field]) {
 			autoFilled = { ...autoFilled, [field]: false };
 		}
+	}
+
+	function clearFieldError(name: string) {
+		if (!formErrors[name]) return;
+		const next = { ...formErrors };
+		delete next[name];
+		formErrors = next;
 	}
 
 	// ── Submit ────────────────────────────────────────────────────────────────────
@@ -423,12 +430,13 @@
 							</span>
 							<AddressAutocomplete
 								value={currentAddressLine1}
-								onchange={(v) => { currentAddressLine1 = v; clearAutoFill('currentAddressLine1'); }}
+								onchange={(v) => { currentAddressLine1 = v; clearAutoFill('currentAddressLine1'); clearFieldError('currentAddressLine1'); }}
 								onresolved={(a) => {
 									if (a.city) currentCity = a.city;
 									if (a.state) currentState = a.state;
 									if (a.zip) currentPostalCode = a.zip;
 									clearAutoFill('currentAddressLine1');
+									clearFieldError('currentAddressLine1');
 								}}
 								placeholder="Street address"
 								testid="apply-currentAddressLine1-input"
@@ -471,6 +479,7 @@
 						<input
 							type="checkbox"
 							bind:checked={consentGiven}
+							onchange={() => clearFieldError('consent')}
 							class="mt-1 h-5 w-5 shrink-0 rounded border-input text-primary focus:ring-2 focus:ring-ring/40"
 							data-testid="apply-consent-checkbox"
 						/>
@@ -537,17 +546,18 @@
 			{#if opts.type === 'date'}
 				<DatePicker
 					value={value}
-					onchange={(v) => { setter(v); clearAutoFill(name); }}
+					onchange={(v) => { setter(v); clearAutoFill(name); clearFieldError(name); }}
 					placeholder={label}
 					testid="apply-{name}-input"
 				/>
 			{:else if opts.address}
 				<AddressAutocomplete
 					value={value}
-					onchange={(v) => { setter(v); clearAutoFill(name); }}
+					onchange={(v) => { setter(v); clearAutoFill(name); clearFieldError(name); }}
 					onresolved={(a) => {
 						setter([a.line1, a.city, [a.state, a.zip].filter(Boolean).join(' ')].filter(Boolean).join(', '));
 						clearAutoFill(name);
+						clearFieldError(name);
 					}}
 					placeholder={label}
 					testid="apply-{name}-input"
@@ -557,7 +567,7 @@
 					type={opts.type ?? 'text'}
 					value={value}
 					inputmode={opts.inputMode}
-					oninput={(e) => { setter((e.currentTarget as HTMLInputElement).value); clearAutoFill(name); }}
+					oninput={(e) => { setter((e.currentTarget as HTMLInputElement).value); clearAutoFill(name); clearFieldError(name); }}
 					class="h-12 w-full rounded-xl border border-input bg-background text-base text-foreground placeholder:text-muted-foreground focus:border-ring focus:outline-none focus:ring-2 focus:ring-ring/40 {opts.prefix ? 'pl-7 pr-3' : 'px-3'}"
 					data-testid="apply-{name}-input"
 				/>
