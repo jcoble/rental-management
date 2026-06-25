@@ -174,6 +174,80 @@ public sealed class SoftDeleteKpiTests : IDisposable
         (await _db.ExpenseLineItems.IgnoreQueryFilters().CountAsync()).Should().Be(1);
     }
 
+    [Fact]
+    public async Task DashboardNetThisMonth_UsesExpensePaidDateFallbackLikeMoneySnapshot()
+    {
+        var now = DateTime.UtcNow;
+        var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var paidThisMonth = monthStart.AddDays(2);
+        var incurredLastMonth = monthStart.AddDays(-3);
+
+        var lease = SeedLease(now, "L-NET");
+        var property = lease.Property!;
+        SeedPayment(lease, PaymentStatus.Paid, 100m, dueDate: paidThisMonth, paidDate: paidThisMonth);
+        _db.Expenses.Add(new Expense
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Category = ScheduleECategory.Repairs,
+            Description = "Invoice incurred last month but paid this month",
+            Amount = 25m,
+            IncurredAt = incurredLastMonth,
+            PaidAt = paidThisMonth,
+            Status = ExpenseStatus.Paid,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.SaveChanges();
+
+        var snapshot = await _accounting.GetSnapshotAsync(PortfolioId);
+        snapshot.Collected.Should().Be(100m);
+        snapshot.Spent.Should().Be(25m);
+        snapshot.Net.Should().Be(75m);
+
+        var dashboard = await _dashboard.GetDashboardAsync(PortfolioId);
+        dashboard!.Accounting.PaidThisMonthAmount.Should().Be(100m);
+        dashboard.Accounting.ExpensesThisMonthAmount.Should().Be(25m);
+        dashboard.Accounting.NetThisMonth.Should().Be(75m);
+    }
+
+    [Fact]
+    public async Task DashboardNetThisMonth_IncludesUnmatchedBankCashMovementAndNonRentPaymentsLikeMoneySnapshot()
+    {
+        var now = DateTime.UtcNow;
+        var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var inMonth = monthStart.AddDays(3);
+
+        var lease = SeedLease(now, "L-CASH");
+        SeedPayment(lease, PaymentStatus.Paid, 100m, dueDate: inMonth, paidDate: inMonth);
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.LateFee,
+            Status = PaymentStatus.Paid,
+            Amount = 20m,
+            DueDate = inMonth,
+            PaidDate = inMonth,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        SeedBankTransaction(amount: 10m, postedAt: inMonth, matchStatus: "Unmatched");
+        SeedBankTransaction(amount: -15m, postedAt: inMonth, matchStatus: "Unmatched");
+        SeedBankTransaction(amount: 999m, postedAt: inMonth, matchStatus: "Removed");
+        _db.SaveChanges();
+
+        var snapshot = await _accounting.GetSnapshotAsync(PortfolioId);
+        snapshot.Collected.Should().Be(130m);
+        snapshot.Spent.Should().Be(15m);
+        snapshot.Net.Should().Be(115m);
+
+        var dashboard = await _dashboard.GetDashboardAsync(PortfolioId);
+        dashboard!.Accounting.PaidThisMonthAmount.Should().Be(130m);
+        dashboard.Accounting.ExpensesThisMonthAmount.Should().Be(15m);
+        dashboard.Accounting.NetThisMonth.Should().Be(115m);
+    }
+
     // ----- seed helpers -----
 
     private Property SeedProperty(DateTime now)
@@ -257,6 +331,35 @@ public sealed class SoftDeleteKpiTests : IDisposable
             PaidDate = paidDate,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
+        });
+    }
+
+    private void SeedBankTransaction(decimal amount, DateTime postedAt, string matchStatus)
+    {
+        var connection = _db.BankConnections.FirstOrDefault() ?? new BankConnection
+        {
+            PortfolioId = PortfolioId,
+            Provider = "Plaid",
+            InstitutionName = "Sandbox Bank",
+            AccountName = "Checking",
+            Status = "Active",
+            CreatedAt = postedAt,
+            UpdatedAt = postedAt,
+        };
+        if (connection.Id == 0) _db.BankConnections.Add(connection);
+
+        _db.BankTransactions.Add(new BankTransaction
+        {
+            PortfolioId = PortfolioId,
+            BankConnection = connection,
+            ProviderTransactionId = Guid.NewGuid().ToString("N"),
+            PostedAt = postedAt,
+            Description = "Bank cash movement",
+            Amount = amount,
+            IsoCurrencyCode = "USD",
+            MatchStatus = matchStatus,
+            CreatedAt = postedAt,
+            UpdatedAt = postedAt,
         });
     }
 }
