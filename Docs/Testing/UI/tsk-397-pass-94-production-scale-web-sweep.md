@@ -96,12 +96,12 @@ Completed in browser with Playwright CLI against the local stack.
 | P94-010 | Recurring maintenance | Row edit/delete/pause icon controls did not have task-specific accessible names. | Row actions now expose task-specific pause/resume, edit, and delete labels. | `recurring-maintenance-accessibility.test.ts` |
 | P94-011 | Generic document files | Generic document downloads and previews bypassed the same-origin file proxy path and preview images fetched full-size blobs. | Document downloads/previews now use `/document-file/{id}`, the proxy forwards `thumb=true`, the API serves inline JPEG thumbnails for image documents, and deposit/inspection previews request thumbnails. | `DocumentsControllerTests.GetFile_WithThumbForImage_ReturnsJpegThumbnail`, `documents.test.ts` |
 | P94-012 | Application approval | After approving an application, the detail page only linked to the created tenant and did not continue the applicant into lease setup. | Approved application banners now include `Create lease`, linking to `/leases?create=1&tenantId={tenantId}`; the leases page opens the create modal with that tenant selected. | `application-approval-continuation.test.ts` |
+| P94-013 | Tenant notices | Forced notice path could keep offering `Create one anyway` after proving no eligible lease/draft existed. | Tenant notice empty state now hides force controls when there is no active lease and after a forced no-draft result; tenants without active leases get a `Create lease` action instead. | `tenant-notice-state.test.ts` |
 
 ## Remaining Bugs And Blocked Lanes
 
 | ID | Surface | Evidence | Status |
 | --- | --- | --- | --- |
-| P94-R03 | Tenant notices | Forced notice path can loop on `Create one anyway` when no eligible lease exists. | Open |
 | P94-R05 | Tenants search | Hyphenated search terms do not tokenize as a user would expect. | Open |
 | P94-R06 | Onboarding | Existing active lease can still land the owner on a create-first-lease step; email-alert setup can loop into onboarding. | Open |
 | P94-R08 | Accounting/banking DB-side rule | Several report/accounting/banking endpoints still materialize rows and then filter/group/sort/aggregate in memory. This includes the general ledger running-balance lane and banking review candidate lane. | Larger refactor lane |
@@ -124,6 +124,7 @@ pnpm --dir web test:unit -- src/lib/leases/lease-detail-state.test.ts
 pnpm --dir web test:unit -- src/lib/applications/public-application-form.test.ts
 pnpm --dir web test:unit -- src/lib/accounting/expense-receipt-data.test.ts src/lib/maintenance/recurring-maintenance-accessibility.test.ts src/lib/api/endpoints/documents.test.ts
 pnpm --dir web test:unit -- src/lib/applications/application-approval-continuation.test.ts
+pnpm --dir web test:unit -- src/lib/tenants/tenant-notice-state.test.ts
 ```
 
 Browser retests after fixes:
