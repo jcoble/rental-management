@@ -119,6 +119,96 @@ public sealed class PortfolioQaServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task FinancialSummaryTool_ReturnsPeriodLabelsAndUnmatchedBankContext()
+    {
+        var now = DateTime.UtcNow;
+        var connection = new BankConnection
+        {
+            PortfolioId = PortfolioId,
+            Provider = "Manual",
+            InstitutionName = "Sample Bank",
+            AccountName = "Operating checking",
+            Status = "Active",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.BankConnections.Add(connection);
+        _db.BankTransactions.Add(new BankTransaction
+        {
+            PortfolioId = PortfolioId,
+            BankConnection = connection,
+            ProviderTransactionId = "manual-deposit-1",
+            PostedAt = now,
+            Description = "Rent deposit",
+            Amount = 1200m,
+            IsoCurrencyCode = "USD",
+            MatchStatus = "Unmatched",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _db.SaveChangesAsync();
+
+        var accounting = new StubAccountingService(
+            summary: new AccountingSummaryResponse
+            {
+                PortfolioId = PortfolioId,
+                Payments = new PaymentRollup
+                {
+                    Collected = 2325m,
+                    Outstanding = 0m,
+                    Overdue = 0m,
+                    OverdueCount = 0,
+                },
+                TotalExpenses = 63.75m,
+                ExpensesByCategory =
+                [
+                    new ScheduleECategoryTotal
+                    {
+                        Category = ScheduleECategory.Repairs,
+                        CategoryName = "Repairs",
+                        Total = 63.75m,
+                        Count = 1,
+                    },
+                ],
+            },
+            snapshot: new MoneySnapshotResponse
+            {
+                PortfolioId = PortfolioId,
+                PeriodLabel = "June 2026 (so far)",
+                PeriodStart = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc),
+                PeriodEnd = new DateTime(2026, 6, 25, 12, 0, 0, DateTimeKind.Utc),
+                Collected = 1200m,
+                Spent = 0m,
+                Net = 1200m,
+                PastDueAmount = 0m,
+                PastDueCount = 0,
+                CollectedLast30Days = 1200m,
+                SpentLast30Days = 0m,
+                NetLast30Days = 1200m,
+            });
+
+        var answer = await AskToolAsync(
+            toolName: "get_financial_summary",
+            argsJson: "{}",
+            question: "How much did I collect?",
+            accounting: accounting);
+
+        using var doc = JsonDocument.Parse(answer);
+        var root = doc.RootElement;
+
+        root.GetProperty("currentLedger").GetProperty("scope").GetString()
+            .Should().Contain("not limited to this month");
+        root.GetProperty("currentLedger").GetProperty("collected").GetDecimal().Should().Be(2325m);
+        root.GetProperty("monthToDate").GetProperty("periodLabel").GetString().Should().Be("June 2026 (so far)");
+        root.GetProperty("monthToDate").GetProperty("collected").GetDecimal().Should().Be(1200m);
+        root.GetProperty("last30Days").GetProperty("collected").GetDecimal().Should().Be(1200m);
+        root.GetProperty("unmatchedBankDeposits").GetProperty("count").GetInt32().Should().Be(1);
+        root.GetProperty("unmatchedBankDeposits").GetProperty("total").GetDecimal().Should().Be(1200m);
+        root.GetProperty("unmatchedBankDeposits").GetProperty("note").GetString()
+            .Should().Contain("mention separately");
+    }
+
+    [Fact]
     public async Task UpcomingEventsTool_MergesSortsAndCapsAppointmentsAndInspectionsInSql()
     {
         var now = DateTime.UtcNow;
@@ -211,13 +301,17 @@ public sealed class PortfolioQaServiceTests : IDisposable
         _commands.Should().Contain(sql => sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
     }
 
-    private async Task<string> AskToolAsync(string toolName, string argsJson, string question)
+    private async Task<string> AskToolAsync(
+        string toolName,
+        string argsJson,
+        string question,
+        IAccountingService? accounting = null)
     {
         _commands.Clear();
         var sut = new PortfolioQaService(
             _db,
             new ToolEchoLlmProvider(toolName, argsJson),
-            new ThrowingAccountingService(),
+            accounting ?? new ThrowingAccountingService(),
             new NoopMessagePublisher(),
             new EmptyKnowledgeBaseService(),
             NullLogger<PortfolioQaService>.Instance);
@@ -355,6 +449,42 @@ public sealed class PortfolioQaServiceTests : IDisposable
             throw new NotSupportedException();
         public Task<YearEndPacketData> GetYearEndPacketDataAsync(int portfolioId, int year, CancellationToken ct = default) =>
             throw new NotSupportedException();
+        public Task<byte[]> GetYearEndPacketAsync(int portfolioId, int year, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class StubAccountingService : IAccountingService
+    {
+        private readonly AccountingSummaryResponse _summary;
+        private readonly MoneySnapshotResponse _snapshot;
+
+        public StubAccountingService(AccountingSummaryResponse summary, MoneySnapshotResponse snapshot)
+        {
+            _summary = summary;
+            _snapshot = snapshot;
+        }
+
+        public Task<AccountingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default) =>
+            Task.FromResult(_summary);
+
+        public Task<MoneySnapshotResponse> GetSnapshotAsync(int portfolioId, CancellationToken ct = default) =>
+            Task.FromResult(_snapshot);
+
+        public Task<PastDueResponse> GetPastDueAsync(int portfolioId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<AccountingReportsResponse> GetReportsAsync(int portfolioId, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<AccountingTransactionsResponse> GetTransactionsAsync(
+            int portfolioId,
+            AccountingTransactionsQuery query,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
+        public Task<YearEndPacketData> GetYearEndPacketDataAsync(int portfolioId, int year, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+
         public Task<byte[]> GetYearEndPacketAsync(int portfolioId, int year, CancellationToken ct = default) =>
             throw new NotSupportedException();
     }

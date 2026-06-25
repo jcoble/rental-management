@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Scanning;       // ReceiptExtractionSchema
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
@@ -232,10 +233,10 @@ public class ScanProcessingWorker : EngineWorkerBase
     private const int GroundingCap = 150;
 
     /// <summary>
-    /// Builds a compact JSON grounding object — { vendors, properties, units, tenants } — of the
+    /// Builds a compact JSON grounding object — { vendors, properties, units, tenants, leases } — of the
     /// portfolio's known records so the LLM can normalise extracted names to the exact records on
     /// file AND return their primary-key ids for auto-fill. Each entry is an {id, name} pair (units
-    /// also carry {unitNumber, propertyId}) so the model can hand back a real id that downstream
+    /// also carry {unitNumber, propertyId}, leases carry {leaseNumber, propertyId, unitId, tenantId}) so the model can hand back a real id that downstream
     /// code validates against this same set before trusting it. Active (non-soft-deleted) rows only,
     /// capped per list, read no-tracking. Returns null when the portfolio has no records to ground
     /// against (keeps the prompt unchanged in that case).
@@ -278,10 +279,27 @@ public class ScanProcessingWorker : EngineWorkerBase
             .Take(GroundingCap)
             .ToListAsync(ct);
 
-        if (vendors.Count == 0 && properties.Count == 0 && units.Count == 0 && tenants.Count == 0)
+        var leases = await db.Leases.AsNoTracking()
+            .Where(l => l.PortfolioId == portfolioId
+                        && l.DeletedAt == null
+                        && l.Status != LeaseStatus.Terminated
+                        && l.Status != LeaseStatus.Void)
+            .OrderByDescending(l => l.UpdatedAt)
+            .Select(l => new
+            {
+                id = l.Id,
+                leaseNumber = l.LeaseNumber,
+                propertyId = l.PropertyId,
+                unitId = l.UnitId,
+                tenantId = l.TenantId,
+            })
+            .Take(GroundingCap)
+            .ToListAsync(ct);
+
+        if (vendors.Count == 0 && properties.Count == 0 && units.Count == 0 && tenants.Count == 0 && leases.Count == 0)
             return null;
 
-        return JsonSerializer.Serialize(new { vendors, properties, units, tenants });
+        return JsonSerializer.Serialize(new { vendors, properties, units, tenants, leases });
     }
 
     /// <summary>
