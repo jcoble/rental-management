@@ -126,10 +126,20 @@
 		category: 'Resident Request',
 		priority: 'Normal'
 	});
+	let workOrderSubmitted = $state(false);
+	const workOrderTitleError = $derived(
+		workOrderSubmitted && !workOrderForm.title.trim() ? 'Issue title is required.' : ''
+	);
+	const workOrderDescriptionError = $derived(
+		workOrderSubmitted && !workOrderForm.description.trim()
+			? 'Describe the issue before submitting.'
+			: ''
+	);
 
 	const createWorkOrderMutation = createMutation(() => ({
 		mutationFn: () => portal.createTenantWorkOrder(workOrderForm),
 		onSuccess: () => {
+			workOrderSubmitted = false;
 			workOrderForm = {
 				title: '',
 				description: '',
@@ -143,7 +153,10 @@
 	}));
 
 	function submitWorkOrder() {
-		if (!workOrderForm.title.trim() || !workOrderForm.description.trim()) return;
+		const missingTitle = !workOrderForm.title.trim();
+		const missingDescription = !workOrderForm.description.trim();
+		workOrderSubmitted = true;
+		if (missingTitle || missingDescription) return;
 		createWorkOrderMutation.mutate();
 	}
 
@@ -346,8 +359,48 @@
 					{/if}
 				</div>
 				<form class="space-y-3" onsubmit={(e) => { e.preventDefault(); submitWorkOrder(); }}>
-					<Input bind:value={workOrderForm.title} placeholder="Issue title" />
-					<textarea bind:value={workOrderForm.description} rows={4} class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" placeholder="Describe the issue"></textarea>
+					<div>
+						<Input
+							bind:value={workOrderForm.title}
+							placeholder="Issue title"
+							aria-required="true"
+							aria-invalid={Boolean(workOrderTitleError)}
+							aria-describedby={workOrderTitleError
+								? 'tenant-dashboard-maintenance-title-error'
+								: undefined}
+						/>
+						{#if workOrderTitleError}
+							<p
+								id="tenant-dashboard-maintenance-title-error"
+								data-testid="tenant-dashboard-maintenance-title-error"
+								class="mt-1 text-xs text-destructive"
+							>
+								{workOrderTitleError}
+							</p>
+						{/if}
+					</div>
+					<div>
+						<textarea
+							bind:value={workOrderForm.description}
+							rows={4}
+							class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+							placeholder="Describe the issue"
+							aria-required="true"
+							aria-invalid={Boolean(workOrderDescriptionError)}
+							aria-describedby={workOrderDescriptionError
+								? 'tenant-dashboard-maintenance-description-error'
+								: undefined}
+						></textarea>
+						{#if workOrderDescriptionError}
+							<p
+								id="tenant-dashboard-maintenance-description-error"
+								data-testid="tenant-dashboard-maintenance-description-error"
+								class="mt-1 text-xs text-destructive"
+							>
+								{workOrderDescriptionError}
+							</p>
+						{/if}
+					</div>
 					<div class="grid gap-3 sm:grid-cols-2">
 						<Input bind:value={workOrderForm.category} placeholder="Category" />
 						<Select.Root type="single" bind:value={workOrderForm.priority}>
