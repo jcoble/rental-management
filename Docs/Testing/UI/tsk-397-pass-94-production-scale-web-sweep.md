@@ -79,6 +79,7 @@ Completed in browser with Playwright CLI against the local stack.
 - Approved a scanned application and verified tenant creation.
 - Submitted a public application route from a token using the same scan/manual form engine.
 - Exercised property, unit, tenant, lease, maintenance, applications, appointments, messages, notices, notifications, settings, team, owners, import, docs, AI, onboarding, portal, deposits, tax, reports, banking manual import, admin audit, and compatibility redirects.
+- Tenant portal task refresh, 2026-06-25: created a tenant portal user from Team, signed in as that tenant, verified dashboard lease/property/unit context, provider-unavailable payments/autopay states, tenant appointments, and maintenance photo upload/detail/download.
 
 ## Fixed Bugs In This Checkpoint
 
@@ -144,3 +145,8 @@ Browser retests after fixes:
 - `/apply/{token}`: blank-submit errors cleared immediately as required fields and consent were filled.
 - `/tenants?q=Avery-Ellis`: returned the single `Avery Ellis` row with no console errors.
 - `/onboarding`: completed core setup opened the `You're all set!` finished card. `Set up email alerts` saved with a blank email and returned to the finished card. `Turn on texting` opened optional SMS setup, `Skip` returned to the finished card, and console errors stayed at 0.
+- `/admin/users`: invited tenant user `portal.extra.pass27.20260625@example.local`; Team showed the new Tenant member, and local DB linked the user to `TenantId=1`/`PortfolioId=2`.
+- `/portal`: signed in as that tenant; dashboard showed messages, $0 overdue, next rent due Jul 1, 2026, lease `QA-2026-001-1A`, property/unit `Cedar Point Flats Unit 1A`, open maintenance, and the scheduled appointment.
+- `/portal/payments`: with payments provider unavailable, the page showed the setup-unavailable banner, disabled autopay setup, and disabled `Pay unavailable` action on a scheduled rent charge.
+- `/portal/appointments`: rendered `Tenant portal follow-up visit` for Fri Jun 26, 2026 10:00-10:30 with property/unit, showing type, and scheduled status.
+- `/portal/maintenance`: opened existing work-order detail with `Photos & documents`, downloaded `work-order-002.jpg` as a valid 1800x2400 JPEG, submitted `Window AC condensation photo test` with camera-style fixture `work-order-010.jpg`, saw the uploaded JPEG in the new detail modal, downloaded it back as a valid 1800x2400 JPEG, and observed 0 console warnings/errors with 200/201 API and document-file responses.
