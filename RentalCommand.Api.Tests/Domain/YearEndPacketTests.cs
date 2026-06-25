@@ -144,6 +144,21 @@ public class YearEndPacketTests : IDisposable
             .Should().BeTrue("year-end packet money and past-due totals must be summed in SQL");
     }
 
+    [Fact]
+    public async Task GetYearEndPacketData_ProjectsRentRollPastDueWithLeaseRowsInSql()
+    {
+        SeedYear(Year);
+        _commands.Clear();
+
+        var packet = await _sut.GetYearEndPacketDataAsync(PortfolioId, Year, CancellationToken.None);
+
+        packet.RentRoll.Should().ContainSingle();
+        packet.RentRoll[0].PastDueBalance.Should().Be(1_200m);
+        _commands.Where(IsStandalonePastDueByLeaseAggregate)
+            .Should()
+            .BeEmpty("the packet rent roll should not materialize a grouped payment query and join it to lease rows in memory");
+    }
+
     /// <summary>
     /// Seeds one property/unit/tenant/active lease, 12 monthly $1,200 rent payments (paid in-year),
     /// a $2,000 repair and $600 insurance expense (in-year), and one past-due scheduled rent payment.
@@ -258,6 +273,11 @@ public class YearEndPacketTests : IDisposable
         });
         _db.SaveChanges();
     }
+
+    private static bool IsStandalonePastDueByLeaseAggregate(string sql) =>
+        sql.TrimStart().StartsWith("SELECT \"p\".\"LeaseId\"", StringComparison.Ordinal) &&
+        sql.Contains("FROM \"Payments\" AS \"p\"", StringComparison.Ordinal) &&
+        sql.Contains("GROUP BY \"p\".\"LeaseId\"", StringComparison.Ordinal);
 }
 
 internal sealed class YearEndPacketRecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
