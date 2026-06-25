@@ -120,7 +120,7 @@ public class AuditEntryResponse
         "Vendor" => "/owners",
         "OwnerEntity" => "/owners",
         "Appointment" => $"/appointments/{entityId}",
-        "Inspection" => $"/inspections/{entityId}",
+        "Inspection" => $"/maintenance/inspections/{entityId}",
         "RentalApplication" => $"/applications/{entityId}",
         _ => null,
     };
