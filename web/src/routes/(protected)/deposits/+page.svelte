@@ -57,6 +57,20 @@
 	let newHoldingNotes = $state('');
 	let newHoldingErrors = $state<Record<string, string>>({});
 
+	function clearNewHoldingError(field: string) {
+		if (!newHoldingErrors[field]) return;
+		const next = { ...newHoldingErrors };
+		delete next[field];
+		newHoldingErrors = next;
+	}
+
+	$effect(() => {
+		if (newHoldingLeaseId) clearNewHoldingError('leaseId');
+	});
+	$effect(() => {
+		if (newHoldingAmount) clearNewHoldingError('amount');
+	});
+
 	function openNewHolding() {
 		newHoldingLeaseId = '';
 		newHoldingAmount = '';
@@ -112,6 +126,7 @@
 	let deductionErrors = $state<Record<string, string>>({});
 
 	function openDeduction(deposit: SecurityDepositHolding) {
+		if (deposit.status !== 'Held') return;
 		deductionTarget = deposit;
 		deductionReason = '';
 		deductionAmount = '';
@@ -261,6 +276,7 @@
 			variant="outline"
 			class="h-7 text-xs"
 			onclick={(e) => { e.stopPropagation(); openDeduction(d); }}
+			disabled={d.status !== 'Held'}
 			data-testid="add-deduction-{d.id}"
 		>
 			Add deduction
@@ -449,6 +465,7 @@
 		: ''}
 	busy={returnMut.isPending}
 	testid="return-confirm"
+	confirmLabel="Process return"
 	onconfirm={submitReturn}
 	oncancel={closeReturn}
 />

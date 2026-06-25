@@ -44,6 +44,7 @@ public class PaymentService : IPaymentService
         paidDate = p.PaidDate,
         method = p.Method,
         externalReference = p.ExternalReference,
+        notes = p.Notes,
         leaseId = p.LeaseId,
     });
 
@@ -224,6 +225,7 @@ public class PaymentService : IPaymentService
         var prevStatus = entity.Status;
         var prevAmount = entity.Amount;
         var prevLeaseId = entity.LeaseId;
+        var prevNotes = entity.Notes;
 
         if (request.LeaseId.HasValue && request.LeaseId.Value != entity.LeaseId)
         {
@@ -264,14 +266,15 @@ public class PaymentService : IPaymentService
 
         await _db.SaveChangesAsync(ct);
 
-        // A status, amount, or lease change is the legally-meaningful event (reversal / refund / waiver /
-        // re-statement / re-attribution) — record the original and new state in full.
-        if (entity.Status != prevStatus || entity.Amount != prevAmount || entity.LeaseId != prevLeaseId)
+        // A status, amount, lease, or note change is detail-history material: notes often carry the
+        // human explanation for a money event, and losing them makes the audit diff misleading.
+        if (entity.Status != prevStatus || entity.Amount != prevAmount || entity.LeaseId != prevLeaseId || entity.Notes != prevNotes)
         {
             var changes = new List<string>();
             if (entity.Status != prevStatus) changes.Add($"status {prevStatus}→{entity.Status}");
             if (entity.Amount != prevAmount) changes.Add($"amount {prevAmount:0.##}→{entity.Amount:0.##}");
             if (entity.LeaseId != prevLeaseId) changes.Add($"lease {prevLeaseId}→{entity.LeaseId}");
+            if (entity.Notes != prevNotes) changes.Add("notes updated");
             await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
                 oldValues: before, newValues: Snapshot(entity),
                 changeReason: $"Payment #{entity.Id}: {string.Join("; ", changes)}", ct: ct);
