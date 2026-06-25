@@ -241,68 +241,44 @@ public class AccountingService : IAccountingService
 
         // One grouped round-trip: per behind lease, sum the past-due amount, count its past-due
         // payments, and find the oldest past-due due date — the single source of truth for "behind".
-        var groupedPastDue = PastDueByLeaseQuery(portfolioId, now);
         var summary = await PastDueSummaryQuery(portfolioId, now).FirstOrDefaultAsync(ct);
         var totalCount = summary?.TotalCount ?? 0;
         var totalPastDueAmount = summary?.TotalPastDueAmount ?? 0m;
 
-        var groups = await groupedPastDue
-            .OrderBy(g => g.OldestDueDate)
-            .ToListAsync(ct);
-
-        if (groups.Count == 0)
+        if (totalCount == 0)
         {
             return new PastDueResponse { Items = [], TotalCount = 0, TotalPastDueAmount = 0m };
         }
 
-        var leaseIds = groups.Select(g => g.LeaseId).ToList();
-
-        // Second round-trip: the id of each lease's oldest past-due payment (for the row deep-link).
-        var oldestPaymentIds = await PastDuePaymentsQuery(portfolioId, now)
-            .Where(p => leaseIds.Contains(p.LeaseId))
-            .GroupBy(p => p.LeaseId)
-            .Select(g => new
+        var items = await PastDueByLeaseQuery(portfolioId, now)
+            .Join(
+                _db.Leases.AsNoTracking().Where(l => l.PortfolioId == portfolioId),
+                g => g.LeaseId,
+                l => l.Id,
+                (g, l) => new { Group = g, Lease = l })
+            .OrderBy(x => x.Group.OldestDueDate)
+            .Select(x => new PastDueLeaseResponse
             {
-                LeaseId = g.Key,
+                LeaseId = x.Group.LeaseId,
+                TenantName = x.Lease.Tenant == null
+                    ? null
+                    : (x.Lease.Tenant.FirstName + " " + x.Lease.Tenant.LastName).Trim(),
+                TenantPhone = x.Lease.Tenant == null ? null : x.Lease.Tenant.Phone,
+                LeaseNumber = x.Lease.LeaseNumber,
+                PropertyName = x.Lease.Property == null ? null : x.Lease.Property.Name,
+                UnitNumber = x.Lease.Unit == null ? null : x.Lease.Unit.UnitNumber,
+                PastDueAmount = x.Group.PastDueAmount,
+                OverduePaymentCount = x.Group.OverduePaymentCount,
+                OldestDueDate = x.Group.OldestDueDate,
                 // Oldest by due date, then by id for a stable pick when due dates tie.
-                OldestPaymentId = g.OrderBy(p => p.DueDate).ThenBy(p => p.Id).Select(p => p.Id).First(),
+                OldestPaymentId = PastDuePaymentsQuery(portfolioId, now)
+                    .Where(p => p.LeaseId == x.Group.LeaseId)
+                    .OrderBy(p => p.DueDate)
+                    .ThenBy(p => p.Id)
+                    .Select(p => p.Id)
+                    .First(),
             })
-            .ToDictionaryAsync(x => x.LeaseId, x => x.OldestPaymentId, ct);
-
-        // Third round-trip: lease/tenant/property/unit labels for the rows.
-        var leaseMeta = await _db.Leases
-            .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId && leaseIds.Contains(l.Id))
-            .Select(l => new
-            {
-                l.Id,
-                l.LeaseNumber,
-                TenantName = l.Tenant == null ? null : (l.Tenant.FirstName + " " + l.Tenant.LastName),
-                TenantPhone = l.Tenant == null ? null : l.Tenant.Phone,
-                PropertyName = l.Property == null ? null : l.Property.Name,
-                UnitNumber = l.Unit == null ? null : l.Unit.UnitNumber,
-            })
-            .ToDictionaryAsync(x => x.Id, ct);
-
-        var items = groups
-            .Select(g =>
-            {
-                leaseMeta.TryGetValue(g.LeaseId, out var meta);
-                return new PastDueLeaseResponse
-                {
-                    LeaseId = g.LeaseId,
-                    TenantName = string.IsNullOrWhiteSpace(meta?.TenantName) ? null : meta!.TenantName!.Trim(),
-                    TenantPhone = meta?.TenantPhone,
-                    LeaseNumber = meta?.LeaseNumber,
-                    PropertyName = meta?.PropertyName,
-                    UnitNumber = meta?.UnitNumber,
-                    PastDueAmount = g.PastDueAmount,
-                    OverduePaymentCount = g.OverduePaymentCount,
-                    OldestDueDate = g.OldestDueDate,
-                    OldestPaymentId = oldestPaymentIds.GetValueOrDefault(g.LeaseId),
-                };
-            })
-            .ToList();
+            .ToListAsync(ct);
 
         return new PastDueResponse
         {
