@@ -9,7 +9,16 @@
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { invalidateQueriesAfterScanConfirm } from '$lib/scans/scan-confirm-invalidation';
 	import { LEASE_REVIEW_NEW_UNIT_DETAIL_FIELDS, seedLeaseUnitId, shouldSeedLeaseReviewState } from '$lib/scans/lease-review-state';
-	import { buildScanReviewFieldGroups, fieldDisplayLabel, scanCategoryLabel, scanCategoryOptionsForTarget } from '$lib/scans/scan-review-fields';
+	import {
+		buildScanReviewInitialEditedFields,
+		buildScanReviewFieldGroups,
+		fieldDisplayLabel,
+		resolveScanReviewLeaseIdFromFields,
+		resolveScanReviewPropertyId,
+		scanCategoryLabel,
+		scanCategoryOptionsForTarget,
+		scanCategoryValue
+	} from '$lib/scans/scan-review-fields';
 	import { createdRecordArticle, isTerminalScanReview, shouldDisableScanReviewControls } from '$lib/scans/scan-review-state';
 	import {
 		applyScanContextOverrides,
@@ -268,6 +277,7 @@
 
 	// Editable field values (keyed by field name, scalars only)
 	let editedFields = $state<Record<string, string>>({});
+	let editedFieldsSeeded = $state(false);
 
 	// Editable line items. Seeded once from the extraction (see the data $effect) and then
 	// owned by the user; the bounded poll / cache refresh must not clobber in-progress edits,
@@ -354,14 +364,37 @@
 		return !['Bill', 'Invoice', 'UtilityBill', 'PropertyTax'].includes(kind);
 	}
 
+	let editableStateDraftId = $state<number | null>(null);
+	$effect(() => {
+		if (!draftId || editableStateDraftId === draftId) return;
+		editableStateDraftId = draftId;
+		editedFields = {};
+		editedFieldsSeeded = false;
+		editedLineItems = [];
+		lineItemsInitialized = false;
+		lineItemKeySeq = 0;
+		isPaid = true;
+		isPaidInitialized = false;
+		selectedLeaseId = '';
+		selectedPropertyId = NO_PROPERTY;
+		resetLeaseReviewState();
+	});
+
 	// Initialize editable fields when data arrives
 	$effect(() => {
 		if (data?.fields) {
-			const initial: Record<string, string> = {};
-			for (const f of data.fields) {
-				if (f.name === LINE_ITEMS_FIELD) continue;
-				if (!(f.name in editedFields)) {
-					initial[f.name] = f.value;
+			let initial: Record<string, string> = {};
+			if (!editedFieldsSeeded && data.fields.length > 0) {
+				initial = buildScanReviewInitialEditedFields(data.fields, data.targetEntityType);
+				editedFieldsSeeded = true;
+			} else {
+				for (const f of data.fields) {
+					if (f.name === LINE_ITEMS_FIELD) continue;
+					if (!(f.name in editedFields)) {
+						initial[f.name] = f.name === 'category'
+							? scanCategoryValue(f.value, data.targetEntityType)
+							: f.value;
+					}
 				}
 			}
 			if (Object.keys(initial).length > 0) {
@@ -380,19 +413,20 @@
 				isPaidInitialized = true;
 			}
 			if ((data.targetEntityType === 'WorkOrder' || data.targetEntityType === 'Expense') && selectedPropertyId === NO_PROPERTY) {
-				const contextPropertyId = scanContext.propertyId ? String(scanContext.propertyId) : '';
-				if (contextPropertyId) {
-					if (propertiesQuery.data?.some((p) => String(p.id) === contextPropertyId)) {
-						selectedPropertyId = contextPropertyId;
-					}
-				} else {
-					const propertyField = data.fields.find((f) => f.name === 'property_id' || f.name === 'propertyId');
-					if (propertyField?.value) selectedPropertyId = propertyField.value;
-				}
+				const resolvedPropertyId = resolveScanReviewPropertyId({
+					contextPropertyId: scanContext.propertyId,
+					fields: data.fields,
+					properties: propertiesQuery.data
+				});
+				if (resolvedPropertyId) selectedPropertyId = resolvedPropertyId;
 			}
 			if (data.targetEntityType === 'Payment' && !selectedLeaseId && leasesQuery.data) {
-				const contextLeaseId = resolvePaymentLeaseIdFromContext(scanContext, leasesQuery.data);
-				if (contextLeaseId) selectedLeaseId = String(contextLeaseId);
+				const resolvedLeaseId = resolveScanReviewLeaseIdFromFields({
+					contextLeaseId: resolvePaymentLeaseIdFromContext(scanContext, leasesQuery.data),
+					fields: data.fields,
+					leases: leasesQuery.data
+				});
+				if (resolvedLeaseId) selectedLeaseId = resolvedLeaseId;
 			}
 			// Lease drafts: seed the property/unit pickers + the create-new fields. Tenant stays on
 			// "create new" unless the user picks.
@@ -662,7 +696,9 @@
 		const overrides: Record<string, unknown> = {};
 		for (const [name, value] of Object.entries(editedFields)) {
 			if (name === LINE_ITEMS_FIELD) continue;
-			overrides[keyMap[name] ?? name] = value;
+			overrides[keyMap[name] ?? name] = name === 'category'
+				? scanCategoryValue(value, data?.targetEntityType)
+				: value;
 		}
 
 		if (isApplication) {

@@ -56,6 +56,32 @@ const WORK_ORDER_CATEGORY_LABELS: Record<string, string> = Object.fromEntries(
 	WORK_ORDER_SCAN_CATEGORY_OPTIONS.map((category) => [category.value, category.label])
 );
 
+const EXPENSE_CATEGORY_ALIASES = new Map([
+	['auto travel', 'AutoTravel'],
+	['auto and travel', 'AutoTravel'],
+	['cleaning maintenance', 'CleaningMaintenance'],
+	['cleaning and maintenance', 'CleaningMaintenance'],
+	['legal professional', 'LegalProfessional'],
+	['legal and professional fees', 'LegalProfessional'],
+	['management fees', 'ManagementFees'],
+	['mortgage interest', 'MortgageInterest'],
+	['repairs maintenance', 'Repairs'],
+	['repairs and maintenance', 'Repairs'],
+	['repair maintenance', 'Repairs']
+]);
+
+const PROPERTY_REFERENCE_PATTERNS = [
+	/\bproperty\s*:\s*([^.;\n]+)/i,
+	/\bproperty\s+([A-Za-z0-9][^.;\n]+)/i
+];
+
+const LEASE_REFERENCE_PATTERNS = [
+	/\blease\s+(?:reference|number|no\.?|#)\s*:?\s*([A-Za-z0-9][A-Za-z0-9._/-]*)/i,
+	/\blease\s*:?\s*([A-Za-z0-9][A-Za-z0-9._/-]*)/i
+];
+
+const PAYMENT_PREFERRED_LEASE_STATUSES = new Set(['Draft', 'PendingSignature', 'Active']);
+
 const LINE_ITEMS_FIELD = 'line_items';
 
 const EXPENSE_FIELD_GROUPS: { label: string; fields: string[] }[] = [
@@ -177,11 +203,190 @@ export function scanCategoryOptionsForTarget(targetEntityType: string | null | u
 	return EXPENSE_SCAN_CATEGORY_OPTIONS;
 }
 
+function normalizeOptionText(value: string | undefined | null): string {
+	return (value ?? '')
+		.trim()
+		.toLowerCase()
+		.replace(/&/g, ' and ')
+		.replace(/[^a-z0-9]+/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
+export function scanCategoryValue(value: string | undefined | null, targetEntityType: string | null | undefined): string {
+	if (!value) return '';
+
+	const options = scanCategoryOptionsForTarget(targetEntityType);
+	const direct = options.find((option) => option.value.toLowerCase() === value.toLowerCase());
+	if (direct) return direct.value;
+
+	const normalized = normalizeOptionText(value);
+	const labelMatch = options.find((option) => normalizeOptionText(option.label) === normalized);
+	if (labelMatch) return labelMatch.value;
+
+	if (targetEntityType !== 'WorkOrder') {
+		const alias = EXPENSE_CATEGORY_ALIASES.get(normalized);
+		if (alias) return alias;
+	}
+
+	return value;
+}
+
 export function scanCategoryLabel(value: string | undefined | null, targetEntityType: string | null | undefined): string {
 	if (!value) return 'Select category';
 
 	const labels = targetEntityType === 'WorkOrder' ? WORK_ORDER_CATEGORY_LABELS : EXPENSE_CATEGORY_LABELS;
-	return labels[value] ?? value;
+	const normalizedValue = scanCategoryValue(value, targetEntityType);
+	return labels[normalizedValue] ?? value;
+}
+
+export function buildScanReviewInitialEditedFields(
+	fields: ScanReviewField[],
+	targetEntityType: string | null | undefined
+): Record<string, string> {
+	const initial: Record<string, string> = {};
+	for (const field of fields) {
+		if (field.name === LINE_ITEMS_FIELD) continue;
+		initial[field.name] = field.name === 'category'
+			? scanCategoryValue(field.value, targetEntityType)
+			: field.value;
+	}
+	return initial;
+}
+
+export interface ScanReviewPropertyCandidate {
+	id: number;
+	name: string;
+}
+
+export interface ScanReviewPropertyResolutionInput {
+	contextPropertyId?: number | null;
+	fields: ScanReviewField[];
+	properties?: ScanReviewPropertyCandidate[] | null;
+}
+
+export interface ScanReviewLeaseCandidate {
+	id: number;
+	leaseNumber?: string | null;
+	propertyId?: number | null;
+	unitId?: number | null;
+	status?: string | null;
+}
+
+export interface ScanReviewLeaseResolutionInput {
+	contextLeaseId?: number | null;
+	fields: ScanReviewField[];
+	leases?: ScanReviewLeaseCandidate[] | null;
+}
+
+function fieldString(fields: ScanReviewField[], ...names: string[]): string {
+	for (const name of names) {
+		const value = fields.find((field) => field.name === name)?.value?.trim();
+		if (value) return value;
+	}
+	return '';
+}
+
+function positiveIntegerString(value: string): string | null {
+	const parsed = Number(value);
+	return Number.isInteger(parsed) && parsed > 0 ? String(parsed) : null;
+}
+
+function propertyReferenceFromNotes(notes: string): string {
+	for (const pattern of PROPERTY_REFERENCE_PATTERNS) {
+		const match = notes.match(pattern);
+		if (!match?.[1]) continue;
+		return match[1]
+			.replace(/\b(?:unit|apt|apartment)\s*(?:#|:)?\s*[A-Za-z0-9-]+\b.*$/i, '')
+			.replace(/,\s*$/g, '')
+			.trim();
+	}
+	return '';
+}
+
+function exactPropertyMatchId(reference: string, properties: ScanReviewPropertyCandidate[]): string | null {
+	const normalizedReference = normalizeOptionText(reference);
+	if (!normalizedReference) return null;
+
+	const matches = properties.filter((property) => normalizeOptionText(property.name) === normalizedReference);
+	return matches.length === 1 ? String(matches[0].id) : null;
+}
+
+function leaseReferenceFromNotes(notes: string): string {
+	for (const pattern of LEASE_REFERENCE_PATTERNS) {
+		const match = notes.match(pattern);
+		if (match?.[1]) return match[1].trim();
+	}
+	return '';
+}
+
+function exactLeaseNumberMatchId(reference: string, leases: ScanReviewLeaseCandidate[]): string | null {
+	const normalizedReference = normalizeOptionText(reference);
+	if (!normalizedReference) return null;
+
+	const matches = leases.filter((lease) => normalizeOptionText(lease.leaseNumber) === normalizedReference);
+	return matches.length === 1 ? String(matches[0].id) : null;
+}
+
+function singlePreferredLeaseId(matches: ScanReviewLeaseCandidate[]): string | null {
+	if (matches.length === 1) return String(matches[0].id);
+
+	const preferred = matches.filter((lease) => lease.status ? PAYMENT_PREFERRED_LEASE_STATUSES.has(lease.status) : false);
+	return preferred.length === 1 ? String(preferred[0].id) : null;
+}
+
+export function resolveScanReviewPropertyId(input: ScanReviewPropertyResolutionInput): string | null {
+	const properties = input.properties ?? [];
+	if (properties.length === 0) return null;
+
+	if (input.contextPropertyId && properties.some((property) => property.id === input.contextPropertyId)) {
+		return String(input.contextPropertyId);
+	}
+
+	const explicitId = positiveIntegerString(fieldString(input.fields, 'property_id', 'propertyId'));
+	if (explicitId && properties.some((property) => String(property.id) === explicitId)) {
+		return explicitId;
+	}
+
+	const propertyName = fieldString(input.fields, 'property_name', 'propertyName');
+	const propertyNameMatch = exactPropertyMatchId(propertyName, properties);
+	if (propertyNameMatch) return propertyNameMatch;
+
+	const notesProperty = propertyReferenceFromNotes(fieldString(input.fields, 'notes'));
+	return exactPropertyMatchId(notesProperty, properties);
+}
+
+export function resolveScanReviewLeaseIdFromFields(input: ScanReviewLeaseResolutionInput): string | null {
+	const leases = input.leases ?? [];
+	if (leases.length === 0) return null;
+
+	if (input.contextLeaseId && leases.some((lease) => lease.id === input.contextLeaseId)) {
+		return String(input.contextLeaseId);
+	}
+
+	const explicitLeaseId = positiveIntegerString(fieldString(input.fields, 'lease_id', 'leaseId'));
+	if (explicitLeaseId && leases.some((lease) => String(lease.id) === explicitLeaseId)) {
+		return explicitLeaseId;
+	}
+
+	const leaseNumber = fieldString(input.fields, 'lease_number', 'leaseNumber')
+		|| leaseReferenceFromNotes(fieldString(input.fields, 'notes'));
+	const leaseNumberMatch = exactLeaseNumberMatchId(leaseNumber, leases);
+	if (leaseNumberMatch) return leaseNumberMatch;
+
+	const propertyId = positiveIntegerString(fieldString(input.fields, 'property_id', 'propertyId'));
+	const unitId = positiveIntegerString(fieldString(input.fields, 'unit_id', 'unitId'));
+	if (propertyId && unitId) {
+		return singlePreferredLeaseId(
+			leases.filter((lease) => String(lease.propertyId) === propertyId && String(lease.unitId) === unitId)
+		);
+	}
+
+	if (unitId) {
+		return singlePreferredLeaseId(leases.filter((lease) => String(lease.unitId) === unitId));
+	}
+
+	return null;
 }
 
 export function buildScanReviewFieldGroups(
