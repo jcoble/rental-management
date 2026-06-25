@@ -110,12 +110,13 @@ Completed in browser with Playwright CLI against the local stack.
 | P94-021 | Money snapshot past-due drill-down | `/accounting/past-due` grouped past-due balances in SQL, then used separate materialized dictionaries to attach oldest payment ids and lease/tenant/property/unit labels. | Past-due rows now project one SQL row per behind lease: grouped amount/count/oldest due date, joined lease metadata, and a correlated oldest-payment-id subquery. The endpoint runs one summary query and one row projection query. | `AccountingServiceTests.GetPastDueAsync_ProjectsMetadataAndOldestPaymentInSingleRowQuery` |
 | P94-022 | Property P&L report | `/reports/property-pnl` materialized properties, then built in-scope ids and joined income/expense aggregate dictionaries in memory. | Property P&L rows now join grouped SQL income/expense subqueries back to the scoped property query, with grand totals still computed by separate SQL sums. | `ReportsServiceTests.GetPropertyProfitAndLossAsync_ProjectsRowsAndTotalsInSql` |
 | P94-023 | Year-end rent roll | `/accounting/year-end` and the year-end packet materialized active leases, separately materialized a grouped payment aggregate by lease, then joined past-due balances through a dictionary in memory. | Both year-end rent-roll projections now compute each lease's past-due balance as a correlated SQL sum in the lease-row query. The only post-query work is display formatting for tenant names and lease status. | `ReportsServiceTests.GetYearEndAsync_ProjectsRentRollPastDueWithLeaseRowsInSql`, `YearEndPacketTests.GetYearEndPacketData_ProjectsRentRollPastDueWithLeaseRowsInSql` |
+| P94-024 | Year-end packet P&L | The year-end packet grouped rent income and total expenses by property in SQL, then materialized dictionaries and joined them back to the property list in memory. | Packet property P&L rows now project rent income and total expenses as correlated SQL sums on the property-row query. Category totals remain a separate SQL grouped child query for nested display only. | `YearEndPacketTests.GetYearEndPacketData_ProjectsPropertyPnlRowsInSql` |
 
 ## Remaining Bugs And Blocked Lanes
 
 | ID | Surface | Evidence | Status |
 | --- | --- | --- | --- |
-| P94-R08 | Accounting/banking/reporting DB-side rule | Accounting summary, banking summary, general-ledger running balance, dashboard net cash movement, banking review-queue paging, money snapshot past-due drill-down metadata, property P&L row joins, and year-end rent-roll past-due projection are fixed. Remaining confirmed violations are larger reporting/accounting refactor lanes: Schedule E row facts, year-end packet P&L, and provider-payload mapping/retry matching. | Follow-up refactor lane |
+| P94-R08 | Accounting/banking/reporting DB-side rule | Accounting summary, banking summary, general-ledger running balance, dashboard net cash movement, banking review-queue paging, money snapshot past-due drill-down metadata, property P&L row joins, year-end rent-roll past-due projection, and year-end packet P&L row joins are fixed. Remaining confirmed violations are larger reporting/accounting refactor lanes: Schedule E row facts and provider-payload mapping/retry matching. | Follow-up refactor lane |
 | P94-R09 | External banking/accounting providers | Plaid Link and QuickBooks OAuth were not exercised because production/sensitive provider access requires user approval. | Blocked by credential/provider policy |
 
 ## Verification Commands
@@ -132,6 +133,7 @@ MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~AccountingServiceTests" --no-restore --logger "console;verbosity=normal"
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ReportsServiceTests" --no-restore --logger "console;verbosity=normal"
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ReportsServiceTests|FullyQualifiedName~YearEndPacketTests" --no-restore --logger "console;verbosity=normal"
+MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~AccountingServiceTests|FullyQualifiedName~YearEndPacketTests" --no-restore --logger "console;verbosity=normal"
 ```
 
 Frontend unit tests:

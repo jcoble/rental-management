@@ -159,6 +159,29 @@ public class YearEndPacketTests : IDisposable
             .BeEmpty("the packet rent roll should not materialize a grouped payment query and join it to lease rows in memory");
     }
 
+    [Fact]
+    public async Task GetYearEndPacketData_ProjectsPropertyPnlRowsInSql()
+    {
+        SeedYear(Year);
+        _commands.Clear();
+
+        var packet = await _sut.GetYearEndPacketDataAsync(PortfolioId, Year, CancellationToken.None);
+
+        packet.Properties.Should().ContainSingle();
+        var pnl = packet.Properties[0];
+        pnl.PropertyName.Should().Be("Maple Street Duplex");
+        pnl.Income.Should().Be(14_400m);
+        pnl.TotalExpenses.Should().Be(2_600m);
+        pnl.Net.Should().Be(11_800m);
+
+        _commands.Where(IsStandaloneIncomeByPropertyAggregate)
+            .Should()
+            .BeEmpty("packet property income should be projected with each property row instead of joined from a materialized aggregate dictionary");
+        _commands.Where(IsStandaloneExpenseTotalByPropertyAggregate)
+            .Should()
+            .BeEmpty("packet property expense totals should be projected with each property row instead of joined from a materialized aggregate dictionary");
+    }
+
     /// <summary>
     /// Seeds one property/unit/tenant/active lease, 12 monthly $1,200 rent payments (paid in-year),
     /// a $2,000 repair and $600 insurance expense (in-year), and one past-due scheduled rent payment.
@@ -278,6 +301,17 @@ public class YearEndPacketTests : IDisposable
         sql.TrimStart().StartsWith("SELECT \"p\".\"LeaseId\"", StringComparison.Ordinal) &&
         sql.Contains("FROM \"Payments\" AS \"p\"", StringComparison.Ordinal) &&
         sql.Contains("GROUP BY \"p\".\"LeaseId\"", StringComparison.Ordinal);
+
+    private static bool IsStandaloneIncomeByPropertyAggregate(string sql) =>
+        sql.TrimStart().StartsWith("SELECT \"l0\".\"PropertyId\"", StringComparison.Ordinal) &&
+        sql.Contains("FROM \"Payments\" AS \"p\"", StringComparison.Ordinal) &&
+        sql.Contains("GROUP BY \"l0\".\"PropertyId\"", StringComparison.Ordinal);
+
+    private static bool IsStandaloneExpenseTotalByPropertyAggregate(string sql) =>
+        sql.TrimStart().StartsWith("SELECT \"e\".\"PropertyId\"", StringComparison.Ordinal) &&
+        sql.Contains("FROM \"Expenses\" AS \"e\"", StringComparison.Ordinal) &&
+        sql.Contains("GROUP BY \"e\".\"PropertyId\"", StringComparison.Ordinal) &&
+        !sql.Contains("\"e\".\"Category\"", StringComparison.Ordinal);
 }
 
 internal sealed class YearEndPacketRecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor
