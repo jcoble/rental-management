@@ -3747,3 +3747,45 @@ Verification:
 - App console proof: Playwright CLI `console error` and `console warning` both returned 0 messages.
 
 Status: Pass after fixing transient app-shell query retry for Command Center unit navigation. Continue the app-shell route group with remaining navigation/header controls: collapsed rail, mobile drawer, theme toggle, notifications, account menu/logout, and the Money/Rentals/Work/Inbox/Settings nav groups.
+
+## Pass 76 App Shell Navigation Continuation
+
+Date: 2026-06-25
+Branch: `tsk-397-real-user-pass-76`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Dev admin sample-data user: Rental Command Admin, `admin@rentalcommand.local`
+- Setup path: continued the cleared local Playwright session from Pass 75, then signed out at the end of this pass.
+
+Guide:
+- `Docs/Testing/UI/tsk-397-pass-76-app-shell-navigation.md`
+
+Acceptance criteria:
+- Header quick actions route to Scan / Add, Messages, Appointments, Help, and the notification dropdown without console errors.
+- Theme toggle switches light/dark without layout overlap or route loss.
+- Staff notification dropdown opens, handles empty/read states, and `Notification settings` routes to Settings.
+- Account menu exposes Settings, Security, and Sign Out; Security lands on staff account security, and Sign Out ends at Login without auto-resuming the session.
+- Desktop collapse turns the sidebar into an icon rail, keeps all visible route targets reachable, and expands back without losing route context.
+- Mobile viewport exposes a drawer toggle, drawer links navigate, and the overlay closes the drawer.
+- Money, Rentals, Work, Inbox, and Settings groups expand one at a time; every visible child link loads its intended page.
+
+Verification:
+- Header quick actions loaded expected routes with no hard-error state: Scan / Add -> `/scan`, Messages -> `/messages`, Appointments -> `/appointments`, Help -> `/docs`.
+- Theme toggle switched light/dark and stayed on the current route without visible overlap or console errors.
+- Notification dropdown opened with `Notifications`, `No notifications yet`, and `Notification settings`; clicking settings loaded `/settings`.
+- Expanded desktop navigation loaded the visible child routes for Money, Rentals, Work, Inbox, and Settings: `/accounting`, `/reports`, `/properties`, `/units`, `/tenants`, `/leases`, `/applications`, `/maintenance`, `/appointments`, `/vendors`, `/messages`, `/notices`, `/settings`, `/admin/users`, `/owners`, and `/audit`.
+- Desktop collapsed rail loaded the visible icon targets for dashboard, scan, Command Center, accounting, reports, properties, units, tenants, leases, applications, maintenance, appointments, vendors, messages, notices, Ask, Help, settings, team, owners, and activity history. Manual retest expanded the rail back to `240px` width from the collapsed icon rail.
+- Mobile proof: at `390x844`, the drawer opened, tapping `Scan / Add` navigated to `/scan`, reopening the drawer and tapping outside the sidebar at `(350,400)` closed it. The earlier Playwright `sidebar-overlay` center-click timeout was a test-coordinate artifact because the overlay element's center sits behind the sidebar; the real outside-tap path closed correctly and the live snapshot output no longer contained the `Close sidebar` overlay. Saved mobile artifacts: drawer open `.playwright-cli/page-2026-06-25T02-39-21-488Z.yml`, route click closed `.playwright-cli/page-2026-06-25T02-39-23-639Z.yml`, invalid center-click attempt `.playwright-cli/page-2026-06-25T02-39-25-262Z.yml`.
+- Account menu proof: snapshot `.playwright-cli/page-2026-06-25T02-42-54-102Z.yml` showed Settings, Security, and Sign Out under Rental Command Admin.
+- Security route proof: clicking Security loaded `/settings/security` with page title `Security - Rental Command`, `Back to settings`, and the shared change-password card. Snapshot: `.playwright-cli/page-2026-06-25T02-43-09-748Z.yml`.
+- Sign-out proof: clicking Sign Out loaded `/login` with page title `Sign in - Rental Command`, the authenticated app shell disappeared, and `cookie-list` returned `No cookies found`. Snapshot: `.playwright-cli/page-2026-06-25T02-43-31-885Z.yml`.
+- Network proof: app-shell route loads returned `200` for route data/API requests. The dashboard still issues known broad sample-data support requests such as `/api/v1/appointments?take=100` and `/api/v1/properties?take=500`; those are part of the still-open DB-side/list-contract risk, not a new navigation failure.
+- App console proof: Playwright CLI `console error` and `console warning` returned 0 messages after mobile close, Security navigation, and Sign Out.
+
+Status: Pass with documentation-only verification for the app-shell navigation group. Continue the real-user audit with the next remaining non-banking/non-QuickBooks route group, while keeping the known DB-side broad-list risks on the open ledger.
