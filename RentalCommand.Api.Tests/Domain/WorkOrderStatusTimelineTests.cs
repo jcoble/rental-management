@@ -131,6 +131,47 @@ public class WorkOrderStatusTimelineTests : IDisposable
     }
 
     [Fact]
+    public async Task UpdateAsync_StampsCompletedAt_WhenStatusChangesToCompleted()
+    {
+        var property = SeedProperty();
+        var created = await _service.CreateAsync(
+            PortfolioId,
+            new CreateWorkOrderRequest
+            {
+                PropertyId = property.Id,
+                Title = "Sticky lock",
+                Description = "Front door lock sticks",
+                Status = WorkOrderStatus.InProgress,
+            },
+            changedByLabel: "Staff");
+
+        var beforeUpdate = DateTime.UtcNow;
+
+        var updated = await _service.UpdateAsync(
+            PortfolioId,
+            created!.Id,
+            new UpdateWorkOrderRequest
+            {
+                Status = WorkOrderStatus.Completed,
+                StatusNote = "Lock lubricated and verified with tenant.",
+            },
+            changedByUserId: 7,
+            changedByLabel: "Staff");
+
+        var afterUpdate = DateTime.UtcNow;
+
+        updated.Should().NotBeNull();
+        updated!.Status.Should().Be(WorkOrderStatus.Completed);
+        updated.CompletedAt.Should().NotBeNull();
+        updated.CompletedAt.Should().BeOnOrAfter(beforeUpdate);
+        updated.CompletedAt.Should().BeOnOrBefore(afterUpdate);
+
+        var entity = await _db.WorkOrders.AsNoTracking().FirstAsync(w => w.Id == created.Id);
+        entity.CompletedAt.Should().NotBeNull("moving a work order to Completed should stamp completion time");
+        entity.CompletedAt.Should().Be(updated.CompletedAt);
+    }
+
+    [Fact]
     public async Task UpdateAsync_DoesNotAppendEvent_WhenStatusUnchanged()
     {
         var property = SeedProperty();
