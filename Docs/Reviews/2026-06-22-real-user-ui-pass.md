@@ -3789,3 +3789,44 @@ Verification:
 - App console proof: Playwright CLI `console error` and `console warning` returned 0 messages after mobile close, Security navigation, and Sign Out.
 
 Status: Pass with documentation-only verification for the app-shell navigation group. Continue the real-user audit with the next remaining non-banking/non-QuickBooks route group, while keeping the known DB-side broad-list risks on the open ledger.
+
+## Pass 77 Settings Hub
+
+Date: 2026-06-25
+Branch: `tsk-397-real-user-pass-77`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Dev admin sample-data user: Rental Command Admin, `admin@rentalcommand.local`
+- Data mode: local example/sample data only; the app banner states example data does not send real emails/texts or charge cards.
+
+Guide:
+- `Docs/Testing/UI/tsk-397-pass-77-settings-hub.md`
+
+Acceptance criteria:
+- Settings must load the example-data guard, all tabs, and hash deep links without hard errors.
+- Go Live must require the exact `GO LIVE` phrase and cancel cleanly without clearing sample data.
+- Portfolio, notifications, automations, messaging defaults, and SMS provider UI must save/reload or expose guarded states through real UI controls.
+- Team/security/owners/import/accounting/activity routes must load from Settings cards.
+- In sample/example-data mode, guided setup must stop at the live-account boundary without starting live setup.
+- Accounting must load only to the disconnected provider-list boundary; no provider connect/import/disconnect may be performed.
+
+Verification:
+- Account mode: `/settings` rendered the example-data banner/card. Go Live kept final confirm disabled for a wrong phrase, enabled it for exact `GO LIVE`, and Cancel returned to Settings with sample data intact.
+- Tabs: Portfolio, Notifications, Automations, Messaging, Team, Owners, Setup & import, and Activity history all selected correctly and mirrored URL hashes. Direct `/settings#messaging` loaded Messaging.
+- Portfolio: safe local edits to name/description/company/time zone/status/collection day saved with `PATCH /api/v1/portfolios/1 => 200`, survived reload, and were restored to the original values. Advanced add/remove returned to zero rows without saving a permanent row.
+- Notifications: notification email and delivery/daily-briefing settings saved through `PUT /api/v1/notifications/email` and `PUT /api/v1/notifications/settings`, reloaded, and were restored. Broadcast stayed disabled until title plus message, then `POST /api/v1/notifications/broadcast => 201` created one local in-app announcement visible in the bell.
+- Automations: temporary values left by an interrupted browser script were normalized back to service defaults: rent charges off, late fees off, lease reminders on, tenant notifications off, and lead/grace/reminder days `5/5/60`.
+- Messaging/SMS: email/SMS defaults toggled true/true, reloaded, and restored false/false via portfolio patches. Twilio showed Account SID/Auth Token only; SignalWire showed Project ID/API Token/Space URL. `Send test SMS` enabled after a local test number but was not clicked.
+- Route cards: Security, Team, Owners, Import, Accounting, and Activity loaded `/settings/security`, `/admin/users`, `/owners`, `/import`, `/settings/accounting`, and `/audit` with expected page titles and no hard-error state.
+- Guided setup: clicking `Start guided setup` in sample mode targeted `/onboarding?from=settings`, bounced to Dashboard, and showed `Setup runs on a live account. Go live first to set up your real portfolio.` Source guard in `web/src/routes/(protected)/onboarding/+page.svelte` confirms this is intentional.
+- Accounting: `/settings/accounting` loaded `Connect your accounting - Rental Command`, showed QuickBooks as `Not connected`, and exposed `Connect QuickBooks`; the button was intentionally not pressed.
+- Console proof: final Playwright CLI `console error` and `console warning` both returned 0 messages.
+- Local recovery note: a mid-pass Vite outage and API self-signed TLS trust issue were resolved by restarting web with the API cert trusted via `NODE_EXTRA_CA_CERTS=/tmp/rentalcommand-api-6041.pem`. After re-login, Settings returned to the example-data state. This was test-harness recovery, not a product bug.
+
+Status: Pass with documentation-only verification for the Settings Hub. Continue the real-user audit with the next remaining non-banking/non-QuickBooks route group. Deferred boundaries remain final Go Live, real SMS delivery, QuickBooks/accounting connect/import/disconnect, Plaid banking, and production/sensitive data.
