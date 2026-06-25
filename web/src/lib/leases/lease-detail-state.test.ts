@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
 	hasNoticeMoveOutDate,
@@ -47,5 +48,17 @@ describe('hasNoticeMoveOutDate', () => {
 		assert.equal(hasNoticeMoveOutDate('   '), false);
 		assert.equal(hasNoticeMoveOutDate(null), false);
 		assert.equal(hasNoticeMoveOutDate('2026-07-15'), true);
+	});
+});
+
+describe('lease detail hero CTA', () => {
+	it('opens the ledger through the tab router so URL sync cannot reset it', () => {
+		const pageSource = readFileSync(
+			new URL('../../routes/(protected)/leases/[id]/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(pageSource, /data-testid="lease-hero-cta"[\s\S]*onclick=\{\(\) => setTab\('ledger'\)\}/);
+		assert.doesNotMatch(pageSource, /data-testid="lease-hero-cta"[\s\S]*onclick=\{\(\) => activeTab = 'ledger'\}/);
 	});
 });
