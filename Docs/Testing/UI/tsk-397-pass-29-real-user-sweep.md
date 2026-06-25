@@ -19,7 +19,7 @@ Baseline:
 - Database started with one seeded admin user and zero properties, units, tenants, leases, and stored files.
 - Engine acquired its advisory lock and started scan/rent/accounting/notice workers.
 - No Playwright, remote-debugging, Node, Chrome, or Claude listeners were left from the old session before this stack was started.
-- Continuation process check found only the active `pass29` Playwright daemon and its Chrome children; no stale Claude/Playwright sessions were killed.
+- Continuation process check found only the active `pass29` Playwright daemon and its Chrome children; no stale Claude/Playwright processes were killed. Six dead Playwright temp profiles from older sessions were removed.
 
 ## Acceptance Criteria
 
@@ -60,6 +60,9 @@ Baseline:
 | Tax and year-end packet | Pass | `/tax`; Schedule E CSV downloaded; year-end PDF downloaded and verified as PDF 1.4, 2 pages, A4, not encrypted | Tax UI rounds display dollars but CSV preserves cents. |
 | Owner reports | Pass | `/owners-report`; owner selected; statement rendered; CSV export downloaded and matched totals | `Email to owner` intentionally not fired because it is an external-message style action. |
 | Banking | Pass with data-rule risk | `/banking`; manual JSON import created Sample Bank connection and one transaction; All/Unmatched/Ignored filters; Ignore and Un-ignore actions verified | Plaid Link/connect/exchange actions intentionally not fired. Transaction list cap/no-paging risk remains deferred. |
+| Messages | Pass | `/messages`; new conversation modal validated disabled start state until tenant/topic/message were provided; portal-only conversation created for Avery Ellis; portal reply sent | Email/SMS checkboxes left off to avoid outbound effects. Thread rendered two Portal messages. |
+| Tenant notices | Pass | `/notices`; Draft filter, Generate drafts help popover, Generate drafts action | Generate drafts returned `No new notice drafts needed`; no notices were sent. |
+| Assistant | Pass after fix | `/ai`; Today's Briefing loaded; `How much did I collect?` preset submitted before/after fix | Initial response mislabeled `$2,325.00` as this month; post-fix response separated overall `$2,325.00`, June 2026 so far `$1,200.00`, and unmatched bank deposit `$1,200.00`. |
 
 ## Bugs And Fixes
 
@@ -67,6 +70,7 @@ Baseline:
 | --- | --- | --- | --- | --- |
 | P29-001 | `/scan/new-rental` converted missing lease-scan bed/bath values into real `0` values. | Lease camera fixture omitted bed/bath; review seeded Beds `0`, Baths `0`, requiring manual correction before confirm. Post-fix draft `8` showed empty Beds/Baths inputs and SQL showed empty extracted values. | Changed guided lease prefill to leave bed/bath blank unless extracted. | `pnpm --dir web test:unit -- src/lib/scan/new-rental-state.test.ts` |
 | P29-002 | Work-order scan could not link a lease from a document that named the lease number. | Work order draft extracted property/unit/tenant but `lease_id` empty; confirmed row `/maintenance/1` had `LeaseId` null. Post-fix draft `6` extracted `lease_id=1` and confirmed `/maintenance/2` with `LeaseId=1`. | Added non-deleted leases to worker grounding JSON and updated work-order extraction schema to allow `lease_id` copied from `leases[].id`. | `dotnet test RentalCommand.Engine.Tests/RentalCommand.Engine.Tests.csproj --filter "FullyQualifiedName~ScanProcessingWorker"`; `dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ScanServiceTests"` |
+| P29-007 | Assistant financial summary blended current-ledger collected cash with month-to-date phrasing after a manual bank import. | `/ai` answered `You collected **$2,325.00** this month` even though the June 2026 so-far snapshot was `$1,200.00` and `$1,200.00` was an unmatched bank deposit. Post-fix browser retest answered with overall `$2,325.00`, June 2026 so far `$1,200.00`, and the unmatched deposit caveat. | Expanded the financial summary tool contract/result to return explicit current-ledger, month-to-date, trailing-30-day, past-due, and unmatched-bank-deposit sections. Unmatched deposit count/total is aggregated DB-side. | `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~PortfolioQaServiceTests" --no-restore` |
 
 ## Open Findings / Risks
 
@@ -82,6 +86,10 @@ Baseline:
 - `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Engine.Tests/RentalCommand.Engine.Tests.csproj --filter "FullyQualifiedName~ScanProcessingWorker"`: passed, 12 tests.
 - `pnpm --dir web test:unit -- src/lib/scan/new-rental-state.test.ts`: passed, 269 tests.
 - `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ScanServiceTests"`: passed, 25 tests.
+- `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~PortfolioQaServiceTests" --no-restore`: passed, 5 tests.
+- `MSBUILDDISABLENODEREUSE=1 dotnet build RentalCommand.Api/RentalCommand.Api.csproj --no-restore`: passed, 0 warnings.
+- Local stack restarted with explicit pass-29 connection string after user-secret drift pointed API at stale port `5583`; API health then returned ready on `https://localhost:5706`.
+- Browser retest on `/ai` verified the assistant no longer labels current-ledger total `$2,325.00` as this month and calls out the unmatched `$1,200.00` bank deposit separately.
 - Browser evidence retained under `.playwright-cli/` for this worktree, including downloaded CSV/PDF/image artifacts:
   - `schedule-e-2026.csv`
   - `income-expense-statement-2026-06-25.csv`
