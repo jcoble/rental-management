@@ -28,7 +28,12 @@ public class ScanProcessingWorkerSchemaTests
         var schema = ScanProcessingWorker.ChooseExtractionSchema("Expense");
 
         schema.Instructions.Should().Be(ReceiptExtractionSchema.Instructions);
-        schema.Fields.Select(f => f.Name).Should().Contain("document_kind");
+        schema.Fields.Select(f => f.Name).Should().Contain([
+            "document_kind",
+            "property_id",
+            "unit_id",
+        ]);
+        schema.Instructions.Should().Contain("grounding context");
     }
 
     [Fact]
