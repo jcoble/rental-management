@@ -766,6 +766,7 @@ public class ReportsServiceTests : IDisposable
         row.Deductions.Should().Be(200m);
         row.Returned.Should().Be(300m);
         row.CurrentBalance.Should().Be(1000m);
+        row.StatusName.Should().Be("Partially Returned");
 
         report.TotalHeld.Should().Be(1500m);
         report.TotalDeductions.Should().Be(200m);

@@ -1274,7 +1274,7 @@ public class ReportsService : IReportsService
                 Returned = h.ReturnedAmount ?? 0m,
                 CurrentBalance = h.CurrentBalance,
                 Status = h.Status,
-                StatusName = h.Status.ToString(),
+                StatusName = FormatSecurityDepositStatus(h.Status),
                 HeldAt = h.HeldAt,
                 ReturnedAt = h.ReturnedAt,
             })
@@ -1301,6 +1301,12 @@ public class ReportsService : IReportsService
             TotalCurrentBalance = totals?.TotalCurrentBalance ?? 0m,
         };
     }
+
+    private static string FormatSecurityDepositStatus(SecurityDepositStatus status) => status switch
+    {
+        SecurityDepositStatus.PartiallyReturned => "Partially Returned",
+        _ => status.ToString(),
+    };
 
     // ── Vendor 1099 & Payments ─────────────────────────────────────────────────────────────────────
 

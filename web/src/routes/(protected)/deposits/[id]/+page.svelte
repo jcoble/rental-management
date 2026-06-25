@@ -476,6 +476,7 @@
 		: ''}
 	busy={returnMut.isPending}
 	testid="return-confirm"
+	confirmLabel="Process return"
 	onconfirm={submitReturn}
 	oncancel={closeReturn}
 />

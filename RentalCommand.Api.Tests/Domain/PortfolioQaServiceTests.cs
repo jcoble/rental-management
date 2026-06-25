@@ -166,6 +166,51 @@ public sealed class PortfolioQaServiceTests : IDisposable
              sql.Contains("FETCH", StringComparison.OrdinalIgnoreCase)));
     }
 
+    [Fact]
+    public async Task WorkOrdersTool_OrdersByRequestedAtInSql_ThenFormatsDatesForAnswer()
+    {
+        var now = DateTime.UtcNow;
+        var property = SeedProperty(now);
+        _db.WorkOrders.AddRange(
+            new WorkOrder
+            {
+                PortfolioId = PortfolioId,
+                Property = property,
+                Title = "Older lock issue",
+                Description = "The lock sticks.",
+                Status = WorkOrderStatus.New,
+                Priority = WorkOrderPriority.Normal,
+                RequestedAt = now.AddDays(-2),
+                UpdatedAt = now.AddDays(-2),
+            },
+            new WorkOrder
+            {
+                PortfolioId = PortfolioId,
+                Property = property,
+                Title = "Newest faucet issue",
+                Description = "The faucet leaks.",
+                Status = WorkOrderStatus.Scheduled,
+                Priority = WorkOrderPriority.High,
+                RequestedAt = now.AddDays(-1),
+                ScheduledFor = now.AddDays(1),
+                UpdatedAt = now.AddDays(-1),
+            });
+        await _db.SaveChangesAsync();
+
+        var answer = await AskToolAsync(
+            toolName: "list_work_orders",
+            argsJson: """{"openOnly":true}""",
+            question: "What maintenance is open?");
+
+        using var doc = JsonDocument.Parse(answer);
+        var rows = doc.RootElement;
+        rows.GetArrayLength().Should().Be(2);
+        rows[0].GetProperty("title").GetString().Should().Be("Newest faucet issue");
+        rows[0].GetProperty("requestedAt").GetString().Should().MatchRegex(@"^\d{4}-\d{2}-\d{2}$");
+
+        _commands.Should().Contain(sql => sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase));
+    }
+
     private async Task<string> AskToolAsync(string toolName, string argsJson, string question)
     {
         _commands.Clear();
