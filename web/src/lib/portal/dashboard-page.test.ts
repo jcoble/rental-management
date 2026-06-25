@@ -20,4 +20,18 @@ describe('portal dashboard page', () => {
 			/<section id="appointments"[\s\S]*Upcoming visits, inspections, and maintenance appointments will appear here\.[\s\S]*<\/section>/
 		);
 	});
+
+	it('shows validation for empty dashboard maintenance requests', () => {
+		const source = readFileSync(
+			new URL('../../routes/(portal)/portal/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(source, /let workOrderSubmitted = \$state\(false\)/);
+		assert.match(source, /workOrderTitleError/);
+		assert.match(source, /workOrderDescriptionError/);
+		assert.match(source, /data-testid="tenant-dashboard-maintenance-title-error"/);
+		assert.match(source, /data-testid="tenant-dashboard-maintenance-description-error"/);
+		assert.doesNotMatch(source, /if \(!workOrderForm\.title\.trim\(\) \|\| !workOrderForm\.description\.trim\(\)\) return;/);
+	});
 });
