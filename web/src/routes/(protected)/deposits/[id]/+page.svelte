@@ -45,6 +45,7 @@
 	let showDeductionForm = $state(false);
 
 	function openDeduction() {
+		if (deposit?.status !== 'Held') return;
 		deductionReason = '';
 		deductionAmount = '';
 		deductionNotes = '';
@@ -253,6 +254,7 @@
 					variant="outline"
 					size="sm"
 					onclick={openDeduction}
+					disabled={deposit.status !== 'Held'}
 				>
 					Add deduction
 				</Button>

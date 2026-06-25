@@ -1,5 +1,6 @@
 using System.Data.Common;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -27,7 +28,7 @@ public class SecurityDepositServiceListTests : IDisposable
             _ctx.Db,
             Mock.Of<IFileStorage>(),
             Mock.Of<IMoveOutStatementPdfGenerator>(),
-            Mock.Of<IAuditTrailService>(),
+            new NoopAuditTrailService(),
             Mock.Of<ICurrentActor>(),
             Mock.Of<ILogger<SecurityDepositService>>());
     }
@@ -64,7 +65,40 @@ public class SecurityDepositServiceListTests : IDisposable
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
-    private void SeedDeposit(string leaseNumber, decimal amount)
+    [Fact]
+    public async Task ReturnAsync_WithDeductionsAndFullNetRefund_MarksReturnedAndClosesDeductionLifecycle()
+    {
+        var deposit = SeedDeposit("R-100", 1_325m);
+
+        var withDeduction = await _sut.AddDeductionAsync(PortfolioId, deposit.Id, new AddDeductionRequest
+        {
+            Reason = "Move-out cleaning",
+            Amount = 150m,
+            Notes = "Documented from photo evidence.",
+        });
+        var returned = await _sut.ReturnAsync(PortfolioId, deposit.Id, new ReturnDepositRequest
+        {
+            Notes = "Net refund returned by ACH.",
+        });
+        var deductionAfterReturn = await _sut.AddDeductionAsync(PortfolioId, deposit.Id, new AddDeductionRequest
+        {
+            Reason = "Late damage",
+            Amount = 25m,
+        });
+
+        withDeduction.Should().NotBeNull();
+        returned.Should().NotBeNull();
+        returned!.Status.Should().Be(SecurityDepositStatus.Returned.ToString());
+        returned.ReturnedAmount.Should().Be(1_175m);
+        returned.TotalDeductions.Should().Be(150m);
+        deductionAfterReturn.Should().BeNull("a fully returned deposit must be closed to new deductions");
+
+        var fromDb = await _ctx.Db.SecurityDepositHoldings.AsNoTracking().SingleAsync(h => h.Id == deposit.Id);
+        fromDb.Status.Should().Be(SecurityDepositStatus.Returned);
+        fromDb.ReturnedAmount.Should().Be(1_175m);
+    }
+
+    private SecurityDepositHolding SeedDeposit(string leaseNumber, decimal amount)
     {
         var now = DateTime.UtcNow;
         var tenant = new Tenant
@@ -117,7 +151,7 @@ public class SecurityDepositServiceListTests : IDisposable
         _ctx.Db.Leases.Add(lease);
         _ctx.Db.SaveChanges();
 
-        _ctx.Db.SecurityDepositHoldings.Add(new SecurityDepositHolding
+        var deposit = new SecurityDepositHolding
         {
             PortfolioId = PortfolioId,
             LeaseId = lease.Id,
@@ -127,8 +161,26 @@ public class SecurityDepositServiceListTests : IDisposable
             DeductionsJson = "[]",
             CreatedAt = now,
             UpdatedAt = now,
-        });
+        };
+        _ctx.Db.SecurityDepositHoldings.Add(deposit);
         _ctx.Db.SaveChanges();
+        return deposit;
+    }
+
+    private sealed class NoopAuditTrailService : IAuditTrailService
+    {
+        public Task LogAsync(
+            int portfolioId,
+            string entityType,
+            int entityId,
+            AuditLogOperation operation,
+            int? userId = null,
+            string? actorLabel = null,
+            string? oldValues = null,
+            string? newValues = null,
+            string? changeReason = null,
+            string? ipAddress = null,
+            CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private sealed class RecordingCommandInterceptor(List<string> commands) : DbCommandInterceptor

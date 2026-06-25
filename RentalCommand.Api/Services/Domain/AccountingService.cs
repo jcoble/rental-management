@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Services;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -877,23 +878,7 @@ public class AccountingService : IAccountingService
             })
             .ToList();
 
-        // Schedule E category rollup, grouped, summed, and ordered SQL-side. Enum-name formatting happens
-        // in memory on the already-aggregated (one row per category) result.
-        var scheduleE = (await _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId)
-            .GroupBy(e => e.Category)
-            .Select(g => new { Category = g.Key, Total = g.Sum(e => e.Amount), Count = g.Count() })
-            .OrderByDescending(g => g.Total)
-            .ToListAsync(ct))
-            .Select(g => new ScheduleECategoryTotal
-            {
-                Category = g.Category,
-                CategoryName = g.Category.ToString(),
-                Total = g.Total,
-                Count = g.Count,
-            })
-            .ToList();
+        var scheduleE = await BuildEmbeddedScheduleETotalsAsync(portfolioId, generatedAt.Year, ct);
 
         var vendors1099 = await _db.Vendors
             .AsNoTracking()
@@ -966,6 +951,123 @@ public class AccountingService : IAccountingService
             ScheduleE = scheduleE,
             Vendors1099 = vendorReports,
         };
+    }
+
+    private async Task<IReadOnlyList<ScheduleECategoryTotal>> BuildEmbeddedScheduleETotalsAsync(
+        int portfolioId,
+        int year,
+        CancellationToken ct)
+    {
+        var yearStart = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var yearEndExclusive = yearStart.AddYears(1);
+
+        var loanPropertyIdsQuery = _db.Loans
+            .AsNoTracking()
+            .Where(l => l.PortfolioId == portfolioId)
+            .Select(l => l.PropertyId)
+            .Distinct();
+
+        var propertyBases = await _db.Properties
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId)
+            .Select(p => new
+            {
+                p.Id,
+                p.PurchasePrice,
+                p.LandValue,
+                p.InServiceDate,
+                p.ManualAnnualDepreciation,
+                p.AccumulatedDepreciation,
+            })
+            .ToListAsync(ct);
+
+        var depreciationByProperty = new Dictionary<int, decimal>();
+        foreach (var basis in propertyBases)
+        {
+            var depreciation = DepreciationCalculator.AnnualForYear(
+                new PropertyDepreciationBasis(
+                    basis.PurchasePrice,
+                    basis.LandValue,
+                    basis.InServiceDate,
+                    basis.ManualAnnualDepreciation,
+                    basis.AccumulatedDepreciation),
+                year);
+            if (depreciation.Amount > 0m)
+                depreciationByProperty[basis.Id] = depreciation.Amount;
+        }
+
+        var depreciationPropertyIds = depreciationByProperty.Keys.ToArray();
+
+        var expenseTotals = await _db.Expenses
+            .AsNoTracking()
+            .Where(e =>
+                e.PortfolioId == portfolioId &&
+                e.IncurredAt >= yearStart &&
+                e.IncurredAt < yearEndExclusive &&
+                !(e.Category == ScheduleECategory.MortgageInterest &&
+                  e.PropertyId != null &&
+                  loanPropertyIdsQuery.Contains(e.PropertyId.Value)) &&
+                !(e.Category == ScheduleECategory.Depreciation &&
+                  e.PropertyId != null &&
+                  depreciationPropertyIds.Contains(e.PropertyId.Value)))
+            .GroupBy(e => e.Category)
+            .Select(g => new
+            {
+                Category = g.Key,
+                Total = g.Sum(e => e.Amount),
+                Count = g.Count(),
+            })
+            .ToListAsync(ct);
+
+        var modeledInterest = await _db.LoanPayments
+            .AsNoTracking()
+            .Where(lp =>
+                lp.PortfolioId == portfolioId &&
+                lp.Loan != null &&
+                lp.DueDate >= yearStart &&
+                lp.DueDate < yearEndExclusive)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Total = g.Sum(lp => lp.InterestAmount),
+                Count = g.Count(),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        var totals = new Dictionary<ScheduleECategory, (decimal Total, int Count)>();
+
+        foreach (var row in expenseTotals)
+        {
+            totals[row.Category] = (row.Total, row.Count);
+        }
+
+        if ((modeledInterest?.Total ?? 0m) != 0m)
+        {
+            var existing = totals.GetValueOrDefault(ScheduleECategory.MortgageInterest);
+            totals[ScheduleECategory.MortgageInterest] = (
+                existing.Total + modeledInterest!.Total,
+                existing.Count + modeledInterest.Count);
+        }
+
+        var totalDepreciation = depreciationByProperty.Values.Sum();
+        if (totalDepreciation != 0m)
+        {
+            var existing = totals.GetValueOrDefault(ScheduleECategory.Depreciation);
+            totals[ScheduleECategory.Depreciation] = (
+                existing.Total + totalDepreciation,
+                existing.Count + depreciationByProperty.Count);
+        }
+
+        return totals
+            .OrderByDescending(kvp => kvp.Value.Total)
+            .Select(kvp => new ScheduleECategoryTotal
+            {
+                Category = kvp.Key,
+                CategoryName = kvp.Key.ToString(),
+                Total = kvp.Value.Total,
+                Count = kvp.Value.Count,
+            })
+            .ToList();
     }
 
     private IQueryable<AccountingReportLedgerRow> ReportLedgerQuery(int portfolioId)

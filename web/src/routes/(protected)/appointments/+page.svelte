@@ -100,6 +100,26 @@
 	let formErrors = $state<Record<string, string>>({});
 	let deleteTarget = $state<Appointment | null>(null);
 
+	function clearFormError(field: string) {
+		if (!formErrors[field]) return;
+		const next = { ...formErrors };
+		delete next[field];
+		formErrors = next;
+	}
+
+	$effect(() => {
+		if (form.title) clearFormError('title');
+	});
+	$effect(() => {
+		if (form.scheduledStart) clearFormError('scheduledStart');
+	});
+	$effect(() => {
+		if (form.scheduledEnd) clearFormError('scheduledEnd');
+	});
+	$effect(() => {
+		if (form.prospectEmail) clearFormError('prospectEmail');
+	});
+
 	function invalidate() {
 		invalidateAppointmentQueries(queryClient, portfolioId);
 	}

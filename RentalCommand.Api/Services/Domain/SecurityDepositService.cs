@@ -200,8 +200,7 @@ public class SecurityDepositService : ISecurityDepositService
 
         entity.ReturnedAmount = net;
         entity.ReturnedAt = DateTime.UtcNow;
-        // "Returned" only when net == original amount (no deductions); otherwise "PartiallyReturned".
-        entity.Status = totalDeductions > 0m ? SecurityDepositStatus.PartiallyReturned : SecurityDepositStatus.Returned;
+        entity.Status = net > 0m ? SecurityDepositStatus.Returned : SecurityDepositStatus.PartiallyReturned;
         if (request.Notes != null)
             entity.Notes = request.Notes;
         entity.UpdatedAt = DateTime.UtcNow;
