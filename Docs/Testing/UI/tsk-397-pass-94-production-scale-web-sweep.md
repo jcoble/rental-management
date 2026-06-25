@@ -108,12 +108,13 @@ Completed in browser with Playwright CLI against the local stack.
 | P94-019 | Dashboard net KPI | Dashboard hero/KPI showed `$25` net this month while the detailed money snapshot showed `$16.25` kept after an unmatched `$8.75` bank withdrawal. | Dashboard accounting now uses the same cash-movement definition as the money snapshot: all paid payment types plus unmatched bank deposits, minus paid/incurred expenses and unmatched bank withdrawals, all computed DB-side. | `SoftDeleteKpiTests.DashboardNetThisMonth_UsesExpensePaidDateFallbackLikeMoneySnapshot`, `SoftDeleteKpiTests.DashboardNetThisMonth_IncludesUnmatchedBankCashMovementAndNonRentPaymentsLikeMoneySnapshot` |
 | P94-020 | Banking review queue | `/banking` review queue counted suggestible unmatched bank lines in SQL, then loaded every suggestible row before rendering review items. | Review queue now accepts `skip/take`, clamps page size, orders/pages suggestible rows in SQL before suggestion mapping, returns pagination metadata, and the web page requests bounded pages with Previous/Next controls. | `BankingServiceTests.ReviewQueue_PagesSuggestibleTransactionsInSql` |
 | P94-021 | Money snapshot past-due drill-down | `/accounting/past-due` grouped past-due balances in SQL, then used separate materialized dictionaries to attach oldest payment ids and lease/tenant/property/unit labels. | Past-due rows now project one SQL row per behind lease: grouped amount/count/oldest due date, joined lease metadata, and a correlated oldest-payment-id subquery. The endpoint runs one summary query and one row projection query. | `AccountingServiceTests.GetPastDueAsync_ProjectsMetadataAndOldestPaymentInSingleRowQuery` |
+| P94-022 | Property P&L report | `/reports/property-pnl` materialized properties, then built in-scope ids and joined income/expense aggregate dictionaries in memory. | Property P&L rows now join grouped SQL income/expense subqueries back to the scoped property query, with grand totals still computed by separate SQL sums. | `ReportsServiceTests.GetPropertyProfitAndLossAsync_ProjectsRowsAndTotalsInSql` |
 
 ## Remaining Bugs And Blocked Lanes
 
 | ID | Surface | Evidence | Status |
 | --- | --- | --- | --- |
-| P94-R08 | Accounting/banking/reporting DB-side rule | Accounting summary, banking summary, general-ledger running balance, dashboard net cash movement, banking review-queue paging, and money snapshot past-due drill-down metadata are fixed. Remaining confirmed violations are larger reporting/accounting refactor lanes: Schedule E row facts, year-end packet P&L, year-end rent roll past-due enrichment, property P&L property-total joins, and provider-payload mapping/retry matching. | Follow-up refactor lane |
+| P94-R08 | Accounting/banking/reporting DB-side rule | Accounting summary, banking summary, general-ledger running balance, dashboard net cash movement, banking review-queue paging, money snapshot past-due drill-down metadata, and property P&L row joins are fixed. Remaining confirmed violations are larger reporting/accounting refactor lanes: Schedule E row facts, year-end packet P&L, year-end rent roll past-due enrichment, and provider-payload mapping/retry matching. | Follow-up refactor lane |
 | P94-R09 | External banking/accounting providers | Plaid Link and QuickBooks OAuth were not exercised because production/sensitive provider access requires user approval. | Blocked by credential/provider policy |
 
 ## Verification Commands
@@ -128,6 +129,7 @@ MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~SoftDeleteKpiTests|FullyQualifiedName~DashboardOccupancyDefinitionTests|FullyQualifiedName~AccountingServiceTests.GetSnapshotAsync" --no-restore --logger "console;verbosity=normal"
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~BankingServiceTests" --no-restore --logger "console;verbosity=normal"
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~AccountingServiceTests" --no-restore --logger "console;verbosity=normal"
+MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ReportsServiceTests" --no-restore --logger "console;verbosity=normal"
 ```
 
 Frontend unit tests:
