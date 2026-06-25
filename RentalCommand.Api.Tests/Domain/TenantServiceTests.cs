@@ -59,6 +59,33 @@ public class TenantServiceTests : IDisposable
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ListPageAsync_TokenizesHyphenatedSearchTermsInSql()
+    {
+        SeedTenant("Avery", "Ellis", activeLeaseCount: 0);
+        SeedTenant("Avery", "Stone", activeLeaseCount: 0);
+        SeedTenant("Blair", "Ellis", activeLeaseCount: 0);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        {
+            Search = "Avery-Ellis",
+            Sort = "name",
+            Skip = 0,
+            Take = 20,
+        });
+
+        result.TotalCount.Should().Be(1);
+        var tenant = result.Items.Should().ContainSingle().Subject;
+        tenant.FirstName.Should().Be("Avery");
+        tenant.LastName.Should().Be("Ellis");
+
+        _commands.Should().HaveCount(2);
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("LIKE", StringComparison.OrdinalIgnoreCase) ||
+            sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
+    }
+
     private void SeedTenant(string firstName, string lastName, int activeLeaseCount)
     {
         var now = DateTime.UtcNow;

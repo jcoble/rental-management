@@ -97,12 +97,12 @@ Completed in browser with Playwright CLI against the local stack.
 | P94-011 | Generic document files | Generic document downloads and previews bypassed the same-origin file proxy path and preview images fetched full-size blobs. | Document downloads/previews now use `/document-file/{id}`, the proxy forwards `thumb=true`, the API serves inline JPEG thumbnails for image documents, and deposit/inspection previews request thumbnails. | `DocumentsControllerTests.GetFile_WithThumbForImage_ReturnsJpegThumbnail`, `documents.test.ts` |
 | P94-012 | Application approval | After approving an application, the detail page only linked to the created tenant and did not continue the applicant into lease setup. | Approved application banners now include `Create lease`, linking to `/leases?create=1&tenantId={tenantId}`; the leases page opens the create modal with that tenant selected. | `application-approval-continuation.test.ts` |
 | P94-013 | Tenant notices | Forced notice path could keep offering `Create one anyway` after proving no eligible lease/draft existed. | Tenant notice empty state now hides force controls when there is no active lease and after a forced no-draft result; tenants without active leases get a `Create lease` action instead. | `tenant-notice-state.test.ts` |
+| P94-014 | Tenants search | Searching for a tenant with punctuation between name tokens, such as `Avery-Ellis`, did not match `Avery Ellis`. | Tenant search now tokenizes punctuation/space-separated input and applies each token as a DB-side lowered `LIKE` predicate before count, sort, and paging. | `TenantServiceTests.ListPageAsync_TokenizesHyphenatedSearchTermsInSql` |
 
 ## Remaining Bugs And Blocked Lanes
 
 | ID | Surface | Evidence | Status |
 | --- | --- | --- | --- |
-| P94-R05 | Tenants search | Hyphenated search terms do not tokenize as a user would expect. | Open |
 | P94-R06 | Onboarding | Existing active lease can still land the owner on a create-first-lease step; email-alert setup can loop into onboarding. | Open |
 | P94-R08 | Accounting/banking DB-side rule | Several report/accounting/banking endpoints still materialize rows and then filter/group/sort/aggregate in memory. This includes the general ledger running-balance lane and banking review candidate lane. | Larger refactor lane |
 | P94-R09 | External banking/accounting providers | Plaid Link and QuickBooks OAuth were not exercised because production/sensitive provider access requires user approval. | Blocked by credential/provider policy |
@@ -114,6 +114,7 @@ Backend focused tests:
 ```bash
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~AuditDetailHrefTests|FullyQualifiedName~PortfolioQaServiceTests.WorkOrdersTool_OrdersByRequestedAtInSql_ThenFormatsDatesForAnswer|FullyQualifiedName~ReportsServiceTests.GetSecurityDepositRegisterAsync_ComputesCurrentBalanceFromDeductionsAndReturned" --no-restore --logger "console;verbosity=normal"
 MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~ExpenseServiceTests.UpdateAsync_WithClearReceiptData_ClearsStoredReceiptJson|FullyQualifiedName~DocumentsControllerTests.GetFile_WithThumbForImage_ReturnsJpegThumbnail" --no-restore --logger "console;verbosity=normal"
+MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter "FullyQualifiedName~TenantServiceTests" --no-restore --logger "console;verbosity=normal"
 ```
 
 Frontend unit tests:
@@ -136,3 +137,4 @@ Browser retests after fixes:
 - `/tax`: packet year followed selected summary year and downloaded `year-end-2026.pdf`.
 - `/leases/1`: `View ledger` moved to `?tab=ledger` and rendered the ledger tab.
 - `/apply/{token}`: blank-submit errors cleared immediately as required fields and consent were filled.
+- `/tenants?q=Avery-Ellis`: returned the single `Avery Ellis` row with no console errors.
