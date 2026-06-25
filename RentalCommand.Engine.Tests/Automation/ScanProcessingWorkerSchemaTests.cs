@@ -23,6 +23,18 @@ public class ScanProcessingWorkerSchemaTests
     }
 
     [Fact]
+    public void ChooseExtractionSchema_WorkOrderTarget_AllowsGroundedLeaseIds()
+    {
+        var schema = ScanProcessingWorker.ChooseExtractionSchema("WorkOrder");
+        var leaseField = schema.Fields.Single(f => f.Name == "lease_id");
+
+        schema.Instructions.Should().Contain("leases");
+        schema.Instructions.Should().Contain("lease_id");
+        leaseField.Description.Should().Contain("leases[].id");
+        leaseField.Description.Should().NotContain("Leave empty");
+    }
+
+    [Fact]
     public void ChooseExtractionSchema_ExpenseTarget_UsesReceiptSchema()
     {
         var schema = ScanProcessingWorker.ChooseExtractionSchema("Expense");
