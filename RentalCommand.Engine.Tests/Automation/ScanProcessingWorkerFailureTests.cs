@@ -182,6 +182,81 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         draft.ExtractedFields!.Should().Contain("Apex Plumbing");
     }
 
+    [Fact]
+    public async Task Cycle_WorkOrderExtraction_GroundingContextIncludesActiveLeases()
+    {
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            var now = DateTime.UtcNow;
+
+            db.Properties.Add(new Property
+            {
+                Id = 10,
+                PortfolioId = 1,
+                Name = "Cedar Point Flats",
+                AddressLine1 = "742 Evergreen St",
+                City = "Columbus",
+                State = "OH",
+                PostalCode = "43200",
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            db.Units.Add(new Unit
+            {
+                Id = 20,
+                PropertyId = 10,
+                UnitNumber = "1A",
+                Bedrooms = 2,
+                Bathrooms = 1,
+                MarketRent = 1125m,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            db.Tenants.Add(new Tenant
+            {
+                Id = 30,
+                PortfolioId = 1,
+                FirstName = "Avery",
+                LastName = "Ellis",
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            db.Leases.Add(new Lease
+            {
+                Id = 40,
+                PortfolioId = 1,
+                PropertyId = 10,
+                UnitId = 20,
+                TenantId = 30,
+                LeaseNumber = "QA-2026-001-1A",
+                Status = Core.Enums.LeaseStatus.Active,
+                StartDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                EndDate = new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+                MonthlyRent = 1125m,
+                SecurityDeposit = 1125m,
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+            db.SaveChanges();
+        }
+
+        SeedPendingDraft(targetEntityType: "WorkOrder");
+        _llm.Result = Extracted(
+            ("target_entity_type", "WorkOrder"),
+            ("title", "Front door lock sticks"),
+            ("description", "Tenant Avery Ellis reports the lock sticks on lease QA-2026-001-1A."));
+
+        await RunCycleAsync();
+
+        _llm.LastGroundingContext.Should().NotBeNullOrWhiteSpace();
+        _llm.LastGroundingContext.Should().Contain("\"leases\"");
+        _llm.LastGroundingContext.Should().Contain("\"id\":40");
+        _llm.LastGroundingContext.Should().Contain("QA-2026-001-1A");
+        _llm.LastGroundingContext.Should().Contain("\"unitId\":20");
+        _llm.LastGroundingContext.Should().Contain("\"tenantId\":30");
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
@@ -192,7 +267,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         await worker.RunOneCycleAsync(_provider, CancellationToken.None);
     }
 
-    private int SeedPendingDraft()
+    private int SeedPendingDraft(string targetEntityType = "Expense")
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
@@ -200,7 +275,7 @@ public class ScanProcessingWorkerFailureTests : IDisposable
         {
             PortfolioId = 1,
             FilePath = "scans/test-key",
-            TargetEntityType = "Expense",
+            TargetEntityType = targetEntityType,
             Status = "Pending",
             CreatedAt = DateTime.UtcNow,
         };
@@ -248,11 +323,16 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     private sealed class StubLlmProvider : ILlmProvider
     {
         public ExtractedFields Result { get; set; } = new();
+        public string? LastGroundingContext { get; private set; }
 
         public Task<ExtractedFields> ExtractAsync(
             byte[] documentBytes, string contentType, string instructions,
             IReadOnlyList<ExtractionFieldSpec> fields, string? groundingContext = null,
-            CancellationToken ct = default) => Task.FromResult(Result);
+            CancellationToken ct = default)
+        {
+            LastGroundingContext = groundingContext;
+            return Task.FromResult(Result);
+        }
 
         public Task<string> ChatAsync(string prompt, CancellationToken ct = default)
             => Task.FromResult(string.Empty);

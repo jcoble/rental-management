@@ -156,8 +156,8 @@
 		propertyForm.postalCode = values.propertyPostalCode;
 		// seed unit
 		unitForm.unitNumber = values.unitNumber || '1';
-		unitForm.bedrooms = values.unitBedrooms || '0';
-		unitForm.bathrooms = values.unitBathrooms || '0';
+		unitForm.bedrooms = values.unitBedrooms;
+		unitForm.bathrooms = values.unitBathrooms;
 		unitForm.marketRent = values.monthlyRent || '0';
 		// seed tenant (split on last space)
 		if (values.tenantName) {
