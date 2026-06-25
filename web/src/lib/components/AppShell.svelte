@@ -216,6 +216,7 @@
 	// source for outgoing Authorization headers and post-login mutations, not for shell rendering.
 	let currentUser = $derived(page.data.user ?? null);
 	let portalUser = $derived(isPortalUser(currentUser) && !isStaff(currentUser));
+	const userSecurityHref = $derived(portalUser ? '/portal/security' : '/settings/security');
 
 	const portalNavItems: NavItem[] = [
 		{ href: '/portal', label: 'Dashboard', icon: Home },
@@ -225,6 +226,10 @@
 		{ href: '/portal/payments', label: 'Payments', icon: CreditCard },
 		{ href: '/portal/lease', label: 'Lease', icon: FileText },
 		{ href: '/portal/appointments', label: 'Appointments', icon: Calendar }
+	];
+
+	const portalUtilityItems: NavItem[] = [
+		{ href: '/portal/security', label: 'Security', icon: Shield }
 	];
 
 	function itemVisible(item: NavItem): boolean {
@@ -258,7 +263,7 @@
 	// Flat list of every visible nav item (both modes) for title resolution.
 	let allItems = $derived.by(() =>
 		portalUser
-			? portalNavItems
+			? [...portalNavItems, ...portalUtilityItems]
 			: [
 					...visiblePinned,
 					...visibleGroups.flatMap((g) => g.items),
@@ -636,7 +641,7 @@
 							</DropdownMenuItem>
 						{/if}
 						<DropdownMenuItem data-testid="user-menu-security-collapsed">
-							<a href="/settings/security" class="flex w-full items-center gap-2">
+							<a href={userSecurityHref} class="flex w-full items-center gap-2">
 								<Shield class="h-4 w-4" />
 								Security
 							</a>
@@ -687,7 +692,7 @@
 							</DropdownMenuItem>
 						{/if}
 						<DropdownMenuItem data-testid="user-menu-security">
-							<a href="/settings/security" class="flex w-full items-center gap-2">
+							<a href={userSecurityHref} class="flex w-full items-center gap-2">
 								<Shield class="h-4 w-4" />
 								Security
 							</a>
