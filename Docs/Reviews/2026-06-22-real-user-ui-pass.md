@@ -4132,3 +4132,45 @@ Verification:
 - Clean final `/notices` reload had `console error` and `console warning` counts of zero. Dynamic requests for auth refresh, portfolio state, notifications, SignalR negotiate, notices, conversations unread count, appointments, approval, and dismiss returned `200`.
 
 Status: Pass with documentation-only verification. No code fix or regression test was added in this slice. Deferred boundaries remain production/sensitive data, real SMS/email delivery, Plaid banking, connected QuickBooks/provider accounting, and final Go Live.
+
+## Pass 85 Team Tenant Portal Users
+
+Date: 2026-06-25
+Branch: `tsk-397-410-real-user-pass-85-team-portal-users`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Guide:
+- `Docs/Testing/UI/tsk-397-pass-85-team-tenant-portal-users.md`
+
+Acceptance criteria:
+- Staff can create a local tenant, open `/admin/users`, and create a tenant-role Team member linked to that tenant.
+- Add member remains disabled until required fields are valid; selecting `Tenant` reveals and requires the tenant selector.
+- Tenant selector uses the portfolio-scoped paged tenants endpoint and includes newly created tenants.
+- Supplied-password tenant creation persists tenant linkage to both Identity and `UserAccount`, then allows tenant login to `/portal`.
+- Tenant users see only tenant portal navigation and receive `Error 403` / `Admin access required` on direct `/admin/users`.
+- Blank temporary password creation opens the one-time generated-password modal and requires copy/manual-save acknowledgement before close.
+- No production/sensitive data, real outbound invite email/SMS, payments, Plaid, QuickBooks, or final Go Live actions are touched.
+
+Verification:
+- Closed Playwright CLI/browser state before continuing; process scan found no lingering Playwright/Claude browser worker sessions.
+- Created tenant `Pass85 Tenant0610`; DB proof showed tenant id `55`, email `tsk397.pass85.tenant.20260625.0610@example.local`, created at `2026-06-25 06:10:52.114482+00`. Screenshot proof: `output/playwright/pass85-tenant-created.png`.
+- `/admin/users` loaded Team. Empty Add member state disabled submit; role `Tenant` revealed tenant selector; submit stayed disabled until tenant selection.
+- Tenant list request `GET /api/v1/tenants/page?take=100&sort=name&portfolioId=1 => 200` included `Pass85 Tenant0610`.
+- Created tenant portal user `tsk397.pass85.portal.20260625.0610@example.local`; `POST /api/v1/admin/users => 201`, toast showed the user added, and Team list refreshed with `GET /api/v1/admin/users/page?take=20&sort=-createdAt => 200`.
+- DB proof showed `UserAccounts.Id = 32`, role `Tenant`, `TenantId = 55`, active true, linked Identity user id `32`, `EmailConfirmed = true`, Identity `PortfolioId = 1`, Identity `TenantId = 55`, and Identity role `Tenant`.
+- Signing in as the new tenant landed at `/portal`, title `Tenant Dashboard - Rental Command`, with tenant-only nav: Dashboard, Messages, Notifications, Maintenance, Payments, Lease, and Appointments. Screenshot proof: `output/playwright/pass85-tenant-portal-login.png`.
+- Direct tenant navigation to `/admin/users` returned `GET /admin/users => 403`, rendered `Error 403` and `Admin access required`, and did not expose staff Team data. Screenshot proof: `output/playwright/pass85-tenant-admin-denied.png`.
+- Re-signed in as admin and created a second tenant portal user without a temporary password; the one-time generated-password modal appeared, required manual-save/copy acknowledgement, then closed and left the generated user visible. The generated password value was intentionally omitted from committed docs.
+- Staff create flow had no console errors; the only 4xx observed in the covered slice was the deliberate tenant-role direct access denial.
+
+Regression:
+- Added focused API tests in `RentalCommand.Api.Tests/Auth/AdminUsersControllerTests.cs` for missing tenant link rejection before Identity creation and successful tenant link persistence to both Identity and `UserAccount`.
+- Focused command passed: `MSBUILDDISABLENODEREUSE=1 dotnet test RentalCommand.Api.Tests/RentalCommand.Api.Tests.csproj --filter FullyQualifiedName~AdminUsersControllerTests -m:1 --no-restore`.
+- The test run passed 3/3 with only the existing `SQLitePCLRaw.lib.e_sqlite3` NU1903 warning.
+
+Status: Pass after regression-test coverage. TSK-410 did not reproduce on current local main-derived code, but the tenant-link contract is now covered. Deferred boundaries remain production/sensitive data, real SMS/email delivery, Plaid banking, connected QuickBooks/provider accounting, and final Go Live.
