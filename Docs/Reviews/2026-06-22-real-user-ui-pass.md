@@ -1067,7 +1067,7 @@ The current pass is not a complete every-control inventory. The next new-user pa
 - `/appointments` and `/appointments/[id]`: calendar month/week/agenda date-window loading, drag-reschedule failure snapback, create-at-slot, detail edit/delete, and calendar/list cross-invalidation. The appointments list primary grid is server-side/page browser-proven.
 - Portal routes `/portal`, `/portal/messages`, `/portal/maintenance`, `/portal/payments`, `/portal/notifications`, `/portal/appointments`, and `/portal/lease`: dashboard links, compose/reply/cancel/delete, Enter vs Shift+Enter, unread invalidation, maintenance request create with photo preview/remove/failure, detail/timeline, Stripe unavailable, checkout success/cancel params, autopay on/off, notification action links/read state, appointment real workflow or placeholder defect, pagination, empty/loading/error states, and optimistic-update failures.
 - `/settings/accounting`: connected-provider toggle/submit/reset/copy actions, confirmations, persistence after reload, provider-unconfigured states, review queue controls, and stale-session failure behavior. `/settings/security` still needs Google-only/no-local-password and stale-session variants; local password-change controls are browser-proven.
-- `/admin/users` and `/superadmin/engine`: Admin Team core list/create/generated-password/role/status controls are browser-proven; remaining Admin Team variants include role-denied, stale-session, duplicate email, tenant-linked member, service-error, and larger-page pagination. Engine health refresh/reindex actions, exports where present, no-results states, and loading/error states remain open. `/audit` and `/admin/audit` core filters/refresh/no-results/detail/export controls are browser-proven; role-denied/error variants remain open.
+- `/admin/users` and `/superadmin/engine`: Admin Team list/create/generated-password/role/status controls, duplicate email recovery, tenant-linked invite, self-row lockout, and one-time-password guards are browser-proven. Remaining Admin Team variants include role-denied, stale-session, service-error, and larger-page pagination. `/superadmin/engine` is verified gated by `PLATFORM_ADMIN_EMAILS` when unset; Engine health happy/error states still need a platform-admin allowlist session. `/audit` and `/admin/audit` core filters/refresh/no-results/detail/export controls are browser-proven; role-denied/error variants remain open.
 - `/docs`, public `/apply/[token]`, and public `/sign/[token]`: docs search/no-results/article/navigation/404, valid/invalid application links, required/invalid-email validation, synthetic image scan success, application submit success, valid/invalid/expired signing links, expired direct document rejection, active PDF open/download, typed/drawn signature, clear, decline modal, and signed/declined terminal states are browser-proven. Remaining variants include duplicate applications, public application scan failure/no extracted fields, staff-side signing send/resend, provider-backed delivery, larger signing envelopes with multiple signers, and stale/reused token reload states after terminal actions.
 - App shell/navigation: staff versus portal role menus, collapsible groups, collapsed rail, mobile drawer/overlay, command-center search/no matches, header badges, account menu/logout, theme toggle, and role-hidden route gates.
 - Shared controls in composed routes: data grids, pagination, search inputs, confirm dialogs, app-shell navigation, command-center navigation, notification bell/list interactions, keyboard/focus/escape behavior, and select-all/bulk states. FileDrop unsupported-file rejection is fixed and browser-proven for drag/drop on `/scan`; upload failure states still need route-specific coverage.
@@ -3667,3 +3667,39 @@ Verification:
 - App console proof: Playwright CLI `console warning` returned 0 warnings and 0 errors.
 
 Status: Pass with documentation-only current-state verification. Continue the full real-user audit from the next unverified non-banking/non-QuickBooks workflow.
+
+## Pass 74 Admin Team and Superadmin Gate Continuation
+
+Date: 2026-06-25
+Branch: `tsk-397-real-user-pass-74`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Dev admin sample-data user: Rental Command Admin, `admin@rentalcommand.local`
+- Setup path: sample/example data only; the app banner states example data does not send real emails/texts or charge cards.
+
+Acceptance criteria:
+- `/superadmin/engine` must stay hidden from ordinary landlord admins when `PLATFORM_ADMIN_EMAILS` is unset.
+- `/admin/users` must load the team list through the page contract and prevent the signed-in admin from changing their own role/status.
+- Empty invite submit must stay disabled.
+- Duplicate-email invite attempts must show a recoverable error and leave the invite dialog open.
+- Successful staff invites must add the member, show the generated one-time password, block accidental dismissal until copied or manually saved, and allow role/status changes for non-self users.
+- Tenant-role invites must require selecting a tenant, persist the tenant link on both the user account and identity user, and use the same generated-password guard.
+
+Verification:
+- Superadmin gate: `/superadmin/engine` returned the app 404 page for the ordinary admin user. Source guard confirms unauthenticated users redirect to login and authenticated non-allowlisted users receive 404; `PLATFORM_ADMIN_EMAILS` is unset locally. Snapshot: `.playwright-cli/page-2026-06-25T02-06-07-728Z.yml`.
+- Admin Team load: `/admin/users` rendered the signed-in admin row with disabled role/status controls and `Page 1 - 1 shown`; request `GET /api/v1/admin/users/page?take=20&sort=-createdAt` returned `200`. Snapshot: `.playwright-cli/page-2026-06-25T02-06-49-083Z.yml`.
+- Empty invite state: opening `Invite member` rendered email/name/role/password fields and a disabled `Add member`. Snapshot: `.playwright-cli/page-2026-06-25T02-06-56-595Z.yml`.
+- Duplicate email: submitting `admin@rentalcommand.local` returned `POST /api/v1/admin/users => 400`, showed toast `A user with that email address already exists.`, and kept the dialog open for correction. Snapshot: `.playwright-cli/page-2026-06-25T02-07-13-241Z.yml`.
+- Staff invite: submitting `team.pass74.20260625@example.local` returned `201`, added `Pass 74 Manager` to the grid, and opened `Temporary password -- save it now`. Escape did not close the dialog before the password was copied. Copying the password showed `Password copied to clipboard.` and unlocked `I've copied the password`; closing returned to the team grid. Snapshots: `.playwright-cli/page-2026-06-25T02-07-26-596Z.yml`, `.playwright-cli/page-2026-06-25T02-07-40-839Z.yml`, `.playwright-cli/page-2026-06-25T02-07-51-960Z.yml`.
+- Staff role/status: `Pass 74 Manager` changed Manager -> Agent with `PATCH /api/v1/admin/users/6/role => 200`, toggled Active -> Inactive -> Active with two `PATCH /active => 200` requests, then restored Agent -> Manager with another role patch. Final grid row is Manager/Active. Snapshot: `.playwright-cli/page-2026-06-25T02-09-21-241Z.yml`.
+- Tenant invite: selecting role `Tenant` added the tenant picker and kept `Add member` disabled until a tenant was selected. Selecting Kevin Brown enabled submit; submitting `tenant.pass74.20260625@example.local` returned `201`, added the row as Tenant/Active, and showed the generated-password guard. Marking it saved manually unlocked the close button. Snapshots: `.playwright-cli/page-2026-06-25T02-09-50-485Z.yml`, `.playwright-cli/page-2026-06-25T02-10-13-605Z.yml`, `.playwright-cli/page-2026-06-25T02-10-23-741Z.yml`, `.playwright-cli/page-2026-06-25T02-10-35-064Z.png`.
+- DB proof: `UserAccounts` + `AspNetUsers` show `team.pass74.20260625@example.local` as role `1`, active, with no tenant id; `tenant.pass74.20260625@example.local` as role `4`, active, with `TenantId = 19` on both records. `Tenants.Id = 19` is Kevin Brown.
+- Console proof: the only browser console error after this pass is the expected failed-resource entry from the intentional duplicate-email `400` response.
+
+Status: Pass with no code changes. Continue the non-banking/non-QuickBooks audit with the remaining settings/admin/support variants or the next route group from the inventory.
