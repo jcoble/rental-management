@@ -4,20 +4,25 @@
 	import { portal } from '$lib/api/endpoints/portal';
 	import { notifications } from '$lib/api/endpoints/notifications';
 	import type { NotificationItem } from '$lib/api/types/notification';
+	import type { Appointment } from '$lib/types';
 	import { getCurrentUser } from '$lib/stores/auth.svelte';
 	import { notificationStore } from '$lib/stores/notifications.svelte';
 	import { portalActionUrl } from '$lib/utils/portalLinks';
 	import { paymentTypeLabel } from '$lib/utils/payment-labels';
 	import { formatDateOnly, daysFromTodayUtc, isPastDueUtc } from '$lib/utils/date';
+	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import {
 		BellRing,
 		CalendarClock,
+		Clock,
 		CreditCard,
 		FileText,
+		MapPin,
 		MessageSquare,
 		Wrench,
 		AlertTriangle,
@@ -43,6 +48,12 @@
 		queryKey: ['portal-payments'],
 		enabled: !!currentUser,
 		queryFn: () => portal.payments()
+	}));
+
+	const appointmentsQuery = createQuery(() => ({
+		queryKey: ['portal-appointments'],
+		enabled: !!currentUser,
+		queryFn: () => portal.appointments()
 	}));
 
 	const workOrdersQuery = createQuery(() => ({
@@ -71,6 +82,7 @@
 
 	const leases = $derived((leasesQuery.data ?? []) as any[]);
 	const payments = $derived((paymentsQuery.data ?? []) as any[]);
+	const appointments = $derived((appointmentsQuery.data ?? []) as Appointment[]);
 	const workOrders = $derived((workOrdersQuery.data ?? []) as any[]);
 	const conversations = $derived(conversationsQuery.data ?? []);
 	const notificationItems = $derived(notificationsQuery.data ?? []);
@@ -95,8 +107,18 @@
 	const nextPayment = $derived(
 		upcomingPayments.find((p) => (daysFromTodayUtc(p.dueDate) ?? -1) >= 0) ?? null
 	);
+	const upcomingAppointments = $derived(appointments);
 	const nextRentDays = $derived(nextPayment ? daysUntil(nextPayment.dueDate) : null);
 	const activeLease = $derived(leases.find((l) => l.status === 'Active') ?? leases[0] ?? null);
+
+	const APPOINTMENT_TYPE_LABELS: Record<string, string> = {
+		Showing: 'Showing',
+		MoveIn: 'Move-in',
+		MoveOut: 'Move-out',
+		Inspection: 'Inspection',
+		MaintenanceVisit: 'Maintenance',
+		OwnerMeeting: 'Owner meeting'
+	};
 
 	let workOrderForm = $state({
 		title: '',
@@ -151,6 +173,44 @@
 	function daysUntil(value: string) {
 		// Whole-day count in UTC so a date due "today" reads 0, not -1, in behind-UTC zones.
 		return daysFromTodayUtc(value) ?? 0;
+	}
+
+	function appointmentTypeLabel(type: string | null | undefined): string {
+		return type ? (APPOINTMENT_TYPE_LABELS[type] ?? formatStatusLabel(type)) : 'Appointment';
+	}
+
+	function dateTime(value: string | null | undefined): string {
+		if (!value) return '';
+		const d = new Date(value);
+		if (Number.isNaN(d.getTime())) return value;
+		return d.toLocaleString(undefined, {
+			weekday: 'short',
+			month: 'short',
+			day: 'numeric',
+			hour: 'numeric',
+			minute: '2-digit'
+		});
+	}
+
+	function timeOnly(value: string | null | undefined): string {
+		if (!value) return '';
+		const d = new Date(value);
+		if (Number.isNaN(d.getTime())) return '';
+		return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+	}
+
+	function appointmentWindow(appointment: Appointment): string {
+		const start = dateTime(appointment.scheduledStart);
+		const end = timeOnly(appointment.scheduledEnd);
+		return end ? `${start} - ${end}` : start;
+	}
+
+	function locationLabel(appointment: Appointment): string {
+		const parts = [
+			appointment.propertyName,
+			appointment.unitNumber ? `Unit ${appointment.unitNumber}` : null
+		].filter(Boolean);
+		return parts.length > 0 ? parts.join(' ') : 'Location to be confirmed';
 	}
 </script>
 
@@ -311,7 +371,41 @@
 					<CalendarClock class="h-5 w-5 text-primary" />
 					<h2 class="font-semibold">Appointments</h2>
 				</div>
-				<p class="text-sm text-muted-foreground">Upcoming visits, inspections, and maintenance appointments will appear here.</p>
+				{#if appointmentsQuery.isLoading}
+					<p class="text-sm text-muted-foreground">Loading appointments...</p>
+				{:else if appointmentsQuery.isError}
+					<p class="text-sm text-destructive">Couldn't load appointments.</p>
+				{:else if upcomingAppointments.length === 0}
+					<p class="text-sm text-muted-foreground">No appointments scheduled.</p>
+				{:else}
+					<div class="space-y-2">
+						{#each upcomingAppointments.slice(0, 3) as appointment (appointment.id)}
+							<a
+								href="/portal/appointments"
+								class="block rounded-md border border-border px-3 py-2 transition-colors hover:bg-muted/40"
+								data-testid="tenant-dashboard-appointment"
+							>
+								<div class="flex flex-wrap items-start justify-between gap-2">
+									<div class="min-w-0">
+										<p class="text-sm font-medium text-foreground">{appointment.title}</p>
+										<p class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+											<Clock class="h-3.5 w-3.5 shrink-0" />
+											<span>{appointmentWindow(appointment)}</span>
+										</p>
+										<p class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+											<MapPin class="h-3.5 w-3.5 shrink-0" />
+											<span>{locationLabel(appointment)}</span>
+										</p>
+									</div>
+									<div class="flex shrink-0 flex-wrap items-center gap-1.5">
+										<StatusBadge status={appointmentTypeLabel(appointment.type)} />
+										<StatusBadge status={formatStatusLabel(appointment.status)} />
+									</div>
+								</div>
+							</a>
+						{/each}
+					</div>
+				{/if}
 			</section>
 
 			<section id="requests" class="rounded-lg border border-border bg-card p-4 xl:col-span-2">

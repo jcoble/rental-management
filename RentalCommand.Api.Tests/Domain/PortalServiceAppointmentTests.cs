@@ -79,6 +79,35 @@ public class PortalServiceAppointmentTests : IDisposable
         appointmentQueries[0].Should().Contain("LIMIT");
     }
 
+    [Fact]
+    public async Task GetAppointmentsAsync_FallsBackToActiveLeaseUnitForTenantScopedAppointments()
+    {
+        var target = SeedTenant("Blake", "Hayes");
+        var activeLease = SeedActiveLease(target, "Riverside Flats", "2B");
+        SeedTenantScopedAppointmentWithoutUnit(
+            target,
+            activeLease.Property!,
+            "Pass 51 service visit date fixed",
+            DateTime.UtcNow.AddDays(3),
+            AppointmentStatus.Scheduled);
+
+        _commands.Clear();
+
+        var result = await _sut.GetAppointmentsAsync(PortfolioId, target.Id);
+
+        result.Should().ContainSingle();
+        var appointment = result.Single();
+        appointment.UnitId.Should().BeNull();
+        appointment.PropertyName.Should().Be("Riverside Flats");
+        appointment.UnitNumber.Should().Be("2B");
+
+        var appointmentQueries = _commands
+            .Where(sql => sql.Contains("FROM \"Appointments\"", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        appointmentQueries.Should().ContainSingle("tenant appointment unit fallback should remain in the appointment projection query");
+        appointmentQueries[0].Should().Contain("FROM \"Leases\"", "the fallback unit should be projected SQL-side from the tenant's active lease");
+    }
+
     private Tenant SeedTenant(string firstName, string lastName)
     {
         var now = DateTime.UtcNow;
@@ -133,6 +162,77 @@ public class PortalServiceAppointmentTests : IDisposable
                 CreatedAt = now,
                 UpdatedAt = now,
             },
+            Title = title,
+            Type = AppointmentType.MaintenanceVisit,
+            Status = status,
+            ScheduledStart = scheduledStart,
+            ScheduledEnd = scheduledStart.AddMinutes(45),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
+    }
+
+    private Lease SeedActiveLease(Tenant tenant, string propertyName, string unitNumber)
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = propertyName,
+            AddressLine1 = "1188 Maple Ave",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43201",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = unitNumber,
+            Bedrooms = 2,
+            Bathrooms = 1,
+            MarketRent = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var lease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = "L-PORTAL-001",
+            Status = LeaseStatus.Active,
+            StartDate = now.AddMonths(-3),
+            EndDate = now.AddMonths(9),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+        _ctx.Db.Leases.Add(lease);
+        _ctx.Db.SaveChanges();
+        return lease;
+    }
+
+    private void SeedTenantScopedAppointmentWithoutUnit(
+        Tenant tenant,
+        Property property,
+        string title,
+        DateTime scheduledStart,
+        AppointmentStatus status)
+    {
+        var now = DateTime.UtcNow;
+        _ctx.Db.Appointments.Add(new Appointment
+        {
+            PortfolioId = PortfolioId,
+            Tenant = tenant,
+            Property = property,
             Title = title,
             Type = AppointmentType.MaintenanceVisit,
             Status = status,
