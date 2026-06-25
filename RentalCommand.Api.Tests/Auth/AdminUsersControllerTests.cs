@@ -73,8 +73,91 @@ public class AdminUsersControllerTests : IDisposable
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
-    private AdminUsersController CreateController() => new(
-        CreateUserManager(),
+    [Fact]
+    public async Task Create_TenantMember_RequiresTenantLinkBeforeCreatingIdentityUser()
+    {
+        var userManager = CreateUserManagerMock();
+        userManager
+            .Setup(m => m.FindByEmailAsync("new-tenant@example.local"))
+            .ReturnsAsync((ApplicationUser?)null);
+
+        var controller = CreateController(userManager.Object);
+
+        var result = await controller.Create(new CreateTeamMemberRequest
+        {
+            Email = "new-tenant@example.local",
+            DisplayName = "New Tenant",
+            Role = UserRole.Tenant,
+            TemporaryPassword = "Pass85Tenant!23",
+        }, CancellationToken.None);
+
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+        userManager.Verify(m => m.CreateAsync(It.IsAny<ApplicationUser>(), It.IsAny<string>()), Times.Never);
+        _ctx.Db.UserAccounts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Create_TenantMember_PersistsTenantLinkToIdentityUserAndUserAccount()
+    {
+        var tenant = SeedTenant(id: 42);
+        var userManager = CreateUserManagerMock();
+        ApplicationUser? identityUser = null;
+        string? identityPassword = null;
+        string? identityRole = null;
+
+        userManager
+            .Setup(m => m.FindByEmailAsync("portal@example.local"))
+            .ReturnsAsync((ApplicationUser?)null);
+        userManager
+            .Setup(m => m.CreateAsync(It.IsAny<ApplicationUser>(), It.IsAny<string>()))
+            .Callback<ApplicationUser, string>((u, password) =>
+            {
+                u.Id = 123;
+                identityUser = u;
+                identityPassword = password;
+            })
+            .ReturnsAsync(IdentityResult.Success);
+        userManager
+            .Setup(m => m.AddToRoleAsync(It.IsAny<ApplicationUser>(), nameof(UserRole.Tenant)))
+            .Callback<ApplicationUser, string>((_, role) => identityRole = role)
+            .ReturnsAsync(IdentityResult.Success);
+
+        var controller = CreateController(userManager.Object);
+
+        var result = await controller.Create(new CreateTeamMemberRequest
+        {
+            Email = "portal@example.local",
+            DisplayName = "Portal Tenant",
+            Role = UserRole.Tenant,
+            TenantId = tenant.Id,
+            TemporaryPassword = "Pass85Tenant!23",
+        }, CancellationToken.None);
+
+        var created = result.Result.Should().BeOfType<CreatedAtActionResult>().Subject;
+        var response = created.Value.Should().BeOfType<CreateTeamMemberResponse>().Subject;
+
+        identityUser.Should().NotBeNull();
+        identityUser!.Email.Should().Be("portal@example.local");
+        identityUser.PortfolioId.Should().Be(PortfolioId);
+        identityUser.TenantId.Should().Be(tenant.Id);
+        identityUser.EmailConfirmed.Should().BeTrue();
+        identityPassword.Should().Be("Pass85Tenant!23");
+        identityRole.Should().Be(nameof(UserRole.Tenant));
+
+        var account = _ctx.Db.UserAccounts.Single(u => u.Email == "portal@example.local");
+        account.PortfolioId.Should().Be(PortfolioId);
+        account.TenantId.Should().Be(tenant.Id);
+        account.Role.Should().Be(UserRole.Tenant);
+        account.IsActive.Should().BeTrue();
+
+        response.Member.Email.Should().Be("portal@example.local");
+        response.Member.TenantId.Should().Be(tenant.Id);
+        response.Member.Role.Should().Be(nameof(UserRole.Tenant));
+        response.GeneratedPassword.Should().BeNull();
+    }
+
+    private AdminUsersController CreateController(UserManager<ApplicationUser>? userManager = null) => new(
+        userManager ?? CreateUserManagerMock().Object,
         _ctx.Db,
         NullLogger<AdminUsersController>.Instance)
     {
@@ -91,7 +174,7 @@ public class AdminUsersControllerTests : IDisposable
         },
     };
 
-    private static UserManager<ApplicationUser> CreateUserManager()
+    private static Mock<UserManager<ApplicationUser>> CreateUserManagerMock()
     {
         var store = new Mock<IUserStore<ApplicationUser>>();
         return new Mock<UserManager<ApplicationUser>>(
@@ -103,7 +186,25 @@ public class AdminUsersControllerTests : IDisposable
             null!,
             null!,
             null!,
-            null!).Object;
+            null!);
+    }
+
+    private Tenant SeedTenant(int id)
+    {
+        var now = DateTime.UtcNow;
+        var tenant = new Tenant
+        {
+            Id = id,
+            PortfolioId = PortfolioId,
+            FirstName = "Portal",
+            LastName = "Tenant",
+            Email = "portal.tenant@example.local",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Tenants.Add(tenant);
+        _ctx.Db.SaveChanges();
+        return tenant;
     }
 
     private void SeedMembers(params string[] emails)
