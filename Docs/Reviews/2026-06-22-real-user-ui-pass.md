@@ -4095,3 +4095,40 @@ Verification:
 - Network proof: clean dynamic requests were only `GET /apply/{token}/__data.json => 200` and `GET /api/v1/public/applications/{token} => 200`.
 
 Status: Pass after fixing `TSK397-B087`. Deferred boundaries remain production/sensitive data, real SMS/email delivery, Plaid banking, connected QuickBooks/provider accounting, and final Go Live.
+
+## Pass 84 Staff Tenant Notices Inbox
+
+Date: 2026-06-25
+Branch: `tsk-397-real-user-pass-84`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Guide:
+- `Docs/Testing/UI/tsk-397-pass-84-staff-notices.md`
+
+Acceptance criteria:
+- Staff can load `/notices`, inspect generated late-rent/renewal/move-out drafts, switch Draft/Approved/Dismissed/All filters, and use Generate-drafts help without sending.
+- Draft editing supports cancel, save, reload persistence, fair-housing issue detection, and suggested rewrite application.
+- Delivery-channel controls disable approval when all channels are off; Portal-only approval is allowed without selecting Email or SMS.
+- Approval moves the draft to Approved, creates a Portal-only conversation, and exposes `Open conversation`.
+- Dismiss moves a different draft to Dismissed and keeps it reachable in the Dismissed filter.
+- Clean route reload has no console warnings/errors and no failed dynamic app requests.
+
+Verification:
+- Closed stale Playwright CLI/browser processes before restarting the pass; after the final close, only the process-scan command itself matched Playwright patterns.
+- `/notices` loaded Draft view with readable notice cards, status badges, trigger dates, channel controls, and edit/approve/dismiss actions. Screenshot proof: `output/playwright/pass84-notices-draft-list.png`.
+- Generate help explained the draft lifecycle and `Generate drafts` returned `No new notice drafts needed.`
+- James Wilson draft `9` edit/cancel/save persisted subject `Final notice: overdue rent for Eastland 8-Plex Unit 6 - TSK397 Pass 84` and body marker `TSK397 Pass 84 edit proof.`
+- Fair-housing check flagged unsafe `families with children` language, showed a protected-class explanation and suggested rewrite, and cancel restored the saved safe body. Screenshot proof: `output/playwright/pass84-notices-fair-housing-issues.png`.
+- Unchecking Portal/Email/SMS disabled approval; Portal-only re-enabled approval. Screenshot proof: `output/playwright/pass84-notices-no-channel-disabled.png`.
+- Approving draft `9` with Portal only returned `POST /api/v1/notices/9/approve => 200`, moved the draft to Approved, and exposed `Open conversation`. Approved screenshot proof: `output/playwright/pass84-notices-approved-filter.png`.
+- Messages handoff opened `/messages?conversation=3`, selected James Wilson, and showed the approved subject/body with delivery tag `Portal`. Screenshot proof: `output/playwright/pass84-notices-conversation-handoff.png`.
+- Dismissing Jordan Smith draft `10` returned `POST /api/v1/notices/10/dismiss => 200`, removed it from Draft, and showed it under Dismissed. Screenshot proof: `output/playwright/pass84-notices-dismissed-filter.png`.
+- DB proof: notice `9` is `Approved` with `ConversationId=3`, `ApprovedChannels=Portal`, and `ApprovedAt` set; notice `10` is `Dismissed` with `DismissedAt` set; message `9` in conversation `3` is `Landlord`/`Portal`.
+- Clean final `/notices` reload had `console error` and `console warning` counts of zero. Dynamic requests for auth refresh, portfolio state, notifications, SignalR negotiate, notices, conversations unread count, appointments, approval, and dismiss returned `200`.
+
+Status: Pass with documentation-only verification. No code fix or regression test was added in this slice. Deferred boundaries remain production/sensitive data, real SMS/email delivery, Plaid banking, connected QuickBooks/provider accounting, and final Go Live.
