@@ -5,4 +5,4 @@
 	let { form }: { form: ActionData } = $props();
 </script>
 
-<AccountSecurityPage {form} backHref="/settings" backLabel="Back to settings" />
+<AccountSecurityPage {form} backHref="/portal" backLabel="Back to portal" />
