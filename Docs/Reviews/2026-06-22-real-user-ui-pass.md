@@ -3880,3 +3880,43 @@ Verification:
 - Console proof: final Playwright `console error` returned `Total messages: 2 (Errors: 0, Warnings: 0)`.
 
 Status: Pass after fixing audit inspection detail links. Remaining related variants are admin/role-denied and service-error states; provider-bound QuickBooks/Plaid work stays deferred.
+
+## Pass 79 Tenant Portal Regression
+
+Date: 2026-06-25
+Branch: `tsk-397-real-user-pass-79`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Tenant account:
+- Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`
+- Data mode: local sanitized/example data only
+
+Guide:
+- `Docs/Testing/UI/tsk-397-pass-79-tenant-portal-regression.md`
+
+Acceptance criteria:
+- Tenant portal login, dashboard, nav, notification read-state, payments/autopay unavailable states, lease Q&A markdown cleanup, appointments, maintenance validation/create/detail/image attachment, messages reply, tenant security validation/reveal controls, notification dropdown/full page, and tenant sign-out must behave through real UI interactions.
+- Console warnings/errors and failed browser requests must remain at zero for the covered flows.
+
+Verification:
+- Tenant login reached `/portal` with portal-only navigation and real Blake Hayes dashboard cards.
+- Two local unread notifications were clicked through dashboard/full notifications paths; DB rows `14` and `15` are now read with action URLs `/portal/messages?conversation=2` and `/portal/payments`, and the app-shell badge shows `0 unread notifications`.
+- Header notification dropdown opened from `/portal/payments`, listed the Pass 79 notifications, and `View notifications` routed to `/portal/notifications`.
+- Payments rendered the unavailable banner, disabled `Set up autopay`, disabled all three `Pay unavailable` buttons, and `What is this charge?` exposed the rent explanation without triggering checkout.
+- Lease suggestion `When is rent due?` returned `Rent is due on the 1st of each month.` with no raw Markdown markers.
+- Appointments rendered `Pass 51 service visit date fixed`, `Sat, Jun 27, 9:30 AM - 10:15 AM`, `Riverside Flats Unit 2B`, `Maintenance`, and `Scheduled`.
+- Maintenance empty-submit validation showed `Issue title is required.` and `Describe the issue before submitting.`
+- Valid maintenance submit created work order `24` titled `TSK-397 Pass 79 tenant portal photo regression`; uploaded `work-order-002.jpg` persisted as StoredFile `45` (`image/jpeg`, `133263` bytes) and downloaded byte-identical to the source fixture with SHA-256 `f8ab417ce87918bd21905488a252bd17be4c4d1a19d5ea77444f77323e99dc6c`.
+- Messages conversation `2` accepted a tenant reply, showed it in the thread/list, cleared the composer, and persisted `ConversationMessages.Id = 8` with `SenderRole = Tenant`.
+- Tenant Security opened `/portal/security`; weak/mismatched password input showed validation, kept `Change password` disabled, and password reveal controls toggled fields between `password` and `text`.
+- Tenant Sign Out returned to `/login` and `cookie-list` returned `No cookies found`.
+- Console proof: Playwright `console error` and `console warning` both returned `Total messages: 2 (Errors: 0, Warnings: 0)`.
+- Network proof: failed-request scan found no `4xx` or `5xx` responses for the covered tenant pass.
+- Screenshot proof: `output/playwright/pass79-tenant-portal-messages-final.png`.
+
+Status: Pass with documentation-only verification. No new product bug was found in this tenant portal regression slice, so no code fix or regression test was added. Deferred boundaries remain Plaid banking, connected QuickBooks/accounting provider workflows, production/sensitive data, real SMS, and final Go Live.
