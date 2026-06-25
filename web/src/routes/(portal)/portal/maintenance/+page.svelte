@@ -15,6 +15,9 @@
 	const queryClient = useQueryClient();
 	const workOrdersQuery = createQuery(() => ({ queryKey: ['portal-work-orders'], queryFn: () => portal.workOrders() }));
 	let form = $state({ title: '', description: '', category: 'Resident Request', priority: 'Normal' });
+	let requestSubmitted = $state(false);
+	const requestTitleError = $derived(requestSubmitted && !form.title.trim() ? 'Issue title is required.' : '');
+	const requestDescriptionError = $derived(requestSubmitted && !form.description.trim() ? 'Describe the issue before submitting.' : '');
 
 	// Photo attached to the new request, uploaded after the work order is created.
 	let photoInput: HTMLInputElement | undefined = $state();
@@ -51,6 +54,7 @@
 		},
 		onSuccess: () => {
 			form = { title: '', description: '', category: 'Resident Request', priority: 'Normal' };
+			requestSubmitted = false;
 			clearPhoto();
 			queryClient.invalidateQueries({ queryKey: ['portal-work-orders'] });
 			showSuccess('Maintenance request submitted.');
@@ -59,7 +63,10 @@
 	}));
 
 	function submit() {
-		if (!form.title.trim() || !form.description.trim()) return;
+		requestSubmitted = true;
+		const missingTitle = !form.title.trim();
+		const missingDescription = !form.description.trim();
+		if (missingTitle || missingDescription) return;
 		submitMutation.mutate();
 	}
 
@@ -117,8 +124,42 @@
 		<section class="rounded-lg border border-border bg-card p-4">
 			<h2 class="mb-3 font-semibold">Submit a request</h2>
 			<form class="space-y-3" onsubmit={(e) => { e.preventDefault(); submit(); }}>
-				<Input bind:value={form.title} placeholder="What's the problem? (e.g. Kitchen sink leaking)" data-testid="portal-request-title" />
-				<textarea bind:value={form.description} rows={5} class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm" placeholder="Describe the issue so we can fix it fast" data-testid="portal-request-description"></textarea>
+				<div class="space-y-1">
+					<Input
+						bind:value={form.title}
+						placeholder="What's the problem? (e.g. Kitchen sink leaking)"
+						aria-required="true"
+						aria-invalid={requestTitleError ? 'true' : undefined}
+						aria-describedby={requestTitleError ? 'portal-request-title-error' : undefined}
+						data-testid="portal-request-title"
+					/>
+					{#if requestTitleError}
+						<p id="portal-request-title-error" class="text-xs font-medium text-destructive" data-testid="portal-request-title-error">
+							{requestTitleError}
+						</p>
+					{/if}
+				</div>
+				<div class="space-y-1">
+					<textarea
+						bind:value={form.description}
+						rows={5}
+						class="w-full rounded-md border border-border bg-background px-3 py-2 text-sm aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40"
+						placeholder="Describe the issue so we can fix it fast"
+						aria-required="true"
+						aria-invalid={requestDescriptionError ? 'true' : undefined}
+						aria-describedby={requestDescriptionError ? 'portal-request-description-error' : undefined}
+						data-testid="portal-request-description"
+					></textarea>
+					{#if requestDescriptionError}
+						<p
+							id="portal-request-description-error"
+							class="text-xs font-medium text-destructive"
+							data-testid="portal-request-description-error"
+						>
+							{requestDescriptionError}
+						</p>
+					{/if}
+				</div>
 				<div class="grid gap-3 sm:grid-cols-2">
 					<Input bind:value={form.category} placeholder="Category" data-testid="portal-request-category" />
 					<Select.Root type="single" bind:value={form.priority}>
