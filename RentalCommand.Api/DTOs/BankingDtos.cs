@@ -155,5 +155,7 @@ public class BankReviewQueueItemResponse
 public class BankReviewQueueResponse
 {
     public int Count { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
     public IReadOnlyList<BankReviewQueueItemResponse> Items { get; set; } = [];
 }

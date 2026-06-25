@@ -254,6 +254,9 @@ public class UpdateExpenseRequest
     /// <summary>Full receipt details JSON (jsonb); rebuilt by the edit form from its receipt fields.</summary>
     public string? ReceiptData { get; set; }
 
+    /// <summary>Explicitly clears <see cref="ReceiptData"/> when the edit form empties the raw receipt JSON.</summary>
+    public bool? ClearReceiptData { get; set; }
+
     /// <summary>
     /// When provided (even if empty), REPLACES all existing <see cref="Core.Entities.ExpenseLineItem"/>
     /// rows for this expense. Pass <c>null</c> to leave existing line items untouched.

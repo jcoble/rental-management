@@ -148,7 +148,7 @@
 	async function loadPhotoUrl(storedFileId: number) {
 		if (photoUrls[storedFileId]) return;
 		try {
-			const url = await fileObjectUrl(storedFileId);
+			const url = await fileObjectUrl(storedFileId, { thumb: true });
 			photoUrls = { ...photoUrls, [storedFileId]: url };
 		} catch {
 			// Thumbnail is best-effort; ignore failures.

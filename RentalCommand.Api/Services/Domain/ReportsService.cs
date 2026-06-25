@@ -809,7 +809,7 @@ public class ReportsService : IReportsService
 
     /// <summary>
     /// Rent roll: current leases (active or under notice) with each lease's past-due balance, computed
-    /// DB-side (the owed-and-overdue sum is grouped in SQL; no rows are pulled back to total in memory).
+    /// DB-side (the owed-and-overdue sum is projected as a correlated SQL aggregate with each lease row).
     /// </summary>
     private async Task<IReadOnlyList<YearEndRentRollRow>> BuildRentRollAsync(int portfolioId, int? propertyId, CancellationToken ct)
     {
@@ -822,12 +822,11 @@ public class ReportsService : IReportsService
         if (propertyId.HasValue)
             leaseQuery = leaseQuery.Where(l => l.PropertyId == propertyId.Value);
 
-        var leases = await leaseQuery
+        var rows = await leaseQuery
             .OrderBy(l => l.Property!.Name)
             .ThenBy(l => l.Unit!.UnitNumber)
             .Select(l => new
             {
-                l.Id,
                 PropertyName = l.Property!.Name,
                 UnitNumber = l.Unit!.UnitNumber,
                 TenantFirstName = l.Tenant!.FirstName,
@@ -836,37 +835,21 @@ public class ReportsService : IReportsService
                 l.StartDate,
                 l.EndDate,
                 l.Status,
+                PastDueBalance = _db.Payments
+                    .AsNoTracking()
+                    .Where(p => p.PortfolioId == portfolioId &&
+                                p.LeaseId == l.Id &&
+                                (p.Status == PaymentStatus.Scheduled ||
+                                 p.Status == PaymentStatus.Partial ||
+                                 p.Status == PaymentStatus.Late) &&
+                                (p.Status == PaymentStatus.Late || p.DueDate < now))
+                    .Sum(p => (decimal?)(p.Status == PaymentStatus.Partial
+                        ? p.Amount - (p.AmountPaid ?? 0m)
+                        : p.Amount)) ?? 0m,
             })
             .ToListAsync(ct);
 
-        if (leases.Count == 0)
-            return [];
-
-        // Past-due balance per lease: owed (Scheduled/Partial/Late) and overdue (Late, or due in the
-        // past). A Partial owes only its unpaid remainder (Amount − AmountPaid). Grouped + summed SQL-side.
-        var pastDueQuery = _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                        p.Lease != null &&
-                        (p.Lease.Status == LeaseStatus.Active || p.Lease.Status == LeaseStatus.NoticeGiven) &&
-                        (p.Status == PaymentStatus.Scheduled ||
-                         p.Status == PaymentStatus.Partial ||
-                         p.Status == PaymentStatus.Late) &&
-                        (p.Status == PaymentStatus.Late || p.DueDate < now));
-        if (propertyId.HasValue)
-            pastDueQuery = pastDueQuery.Where(p => p.Lease!.PropertyId == propertyId.Value);
-
-        var pastDueByLease = (await pastDueQuery
-            .GroupBy(p => p.LeaseId)
-            .Select(g => new
-            {
-                LeaseId = g.Key,
-                Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.Amount - (p.AmountPaid ?? 0m)) : p.Amount),
-            })
-            .ToListAsync(ct))
-            .ToDictionary(g => g.LeaseId, g => g.Total);
-
-        return leases
+        return rows
             .Select(l => new YearEndRentRollRow
             {
                 PropertyName = l.PropertyName,
@@ -878,7 +861,7 @@ public class ReportsService : IReportsService
                 LeaseStart = l.StartDate,
                 LeaseEnd = l.EndDate,
                 LeaseStatus = l.Status.ToString(),
-                PastDueBalance = pastDueByLease.GetValueOrDefault(l.Id, 0m),
+                PastDueBalance = l.PastDueBalance,
             })
             .ToList();
     }
@@ -889,6 +872,9 @@ public class ReportsService : IReportsService
     {
         var (from, to) = ResolveRange(query);
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
+
+        const int expenseEntryKind = 0;
+        const int paymentEntryKind = 1;
 
         // Income: paid payments dated on PaidDate (fall back to DueDate). Expense: expenses dated on
         // PaidAt (fall back to IncurredAt). Income is positive, expense negative; running balance is the
@@ -901,9 +887,10 @@ public class ReportsService : IReportsService
             paymentQuery = paymentQuery.Where(p => propertyFilter.Contains(p.Lease!.PropertyId));
 
         var paymentEntries = paymentQuery
-            .Select(p => new GeneralLedgerEntry
+            .Select(p => new GeneralLedgerQueryRow
             {
                 Date = p.PaidDate ?? p.DueDate,
+                EntryKind = paymentEntryKind,
                 Type = "Payment",
                 Id = p.Id,
                 Description = p.PaymentType.ToString() + " — " + p.Lease!.Tenant!.FirstName + " " + p.Lease!.Tenant!.LastName,
@@ -922,9 +909,10 @@ public class ReportsService : IReportsService
             expenseQuery = expenseQuery.Where(e => e.PropertyId != null && propertyFilter.Contains(e.PropertyId.Value));
 
         var expenseEntries = expenseQuery
-            .Select(e => new GeneralLedgerEntry
+            .Select(e => new GeneralLedgerQueryRow
             {
                 Date = e.PaidAt ?? e.IncurredAt,
+                EntryKind = expenseEntryKind,
                 Type = "Expense",
                 Id = e.Id,
                 Description = e.Description,
@@ -940,6 +928,23 @@ public class ReportsService : IReportsService
             .Where(e => e.Date >= from && e.Date <= to);
 
         var entries = await ledgerQuery
+            .Select(e => new GeneralLedgerEntry
+            {
+                Date = e.Date,
+                Type = e.Type,
+                Id = e.Id,
+                Description = e.Description,
+                Category = e.Category,
+                PropertyId = e.PropertyId,
+                PropertyName = e.PropertyName,
+                Counterparty = e.Counterparty,
+                Amount = e.Amount,
+                RunningBalance = ledgerQuery
+                    .Where(x => x.Date < e.Date ||
+                                (x.Date == e.Date && x.EntryKind < e.EntryKind) ||
+                                (x.Date == e.Date && x.EntryKind == e.EntryKind && x.Id <= e.Id))
+                    .Sum(x => (decimal?)x.Amount) ?? 0m,
+            })
             .OrderBy(e => e.Date)
             .ThenBy(e => e.Type)
             .ThenBy(e => e.Id)
@@ -953,13 +958,6 @@ public class ReportsService : IReportsService
                 TotalExpense = g.Sum(e => e.Amount < 0m ? -e.Amount : 0m),
             })
             .SingleOrDefaultAsync(ct);
-
-        var running = 0m;
-        foreach (var e in entries)
-        {
-            running += e.Amount;
-            e.RunningBalance = running;
-        }
 
         var totalIncome = totals?.TotalIncome ?? 0m;
         var totalExpense = totals?.TotalExpense ?? 0m;
@@ -989,72 +987,61 @@ public class ReportsService : IReportsService
         if (propertyFilter is not null)
             propertyQuery = propertyQuery.Where(p => propertyFilter.Contains(p.Id));
 
-        var properties = await propertyQuery
-            .OrderBy(p => p.Name)
-            .Select(p => new { p.Id, p.Name })
-            .ToListAsync(ct);
-
-        var inScope = properties.Select(p => p.Id).ToArray();
-
         // Income: paid payments dated in range, keyed to property via lease.
-        var incomeByProperty = inScope.Length == 0
-            ? new Dictionary<int, decimal>()
-            : (await _db.Payments
-                .AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
-                .Where(p => inScope.Contains(p.Lease!.PropertyId))
-                .Where(p => (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
-                .GroupBy(p => p.Lease!.PropertyId)
-                .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) })
-                .ToListAsync(ct))
-            .ToDictionary(r => r.PropertyId, r => r.Total);
+        var incomeByPropertyQuery = _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid && p.Lease != null)
+            .Where(p => (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
+            .GroupBy(p => p.Lease!.PropertyId)
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) });
 
         // Expense: expenses dated in range, keyed to property (unassigned ones never match a property).
-        var expenseByProperty = inScope.Length == 0
-            ? new Dictionary<int, decimal>()
-            : (await _db.Expenses
-                .AsNoTracking()
-                .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
-                .Where(e => inScope.Contains(e.PropertyId!.Value))
-                .Where(e => (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to)
-                .GroupBy(e => e.PropertyId!.Value)
-                .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) })
-                .ToListAsync(ct))
-            .ToDictionary(r => r.PropertyId, r => r.Total);
+        var expenseByPropertyQuery = _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
+            .Where(e => (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to)
+            .GroupBy(e => e.PropertyId!.Value)
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) });
 
-        var totalIncome = inScope.Length == 0
-            ? 0m
-            : await _db.Payments
-                .AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
-                .Where(p => inScope.Contains(p.Lease!.PropertyId))
-                .Where(p => (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
-                .SumAsync(p => (decimal?)p.Amount, ct) ?? 0m;
-
-        var totalExpense = inScope.Length == 0
-            ? 0m
-            : await _db.Expenses
-                .AsNoTracking()
-                .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
-                .Where(e => inScope.Contains(e.PropertyId!.Value))
-                .Where(e => (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to)
-                .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
-
-        var rows = properties
-            .Select(p =>
-            {
-                var income = incomeByProperty.GetValueOrDefault(p.Id, 0m);
-                var expense = expenseByProperty.GetValueOrDefault(p.Id, 0m);
-                return new PropertyProfitAndLossRow
+        var rows = await (
+                from property in propertyQuery
+                join income in incomeByPropertyQuery on property.Id equals income.PropertyId into incomeJoin
+                from income in incomeJoin.DefaultIfEmpty()
+                join expense in expenseByPropertyQuery on property.Id equals expense.PropertyId into expenseJoin
+                from expense in expenseJoin.DefaultIfEmpty()
+                orderby property.Name
+                select new
                 {
-                    PropertyId = p.Id,
-                    PropertyName = p.Name,
-                    Income = income,
-                    Expense = expense,
-                    Net = income - expense,
-                };
+                    property.Id,
+                    property.Name,
+                    Income = income == null ? 0m : income.Total,
+                    Expense = expense == null ? 0m : expense.Total,
+                })
+            .Select(row => new PropertyProfitAndLossRow
+            {
+                PropertyId = row.Id,
+                PropertyName = row.Name,
+                Income = row.Income,
+                Expense = row.Expense,
+                Net = row.Income - row.Expense,
             })
-            .ToList();
+            .ToListAsync(ct);
+
+        var propertyIds = propertyQuery.Select(p => p.Id);
+
+        var totalIncome = await _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid && p.Lease != null)
+            .Where(p => propertyIds.Contains(p.Lease!.PropertyId))
+            .Where(p => (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
+            .SumAsync(p => (decimal?)p.Amount, ct) ?? 0m;
+
+        var totalExpense = await _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
+            .Where(e => propertyIds.Contains(e.PropertyId!.Value))
+            .Where(e => (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to)
+            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
 
         return new PropertyProfitAndLossResponse
         {
@@ -1222,6 +1209,20 @@ public class ReportsService : IReportsService
         public decimal RunningBalance { get; set; }
     }
 
+    private sealed class GeneralLedgerQueryRow
+    {
+        public DateTime Date { get; set; }
+        public int EntryKind { get; set; }
+        public string Type { get; set; } = string.Empty;
+        public int Id { get; set; }
+        public string Description { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
+        public int? PropertyId { get; set; }
+        public string? PropertyName { get; set; }
+        public string? Counterparty { get; set; }
+        public decimal Amount { get; set; }
+    }
+
     // ── Security Deposit Register ──────────────────────────────────────────────────────────────────
 
     public async Task<SecurityDepositRegisterResponse> GetSecurityDepositRegisterAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
@@ -1274,7 +1275,7 @@ public class ReportsService : IReportsService
                 Returned = h.ReturnedAmount ?? 0m,
                 CurrentBalance = h.CurrentBalance,
                 Status = h.Status,
-                StatusName = h.Status.ToString(),
+                StatusName = FormatSecurityDepositStatus(h.Status),
                 HeldAt = h.HeldAt,
                 ReturnedAt = h.ReturnedAt,
             })
@@ -1301,6 +1302,12 @@ public class ReportsService : IReportsService
             TotalCurrentBalance = totals?.TotalCurrentBalance ?? 0m,
         };
     }
+
+    private static string FormatSecurityDepositStatus(SecurityDepositStatus status) => status switch
+    {
+        SecurityDepositStatus.PartiallyReturned => "Partially Returned",
+        _ => status.ToString(),
+    };
 
     // ── Vendor 1099 & Payments ─────────────────────────────────────────────────────────────────────
 

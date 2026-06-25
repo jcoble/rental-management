@@ -42,10 +42,10 @@ public class AccountingService : IAccountingService
                 Total = g.Sum(e => e.Amount),
                 Count = g.Count(),
             })
+            .OrderByDescending(g => g.Total)
             .ToListAsync(ct);
 
         var expensesByCategory = categoryGroups
-            .OrderByDescending(g => g.Total)
             .Select(g => new ScheduleECategoryTotal
             {
                 Category = g.Category,
@@ -64,7 +64,12 @@ public class AccountingService : IAccountingService
                 t.MatchedExpenseId == null)
             .SumAsync(t => (decimal?)-t.Amount, ct) ?? 0m;
 
-        var totalExpenses = categoryGroups.Sum(g => g.Total) + unmatchedBankWithdrawals;
+        var expenseTotal = await _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId)
+            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
+
+        var totalExpenses = expenseTotal + unmatchedBankWithdrawals;
 
         // Payment collection rollup. "Outstanding" is anything not yet collected/written off; "overdue"
         // is the subset of that which is past its due date. All four figures are computed SQL-side as
@@ -236,68 +241,44 @@ public class AccountingService : IAccountingService
 
         // One grouped round-trip: per behind lease, sum the past-due amount, count its past-due
         // payments, and find the oldest past-due due date — the single source of truth for "behind".
-        var groupedPastDue = PastDueByLeaseQuery(portfolioId, now);
         var summary = await PastDueSummaryQuery(portfolioId, now).FirstOrDefaultAsync(ct);
         var totalCount = summary?.TotalCount ?? 0;
         var totalPastDueAmount = summary?.TotalPastDueAmount ?? 0m;
 
-        var groups = await groupedPastDue
-            .OrderBy(g => g.OldestDueDate)
-            .ToListAsync(ct);
-
-        if (groups.Count == 0)
+        if (totalCount == 0)
         {
             return new PastDueResponse { Items = [], TotalCount = 0, TotalPastDueAmount = 0m };
         }
 
-        var leaseIds = groups.Select(g => g.LeaseId).ToList();
-
-        // Second round-trip: the id of each lease's oldest past-due payment (for the row deep-link).
-        var oldestPaymentIds = await PastDuePaymentsQuery(portfolioId, now)
-            .Where(p => leaseIds.Contains(p.LeaseId))
-            .GroupBy(p => p.LeaseId)
-            .Select(g => new
+        var items = await PastDueByLeaseQuery(portfolioId, now)
+            .Join(
+                _db.Leases.AsNoTracking().Where(l => l.PortfolioId == portfolioId),
+                g => g.LeaseId,
+                l => l.Id,
+                (g, l) => new { Group = g, Lease = l })
+            .OrderBy(x => x.Group.OldestDueDate)
+            .Select(x => new PastDueLeaseResponse
             {
-                LeaseId = g.Key,
+                LeaseId = x.Group.LeaseId,
+                TenantName = x.Lease.Tenant == null
+                    ? null
+                    : (x.Lease.Tenant.FirstName + " " + x.Lease.Tenant.LastName).Trim(),
+                TenantPhone = x.Lease.Tenant == null ? null : x.Lease.Tenant.Phone,
+                LeaseNumber = x.Lease.LeaseNumber,
+                PropertyName = x.Lease.Property == null ? null : x.Lease.Property.Name,
+                UnitNumber = x.Lease.Unit == null ? null : x.Lease.Unit.UnitNumber,
+                PastDueAmount = x.Group.PastDueAmount,
+                OverduePaymentCount = x.Group.OverduePaymentCount,
+                OldestDueDate = x.Group.OldestDueDate,
                 // Oldest by due date, then by id for a stable pick when due dates tie.
-                OldestPaymentId = g.OrderBy(p => p.DueDate).ThenBy(p => p.Id).Select(p => p.Id).First(),
+                OldestPaymentId = PastDuePaymentsQuery(portfolioId, now)
+                    .Where(p => p.LeaseId == x.Group.LeaseId)
+                    .OrderBy(p => p.DueDate)
+                    .ThenBy(p => p.Id)
+                    .Select(p => p.Id)
+                    .First(),
             })
-            .ToDictionaryAsync(x => x.LeaseId, x => x.OldestPaymentId, ct);
-
-        // Third round-trip: lease/tenant/property/unit labels for the rows.
-        var leaseMeta = await _db.Leases
-            .AsNoTracking()
-            .Where(l => l.PortfolioId == portfolioId && leaseIds.Contains(l.Id))
-            .Select(l => new
-            {
-                l.Id,
-                l.LeaseNumber,
-                TenantName = l.Tenant == null ? null : (l.Tenant.FirstName + " " + l.Tenant.LastName),
-                TenantPhone = l.Tenant == null ? null : l.Tenant.Phone,
-                PropertyName = l.Property == null ? null : l.Property.Name,
-                UnitNumber = l.Unit == null ? null : l.Unit.UnitNumber,
-            })
-            .ToDictionaryAsync(x => x.Id, ct);
-
-        var items = groups
-            .Select(g =>
-            {
-                leaseMeta.TryGetValue(g.LeaseId, out var meta);
-                return new PastDueLeaseResponse
-                {
-                    LeaseId = g.LeaseId,
-                    TenantName = string.IsNullOrWhiteSpace(meta?.TenantName) ? null : meta!.TenantName!.Trim(),
-                    TenantPhone = meta?.TenantPhone,
-                    LeaseNumber = meta?.LeaseNumber,
-                    PropertyName = meta?.PropertyName,
-                    UnitNumber = meta?.UnitNumber,
-                    PastDueAmount = g.PastDueAmount,
-                    OverduePaymentCount = g.OverduePaymentCount,
-                    OldestDueDate = g.OldestDueDate,
-                    OldestPaymentId = oldestPaymentIds.GetValueOrDefault(g.LeaseId),
-                };
-            })
-            .ToList();
+            .ToListAsync(ct);
 
         return new PastDueResponse
         {
@@ -387,7 +368,7 @@ public class AccountingService : IAccountingService
         IReadOnlyList<ScheduleECategoryTotal> expensesByCategory)
     {
         var netCollectedAfterExpenses = rollup.Collected - totalExpenses;
-        var topExpense = expensesByCategory.OrderByDescending(c => c.Total).FirstOrDefault();
+        var topExpense = expensesByCategory.FirstOrDefault();
         var title = rollup.Overdue > 0
             ? "Overdue rent needs attention"
             : rollup.Outstanding > 0
@@ -1180,45 +1161,22 @@ public class AccountingService : IAccountingService
         var scheduleE = await _scheduleE.GetReportAsync(portfolioId, year, ct: ct);
 
         // ── Per-property P&L for the year ─────────────────────────────────────────────────────────
-        // Income: Rent cash received (Paid full Amount + Partial AmountPaid) whose PaidDate falls in the
-        // year, keyed by property via Lease — matching the Schedule E rental-income definition so the
-        // packet reconciles with it. Grouped + summed SQL-side (one row per property), never by grouping
-        // materialized rows.
-        var incomeByProperty = (await _db.Payments
-            .AsNoTracking()
-            .Where(p =>
-                p.PortfolioId == portfolioId &&
-                p.PaymentType == PaymentType.Rent &&
-                (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
-                p.PaidDate != null &&
-                p.PaidDate.Value.Year == year &&
-                p.Lease != null)
-            .GroupBy(p => p.Lease!.PropertyId)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p =>
-                p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount) })
-            .ToListAsync(ct))
-            .ToDictionary(g => g.PropertyId, g => g.Total);
+        var yearStart = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var yearEndExclusive = yearStart.AddYears(1);
 
-        // Expenses for the year, keyed by property + Schedule E category — grouped on both keys
-        // SQL-side. Cash basis (matching the cash-basis income above and the packet's monthly cash-flow
-        // block below): only Paid expenses count, dated by PaidAt (falling back to IncurredAt) — the same
-        // COALESCE(PaidAt, IncurredAt) convention used elsewhere. The result (one row per
-        // property/category pair) is reshaped into the nested map in memory, but no SUM is computed in
-        // memory.
+        // Category rows are grouped SQL-side and only reshaped into the packet's nested DTO structure
+        // after materialization. Property-level income, total expense, and net are projected below with
+        // the property rows themselves, avoiding in-memory joins from aggregate dictionaries.
         var expenseCategoryTotals = await _db.Expenses
             .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId && e.Status == ExpenseStatus.Paid && (e.PaidAt ?? e.IncurredAt).Year == year && e.PropertyId != null)
+            .Where(e => e.PortfolioId == portfolioId &&
+                        e.Status == ExpenseStatus.Paid &&
+                        (e.PaidAt ?? e.IncurredAt) >= yearStart &&
+                        (e.PaidAt ?? e.IncurredAt) < yearEndExclusive &&
+                        e.PropertyId != null)
             .GroupBy(e => new { PropertyId = e.PropertyId!.Value, e.Category })
             .Select(g => new { g.Key.PropertyId, g.Key.Category, Total = g.Sum(e => e.Amount) })
             .ToListAsync(ct);
-
-        var expenseTotalsByProperty = (await _db.Expenses
-            .AsNoTracking()
-            .Where(e => e.PortfolioId == portfolioId && e.Status == ExpenseStatus.Paid && (e.PaidAt ?? e.IncurredAt).Year == year && e.PropertyId != null)
-            .GroupBy(e => e.PropertyId!.Value)
-            .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) })
-            .ToListAsync(ct))
-            .ToDictionary(g => g.PropertyId, g => g.Total);
 
         var expensesByProperty = new Dictionary<int, Dictionary<ScheduleECategory, decimal>>();
         foreach (var row in expenseCategoryTotals)
@@ -1241,22 +1199,50 @@ public class AccountingService : IAccountingService
                     pay.PaymentType == PaymentType.Rent &&
                     (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial) &&
                     pay.PaidDate != null &&
-                    pay.PaidDate.Value.Year == year &&
+                    pay.PaidDate.Value >= yearStart &&
+                    pay.PaidDate.Value < yearEndExclusive &&
                     pay.Lease != null &&
                     pay.Lease.PropertyId == p.Id) ||
                  _db.Expenses.Any(e =>
                     e.PortfolioId == portfolioId &&
                     e.Status == ExpenseStatus.Paid &&
-                    (e.PaidAt ?? e.IncurredAt).Year == year &&
+                    (e.PaidAt ?? e.IncurredAt) >= yearStart &&
+                    (e.PaidAt ?? e.IncurredAt) < yearEndExclusive &&
                     e.PropertyId == p.Id)))
             .OrderBy(p => p.Name)
-            .Select(p => new { p.Id, p.Name })
+            .Select(p => new
+            {
+                p.Id,
+                p.Name,
+                Income = _db.Payments
+                    .AsNoTracking()
+                    .Where(pay =>
+                        pay.PortfolioId == portfolioId &&
+                        pay.PaymentType == PaymentType.Rent &&
+                        (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial) &&
+                        pay.PaidDate != null &&
+                        pay.PaidDate.Value >= yearStart &&
+                        pay.PaidDate.Value < yearEndExclusive &&
+                        pay.Lease != null &&
+                        pay.Lease.PropertyId == p.Id)
+                    .Sum(pay => (decimal?)(pay.Status == PaymentStatus.Partial
+                        ? (pay.AmountPaid ?? 0m)
+                        : pay.Amount)) ?? 0m,
+                TotalExpenses = _db.Expenses
+                    .AsNoTracking()
+                    .Where(e =>
+                        e.PortfolioId == portfolioId &&
+                        e.Status == ExpenseStatus.Paid &&
+                        (e.PaidAt ?? e.IncurredAt) >= yearStart &&
+                        (e.PaidAt ?? e.IncurredAt) < yearEndExclusive &&
+                        e.PropertyId == p.Id)
+                    .Sum(e => (decimal?)e.Amount) ?? 0m,
+            })
             .ToListAsync(ct);
 
         var propertyPnL = new List<YearEndPropertyPnL>(properties.Count);
         foreach (var prop in properties)
         {
-            var income = incomeByProperty.GetValueOrDefault(prop.Id, 0m);
             var catMap = expensesByProperty.GetValueOrDefault(prop.Id);
 
             var categories = new List<ScheduleECategoryAmount>();
@@ -1270,16 +1256,14 @@ public class AccountingService : IAccountingService
                 }
             }
 
-            var totalExpenses = expenseTotalsByProperty.GetValueOrDefault(prop.Id, 0m);
-
             propertyPnL.Add(new YearEndPropertyPnL
             {
                 PropertyId = prop.Id,
                 PropertyName = prop.Name,
-                Income = income,
+                Income = prop.Income,
                 ExpensesByCategory = categories,
-                TotalExpenses = totalExpenses,
-                Net = income - totalExpenses,
+                TotalExpenses = prop.TotalExpenses,
+                Net = prop.Income - prop.TotalExpenses,
             });
         }
 
@@ -1339,8 +1323,9 @@ public class AccountingService : IAccountingService
             .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
 
         // ── Rent roll ─────────────────────────────────────────────────────────────────────────────
-        // Current leases (active or under notice). Past-due balance is owed rent/charges due in the past.
-        var leases = await _db.Leases
+        // Current leases (active or under notice). Past-due balance is projected with each lease row as
+        // a correlated SQL sum, so the packet does not load a separate aggregate and join it in memory.
+        var rentRollRows = await _db.Leases
             .AsNoTracking()
             .Where(l => l.PortfolioId == portfolioId &&
                         (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven))
@@ -1348,7 +1333,6 @@ public class AccountingService : IAccountingService
             .ThenBy(l => l.Unit!.UnitNumber)
             .Select(l => new
             {
-                l.Id,
                 PropertyName = l.Property!.Name,
                 UnitNumber = l.Unit!.UnitNumber,
                 TenantFirstName = l.Tenant!.FirstName,
@@ -1357,29 +1341,21 @@ public class AccountingService : IAccountingService
                 l.StartDate,
                 l.EndDate,
                 l.Status,
+                PastDueBalance = _db.Payments
+                    .AsNoTracking()
+                    .Where(p => p.PortfolioId == portfolioId &&
+                                p.LeaseId == l.Id &&
+                                (p.Status == PaymentStatus.Scheduled ||
+                                 p.Status == PaymentStatus.Partial ||
+                                 p.Status == PaymentStatus.Late) &&
+                                (p.Status == PaymentStatus.Late || p.DueDate < now))
+                    .Sum(p => (decimal?)(p.Status == PaymentStatus.Partial
+                        ? p.Amount - (p.AmountPaid ?? 0m)
+                        : p.Amount)) ?? 0m,
             })
             .ToListAsync(ct);
 
-        // Past-due balance per lease: the full owed-and-overdue predicate (including the `DueDate < now`
-        // / Late check) is applied in the WHERE and the sum is grouped SQL-side — no rows are pulled
-        // back to filter and total in memory.
-        var pastDueByLease = (await _db.Payments
-                .AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId &&
-                            p.Lease != null &&
-                            (p.Lease.Status == LeaseStatus.Active || p.Lease.Status == LeaseStatus.NoticeGiven) &&
-                            (p.Status == PaymentStatus.Scheduled ||
-                             p.Status == PaymentStatus.Partial ||
-                             p.Status == PaymentStatus.Late) &&
-                            (p.Status == PaymentStatus.Late || p.DueDate < now))
-                .GroupBy(p => p.LeaseId)
-                // A Partial owes only its unpaid remainder; Scheduled/Late owe in full.
-                .Select(g => new { LeaseId = g.Key, Total = g.Sum(p =>
-                    p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) })
-                .ToListAsync(ct))
-            .ToDictionary(g => g.LeaseId, g => g.Total);
-
-        var rentRoll = leases
+        var rentRoll = rentRollRows
             .Select(l => new YearEndRentRollRow
             {
                 PropertyName = l.PropertyName,
@@ -1389,7 +1365,7 @@ public class AccountingService : IAccountingService
                 LeaseStart = l.StartDate,
                 LeaseEnd = l.EndDate,
                 LeaseStatus = l.Status.ToString(),
-                PastDueBalance = pastDueByLease.GetValueOrDefault(l.Id, 0m),
+                PastDueBalance = l.PastDueBalance,
             })
             .ToList();
 

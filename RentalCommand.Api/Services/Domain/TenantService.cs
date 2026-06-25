@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core;
@@ -12,6 +13,7 @@ namespace RentalCommand.Api.Services.Domain;
 public class TenantService : ITenantService
 {
     private const string EntityType = "Tenant";
+    private const int MaxSearchTokens = 8;
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -36,13 +38,24 @@ public class TenantService : ITenantService
 
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
-            var term = query.Search.Trim();
-            q = q.Where(t =>
-                EF.Functions.ILike(t.FirstName, $"%{term}%") ||
-                EF.Functions.ILike(t.LastName, $"%{term}%") ||
-                EF.Functions.ILike(t.FirstName + " " + t.LastName, $"%{term}%") ||
-                (t.Email != null && EF.Functions.ILike(t.Email, $"%{term}%")) ||
-                (t.Phone != null && EF.Functions.ILike(t.Phone, $"%{term}%")));
+            var tokens = SearchTokens(query.Search);
+            if (tokens.Count == 0)
+            {
+                q = q.Where(_ => false);
+            }
+            else
+            {
+                foreach (var token in tokens)
+                {
+                    var pattern = $"%{token}%";
+                    q = q.Where(t =>
+                        EF.Functions.Like(t.FirstName.ToLower(), pattern) ||
+                        EF.Functions.Like(t.LastName.ToLower(), pattern) ||
+                        EF.Functions.Like((t.FirstName + " " + t.LastName).ToLower(), pattern) ||
+                        (t.Email != null && EF.Functions.Like(t.Email.ToLower(), pattern)) ||
+                        (t.Phone != null && EF.Functions.Like(t.Phone.ToLower(), pattern)));
+                }
+            }
         }
 
         q = query.SortField switch
@@ -93,6 +106,53 @@ public class TenantService : ITenantService
         Search = query.Search,
         Sort = query.Sort,
     };
+
+    private static IReadOnlyList<string> SearchTokens(string search)
+    {
+        var tokens = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var token = new StringBuilder();
+
+        void Flush()
+        {
+            if (token.Length == 0) return;
+            var value = token.ToString().ToLowerInvariant();
+            token.Clear();
+
+            if (seen.Add(value))
+            {
+                tokens.Add(value);
+            }
+        }
+
+        foreach (var c in search.Trim())
+        {
+            if (char.IsLetterOrDigit(c))
+            {
+                if (tokens.Count >= MaxSearchTokens && token.Length == 0)
+                {
+                    break;
+                }
+
+                token.Append(c);
+            }
+            else
+            {
+                Flush();
+                if (tokens.Count >= MaxSearchTokens)
+                {
+                    break;
+                }
+            }
+        }
+
+        if (tokens.Count < MaxSearchTokens)
+        {
+            Flush();
+        }
+
+        return tokens;
+    }
 
     public async Task<TenantResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {

@@ -268,6 +268,32 @@ public class ReportsServiceTests : IDisposable
             .Should().BeTrue("ledger totals must be summed in SQL");
     }
 
+    [Fact]
+    public async Task GetGeneralLedgerAsync_ComputesRunningBalanceInSql()
+    {
+        var property = SeedProperty("Maple");
+        var lease = SeedLease(property, SeedUnit("1", property.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+
+        SeedPayment(lease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedExpense(property.Id, 300m, paidAt: D(2026, 1, 10));
+        SeedPayment(lease, 200m, dueDate: D(2026, 1, 15), PaymentStatus.Paid, paidDate: D(2026, 1, 20));
+
+        _executedSql.Clear();
+
+        var report = await _sut.GetGeneralLedgerAsync(PortfolioId, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+        }, CancellationToken.None);
+
+        report.Entries.Select(e => e.RunningBalance).Should().Equal(1000m, 700m, 900m);
+        _executedSql.Should().Contain(sql =>
+            sql.Contains("UNION", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase)),
+            "the ordered ledger row query must compute running balance in SQL before materialization");
+    }
+
     // ── Rent Ledger running balance (DB) ───────────────────────────────────────────────────────────
 
     [Fact]
@@ -544,6 +570,47 @@ public class ReportsServiceTests : IDisposable
             "property P&L grand totals must be summed in SQL, not from the property DTO dictionary");
     }
 
+    [Fact]
+    public async Task GetPropertyProfitAndLossAsync_ProjectsRowsAndTotalsInSql()
+    {
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+        var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+        var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2000m);
+
+        SeedPayment(mapleLease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedPayment(oakLease, 2000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 6));
+        SeedExpense(maple.Id, 300m, paidAt: D(2026, 1, 10));
+        SeedExpense(oak.Id, 450m, paidAt: D(2026, 1, 11));
+
+        _executedSql.Clear();
+
+        var report = await _sut.GetPropertyProfitAndLossAsync(PortfolioId, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+        }, CancellationToken.None);
+
+        report.Rows.Should().HaveCount(2);
+        report.Rows.Single(r => r.PropertyName == "Maple").Net.Should().Be(700m);
+        report.Rows.Single(r => r.PropertyName == "Oak").Net.Should().Be(1550m);
+        report.TotalIncome.Should().Be(3000m);
+        report.TotalExpense.Should().Be(750m);
+        report.TotalNet.Should().Be(2250m);
+
+        var selects = _executedSql
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        selects.Should().HaveCount(3, "property P&L should run one property row projection plus SQL grand-total queries");
+        selects[0].Should().Contain("\"Properties\"", "the row query should start from properties");
+        selects[0].Should().Contain("\"Payments\"", "property income should be projected in SQL");
+        selects[0].Should().Contain("\"Expenses\"", "property expenses should be projected in SQL");
+        (selects[0].Contains("SUM(", StringComparison.OrdinalIgnoreCase) ||
+         selects[0].Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("row income and expense totals should be SQL aggregates");
+    }
+
     // ── True cash flow (§9/§18, DB) ──────────────────────────────────────────────────────────────
 
     [Fact]
@@ -697,6 +764,34 @@ public class ReportsServiceTests : IDisposable
         view.RentRoll.Should().NotContain(r => r.PropertyName == "Oak");
     }
 
+    [Fact]
+    public async Task GetYearEndAsync_ProjectsRentRollPastDueWithLeaseRowsInSql()
+    {
+        var now = DateTime.UtcNow;
+        var maple = SeedProperty("Maple");
+        var behind = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1_000m,
+            start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.Active);
+        var current = SeedLease(maple, SeedUnit("2", maple.Id), SeedTenant("Bob", "Birch"), rent: 900m,
+            start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.NoticeGiven);
+
+        SeedPayment(behind, 1_000m, dueDate: now.AddDays(-30), PaymentStatus.Scheduled);
+        SeedPayment(behind, 500m, dueDate: now.AddDays(-20), PaymentStatus.Partial).AmountPaid = 200m;
+        SeedPayment(behind, 999m, dueDate: now.AddDays(-10), PaymentStatus.Paid, paidDate: now.AddDays(-9));
+        SeedPayment(current, 900m, dueDate: now.AddDays(30), PaymentStatus.Scheduled);
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var view = await _sut.GetYearEndAsync(PortfolioId, 2025, ct: CancellationToken.None);
+
+        view.RentRoll.Should().HaveCount(2);
+        view.RentRoll.Single(r => r.UnitNumber == "1").PastDueBalance.Should().Be(1_300m);
+        view.RentRoll.Single(r => r.UnitNumber == "2").PastDueBalance.Should().Be(0m);
+
+        _executedSql.Where(IsStandalonePastDueByLeaseAggregate)
+            .Should()
+            .BeEmpty("year-end rent-roll balances should be projected with the lease rows instead of materializing a payment aggregate dictionary");
+    }
+
     // ── Occupancy % (DB) ───────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -766,6 +861,7 @@ public class ReportsServiceTests : IDisposable
         row.Deductions.Should().Be(200m);
         row.Returned.Should().Be(300m);
         row.CurrentBalance.Should().Be(1000m);
+        row.StatusName.Should().Be("Partially Returned");
 
         report.TotalHeld.Should().Be(1500m);
         report.TotalDeductions.Should().Be(200m);
@@ -956,6 +1052,11 @@ public class ReportsServiceTests : IDisposable
     // ── Seed helpers ───────────────────────────────────────────────────────────────────────────────
 
     private static DateTime D(int y, int m, int d) => new(y, m, d, 0, 0, 0, DateTimeKind.Utc);
+
+    private static bool IsStandalonePastDueByLeaseAggregate(string sql) =>
+        sql.TrimStart().StartsWith("SELECT \"p\".\"LeaseId\"", StringComparison.Ordinal) &&
+        sql.Contains("FROM \"Payments\" AS \"p\"", StringComparison.Ordinal) &&
+        sql.Contains("GROUP BY \"p\".\"LeaseId\"", StringComparison.Ordinal);
 
     private Property SeedProperty(string name)
     {

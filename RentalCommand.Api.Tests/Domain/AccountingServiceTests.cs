@@ -81,6 +81,36 @@ public class AccountingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetSummaryAsync_OrdersAndTotalsExpenseCategoriesInSql()
+    {
+        var now = new DateTime(2026, 05, 25, 12, 0, 0, DateTimeKind.Utc);
+        SeedExpense("Minor repair", 40m, now, ScheduleECategory.Repairs, ExpenseStatus.Paid);
+        SeedExpense("Insurance premium", 125m, now, ScheduleECategory.Insurance, ExpenseStatus.Paid);
+        SeedExpense("Cleaning", 75m, now, ScheduleECategory.CleaningMaintenance, ExpenseStatus.Paid);
+
+        _commands.Clear();
+
+        var summary = await _sut.GetSummaryAsync(PortfolioId, CancellationToken.None);
+
+        summary.ExpensesByCategory.Select(c => c.Category).Should().Equal(
+            ScheduleECategory.Insurance,
+            ScheduleECategory.CleaningMaintenance,
+            ScheduleECategory.Repairs);
+        summary.TotalExpenses.Should().Be(240m);
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase),
+            "expense category ordering must run in SQL before materialization");
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("SUM", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),
+            "the total expense aggregate must be computed by SQL instead of summing the materialized category rows");
+    }
+
+    [Fact]
     public async Task GetSnapshotAsync_AggregatesMonthToDateWithPlainEnglishExplanations()
     {
         // Anchor everything to "now" so the figures land inside the current month-to-date window
@@ -244,6 +274,66 @@ public class AccountingServiceTests : IDisposable
         (sql.Contains("SUM(", StringComparison.OrdinalIgnoreCase) || sql.Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
             .Should().BeTrue("past-due balances must be summed in SQL");
         sql.Should().Contain("GROUP BY", "the SQL aggregate should be over the per-lease past-due grouping");
+    }
+
+    [Fact]
+    public async Task GetPastDueAsync_ProjectsMetadataAndOldestPaymentInSingleRowQuery()
+    {
+        var now = DateTime.UtcNow;
+        var (_, lease) = SeedPropertyAndLease(now);
+        lease.Tenant!.Phone = "614-555-0130";
+
+        var oldest = new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 900m,
+            DueDate = now.AddDays(-20),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var partial = new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Partial,
+            Amount = 500m,
+            AmountPaid = 125m,
+            DueDate = now.AddDays(-5),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Payments.AddRange(oldest, partial);
+        _db.SaveChanges();
+        _commands.Clear();
+
+        var pastDue = await _sut.GetPastDueAsync(PortfolioId, CancellationToken.None);
+
+        var row = pastDue.Items.Should().ContainSingle().Subject;
+        row.LeaseId.Should().Be(lease.Id);
+        row.TenantName.Should().Be("Maria Tenant");
+        row.TenantPhone.Should().Be("614-555-0130");
+        row.LeaseNumber.Should().Be("L-001");
+        row.PropertyName.Should().Be("General");
+        row.UnitNumber.Should().Be("12");
+        row.OldestPaymentId.Should().Be(oldest.Id);
+        row.OldestDueDate.Should().Be(oldest.DueDate);
+        row.PastDueAmount.Should().Be(1275m);
+        row.OverduePaymentCount.Should().Be(2);
+
+        var selects = _commands
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        selects.Should().HaveCount(2, "past-due drill-down should run one summary query and one row projection query");
+        selects[1].Should().Contain("\"Leases\"", "row metadata should be joined/projected with the past-due aggregate");
+        selects[1].Should().Contain("\"Tenants\"", "tenant labels should not require a post-materialization dictionary query");
+        selects[1].Should().Contain("\"Properties\"", "property labels should not require a post-materialization dictionary query");
+        selects[1].Should().Contain("\"Units\"", "unit labels should not require a post-materialization dictionary query");
+        selects[1].Should().Contain("ORDER BY", "oldest-payment selection and row ordering should be SQL-side");
     }
 
     [Fact]

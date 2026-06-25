@@ -673,7 +673,7 @@ public class PortfolioQaService : IPortfolioQaService
             query = query.Where(w => openStatuses.Contains(w.Status));
 
         var rows = await query
-            .Include(w => w.Property)
+            .OrderByDescending(w => w.RequestedAt)
             .Select(w => new
             {
                 title          = w.Title,
@@ -681,16 +681,28 @@ public class PortfolioQaService : IPortfolioQaService
                 priority       = w.Priority.ToString(),
                 category       = w.Category,
                 propertyName   = w.Property != null ? w.Property.Name : "(unknown)",
-                requestedAt    = w.RequestedAt.ToString("yyyy-MM-dd"),
-                scheduledFor   = w.ScheduledFor.HasValue ? w.ScheduledFor.Value.ToString("yyyy-MM-dd") : null,
-                completedAt    = w.CompletedAt.HasValue ? w.CompletedAt.Value.ToString("yyyy-MM-dd") : null,
+                requestedAt    = w.RequestedAt,
+                scheduledFor   = w.ScheduledFor,
+                completedAt    = w.CompletedAt,
             })
-            .OrderByDescending(w => w.requestedAt)
+            .Take(50)
             .ToListAsync(ct);
 
-        return rows.Count == 0
+        var formatted = rows.Select(w => new
+        {
+            w.title,
+            w.status,
+            w.priority,
+            w.category,
+            w.propertyName,
+            requestedAt = w.requestedAt.ToString("yyyy-MM-dd"),
+            scheduledFor = w.scheduledFor.HasValue ? w.scheduledFor.Value.ToString("yyyy-MM-dd") : null,
+            completedAt = w.completedAt.HasValue ? w.completedAt.Value.ToString("yyyy-MM-dd") : null,
+        }).ToList();
+
+        return formatted.Count == 0
             ? "[]"
-            : JsonSerializer.Serialize(rows, _json);
+            : JsonSerializer.Serialize(formatted, _json);
     }
 
     private async Task<string> ListExpiringLeasesAsync(string argsJson, int portfolioId, CancellationToken ct)

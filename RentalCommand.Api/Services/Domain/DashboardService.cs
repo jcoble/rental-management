@@ -120,11 +120,12 @@ public class DashboardService : IDashboardService
                 DueThisMonth = g.Sum(p =>
                     p.DueDate >= monthStart && p.DueDate < nextMonthStart && p.Status != PaymentStatus.Waived
                         ? p.Amount : 0m),
-                // Collected rent this month, based on when it was actually paid: Paid contributes the
-                // full Amount, a Partial contributes only the collected AmountPaid.
+                // Collected cash this month, based on when it was actually paid: Paid contributes the
+                // full Amount, a Partial contributes only the collected AmountPaid. This intentionally
+                // includes rent, deposits, late fees, utilities, and other tenant payments so it matches
+                // the dashboard money snapshot's "Total Collected" definition.
                 PaidThisMonth = g.Sum(p =>
                     (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial)
-                    && p.PaymentType == PaymentType.Rent
                     && p.PaidDate != null
                     && p.PaidDate >= monthStart
                     && p.PaidDate < nextMonthStart
@@ -133,17 +134,33 @@ public class DashboardService : IDashboardService
             })
             .FirstOrDefaultAsync(ct);
 
+        var bankCash = await _db.BankTransactions
+            .AsNoTracking()
+            .Where(t => t.PortfolioId == portfolioId
+                && t.MatchStatus != "Removed"
+                && t.PostedAt >= monthStart
+                && t.PostedAt < nextMonthStart)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                UnmatchedDeposits = g.Sum(t => t.Amount > 0 && t.MatchedPaymentId == null ? t.Amount : 0m),
+                UnmatchedWithdrawals = g.Sum(t => t.Amount < 0 && t.MatchedExpenseId == null ? -t.Amount : 0m),
+            })
+            .FirstOrDefaultAsync(ct);
+
         var overdue = money?.Overdue ?? 0m;
         var dueThisMonth = money?.DueThisMonth ?? 0m;
-        var paidThisMonth = money?.PaidThisMonth ?? 0m;
+        var paidThisMonth = (money?.PaidThisMonth ?? 0m) + (bankCash?.UnmatchedDeposits ?? 0m);
 
-        // Expenses incurred this month (soft-deleted expenses excluded by the global query filter).
-        var expensesThisMonth = await _db.Expenses
+        // Expenses spent this month (paid date when present, else incurred date), matching the
+        // dashboard money snapshot so the summary KPI and the detailed money card cannot diverge.
+        var expenseRowsThisMonth = await _db.Expenses
             .AsNoTracking()
             .Where(e => e.PortfolioId == portfolioId
-                && e.IncurredAt >= monthStart
-                && e.IncurredAt < nextMonthStart)
+                && (e.PaidAt ?? e.IncurredAt) >= monthStart
+                && (e.PaidAt ?? e.IncurredAt) < nextMonthStart)
             .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
+        var expensesThisMonth = expenseRowsThisMonth + (bankCash?.UnmatchedWithdrawals ?? 0m);
 
         return new DashboardAccounting
         {

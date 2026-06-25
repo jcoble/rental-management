@@ -40,7 +40,7 @@
 			label: 'Tenants',
 			recordLabel: 'tenant',
 			recordPluralLabel: 'tenants',
-			columns: 'first name, last name, email, phone',
+			columns: 'firstName, lastName, email, phone',
 			listHref: '/tenants',
 			listLabel: 'tenants'
 		},
@@ -49,7 +49,7 @@
 			label: 'Properties',
 			recordLabel: 'property',
 			recordPluralLabel: 'properties',
-			columns: 'name, address, city, state, ZIP, type',
+			columns: 'name, addressLine1, addressLine2, city, state, postalCode, type',
 			listHref: '/properties',
 			listLabel: 'properties'
 		},
@@ -58,7 +58,7 @@
 			label: 'Units',
 			recordLabel: 'unit',
 			recordPluralLabel: 'units',
-			columns: 'property name, unit number, beds, baths, market rent',
+			columns: 'propertyName, propertyId, unitNumber, bedrooms, bathrooms, marketRent',
 			listHref: '/properties',
 			listLabel: 'properties'
 		}

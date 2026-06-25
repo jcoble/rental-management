@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Imaging;
 using RentalCommand.Api.Scanning;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
@@ -201,7 +202,7 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
     [HttpGet("{id:int}/file", Name = nameof(GetFile))]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> GetFile(int id, CancellationToken ct)
+    public async Task<IActionResult> GetFile(int id, [FromQuery] bool thumb = false, CancellationToken ct = default)
     {
         var portfolioId = GetPortfolioId();
         var row = await _documents.FindAsync(portfolioId, id, ct);
@@ -229,6 +230,31 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         Response.Headers["X-Content-Type-Options"] = "nosniff";
 
         var safeName = Uri.EscapeDataString(row.FileName);
+
+        if (thumb && row.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        {
+            byte[] srcBytes;
+            using (var ms = new MemoryStream())
+            {
+                await stream.CopyToAsync(ms, ct);
+                srcBytes = ms.ToArray();
+            }
+
+            var thumbBytes = ThumbnailResizer.ResizeToJpeg(srcBytes);
+            if (thumbBytes is not null)
+            {
+                var baseName = Path.GetFileNameWithoutExtension(row.FileName);
+                if (string.IsNullOrWhiteSpace(baseName))
+                    baseName = $"document-{id}";
+                var thumbName = Uri.EscapeDataString($"{baseName}-thumb.jpg");
+
+                Response.Headers["Cache-Control"] = "private, max-age=86400";
+                Response.Headers["Content-Disposition"] = $"inline; filename=\"{thumbName}\"";
+                return File(thumbBytes, "image/jpeg");
+            }
+
+            stream = new MemoryStream(srcBytes);
+        }
 
         if (InlineSafeContentTypes.Contains(row.ContentType))
         {
