@@ -3,11 +3,11 @@
 Date: 2026-06-25
 Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-real-user-pass-30`
 Branch: `tsk-397-real-user-pass-30`
-Status: Interim checkpoint. Local notification safety fixed and image-scan bootstrap rechecked from a clean browser session.
+Status: Interim checkpoint. Local notification safety fixed, image-scan bootstrap rechecked from a clean browser session, and work-order completion timestamp regression fixed.
 
 ## Scope
 
-Resume the production-scale real-user audit after the pass-94 checkpoint, clear stale Playwright sessions, verify local dev cannot silently use production notification providers from user-secrets, and recheck the image-first scan spine from a fresh browser session.
+Resume the production-scale real-user audit after the pass-94 checkpoint, clear stale Playwright sessions, verify local dev cannot silently use production notification providers from user-secrets, recheck the image-first scan spine from a fresh browser session, and close the work-order status timestamp defect found during the real-user maintenance flow.
 
 ## Local Stack
 
@@ -22,6 +22,7 @@ Resume the production-scale real-user audit after the pass-94 checkpoint, clear 
 | ID | Surface | Reproduction evidence | Fix | Regression coverage |
 | --- | --- | --- | --- | --- |
 | TSK-431 | Local dev launcher notifications | Before the fix, registering the synthetic owner `jordan.pass30.20260625@rentalcommand.local` under `scripts/start-dev.sh` allowed Development user-secrets to configure SendGrid and the Engine attempted a real provider send for the verification email. | `scripts/start-dev.sh` now defaults `ALLOW_EXTERNAL_NOTIFICATIONS=0` and blanks SendGrid, SMTP, SignalWire, Twilio, Telnyx, and Vonage notification env vars for local dev. Explicit opt-in via `ALLOW_EXTERNAL_NOTIFICATIONS=1` is required to use external providers. | `node --test scripts/qa/start-dev-script.test.mjs`; `bash -n scripts/start-dev.sh scripts/qa/start-scan-audit-local.sh`; fresh stack log showed only `[Email suppressed -- not configured]` and no SendGrid/SMS provider calls. |
+| TSK-432 | Work-order status completion | Browser flow on `/maintenance/1` moved `Front door lock sticks` to Completed through the status-note modal; UI showed Completed but SQL showed `WorkOrders.Status=4` and `CompletedAt IS NULL`. | `WorkOrderService.UpdateAsync` now stamps `CompletedAt` with the status transition time whenever a work order moves into Completed without an explicit completion date, and validates that stamped time through the existing completion-date guard. | Added `WorkOrderStatusTimelineTests.UpdateAsync_StampsCompletedAt_WhenStatusChangesToCompleted`. Red run failed on null `updated.CompletedAt`; green runs passed the focused test and the 15 related status/timing tests. Browser retest on `/maintenance/2` showed Completed in Costs & timing, and SQL showed `CompletedAt=2026-06-25 23:15:50.635269+00`. |
 
 ## Browser And Process Hygiene
 
@@ -51,6 +52,23 @@ Screenshots:
 - `output/playwright/pass30-payment-image-review.png`
 - `output/playwright/pass30-application-image-review.png`
 - `output/playwright/pass30-workorder-image-review.png`
+- `output/playwright/pass30-workorder-completedat-fixed.png`
+
+## Work-Order Completion Timestamp Recheck
+
+After the fix, a fresh Playwright session `pass30completedat` logged in as `jordan.pass30.safe.20260625@rentalcommand.local`, created `/maintenance/2` (`Patio light flickers`) through the work-order modal, moved it from New to In progress with a note, then moved it from In progress to Completed with only a note. The detail page showed `Completed` in the header and `Completed Jun 25, 2026` in Costs & timing.
+
+SQL proof:
+
+```sql
+SELECT "Id", "Title", "Status", "CompletedAt", ("CompletedAt" IS NOT NULL) AS completed_at_set
+FROM "WorkOrders"
+WHERE "Id" = 2;
+```
+
+Result: `Id=2`, `Title='Patio light flickers'`, `Status=4`, `CompletedAt=2026-06-25 23:15:50.635269+00`, `completed_at_set=t`.
+
+Status-event proof: work order 2 has three timeline rows: create (`NULL -> New`), `New -> In progress` with the vendor-started note, and `In progress -> Completed` with the completion note at the same timestamp as `CompletedAt`.
 
 ## Remaining Boundaries
 
