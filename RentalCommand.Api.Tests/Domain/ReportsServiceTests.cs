@@ -570,6 +570,47 @@ public class ReportsServiceTests : IDisposable
             "property P&L grand totals must be summed in SQL, not from the property DTO dictionary");
     }
 
+    [Fact]
+    public async Task GetPropertyProfitAndLossAsync_ProjectsRowsAndTotalsInSql()
+    {
+        var maple = SeedProperty("Maple");
+        var oak = SeedProperty("Oak");
+        var mapleLease = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1000m);
+        var oakLease = SeedLease(oak, SeedUnit("A", oak.Id), SeedTenant("Bob", "Birch"), rent: 2000m);
+
+        SeedPayment(mapleLease, 1000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 5));
+        SeedPayment(oakLease, 2000m, dueDate: D(2026, 1, 1), PaymentStatus.Paid, paidDate: D(2026, 1, 6));
+        SeedExpense(maple.Id, 300m, paidAt: D(2026, 1, 10));
+        SeedExpense(oak.Id, 450m, paidAt: D(2026, 1, 11));
+
+        _executedSql.Clear();
+
+        var report = await _sut.GetPropertyProfitAndLossAsync(PortfolioId, new ReportRangeQuery
+        {
+            From = D(2026, 1, 1),
+            To = D(2026, 1, 31),
+        }, CancellationToken.None);
+
+        report.Rows.Should().HaveCount(2);
+        report.Rows.Single(r => r.PropertyName == "Maple").Net.Should().Be(700m);
+        report.Rows.Single(r => r.PropertyName == "Oak").Net.Should().Be(1550m);
+        report.TotalIncome.Should().Be(3000m);
+        report.TotalExpense.Should().Be(750m);
+        report.TotalNet.Should().Be(2250m);
+
+        var selects = _executedSql
+            .Where(sql => sql.TrimStart().StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        selects.Should().HaveCount(3, "property P&L should run one property row projection plus SQL grand-total queries");
+        selects[0].Should().Contain("\"Properties\"", "the row query should start from properties");
+        selects[0].Should().Contain("\"Payments\"", "property income should be projected in SQL");
+        selects[0].Should().Contain("\"Expenses\"", "property expenses should be projected in SQL");
+        (selects[0].Contains("SUM(", StringComparison.OrdinalIgnoreCase) ||
+         selects[0].Contains("ef_sum(", StringComparison.OrdinalIgnoreCase))
+            .Should().BeTrue("row income and expense totals should be SQL aggregates");
+    }
+
     // ── True cash flow (§9/§18, DB) ──────────────────────────────────────────────────────────────
 
     [Fact]

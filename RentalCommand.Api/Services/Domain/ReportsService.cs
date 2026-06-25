@@ -1004,72 +1004,61 @@ public class ReportsService : IReportsService
         if (propertyFilter is not null)
             propertyQuery = propertyQuery.Where(p => propertyFilter.Contains(p.Id));
 
-        var properties = await propertyQuery
-            .OrderBy(p => p.Name)
-            .Select(p => new { p.Id, p.Name })
-            .ToListAsync(ct);
-
-        var inScope = properties.Select(p => p.Id).ToArray();
-
         // Income: paid payments dated in range, keyed to property via lease.
-        var incomeByProperty = inScope.Length == 0
-            ? new Dictionary<int, decimal>()
-            : (await _db.Payments
-                .AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
-                .Where(p => inScope.Contains(p.Lease!.PropertyId))
-                .Where(p => (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
-                .GroupBy(p => p.Lease!.PropertyId)
-                .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) })
-                .ToListAsync(ct))
-            .ToDictionary(r => r.PropertyId, r => r.Total);
+        var incomeByPropertyQuery = _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid && p.Lease != null)
+            .Where(p => (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
+            .GroupBy(p => p.Lease!.PropertyId)
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(p => p.Amount) });
 
         // Expense: expenses dated in range, keyed to property (unassigned ones never match a property).
-        var expenseByProperty = inScope.Length == 0
-            ? new Dictionary<int, decimal>()
-            : (await _db.Expenses
-                .AsNoTracking()
-                .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
-                .Where(e => inScope.Contains(e.PropertyId!.Value))
-                .Where(e => (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to)
-                .GroupBy(e => e.PropertyId!.Value)
-                .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) })
-                .ToListAsync(ct))
-            .ToDictionary(r => r.PropertyId, r => r.Total);
+        var expenseByPropertyQuery = _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
+            .Where(e => (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to)
+            .GroupBy(e => e.PropertyId!.Value)
+            .Select(g => new { PropertyId = g.Key, Total = g.Sum(e => e.Amount) });
 
-        var totalIncome = inScope.Length == 0
-            ? 0m
-            : await _db.Payments
-                .AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid)
-                .Where(p => inScope.Contains(p.Lease!.PropertyId))
-                .Where(p => (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
-                .SumAsync(p => (decimal?)p.Amount, ct) ?? 0m;
-
-        var totalExpense = inScope.Length == 0
-            ? 0m
-            : await _db.Expenses
-                .AsNoTracking()
-                .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
-                .Where(e => inScope.Contains(e.PropertyId!.Value))
-                .Where(e => (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to)
-                .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
-
-        var rows = properties
-            .Select(p =>
-            {
-                var income = incomeByProperty.GetValueOrDefault(p.Id, 0m);
-                var expense = expenseByProperty.GetValueOrDefault(p.Id, 0m);
-                return new PropertyProfitAndLossRow
+        var rows = await (
+                from property in propertyQuery
+                join income in incomeByPropertyQuery on property.Id equals income.PropertyId into incomeJoin
+                from income in incomeJoin.DefaultIfEmpty()
+                join expense in expenseByPropertyQuery on property.Id equals expense.PropertyId into expenseJoin
+                from expense in expenseJoin.DefaultIfEmpty()
+                orderby property.Name
+                select new
                 {
-                    PropertyId = p.Id,
-                    PropertyName = p.Name,
-                    Income = income,
-                    Expense = expense,
-                    Net = income - expense,
-                };
+                    property.Id,
+                    property.Name,
+                    Income = income == null ? 0m : income.Total,
+                    Expense = expense == null ? 0m : expense.Total,
+                })
+            .Select(row => new PropertyProfitAndLossRow
+            {
+                PropertyId = row.Id,
+                PropertyName = row.Name,
+                Income = row.Income,
+                Expense = row.Expense,
+                Net = row.Income - row.Expense,
             })
-            .ToList();
+            .ToListAsync(ct);
+
+        var propertyIds = propertyQuery.Select(p => p.Id);
+
+        var totalIncome = await _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId && p.Status == PaymentStatus.Paid && p.Lease != null)
+            .Where(p => propertyIds.Contains(p.Lease!.PropertyId))
+            .Where(p => (p.PaidDate ?? p.DueDate) >= from && (p.PaidDate ?? p.DueDate) <= to)
+            .SumAsync(p => (decimal?)p.Amount, ct) ?? 0m;
+
+        var totalExpense = await _db.Expenses
+            .AsNoTracking()
+            .Where(e => e.PortfolioId == portfolioId && e.PropertyId != null)
+            .Where(e => propertyIds.Contains(e.PropertyId!.Value))
+            .Where(e => (e.PaidAt ?? e.IncurredAt) >= from && (e.PaidAt ?? e.IncurredAt) <= to)
+            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
 
         return new PropertyProfitAndLossResponse
         {
