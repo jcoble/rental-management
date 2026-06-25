@@ -287,6 +287,39 @@ public class PaymentServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task UpdateAsync_NotesOnlyChange_IsCapturedInAuditSnapshot()
+    {
+        var now = DateTime.UtcNow;
+        var created = await _sut.CreateAsync(PortfolioId, new CreatePaymentRequest
+        {
+            LeaseId = LeaseId,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1200.00m,
+            DueDate = now,
+            Notes = "Original note",
+        });
+        created.Should().NotBeNull();
+
+        var updated = await _sut.UpdateAsync(PortfolioId, created!.Id, new UpdatePaymentRequest
+        {
+            Notes = "Updated note from detail view",
+        });
+
+        updated.Should().NotBeNull();
+        updated!.Notes.Should().Be("Updated note from detail view");
+
+        var log = await _db.AuditLogs.AsNoTracking().SingleOrDefaultAsync(a =>
+            a.EntityType == "Payment" &&
+            a.EntityId == created.Id &&
+            a.Operation == AuditLogOperation.Updated);
+        log.Should().NotBeNull("payment detail history must show notes edits, not just money/status changes");
+        log!.OldValues.Should().Contain("\"notes\":\"Original note\"");
+        log.NewValues.Should().Contain("\"notes\":\"Updated note from detail view\"");
+        log.ChangeReason.Should().Contain("notes updated");
+    }
+
+    [Fact]
     public async Task MarkLeasePastDuePaidAsync_MarksOnlyPastDueRowsForThatLease()
     {
         var now = DateTime.UtcNow;

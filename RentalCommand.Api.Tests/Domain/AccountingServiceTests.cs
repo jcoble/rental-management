@@ -364,6 +364,115 @@ public class AccountingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetReportsAsync_ScheduleEUsesTaxRollupIncludingModeledInterestAndDepreciation()
+    {
+        var year = DateTime.UtcNow.Year;
+        var now = new DateTime(year, 03, 03, 12, 0, 0, DateTimeKind.Utc);
+        var (property, lease) = SeedPropertyAndLease(now);
+        property.PurchasePrice = 300_000m;
+        property.LandValue = 60_000m;
+        property.InServiceDate = new DateTime(2020, 01, 01, 0, 0, 0, DateTimeKind.Utc);
+
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1_200m,
+            DueDate = now,
+            PaidDate = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Expenses.Add(new Expense
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Category = ScheduleECategory.Repairs,
+            Description = "Sink repair",
+            Status = ExpenseStatus.Paid,
+            Amount = 1_000m,
+            IncurredAt = now,
+            PaidAt = now,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.SaveChanges();
+
+        var loan = new Loan
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            Lender = "Bank",
+            OriginalAmount = 100_000m,
+            CurrentBalance = 100_000m,
+            AnnualInterestRatePct = 6m,
+            TermMonths = 360,
+            StartDate = new DateTime(year, 01, 01, 0, 0, 0, DateTimeKind.Utc),
+            DayOfMonthDue = 1,
+            MonthlyPrincipalInterest = 600m,
+            Status = LoanStatus.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Loans.Add(loan);
+        _db.SaveChanges();
+        _db.LoanPayments.AddRange(
+            new LoanPayment
+            {
+                PortfolioId = PortfolioId,
+                LoanId = loan.Id,
+                PeriodKey = $"{year}-01",
+                DueDate = new DateTime(year, 01, 01, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 600m,
+                PrincipalAmount = 100m,
+                EscrowAmount = 0m,
+                TotalAmount = 700m,
+                BalanceAfter = 99_900m,
+                Status = LoanPaymentStatus.Scheduled,
+                CreatedAt = now,
+            },
+            new LoanPayment
+            {
+                PortfolioId = PortfolioId,
+                LoanId = loan.Id,
+                PeriodKey = $"{year}-02",
+                DueDate = new DateTime(year, 02, 01, 0, 0, 0, DateTimeKind.Utc),
+                InterestAmount = 590m,
+                PrincipalAmount = 110m,
+                EscrowAmount = 0m,
+                TotalAmount = 700m,
+                BalanceAfter = 99_790m,
+                Status = LoanPaymentStatus.Scheduled,
+                CreatedAt = now,
+            });
+        _db.SaveChanges();
+
+        _commands.Clear();
+
+        var reports = await _sut.GetReportsAsync(PortfolioId, CancellationToken.None);
+
+        reports.ScheduleE.Should().Contain(c =>
+            c.Category == ScheduleECategory.Repairs &&
+            c.Total == 1_000m);
+        reports.ScheduleE.Should().Contain(c =>
+            c.Category == ScheduleECategory.MortgageInterest &&
+            c.Total == 1_190m);
+        reports.ScheduleE.Should().Contain(c =>
+            c.Category == ScheduleECategory.Depreciation &&
+            c.Total == 8_727.27m);
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"Expenses\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),
+            "regular Schedule E categories must be grouped and summed in SQL");
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"LoanPayments\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase),
+            "modeled mortgage interest must be grouped and summed in SQL");
+    }
+
+    [Fact]
     public async Task GetReportsAsync_BuildsLedgerWithSqlUnionAndOrdering()
     {
         var now = new DateTime(2026, 03, 03, 12, 0, 0, 0, DateTimeKind.Utc);

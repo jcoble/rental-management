@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -7,31 +8,66 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
 
 public class BankingService : IBankingService
 {
+    private const string BankConnectionEntityType = "BankConnection";
+    private const string BankTransactionEntityType = "BankTransaction";
     private const int DefaultReviewQueueTake = 50;
     private const int MaxReviewQueueTake = 100;
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataProtector _protector;
     private readonly IPlaidBankingProvider _plaid;
+    private readonly IAuditTrailService _audit;
     private readonly PlaidOptions _plaidOptions;
 
     public BankingService(
         RentalCommandDbContext db,
         IDataProtectionProvider dataProtection,
         IPlaidBankingProvider plaid,
+        IAuditTrailService audit,
         IOptions<PlaidOptions> plaidOptions)
     {
         _db = db;
         _protector = dataProtection.CreateProtector("RentalCommand.Banking.v1");
         _plaid = plaid;
+        _audit = audit;
         _plaidOptions = plaidOptions.Value;
     }
+
+    private static string ConnectionSnapshot(BankConnection connection) => JsonSerializer.Serialize(new
+    {
+        provider = connection.Provider,
+        institutionName = connection.InstitutionName,
+        accountName = connection.AccountName,
+        accountMask = connection.AccountMask,
+        accountType = connection.AccountType,
+        accountSubtype = connection.AccountSubtype,
+        status = connection.Status,
+        lastSyncedAt = connection.LastSyncedAt,
+    });
+
+    private static string TransactionSnapshot(BankTransaction transaction) => JsonSerializer.Serialize(new
+    {
+        providerTransactionId = transaction.ProviderTransactionId,
+        postedAt = transaction.PostedAt,
+        authorizedAt = transaction.AuthorizedAt,
+        description = transaction.Description,
+        merchantName = transaction.MerchantName,
+        amount = transaction.Amount,
+        isoCurrencyCode = transaction.IsoCurrencyCode,
+        category = transaction.Category,
+        matchedPaymentId = transaction.MatchedPaymentId,
+        matchedExpenseId = transaction.MatchedExpenseId,
+        matchStatus = transaction.MatchStatus,
+        matchConfidence = transaction.MatchConfidence,
+        notes = transaction.Notes,
+    });
 
     public async Task<BankingSummaryResponse> GetSummaryAsync(int portfolioId, CancellationToken ct = default)
     {
@@ -144,6 +180,8 @@ public class BankingService : IBankingService
                 c.ExternalAccountIdHash == accountIdHash,
                 ct);
 
+        var createdConnection = connection == null;
+        var connectionBefore = connection == null ? null : ConnectionSnapshot(connection);
         if (connection == null)
         {
             connection = new BankConnection
@@ -169,6 +207,17 @@ public class BankingService : IBankingService
         connection.UpdatedAt = now;
 
         await _db.SaveChangesAsync(ct);
+        await _audit.LogAsync(
+            portfolioId,
+            BankConnectionEntityType,
+            connection.Id,
+            createdConnection ? AuditLogOperation.Created : AuditLogOperation.Updated,
+            oldValues: connectionBefore,
+            newValues: ConnectionSnapshot(connection),
+            changeReason: createdConnection
+                ? $"Bank connection created: {connection.InstitutionName} {connection.AccountName}"
+                : $"Bank connection relinked: {connection.InstitutionName} {connection.AccountName}",
+            ct: ct);
         await SyncPlaidConnectionAsync(portfolioId, connection.Id, ct);
         return MapConnection(connection);
     }
@@ -182,6 +231,7 @@ public class BankingService : IBankingService
             .FirstOrDefaultAsync(c => c.PortfolioId == portfolioId && c.Id == connectionId && c.Provider == "Plaid", ct);
         if (connection == null) return null;
 
+        var connectionBefore = ConnectionSnapshot(connection);
         var accessToken = UnprotectNullable(connection.ExternalAccessTokenCipherText);
         if (string.IsNullOrWhiteSpace(accessToken))
         {
@@ -200,6 +250,8 @@ public class BankingService : IBankingService
         var linkedAccountId = UnprotectNullable(connection.ExternalAccountIdCipherText);
         var imported = new List<BankTransaction>();
         var modified = new List<BankTransaction>();
+        var removed = new List<BankTransaction>();
+        var transactionBeforeSnapshots = new Dictionary<int, string>();
         var skipped = 0;
         var incomingIds = synced.Added
             .Concat(synced.Modified)
@@ -253,6 +305,7 @@ public class BankingService : IBankingService
                 continue;
             }
 
+            transactionBeforeSnapshots[transaction.Id] = TransactionSnapshot(transaction);
             ApplyPlaidTransaction(transaction, item, now);
             modified.Add(transaction);
         }
@@ -265,12 +318,14 @@ public class BankingService : IBankingService
                 .ToListAsync(ct);
             foreach (var transaction in removedTransactions)
             {
+                transactionBeforeSnapshots[transaction.Id] = TransactionSnapshot(transaction);
                 transaction.MatchedPaymentId = null;
                 transaction.MatchedExpenseId = null;
                 transaction.MatchStatus = "Removed";
                 transaction.MatchConfidence = null;
                 transaction.Notes = "Removed by Plaid sync.";
                 transaction.UpdatedAt = now;
+                removed.Add(transaction);
             }
         }
 
@@ -278,6 +333,54 @@ public class BankingService : IBankingService
         connection.LastSyncedAt = now;
         connection.UpdatedAt = now;
         await _db.SaveChangesAsync(ct);
+
+        foreach (var transaction in imported)
+        {
+            await _audit.LogAsync(
+                portfolioId,
+                BankTransactionEntityType,
+                transaction.Id,
+                AuditLogOperation.Created,
+                newValues: TransactionSnapshot(transaction),
+                changeReason: $"Bank transaction imported from Plaid: {transaction.Description}",
+                ct: ct);
+        }
+
+        foreach (var transaction in modified)
+        {
+            await _audit.LogAsync(
+                portfolioId,
+                BankTransactionEntityType,
+                transaction.Id,
+                AuditLogOperation.Updated,
+                oldValues: transactionBeforeSnapshots[transaction.Id],
+                newValues: TransactionSnapshot(transaction),
+                changeReason: $"Bank transaction updated from Plaid: {transaction.Description}",
+                ct: ct);
+        }
+
+        foreach (var transaction in removed)
+        {
+            await _audit.LogAsync(
+                portfolioId,
+                BankTransactionEntityType,
+                transaction.Id,
+                AuditLogOperation.Updated,
+                oldValues: transactionBeforeSnapshots[transaction.Id],
+                newValues: TransactionSnapshot(transaction),
+                changeReason: $"Bank transaction removed by Plaid sync: {transaction.Description}",
+                ct: ct);
+        }
+
+        await _audit.LogAsync(
+            portfolioId,
+            BankConnectionEntityType,
+            connection.Id,
+            AuditLogOperation.Updated,
+            oldValues: connectionBefore,
+            newValues: ConnectionSnapshot(connection),
+            changeReason: $"Bank connection synced: {imported.Count} imported, {modified.Count} updated, {removedIds.Count} removed",
+            ct: ct);
 
         var mapped = await MapTransactionsWithSuggestionsAsync(portfolioId, imported.Concat(modified).ToList(), ct);
         return new SyncBankConnectionResponse
@@ -332,6 +435,8 @@ public class BankingService : IBankingService
                 c.AccountName == account &&
                 c.AccountMask == request.AccountMask, ct);
 
+        var createdConnection = connection == null;
+        var connectionBefore = connection == null ? null : ConnectionSnapshot(connection);
         if (connection == null)
         {
             connection = new BankConnection
@@ -398,6 +503,30 @@ public class BankingService : IBankingService
         connection.UpdatedAt = now;
         await _db.SaveChangesAsync(ct);
 
+        await _audit.LogAsync(
+            portfolioId,
+            BankConnectionEntityType,
+            connection.Id,
+            createdConnection ? AuditLogOperation.Created : AuditLogOperation.Updated,
+            oldValues: connectionBefore,
+            newValues: ConnectionSnapshot(connection),
+            changeReason: createdConnection
+                ? $"Bank connection created: {connection.InstitutionName} {connection.AccountName}"
+                : $"Bank connection imported into: {connection.InstitutionName} {connection.AccountName}",
+            ct: ct);
+
+        foreach (var transaction in imported)
+        {
+            await _audit.LogAsync(
+                portfolioId,
+                BankTransactionEntityType,
+                transaction.Id,
+                AuditLogOperation.Created,
+                newValues: TransactionSnapshot(transaction),
+                changeReason: $"Bank transaction imported: {transaction.Description}",
+                ct: ct);
+        }
+
         var mapped = await MapTransactionsWithSuggestionsAsync(portfolioId, imported, ct);
 
         return new ImportBankTransactionsResponse
@@ -419,13 +548,16 @@ public class BankingService : IBankingService
             .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
         if (transaction == null) return null;
 
+        var before = TransactionSnapshot(transaction);
         var entityType = request.EntityType.Trim();
+        string matchedEntityType;
         if (entityType.Equals("Payment", StringComparison.OrdinalIgnoreCase))
         {
             var exists = await _db.Payments.AnyAsync(p => p.PortfolioId == portfolioId && p.Id == request.EntityId, ct);
             if (!exists) return null;
             transaction.MatchedPaymentId = request.EntityId;
             transaction.MatchedExpenseId = null;
+            matchedEntityType = "Payment";
         }
         else if (entityType.Equals("Expense", StringComparison.OrdinalIgnoreCase))
         {
@@ -433,6 +565,7 @@ public class BankingService : IBankingService
             if (!exists) return null;
             transaction.MatchedExpenseId = request.EntityId;
             transaction.MatchedPaymentId = null;
+            matchedEntityType = "Expense";
         }
         else
         {
@@ -443,6 +576,15 @@ public class BankingService : IBankingService
         transaction.MatchConfidence = 1m;
         transaction.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+        await _audit.LogAsync(
+            portfolioId,
+            BankTransactionEntityType,
+            transaction.Id,
+            AuditLogOperation.Updated,
+            oldValues: before,
+            newValues: TransactionSnapshot(transaction),
+            changeReason: $"Bank transaction matched to {matchedEntityType} #{request.EntityId}",
+            ct: ct);
 
         return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
     }
@@ -453,12 +595,22 @@ public class BankingService : IBankingService
             .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
         if (transaction == null) return null;
 
+        var before = TransactionSnapshot(transaction);
         transaction.MatchedPaymentId = null;
         transaction.MatchedExpenseId = null;
         transaction.MatchStatus = "Unmatched";
         transaction.MatchConfidence = null;
         transaction.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+        await _audit.LogAsync(
+            portfolioId,
+            BankTransactionEntityType,
+            transaction.Id,
+            AuditLogOperation.Updated,
+            oldValues: before,
+            newValues: TransactionSnapshot(transaction),
+            changeReason: "Bank transaction match cleared",
+            ct: ct);
 
         return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
     }
@@ -514,6 +666,7 @@ public class BankingService : IBankingService
             .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
         if (transaction == null) return null;
 
+        var before = TransactionSnapshot(transaction);
         // Resolve the target. An explicit paymentId/expenseId wins; otherwise fall back to the
         // current suggestion so a one-tap "confirm" from the queue works without echoing the id.
         int? paymentId = request.PaymentId;
@@ -556,6 +709,17 @@ public class BankingService : IBankingService
         transaction.MatchConfidence = 1m;
         transaction.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+        await _audit.LogAsync(
+            portfolioId,
+            BankTransactionEntityType,
+            transaction.Id,
+            AuditLogOperation.Updated,
+            oldValues: before,
+            newValues: TransactionSnapshot(transaction),
+            changeReason: paymentId.HasValue
+                ? $"Bank match confirmed to Payment #{paymentId.Value}"
+                : $"Bank match confirmed to Expense #{expenseId!.Value}",
+            ct: ct);
 
         return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
     }
@@ -566,6 +730,7 @@ public class BankingService : IBankingService
             .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
         if (transaction == null) return null;
 
+        var before = TransactionSnapshot(transaction);
         // Reviewed and decided to be NOT a match. The line is real bank money that does not
         // correspond to a recorded payment/expense, so it leaves the queue but stays in the books
         // (accounting still counts dismissed, unlinked bank activity — only the link is cleared).
@@ -575,6 +740,15 @@ public class BankingService : IBankingService
         transaction.MatchConfidence = null;
         transaction.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+        await _audit.LogAsync(
+            portfolioId,
+            BankTransactionEntityType,
+            transaction.Id,
+            AuditLogOperation.Updated,
+            oldValues: before,
+            newValues: TransactionSnapshot(transaction),
+            changeReason: "Bank suggested match dismissed",
+            ct: ct);
 
         return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
     }
@@ -585,6 +759,7 @@ public class BankingService : IBankingService
             .FirstOrDefaultAsync(t => t.Id == transactionId, ct);
         if (transaction == null) return null;
 
+        var before = TransactionSnapshot(transaction);
         // Personal / not-business money (Starbucks, Uber, an owner draw, etc.). We reuse the existing
         // "Removed" status because that is the one accounting already excludes everywhere
         // (MatchStatus != "Removed"), so an ignored line never inflates the business P&L. It also
@@ -600,6 +775,15 @@ public class BankingService : IBankingService
         transaction.Notes = "Marked personal / ignored by the landlord.";
         transaction.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+        await _audit.LogAsync(
+            portfolioId,
+            BankTransactionEntityType,
+            transaction.Id,
+            AuditLogOperation.Updated,
+            oldValues: before,
+            newValues: TransactionSnapshot(transaction),
+            changeReason: "Bank transaction ignored as personal / not business",
+            ct: ct);
 
         return (await MapTransactionsWithSuggestionsAsync(portfolioId, [transaction], ct)).Single();
     }

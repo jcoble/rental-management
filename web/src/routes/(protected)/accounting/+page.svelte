@@ -170,6 +170,26 @@
 	let paymentErrors = $state<Record<string, string>>({});
 	let paymentDeleteTarget = $state<Payment | null>(null);
 
+	function clearPaymentError(field: string) {
+		if (!paymentErrors[field]) return;
+		const next = { ...paymentErrors };
+		delete next[field];
+		paymentErrors = next;
+	}
+
+	$effect(() => {
+		if (paymentForm.leaseId) clearPaymentError('leaseId');
+	});
+	$effect(() => {
+		if (paymentForm.amount) clearPaymentError('amount');
+	});
+	$effect(() => {
+		if (paymentForm.dueDate) clearPaymentError('dueDate');
+	});
+	$effect(() => {
+		if (paymentForm.amountPaid) clearPaymentError('amountPaid');
+	});
+
 	function invalidatePayments() {
 		queryClient.invalidateQueries({ queryKey: ['payments', portfolioId] });
 		queryClient.invalidateQueries({ queryKey: ['accounting-transactions', portfolioId] });
@@ -970,7 +990,7 @@
 				<div class="border-t px-4 py-3">
 					<div class="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
 						{#each (reports?.vendors1099 ?? []).slice(0, 9) as vendor}
-							<a href="/owners" class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-muted/60">
+							<a href="/vendors/{vendor.vendorId}" class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-muted/60">
 								<span class="min-w-0">
 									<span class="block truncate text-sm">{vendor.vendorName}</span>
 									<span class="block text-xs text-muted-foreground">
