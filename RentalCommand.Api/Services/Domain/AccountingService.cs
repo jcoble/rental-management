@@ -1320,8 +1320,9 @@ public class AccountingService : IAccountingService
             .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
 
         // ── Rent roll ─────────────────────────────────────────────────────────────────────────────
-        // Current leases (active or under notice). Past-due balance is owed rent/charges due in the past.
-        var leases = await _db.Leases
+        // Current leases (active or under notice). Past-due balance is projected with each lease row as
+        // a correlated SQL sum, so the packet does not load a separate aggregate and join it in memory.
+        var rentRollRows = await _db.Leases
             .AsNoTracking()
             .Where(l => l.PortfolioId == portfolioId &&
                         (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven))
@@ -1329,7 +1330,6 @@ public class AccountingService : IAccountingService
             .ThenBy(l => l.Unit!.UnitNumber)
             .Select(l => new
             {
-                l.Id,
                 PropertyName = l.Property!.Name,
                 UnitNumber = l.Unit!.UnitNumber,
                 TenantFirstName = l.Tenant!.FirstName,
@@ -1338,29 +1338,21 @@ public class AccountingService : IAccountingService
                 l.StartDate,
                 l.EndDate,
                 l.Status,
+                PastDueBalance = _db.Payments
+                    .AsNoTracking()
+                    .Where(p => p.PortfolioId == portfolioId &&
+                                p.LeaseId == l.Id &&
+                                (p.Status == PaymentStatus.Scheduled ||
+                                 p.Status == PaymentStatus.Partial ||
+                                 p.Status == PaymentStatus.Late) &&
+                                (p.Status == PaymentStatus.Late || p.DueDate < now))
+                    .Sum(p => (decimal?)(p.Status == PaymentStatus.Partial
+                        ? p.Amount - (p.AmountPaid ?? 0m)
+                        : p.Amount)) ?? 0m,
             })
             .ToListAsync(ct);
 
-        // Past-due balance per lease: the full owed-and-overdue predicate (including the `DueDate < now`
-        // / Late check) is applied in the WHERE and the sum is grouped SQL-side — no rows are pulled
-        // back to filter and total in memory.
-        var pastDueByLease = (await _db.Payments
-                .AsNoTracking()
-                .Where(p => p.PortfolioId == portfolioId &&
-                            p.Lease != null &&
-                            (p.Lease.Status == LeaseStatus.Active || p.Lease.Status == LeaseStatus.NoticeGiven) &&
-                            (p.Status == PaymentStatus.Scheduled ||
-                             p.Status == PaymentStatus.Partial ||
-                             p.Status == PaymentStatus.Late) &&
-                            (p.Status == PaymentStatus.Late || p.DueDate < now))
-                .GroupBy(p => p.LeaseId)
-                // A Partial owes only its unpaid remainder; Scheduled/Late owe in full.
-                .Select(g => new { LeaseId = g.Key, Total = g.Sum(p =>
-                    p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount) })
-                .ToListAsync(ct))
-            .ToDictionary(g => g.LeaseId, g => g.Total);
-
-        var rentRoll = leases
+        var rentRoll = rentRollRows
             .Select(l => new YearEndRentRollRow
             {
                 PropertyName = l.PropertyName,
@@ -1370,7 +1362,7 @@ public class AccountingService : IAccountingService
                 LeaseStart = l.StartDate,
                 LeaseEnd = l.EndDate,
                 LeaseStatus = l.Status.ToString(),
-                PastDueBalance = pastDueByLease.GetValueOrDefault(l.Id, 0m),
+                PastDueBalance = l.PastDueBalance,
             })
             .ToList();
 

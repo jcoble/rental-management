@@ -809,7 +809,7 @@ public class ReportsService : IReportsService
 
     /// <summary>
     /// Rent roll: current leases (active or under notice) with each lease's past-due balance, computed
-    /// DB-side (the owed-and-overdue sum is grouped in SQL; no rows are pulled back to total in memory).
+    /// DB-side (the owed-and-overdue sum is projected as a correlated SQL aggregate with each lease row).
     /// </summary>
     private async Task<IReadOnlyList<YearEndRentRollRow>> BuildRentRollAsync(int portfolioId, int? propertyId, CancellationToken ct)
     {
@@ -822,12 +822,11 @@ public class ReportsService : IReportsService
         if (propertyId.HasValue)
             leaseQuery = leaseQuery.Where(l => l.PropertyId == propertyId.Value);
 
-        var leases = await leaseQuery
+        var rows = await leaseQuery
             .OrderBy(l => l.Property!.Name)
             .ThenBy(l => l.Unit!.UnitNumber)
             .Select(l => new
             {
-                l.Id,
                 PropertyName = l.Property!.Name,
                 UnitNumber = l.Unit!.UnitNumber,
                 TenantFirstName = l.Tenant!.FirstName,
@@ -836,37 +835,21 @@ public class ReportsService : IReportsService
                 l.StartDate,
                 l.EndDate,
                 l.Status,
+                PastDueBalance = _db.Payments
+                    .AsNoTracking()
+                    .Where(p => p.PortfolioId == portfolioId &&
+                                p.LeaseId == l.Id &&
+                                (p.Status == PaymentStatus.Scheduled ||
+                                 p.Status == PaymentStatus.Partial ||
+                                 p.Status == PaymentStatus.Late) &&
+                                (p.Status == PaymentStatus.Late || p.DueDate < now))
+                    .Sum(p => (decimal?)(p.Status == PaymentStatus.Partial
+                        ? p.Amount - (p.AmountPaid ?? 0m)
+                        : p.Amount)) ?? 0m,
             })
             .ToListAsync(ct);
 
-        if (leases.Count == 0)
-            return [];
-
-        // Past-due balance per lease: owed (Scheduled/Partial/Late) and overdue (Late, or due in the
-        // past). A Partial owes only its unpaid remainder (Amount − AmountPaid). Grouped + summed SQL-side.
-        var pastDueQuery = _db.Payments
-            .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId &&
-                        p.Lease != null &&
-                        (p.Lease.Status == LeaseStatus.Active || p.Lease.Status == LeaseStatus.NoticeGiven) &&
-                        (p.Status == PaymentStatus.Scheduled ||
-                         p.Status == PaymentStatus.Partial ||
-                         p.Status == PaymentStatus.Late) &&
-                        (p.Status == PaymentStatus.Late || p.DueDate < now));
-        if (propertyId.HasValue)
-            pastDueQuery = pastDueQuery.Where(p => p.Lease!.PropertyId == propertyId.Value);
-
-        var pastDueByLease = (await pastDueQuery
-            .GroupBy(p => p.LeaseId)
-            .Select(g => new
-            {
-                LeaseId = g.Key,
-                Total = g.Sum(p => p.Status == PaymentStatus.Partial ? (p.Amount - (p.AmountPaid ?? 0m)) : p.Amount),
-            })
-            .ToListAsync(ct))
-            .ToDictionary(g => g.LeaseId, g => g.Total);
-
-        return leases
+        return rows
             .Select(l => new YearEndRentRollRow
             {
                 PropertyName = l.PropertyName,
@@ -878,7 +861,7 @@ public class ReportsService : IReportsService
                 LeaseStart = l.StartDate,
                 LeaseEnd = l.EndDate,
                 LeaseStatus = l.Status.ToString(),
-                PastDueBalance = pastDueByLease.GetValueOrDefault(l.Id, 0m),
+                PastDueBalance = l.PastDueBalance,
             })
             .ToList();
     }

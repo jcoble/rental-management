@@ -764,6 +764,34 @@ public class ReportsServiceTests : IDisposable
         view.RentRoll.Should().NotContain(r => r.PropertyName == "Oak");
     }
 
+    [Fact]
+    public async Task GetYearEndAsync_ProjectsRentRollPastDueWithLeaseRowsInSql()
+    {
+        var now = DateTime.UtcNow;
+        var maple = SeedProperty("Maple");
+        var behind = SeedLease(maple, SeedUnit("1", maple.Id), SeedTenant("Ann", "Acre"), rent: 1_000m,
+            start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.Active);
+        var current = SeedLease(maple, SeedUnit("2", maple.Id), SeedTenant("Bob", "Birch"), rent: 900m,
+            start: D(2025, 1, 1), end: D(2026, 1, 1), status: LeaseStatus.NoticeGiven);
+
+        SeedPayment(behind, 1_000m, dueDate: now.AddDays(-30), PaymentStatus.Scheduled);
+        SeedPayment(behind, 500m, dueDate: now.AddDays(-20), PaymentStatus.Partial).AmountPaid = 200m;
+        SeedPayment(behind, 999m, dueDate: now.AddDays(-10), PaymentStatus.Paid, paidDate: now.AddDays(-9));
+        SeedPayment(current, 900m, dueDate: now.AddDays(30), PaymentStatus.Scheduled);
+        _db.SaveChanges();
+        _executedSql.Clear();
+
+        var view = await _sut.GetYearEndAsync(PortfolioId, 2025, ct: CancellationToken.None);
+
+        view.RentRoll.Should().HaveCount(2);
+        view.RentRoll.Single(r => r.UnitNumber == "1").PastDueBalance.Should().Be(1_300m);
+        view.RentRoll.Single(r => r.UnitNumber == "2").PastDueBalance.Should().Be(0m);
+
+        _executedSql.Where(IsStandalonePastDueByLeaseAggregate)
+            .Should()
+            .BeEmpty("year-end rent-roll balances should be projected with the lease rows instead of materializing a payment aggregate dictionary");
+    }
+
     // ── Occupancy % (DB) ───────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -1024,6 +1052,11 @@ public class ReportsServiceTests : IDisposable
     // ── Seed helpers ───────────────────────────────────────────────────────────────────────────────
 
     private static DateTime D(int y, int m, int d) => new(y, m, d, 0, 0, 0, DateTimeKind.Utc);
+
+    private static bool IsStandalonePastDueByLeaseAggregate(string sql) =>
+        sql.TrimStart().StartsWith("SELECT \"p\".\"LeaseId\"", StringComparison.Ordinal) &&
+        sql.Contains("FROM \"Payments\" AS \"p\"", StringComparison.Ordinal) &&
+        sql.Contains("GROUP BY \"p\".\"LeaseId\"", StringComparison.Ordinal);
 
     private Property SeedProperty(string name)
     {
