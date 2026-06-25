@@ -62,6 +62,7 @@ Fixed and verified:
 - `TSK-421`: tenant portal dashboard notification links now mark unread notifications read, refresh the app-shell unread badge, and then navigate to the target workflow.
 - `TSK-422`, `TSK-423`, and `TSK-424`: tenant portal dashboard now shows upcoming tenant appointments, treats due-today rent as due today instead of overdue, and fills tenant-scoped appointment unit labels from the active/latest lease when the appointment itself has no direct unit.
 - `TSK-425`: tenant dashboard quick maintenance submit now shows inline title/description validation instead of silently doing nothing on an empty submit.
+- `TSK-426`: tenant portal maintenance page submit now shows inline title/description validation instead of silently doing nothing on an empty submit, while preserving valid tenant work-order creation.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3510,3 +3511,51 @@ Verification:
 - DB proof: `WorkOrders.Id = 7`, title `TSK-397 Pass 69 dashboard quick maintenance validation proof`, `TenantId = 10`, `UnitId = 9`, `LeaseId = 8`, `Status = 0`, `Priority = 1`, `CreatedBy = Tenant`.
 
 Status: Pass after fixing tenant dashboard quick maintenance validation and proving the submit path still creates a tenant-scoped work order. Continue the real-user pass with tenant portal maintenance list/detail follow-through and remaining non-banking/non-QuickBooks workflows.
+
+## Pass 70 Tenant Portal Maintenance Detail Follow-Through And Validation
+
+Date: 2026-06-25
+Branch: `tsk-397-full-ui-pass-70`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Fresh account:
+- Tenant portal user: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`, tenant id `10`
+
+Acceptance criteria:
+- A tenant-created dashboard maintenance request should appear on the full tenant maintenance page without reload-only workarounds.
+- Opening the request should show the title, status, priority, description, progress, and document empty state in the detail modal.
+- A tenant should be able to attach a camera-style image from the detail modal's Photos & documents panel.
+- The attached image should be retrievable through the tenant UI and should match the uploaded file bytes.
+- Empty submit on the full tenant maintenance page should show visible field-level validation for missing issue title and description.
+- Valid submit on the full tenant maintenance page should still create a tenant-scoped work order, clear validation state, reset the form, and refresh the request list.
+
+Bug `TSK-426`:
+- Repro: As Blake Hayes Portal, open `/portal/maintenance` and click `Submit Request` in the full Submit a request form with title and description blank.
+- Observed before fix: `submit()` returned early when either field was blank, with no toast, inline error, invalid field state, or focus-changing feedback.
+- Fix: the full maintenance form now tracks attempted submit state, renders inline errors for missing title and description, marks invalid fields with `aria-invalid`, wires `aria-describedby`, and clears validation state after a successful submit.
+- Regression: `web/src/lib/portal/maintenance-page.test.ts`.
+
+Verification:
+- UI guide: `Docs/Testing/UI/tsk-397-pass-70-portal-maintenance-detail.md`.
+- RED: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/maintenance-page.test.ts` failed before the fix because the route had no `requestSubmitted`, title error, or description error state.
+- GREEN: `rtk pnpm --dir web exec node --test --experimental-strip-types src/lib/portal/maintenance-page.test.ts` passed 1/1 after the fix.
+- GREEN: `rtk pnpm --dir web check` reported 0 errors and the existing 4 `PageHeader.svelte` unused-selector warnings.
+- Browser proof: Playwright CLI opened `/portal` as Blake Hayes Portal, clicked the dashboard Maintenance card, and `/portal/maintenance` listed `TSK-397 Pass 69 dashboard quick maintenance validation proof` first with `Normal` and `New`. Snapshot: `.playwright-cli/page-2026-06-25T01-22-08-151Z.yml`.
+- Browser detail proof: opening the request showed the detail modal with status `New`, priority `Normal`, description `Kitchen cabinet door hinge is loose. Submitted from the tenant dashboard quick form after validation proof.`, progress row `Tenant · Created`, and the empty Photos & documents state. Snapshot: `.playwright-cli/page-2026-06-25T01-22-16-862Z.yml`.
+- Browser upload proof: uploaded `output/qa/production-scale-scans/05-work-orders-camera/work-order-002.jpg` through the modal Upload button. The app showed `"work-order-002.jpg" uploaded.` and listed `work-order-002.jpg` as a `130.1 KB` attachment. Snapshot: `.playwright-cli/page-2026-06-25T01-22-43-237Z.yml`; screenshot: `.playwright-cli/page-2026-06-25T01-23-43-441Z.png`.
+- Browser download proof: clicking the document name downloaded `work-order-002.jpg` to `.playwright-cli/work-order-002.jpg`.
+- File proof: `file .playwright-cli/work-order-002.jpg` reported a JPEG image, `1800x2400`; SHA-256 matched the uploaded fixture exactly: `f8ab417ce87918bd21905488a252bd17be4c4d1a19d5ea77444f77323e99dc6c`.
+- Network proof: request log showed `GET /api/v1/portal/work-orders/7 => 200`, `GET /api/v1/documents?entityType=WorkOrder&entityId=7 => 200`, `POST /api/v1/documents => 201`, refreshed `GET /api/v1/documents?entityType=WorkOrder&entityId=7 => 200`, and `GET /api/v1/documents/44/file => 200`.
+- DB proof: `StoredFiles.Id = 44`, `FileName = work-order-002.jpg`, `ContentType = image/jpeg`, `FileSize = 133263`, `EntityType = WorkOrder`, `EntityId = 7`, `DeletedAt = NULL`, `UploadedAt = 2026-06-25 01:22:42.240963+00`.
+- Browser validation proof: empty `Submit Request` rendered invalid title/description fields plus `Issue title is required.` and `Describe the issue before submitting.` Snapshot: `.playwright-cli/page-2026-06-25T01-27-20-918Z.yml`; screenshot: `.playwright-cli/page-2026-06-25T01-27-22-088Z.png`.
+- Browser happy-path proof after validation: filling `TSK-397 Pass 70 full maintenance validation proof` and the closet-door description submitted successfully, showed `Maintenance request submitted.`, cleared the form, and rendered the new request first as `New` / `Normal`. Snapshot: `.playwright-cli/page-2026-06-25T01-27-35-439Z.yml`; screenshot: `.playwright-cli/page-2026-06-25T01-27-50-018Z.png`.
+- DB proof after validation: `WorkOrders.Id = 8`, title `TSK-397 Pass 70 full maintenance validation proof`, `TenantId = 10`, `UnitId = 9`, `LeaseId = 8`, `Status = 0`, `Priority = 1`, `CreatedBy = Tenant`, `RequestedAt = 2026-06-25 01:27:34.428372+00`.
+- Network proof after validation: request log showed `POST /api/v1/portal/tenant/work-orders => 201` followed by `GET /api/v1/portal/work-orders => 200`.
+- App console proof: Playwright CLI `console warning` and `console error` returned 0 app warnings/errors.
+
+Status: Pass after fixing full tenant maintenance page validation and preserving valid request creation. Continue the real-user tenant portal pass with remaining maintenance close/delete behaviors, then resume remaining non-banking/non-QuickBooks workflows.
