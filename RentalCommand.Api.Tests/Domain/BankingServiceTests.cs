@@ -122,6 +122,83 @@ public class BankingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ImportAsync_AuditsConnectionAndImportedTransactions()
+    {
+        await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Test Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "audit-import-1",
+                    PostedAt = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc),
+                    Description = "ACH CREDIT RENT",
+                    Amount = 1400m,
+                },
+            ],
+        });
+
+        var connection = _ctx.Db.BankConnections.Single();
+        var transaction = _ctx.Db.BankTransactions.Single();
+
+        _ctx.Db.AuditLogs.Should().ContainSingle(a =>
+            a.EntityType == "BankConnection" &&
+            a.EntityId == connection.Id &&
+            a.Operation == AuditLogOperation.Created &&
+            a.NewValues != null &&
+            a.NewValues.Contains("\"institutionName\":\"Test Bank\""));
+        _ctx.Db.AuditLogs.Should().ContainSingle(a =>
+            a.EntityType == "BankTransaction" &&
+            a.EntityId == transaction.Id &&
+            a.Operation == AuditLogOperation.Created &&
+            a.NewValues != null &&
+            a.NewValues.Contains("\"providerTransactionId\":\"audit-import-1\""));
+    }
+
+    [Fact]
+    public async Task MatchAsync_AuditsReconciliationStateChange()
+    {
+        var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
+        var imported = await _sut.ImportAsync(1, new ImportBankTransactionsRequest
+        {
+            Provider = "Manual",
+            InstitutionName = "Test Bank",
+            AccountName = "Operating checking",
+            Transactions =
+            [
+                new ImportBankTransactionItem
+                {
+                    ProviderTransactionId = "audit-match-1",
+                    PostedAt = payment.PaidDate!.Value,
+                    Description = "Rent deposit",
+                    Amount = payment.Amount,
+                },
+            ],
+        });
+        var transactionId = imported.Transactions.Single().Id;
+        _ctx.Db.AuditLogs.RemoveRange(_ctx.Db.AuditLogs);
+        await _ctx.Db.SaveChangesAsync();
+
+        await _sut.MatchAsync(1, transactionId, new MatchBankTransactionRequest
+        {
+            EntityType = "Payment",
+            EntityId = payment.Id,
+        });
+
+        var log = _ctx.Db.AuditLogs.Should().ContainSingle(a =>
+            a.EntityType == "BankTransaction" &&
+            a.EntityId == transactionId &&
+            a.Operation == AuditLogOperation.Updated).Subject;
+        log.OldValues.Should().Contain("\"matchStatus\":\"Unmatched\"");
+        log.NewValues.Should().Contain("\"matchStatus\":\"Matched\"");
+        log.NewValues.Should().Contain($"\"matchedPaymentId\":{payment.Id}");
+        log.ChangeReason.Should().Contain("matched to Payment");
+    }
+
+    [Fact]
     public async Task ReviewQueue_SurfacesSuggestedMatch_ConfirmLinksAndRemovesIt_DismissRemovesIt()
     {
         var payment = SeedRentPayment(new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc));
@@ -915,6 +992,7 @@ public class BankingServiceTests : IDisposable
             ctx.Db,
             new EphemeralDataProtectionProvider(),
             _plaid.Object,
+            new RentalCommand.Api.Services.AuditTrailService(ctx.Db, new RentalCommand.Data.Auditing.AuditScope()),
             Options.Create(new PlaidOptions
             {
                 Environment = "sandbox",
@@ -1028,6 +1106,7 @@ public class BankingServiceTests : IDisposable
             _ctx.Db,
             new EphemeralDataProtectionProvider(),
             _plaid.Object,
+            new RentalCommand.Api.Services.AuditTrailService(_ctx.Db, new RentalCommand.Data.Auditing.AuditScope()),
             Options.Create(options ?? new PlaidOptions
             {
                 Environment = "sandbox",

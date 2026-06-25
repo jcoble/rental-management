@@ -6,12 +6,14 @@ const depositDetailSource = readFileSync(
 	'src/routes/(protected)/deposits/[id]/+page.svelte',
 	'utf8'
 );
+const depositListSource = readFileSync('src/routes/(protected)/deposits/+page.svelte', 'utf8');
 const importSource = readFileSync('src/routes/(protected)/import/+page.svelte', 'utf8');
 const taxSource = readFileSync('src/routes/(protected)/tax/+page.svelte', 'utf8');
 
 describe('pass 27 UI regressions', () => {
 	it('labels the deposit return confirmation as a return action instead of delete', () => {
 		assert.match(depositDetailSource, /confirmLabel="Process return"/);
+		assert.match(depositListSource, /confirmLabel="Process return"/);
 	});
 
 	it('shows the same tenant CSV columns that the downloaded template accepts', () => {

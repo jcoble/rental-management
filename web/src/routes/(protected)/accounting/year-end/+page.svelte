@@ -6,9 +6,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Download, Wallet, Receipt, Home, AlertCircle, Info } from '@lucide/svelte';
 
-	// Default to the previous calendar year (the year you file for).
+	// Default to the current operating year; completed prior-year packets stay one select away.
 	const currentYear = new Date().getFullYear();
-	let year = $state(currentYear - 1);
+	let year = $state(currentYear);
 	const yearOptions = Array.from({ length: 6 }, (_, i) => currentYear - i);
 
 	let selectedPropertyId = $state<number | 'all'>('all');
