@@ -68,6 +68,7 @@ Fixed and verified:
 - `TSK-426`: tenant portal maintenance page submit now shows inline title/description validation instead of silently doing nothing on an empty submit, while preserving valid tenant work-order creation.
 - `TSK-427`: tenant-only users now land on a tenant-accessible `/portal/security` account security route from the user menu instead of bouncing away from the protected staff `/settings/security` route.
 - Pass 80 auth/setup front door: anonymous welcome/register/verify/login/logout/forgot/reset, live setup handoff, anonymous route guard, and sandbox sample-data setup all pass through real UI interactions on local sanitized data.
+- Pass 81 access guards: owner-admin self-row lockout, tenant direct-access denial/redirects for staff/admin/superadmin routes, and stale-session return-to-portal behavior are browser-proven.
 
 Open, watch, or deferred:
 - `TSK397-B020`: scan-new-rental review still uses broad support lookups (`take=200`) for property/tenant choices. Needs bounded lookup/search contracts before production-scale DB-side compliance can be claimed for that workflow.
@@ -3966,3 +3967,42 @@ Verification:
 - Network proof: final Dashboard load returned `200` for route/API requests. Two `/api/v1/ai/briefing` requests aborted during load and were followed by `/api/v1/ai/briefing => 200`, so no user-visible failure was observed.
 
 Status: Pass with documentation-only verification. No code fix or regression test was added in this slice. Deferred boundaries remain production/sensitive data, real email/SMS delivery, Plaid banking, connected QuickBooks/provider accounting, and final Go Live.
+
+## Pass 81 Access Guards And Stale Sessions
+
+Date: 2026-06-25
+Branch: `tsk-397-real-user-pass-81`
+Worktree: `/Users/blackcolours/dev/work/worktrees/rental-management/tsk-397-full-ui-pass-26`
+
+Local stack:
+- Web: `https://localhost:6042`
+- API: `https://localhost:6041` (`http://localhost:6040`)
+- DB: PostgreSQL container `rentalcommand-tsk397-pass26-db`, database `rentalcommand_tsk397_pass26_clean`, host port `5583`
+
+Accounts:
+- Owner/admin sample-data account: `tsk397.pass80.sandbox.1782362697@example.local`
+- Tenant-only account: Blake Hayes Portal, `blake.hayes.portal.pass55@example.local`
+
+Guide:
+- `Docs/Testing/UI/tsk-397-pass-81-access-guards.md`
+
+Acceptance criteria:
+- Owner/admin self role/status controls must stay disabled.
+- Tenant-only users must not see staff/admin shells or data by directly navigating to staff-only URLs.
+- Superadmin Engine must remain hidden from non-allowlisted users when `PLATFORM_ADMIN_EMAILS` is unset.
+- Error/recovery routes must return tenants to the tenant portal.
+- Stale sessions must redirect to login with a safe local redirect target and return to the intended portal route after login.
+
+Verification:
+- As `tsk397.pass80.sandbox.1782362697@example.local`, `/admin/users` loaded Team with the sample-data banner and a single current-user row. Role `Admin` and status `Active` controls were disabled for `(you)`, preventing self-lockout.
+- As Blake Hayes Portal, login landed at `/portal` with portal-only navigation and no staff shell.
+- Tenant direct `/admin/users` returned `Error 403` with `Admin access required`.
+- Tenant direct `/admin/audit` returned the same `Error 403` state.
+- Tenant direct `/superadmin/engine` returned the app `Error 404` page because this local session is not allowlisted by `PLATFORM_ADMIN_EMAILS`.
+- Tenant direct `/settings/security`, `/settings/accounting`, and `/audit` redirected back to `/portal`.
+- Clicking `Back to dashboard` from the 403 page returned the tenant to `/portal`, not staff Dashboard.
+- After `cookie-clear`, opening `/portal/messages` redirected to `/login?redirectTo=%2Fportal%2Fmessages`; re-signing in as Blake returned to `/portal/messages`.
+- Request proof contained only the deliberate guard responses for this slice: `/admin/users => 403`, `/admin/audit => 403`, `/superadmin/engine => 404`, followed by successful portal/login requests.
+- Final console proof after returning to `/portal/messages`: Vite debug messages only, `Errors: 0`, `Warnings: 0`.
+
+Status: Pass with documentation-only verification. No code fix or regression test was added in this slice. Remaining related variants are service-error simulation and platform-admin allowlist Engine health; provider-bound QuickBooks/Plaid work stays deferred.
