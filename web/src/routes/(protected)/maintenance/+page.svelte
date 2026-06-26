@@ -16,6 +16,7 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import { clearFieldError } from '$lib/forms/form-errors';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import { Plus, ShieldCheck, RefreshCw } from '@lucide/svelte';
@@ -106,6 +107,36 @@
 	let woForm = $state({ ...emptyWo });
 	let woErrors = $state<Record<string, string>>({});
 	let woDeleteTarget = $state<WorkOrder | null>(null);
+
+	function clearWoError(field: string) {
+		const next = clearFieldError(woErrors, field);
+		if (next !== woErrors) woErrors = next;
+	}
+
+	$effect(() => {
+		if (woForm.propertyId) clearWoError('propertyId');
+	});
+	$effect(() => {
+		if (woForm.title.trim()) clearWoError('title');
+	});
+	$effect(() => {
+		if (woForm.description.trim()) clearWoError('description');
+	});
+	$effect(() => {
+		if (woForm.category.trim()) clearWoError('category');
+	});
+	$effect(() => {
+		if (woForm.scheduledFor) clearWoError('scheduledFor');
+	});
+	$effect(() => {
+		if (!woForm.scheduledWindowEnd || !woForm.scheduledFor) return;
+		const start = new Date(woForm.scheduledFor).getTime();
+		const end = new Date(woForm.scheduledWindowEnd).getTime();
+		if (!isNaN(start) && !isNaN(end) && end > start) clearWoError('scheduledWindowEnd');
+	});
+	$effect(() => {
+		if (woForm.estimatedCost) clearWoError('estimatedCost');
+	});
 
 	// Optional work-order context. Tenants/vendors load only while the form is open; units are
 	// fetched per selected property so the Unit dropdown only offers units of that property.
@@ -204,6 +235,18 @@
 	let showInspectionForm = $state(false);
 	let inspectionForm = $state({ ...emptyInspection });
 	let inspectionErrors = $state<Record<string, string>>({});
+
+	function clearInspectionError(field: string) {
+		const next = clearFieldError(inspectionErrors, field);
+		if (next !== inspectionErrors) inspectionErrors = next;
+	}
+
+	$effect(() => {
+		if (inspectionForm.propertyId) clearInspectionError('propertyId');
+	});
+	$effect(() => {
+		if (inspectionForm.scheduledFor) clearInspectionError('scheduledFor');
+	});
 
 	// Smart-checklist templates (built-ins have negative ids). Loaded only when the form is open.
 	const templatesQuery = createQuery(() => ({

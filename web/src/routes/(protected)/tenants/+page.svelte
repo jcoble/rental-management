@@ -12,6 +12,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import TenantFields from '$lib/components/forms/TenantFields.svelte';
+	import { clearFieldError } from '$lib/forms/form-errors';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import { page } from '$app/state';
@@ -69,6 +70,21 @@
 	let deleteTarget = $state<Tenant | null>(null);
 	const deleteState = $derived(deleteTarget ? getTenantDeleteState(deleteTarget) : null);
 	let createParamHandled = $state(false);
+
+	function clearTenantError(field: string) {
+		const next = clearFieldError(formErrors, field);
+		if (next !== formErrors) formErrors = next;
+	}
+
+	$effect(() => {
+		if (form.firstName.trim()) clearTenantError('firstName');
+	});
+	$effect(() => {
+		if (form.lastName.trim()) clearTenantError('lastName');
+	});
+	$effect(() => {
+		if (!form.email.trim() || form.email.includes('@')) clearTenantError('email');
+	});
 
 	function invalidate() {
 		queryClient.invalidateQueries({ queryKey: ['tenants', portfolioId] });

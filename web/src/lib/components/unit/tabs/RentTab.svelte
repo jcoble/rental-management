@@ -13,6 +13,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
+	import { clearFieldError } from '$lib/forms/form-errors';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { Plus, X, ScanLine, ChevronDown, ChevronRight } from '@lucide/svelte';
 
@@ -97,6 +98,18 @@
 	let showCreate = $state(false);
 	let createForm = $state(emptyCreate());
 	let createErrors = $state<Record<string, string>>({});
+
+	function clearCreateError(field: string) {
+		const next = clearFieldError(createErrors, field);
+		if (next !== createErrors) createErrors = next;
+	}
+
+	$effect(() => {
+		if (createForm.amount) clearCreateError('amount');
+	});
+	$effect(() => {
+		if (createForm.dueDate) clearCreateError('dueDate');
+	});
 
 	function openCreate() {
 		createForm = emptyCreate();

@@ -19,6 +19,7 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
+	import { clearFieldError } from '$lib/forms/form-errors';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import { Plus, RefreshCw, Pencil, Trash2 } from '@lucide/svelte';
@@ -121,6 +122,24 @@
 	let form = $state({ ...emptyForm });
 	let errors = $state<Record<string, string>>({});
 	let deleteTarget = $state<RecurringMaintenanceTask | null>(null);
+
+	function clearRecurringError(field: string) {
+		const next = clearFieldError(errors, field);
+		if (next !== errors) errors = next;
+	}
+
+	$effect(() => {
+		if (form.propertyId) clearRecurringError('propertyId');
+	});
+	$effect(() => {
+		if (form.title.trim()) clearRecurringError('title');
+	});
+	$effect(() => {
+		if (form.nextDueDate) clearRecurringError('nextDueDate');
+	});
+	$effect(() => {
+		if (form.category.trim()) clearRecurringError('category');
+	});
 
 	// Units for the selected property (optional picker, scoped to property).
 	const unitsQuery = createQuery(() => ({

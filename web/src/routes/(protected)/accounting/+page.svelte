@@ -42,6 +42,7 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
+	import { clearFieldError } from '$lib/forms/form-errors';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	const queryClient = useQueryClient();
@@ -331,6 +332,30 @@
 	let expenseDeleteTarget = $state<Expense | null>(null);
 	// Holds the parsed ReceiptData of the expense being edited, so line items / extra survive a re-save.
 	let editingReceipt = $state<Record<string, any> | null>(null);
+
+	function clearExpenseError(field: string) {
+		const next = clearFieldError(expenseErrors, field);
+		if (next !== expenseErrors) expenseErrors = next;
+	}
+
+	$effect(() => {
+		if (expenseForm.description.trim()) clearExpenseError('description');
+	});
+	$effect(() => {
+		if (expenseForm.amount) clearExpenseError('amount');
+	});
+	$effect(() => {
+		if (expenseForm.incurredAt) clearExpenseError('incurredAt');
+	});
+	$effect(() => {
+		if (expenseForm.subtotal) clearExpenseError('subtotal');
+	});
+	$effect(() => {
+		if (expenseForm.taxAmount) clearExpenseError('taxAmount');
+	});
+	$effect(() => {
+		if (expenseForm.taxRate) clearExpenseError('taxRate');
+	});
 
 	function invalidateExpenses() {
 		queryClient.invalidateQueries({ queryKey: ['expenses', portfolioId] });
