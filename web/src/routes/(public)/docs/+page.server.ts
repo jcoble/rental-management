@@ -7,7 +7,6 @@
  * handleFetch simply forwards the request.
  */
 
-import { error } from '@sveltejs/kit';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
 import type { DocsIndex } from '$lib/api/endpoints/docs';
 import type { PageServerLoad } from './$types';
@@ -15,14 +14,15 @@ import type { PageServerLoad } from './$types';
 export const load: PageServerLoad = async ({ fetch }) => {
 	try {
 		const res = await fetch(`${SERVER_API_BASE_URL}/docs`);
-		if (!res.ok) {
-			throw error(res.status, 'Could not load documentation.');
+		if (res.ok) {
+			const index = (await res.json()) as DocsIndex;
+			return { index, unavailable: false };
 		}
-		const index = (await res.json()) as DocsIndex;
-		return { index };
-	} catch (err) {
-		// A thrown SvelteKit `error` has a `status`; re-throw it untouched.
-		if (err && typeof err === 'object' && 'status' in err) throw err;
-		throw error(502, 'The documentation service is unavailable right now.');
+	} catch {
+		/* fall through to the graceful empty state below */
 	}
+	// Fail-soft: when the docs service is unreachable (or returns non-OK), render a
+	// friendly "being set up / temporarily unavailable" state instead of a hard 5xx
+	// error page. The footer + nav "Docs" link should always land somewhere usable.
+	return { index: { categories: [] } as DocsIndex, unavailable: true };
 };
