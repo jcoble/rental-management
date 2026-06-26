@@ -35,8 +35,18 @@ export function formatAuditChangeValue(field: string | undefined | null, value: 
 	if (fieldName === 'status' || fieldName.endsWith(' status')) {
 		return formatStatusLabel(value);
 	}
-	if (fieldName === 'amount' || fieldName.endsWith(' amount') || fieldName.endsWith('amount')) {
-		const amount = Number(value);
+	if (
+		fieldName === 'amount' ||
+		fieldName.endsWith(' amount') ||
+		fieldName.endsWith('amount') ||
+		fieldName === 'rent' ||
+		fieldName.endsWith(' rent') ||
+		fieldName === 'deposit' ||
+		fieldName.endsWith(' deposit') ||
+		fieldName === 'fee' ||
+		fieldName.endsWith(' fee')
+	) {
+		const amount = Number(value.replace(/,/g, ''));
 		if (Number.isFinite(amount)) {
 			return currencyFormatter.format(amount);
 		}
