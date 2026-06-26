@@ -443,6 +443,10 @@ export const ownerSchema = z.object({
 export const vendorSchema = z.object({
 	name: required('Name'),
 	serviceType: required('Service type'),
+	addressLine1: optionalText,
+	city: optionalText,
+	state: optionalText,
+	postalCode: optionalText,
 	// email: server [EmailAddress] optional
 	email: optionalEmail,
 	phone: optionalText,

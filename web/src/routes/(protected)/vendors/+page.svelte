@@ -10,9 +10,11 @@
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
+	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import StateSelect from '$lib/components/shared/StateSelect.svelte';
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -58,7 +60,19 @@
 	}));
 
 	// --- Vendor form/dialog ---
-	const emptyVendor = { name: '', serviceType: 'Plumbing', email: '', phone: '', is1099Eligible: true, w9OnFile: false, preferred: false };
+	const emptyVendor = {
+		name: '',
+		serviceType: 'Plumbing',
+		addressLine1: '',
+		city: '',
+		state: '',
+		postalCode: '',
+		email: '',
+		phone: '',
+		is1099Eligible: true,
+		w9OnFile: false,
+		preferred: false
+	};
 	let showVendorForm = $state(false);
 	let editingVendorId = $state<number | null>(null);
 	let vendorForm = $state({ ...emptyVendor });
@@ -121,7 +135,19 @@
 
 	function openEditVendor(v: Vendor) {
 		editingVendorId = v.id;
-		vendorForm = { name: v.name, serviceType: v.serviceType, email: v.email ?? '', phone: v.phone ?? '', is1099Eligible: v.is1099Eligible, w9OnFile: v.w9OnFile, preferred: v.preferred };
+		vendorForm = {
+			name: v.name,
+			serviceType: v.serviceType,
+			addressLine1: v.addressLine1 ?? '',
+			city: v.city ?? '',
+			state: v.state ?? '',
+			postalCode: v.postalCode ?? '',
+			email: v.email ?? '',
+			phone: v.phone ?? '',
+			is1099Eligible: v.is1099Eligible,
+			w9OnFile: v.w9OnFile,
+			preferred: v.preferred
+		};
 		vendorErrors = {};
 		showVendorForm = true;
 	}
@@ -271,7 +297,7 @@
 </div>
 
 <Dialog.Root open={showVendorForm} onOpenChange={(v) => { if (!v) closeVendorForm(); }}>
-	<Dialog.Content class="max-w-md">
+	<Dialog.Content class="max-w-lg">
 		<Dialog.Header>
 			<Dialog.Title>{editingVendorId == null ? 'New Vendor' : 'Edit Vendor'}</Dialog.Title>
 		</Dialog.Header>
@@ -289,6 +315,27 @@
 				{#if vendorErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="vendor-email-error">{vendorErrors.email}</p>{/if}
 			</div>
 			<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" />
+			<div class="space-y-2">
+				<AddressAutocomplete
+					testid="vendor-address-input"
+					bind:value={vendorForm.addressLine1}
+					placeholder="Vendor address"
+					onresolved={(a) => {
+						if (a.city) vendorForm.city = a.city;
+						if (a.state) vendorForm.state = a.state;
+						if (a.zip) vendorForm.postalCode = a.zip;
+					}}
+				/>
+				<div class="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_8rem_9rem]">
+					<Input data-testid="vendor-city-input" bind:value={vendorForm.city} placeholder="City" />
+					<StateSelect
+						testid="vendor-state-input"
+						bind:value={vendorForm.state}
+						placeholder="State"
+					/>
+					<Input data-testid="vendor-zip-input" bind:value={vendorForm.postalCode} placeholder="ZIP" />
+				</div>
+			</div>
 			<div class="flex flex-wrap gap-4 text-sm">
 				<label class="flex items-center gap-1.5"><input data-testid="vendor-1099-input" type="checkbox" bind:checked={vendorForm.is1099Eligible} /> 1099 eligible</label>
 				<label class="flex items-center gap-1.5"><input data-testid="vendor-w9-input" type="checkbox" bind:checked={vendorForm.w9OnFile} /> W-9 on file</label>

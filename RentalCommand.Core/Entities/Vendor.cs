@@ -11,6 +11,10 @@ public class Vendor : IAuditable, IPortfolioScoped
     public string? Email { get; set; }
     public string? Phone { get; set; }
     public string? TaxId { get; set; }
+    public string? AddressLine1 { get; set; }
+    public string? City { get; set; }
+    public string? State { get; set; }
+    public string? PostalCode { get; set; }
     public bool Is1099Eligible { get; set; }
     public bool W9OnFile { get; set; }
     public bool Preferred { get; set; }

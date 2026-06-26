@@ -100,6 +100,10 @@ public class VendorService : IVendorService
             Email = request.Email,
             Phone = request.Phone,
             TaxId = request.TaxId,
+            AddressLine1 = request.AddressLine1,
+            City = request.City,
+            State = request.State,
+            PostalCode = request.PostalCode,
             Is1099Eligible = request.Is1099Eligible,
             W9OnFile = request.W9OnFile,
             Preferred = request.Preferred,
@@ -130,6 +134,10 @@ public class VendorService : IVendorService
         if (request.Email != null) entity.Email = request.Email;
         if (request.Phone != null) entity.Phone = request.Phone;
         if (request.TaxId != null) entity.TaxId = request.TaxId;
+        if (request.AddressLine1 != null) entity.AddressLine1 = request.AddressLine1;
+        if (request.City != null) entity.City = request.City;
+        if (request.State != null) entity.State = request.State;
+        if (request.PostalCode != null) entity.PostalCode = request.PostalCode;
         if (request.Is1099Eligible.HasValue) entity.Is1099Eligible = request.Is1099Eligible.Value;
         if (request.W9OnFile.HasValue) entity.W9OnFile = request.W9OnFile.Value;
         if (request.Preferred.HasValue) entity.Preferred = request.Preferred.Value;
