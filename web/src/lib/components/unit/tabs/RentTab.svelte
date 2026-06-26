@@ -159,6 +159,7 @@
 			status: p.status,
 			paidDate: p.paidDate?.slice(0, 10) ?? '',
 			method: p.method ?? '',
+			externalReference: p.externalReference ?? '',
 			notes: p.notes ?? '',
 		};
 		editErrors = {};
@@ -310,6 +311,8 @@
 									<InlineField label="Status" bind:value={editForm.status} editing type="select" options={PAYMENT_STATUSES.map((s) => ({ value: s, label: s }))} testid="rent-edit-status" />
 									<InlineField label="Paid date" bind:value={editForm.paidDate} editing type="date" testid="rent-edit-paid" />
 									<InlineField label="Method" bind:value={editForm.method} editing type="text" testid="rent-edit-method" />
+									<InlineField label="Reference" bind:value={editForm.externalReference} editing type="text" testid="rent-edit-reference" />
+									<InlineField label="Notes" bind:value={editForm.notes} editing type="textarea" testid="rent-edit-notes" class="sm:col-span-2" />
 								</div>
 								<div class="mt-3 flex justify-end gap-2">
 									<Button variant="outline" size="sm" onclick={cancelEdit} disabled={editMut.isPending}>Cancel</Button>
@@ -325,6 +328,8 @@
 									<div><dt class="text-muted-foreground">Type</dt><dd>{p.paymentType}</dd></div>
 									<div><dt class="text-muted-foreground">Status</dt><dd><StatusBadge status={p.status} /></dd></div>
 									{#if p.method}<div><dt class="text-muted-foreground">Method</dt><dd>{p.method}</dd></div>{/if}
+									<div><dt class="text-muted-foreground">Reference</dt><dd>{p.externalReference || '—'}</dd></div>
+									<div class="sm:col-span-2"><dt class="text-muted-foreground">Notes</dt><dd class="whitespace-pre-wrap">{p.notes || '—'}</dd></div>
 								</dl>
 								<div class="mt-3 flex justify-end">
 									<Button variant="outline" size="sm" onclick={() => startEdit(p)} data-testid="rent-edit-{p.id}">Edit</Button>
