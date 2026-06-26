@@ -203,18 +203,41 @@
 		{ type: 'LateFee', label: 'Late fees', description: 'When a late fee is added to a lease.' },
 		{ type: 'LeaseExpiry', label: 'Lease expiry / renewal', description: 'When a lease is coming up for renewal or move-out.' },
 		{ type: 'RentConfirmation', label: 'Rent confirmations', description: 'When a rent payment is recorded.' },
-		{ type: 'NoticeAutopilot', label: 'Lease notices (autopilot)', description: 'Automated notices sent to tenants.' },
+		{ type: 'NoticeAutopilot', label: 'Lease notices (autopilot)', description: 'Drafted renewal, late-rent, and move-out notices that staff approves before sending.' },
 		{ type: 'DailyBriefing', label: 'Daily briefing', description: 'Your once-a-day summary of what needs attention.' },
 	];
 
-	// enablePush is round-tripped (not yet shown in this UI) so a web save never clobbers the
-	// landlord's mobile-set push preference. Defaults to true (the server default for new rows).
 	type ChannelPrefs = {
 		enableInApp: boolean;
 		enableEmail: boolean;
 		enableSms: boolean;
 		enablePush: boolean;
 	};
+	type ChannelKey = keyof ChannelPrefs;
+
+	const channelColumns: { key: ChannelKey; label: string; description: string; testSuffix: string }[] = [
+		{ key: 'enableInApp', label: 'In-app', description: 'The Rental Command bell and inbox.', testSuffix: 'inapp' },
+		{ key: 'enablePush', label: 'Mobile push', description: 'Push alerts to registered mobile app devices.', testSuffix: 'push' },
+		{ key: 'enableEmail', label: 'Email', description: 'Email delivery using the saved notification address or tenant contact.', testSuffix: 'email' },
+		{ key: 'enableSms', label: 'Text (SMS)', description: 'Text messages through the configured SMS provider.', testSuffix: 'sms' },
+	];
+
+	const tenantFacingNotificationTypes = new Set<NotificationChannelType>(['RentCharge', 'LateFee']);
+
+	function isTenantFacingNotification(type: NotificationChannelType) {
+		return tenantFacingNotificationTypes.has(type);
+	}
+
+	function tenantChannelStatus(type: NotificationChannelType, key: ChannelKey) {
+		if (!notificationSettingsForm.notifyTenants) return 'Off';
+		return channelPreferences[type][key] ? 'On' : 'Off';
+	}
+
+	function tenantChannelStatusClass(type: NotificationChannelType, key: ChannelKey) {
+		return notificationSettingsForm.notifyTenants && channelPreferences[type][key]
+			? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-700 dark:text-emerald-300'
+			: 'border-border bg-muted text-muted-foreground';
+	}
 
 	function emptyChannelPrefs(): Record<NotificationChannelType, ChannelPrefs> {
 		return Object.fromEntries(
@@ -826,52 +849,100 @@
 					<Card.Content class="p-5">
 						<p class="text-sm font-semibold">How you get notified</p>
 						<p class="mb-3 text-xs text-muted-foreground">
-							Pick how you want to hear about each kind of update. In-app shows in the bell at the top.
-							Email goes to your notification email. Text (SMS) needs an SMS provider set up on the Messaging tab.
+							Pick how staff and owner users hear about each kind of update. Tenant rows show the
+							automations that can also notify renters when tenant delivery is on.
 						</p>
 
-						<div class="overflow-x-auto">
-							<table class="w-full min-w-[28rem] border-collapse text-sm">
+						<div
+							class="mb-4 rounded-lg border border-border bg-muted/30 p-4"
+							data-testid="settings-notification-audience-summary"
+						>
+							<div class="grid gap-4 md:grid-cols-[1fr_18rem]">
+								<div class="space-y-2 text-xs text-muted-foreground">
+									<p>
+										<span class="font-medium text-foreground">Channels:</span>
+										In-app is the Rental Command bell and inbox. Mobile push goes to registered mobile app devices.
+										Email uses the saved notification address or tenant contact. SMS uses the provider on the Messaging tab.
+									</p>
+									<p>
+										Browser web push is not available yet. Turning on mobile push will not send browser notifications.
+									</p>
+								</div>
+								<label class="flex items-start gap-3 rounded border border-border bg-background p-3">
+									<Checkbox
+										checked={notificationSettingsForm.notifyTenants}
+										onCheckedChange={(v) => (notificationSettingsForm.notifyTenants = v === true)}
+										data-testid="settings-tenant-delivery-toggle"
+									/>
+									<span class="text-sm leading-tight">
+										<span class="font-medium">Send tenant notices</span>
+										<span class="block text-xs text-muted-foreground">
+											Rent reminders and late fees also go to renters using the enabled channels below.
+										</span>
+									</span>
+								</label>
+							</div>
+						</div>
+
+						<div class="overflow-x-auto" data-testid="settings-notification-audience-matrix">
+							<table class="w-full min-w-[48rem] border-collapse text-sm">
 								<thead>
 									<tr class="border-b border-border text-xs text-muted-foreground">
-										<th class="py-2 pr-3 text-left font-medium">Notification</th>
-										<th class="px-3 py-2 text-center font-medium">In-app</th>
-										<th class="px-3 py-2 text-center font-medium">Email</th>
-										<th class="px-3 py-2 text-center font-medium">Text (SMS)</th>
+										<th class="py-2 pr-3 text-left font-medium">Audience / event</th>
+										{#each channelColumns as column (column.key)}
+											<th class="px-3 py-2 text-center font-medium">
+												<span class="block">{column.label}</span>
+												<span class="block text-[0.68rem] font-normal text-muted-foreground">{column.description}</span>
+											</th>
+										{/each}
 									</tr>
 								</thead>
 								<tbody>
 									{#each channelRows as row (row.type)}
-										<tr class="border-b border-border/60 last:border-0" data-testid={`settings-channel-row-${row.type}`}>
+										<tr class="border-b border-border/60" data-testid={`settings-audience-row-${row.type}-staff`}>
 											<td class="py-2 pr-3 align-top">
+												<span class="mb-1 inline-flex rounded-full border border-border bg-background px-2 py-0.5 text-[0.68rem] font-medium text-muted-foreground">
+													Staff / owner
+												</span>
 												<span class="block font-medium leading-tight">{row.label}</span>
 												<span class="block text-xs text-muted-foreground">{row.description}</span>
 											</td>
-											<td class="px-3 py-2 text-center align-top">
-												<Checkbox
-													checked={channelPreferences[row.type].enableInApp}
-													onCheckedChange={(v) => (channelPreferences[row.type].enableInApp = v === true)}
-													aria-label={`${row.label} in-app`}
-													data-testid={`settings-channel-${row.type}-inapp`}
-												/>
-											</td>
-											<td class="px-3 py-2 text-center align-top">
-												<Checkbox
-													checked={channelPreferences[row.type].enableEmail}
-													onCheckedChange={(v) => (channelPreferences[row.type].enableEmail = v === true)}
-													aria-label={`${row.label} email`}
-													data-testid={`settings-channel-${row.type}-email`}
-												/>
-											</td>
-											<td class="px-3 py-2 text-center align-top">
-												<Checkbox
-													checked={channelPreferences[row.type].enableSms}
-													onCheckedChange={(v) => (channelPreferences[row.type].enableSms = v === true)}
-													aria-label={`${row.label} text message`}
-													data-testid={`settings-channel-${row.type}-sms`}
-												/>
-											</td>
+											{#each channelColumns as column (column.key)}
+												<td class="px-3 py-2 text-center align-top">
+													<Checkbox
+														checked={channelPreferences[row.type][column.key]}
+														onCheckedChange={(v) => (channelPreferences[row.type][column.key] = v === true)}
+														aria-label={`${row.label} ${column.label}`}
+														data-testid={`settings-channel-${row.type}-${column.testSuffix}`}
+													/>
+												</td>
+											{/each}
 										</tr>
+										{#if isTenantFacingNotification(row.type)}
+											<tr class="border-b border-border/60 bg-muted/20 last:border-0" data-testid={`settings-audience-row-${row.type}-tenant`}>
+												<td class="py-2 pl-4 pr-3 align-top">
+													<span class="mb-1 inline-flex rounded-full border border-border bg-background px-2 py-0.5 text-[0.68rem] font-medium text-muted-foreground">
+														Tenant
+													</span>
+													<span class="block font-medium leading-tight">{row.label}</span>
+													<span class="block text-xs text-muted-foreground">
+														{notificationSettingsForm.notifyTenants
+															? 'Tenant delivery follows the enabled channels in this event row.'
+															: 'Tenant delivery is off until Send tenant notices is enabled.'}
+													</span>
+												</td>
+												{#each channelColumns as column (column.key)}
+													<td class="px-3 py-2 text-center align-top">
+														<span
+															class={`inline-flex min-w-10 justify-center rounded-full border px-2 py-0.5 text-xs font-medium ${tenantChannelStatusClass(row.type, column.key)}`}
+															data-testid={`settings-tenant-channel-${row.type}-${column.testSuffix}`}
+														>
+															{tenantChannelStatus(row.type, column.key)}
+														</span>
+													</td>
+												{/each}
+											</tr>
+										{/if}
 									{/each}
 								</tbody>
 							</table>
