@@ -352,16 +352,24 @@ public class OutboxDispatchWorker : EngineWorkerBase
             if (!string.IsNullOrWhiteSpace(value)) data[key] = value;
         }
 
-        var tokens = await db.DeviceTokens
-            .Where(d => d.PortfolioId == portfolioId)
+        var targetUserIds = GetTargetUserIds(root);
+        var tokenQuery = db.DeviceTokens
+            .Where(d => d.PortfolioId == portfolioId);
+        if (targetUserIds.Count > 0)
+        {
+            tokenQuery = tokenQuery.Where(d => targetUserIds.Contains(d.UserId));
+        }
+
+        var tokens = await tokenQuery
             .Select(d => d.Token)
             .ToListAsync(ct);
 
         if (tokens.Count == 0)
         {
             logger.LogInformation(
-                "[push] OutboxMessage {MessageId} — no registered devices for portfolio {PortfolioId}.",
-                message.Id, portfolioId);
+                "[push] OutboxMessage {MessageId} — no registered devices for portfolio {PortfolioId}{Target}.",
+                message.Id, portfolioId,
+                targetUserIds.Count == 0 ? string.Empty : $" target user(s) {string.Join(",", targetUserIds)}");
             return;
         }
 
@@ -430,4 +438,31 @@ public class OutboxDispatchWorker : EngineWorkerBase
         && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static IReadOnlyList<int> GetTargetUserIds(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+            return [];
+
+        if (root.TryGetProperty("userIds", out var userIds) &&
+            userIds.ValueKind == JsonValueKind.Array)
+        {
+            return userIds.EnumerateArray()
+                .Where(e => e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out _))
+                .Select(e => e.GetInt32())
+                .Where(id => id > 0)
+                .Distinct()
+                .ToList();
+        }
+
+        if (root.TryGetProperty("userId", out var userId) &&
+            userId.ValueKind == JsonValueKind.Number &&
+            userId.TryGetInt32(out var id) &&
+            id > 0)
+        {
+            return [id];
+        }
+
+        return [];
+    }
 }

@@ -216,6 +216,7 @@ public sealed class LateFeeService : ILateFeeService
                     var emailBody = $"A late fee of ${fee:F2} has been assessed on your account for the {periodKey} billing period. "
                                     + "Please contact your property manager if you have questions.";
                     var smsBody = $"A late fee of ${fee:F2} has been assessed for {periodKey}. Contact your manager with questions.";
+                    var tenantMessage = $"A late fee of ${fee:F2} has been assessed for {periodKey}. Contact your manager with questions.";
 
                     inAppRows = await notifier.SendAsync(
                         rp.PortfolioId,
@@ -231,7 +232,20 @@ public sealed class LateFeeService : ILateFeeService
                         new AutomationNotifier.EmailContent(tenant?.Email, $"Late fee notice — {periodKey}", emailBody),
                         new AutomationNotifier.SmsContent(tenant?.Phone, smsBody),
                         now,
-                        ct);
+                        ct,
+                        tenant is null
+                            ? new AutomationNotifier.AudienceTargets(IncludeStaff: true)
+                            : new AutomationNotifier.AudienceTargets(
+                                IncludeStaff: true,
+                                TenantId: tenant.Id,
+                                TenantInApp: new AutomationNotifier.InAppContent(
+                                    Type: "LateFee",
+                                    Title: $"Late fee assessed — {periodKey}",
+                                    Message: tenantMessage,
+                                    Severity: "Warning",
+                                    ActionUrl: "/portal/payments",
+                                    RelatedEntityType: "Payment",
+                                    RelatedEntityId: lateFeePayment.Id)));
 
                     if (inAppRows.Count > 0)
                         await _db.SaveChangesAsync(ct);

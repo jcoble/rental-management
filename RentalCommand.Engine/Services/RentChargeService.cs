@@ -172,6 +172,7 @@ public sealed class RentChargeService : IRentChargeService
                 {
                     var channels = cfg.ResolveChannels(NotificationType.RentCharge);
                     var message = $"Hi {tenant.FirstName}, your rent of {lease.MonthlyRent:C} is due on {period.DueDate:MMMM d}.";
+                    var tenantMessage = $"Your rent of {lease.MonthlyRent:C} is due on {period.DueDate:MMMM d}.";
                     inAppRows = await notifier.SendAsync(
                         lease.PortfolioId,
                         channels,
@@ -186,7 +187,18 @@ public sealed class RentChargeService : IRentChargeService
                         new AutomationNotifier.EmailContent(tenant.Email, $"Rent due {period.DueDate:MMM d}", message),
                         new AutomationNotifier.SmsContent(tenant.Phone, message),
                         DateTime.UtcNow,
-                        ct);
+                        ct,
+                        new AutomationNotifier.AudienceTargets(
+                            IncludeStaff: true,
+                            TenantId: tenant.Id,
+                            TenantInApp: new AutomationNotifier.InAppContent(
+                                Type: "RentCharge",
+                                Title: $"Rent due {period.DueDate:MMM d}",
+                                Message: tenantMessage,
+                                Severity: "Info",
+                                ActionUrl: "/portal/payments",
+                                RelatedEntityType: "Payment",
+                                RelatedEntityId: payment.Id)));
 
                     // The in-app rows were added before this save; persist them inside the transaction.
                     if (inAppRows.Count > 0)

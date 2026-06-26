@@ -632,13 +632,15 @@ public class ConversationService : IConversationService
             return null;
         }
 
+        var preview = Preview(body) ?? subject;
+
         return new Notification
         {
             PortfolioId = portfolioId,
             UserId = tenantUserId,
             Type = "TenantNotice",
             Title = subject,
-            Message = Preview(body) ?? subject,
+            Message = preview,
             Severity = "Info",
             ActionUrl = $"/portal/messages?conversation={conversation.Id}",
             RelatedEntityType = "Conversation",
