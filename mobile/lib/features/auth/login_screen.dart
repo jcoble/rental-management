@@ -137,8 +137,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     // reason, still surface it. The local message (set in _submit/_signInWithGoogle)
     // takes priority so we never show two error chips for the same failure.
     final authState = ref.watch(authControllerProvider);
-    final stateError =
-        authState is AuthStateUnauthenticated ? authState.error : null;
+    final stateError = authState is AuthStateUnauthenticated
+        ? authState.error
+        : null;
     final effectiveError = _errorMessage ?? stateError;
 
     return Scaffold(
@@ -304,8 +305,10 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                                         strokeWidth: 2,
                                       ),
                                     )
-                                  : const Icon(Icons.mark_email_read_outlined,
-                                      size: 18),
+                                  : const Icon(
+                                      Icons.mark_email_read_outlined,
+                                      size: 18,
+                                    ),
                               label: Text(
                                 _isResendingVerification
                                     ? 'Sending…'
@@ -354,13 +357,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         TextButton(
                           onPressed: _busy
                               ? null
-                              : () => context.go('/register'),
+                              : () => context.push('/register'),
                           child: const Text('Create an account'),
                         ),
                         TextButton(
                           onPressed: _busy
                               ? null
-                              : () => context.go('/forgot-password'),
+                              : () => context.push('/forgot-password'),
                           child: const Text('Forgot password?'),
                         ),
 
