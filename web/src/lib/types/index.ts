@@ -280,6 +280,7 @@ export interface Lease {
 	securityDeposit: number;
 	lateFeeAmount: number;
 	rentDueDay: number;
+	rentTrackingStartDate?: string | null;
 	notes?: string;
 	tenantName?: string;
 	propertyName?: string;

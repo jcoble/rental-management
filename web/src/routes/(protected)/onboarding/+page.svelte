@@ -20,6 +20,7 @@
 		unitSchema,
 		tenantSchema,
 		leaseSchema,
+		leaseRentTrackingErrors,
 		parseForm,
 	} from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -508,6 +509,13 @@
 	const oneYear = new Date(today);
 	oneYear.setFullYear(oneYear.getFullYear() + 1);
 	const isoDate = (d: Date) => d.toISOString().slice(0, 10);
+	const rentTrackingStartOptions = [
+		{ value: 'ForwardOnly', label: 'Start from today' },
+		{ value: 'BackfillFromLeaseStart', label: 'Backfill from lease start' },
+		{ value: 'CustomCutoffDate', label: 'Use cutoff date' }
+	] as const;
+	const rentTrackingStartLabel = (value: string) =>
+		rentTrackingStartOptions.find((option) => option.value === value)?.label ?? 'Select start';
 
 	let leaseForm = $state({
 		tenantId: '',
@@ -520,6 +528,8 @@
 		lateFeeAmount: '0',
 		leaseNumber: '',
 		rentDueDay: '1',
+		rentTrackingStartMode: 'ForwardOnly',
+		rentTrackingStartDate: '',
 	});
 	let leaseErrors = $state<Record<string, string>>({});
 	let leasePrefilled = false;
@@ -553,6 +563,11 @@
 			if (!leaseForm.monthlyRent && preferred.marketRent != null) {
 				leaseForm.monthlyRent = String(preferred.marketRent);
 			}
+		}
+	});
+	$effect(() => {
+		if (leaseForm.rentTrackingStartMode !== 'CustomCutoffDate' && leaseForm.rentTrackingStartDate) {
+			leaseForm.rentTrackingStartDate = '';
 		}
 	});
 
@@ -623,11 +638,14 @@
 			securityDeposit: leaseForm.securityDeposit || '0',
 			lateFeeAmount: leaseForm.lateFeeAmount || '0',
 			rentDueDay: leaseForm.rentDueDay,
+			rentTrackingStartMode: leaseForm.rentTrackingStartMode,
+			rentTrackingStartDate: leaseForm.rentTrackingStartDate,
 			status: 'Active',
 			notes: '',
 		});
-		if (result.errors) {
-			leaseErrors = result.errors;
+		const rentTrackingErrors = leaseRentTrackingErrors({ ...leaseForm, status: 'Active' });
+		if (result.errors || Object.keys(rentTrackingErrors).length > 0) {
+			leaseErrors = { ...(result.errors ?? {}), ...rentTrackingErrors };
 			return;
 		}
 		leaseErrors = {};
@@ -1264,6 +1282,24 @@
 										<Input id="ob-lease-dueday" data-testid="onboarding-lease-dueday" bind:value={leaseForm.rentDueDay} placeholder="1" />
 										{#if leaseErrors.rentDueDay}<p class="mt-1 text-xs text-destructive">{leaseErrors.rentDueDay}</p>{/if}
 									</div>
+									<div class={leaseForm.rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
+										<span class="mb-1 block text-xs font-medium text-muted-foreground">Rent tracking start</span>
+										<Select.Root type="single" bind:value={leaseForm.rentTrackingStartMode}>
+											<Select.Trigger class="w-full" data-testid="onboarding-lease-rent-tracking-mode">{rentTrackingStartLabel(leaseForm.rentTrackingStartMode)}</Select.Trigger>
+											<Select.Content>
+												{#each rentTrackingStartOptions as option}
+													<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+												{/each}
+											</Select.Content>
+										</Select.Root>
+									</div>
+									{#if leaseForm.rentTrackingStartMode === 'CustomCutoffDate'}
+										<div>
+											<label for="ob-lease-rent-tracking-date" class="mb-1 block text-xs font-medium text-muted-foreground">Cutoff date</label>
+											<DatePicker id="ob-lease-rent-tracking-date" testid="onboarding-lease-rent-tracking-date" bind:value={leaseForm.rentTrackingStartDate} placeholder="Cutoff date" min={leaseForm.startDate || undefined} />
+											{#if leaseErrors.rentTrackingStartDate}<p class="mt-1 text-xs text-destructive">{leaseErrors.rentTrackingStartDate}</p>{/if}
+										</div>
+									{/if}
 								</div>
 							{/if}
 						</WizardStepScaffold>

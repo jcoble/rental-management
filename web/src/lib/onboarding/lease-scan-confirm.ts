@@ -9,6 +9,8 @@ export interface OnboardingLeaseConfirmInput {
 	securityDeposit: number;
 	lateFeeAmount: number;
 	rentDueDay: number;
+	rentTrackingStartMode?: string;
+	rentTrackingStartDate?: string | null;
 }
 
 export function buildOnboardingLeaseScanOverrides(input: OnboardingLeaseConfirmInput): string {
@@ -22,6 +24,8 @@ export function buildOnboardingLeaseScanOverrides(input: OnboardingLeaseConfirmI
 		monthlyRent: input.monthlyRent,
 		securityDeposit: input.securityDeposit,
 		lateFee: input.lateFeeAmount,
-		rentDueDay: input.rentDueDay
+		rentDueDay: input.rentDueDay,
+		rentTrackingStartMode: input.rentTrackingStartMode,
+		rentTrackingStartDate: input.rentTrackingStartDate
 	});
 }
