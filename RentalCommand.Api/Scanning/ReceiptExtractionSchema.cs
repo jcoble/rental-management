@@ -18,7 +18,12 @@ public static class ReceiptExtractionSchema
         "'UtilityBill' for a utility bill, 'PropertyTax' for a property-tax bill, or 'Other' if none of the above apply. " +
         "For 'due_date', capture the payment due date if the document is an unpaid bill or invoice; leave blank for an already-paid receipt. " +
         "For 'category', map the expense to the closest IRS Schedule E category. " +
-        "For 'line_items', return one object per line item on the receipt (description, quantity, unit_price, amount). " +
+        "For 'line_items', return one object per printed charge row on the receipt/invoice, preserving the printed order. " +
+        "For each row, extract description, quantity, unit_price, and row amount when visible. " +
+        "OCR text may flatten tables into separate description, quantity, unit-price, and amount columns; when that happens, reconstruct rows by matching values in printed column order. " +
+        "Do not include subtotal, tax, tip, discount, shipping, payment, balance, or total rows as line items. " +
+        "If a row amount is visible but quantity/unit price are absent, still return the row with amount and leave the absent cells empty. " +
+        "If the document only shows summary totals and no itemized rows, return an empty line_items array. " +
         "Leave unknown or absent fields empty — never invent values not present on the document.";
 
     public static IReadOnlyList<ExtractionFieldSpec> Fields { get; } = new[]
@@ -70,13 +75,13 @@ public static class ReceiptExtractionSchema
         new ExtractionFieldSpec("notes", "string",
             "Any short free-text note (e.g. purpose, job reference). Optional."),
         new ExtractionFieldSpec("line_items", "array",
-            "One object per line item on the receipt.",
+            "One object per printed charge row on the receipt/invoice, excluding subtotal/tax/tip/discount/shipping/payment/total rows.",
             ItemFields: new[]
             {
                 new ExtractionFieldSpec("description", "string", "Line-item description or product name."),
-                new ExtractionFieldSpec("quantity",    "number", "Quantity purchased (decimal)."),
-                new ExtractionFieldSpec("unit_price",  "number", "Price per unit (decimal, no currency symbol)."),
-                new ExtractionFieldSpec("amount",      "number", "Total for this line (decimal, no currency symbol)."),
+                new ExtractionFieldSpec("quantity",    "number", "Quantity purchased (decimal), only when visible."),
+                new ExtractionFieldSpec("unit_price",  "number", "Price per unit (decimal, no currency symbol), only when visible."),
+                new ExtractionFieldSpec("amount",      "number", "Printed total for this line (decimal, no currency symbol), only when visible."),
             }),
     };
 }

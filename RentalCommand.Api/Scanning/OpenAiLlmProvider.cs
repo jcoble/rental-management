@@ -24,13 +24,19 @@ public sealed class OpenAiLlmProvider : ILlmProvider
     private readonly HttpClient _http;
     private readonly AssistantConfig _config;
     private readonly ILogger<OpenAiLlmProvider> _logger;
+    private readonly IImageTextExtractor _imageTextExtractor;
     private bool _warnedNoKey;
 
-    public OpenAiLlmProvider(HttpClient http, IOptions<AssistantConfig> config, ILogger<OpenAiLlmProvider> logger)
+    public OpenAiLlmProvider(
+        HttpClient http,
+        IOptions<AssistantConfig> config,
+        ILogger<OpenAiLlmProvider> logger,
+        IImageTextExtractor? imageTextExtractor = null)
     {
         _http = http;
         _config = config.Value;
         _logger = logger;
+        _imageTextExtractor = imageTextExtractor ?? new TesseractImageTextExtractor();
     }
 
     public async Task<string> ChatAsync(string prompt, CancellationToken ct = default)
@@ -120,13 +126,15 @@ public sealed class OpenAiLlmProvider : ILlmProvider
         }
         else
         {
-            // Image — optionally OCR locally first (cheap — avoids vision tokens); fall back to
-            // the vision image_url block if OCR is disabled, unavailable, or yields too little text.
+            // Image — optionally OCR locally. Legacy text-only mode replaces the vision call; hybrid
+            // sends OCR as a hint while keeping the image authoritative for small receipt tables and
+            // lease labels that local OCR often drops or misreads.
             string? ocrText = null;
-            if (_config.UseImageOcr)
-                ocrText = ImageTextExtractor.TryExtractText(documentBytes, contentType);
+            var ocrMode = ImageOcrRouting.Resolve(_config);
+            if (ocrMode != ImageOcrRoutingMode.Disabled)
+                ocrText = _imageTextExtractor.TryExtractText(documentBytes, contentType);
 
-            if (ocrText is { Length: > 0 })
+            if (ocrMode == ImageOcrRoutingMode.TextOnly && ImageOcrRouting.IsUseful(ocrText))
             {
                 userContent = "Document text follows. Extract the fields.\n\n" + ocrText;
             }
@@ -134,9 +142,12 @@ public sealed class OpenAiLlmProvider : ILlmProvider
             {
                 var dataUri = $"data:{contentType};base64,{Convert.ToBase64String(documentBytes)}";
                 var imageDetail = string.IsNullOrWhiteSpace(_config.ImageDetail) ? "low" : _config.ImageDetail;
+                var promptText = ocrMode == ImageOcrRoutingMode.Hybrid && ImageOcrRouting.IsUseful(ocrText)
+                    ? ImageOcrRouting.BuildHybridHint(ocrText!)
+                    : "Extract the fields from the attached document.";
                 userContent = new object[]
                 {
-                    new { type = "text", text = "Extract the fields from the attached document." },
+                    new { type = "text", text = promptText },
                     new
                     {
                         type = "image_url",

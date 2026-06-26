@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -183,6 +184,82 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     }
 
     [Fact]
+    public async Task Cycle_ReceiptWithIncompleteLineItems_RetriesOnceWithTargetedRepair()
+    {
+        var draftId = SeedPendingDraft(targetEntityType: "Expense");
+        _llm.Results.Enqueue(Extracted(
+            ("vendor_name", "Apex Plumbing"),
+            ("total", "286.45"),
+            ("document_kind", "Receipt"),
+            ("line_items", """[{"description":"Washer hose"},{"description":"Pipe tape"}]""")));
+        _llm.Results.Enqueue(Extracted(
+            ("vendor_name", "Apex Plumbing"),
+            ("total", "286.45"),
+            ("document_kind", "Receipt"),
+            ("line_items", """[{"description":"Washer hose","quantity":1,"unit_price":250.00,"amount":250.00},{"description":"Pipe tape","quantity":1,"unit_price":36.45,"amount":36.45}]""")));
+
+        await RunCycleAsync();
+
+        var draft = await ReloadAsync(draftId);
+        draft.Status.Should().Be("Reviewing");
+        using (var doc = JsonDocument.Parse(draft.ExtractedFields!))
+        {
+            var lineItemsJson = doc.RootElement
+                .GetProperty("line_items")
+                .GetProperty("value")
+                .GetString();
+            lineItemsJson.Should().Contain("\"amount\":250.00");
+        }
+        _llm.ExtractCalls.Should().Be(2);
+        _llm.Instructions.Should().HaveCount(2);
+        _llm.Instructions[1].Should().Contain("line item");
+        _llm.Instructions[1].Should().Contain("amount");
+    }
+
+    [Fact]
+    public async Task Cycle_ReceiptRepairProviderError_KeepsInitialReviewingDraft()
+    {
+        var draftId = SeedPendingDraft(targetEntityType: "Expense");
+        _llm.Results.Enqueue(Extracted(
+            ("vendor_name", "Apex Plumbing"),
+            ("total", "286.45"),
+            ("document_kind", "Receipt"),
+            ("line_items", """[{"description":"Washer hose"},{"description":"Pipe tape"}]""")));
+        _llm.Results.Enqueue(new InvalidOperationException("repair provider unavailable"));
+
+        await RunCycleAsync();
+
+        var draft = await ReloadAsync(draftId);
+        draft.Status.Should().Be("Reviewing");
+        draft.FailureReason.Should().BeNull();
+        draft.ExtractedFields.Should().Contain("Washer hose");
+        _llm.ExtractCalls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Cycle_LeaseWithZeroBedBath_BlanksInvalidUnitCountsBeforeReview()
+    {
+        var draftId = SeedPendingDraft(targetEntityType: "Lease");
+        _llm.Result = Extracted(
+            ("target_entity_type", "Lease"),
+            ("tenant_name", "Dana Brooks"),
+            ("property_address", "742 Evergreen St"),
+            ("unit_number", "3C"),
+            ("unit_bedrooms", "0"),
+            ("unit_bathrooms", "0"),
+            ("start_date", "2026-02-01"),
+            ("end_date", "2027-01-31"),
+            ("monthly_rent", "1325.00"));
+
+        await RunCycleAsync();
+
+        var draft = await ReloadAsync(draftId);
+        draft.Status.Should().Be("Reviewing");
+        draft.ExtractedFields.Should().Contain("\"unit_bedrooms\":{\"value\":\"\",\"confidence\":0}");
+        draft.ExtractedFields.Should().Contain("\"unit_bathrooms\":{\"value\":\"\",\"confidence\":0}");
+    }
+
+    [Fact]
     public async Task Cycle_WorkOrderExtraction_GroundingContextIncludesActiveLeases()
     {
         using (var scope = _provider.CreateScope())
@@ -323,15 +400,27 @@ public class ScanProcessingWorkerFailureTests : IDisposable
     private sealed class StubLlmProvider : ILlmProvider
     {
         public ExtractedFields Result { get; set; } = new();
+        public Queue<object> Results { get; } = new();
         public string? LastGroundingContext { get; private set; }
+        public List<string> Instructions { get; } = new();
+        public int ExtractCalls { get; private set; }
 
         public Task<ExtractedFields> ExtractAsync(
             byte[] documentBytes, string contentType, string instructions,
             IReadOnlyList<ExtractionFieldSpec> fields, string? groundingContext = null,
             CancellationToken ct = default)
         {
+            ExtractCalls++;
+            Instructions.Add(instructions);
             LastGroundingContext = groundingContext;
-            return Task.FromResult(Result);
+            if (Results.Count == 0)
+                return Task.FromResult(Result);
+
+            var next = Results.Dequeue();
+            if (next is Exception ex)
+                throw ex;
+
+            return Task.FromResult((ExtractedFields)next);
         }
 
         public Task<string> ChatAsync(string prompt, CancellationToken ct = default)

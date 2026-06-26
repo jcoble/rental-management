@@ -23,13 +23,19 @@ public sealed class AnthropicLlmProvider : ILlmProvider
     private readonly HttpClient _http;
     private readonly AssistantConfig _config;
     private readonly ILogger<AnthropicLlmProvider> _logger;
+    private readonly IImageTextExtractor _imageTextExtractor;
     private bool _warnedNoKey;
 
-    public AnthropicLlmProvider(HttpClient http, IOptions<AssistantConfig> config, ILogger<AnthropicLlmProvider> logger)
+    public AnthropicLlmProvider(
+        HttpClient http,
+        IOptions<AssistantConfig> config,
+        ILogger<AnthropicLlmProvider> logger,
+        IImageTextExtractor? imageTextExtractor = null)
     {
         _http = http;
         _config = config.Value;
         _logger = logger;
+        _imageTextExtractor = imageTextExtractor ?? new TesseractImageTextExtractor();
     }
 
     public async Task<string> ChatAsync(string prompt, CancellationToken ct = default)
@@ -101,13 +107,14 @@ public sealed class AnthropicLlmProvider : ILlmProvider
         else
         {
             // For images (or scanned PDFs that yielded no born-digital text): optionally OCR locally
-            // first (cheap — avoids vision tokens); fall back to the vision block if OCR is disabled,
-            // unavailable, or returns too little text.
+            // first. Legacy text-only mode replaces the vision call; hybrid sends OCR as a hint while
+            // keeping the image authoritative for receipt tables and lease labels local OCR often misses.
             string? ocrText = null;
-            if (_config.UseImageOcr && !isPdf)
-                ocrText = ImageTextExtractor.TryExtractText(documentBytes, contentType);
+            var ocrMode = !isPdf ? ImageOcrRouting.Resolve(_config) : ImageOcrRoutingMode.Disabled;
+            if (ocrMode != ImageOcrRoutingMode.Disabled)
+                ocrText = _imageTextExtractor.TryExtractText(documentBytes, contentType);
 
-            if (ocrText is { Length: > 0 })
+            if (ocrMode == ImageOcrRoutingMode.TextOnly && ImageOcrRouting.IsUseful(ocrText))
             {
                 userContent = new object[]
                 {
@@ -118,6 +125,9 @@ public sealed class AnthropicLlmProvider : ILlmProvider
             {
                 var mediaType = isPdf ? "application/pdf" : contentType;
                 var blockType = isPdf ? "document" : "image";
+                var promptText = ocrMode == ImageOcrRoutingMode.Hybrid && ImageOcrRouting.IsUseful(ocrText)
+                    ? ImageOcrRouting.BuildHybridHint(ocrText!)
+                    : "Extract the fields from the attached document.";
                 userContent = new object[]
                 {
                     new
@@ -130,7 +140,7 @@ public sealed class AnthropicLlmProvider : ILlmProvider
                             data = Convert.ToBase64String(documentBytes)
                         }
                     },
-                    new { type = "text", text = "Extract the fields from the attached document." }
+                    new { type = "text", text = promptText }
                 };
             }
         }
