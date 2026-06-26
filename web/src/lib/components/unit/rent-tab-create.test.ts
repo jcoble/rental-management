@@ -21,4 +21,12 @@ describe('unit rent quick payment create form', () => {
 		assert.match(source, /onSuccess: \(payment: Payment\) =>/);
 		assert.match(source, /paymentItems = \[payment, \.\.\.paymentItems\.filter\(\(item\) => item\.id !== payment\.id\)\]/);
 	});
+
+	it('shows and edits reference and notes from expanded payment rows', () => {
+		assert.match(source, /externalReference: p\.externalReference \?\? ''/);
+		assert.match(source, /testid="rent-edit-reference"/);
+		assert.match(source, /testid="rent-edit-notes"/);
+		assert.match(source, /<dt class="text-muted-foreground">Reference<\/dt>/);
+		assert.match(source, /<dt class="text-muted-foreground">Notes<\/dt>/);
+	});
 });
