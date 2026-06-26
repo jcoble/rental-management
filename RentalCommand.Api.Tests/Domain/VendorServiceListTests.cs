@@ -1,5 +1,6 @@
 using System.Data.Common;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -62,7 +63,59 @@ public class VendorServiceListTests : IDisposable
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
-    private void SeedVendor(string name, string serviceType)
+    [Fact]
+    public async Task CreateAsync_ReturnsStructuredAddressFields()
+    {
+        var created = await _sut.CreateAsync(PortfolioId, new CreateVendorRequest
+        {
+            Name = "Acme HVAC",
+            ServiceType = "HVAC",
+            AddressLine1 = "123 Service Rd",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+        });
+
+        created.AddressLine1.Should().Be("123 Service Rd");
+        created.City.Should().Be("Columbus");
+        created.State.Should().Be("OH");
+        created.PostalCode.Should().Be("43215");
+
+        var saved = await _ctx.Db.Vendors.AsNoTracking().SingleAsync(v => v.Id == created.Id);
+        saved.AddressLine1.Should().Be("123 Service Rd");
+        saved.City.Should().Be("Columbus");
+        saved.State.Should().Be("OH");
+        saved.PostalCode.Should().Be("43215");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_UpdatesStructuredAddressFields()
+    {
+        SeedVendor("Acme HVAC", "HVAC");
+        var vendorId = await _ctx.Db.Vendors.Select(v => v.Id).SingleAsync();
+
+        var updated = await _sut.UpdateAsync(PortfolioId, vendorId, new UpdateVendorRequest
+        {
+            AddressLine1 = "456 Repair Ave",
+            City = "Cincinnati",
+            State = "OH",
+            PostalCode = "45202",
+        });
+
+        updated.Should().NotBeNull();
+        updated!.AddressLine1.Should().Be("456 Repair Ave");
+        updated.City.Should().Be("Cincinnati");
+        updated.State.Should().Be("OH");
+        updated.PostalCode.Should().Be("45202");
+    }
+
+    private void SeedVendor(
+        string name,
+        string serviceType,
+        string? addressLine1 = null,
+        string? city = null,
+        string? state = null,
+        string? postalCode = null)
     {
         var now = DateTime.UtcNow;
         _ctx.Db.Vendors.Add(new Vendor
@@ -71,6 +124,10 @@ public class VendorServiceListTests : IDisposable
             Name = name,
             ServiceType = serviceType,
             Email = $"{name.Replace(" ", ".", StringComparison.Ordinal).ToLowerInvariant()}@example.local",
+            AddressLine1 = addressLine1,
+            City = city,
+            State = state,
+            PostalCode = postalCode,
             CreatedAt = now,
             UpdatedAt = now,
         });

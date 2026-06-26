@@ -820,6 +820,10 @@ export interface Vendor {
 	portfolioId: number;
 	name: string;
 	serviceType: string;
+	addressLine1?: string | null;
+	city?: string | null;
+	state?: string | null;
+	postalCode?: string | null;
 	email?: string;
 	phone?: string;
 	taxId?: string;

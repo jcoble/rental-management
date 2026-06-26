@@ -13,6 +13,10 @@ public class VendorResponse
     public string? Email { get; set; }
     public string? Phone { get; set; }
     public string? TaxId { get; set; }
+    public string? AddressLine1 { get; set; }
+    public string? City { get; set; }
+    public string? State { get; set; }
+    public string? PostalCode { get; set; }
     public bool Is1099Eligible { get; set; }
     public bool W9OnFile { get; set; }
     public bool Preferred { get; set; }
@@ -42,6 +46,10 @@ public class VendorResponse
         Email = e.Email,
         Phone = e.Phone,
         TaxId = e.TaxId,
+        AddressLine1 = e.AddressLine1,
+        City = e.City,
+        State = e.State,
+        PostalCode = e.PostalCode,
         Is1099Eligible = e.Is1099Eligible,
         W9OnFile = e.W9OnFile,
         Preferred = e.Preferred,
@@ -133,6 +141,18 @@ public class CreateVendorRequest
     [MaxLength(50)]
     public string? TaxId { get; set; }
 
+    [MaxLength(250)]
+    public string? AddressLine1 { get; set; }
+
+    [MaxLength(120)]
+    public string? City { get; set; }
+
+    [MaxLength(60)]
+    public string? State { get; set; }
+
+    [MaxLength(20)]
+    public string? PostalCode { get; set; }
+
     public bool Is1099Eligible { get; set; }
     public bool W9OnFile { get; set; }
     public bool Preferred { get; set; }
@@ -158,6 +178,18 @@ public class UpdateVendorRequest
 
     [MaxLength(50)]
     public string? TaxId { get; set; }
+
+    [MaxLength(250)]
+    public string? AddressLine1 { get; set; }
+
+    [MaxLength(120)]
+    public string? City { get; set; }
+
+    [MaxLength(60)]
+    public string? State { get; set; }
+
+    [MaxLength(20)]
+    public string? PostalCode { get; set; }
 
     public bool? Is1099Eligible { get; set; }
     public bool? W9OnFile { get; set; }

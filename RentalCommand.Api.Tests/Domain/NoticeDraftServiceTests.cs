@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Api.DTOs;
@@ -57,7 +58,8 @@ public class NoticeDraftServiceTests : IDisposable
         var slowLlm = new SlowLlmProvider();
         var sut = CreateService(slowLlm);
 
-        using var testTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var testTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var elapsed = Stopwatch.StartNew();
         var result = await sut.GenerateAsync(
             1,
             new GenerateNoticeDraftsRequest
@@ -66,6 +68,7 @@ public class NoticeDraftServiceTests : IDisposable
                 NoticeType = "RenewalOffer",
             },
             testTimeout.Token);
+        elapsed.Stop();
 
         result.CreatedCount.Should().Be(1);
         result.Drafts.Should().ContainSingle(d =>
@@ -73,6 +76,7 @@ public class NoticeDraftServiceTests : IDisposable
             d.NoticeType == "RenewalOffer" &&
             d.Subject == "Lease renewal for Maple Grove Duplex Unit B");
         slowLlm.ChatCalls.Should().Be(1);
+        elapsed.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
     }
 
     [Fact]

@@ -2,6 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { page } from '$app/state';
 	import { vendors } from '$lib/api/endpoints/vendors';
+	import type { Vendor } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
@@ -127,6 +128,11 @@
 		if (h == null) return '—';
 		if (h < 1) return `${Math.round(h * 60)} min`;
 		return `${h.toFixed(1)} hrs`;
+	}
+
+	function formatVendorAddress(v: Vendor): string {
+		const cityStateZip = [v.city, v.state, v.postalCode].filter(Boolean).join(', ');
+		return [v.addressLine1, cityStateZip].filter(Boolean).join('\n') || '—';
 	}
 </script>
 
@@ -258,6 +264,12 @@
 					<div>
 						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Email</dt>
 						<dd class="mt-1 text-sm" data-testid="vendor-detail-email">{vendor.email || '—'}</dd>
+					</div>
+					<div class="sm:col-span-2 lg:col-span-3">
+						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Address</dt>
+						<dd class="mt-1 whitespace-pre-line text-sm" data-testid="vendor-detail-address">
+							{formatVendorAddress(vendor)}
+						</dd>
 					</div>
 					<div>
 						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">1099 eligible</dt>
