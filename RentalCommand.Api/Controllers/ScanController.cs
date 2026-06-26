@@ -119,7 +119,7 @@ public class ScanController : ManagementControllerBase
         // A batch always targets a concrete entity; default to the lease-import on-ramp.
         var target = string.IsNullOrWhiteSpace(targetEntityType) ? "Lease" : targetEntityType.Trim();
         if (!ValidTargets.Contains(target))
-            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease." });
+            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease, Application." });
 
         // Normalize to the canonical casing so the worker's case-sensitive target checks match.
         target = ValidTargets.First(t => string.Equals(t, target, StringComparison.OrdinalIgnoreCase));
