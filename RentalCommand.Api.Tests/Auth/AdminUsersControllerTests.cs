@@ -9,9 +9,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
+using RentalCommand.Data.Auditing;
 using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Auth;
@@ -34,6 +36,18 @@ public class AdminUsersControllerTests : IDisposable
             TimeZone = "UTC",
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
+        });
+        _ctx.Db.Users.Add(new ApplicationUser
+        {
+            Id = 7,
+            PortfolioId = PortfolioId,
+            UserName = "admin@example.local",
+            NormalizedUserName = "ADMIN@EXAMPLE.LOCAL",
+            Email = "admin@example.local",
+            NormalizedEmail = "ADMIN@EXAMPLE.LOCAL",
+            DisplayName = "Admin User",
+            EmailConfirmed = true,
+            CreatedAt = DateTime.UtcNow,
         });
         _ctx.Db.SaveChanges();
     }
@@ -156,9 +170,102 @@ public class AdminUsersControllerTests : IDisposable
         response.GeneratedPassword.Should().BeNull();
     }
 
+    [Fact]
+    public async Task Create_TeamMember_WritesAuditLogWithoutTemporaryPassword()
+    {
+        var userManager = CreateUserManagerMock();
+        userManager
+            .Setup(m => m.FindByEmailAsync("audited@example.local"))
+            .ReturnsAsync((ApplicationUser?)null);
+        userManager
+            .Setup(m => m.CreateAsync(It.IsAny<ApplicationUser>(), It.IsAny<string>()))
+            .Callback<ApplicationUser, string>((u, _) => u.Id = 321)
+            .ReturnsAsync(IdentityResult.Success);
+        userManager
+            .Setup(m => m.AddToRoleAsync(It.IsAny<ApplicationUser>(), nameof(UserRole.Manager)))
+            .ReturnsAsync(IdentityResult.Success);
+
+        var controller = CreateController(userManager.Object);
+
+        await controller.Create(new CreateTeamMemberRequest
+        {
+            Email = "audited@example.local",
+            DisplayName = "Audited Manager",
+            Role = UserRole.Manager,
+            TemporaryPassword = "TempPass85!NoAudit",
+        }, CancellationToken.None);
+
+        var account = _ctx.Db.UserAccounts.Single(u => u.Email == "audited@example.local");
+        var audit = _ctx.Db.AuditLogs.Should().ContainSingle().Subject;
+        audit.PortfolioId.Should().Be(PortfolioId);
+        audit.UserId.Should().Be(7);
+        audit.EntityType.Should().Be(nameof(UserAccount));
+        audit.EntityId.Should().Be(account.Id);
+        audit.Operation.Should().Be(AuditLogOperation.Created);
+        audit.NewValues.Should().Contain("\"email\":\"audited@example.local\"");
+        audit.NewValues.Should().Contain("\"role\":\"Manager\"");
+        audit.NewValues.Should().NotContain("TempPass85!NoAudit");
+        audit.OldValues.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ChangeRole_WritesAuditLogWithOldAndNewRole()
+    {
+        SeedMember("role-change@example.local", PortfolioId);
+        await _ctx.Db.SaveChangesAsync();
+        var account = _ctx.Db.UserAccounts.Single(u => u.Email == "role-change@example.local");
+        var userManager = CreateUserManagerMock();
+        userManager
+            .Setup(m => m.FindByEmailAsync(account.Email))
+            .ReturnsAsync((ApplicationUser?)null);
+        var controller = CreateController(userManager.Object);
+
+        await controller.ChangeRole(account.Id, new ChangeRoleRequest { Role = UserRole.Agent }, CancellationToken.None);
+
+        var audit = _ctx.Db.AuditLogs.Should().ContainSingle().Subject;
+        audit.PortfolioId.Should().Be(PortfolioId);
+        audit.UserId.Should().Be(7);
+        audit.EntityType.Should().Be(nameof(UserAccount));
+        audit.EntityId.Should().Be(account.Id);
+        audit.Operation.Should().Be(AuditLogOperation.Updated);
+        audit.OldValues.Should().Contain("\"role\":\"Manager\"");
+        audit.NewValues.Should().Contain("\"role\":\"Agent\"");
+        audit.ChangeReason.Should().Contain("role");
+    }
+
+    [Fact]
+    public async Task SetActive_WritesAuditLogsForDeactivateAndReactivate()
+    {
+        SeedMember("active-toggle@example.local", PortfolioId);
+        await _ctx.Db.SaveChangesAsync();
+        var account = _ctx.Db.UserAccounts.Single(u => u.Email == "active-toggle@example.local");
+        var controller = CreateController();
+
+        await controller.SetActive(account.Id, new SetActiveRequest { IsActive = false }, CancellationToken.None);
+        controller = CreateController();
+        await controller.SetActive(account.Id, new SetActiveRequest { IsActive = true }, CancellationToken.None);
+
+        var audits = _ctx.Db.AuditLogs
+            .Where(a => a.EntityType == nameof(UserAccount) && a.EntityId == account.Id)
+            .OrderBy(a => a.Id)
+            .ToList();
+        audits.Should().HaveCount(2);
+        audits.Should().OnlyContain(a =>
+            a.PortfolioId == PortfolioId &&
+            a.UserId == 7 &&
+            a.Operation == AuditLogOperation.Updated);
+        audits[0].OldValues.Should().Contain("\"isActive\":true");
+        audits[0].NewValues.Should().Contain("\"isActive\":false");
+        audits[0].ChangeReason.Should().Contain("deactivated");
+        audits[1].OldValues.Should().Contain("\"isActive\":false");
+        audits[1].NewValues.Should().Contain("\"isActive\":true");
+        audits[1].ChangeReason.Should().Contain("reactivated");
+    }
+
     private AdminUsersController CreateController(UserManager<ApplicationUser>? userManager = null) => new(
         userManager ?? CreateUserManagerMock().Object,
         _ctx.Db,
+        new AuditTrailService(_ctx.Db, new AuditScope()),
         NullLogger<AdminUsersController>.Instance)
     {
         ControllerContext = new ControllerContext
