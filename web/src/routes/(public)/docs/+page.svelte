@@ -22,6 +22,7 @@
 	let { data }: { data: PageData } = $props();
 
 	const categories = $derived(data.index.categories ?? []);
+	const unavailable = $derived(data.unavailable ?? false);
 
 	// Per-category icon + accent, keyed by the category *name* the API returns
 	// (RC has no category ids). Mirrors how EdiPlatform colocates its icon/accent
@@ -141,6 +142,40 @@
 			<Search class="h-8 w-8 text-muted-foreground" />
 			<p class="mt-3 text-sm font-medium">No articles match “{query.trim()}”</p>
 			<p class="mt-1 text-xs text-muted-foreground">Try a different word or clear the search.</p>
+		</div>
+	{:else if !searching && categories.length === 0}
+		<!-- Fail-soft state: docs service unreachable, or no published articles yet.
+		     Friendly + actionable instead of a hard error page. -->
+		<div
+			class="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-card/40 px-6 py-16 text-center"
+			data-testid="docs-unavailable"
+		>
+			<div class="rounded-2xl bg-primary/10 p-3 ring-1 ring-inset ring-primary/20">
+				<BookOpen class="h-7 w-7 text-primary" />
+			</div>
+			<h2 class="mt-4 text-lg font-semibold tracking-tight">
+				{unavailable ? 'Docs are temporarily unavailable' : 'The docs are on the way'}
+			</h2>
+			<p class="mt-2 max-w-md text-sm leading-relaxed text-muted-foreground">
+				{unavailable
+					? 'We couldn’t reach the documentation service just now. Please check back shortly — everything else in Rental Command is working normally.'
+					: 'Guides for scanning, leases, rent, maintenance, and the AI assistant are being written. In the meantime, jump in and the app walks you through it.'}
+			</p>
+			<div class="mt-6 flex flex-wrap items-center justify-center gap-3">
+				<a
+					href="/register"
+					class="inline-flex h-10 items-center gap-1.5 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+				>
+					Get started
+					<ArrowRight class="h-4 w-4" />
+				</a>
+				<a
+					href="/welcome"
+					class="inline-flex h-10 items-center rounded-full border border-border px-5 text-sm font-medium text-foreground transition-colors hover:bg-secondary"
+				>
+					Back to home
+				</a>
+			</div>
 		</div>
 	{:else}
 		<!-- Start here (hidden while searching — it's a landing affordance, not a result) -->
