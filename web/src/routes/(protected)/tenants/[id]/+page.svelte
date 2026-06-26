@@ -12,7 +12,11 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { getTenantNoticeEmptyCopy, getTenantNoticeEmptyState } from '$lib/tenants/tenant-notice-state';
 	import { getTenantDeleteState } from '$lib/tenants/tenant-delete-state';
-	import { readTenantNoticeAction } from '$lib/tenants/tenant-notice-action';
+	import {
+		clearTenantNoticeActionUrl,
+		readTenantNoticeAction,
+		tenantNoticeActionKey,
+	} from '$lib/tenants/tenant-notice-action';
 	import { DataGrid } from '$lib/components/data-grid';
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import PageBreadcrumb from '$lib/components/shared/PageBreadcrumb.svelte';
@@ -45,9 +49,7 @@
 
 	const tenant = $derived(tenantQuery.data);
 	const tenantLeases = $derived(leasesQuery.data ?? []);
-	const activeTenantLeaseCount = $derived(
-		tenant?.activeLeaseCount ?? tenantLeases.filter((lease) => lease.status === 'Active').length
-	);
+	const activeTenantLeaseCount = $derived(tenant?.activeLeaseCount ?? 0);
 	const fullName = $derived(
 		tenant ? (tenant.fullName ?? `${tenant.firstName} ${tenant.lastName}`) : ''
 	);
@@ -117,7 +119,7 @@
 	let showNoticeDialog = $state(false);
 	let noticeDrafts = $state<NoticeDraft[]>([]);
 	let forcedNoticeLabel = $state<string | null>(null);
-	let noticeActionHandled = false;
+	let handledNoticeActionKey: string | null = null;
 	// Per-draft channel selection (portal / email / sms), defaulting to all on.
 	let noticeChannels = $state<Record<number, { portal: boolean; email: boolean; sms: boolean }>>({});
 	const noticeEmptyState = $derived(
@@ -216,9 +218,20 @@
 
 	$effect(() => {
 		const action = readTenantNoticeAction(page.url.searchParams);
-		if (noticeActionHandled || !action || !tenant) return;
-		noticeActionHandled = true;
+		if (!action) {
+			handledNoticeActionKey = null;
+			return;
+		}
+		if (!tenant) return;
+		const actionKey = tenantNoticeActionKey(id, action);
+		if (handledNoticeActionKey === actionKey) return;
+		handledNoticeActionKey = actionKey;
 		openNoticeDialog(action.noticeType);
+		void goto(clearTenantNoticeActionUrl(page.url), {
+			replaceState: true,
+			noScroll: true,
+			keepFocus: true,
+		});
 	});
 
 	// ── Lease columns ──────────────────────────────────────────────────────────
