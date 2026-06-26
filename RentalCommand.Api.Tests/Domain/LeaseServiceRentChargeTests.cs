@@ -105,6 +105,39 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateAsync_ActiveLeaseWithSecurityDeposit_CreatesDepositHolding()
+    {
+        var today = DateTime.UtcNow.Date;
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+
+        var result = await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-DEPOSIT-001",
+            Status = LeaseStatus.Active,
+            StartDate = today,
+            EndDate = today.AddMonths(12),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 950m,
+            LateFeeAmount = 75m,
+            RentDueDay = today.Day,
+        });
+
+        result.Should().NotBeNull();
+        var holding = await _ctx.Db.SecurityDepositHoldings
+            .AsNoTracking()
+            .SingleAsync(h => h.LeaseId == result!.Id);
+
+        holding.PortfolioId.Should().Be(PortfolioId);
+        holding.Amount.Should().Be(950m);
+        holding.Status.Should().Be(SecurityDepositStatus.Held);
+        holding.DeductionsJson.Should().Be("[]");
+        holding.Notes.Should().Be("Created from lease security deposit.");
+    }
+
+    [Fact]
     public async Task CreateAsync_ActivePastStartLease_ForwardOnlyCreatesCurrentDueChargeWithoutHistory()
     {
         var today = DateTime.UtcNow.Date;
@@ -206,6 +239,63 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
             p.PaymentType == PaymentType.Rent
             && p.Status == PaymentStatus.Scheduled
             && p.Amount == 1275m);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ActivatingLeaseWithSecurityDeposit_CreatesDepositHolding()
+    {
+        var today = DateTime.UtcNow.Date;
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        var lease = SeedLease(property, unit, tenant, LeaseStatus.Draft, today);
+
+        var result = await _sut.UpdateAsync(PortfolioId, lease.Id, new UpdateLeaseRequest
+        {
+            Status = LeaseStatus.Active,
+        });
+
+        result.Should().NotBeNull();
+        var holding = await _ctx.Db.SecurityDepositHoldings
+            .AsNoTracking()
+            .SingleAsync(h => h.LeaseId == lease.Id);
+
+        holding.Amount.Should().Be(1275m);
+        holding.Status.Should().Be(SecurityDepositStatus.Held);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ActivatingLeaseWithExistingDepositHolding_DoesNotDuplicate()
+    {
+        var today = DateTime.UtcNow.Date;
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        var lease = SeedLease(property, unit, tenant, LeaseStatus.Draft, today);
+        _ctx.Db.SecurityDepositHoldings.Add(new SecurityDepositHolding
+        {
+            PortfolioId = PortfolioId,
+            LeaseId = lease.Id,
+            Amount = 800m,
+            Status = SecurityDepositStatus.Held,
+            HeldAt = today,
+            DeductionsJson = "[]",
+            Notes = "Entered manually.",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        var result = await _sut.UpdateAsync(PortfolioId, lease.Id, new UpdateLeaseRequest
+        {
+            Status = LeaseStatus.Active,
+        });
+
+        result.Should().NotBeNull();
+        var holdings = await _ctx.Db.SecurityDepositHoldings
+            .AsNoTracking()
+            .Where(h => h.LeaseId == lease.Id)
+            .ToListAsync();
+
+        holdings.Should().ContainSingle();
+        holdings[0].Amount.Should().Be(800m);
+        holdings[0].Notes.Should().Be("Entered manually.");
     }
 
     [Fact]

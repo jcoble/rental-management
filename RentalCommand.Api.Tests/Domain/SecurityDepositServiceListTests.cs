@@ -98,6 +98,27 @@ public class SecurityDepositServiceListTests : IDisposable
         fromDb.ReturnedAmount.Should().Be(1_175m);
     }
 
+    [Fact]
+    public async Task CreateAsync_WhenHoldingAlreadyExists_ReturnsExistingWithoutDuplicate()
+    {
+        var existing = SeedDeposit("DUP-100", 1_200m);
+
+        var result = await _sut.CreateAsync(PortfolioId, new CreateDepositRequest
+        {
+            LeaseId = existing.LeaseId,
+            Amount = 1_500m,
+            Notes = "Duplicate attempt.",
+        });
+
+        result.Should().NotBeNull();
+        result!.Id.Should().Be(existing.Id);
+        result.Amount.Should().Be(1_200m);
+        var count = await _ctx.Db.SecurityDepositHoldings
+            .AsNoTracking()
+            .CountAsync(h => h.LeaseId == existing.LeaseId);
+        count.Should().Be(1);
+    }
+
     private SecurityDepositHolding SeedDeposit(string leaseNumber, decimal amount)
     {
         var now = DateTime.UtcNow;
