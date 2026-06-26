@@ -35,6 +35,8 @@ public static class LeaseExtractionSchema
         "unit_number is the apartment / unit / suite identifier of the leased premises (e.g. '4B', 'Apt 2', '101'); " +
         "leave it empty for a single-family home with no unit designation. " +
         "unit_bedrooms and unit_bathrooms are the unit's bed/bath counts (decimals, e.g. 1.5) and unit_square_feet its size, only if the lease states them. " +
+        "Look for common lease shorthand such as '2BR/1BA', '2 bed 1 bath', 'two bedroom, one bath', '1/2 bath', 'half bath', and '1.5 baths'. " +
+        "Do not default missing bed/bath counts to 0; leave them empty unless the document states the counts. " +
         "For tenant_name, return the full name of the primary tenant/lessee exactly as written on the lease — do NOT return an id. " +
         "Also extract tenant_email, tenant_phone, and tenant_emergency_contact when the lease states them, because those populate the tenant record. " +
         "Dates must be ISO 8601 (YYYY-MM-DD). monthly_rent, security_deposit, and late_fee are decimal numbers with no currency symbol. " +
@@ -72,9 +74,9 @@ public static class LeaseExtractionSchema
         new ExtractionFieldSpec("unit_number", "string",
             "Apartment / unit / suite identifier of the leased premises (e.g. '4B', 'Apt 2', '101'). Empty for a single-family home with no unit designation."),
         new ExtractionFieldSpec("unit_bedrooms", "number",
-            "Number of bedrooms in the leased unit, as a decimal (e.g. 2 or 1.5), only if stated on the lease."),
+            "Number of bedrooms in the leased unit, only if stated on the lease. Read common shorthand such as '2BR', '2 bed', or 'two bedroom'. Never return 0 for an absent value."),
         new ExtractionFieldSpec("unit_bathrooms", "number",
-            "Number of bathrooms in the leased unit, as a decimal (e.g. 1 or 1.5), only if stated on the lease."),
+            "Number of bathrooms in the leased unit, as a decimal (e.g. 1, 1.5, 2), only if stated on the lease. Read common shorthand such as '1BA', '1 bath', '1/2 bath', 'half bath', or 'one and one-half baths'. Never return 0 for an absent value."),
         new ExtractionFieldSpec("unit_square_feet", "integer",
             "Approximate square footage of the leased unit, only if stated on the lease."),
         new ExtractionFieldSpec("lease_number", "string",

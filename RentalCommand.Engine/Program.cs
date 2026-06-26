@@ -75,6 +75,7 @@ builder.Services.Configure<AssistantConfig>(builder.Configuration.GetSection(Ass
 builder.Services.Configure<UploadSettings>(builder.Configuration.GetSection(UploadSettings.SectionName));
 builder.Services.Configure<NotificationsConfig>(builder.Configuration.GetSection(NotificationsConfig.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
+builder.Services.AddSingleton<IImageTextExtractor, TesseractImageTextExtractor>();
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddHttpClient<ILlmProvider, AnthropicLlmProvider>(c =>

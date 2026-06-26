@@ -65,6 +65,8 @@ builder.Services.Configure<RentalCommand.Core.Configuration.ScreeningConfig>(
 builder.Services.Configure<RentalCommand.Core.Configuration.QuickBooksOptions>(
     builder.Configuration.GetSection(RentalCommand.Core.Configuration.QuickBooksOptions.SectionName));
 var llmProvider = builder.Configuration.GetValue<string>("Assistant:Provider") ?? "openai";
+builder.Services.AddSingleton<RentalCommand.Api.Scanning.IImageTextExtractor,
+    RentalCommand.Api.Scanning.TesseractImageTextExtractor>();
 if (string.Equals(llmProvider, "anthropic", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddHttpClient<RentalCommand.Core.Interfaces.ILlmProvider, RentalCommand.Api.Scanning.AnthropicLlmProvider>(c =>

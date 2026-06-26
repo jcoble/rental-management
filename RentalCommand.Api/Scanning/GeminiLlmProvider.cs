@@ -27,13 +27,19 @@ public sealed class GeminiLlmProvider : ILlmProvider
     private readonly HttpClient _http;
     private readonly AssistantConfig _config;
     private readonly ILogger<GeminiLlmProvider> _logger;
+    private readonly IImageTextExtractor _imageTextExtractor;
     private bool _warnedNoKey;
 
-    public GeminiLlmProvider(HttpClient http, IOptions<AssistantConfig> config, ILogger<GeminiLlmProvider> logger)
+    public GeminiLlmProvider(
+        HttpClient http,
+        IOptions<AssistantConfig> config,
+        ILogger<GeminiLlmProvider> logger,
+        IImageTextExtractor? imageTextExtractor = null)
     {
         _http = http;
         _config = config.Value;
         _logger = logger;
+        _imageTextExtractor = imageTextExtractor ?? new TesseractImageTextExtractor();
     }
 
     public async Task<string> ChatAsync(string prompt, CancellationToken ct = default)
@@ -107,12 +113,14 @@ public sealed class GeminiLlmProvider : ILlmProvider
         }
         else
         {
-            // Optionally OCR images locally first (cheap — avoids vision tokens).
+            // Optionally OCR images locally. Legacy text-only mode replaces the vision call; hybrid
+            // keeps the image/PDF data authoritative and includes OCR as a secondary hint.
             string? ocrText = null;
-            if (!isPdf && _config.UseImageOcr)
-                ocrText = ImageTextExtractor.TryExtractText(documentBytes, contentType);
+            var ocrMode = !isPdf ? ImageOcrRouting.Resolve(_config) : ImageOcrRoutingMode.Disabled;
+            if (ocrMode != ImageOcrRoutingMode.Disabled)
+                ocrText = _imageTextExtractor.TryExtractText(documentBytes, contentType);
 
-            if (ocrText is { Length: > 0 })
+            if (ocrMode == ImageOcrRoutingMode.TextOnly && ImageOcrRouting.IsUseful(ocrText))
             {
                 userParts = new object[]
                 {
@@ -126,9 +134,12 @@ public sealed class GeminiLlmProvider : ILlmProvider
                 var mime = isPdf && !contentType.Contains("pdf", StringComparison.OrdinalIgnoreCase)
                     ? "application/pdf"
                     : contentType;
+                var promptText = ocrMode == ImageOcrRoutingMode.Hybrid && ImageOcrRouting.IsUseful(ocrText)
+                    ? ImageOcrRouting.BuildHybridHint(ocrText!)
+                    : "Extract the fields from the attached document.";
                 userParts = new object[]
                 {
-                    new { text = "Extract the fields from the attached document." },
+                    new { text = promptText },
                     new { inlineData = new { mimeType = mime, data = Convert.ToBase64String(documentBytes) } }
                 };
             }

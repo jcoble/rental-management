@@ -123,6 +123,37 @@ public class ScanProcessingWorker : EngineWorkerBase
                 var extracted = await ExtractWithRetryAsync(
                     llm, bytes, contentType, schema, groundingContext, draft.Id, logger, ct);
 
+                if (string.IsNullOrWhiteSpace(extracted.FailureReason))
+                {
+                    var repairInstruction = GetExtractionQualityRepairInstruction(draft.TargetEntityType, extracted);
+                    if (repairInstruction is not null)
+                    {
+                        logger.LogInformation(
+                            "Scan extraction for draft {DraftId} needs quality repair: {RepairInstruction}",
+                            draft.Id, repairInstruction);
+                        try
+                        {
+                            var repairSchema = new ExtractionSchema(
+                                schema.Instructions +
+                                "\n\nQUALITY REPAIR PASS: " + repairInstruction +
+                                " Return the full extraction schema again. Keep previously correct fields unchanged; " +
+                                "only improve fields you can read from the document.",
+                                schema.Fields);
+                            var repaired = await llm.ExtractAsync(
+                                bytes, contentType, repairSchema.Instructions, repairSchema.Fields, groundingContext, ct);
+                            ApplyQualityRepair(draft.TargetEntityType, extracted, repaired);
+                        }
+                        catch (Exception ex) when (!ct.IsCancellationRequested)
+                        {
+                            logger.LogWarning(ex,
+                                "Scan extraction quality repair failed for draft {DraftId}; keeping initial extraction",
+                                draft.Id);
+                        }
+                    }
+
+                    NormalizeExtractionQuality(draft.TargetEntityType, extracted);
+                }
+
                 // Guard against the silent-empty-draft bug: a failed/empty/truncated/unparseable
                 // extraction must surface as a terminal "Failed" (with a reason) so the reviewer
                 // knows to re-scan or enter manually — it must NEVER be stored as a "Reviewing"
@@ -373,6 +404,51 @@ public class ScanProcessingWorker : EngineWorkerBase
         return null;
     }
 
+    public static string? GetExtractionQualityRepairInstruction(string? targetEntityType, ExtractedFields extracted)
+    {
+        if (!IsExpenseLikeTarget(targetEntityType))
+            return null;
+
+        if (IsRentCheck(extracted))
+            return null;
+
+        if (NeedsReceiptLineItemRepair(extracted))
+        {
+            return "Re-read the receipt/invoice line-item table. For every printed row, extract description, quantity, unit_price, and amount where visible. Do not invent amounts; leave a cell blank if the image does not show it.";
+        }
+
+        return null;
+    }
+
+    public static void NormalizeExtractionQuality(string? targetEntityType, ExtractedFields extracted)
+    {
+        if (extracted.Fields.Count == 0 || !IsLeaseTarget(targetEntityType))
+            return;
+
+        BlankInvalidLeaseUnitCount(extracted, "unit_bedrooms", maxReasonable: 20m);
+        BlankInvalidLeaseUnitCount(extracted, "unit_bathrooms", maxReasonable: 20m);
+    }
+
+    public static void ApplyQualityRepair(string? targetEntityType, ExtractedFields original, ExtractedFields repaired)
+    {
+        if (repaired is null || !string.IsNullOrWhiteSpace(repaired.FailureReason))
+            return;
+
+        if (IsExpenseLikeTarget(targetEntityType)
+            && TryGetField(original, "line_items", out var originalLineItems)
+            && TryGetField(repaired, "line_items", out var repairedLineItems)
+            && ReceiptLineItemCompletenessScore(repairedLineItems.Value) > ReceiptLineItemCompletenessScore(originalLineItems.Value))
+        {
+            original.Fields["line_items"] = repairedLineItems;
+        }
+
+        if (IsLeaseTarget(targetEntityType))
+        {
+            CopyValidLeaseUnitCount(original, repaired, "unit_bedrooms", maxReasonable: 20m);
+            CopyValidLeaseUnitCount(original, repaired, "unit_bathrooms", maxReasonable: 20m);
+        }
+    }
+
     /// <summary>
     /// Counts how many real <em>data</em> fields came back with a non-whitespace value, ignoring
     /// the classifier-only fields (e.g. document_kind) that a model fills even when it read nothing.
@@ -398,6 +474,140 @@ public class ScanProcessingWorker : EngineWorkerBase
         }
         return count;
     }
+
+    private static bool IsExpenseLikeTarget(string? targetEntityType) =>
+        string.IsNullOrWhiteSpace(targetEntityType)
+        || string.Equals(targetEntityType, "Expense", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(targetEntityType, "Receipt", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(targetEntityType, "Bill", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(targetEntityType, "Invoice", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsRentCheck(ExtractedFields extracted) =>
+        TryGetField(extracted, "document_kind", out var kind)
+        && string.Equals(kind.Value?.Trim(), "RentCheck", StringComparison.OrdinalIgnoreCase);
+
+    private static bool NeedsReceiptLineItemRepair(ExtractedFields extracted)
+    {
+        if (!TryGetField(extracted, "line_items", out var lineItems)
+            || string.IsNullOrWhiteSpace(lineItems.Value))
+        {
+            return false;
+        }
+
+        return ReceiptLineItemsHaveDescriptionsMissingAmounts(lineItems.Value)
+            || (lineItems.Confidence is > 0m and < 0.65m
+                && ReceiptLineItemCompletenessScore(lineItems.Value) > 0);
+    }
+
+    private static bool ReceiptLineItemsHaveDescriptionsMissingAmounts(string lineItemsJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(lineItemsJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return false;
+
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                var hasDescription = HasNonEmptyString(item, "description");
+                var hasAmount = HasNumericValue(item, "amount");
+                if (hasDescription && !hasAmount)
+                    return true;
+            }
+        }
+        catch
+        {
+            return false;
+        }
+
+        return false;
+    }
+
+    private static int ReceiptLineItemCompletenessScore(string? lineItemsJson)
+    {
+        if (string.IsNullOrWhiteSpace(lineItemsJson))
+            return 0;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(lineItemsJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array)
+                return 0;
+
+            var score = 0;
+            foreach (var item in doc.RootElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                if (HasNonEmptyString(item, "description")) score += 2;
+                if (HasNumericValue(item, "quantity")) score += 1;
+                if (HasNumericValue(item, "unit_price")) score += 2;
+                if (HasNumericValue(item, "amount")) score += 5;
+            }
+            return score;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private static bool HasNonEmptyString(JsonElement item, string name) =>
+        item.TryGetProperty(name, out var value)
+        && value.ValueKind == JsonValueKind.String
+        && !string.IsNullOrWhiteSpace(value.GetString());
+
+    private static bool HasNumericValue(JsonElement item, string name)
+    {
+        if (!item.TryGetProperty(name, out var value))
+            return false;
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out _))
+            return true;
+
+        return value.ValueKind == JsonValueKind.String
+               && decimal.TryParse(value.GetString(), System.Globalization.NumberStyles.Any,
+                   System.Globalization.CultureInfo.InvariantCulture, out _);
+    }
+
+    private static void BlankInvalidLeaseUnitCount(
+        ExtractedFields extracted, string fieldName, decimal maxReasonable)
+    {
+        if (!TryGetField(extracted, fieldName, out var field))
+            return;
+
+        if (!decimal.TryParse(field.Value, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var value)
+            || value <= 0m
+            || value > maxReasonable)
+        {
+            field.Value = string.Empty;
+            field.Confidence = 0m;
+        }
+    }
+
+    private static void CopyValidLeaseUnitCount(
+        ExtractedFields original, ExtractedFields repaired, string fieldName, decimal maxReasonable)
+    {
+        if (!TryGetField(repaired, fieldName, out var repairedField))
+            return;
+
+        if (decimal.TryParse(repairedField.Value, System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture, out var value)
+            && value > 0m
+            && value <= maxReasonable)
+        {
+            original.Fields[fieldName] = repairedField;
+        }
+    }
+
+    private static bool TryGetField(
+        ExtractedFields extracted, string fieldName, out FieldExtraction field) =>
+        extracted.Fields.TryGetValue(fieldName, out field!) && field is not null;
 
     /// <summary>
     /// Runs the extraction with a single bounded retry on a <em>transient</em> provider error
