@@ -58,7 +58,12 @@ public sealed class ApplicationService : IApplicationService
                 Units = p.Units
                     .Where(u => u.Status != UnitStatus.Offline)
                     .OrderBy(u => u.UnitNumber)
-                    .Select(u => new PublicUnitOption { Id = u.Id, UnitNumber = u.UnitNumber })
+                    .Select(u => new PublicUnitOption
+                    {
+                        Id = u.Id,
+                        UnitNumber = u.UnitNumber,
+                        Status = u.Status,
+                    })
                     .ToList(),
             })
             .ToListAsync(ct);

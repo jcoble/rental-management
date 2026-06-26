@@ -15,6 +15,10 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import { resolveApplyHomeSelection } from '$lib/applications/application-link';
+	import {
+		applicationUnitAvailabilityLabel,
+		applicationUnitOptionLabel,
+	} from '$lib/applications/application-unit-options';
 
 	const token = $derived(page.params.token ?? '');
 
@@ -98,7 +102,7 @@
 			return availableUnits.length === 0 ? 'No specific unit' : 'No preference';
 		}
 		const u = availableUnits.find((x) => String(x.id) === unitValue);
-		return u ? `Unit ${u.unitNumber}` : 'No preference';
+		return u ? applicationUnitOptionLabel(u) : 'No preference';
 	});
 
 	function onPropertyChange() {
@@ -391,17 +395,29 @@
 								<span class="mb-1.5 block text-sm font-medium text-foreground">Unit</span>
 								<Select.Root type="single" bind:value={unitValue} disabled={availableUnits.length === 0}>
 									<Select.Trigger class="h-12 w-full text-base" data-testid="apply-unit-select">
-										{unitSelectLabel}
+										<span class="block truncate text-left" title={unitSelectLabel}>
+											{unitSelectLabel}
+										</span>
 									</Select.Trigger>
 									<Select.Content>
 										<Select.Item value={NO_PREFERENCE} label={availableUnits.length === 0 ? 'No specific unit' : 'No preference'}>
 											{availableUnits.length === 0 ? 'No specific unit' : 'No preference'}
 										</Select.Item>
 										{#each availableUnits as u (u.id)}
-											<Select.Item value={String(u.id)} label={`Unit ${u.unitNumber}`}>Unit {u.unitNumber}</Select.Item>
+											<Select.Item value={String(u.id)} label={applicationUnitOptionLabel(u)}>
+												<span class="flex min-w-0 flex-col">
+													<span class="truncate font-medium">Unit {u.unitNumber}</span>
+													<span class="truncate text-xs text-muted-foreground">{applicationUnitAvailabilityLabel(u.status)}</span>
+												</span>
+											</Select.Item>
 										{/each}
 									</Select.Content>
 								</Select.Root>
+								{#if availableUnits.length > 0}
+									<p class="mt-1.5 text-xs text-muted-foreground">
+										Unit selection is a preference and depends on availability at move-in.
+									</p>
+								{/if}
 							</div>
 						</div>
 					</div>
