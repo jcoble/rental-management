@@ -204,12 +204,14 @@ public class ReportsService : IReportsService
 
     public async Task<RentRollResponse> GetRentRollAsync(int portfolioId, ReportRangeQuery query, CancellationToken ct = default)
     {
+        var today = DateTime.UtcNow.Date;
         var propertyFilter = await ResolvePropertyFilterAsync(portfolioId, query, ct);
 
         var q = _db.Leases
             .AsNoTracking()
             .Where(l => l.PortfolioId == portfolioId &&
-                        (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven));
+                        ((l.Status == LeaseStatus.Active && l.EndDate >= today) ||
+                         (l.Status == LeaseStatus.NoticeGiven && (l.MoveOutDate ?? l.EndDate) >= today)));
 
         if (propertyFilter is not null)
             q = q.Where(l => propertyFilter.Contains(l.PropertyId));
@@ -441,6 +443,7 @@ public class ReportsService : IReportsService
         // only, which dropped a Late payment whose DueDate hadn't passed — diverging from the Money pages.)
         var owed = _db.Payments
             .AsNoTracking()
+            .ForCurrentLeaseAttention(asOf)
             .Where(p => p.PortfolioId == portfolioId &&
                         (p.Status == PaymentStatus.Scheduled ||
                          p.Status == PaymentStatus.Partial ||

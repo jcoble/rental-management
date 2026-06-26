@@ -119,6 +119,50 @@ public sealed class PortfolioQaServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task OverdueRentTool_ExcludesEndedFixedTermLeasePayments()
+    {
+        var now = DateTime.UtcNow;
+        var current = SeedLease(now);
+        var stale = SeedLease(now);
+        current.LeaseNumber = "CURRENT-1";
+        stale.LeaseNumber = "STALE-1";
+        stale.EndDate = now.Date.AddDays(-1);
+        _db.Payments.AddRange(
+            new Payment
+            {
+                PortfolioId = PortfolioId,
+                Lease = current,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Scheduled,
+                Amount = 1400m,
+                DueDate = now.AddDays(-5),
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Payment
+            {
+                PortfolioId = PortfolioId,
+                Lease = stale,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Scheduled,
+                Amount = 1400m,
+                DueDate = now.AddDays(-30),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await _db.SaveChangesAsync();
+
+        var answer = await AskToolAsync(
+            toolName: "list_overdue_rent",
+            argsJson: "{}",
+            question: "Who is overdue?");
+
+        using var doc = JsonDocument.Parse(answer);
+        doc.RootElement.GetArrayLength().Should().Be(1);
+        doc.RootElement[0].GetProperty("leaseNumber").GetString().Should().Be("CURRENT-1");
+    }
+
+    [Fact]
     public async Task FinancialSummaryTool_ReturnsPeriodLabelsAndUnmatchedBankContext()
     {
         var now = DateTime.UtcNow;

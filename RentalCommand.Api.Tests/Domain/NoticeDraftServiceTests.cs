@@ -114,6 +114,53 @@ public class NoticeDraftServiceTests : IDisposable
             d.Subject == "Existing renewal draft");
     }
 
+    [Fact]
+    public async Task GenerateAsync_LateRentNoticeExcludesEndedFixedTermLeasePayments()
+    {
+        var (currentLease, staleLease) = SeedActiveLeases();
+        var now = DateTime.UtcNow;
+        var today = now.Date;
+        var stale = _ctx.Db.Leases.Find(staleLease.Id)!;
+        stale.EndDate = today.AddDays(-1);
+        stale.UpdatedAt = now;
+        _ctx.Db.Payments.AddRange(
+            new Payment
+            {
+                PortfolioId = 1,
+                LeaseId = currentLease.Id,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Scheduled,
+                Amount = 1400m,
+                DueDate = today.AddDays(-10),
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Payment
+            {
+                PortfolioId = 1,
+                LeaseId = staleLease.Id,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Scheduled,
+                Amount = 1450m,
+                DueDate = today.AddDays(-20),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var sut = CreateService();
+
+        var result = await sut.GenerateAsync(
+            1,
+            new GenerateNoticeDraftsRequest { NoticeType = "LateRentNotice" });
+
+        result.CreatedCount.Should().Be(1);
+        result.Drafts.Should().ContainSingle(d =>
+            d.LeaseId == currentLease.Id &&
+            d.NoticeType == "LateRentNotice");
+        result.Drafts.Should().NotContain(d => d.LeaseId == staleLease.Id);
+    }
+
     private NoticeDraftService CreateService(ILlmProvider? llm = null) => new(
         _ctx.Db,
         new NoopConversationService(),

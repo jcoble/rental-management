@@ -57,6 +57,24 @@ public class AutopayChargeServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SkipsEndedFixedTermLeaseWithActiveEnrollment()
+    {
+        var lease = SeedLease(tenantId: 10);
+        SeedDueRent(lease);
+        SeedEnrollment(lease, tenantId: 10, active: true);
+        lease.EndDate = DateTime.UtcNow.Date.AddDays(-1);
+        lease.UpdatedAt = DateTime.UtcNow;
+        _ctx.Db.SaveChanges();
+
+        var sut = BuildService(enabled: true);
+
+        var charged = await sut.ChargeDueAsync();
+
+        charged.Should().Be(0);
+        _ctx.Db.PaymentTransactions.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task SkipsPaymentsAlreadyPaid()
     {
         var lease = SeedLease(tenantId: 10);

@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Stripe;
+using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -43,7 +44,7 @@ public sealed class AutopayChargeService : IAutopayChargeService
         // enrollment. Joining through the active enrollment is the selection gate — leases that
         // cancelled (Active=false) or never enrolled are excluded.
         var candidates = await (
-            from p in _db.Payments
+            from p in _db.Payments.ForCurrentLeaseAttention(now)
             where (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late)
                   && p.PaymentType == PaymentType.Rent
                   && p.DueDate <= now
