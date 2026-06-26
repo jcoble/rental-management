@@ -4,9 +4,227 @@
 		<meta charset="utf-8" />
 		<link rel="icon" type="image/svg+xml" href="%sveltekit.assets%/favicon.svg" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<style>
+			/* Marketing splash loader — paints on the very first frame, before SvelteKit
+			   hydrates or any JS/asset chunk downloads. Self-contained (no framework or
+			   external CSS deps). Only shown on the marketing routes (/welcome, /features)
+			   — the inline script below removes it instantly everywhere else so the
+			   authenticated app shell never flashes a splash. For slower networks. */
+			#rc-loader {
+				position: fixed;
+				inset: 0;
+				z-index: 100000;
+				display: grid;
+				grid-template-rows: auto 1fr auto;
+				padding: clamp(1.5rem, 5vw, 3rem);
+				background: #0b0b10;
+				color: #f4f1fb;
+				transition: opacity 0.6s ease;
+				font-family: 'Funnel Display', ui-sans-serif, system-ui, sans-serif;
+			}
+			#rc-loader.rc-hidden {
+				opacity: 0;
+				pointer-events: none;
+			}
+			.rc-brand {
+				display: flex;
+				align-items: center;
+				gap: 0.6rem;
+				font-size: 0.95rem;
+				font-weight: 600;
+				letter-spacing: 0.18em;
+				text-transform: uppercase;
+				color: #cfc8e6;
+			}
+			.rc-brand-mark {
+				display: inline-flex;
+				width: 1.6rem;
+				height: 1.6rem;
+				align-items: center;
+				justify-content: center;
+				border-radius: 0.5rem;
+				background: rgba(164, 107, 255, 0.16);
+				border: 1px solid rgba(164, 107, 255, 0.4);
+				color: #c9acff;
+			}
+			.rc-bottom {
+				display: flex;
+				align-items: flex-end;
+				justify-content: space-between;
+			}
+			.rc-loading {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.5rem;
+				font-size: 0.85rem;
+				color: #9b97ad;
+				letter-spacing: 0.02em;
+			}
+			.rc-dot {
+				width: 7px;
+				height: 7px;
+				border-radius: 50%;
+				background: #a36bff;
+				box-shadow: 0 0 10px #a36bff;
+				animation: rc-pulse 1.2s ease-in-out infinite;
+			}
+			@keyframes rc-pulse {
+				0%, 100% { opacity: 1; transform: scale(1); }
+				50% { opacity: 0.5; transform: scale(0.7); }
+			}
+			.rc-pct {
+				font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
+				font-size: clamp(2.4rem, 7vw, 3.6rem);
+				font-weight: 600;
+				line-height: 1;
+				font-variant-numeric: tabular-nums;
+				color: #f4f1fb;
+			}
+			.rc-pct-sym {
+				color: #7d7791;
+				font-size: 0.5em;
+				margin-left: 0.1em;
+			}
+			@media (prefers-reduced-motion: reduce) {
+				.rc-dot {
+					animation: none;
+				}
+			}
+		</style>
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">
+		<div id="rc-loader" aria-hidden="true">
+			<div class="rc-brand">
+				<span class="rc-brand-mark">
+					<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="20" x="4" y="2" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01M16 6h.01M12 6h.01M12 10h.01M12 14h.01M16 10h.01M16 14h.01M8 10h.01M8 14h.01"/></svg>
+				</span>
+				Rental Command
+			</div>
+			<div></div>
+			<div class="rc-bottom">
+				<div class="rc-loading"><span class="rc-dot"></span> Loading</div>
+				<div class="rc-pct"><span id="rc-pct">000</span><span class="rc-pct-sym">%</span></div>
+			</div>
+		</div>
+		<script>
+			(function () {
+				var loaderEl = document.getElementById('rc-loader');
+				if (!loaderEl) return;
+
+				// Only the marketing routes get the splash. Everywhere else, remove it now
+				// (synchronously, before first paint) so the app never flashes it.
+				var path = location.pathname.replace(/\/+$/, '') || '/';
+				var isMarketing = path === '/welcome' || path === '/features';
+				if (!isMarketing) {
+					if (loaderEl.parentNode) loaderEl.parentNode.removeChild(loaderEl);
+					return;
+				}
+
+				var videoExpected = path === '/welcome'; // the hero house-scrub video
+				function now() {
+					return window.performance && performance.now ? performance.now() : Date.now();
+				}
+				var startedAt = now();
+				var pctEl = document.getElementById('rc-pct');
+				var displayed = 0;
+				var docComplete = document.readyState === 'complete';
+				var video = null,
+					videoBound = false,
+					videoReady = false,
+					hidden = false,
+					lastAt = 0;
+
+				function bindVideo() {
+					if (videoBound) return;
+					var v = document.querySelector('video[src*="house-scrub"]');
+					if (!v) return;
+					videoBound = true;
+					video = v;
+					['loadstart', 'loadedmetadata', 'progress', 'canplay', 'canplaythrough'].forEach(function (ev) {
+						v.addEventListener(ev, schedule);
+					});
+					// Decode/network error → stop waiting, reveal the page (poster/first frame).
+					v.addEventListener('error', function () {
+						videoReady = true;
+						update();
+					});
+				}
+
+				// Throttle to ~20 Hz so high-frequency video events can't starve the thread.
+				function schedule() {
+					var t = now();
+					if (t - lastAt < 50) return;
+					lastAt = t;
+					update();
+				}
+
+				function update() {
+					var elapsed = now() - startedAt;
+					var target = Math.min(25, Math.round((elapsed / 600) * 25)); // time baseline 0→25
+
+					if (video && isFinite(video.duration) && video.duration > 0) {
+						var vf = 0;
+						if (video.readyState >= 4) {
+							vf = 1;
+							videoReady = true;
+						} else if (video.buffered.length > 0) {
+							vf = video.buffered.end(video.buffered.length - 1) / video.duration;
+							if (vf >= 0.99) videoReady = true;
+						} else if (video.readyState >= 1) {
+							vf = 0.05;
+						}
+						target = Math.max(target, 25 + Math.round(vf * 70)); // video buffer 25→95
+					}
+
+					// Finish once the document is loaded AND (the hero video is ready, or this
+					// page has no hero video to wait on).
+					if (docComplete && (videoReady || !videoExpected)) target = 100;
+					target = Math.min(100, target);
+
+					if (target > displayed) displayed = Math.min(target, displayed + 6); // ≥~1.3s min
+					var disp = Math.round(displayed);
+					if (pctEl) pctEl.textContent = ('000' + disp).slice(-3);
+
+					if (disp >= 100 && !hidden) {
+						hidden = true;
+						setTimeout(function () {
+							loaderEl.classList.add('rc-hidden');
+							setTimeout(function () {
+								if (loaderEl.parentNode) loaderEl.parentNode.removeChild(loaderEl);
+								clearInterval(tick);
+							}, 650);
+						}, 250);
+					}
+				}
+
+				function onDoc() {
+					if (document.readyState === 'complete') docComplete = true;
+					update();
+				}
+				document.addEventListener('readystatechange', onDoc);
+				window.addEventListener('load', onDoc);
+
+				// Tick at 80ms — drives the time baseline + polls for the hero video element
+				// until it appears in the DOM after hydration.
+				var tick = setInterval(function () {
+					bindVideo();
+					update();
+				}, 80);
+
+				// Safety net — if progress never reaches 100 (network failure, missing video),
+				// force-finish after 12s so the page is always reachable.
+				setTimeout(function () {
+					if (!hidden) {
+						docComplete = true;
+						videoReady = true;
+						update();
+					}
+				}, 12000);
+
+				update();
+			})();
+		</script>
 		<div style="display: contents">%sveltekit.body%</div>
 	</body>
 </html>

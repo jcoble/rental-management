@@ -14,7 +14,7 @@
  * by an untrusted author (L-14).
  */
 
-import { error } from '@sveltejs/kit';
+import { error, redirect } from '@sveltejs/kit';
 import { marked } from 'marked';
 import sanitizeHtmlLib from 'sanitize-html';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
@@ -119,13 +119,17 @@ export const load: PageServerLoad = async ({ params, fetch }) => {
 			fetch(`${SERVER_API_BASE_URL}/docs`)
 		]);
 	} catch {
-		throw error(502, 'The documentation service is unavailable right now.');
+		// Service unreachable → send the reader to the graceful docs index instead of a
+		// hard 502 error page.
+		throw redirect(307, '/docs');
 	}
 
 	if (articleRes.status === 404) {
 		throw error(404, 'That documentation article could not be found.');
 	}
 	if (!articleRes.ok) {
+		// Server-side failure → fall back to the docs index rather than a scary error.
+		if (articleRes.status >= 500) throw redirect(307, '/docs');
 		throw error(articleRes.status, 'Could not load this article.');
 	}
 
