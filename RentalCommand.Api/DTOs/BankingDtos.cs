@@ -77,6 +77,14 @@ public class BankTransactionResponse
     public BankMatchSuggestionResponse? SuggestedMatch { get; set; }
 }
 
+public class BankTransactionListResponse
+{
+    public int TotalCount { get; set; }
+    public int Skip { get; set; }
+    public int Take { get; set; }
+    public IReadOnlyList<BankTransactionResponse> Items { get; set; } = [];
+}
+
 public class BankMatchSuggestionResponse
 {
     public string EntityType { get; set; } = string.Empty;

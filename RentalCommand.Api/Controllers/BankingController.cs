@@ -77,12 +77,14 @@ public class BankingController : ManagementControllerBase
     }
 
     [HttpGet("transactions")]
-    [ProducesResponseType(typeof(IReadOnlyList<BankTransactionResponse>), StatusCodes.Status200OK)]
-    public async Task<ActionResult<IReadOnlyList<BankTransactionResponse>>> Transactions(
+    [ProducesResponseType(typeof(BankTransactionListResponse), StatusCodes.Status200OK)]
+    public async Task<ActionResult<BankTransactionListResponse>> Transactions(
         [FromQuery] string? status,
-        CancellationToken ct)
+        [FromQuery] int skip,
+        [FromQuery] int take = ListQuery.DefaultTake,
+        CancellationToken ct = default)
     {
-        return Ok(await _service.ListTransactionsAsync(GetPortfolioId(), status, ct));
+        return Ok(await _service.ListTransactionsAsync(GetPortfolioId(), status, skip, take, ct));
     }
 
     [HttpPost("transactions/import")]
