@@ -10,7 +10,7 @@ export interface ScanProcessingCopy {
 	body: string;
 }
 
-const DEFAULT_HELPER = 'or click to browse — PDF, JPG, PNG accepted';
+const DEFAULT_HELPER = 'or click to browse — one PDF or multiple photos accepted';
 
 const UPLOAD_COPY: Record<ScanDocType, ScanUploadCopy> = {
 	Expense: {

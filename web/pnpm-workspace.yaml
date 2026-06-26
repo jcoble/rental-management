@@ -1,4 +1,5 @@
 allowBuilds:
+  core-js: false
   esbuild: true
 # pnpm settings home (pnpm 9+ reads overrides here; pnpm 11 no longer reads
 # package.json#pnpm.overrides). Dockerfile.web COPYs this file — keep it next
