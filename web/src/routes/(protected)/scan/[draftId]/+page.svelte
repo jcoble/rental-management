@@ -19,7 +19,13 @@
 		scanCategoryOptionsForTarget,
 		scanCategoryValue
 	} from '$lib/scans/scan-review-fields';
-	import { createdRecordArticle, isTerminalScanReview, shouldDisableScanReviewControls } from '$lib/scans/scan-review-state';
+	import {
+		createdRecordArticle,
+		createdRecordHref,
+		createdRecordLabel,
+		isTerminalScanReview,
+		shouldDisableScanReviewControls
+	} from '$lib/scans/scan-review-state';
 	import {
 		applyScanContextOverrides,
 		parseScanContext,
@@ -565,11 +571,7 @@
 	const linkedRecordHref = $derived((() => {
 		const type = confirmedRecord?.type ?? data?.createdEntityType;
 		const id = confirmedRecord?.id ?? data?.createdEntityId;
-		if (!type || !id) return '/accounting';
-		if (type === 'Payment') return `/accounting/payments/${id}`;
-		if (type === 'WorkOrder') return `/maintenance/${id}`;
-		if (type === 'Lease') return `/leases/${id}`;
-		return `/accounting/expenses/${id}`;
+		return createdRecordHref(type, id);
 	})());
 
 	function formatUsd(val: number | null): string {
@@ -588,13 +590,7 @@
 	// Friendly label for the created record's type (drives the "View/Edit the Payment" button).
 	const createdTypeLabel = $derived.by(() => {
 		const type = confirmedRecord?.type ?? data?.createdEntityType;
-		switch (type) {
-			case 'Payment': return 'Payment';
-			case 'WorkOrder': return 'Work Order';
-			case 'Lease': return 'Lease';
-			case 'Expense': return 'Expense';
-			default: return 'Record';
-		}
+		return createdRecordLabel(type);
 	});
 
 	const returnToSourceLabel = $derived.by(() => {
