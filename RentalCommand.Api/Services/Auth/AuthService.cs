@@ -1,8 +1,10 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Auth;
@@ -99,6 +101,7 @@ public class AuthService : IAuthService
     private readonly IUserMigrationService _userMigration;
     private readonly IAuthEmailSender _emailSender;
     private readonly RentalCommandDbContext _db;
+    private readonly IAuditTrailService _audit;
     private readonly Domain.ISelfOwnerProvisioner _selfOwnerProvisioner;
     private readonly ILogger<AuthService> _logger;
 
@@ -109,6 +112,7 @@ public class AuthService : IAuthService
         IUserMigrationService userMigration,
         IAuthEmailSender emailSender,
         RentalCommandDbContext db,
+        IAuditTrailService audit,
         Domain.ISelfOwnerProvisioner selfOwnerProvisioner,
         ILogger<AuthService> logger)
     {
@@ -118,6 +122,7 @@ public class AuthService : IAuthService
         _userMigration = userMigration;
         _emailSender = emailSender;
         _db = db;
+        _audit = audit;
         _selfOwnerProvisioner = selfOwnerProvisioner;
         _logger = logger;
     }
@@ -443,10 +448,61 @@ public class AuthService : IAuthService
             return AuthUserResult.Fail(errors, AuthErrorType.BadRequest);
         }
 
+        await LogPasswordChangeAuditAsync(user);
         _logger.LogInformation("Password changed for user {UserId}.", userId);
         var roles = await _userManager.GetRolesAsync(user);
         return AuthUserResult.Ok(await MapToUserDtoAsync(user, roles));
     }
+
+    private async Task LogPasswordChangeAuditAsync(ApplicationUser user)
+    {
+        if (!user.PortfolioId.HasValue)
+        {
+            return;
+        }
+
+        var email = user.Email ?? user.UserName ?? string.Empty;
+        var account = string.IsNullOrWhiteSpace(email)
+            ? null
+            : await _db.UserAccounts
+                .AsNoTracking()
+                .Where(a => a.PortfolioId == user.PortfolioId.Value && a.Email == email)
+                .Select(a => new
+                {
+                    a.Id,
+                    a.Email,
+                    a.DisplayName,
+                    Role = a.Role.ToString(),
+                    a.IsActive,
+                })
+                .FirstOrDefaultAsync();
+
+        var entityType = account is null ? nameof(ApplicationUser) : nameof(UserAccount);
+        var entityId = account?.Id ?? user.Id;
+        await _audit.LogAsync(
+            user.PortfolioId.Value,
+            entityType,
+            entityId,
+            AuditLogOperation.Updated,
+            userId: user.Id,
+            oldValues: SerializeAudit(new
+            {
+                securityEvent = "PasswordChange",
+                email,
+            }),
+            newValues: SerializeAudit(new
+            {
+                securityEvent = "PasswordChanged",
+                targetUserId = user.Id,
+                email,
+                displayName = account?.DisplayName ?? user.DisplayName,
+                role = account?.Role,
+                isActive = account?.IsActive,
+            }),
+            changeReason: "Password changed by account user.");
+    }
+
+    private static string SerializeAudit(object values) => JsonSerializer.Serialize(values);
 
     public Task<UserDto> MapToUserDtoAsync(ApplicationUser user, IList<string> roles)
     {

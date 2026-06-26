@@ -5,9 +5,12 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
+using RentalCommand.Data.Auditing;
 using RentalCommand.Data;
 using RentalCommand.TestCommon;
 
@@ -56,6 +59,52 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
         (await _userManager.GetAccessFailedCountAsync(reloaded!)).Should().Be(0);
     }
 
+    [Fact]
+    public async Task ChangePasswordAsync_WritesScopedAuditLogWithoutPasswordValues()
+    {
+        var now = DateTime.UtcNow;
+        var user = new ApplicationUser
+        {
+            UserName = "password-audit@example.local",
+            Email = "password-audit@example.local",
+            EmailConfirmed = true,
+            DisplayName = "Password Audit",
+            PortfolioId = 1,
+            CreatedAt = now,
+        };
+        (await _userManager.CreateAsync(user, "OldPassword123!")).Succeeded.Should().BeTrue();
+        var account = new UserAccount
+        {
+            PortfolioId = 1,
+            Email = user.Email,
+            DisplayName = user.DisplayName,
+            PasswordHash = string.Empty,
+            Role = UserRole.Admin,
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.UserAccounts.Add(account);
+        await _ctx.Db.SaveChangesAsync();
+
+        var result = await CreateService().ChangePasswordAsync(
+            user.Id.ToString(),
+            "OldPassword123!",
+            "NewPassword123!");
+
+        result.Success.Should().BeTrue();
+        var audit = _ctx.Db.AuditLogs.Should().ContainSingle().Subject;
+        audit.PortfolioId.Should().Be(1);
+        audit.UserId.Should().Be(user.Id);
+        audit.EntityType.Should().Be(nameof(UserAccount));
+        audit.EntityId.Should().Be(account.Id);
+        audit.Operation.Should().Be(AuditLogOperation.Updated);
+        audit.ChangeReason.Should().Contain("Password");
+        audit.NewValues.Should().Contain("\"securityEvent\":\"PasswordChanged\"");
+        audit.OldValues.Should().NotContain("OldPassword123!");
+        audit.NewValues.Should().NotContain("NewPassword123!");
+    }
+
     private AuthService CreateService() => new(
         _userManager,
         null!,
@@ -63,6 +112,7 @@ public sealed class AuthServiceResetPasswordTests : IDisposable
         Mock.Of<IUserMigrationService>(),
         Mock.Of<IAuthEmailSender>(),
         _ctx.Db,
+        new AuditTrailService(_ctx.Db, new AuditScope()),
         Mock.Of<ISelfOwnerProvisioner>(),
         NullLogger<AuthService>.Instance);
 

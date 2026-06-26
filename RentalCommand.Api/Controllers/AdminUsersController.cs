@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -7,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Controllers;
@@ -24,15 +26,18 @@ public class AdminUsersController : ManagementControllerBase
 {
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly RentalCommandDbContext _db;
+    private readonly IAuditTrailService _audit;
     private readonly ILogger<AdminUsersController> _logger;
 
     public AdminUsersController(
         UserManager<ApplicationUser> userManager,
         RentalCommandDbContext db,
+        IAuditTrailService audit,
         ILogger<AdminUsersController> logger)
     {
         _userManager = userManager;
         _db = db;
+        _audit = audit;
         _logger = logger;
     }
 
@@ -203,6 +208,24 @@ public class AdminUsersController : ManagementControllerBase
         };
         _db.UserAccounts.Add(account);
         await _db.SaveChangesAsync(ct);
+        await _audit.LogAsync(
+            portfolioId,
+            nameof(UserAccount),
+            account.Id,
+            AuditLogOperation.Created,
+            userId: GetUserId(),
+            newValues: SerializeAudit(new
+            {
+                email = account.Email,
+                displayName = account.DisplayName,
+                role = account.Role.ToString(),
+                isActive = account.IsActive,
+                ownerId = account.OwnerId,
+                tenantId = account.TenantId,
+                identityUserId = identityUser.Id,
+            }),
+            changeReason: $"Team member created with role {roleName}.",
+            ct: ct);
 
         _logger.LogInformation(
             "Admin {AdminId} created team member {Email} (UserAccount {AccountId}, Identity {IdentityId}) with role {Role} in portfolio {PortfolioId}.",
@@ -273,9 +296,28 @@ public class AdminUsersController : ManagementControllerBase
         }
 
         // Update the domain UserAccount.
+        var oldRole = account.Role;
         account.Role = request.Role;
         account.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+        await _audit.LogAsync(
+            portfolioId,
+            nameof(UserAccount),
+            account.Id,
+            AuditLogOperation.Updated,
+            userId: GetUserId(),
+            oldValues: SerializeAudit(new
+            {
+                email = account.Email,
+                role = oldRole.ToString(),
+            }),
+            newValues: SerializeAudit(new
+            {
+                email = account.Email,
+                role = account.Role.ToString(),
+            }),
+            changeReason: $"Team member role changed from {oldRole} to {account.Role}.",
+            ct: ct);
 
         _logger.LogInformation(
             "Admin {AdminId} changed role of UserAccount {AccountId} to {Role} in portfolio {PortfolioId}.",
@@ -326,9 +368,28 @@ public class AdminUsersController : ManagementControllerBase
             }
         }
 
+        var oldIsActive = account.IsActive;
         account.IsActive = request.IsActive;
         account.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+        await _audit.LogAsync(
+            portfolioId,
+            nameof(UserAccount),
+            account.Id,
+            AuditLogOperation.Updated,
+            userId: GetUserId(),
+            oldValues: SerializeAudit(new
+            {
+                email = account.Email,
+                isActive = oldIsActive,
+            }),
+            newValues: SerializeAudit(new
+            {
+                email = account.Email,
+                isActive = account.IsActive,
+            }),
+            changeReason: BuildActiveAuditReason(oldIsActive, account.IsActive),
+            ct: ct);
 
         _logger.LogInformation(
             "Admin {AdminId} set UserAccount {AccountId} IsActive={IsActive} in portfolio {PortfolioId}.",
@@ -352,6 +413,20 @@ public class AdminUsersController : ManagementControllerBase
         TenantId = u.TenantId,
         CreatedAt = u.CreatedAt,
     };
+
+    private static string BuildActiveAuditReason(bool oldIsActive, bool newIsActive)
+    {
+        if (oldIsActive == newIsActive)
+        {
+            return $"Team member active status confirmed as {(newIsActive ? "active" : "inactive")}.";
+        }
+
+        return newIsActive
+            ? "Team member reactivated."
+            : "Team member deactivated.";
+    }
+
+    private static string SerializeAudit(object values) => JsonSerializer.Serialize(values);
 
     /// <summary>
     /// Generates a cryptographically random password that satisfies ASP.NET Identity's
