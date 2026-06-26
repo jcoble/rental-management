@@ -124,18 +124,56 @@ public class UnitService : IUnitService
                     w.Status != WorkOrderStatus.Completed &&
                     w.Status != WorkOrderStatus.Cancelled &&
                     w.Status != WorkOrderStatus.Archived),
-                // The active lease's end date + a flag, taken from the latest-ending active lease.
-                ActiveLeaseEndDate = u.Leases
-                    .Where(l => l.Status == LeaseStatus.Active)
-                    .OrderByDescending(l => l.EndDate)
+                // Current lease signal for list badges: Active leases, plus NoticeGiven leases that are
+                // still occupied but moving out. Kept as correlated SQL subqueries.
+                CurrentLeaseStatus = u.Leases
+                    .Where(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
+                    .OrderByDescending(l => l.Status == LeaseStatus.Active)
+                    .ThenByDescending(l => l.StartDate)
+                    .ThenByDescending(l => l.Id)
+                    .Select(l => (LeaseStatus?)l.Status)
+                    .FirstOrDefault(),
+                CurrentLeaseEndDate = u.Leases
+                    .Where(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)
+                    .OrderByDescending(l => l.Status == LeaseStatus.Active)
+                    .ThenByDescending(l => l.StartDate)
+                    .ThenByDescending(l => l.Id)
                     .Select(l => (DateTime?)l.EndDate)
                     .FirstOrDefault(),
-                ActiveLeaseNoticeGiven = u.Leases.Any(l => l.Status == LeaseStatus.NoticeGiven),
-                HasActiveLease = u.Leases.Any(l => l.Status == LeaseStatus.Active),
                 HasDraftOrPendingLease = u.Leases.Any(l =>
                     l.Status == LeaseStatus.Draft || l.Status == LeaseStatus.PendingSignature),
                 DocsCount = _db.StoredFiles.Count(f =>
-                    f.PortfolioId == portfolioId && f.EntityType == "Unit" && f.EntityId == u.Id),
+                    f.PortfolioId == portfolioId
+                    && f.EntityId != null
+                    && (
+                        (f.EntityType == "Unit" && f.EntityId == u.Id)
+                        || (f.EntityType == "Lease" && _db.Leases.Any(l =>
+                            l.PortfolioId == portfolioId
+                            && l.UnitId == u.Id
+                            && l.Id == f.EntityId.Value))
+                        || (f.EntityType == "Payment" && _db.Payments.Any(p =>
+                            p.PortfolioId == portfolioId
+                            && p.Id == f.EntityId.Value
+                            && _db.Leases.Any(l =>
+                                l.PortfolioId == portfolioId
+                                && l.UnitId == u.Id
+                                && l.Id == p.LeaseId)))
+                        || (f.EntityType == "Expense" && _db.Expenses.Any(e =>
+                            e.PortfolioId == portfolioId
+                            && e.Id == f.EntityId.Value
+                            && (e.UnitId == u.Id
+                                || (e.WorkOrderId != null && _db.WorkOrders.Any(w =>
+                                    w.PortfolioId == portfolioId
+                                    && w.UnitId == u.Id
+                                    && w.Id == e.WorkOrderId.Value)))))
+                        || (f.EntityType == "WorkOrder" && _db.WorkOrders.Any(w =>
+                            w.PortfolioId == portfolioId
+                            && w.UnitId == u.Id
+                            && w.Id == f.EntityId.Value))
+                        || (f.EntityType == "Inspection" && _db.Inspections.Any(i =>
+                            i.PortfolioId == portfolioId
+                            && i.UnitId == u.Id
+                            && i.Id == f.EntityId.Value)))),
             })
             .ToListAsync(ct);
 
@@ -150,11 +188,16 @@ public class UnitService : IUnitService
                 Status = r.Status.ToString(),
                 MarketRent = r.MarketRent,
                 OpenWorkOrderCount = r.OpenWorkOrderCount,
-                LeaseEndsInDays = r.ActiveLeaseEndDate is { } end
+                LeaseEndsInDays = r.CurrentLeaseEndDate is { } end
                     ? Math.Max(0, (int)Math.Ceiling((end - now).TotalDays))
                     : null,
                 DocsNeedingReviewCount = r.DocsCount,
-                SimpleStage = ComputeSimpleStage(r.Status, r.HasActiveLease, r.ActiveLeaseNoticeGiven, r.ActiveLeaseEndDate, r.HasDraftOrPendingLease, now),
+                SimpleStage = ComputeSimpleStage(
+                    r.Status,
+                    r.CurrentLeaseStatus,
+                    r.CurrentLeaseEndDate,
+                    r.HasDraftOrPendingLease,
+                    now),
             }).ToList(),
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
@@ -173,24 +216,24 @@ public class UnitService : IUnitService
 
     /// <summary>
     /// Simplified list badge (NOT the full 9-stage detail derivation): a cheap label from the unit's
-    /// occupancy status + active-lease status, formatted from already-projected scalars (no extra query).
+    /// occupancy status + current-lease status, formatted from already-projected scalars (no extra query).
     /// </summary>
     private static string ComputeSimpleStage(
-        UnitStatus status, bool hasActiveLease, bool noticeGiven, DateTime? activeLeaseEnd, bool hasDraftOrPending, DateTime now)
+        UnitStatus status, LeaseStatus? currentLeaseStatus, DateTime? currentLeaseEnd, bool hasDraftOrPending, DateTime now)
     {
         if (status == UnitStatus.Offline)
         {
             return "Turnover";
         }
 
-        if (hasActiveLease)
+        if (currentLeaseStatus is LeaseStatus.Active or LeaseStatus.NoticeGiven)
         {
-            if (noticeGiven)
+            if (currentLeaseStatus == LeaseStatus.NoticeGiven)
             {
                 return "Move-Out";
             }
 
-            if (activeLeaseEnd is { } end && end >= now && end <= now.AddDays(90))
+            if (currentLeaseEnd is { } end && end >= now && end <= now.AddDays(90))
             {
                 return "Renewal";
             }

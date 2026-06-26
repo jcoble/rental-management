@@ -42,9 +42,9 @@ public class UnitResponse
 
 /// <summary>
 /// A units-list row with cheap health badges for the <c>/units</c> page (spec section 10). Every field
-/// is computed DB-side in one projection query (grouped counts + the active-lease scalars) — the list
+/// is computed DB-side in one projection query (grouped counts + the current-lease scalars) — the list
 /// never calls the per-unit dashboard per row. <see cref="SimpleStage"/> is a simplified label
-/// (Unit.Status + active-lease status), NOT the full 9-stage detail-page derivation.
+/// (Unit.Status + current-lease status), NOT the full 9-stage detail-page derivation.
 /// </summary>
 public class UnitHealthResponse
 {
@@ -63,7 +63,7 @@ public class UnitHealthResponse
     /// <summary>Days until the unit's active lease ends; null when there is no active lease.</summary>
     public int? LeaseEndsInDays { get; set; }
 
-    /// <summary>Documents attached directly to the unit (a cheap list-level signal; full set on the detail page).</summary>
+    /// <summary>Documents attached to the unit or its lease/payment/expense/work-order/inspection children.</summary>
     public int DocsNeedingReviewCount { get; set; }
 
     /// <summary>Simplified lifecycle label for the list badge (Active/Renewal/Move-Out/Lease/Vacant/Turnover).</summary>

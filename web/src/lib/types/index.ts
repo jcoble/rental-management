@@ -132,7 +132,7 @@ export interface Unit {
 	updatedAt: string;
 }
 
-/** A units-list row with cheap health badges (GET /units/list-with-health). */
+/** A units-list row with health badges (GET /units/list-with-health). */
 export interface UnitHealth {
 	id: number;
 	propertyId: number;
