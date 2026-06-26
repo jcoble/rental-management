@@ -112,7 +112,9 @@ public class ScanBatchControllerTests : IDisposable
 
         var result = await controller.UploadBatch(files, targetEntityType: "Banana", name: null, CancellationToken.None);
 
-        result.Result.Should().BeOfType<BadRequestObjectResult>();
+        var badRequest = result.Result.Should().BeOfType<BadRequestObjectResult>().Subject;
+        var error = badRequest.Value!.GetType().GetProperty("error")!.GetValue(badRequest.Value) as string;
+        error.Should().Contain("Application");
         (await _db.ScanBatches.CountAsync()).Should().Be(0);
     }
 
