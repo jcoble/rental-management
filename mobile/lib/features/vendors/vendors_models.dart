@@ -8,6 +8,10 @@ class Vendor {
     required this.id,
     required this.name,
     required this.serviceType,
+    this.addressLine1,
+    this.city,
+    this.state,
+    this.postalCode,
     this.email,
     this.phone,
     this.preferred = false,
@@ -21,6 +25,10 @@ class Vendor {
   final int id;
   final String name;
   final String serviceType;
+  final String? addressLine1;
+  final String? city;
+  final String? state;
+  final String? postalCode;
   final String? email;
   final String? phone;
   final bool preferred;
@@ -57,6 +65,10 @@ class Vendor {
       id: (json['id'] as num).toInt(),
       name: json['name'] as String? ?? '',
       serviceType: json['serviceType'] as String? ?? '',
+      addressLine1: asString('addressLine1'),
+      city: asString('city'),
+      state: asString('state'),
+      postalCode: asString('postalCode'),
       email: asString('email'),
       phone: asString('phone'),
       preferred: json['preferred'] as bool? ?? false,
@@ -73,6 +85,10 @@ class Vendor {
       id: id,
       name: name,
       serviceType: serviceType,
+      addressLine1: addressLine1,
+      city: city,
+      state: state,
+      postalCode: postalCode,
       email: email,
       phone: phone,
       preferred: preferred,
