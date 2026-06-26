@@ -25,7 +25,7 @@ function loadImage(dataUrl: string): Promise<HTMLImageElement> {
 }
 
 /** Stitch image files (jpeg/png/webp) into a single A4 PDF, one image per page. */
-export async function stitchImagesToPdf(files: File[]): Promise<File> {
+export async function stitchImagesToPdf(files: File[], outputName = 'scan.pdf'): Promise<File> {
 	if (files.length === 0) throw new Error('No photos to combine');
 	let doc: jsPDF | null = null;
 	for (const file of files) {
@@ -53,5 +53,5 @@ export async function stitchImagesToPdf(files: File[]): Promise<File> {
 		doc.addImage(dataUrl, fmt, x, y, w, h);
 	}
 	const blob = doc!.output('blob');
-	return new File([blob], 'lease-scan.pdf', { type: 'application/pdf' });
+	return new File([blob], outputName, { type: 'application/pdf' });
 }
