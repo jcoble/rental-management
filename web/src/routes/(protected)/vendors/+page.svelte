@@ -13,6 +13,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
+	import { clearFieldError } from '$lib/forms/form-errors';
 	import { Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -64,6 +65,21 @@
 	let vendorErrors = $state<Record<string, string>>({});
 	let vendorDeleteTarget = $state<Vendor | null>(null);
 	let createParamHandled = $state(false);
+
+	function clearVendorError(field: string) {
+		const next = clearFieldError(vendorErrors, field);
+		if (next !== vendorErrors) vendorErrors = next;
+	}
+
+	$effect(() => {
+		if (vendorForm.name.trim()) clearVendorError('name');
+	});
+	$effect(() => {
+		if (vendorForm.serviceType.trim()) clearVendorError('serviceType');
+	});
+	$effect(() => {
+		if (!vendorForm.email.trim() || vendorForm.email.includes('@')) clearVendorError('email');
+	});
 
 	function invalidateVendors() {
 		queryClient.invalidateQueries({ queryKey: ['vendors', portfolioId] });
