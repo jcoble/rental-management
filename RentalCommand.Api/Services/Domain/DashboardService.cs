@@ -132,11 +132,12 @@ public class DashboardService : IDashboardService
             .Select(g => new
             {
                 // Collected cash this month, based on when it was actually paid: Paid contributes the
-                // full Amount, a Partial contributes only the collected AmountPaid. This intentionally
-                // includes rent, deposits, late fees, utilities, and other tenant payments so it matches
-                // the dashboard money snapshot's "Total Collected" definition.
+                // full Amount, a Partial contributes only the collected AmountPaid. Security deposits
+                // are liabilities, not income, so they are excluded to match the money snapshot's
+                // "Total Collected" definition.
                 PaidThisMonth = g.Sum(p =>
                     (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial)
+                    && p.PaymentType != PaymentType.SecurityDeposit
                     && p.PaidDate != null
                     && p.PaidDate >= monthStart
                     && p.PaidDate < nextMonthStart
