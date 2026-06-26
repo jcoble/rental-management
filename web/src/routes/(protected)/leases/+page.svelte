@@ -6,7 +6,7 @@
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import type { Lease } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
-	import { leaseSchema, parseForm } from '$lib/schemas';
+	import { leaseRentTrackingErrors, leaseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import { debounced } from '$lib/utils/debounce.svelte';
 	import { DataGrid } from '$lib/components/data-grid';
@@ -89,7 +89,9 @@
 
 	const empty = {
 		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', startDate: '', endDate: '',
-		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1', status: 'Draft', notes: '',
+		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1',
+		rentTrackingStartMode: 'ForwardOnly', rentTrackingStartDate: '',
+		status: 'Draft', notes: '',
 	};
 	let showForm = $state(false);
 	let editingId = $state<number | null>(null);
@@ -132,6 +134,14 @@
 	});
 	$effect(() => {
 		if (form.rentDueDay) clearLeaseError('rentDueDay');
+	});
+	$effect(() => {
+		if (form.rentTrackingStartDate) clearLeaseError('rentTrackingStartDate');
+	});
+	$effect(() => {
+		if (form.rentTrackingStartMode !== 'CustomCutoffDate' && form.rentTrackingStartDate) {
+			form.rentTrackingStartDate = '';
+		}
 	});
 
 	$effect(() => {
@@ -196,6 +206,7 @@
 	}
 	function openEdit(l: Lease) {
 		editingId = l.id;
+		const rentTrackingStartDate = l.rentTrackingStartDate?.slice(0, 10) ?? '';
 		form = {
 			leaseNumber: l.leaseNumber ?? '',
 			propertyId: String(l.propertyId),
@@ -207,6 +218,12 @@
 			securityDeposit: String(l.securityDeposit),
 			lateFeeAmount: String(l.lateFeeAmount),
 			rentDueDay: String(l.rentDueDay),
+			rentTrackingStartMode: rentTrackingStartDate
+				? 'CustomCutoffDate'
+				: l.status === 'Active'
+					? 'BackfillFromLeaseStart'
+					: 'ForwardOnly',
+			rentTrackingStartDate,
 			status: l.status,
 			notes: l.notes ?? '',
 		};
@@ -226,8 +243,9 @@
 		// propertyId OUT before parseForm, so validation always failed on the missing field —
 		// Save silently no-op'd (no request, no surfaced error). Keep propertyId in the payload.
 		const result = parseForm(leaseSchema, form);
-		if (result.errors) {
-			formErrors = result.errors;
+		const rentTrackingErrors = leaseRentTrackingErrors(form);
+		if (result.errors || Object.keys(rentTrackingErrors).length > 0) {
+			formErrors = { ...(result.errors ?? {}), ...rentTrackingErrors };
 			return;
 		}
 		formErrors = {};

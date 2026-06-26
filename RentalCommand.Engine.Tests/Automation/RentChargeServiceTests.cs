@@ -105,6 +105,35 @@ public class RentChargeServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task PastStartLease_WithRentTrackingStartDate_CatchesUpOnlyFromTrackingDate()
+    {
+        var today = DateTime.UtcNow.Date;
+        var start = new DateTime(today.Year, today.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(-3);
+        var rentTrackingStart = new DateTime(today.Year, today.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(-1);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        SeedActiveLease(
+            property.Id,
+            unit.Id,
+            tenant.Id,
+            monthlyRent: 1000m,
+            rentDueDay: 1,
+            startDate: start,
+            rentTrackingStartDate: rentTrackingStart);
+
+        var sut = BuildService(enable: true, leadDays: 5);
+
+        var result = await sut.GenerateAsync();
+
+        result.Should().Be(2);
+        _ctx.Db.Payments
+            .OrderBy(p => p.PeriodKey)
+            .Select(p => p.PeriodKey)
+            .Should().Equal(
+                rentTrackingStart.ToString("yyyy-MM"),
+                today.ToString("yyyy-MM"));
+    }
+
+    [Fact]
     public async Task FutureStartLease_CreatesNothingEvenWhenCurrentPeriodIsInLeadWindow()
     {
         var today = DateTime.UtcNow.Date;
@@ -190,7 +219,7 @@ public class RentChargeServiceTests : IDisposable
 
     private Lease SeedActiveLease(
         int propertyId, int unitId, int tenantId,
-        decimal monthlyRent, int rentDueDay = 1, DateTime? startDate = null)
+        decimal monthlyRent, int rentDueDay = 1, DateTime? startDate = null, DateTime? rentTrackingStartDate = null)
     {
         var today = DateTime.UtcNow.Date;
         var lease = new Lease
@@ -207,6 +236,7 @@ public class RentChargeServiceTests : IDisposable
             SecurityDeposit = 0m,
             LateFeeAmount   = 0m,
             RentDueDay      = rentDueDay,
+            RentTrackingStartDate = rentTrackingStartDate,
             CreatedAt       = DateTime.UtcNow,
             UpdatedAt       = DateTime.UtcNow,
         };
