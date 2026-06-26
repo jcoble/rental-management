@@ -72,6 +72,7 @@ public sealed class LateFeeService : ILateFeeService
         // Grace days are per-portfolio now, so the cutoff is too. Load overdue rent broadly and gate
         // each payment against its own portfolio's cutoff + master flag below.
         var overdueRent = await _db.Payments
+            .ForCurrentLeaseAttention(today)
             .Where(p =>
                 p.PaymentType == PaymentType.Rent &&
                 p.PeriodKey != null &&   // only auto-generated rent charges carry a period; manual entries are excluded

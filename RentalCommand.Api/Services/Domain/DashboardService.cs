@@ -99,11 +99,11 @@ public class DashboardService : IDashboardService
     private async Task<DashboardAccounting> BuildAccountingAsync(
         int portfolioId, DateTime now, DateTime monthStart, DateTime nextMonthStart, CancellationToken ct)
     {
-        // All three money figures are computed SQL-side over the whole payment set as conditional SUMs
-        // (SUM(CASE WHEN <branch> THEN Amount ELSE 0 END)) in a single grouped round-trip — no payment
-        // rows are pulled into memory. The branch predicates are identical to the prior in-memory loop.
-        var money = await _db.Payments
+        // Receivable figures are computed SQL-side and limited to current leases. A stale Active lease
+        // whose fixed term ended without an extension should not keep generating dashboard TODOs.
+        var receivables = await _db.Payments
             .AsNoTracking()
+            .ForCurrentLeaseAttention(now)
             .Where(p => p.PortfolioId == portfolioId)
             .GroupBy(_ => 1)
             .Select(g => new
@@ -120,6 +120,17 @@ public class DashboardService : IDashboardService
                 DueThisMonth = g.Sum(p =>
                     p.DueDate >= monthStart && p.DueDate < nextMonthStart && p.Status != PaymentStatus.Waived
                         ? p.Amount : 0m),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        // Cash collected this month remains historical. If a landlord collects an old balance after
+        // move-out, it should still be counted as money in; it just should not be an active overdue TODO.
+        var collected = await _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
                 // Collected cash this month, based on when it was actually paid: Paid contributes the
                 // full Amount, a Partial contributes only the collected AmountPaid. This intentionally
                 // includes rent, deposits, late fees, utilities, and other tenant payments so it matches
@@ -148,9 +159,9 @@ public class DashboardService : IDashboardService
             })
             .FirstOrDefaultAsync(ct);
 
-        var overdue = money?.Overdue ?? 0m;
-        var dueThisMonth = money?.DueThisMonth ?? 0m;
-        var paidThisMonth = (money?.PaidThisMonth ?? 0m) + (bankCash?.UnmatchedDeposits ?? 0m);
+        var overdue = receivables?.Overdue ?? 0m;
+        var dueThisMonth = receivables?.DueThisMonth ?? 0m;
+        var paidThisMonth = (collected?.PaidThisMonth ?? 0m) + (bankCash?.UnmatchedDeposits ?? 0m);
 
         // Expenses spent this month (paid date when present, else incurred date), matching the
         // dashboard money snapshot so the summary KPI and the detailed money card cannot diverge.

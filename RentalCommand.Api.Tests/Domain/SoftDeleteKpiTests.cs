@@ -138,6 +138,33 @@ public sealed class SoftDeleteKpiTests : IDisposable
     }
 
     [Fact]
+    public async Task EndedFixedTermLease_PaymentsStayHistoricalButDoNotCountAsDashboardOverdue()
+    {
+        var now = DateTime.UtcNow;
+
+        var endedLease = SeedLease(now, "L-ENDED");
+        endedLease.StartDate = now.AddYears(-2);
+        endedLease.EndDate = now.AddMonths(-1);
+        SeedPayment(endedLease, PaymentStatus.Late, 925m, dueDate: now.AddMonths(-6));
+
+        var currentLease = SeedLease(now, "L-CURRENT");
+        SeedPayment(currentLease, PaymentStatus.Late, 975m, dueDate: now.AddDays(-5));
+        await _db.SaveChangesAsync();
+        _db.ChangeTracker.Clear();
+
+        var allPhysicalPayments = await _db.Payments.IgnoreQueryFilters().CountAsync();
+        allPhysicalPayments.Should().Be(2, "the ended lease's old payment row should remain in the database");
+
+        var dashboard = await _dashboard.GetDashboardAsync(PortfolioId);
+        dashboard!.Accounting.OverdueAmount.Should().Be(975m,
+            "dashboard TODO/KPI surfaces should only nag on current leases unless an explicit continuation exists");
+
+        var summary = await _accounting.GetSummaryAsync(PortfolioId);
+        summary.Payments.Overdue.Should().Be(975m);
+        summary.Payments.OverdueCount.Should().Be(1);
+    }
+
+    [Fact]
     public async Task SoftDeletedExpense_LineItemsAreFilteredOut()
     {
         // M-7 generic: ExpenseLineItem (required dependent of soft-deletable Expense) follows the
