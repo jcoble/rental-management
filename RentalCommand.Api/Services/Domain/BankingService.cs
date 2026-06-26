@@ -392,24 +392,36 @@ public class BankingService : IBankingService
         };
     }
 
-    public async Task<IReadOnlyList<BankTransactionResponse>> ListTransactionsAsync(
+    public async Task<BankTransactionListResponse> ListTransactionsAsync(
         int portfolioId,
         string? status,
+        int skip = 0,
+        int take = ListQuery.DefaultTake,
         CancellationToken ct = default)
     {
+        skip = Math.Max(0, skip);
+        take = take <= 0 ? ListQuery.DefaultTake : Math.Min(take, ListQuery.MaxTake);
         var query = BaseTransactions(portfolioId);
         if (!string.IsNullOrWhiteSpace(status))
         {
             query = query.Where(t => t.MatchStatus == status);
         }
 
+        var totalCount = await query.CountAsync(ct);
         var transactions = await query
             .OrderByDescending(t => t.PostedAt)
             .ThenByDescending(t => t.Id)
-            .Take(100)
+            .Skip(skip)
+            .Take(take)
             .ToListAsync(ct);
 
-        return await MapTransactionsWithSuggestionsAsync(portfolioId, transactions, ct);
+        return new BankTransactionListResponse
+        {
+            TotalCount = totalCount,
+            Skip = skip,
+            Take = take,
+            Items = await MapTransactionsWithSuggestionsAsync(portfolioId, transactions, ct),
+        };
     }
 
     public async Task<ImportBankTransactionsResponse> ImportAsync(

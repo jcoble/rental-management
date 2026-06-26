@@ -400,12 +400,12 @@ public class BankingServiceTests : IDisposable
 
         // Gone from the unmatched feed and the review queue...
         var unmatched = await _sut.ListTransactionsAsync(1, "Unmatched");
-        unmatched.Should().NotContain(t => t.Id == transactionId);
+        unmatched.Items.Should().NotContain(t => t.Id == transactionId);
         (await _sut.GetReviewQueueAsync(1)).Items.Should().NotContain(i => i.Transaction.Id == transactionId);
 
         // ...but still listable under the Removed filter.
         var removed = await _sut.ListTransactionsAsync(1, "Removed");
-        removed.Should().ContainSingle(t => t.Id == transactionId);
+        removed.Items.Should().ContainSingle(t => t.Id == transactionId);
     }
 
     [Fact]
@@ -670,6 +670,40 @@ public class BankingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListTransactionsAsync_PagesFilteredTransactionsInSql()
+    {
+        var executedSql = new List<string>();
+        using var ctx = new SqliteTestContext([new RecordingCommandInterceptor(executedSql)]);
+        var sut = CreateServiceFor(ctx);
+        var connection = SeedBankConnectionInto(ctx);
+        SeedBankTransactionInto(ctx, connection.Id, "txn-1", new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc), "Unmatched");
+        SeedBankTransactionInto(ctx, connection.Id, "txn-2", new DateTime(2026, 06, 02, 0, 0, 0, DateTimeKind.Utc), "Matched");
+        SeedBankTransactionInto(ctx, connection.Id, "txn-3", new DateTime(2026, 06, 03, 0, 0, 0, DateTimeKind.Utc), "Unmatched");
+        SeedBankTransactionInto(ctx, connection.Id, "txn-4", new DateTime(2026, 06, 04, 0, 0, 0, DateTimeKind.Utc), "Unmatched");
+        await ctx.Db.SaveChangesAsync();
+        executedSql.Clear();
+
+        var page = await sut.ListTransactionsAsync(1, "Unmatched", skip: 1, take: 1);
+
+        page.TotalCount.Should().Be(3);
+        page.Skip.Should().Be(1);
+        page.Take.Should().Be(1);
+        page.Items.Should().ContainSingle();
+        page.Items.Single().ProviderTransactionId.Should().Be("txn-3");
+        executedSql.Should().Contain(sql =>
+            sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"MatchStatus\" = @", StringComparison.OrdinalIgnoreCase),
+            "filtered transaction totals must be counted in SQL before paging");
+        executedSql.Should().Contain(sql =>
+            sql.Contains("FROM \"BankTransactions\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase),
+            "transaction rows must be filtered and paged in SQL before mapping suggestions");
+    }
+
+    [Fact]
     public async Task GetPlaidSettingsAsync_ReturnsSafeConfigStatus()
     {
         var settings = await _sut.GetPlaidSettingsAsync(1);
@@ -920,6 +954,46 @@ public class BankingServiceTests : IDisposable
                 },
             ],
         };
+
+    private static BankConnection SeedBankConnectionInto(SqliteTestContext ctx)
+    {
+        var now = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+        var connection = new BankConnection
+        {
+            PortfolioId = 1,
+            Provider = "Manual",
+            InstitutionName = "Test Bank",
+            AccountName = "Operating checking",
+            Status = "Active",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        ctx.Db.BankConnections.Add(connection);
+        ctx.Db.SaveChanges();
+        return connection;
+    }
+
+    private static void SeedBankTransactionInto(
+        SqliteTestContext ctx,
+        int connectionId,
+        string providerTransactionId,
+        DateTime postedAt,
+        string matchStatus)
+    {
+        ctx.Db.BankTransactions.Add(new BankTransaction
+        {
+            PortfolioId = 1,
+            BankConnectionId = connectionId,
+            ProviderTransactionId = providerTransactionId,
+            PostedAt = postedAt,
+            Description = providerTransactionId,
+            Amount = 100m,
+            IsoCurrencyCode = "USD",
+            MatchStatus = matchStatus,
+            CreatedAt = postedAt,
+            UpdatedAt = postedAt,
+        });
+    }
 
     private Payment SeedRentPaymentFor(string firstName, string lastName, decimal amount, DateTime paidAt, string leaseNumber) =>
         SeedRentPaymentInto(_ctx, firstName, lastName, amount, paidAt, leaseNumber);

@@ -3,7 +3,7 @@
 	import { banking } from '$lib/api/endpoints/banking';
 	import type {
 		BankReviewQueueResponse,
-		BankTransaction,
+		BankTransactionListResponse,
 		BankingSummary,
 		ExchangePlaidPublicTokenRequest,
 		ImportBankTransactionsRequest,
@@ -16,6 +16,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import Pagination from '$lib/components/shared/Pagination.svelte';
 	import { Ban, Check, Landmark, Link2, RefreshCw, RotateCcw, Upload, X } from '@lucide/svelte';
 
 	type PlaidWindow = Window &
@@ -40,10 +41,12 @@
 		// Ignored/personal lines are stored server-side as MatchStatus="Removed".
 		{ value: 'Removed', label: 'Ignored' }
 	];
+	const TRANSACTION_PAGE_SIZE = 50;
 	const REVIEW_QUEUE_PAGE_SIZE = 50;
 	const statusFilterLabel = $derived(
 		STATUS_FILTER_OPTIONS.find((o) => o.value === statusValue)?.label ?? 'All'
 	);
+	let transactionSkip = $state(0);
 	let reviewSkip = $state(0);
 	let exchangePublicToken = $state('');
 	let exchangeInstitutionName = $state('Plaid Sandbox Bank');
@@ -75,8 +78,12 @@
 	}));
 
 	const transactionsQuery = createQuery(() => ({
-		queryKey: ['banking-transactions', portfolioId, statusFilter],
-		queryFn: () => banking.transactions(statusFilter || undefined),
+		queryKey: ['banking-transactions', portfolioId, statusFilter, transactionSkip],
+		queryFn: () => banking.transactions({
+			status: statusFilter || undefined,
+			skip: transactionSkip,
+			take: TRANSACTION_PAGE_SIZE
+		}),
 		enabled: !!portfolioId
 	}));
 
@@ -93,7 +100,10 @@
 	}));
 
 	const summary = $derived(summaryQuery.data as BankingSummary | undefined);
-	const transactions = $derived((transactionsQuery.data as BankTransaction[] | undefined) ?? []);
+	const transactionPage = $derived(transactionsQuery.data as BankTransactionListResponse | undefined);
+	const transactions = $derived(transactionPage?.items ?? []);
+	const transactionTotalCount = $derived(transactionPage?.totalCount ?? transactions.length);
+	const transactionPageEnd = $derived((transactionPage?.skip ?? transactionSkip) + transactions.length);
 	const plaidSettings = $derived(plaidSettingsQuery.data as PlaidSettings | undefined);
 	const reviewQueue = $derived(reviewQueueQuery.data as BankReviewQueueResponse | undefined);
 	const reviewItems = $derived(reviewQueue?.items ?? []);
@@ -102,6 +112,11 @@
 	const reviewPageEnd = $derived((reviewQueue?.skip ?? reviewSkip) + reviewItems.length);
 	const canReviewPrevious = $derived((reviewQueue?.skip ?? reviewSkip) > 0);
 	const canReviewNext = $derived(reviewPageEnd < reviewCount);
+
+	$effect(() => {
+		statusFilter;
+		transactionSkip = 0;
+	});
 
 	function money(value: number) {
 		return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value || 0);
@@ -604,6 +619,15 @@
 								{/each}
 							</tbody>
 						</table>
+					</div>
+					<div class="border-t border-border px-4 py-3">
+						<Pagination
+							bind:skip={transactionSkip}
+							take={TRANSACTION_PAGE_SIZE}
+							count={transactions.length}
+							hasNext={transactionPageEnd < transactionTotalCount}
+							testid="banking-transactions-pagination"
+						/>
 					</div>
 				{/if}
 			</Card.Content>
