@@ -78,7 +78,8 @@ public class AccountingService : IAccountingService
         var now = DateTime.UtcNow;
         var collectedRaw = await _db.Payments
             .AsNoTracking()
-            .Where(p => p.PortfolioId == portfolioId)
+            .Where(p => p.PortfolioId == portfolioId &&
+                        p.PaymentType != PaymentType.SecurityDeposit)
             .GroupBy(_ => 1)
             .Select(g => new
             {
@@ -163,6 +164,7 @@ public class AccountingService : IAccountingService
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId
                 && (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial)
+                && p.PaymentType != PaymentType.SecurityDeposit
                 && p.PaidDate != null)
             .GroupBy(_ => 1)
             .Select(g => new
@@ -848,6 +850,7 @@ public class AccountingService : IAccountingService
                     .Where(pay => pay.PortfolioId == portfolioId &&
                                   pay.Lease != null &&
                                   pay.Lease.PropertyId == p.Id &&
+                                  pay.PaymentType != PaymentType.SecurityDeposit &&
                                   (pay.Status == PaymentStatus.Paid || pay.Status == PaymentStatus.Partial))
                     .Sum(pay => (decimal?)(pay.Status == PaymentStatus.Partial
                         ? (pay.AmountPaid ?? 0m)
@@ -930,6 +933,7 @@ public class AccountingService : IAccountingService
         var paidPaymentTotal = await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId &&
+                        p.PaymentType != PaymentType.SecurityDeposit &&
                         (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial))
             .SumAsync(p => (decimal?)(p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount), ct) ?? 0m;
 
@@ -1390,6 +1394,7 @@ public class AccountingService : IAccountingService
         var moneyInByMonth = (await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId &&
+                        p.PaymentType != PaymentType.SecurityDeposit &&
                         (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
                         (p.PaidDate ?? p.DueDate).Year == year)
             .GroupBy(p => (p.PaidDate ?? p.DueDate).Month)
@@ -1429,6 +1434,7 @@ public class AccountingService : IAccountingService
         var cashIn = await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId &&
+                        p.PaymentType != PaymentType.SecurityDeposit &&
                         (p.Status == PaymentStatus.Paid || p.Status == PaymentStatus.Partial) &&
                         (p.PaidDate ?? p.DueDate).Year == year)
             .SumAsync(p => (decimal?)(p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : p.Amount), ct) ?? 0m;

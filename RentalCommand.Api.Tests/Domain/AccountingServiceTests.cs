@@ -173,6 +173,53 @@ public class AccountingServiceTests : IDisposable
         snapshot.Explanations.PastDue.Should().Contain("1 rental").And.Contain("behind");
     }
 
+    [Fact]
+    public async Task MoneyReports_ExcludeSecurityDepositsFromCollectedIncome()
+    {
+        var now = DateTime.UtcNow;
+        var (_, lease) = SeedPropertyAndLease(now);
+
+        _db.Payments.AddRange(
+            new Payment
+            {
+                PortfolioId = PortfolioId,
+                Lease = lease,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Paid,
+                Amount = 1200m,
+                DueDate = now,
+                PaidDate = now,
+                Method = "Check",
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Payment
+            {
+                PortfolioId = PortfolioId,
+                Lease = lease,
+                PaymentType = PaymentType.SecurityDeposit,
+                Status = PaymentStatus.Paid,
+                Amount = 1200m,
+                DueDate = now,
+                PaidDate = now,
+                Method = "Check",
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        _db.SaveChanges();
+
+        var summary = await _sut.GetSummaryAsync(PortfolioId, CancellationToken.None);
+        var snapshot = await _sut.GetSnapshotAsync(PortfolioId, CancellationToken.None);
+        var reports = await _sut.GetReportsAsync(PortfolioId, CancellationToken.None);
+
+        summary.Payments.Collected.Should().Be(1200m);
+        snapshot.Collected.Should().Be(1200m);
+        snapshot.Net.Should().Be(1200m);
+        reports.TotalIncome.Should().Be(1200m);
+        reports.NetCashFlow.Should().Be(1200m);
+        reports.Properties.Should().ContainSingle().Which.Income.Should().Be(1200m);
+    }
+
     // Regression for TSK-268: the dashboard "tenants behind" KPI and the "Who's behind" list must
     // never disagree. Both must read from one past-due definition — one row per behind lease — so the
     // KPI count equals the list length and the amounts reconcile, even when a single lease has more

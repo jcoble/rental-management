@@ -145,6 +145,34 @@ public class YearEndPacketTests : IDisposable
     }
 
     [Fact]
+    public async Task GetYearEndPacketData_ExcludesSecurityDepositsFromCashFlowMoneyIn()
+    {
+        SeedYear(Year);
+        var lease = _db.Leases.Single();
+        var paid = new DateTime(Year, 1, 2, 0, 0, 0, DateTimeKind.Utc);
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.SecurityDeposit,
+            Status = PaymentStatus.Paid,
+            Amount = 1_200m,
+            DueDate = paid,
+            PaidDate = paid,
+            Method = "Check",
+            CreatedAt = paid,
+            UpdatedAt = paid,
+        });
+        _db.SaveChanges();
+
+        var packet = await _sut.GetYearEndPacketDataAsync(PortfolioId, Year, CancellationToken.None);
+
+        packet.CashFlowMoneyIn.Should().Be(14_400m);
+        packet.CashFlowNet.Should().Be(11_800m);
+        packet.CashFlow.Single(m => m.Month == 1).MoneyIn.Should().Be(1_200m);
+    }
+
+    [Fact]
     public async Task GetYearEndPacketData_ProjectsRentRollPastDueWithLeaseRowsInSql()
     {
         SeedYear(Year);
