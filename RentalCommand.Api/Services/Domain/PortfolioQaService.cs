@@ -630,18 +630,16 @@ public class PortfolioQaService : IPortfolioQaService
     {
         var today = DateTime.UtcNow;
 
-        var rows = await _db.Payments
+        var paymentRows = await _db.Payments
             .AsNoTracking()
+            .ForCurrentLeaseAttention(today)
             .Where(p =>
                 p.PortfolioId == portfolioId &&
                 (p.Status == PaymentStatus.Scheduled ||
                  p.Status == PaymentStatus.Partial ||
                  p.Status == PaymentStatus.Late) &&
                 p.DueDate < today)
-            .Include(p => p.Lease)
-                .ThenInclude(l => l!.Tenant)
-            .Include(p => p.Lease)
-                .ThenInclude(l => l!.Unit)
+            .OrderBy(p => p.DueDate)
             .Select(p => new
             {
                 leaseNumber  = p.Lease != null ? p.Lease.LeaseNumber : $"lease-{p.LeaseId}",
@@ -650,12 +648,23 @@ public class PortfolioQaService : IPortfolioQaService
                                    ? p.Lease.Tenant.FirstName + " " + p.Lease.Tenant.LastName
                                    : "(unknown)",
                 amount       = p.Amount,
-                dueDate      = p.DueDate.ToString("yyyy-MM-dd"),
-                daysOverdue  = (int)(today - p.DueDate).TotalDays,
-                status       = p.Status.ToString(),
+                dueDate      = p.DueDate,
+                status       = p.Status,
             })
-            .OrderByDescending(r => r.daysOverdue)
             .ToListAsync(ct);
+
+        var rows = paymentRows
+            .Select(p => new
+            {
+                p.leaseNumber,
+                p.unitNumber,
+                p.tenantName,
+                p.amount,
+                dueDate = p.dueDate.ToString("yyyy-MM-dd"),
+                daysOverdue = (int)(today.Date - p.dueDate.Date).TotalDays,
+                status = p.status.ToString(),
+            })
+            .ToList();
 
         return rows.Count == 0
             ? "[]"

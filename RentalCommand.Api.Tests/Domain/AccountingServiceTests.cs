@@ -337,6 +337,54 @@ public class AccountingServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetPastDueAsync_ExcludesEndedFixedTermLeasesFromActivePastDue()
+    {
+        var now = DateTime.UtcNow;
+
+        var (_, endedLease) = SeedPropertyAndLease(now);
+        endedLease.LeaseNumber = "L-ENDED";
+        endedLease.StartDate = now.AddYears(-2);
+        endedLease.EndDate = now.AddMonths(-1);
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = endedLease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Late,
+            Amount = 925m,
+            DueDate = now.AddMonths(-6),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        var (_, currentLease) = SeedPropertyAndLease(now);
+        currentLease.LeaseNumber = "L-CURRENT";
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = currentLease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Late,
+            Amount = 975m,
+            DueDate = now.AddDays(-5),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _db.SaveChangesAsync();
+
+        var snapshot = await _sut.GetSnapshotAsync(PortfolioId, CancellationToken.None);
+        var pastDue = await _sut.GetPastDueAsync(PortfolioId, CancellationToken.None);
+
+        snapshot.PastDueCount.Should().Be(1);
+        snapshot.PastDueAmount.Should().Be(975m);
+        pastDue.TotalCount.Should().Be(1);
+        pastDue.TotalPastDueAmount.Should().Be(975m);
+        pastDue.Items.Should().ContainSingle(i => i.LeaseId == currentLease.Id);
+        pastDue.Items.Should().NotContain(i => i.LeaseId == endedLease.Id,
+            "an ended fixed-term lease can keep historical ledger rows, but it should not be an active dashboard/Money TODO");
+    }
+
+    [Fact]
     public async Task GetReportsAsync_LedgerEntriesCarryPlainEnglishExplanations()
     {
         var now = new DateTime(2026, 03, 03, 12, 0, 0, DateTimeKind.Utc);

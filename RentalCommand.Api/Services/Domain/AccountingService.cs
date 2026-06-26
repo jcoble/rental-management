@@ -72,11 +72,11 @@ public class AccountingService : IAccountingService
 
         var totalExpenses = expenseTotal + unmatchedBankWithdrawals;
 
-        // Payment collection rollup. "Outstanding" is anything not yet collected/written off; "overdue"
-        // is the subset of that which is past its due date. All four figures are computed SQL-side as
-        // conditional SUM/COUNT aggregates in a single grouped round-trip — no payment rows are loaded.
+        // Payment collection rollup. Collected cash remains historical; active receivables (outstanding
+        // and overdue) are limited to current leases so old fixed-term lease balances do not become
+        // dashboard/Money TODOs after the lease ended without an extension.
         var now = DateTime.UtcNow;
-        var rollupRaw = await _db.Payments
+        var collectedRaw = await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId)
             .GroupBy(_ => 1)
@@ -88,6 +88,16 @@ public class AccountingService : IAccountingService
                     p.Status == PaymentStatus.Paid ? p.Amount
                     : p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m)
                     : 0m),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        var receivablesRaw = await _db.Payments
+            .AsNoTracking()
+            .ForCurrentLeaseAttention(now)
+            .Where(p => p.PortfolioId == portfolioId)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
                 // Owed = Scheduled/Partial/Late (Waived/Failed/Refunded are not money to collect). A
                 // Partial only owes its unpaid remainder (Amount − AmountPaid); Scheduled/Late owe in full.
                 Outstanding = g.Sum(p =>
@@ -107,10 +117,10 @@ public class AccountingService : IAccountingService
 
         var rollup = new PaymentRollup
         {
-            Collected = rollupRaw?.Collected ?? 0m,
-            Outstanding = rollupRaw?.Outstanding ?? 0m,
-            Overdue = rollupRaw?.Overdue ?? 0m,
-            OverdueCount = rollupRaw?.OverdueCount ?? 0,
+            Collected = collectedRaw?.Collected ?? 0m,
+            Outstanding = receivablesRaw?.Outstanding ?? 0m,
+            Overdue = receivablesRaw?.Overdue ?? 0m,
+            OverdueCount = receivablesRaw?.OverdueCount ?? 0,
         };
 
         var unmatchedBankDeposits = await _db.BankTransactions
@@ -297,6 +307,7 @@ public class AccountingService : IAccountingService
     /// </summary>
     private IQueryable<Payment> PastDuePaymentsQuery(int portfolioId, DateTime now) => _db.Payments
         .AsNoTracking()
+        .ForCurrentLeaseAttention(now)
         .Where(p => p.PortfolioId == portfolioId &&
                     (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late) &&
                     (p.Status == PaymentStatus.Late || p.DueDate < now));
@@ -845,6 +856,7 @@ public class AccountingService : IAccountingService
                     .Where(e => e.PortfolioId == portfolioId && e.PropertyId == p.Id)
                     .Sum(e => (decimal?)e.Amount) ?? 0m,
                 Overdue = _db.Payments
+                    .ForCurrentLeaseAttention(generatedAt)
                     .Where(pay => pay.PortfolioId == portfolioId &&
                                   pay.Lease != null &&
                                   pay.Lease.PropertyId == p.Id &&
@@ -853,12 +865,14 @@ public class AccountingService : IAccountingService
                     .Sum(pay => (decimal?)(pay.Status == PaymentStatus.Partial
                         ? pay.Amount - (pay.AmountPaid ?? 0m)
                         : pay.Amount)) ?? 0m,
-                OverdueCount = _db.Payments.Count(pay =>
-                    pay.PortfolioId == portfolioId &&
-                    pay.Lease != null &&
-                    pay.Lease.PropertyId == p.Id &&
-                    (pay.Status == PaymentStatus.Scheduled || pay.Status == PaymentStatus.Partial || pay.Status == PaymentStatus.Late) &&
-                    (pay.Status == PaymentStatus.Late || pay.DueDate < generatedAt)),
+                OverdueCount = _db.Payments
+                    .ForCurrentLeaseAttention(generatedAt)
+                    .Count(pay =>
+                        pay.PortfolioId == portfolioId &&
+                        pay.Lease != null &&
+                        pay.Lease.PropertyId == p.Id &&
+                        (pay.Status == PaymentStatus.Scheduled || pay.Status == PaymentStatus.Partial || pay.Status == PaymentStatus.Late) &&
+                        (pay.Status == PaymentStatus.Late || pay.DueDate < generatedAt)),
             })
             .ToListAsync(ct);
 

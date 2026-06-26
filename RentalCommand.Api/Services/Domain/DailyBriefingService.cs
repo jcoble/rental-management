@@ -52,6 +52,8 @@ public class DailyBriefingService : IDailyBriefingService
                 DetailText = w.Description,
                 LeaseNumber = null,
                 UnitNumber = null,
+                TenantName = null,
+                PropertyName = null,
                 Amount = 0m,
                 EventDate = w.RequestedAt,
                 TypeValue = 0,
@@ -60,6 +62,7 @@ public class DailyBriefingService : IDailyBriefingService
         // --- Rule 2: Overdue rent ---
         var overduePayments = _db.Payments
             .AsNoTracking()
+            .ForCurrentLeaseAttention(today)
             .Where(p =>
                 p.PortfolioId == portfolioId &&
                 (p.Status == PaymentStatus.Scheduled ||
@@ -76,7 +79,11 @@ public class DailyBriefingService : IDailyBriefingService
                 TitleText = null,
                 DetailText = null,
                 LeaseNumber = p.Lease != null ? p.Lease.LeaseNumber : null,
-                UnitNumber = null,
+                UnitNumber = p.Lease != null && p.Lease.Unit != null ? p.Lease.Unit.UnitNumber : null,
+                TenantName = p.Lease != null && p.Lease.Tenant != null
+                    ? (p.Lease.Tenant.FirstName + " " + p.Lease.Tenant.LastName).Trim()
+                    : null,
+                PropertyName = p.Lease != null && p.Lease.Property != null ? p.Lease.Property.Name : null,
                 Amount = p.Amount,
                 EventDate = p.DueDate,
                 TypeValue = 0,
@@ -88,6 +95,7 @@ public class DailyBriefingService : IDailyBriefingService
             .Where(l =>
                 l.PortfolioId == portfolioId &&
                 l.Status == LeaseStatus.Active &&
+                l.EndDate >= today &&
                 l.RentDueDay == today.Day)
             .Select(l => new BriefingCandidate
             {
@@ -100,6 +108,8 @@ public class DailyBriefingService : IDailyBriefingService
                 DetailText = null,
                 LeaseNumber = l.LeaseNumber,
                 UnitNumber = l.Unit != null ? l.Unit.UnitNumber : null,
+                TenantName = l.Tenant != null ? (l.Tenant.FirstName + " " + l.Tenant.LastName).Trim() : null,
+                PropertyName = l.Property != null ? l.Property.Name : null,
                 Amount = l.MonthlyRent,
                 EventDate = today,
                 TypeValue = 0,
@@ -123,6 +133,8 @@ public class DailyBriefingService : IDailyBriefingService
                 DetailText = null,
                 LeaseNumber = null,
                 UnitNumber = null,
+                TenantName = null,
+                PropertyName = null,
                 Amount = 0m,
                 TypeValue = (int)a.Type,
                 EventDate = a.ScheduledStart,
@@ -147,6 +159,8 @@ public class DailyBriefingService : IDailyBriefingService
                 DetailText = null,
                 LeaseNumber = null,
                 UnitNumber = null,
+                TenantName = null,
+                PropertyName = null,
                 Amount = 0m,
                 TypeValue = (int)i.Type,
                 EventDate = i.ScheduledFor,
@@ -171,6 +185,8 @@ public class DailyBriefingService : IDailyBriefingService
                 DetailText = null,
                 LeaseNumber = l.LeaseNumber,
                 UnitNumber = l.Unit != null ? l.Unit.UnitNumber : null,
+                TenantName = l.Tenant != null ? (l.Tenant.FirstName + " " + l.Tenant.LastName).Trim() : null,
+                PropertyName = l.Property != null ? l.Property.Name : null,
                 Amount = 0m,
                 EventDate = l.EndDate,
                 TypeValue = 0,
@@ -241,7 +257,7 @@ public class DailyBriefingService : IDailyBriefingService
                 EntityId: candidate.EntityId),
 
             "RentLate" => new BriefingBullet(
-                Title: $"Rent overdue — {LeaseRef(candidate)}",
+                Title: $"Rent overdue — {RentAttentionRef(candidate)}",
                 Detail: $"${candidate.Amount:N0} was due {DaysBetween(today, candidate.EventDate)} day{(DaysBetween(today, candidate.EventDate) == 1 ? "" : "s")} ago",
                 Category: candidate.Category,
                 Severity: severity,
@@ -310,6 +326,39 @@ public class DailyBriefingService : IDailyBriefingService
             ? $"Unit {candidate.UnitNumber}"
             : LeaseRef(candidate);
 
+    private static string RentAttentionRef(BriefingCandidate candidate)
+    {
+        var location = LocationRef(candidate);
+        if (!string.IsNullOrWhiteSpace(candidate.TenantName) && !string.IsNullOrWhiteSpace(location))
+        {
+            return $"{candidate.TenantName} - {location}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(candidate.TenantName))
+        {
+            return candidate.TenantName!;
+        }
+
+        return !string.IsNullOrWhiteSpace(location)
+            ? location
+            : LeaseRef(candidate);
+    }
+
+    private static string? LocationRef(BriefingCandidate candidate)
+    {
+        if (!string.IsNullOrWhiteSpace(candidate.PropertyName) && !string.IsNullOrWhiteSpace(candidate.UnitNumber))
+        {
+            return $"{candidate.PropertyName}, Unit {candidate.UnitNumber}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(candidate.UnitNumber))
+        {
+            return $"Unit {candidate.UnitNumber}";
+        }
+
+        return string.IsNullOrWhiteSpace(candidate.PropertyName) ? null : candidate.PropertyName;
+    }
+
     private static int DaysBetween(DateTime later, DateTime earlier)
         => (int)(later.Date - earlier.Date).TotalDays;
 
@@ -335,6 +384,8 @@ public class DailyBriefingService : IDailyBriefingService
         public string? DetailText { get; set; }
         public string? LeaseNumber { get; set; }
         public string? UnitNumber { get; set; }
+        public string? TenantName { get; set; }
+        public string? PropertyName { get; set; }
         public decimal Amount { get; set; }
         public DateTime EventDate { get; set; }
         public int TypeValue { get; set; }

@@ -68,6 +68,23 @@ public class LateFeeServiceTests : IDisposable
             .Should().Be(1);
     }
 
+    [Fact]
+    public async Task SkipsEndedFixedTermLeasePayments()
+    {
+        var (lease, rentPayment) = SeedOverdueScenario();
+        var today = DateTime.UtcNow.Date;
+        lease.EndDate = today.AddDays(-1);
+        lease.UpdatedAt = DateTime.UtcNow;
+        _ctx.Db.SaveChanges();
+
+        var sut = BuildService(enable: true, graceDays: 5, caState6Percent: true);
+        var count = await sut.AssessAsync();
+
+        count.Should().Be(0);
+        _ctx.Db.Payments.Count(p => p.PaymentType == PaymentType.LateFee).Should().Be(0);
+        _ctx.Db.Payments.Find(rentPayment.Id)!.Status.Should().Be(PaymentStatus.Scheduled);
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
 

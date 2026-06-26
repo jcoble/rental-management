@@ -78,6 +78,102 @@ public class DailyBriefingServiceTests : IDisposable
             "daily briefing candidate ranking and cap must happen in one DB-side query before bullet formatting");
     }
 
+    [Fact]
+    public async Task ComposeAsync_ExcludesEndedFixedTermLeasePaymentsFromActiveAttention()
+    {
+        var now = DateTime.UtcNow;
+        var today = now.Date;
+        var endedLease = SeedLease(
+            today,
+            leaseNumber: "L-OLD",
+            propertyName: "Westview Four-Plex",
+            unitNumber: "101",
+            tenantFirstName: "Jordan",
+            tenantLastName: "Smith",
+            startDate: today.AddMonths(-15),
+            endDate: today.AddMonths(-3));
+        var currentLease = SeedLease(
+            today,
+            leaseNumber: "L-CURRENT",
+            propertyName: "Eastland 8-Plex",
+            unitNumber: "4B",
+            tenantFirstName: "Kevin",
+            tenantLastName: "Brown",
+            startDate: today.AddMonths(-6),
+            endDate: today.AddMonths(6));
+
+        _db.Payments.AddRange(
+            new Payment
+            {
+                PortfolioId = PortfolioId,
+                Lease = endedLease,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Late,
+                Amount = 925m,
+                DueDate = today.AddMonths(-10),
+                CreatedAt = now,
+                UpdatedAt = now,
+            },
+            new Payment
+            {
+                PortfolioId = PortfolioId,
+                Lease = currentLease,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Late,
+                Amount = 975m,
+                DueDate = today.AddDays(-7),
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await _db.SaveChangesAsync();
+
+        var briefing = await _sut.ComposeAsync(PortfolioId, CancellationToken.None);
+
+        briefing.Bullets.Should().ContainSingle(b =>
+            b.Category == "RentLate" &&
+            b.EntityId == _db.Payments.Single(p => p.LeaseId == currentLease.Id).Id);
+        briefing.Bullets.Should().NotContain(b =>
+            b.Category == "RentLate" &&
+            b.Title.Contains("L-OLD", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ComposeAsync_RentAttentionUsesTenantUnitPropertyLabelInsteadOfLeaseNumber()
+    {
+        var now = DateTime.UtcNow;
+        var today = now.Date;
+        var lease = SeedLease(
+            today,
+            leaseNumber: "L2024-003",
+            propertyName: "Westview Four-Plex",
+            unitNumber: "101",
+            tenantFirstName: "Jordan",
+            tenantLastName: "Smith",
+            startDate: today.AddMonths(-6),
+            endDate: today.AddMonths(6));
+
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Late,
+            Amount = 925m,
+            DueDate = today.AddDays(-7),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _db.SaveChangesAsync();
+
+        var briefing = await _sut.ComposeAsync(PortfolioId, CancellationToken.None);
+
+        var rentBullet = briefing.Bullets.Should().ContainSingle(b => b.Category == "RentLate").Subject;
+        rentBullet.Title.Should().Contain("Jordan Smith");
+        rentBullet.Title.Should().Contain("Westview Four-Plex");
+        rentBullet.Title.Should().Contain("Unit 101");
+        rentBullet.Title.Should().NotContain("L2024-003");
+    }
+
     private void SeedBriefingData()
     {
         var now = DateTime.UtcNow;
@@ -179,6 +275,65 @@ public class DailyBriefingServiceTests : IDisposable
                 UpdatedAt = now,
             });
         _db.SaveChanges();
+    }
+
+    private Lease SeedLease(
+        DateTime today,
+        string leaseNumber,
+        string propertyName,
+        string unitNumber,
+        string tenantFirstName,
+        string tenantLastName,
+        DateTime startDate,
+        DateTime endDate)
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = propertyName,
+            AddressLine1 = "1 Main",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43219",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = unitNumber,
+            MarketRent = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = tenantFirstName,
+            LastName = tenantLastName,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var lease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = leaseNumber,
+            Status = LeaseStatus.Active,
+            StartDate = startDate,
+            EndDate = endDate,
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            RentDueDay = today.Day,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Leases.Add(lease);
+        _db.SaveChanges();
+        return lease;
     }
 
     private sealed class NoopLlmProvider : ILlmProvider
