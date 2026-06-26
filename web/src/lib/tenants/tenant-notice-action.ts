@@ -9,3 +9,19 @@ export function readTenantNoticeAction(params: URLSearchParams): TenantNoticeAct
 	const noticeType = params.get('noticeType')?.trim();
 	return noticeType && FORCEABLE_NOTICE_TYPES.has(noticeType) ? { noticeType } : {};
 }
+
+export function tenantNoticeActionKey(
+	tenantId: number | string,
+	action: TenantNoticeAction
+): string {
+	return `${tenantId}:${action.noticeType ?? 'all'}`;
+}
+
+export function clearTenantNoticeActionUrl(url: URL): string {
+	const next = new URL(url);
+	next.searchParams.delete('action');
+	next.searchParams.delete('noticeType');
+
+	const search = next.searchParams.toString();
+	return `${next.pathname}${search ? `?${search}` : ''}${next.hash}`;
+}
