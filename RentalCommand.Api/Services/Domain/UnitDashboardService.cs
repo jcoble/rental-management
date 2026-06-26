@@ -71,6 +71,10 @@ public class UnitDashboardService : IUnitDashboardService
                 l.EndDate,
                 l.MonthlyRent,
                 l.SecurityDeposit,
+                HasHeldSecurityDeposit = _db.SecurityDepositHoldings.Any(h =>
+                    h.PortfolioId == portfolioId
+                    && h.LeaseId == l.Id
+                    && h.Status == SecurityDepositStatus.Held),
                 l.TenantId,
                 TenantFirst = l.Tenant != null ? l.Tenant.FirstName : null,
                 TenantLast = l.Tenant != null ? l.Tenant.LastName : null,
@@ -236,7 +240,12 @@ public class UnitDashboardService : IUnitDashboardService
 
         var leaseSnapshot = currentLease is null
             ? null
-            : new LeaseSnapshot(currentLease.Status, currentLease.StartDate, currentLease.EndDate);
+            : new LeaseSnapshot(
+                currentLease.Status,
+                currentLease.StartDate,
+                currentLease.EndDate,
+                currentLease.SecurityDeposit,
+                currentLease.HasHeldSecurityDeposit);
 
         var stageInputs = new UnitStageInputs(
             unitRow.Unit.Status,
@@ -503,7 +512,7 @@ public class UnitDashboardService : IUnitDashboardService
         UnitLifecycleStage.Listed => $"/units/{unitId}?tab=overview",
         UnitLifecycleStage.Applicant => $"/units/{unitId}?tab=overview",
         UnitLifecycleStage.Lease => $"/units/{unitId}?tab=lease",
-        UnitLifecycleStage.MoveIn => $"/units/{unitId}?tab=lease",
+        UnitLifecycleStage.MoveIn => $"/units/{unitId}?tab=lease&action=confirm-move-in",
         UnitLifecycleStage.Active => $"/units/{unitId}?tab=rent",
         UnitLifecycleStage.Renewal when tenantId is int id => $"/tenants/{id}?action=create-notice&noticeType=RenewalOffer",
         UnitLifecycleStage.Renewal => $"/units/{unitId}?tab=lease",

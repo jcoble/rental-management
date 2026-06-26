@@ -45,8 +45,13 @@ public sealed record UnitStageInputs(
     bool RecentMoveOutSignal,
     decimal OutstandingRentBalance);
 
-/// <summary>Minimal lease projection the resolver reads (status + the two dates that drive Move-In/Renewal).</summary>
-public sealed record LeaseSnapshot(LeaseStatus Status, DateTime? StartDate, DateTime? EndDate);
+/// <summary>Minimal lease projection the resolver reads (status, dates, and deposit-completion signal).</summary>
+public sealed record LeaseSnapshot(
+    LeaseStatus Status,
+    DateTime? StartDate,
+    DateTime? EndDate,
+    decimal SecurityDeposit = 0m,
+    bool HasHeldSecurityDeposit = false);
 
 /// <summary>
 /// Derives a unit's lifecycle stage and its next-best-action label from an already-fetched aggregate,
@@ -83,7 +88,7 @@ public static class UnitLifecycleStageResolver
             // just started (still settling in). Checked before Renewal so a brand-new lease never reads as Renewal.
             if (IsFuture(lease.StartDate, nowUtc)
                 || inputs.HasUpcomingMoveInAppt
-                || StartedWithinDays(lease.StartDate, nowUtc, MoveInRecentDays))
+                || (StartedWithinDays(lease.StartDate, nowUtc, MoveInRecentDays) && NeedsDepositCompletion(lease)))
             {
                 return UnitLifecycleStage.MoveIn;
             }
@@ -147,6 +152,9 @@ public static class UnitLifecycleStageResolver
 
     private static bool StartedWithinDays(DateTime? start, DateTime nowUtc, int days)
         => start.HasValue && start.Value <= nowUtc && start.Value >= nowUtc.AddDays(-days);
+
+    private static bool NeedsDepositCompletion(LeaseSnapshot lease)
+        => lease.SecurityDeposit > 0m && !lease.HasHeldSecurityDeposit;
 
     private static bool EndsWithinDays(DateTime? end, DateTime nowUtc, int days)
         => end.HasValue && end.Value >= nowUtc && end.Value <= nowUtc.AddDays(days);
