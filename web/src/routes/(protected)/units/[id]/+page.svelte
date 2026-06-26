@@ -3,6 +3,8 @@
 	import { goto } from '$app/navigation';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { units } from '$lib/api/endpoints/units';
+	import { securityDeposits } from '$lib/api/endpoints/securityDeposits';
+	import { appointments } from '$lib/api/endpoints/appointments';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -22,6 +24,7 @@
 	import { scanHref, type ScanContext } from '$lib/scan/scan-context';
 	import { unitSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import type { UnitLeaseSummary } from '$lib/types';
 	import { ArrowLeft } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -31,6 +34,8 @@
 	// Active tab is driven by ?tab= (default overview) so deep links land on the right tab.
 	let activeTab = $state(resolveUnitTab(page.url.searchParams.get('tab')));
 	let showEditUnit = $state(false);
+	let showMoveInDialog = $state(false);
+	let handledMoveInActionKey = $state('');
 	let unitForm = $state({ ...emptyUnitForm });
 	let unitFormErrors = $state<Record<string, string>>({});
 
@@ -55,10 +60,69 @@
 	}));
 
 	const dashboard = $derived(dashboardQuery.data);
+	const moveInAppointment = $derived(
+		dashboard?.overview.upcomingAppointments.find((appointment) =>
+			appointment.type === 'MoveIn'
+			&& appointment.status !== 'Completed'
+			&& appointment.status !== 'Cancelled'
+			&& appointment.status !== 'NoShow'
+		) ?? null
+	);
+	const moveInDialogLease = $derived(dashboard?.currentLease ?? null);
+
+	$effect(() => {
+		const isConfirmMoveInAction = page.url.searchParams.get('action') === 'confirm-move-in';
+		if (!dashboard || !isConfirmMoveInAction) return;
+
+		const actionKey = `${id}:${dashboard.currentLease?.id ?? 'no-lease'}:${page.url.search}`;
+		if (handledMoveInActionKey !== actionKey) {
+			handledMoveInActionKey = actionKey;
+			activeTab = 'lease';
+			showMoveInDialog = true;
+		}
+	});
 
 	function refreshUnitDashboard() {
 		queryClient.invalidateQueries({ queryKey: ['unit-dashboard', id] });
 	}
+
+	function clearMoveInActionUrl() {
+		if (page.url.searchParams.get('action') !== 'confirm-move-in') return;
+		const url = new URL(page.url);
+		url.searchParams.delete('action');
+		goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+	}
+
+	function closeMoveInDialog() {
+		showMoveInDialog = false;
+		clearMoveInActionUrl();
+	}
+
+	const moveInMutation = createMutation(() => ({
+		mutationFn: async (lease: UnitLeaseSummary) => {
+			const deposit = lease.securityDeposit > 0
+				? await securityDeposits.create({
+					leaseId: lease.id,
+					notes: 'Confirmed from Unit Command Center move-in workflow.'
+				})
+				: null;
+
+			if (moveInAppointment) {
+				await appointments.update(moveInAppointment.id, { status: 'Completed' });
+			}
+
+			return deposit;
+		},
+		onSuccess: () => {
+			showSuccess('Move-in confirmed.');
+			closeMoveInDialog();
+			queryClient.invalidateQueries({ queryKey: ['unit-dashboard', id] });
+			queryClient.invalidateQueries({ queryKey: ['unit-timeline', id] });
+			queryClient.invalidateQueries({ queryKey: ['deposits'] });
+			queryClient.invalidateQueries({ queryKey: ['appointments'] });
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
 
 	function openEditUnit() {
 		if (!dashboard) return;
@@ -190,6 +254,56 @@
 		</div>
 	{/if}
 </div>
+
+<Dialog.Root open={showMoveInDialog} onOpenChange={(v) => { if (!v) closeMoveInDialog(); }}>
+	<Dialog.Content class="max-w-md" data-testid="unit-move-in-dialog">
+		<Dialog.Header>
+			<Dialog.Title>Confirm move-in</Dialog.Title>
+			<Dialog.Description>
+				Confirm this tenant has moved in and record the lease deposit as held.
+			</Dialog.Description>
+		</Dialog.Header>
+		{#if moveInDialogLease}
+			<div class="space-y-3 rounded-lg border bg-muted/30 p-3 text-sm">
+				<div class="flex items-center justify-between gap-3">
+					<span class="text-muted-foreground">Lease</span>
+					<span class="font-medium">{moveInDialogLease.leaseNumber}</span>
+				</div>
+				<div class="flex items-center justify-between gap-3">
+					<span class="text-muted-foreground">Tenant</span>
+					<span class="font-medium">{dashboard?.currentTenant?.name ?? 'Current tenant'}</span>
+				</div>
+				<div class="flex items-center justify-between gap-3">
+					<span class="text-muted-foreground">Security deposit</span>
+					<span class="font-mono font-medium tabular-nums">
+						{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(moveInDialogLease.securityDeposit)}
+					</span>
+				</div>
+				{#if moveInAppointment}
+					<div class="flex items-center justify-between gap-3">
+						<span class="text-muted-foreground">Appointment</span>
+						<span class="font-medium">{moveInAppointment.title}</span>
+					</div>
+				{/if}
+			</div>
+			<p class="text-sm text-muted-foreground">
+				Use this after keys are handed over and the deposit has been received.
+			</p>
+		{:else}
+			<p class="text-sm text-muted-foreground">This unit does not have a current lease to confirm.</p>
+		{/if}
+		<Dialog.Footer class="mt-4">
+			<Button variant="outline" onclick={closeMoveInDialog}>Cancel</Button>
+			<Button
+				onclick={() => moveInDialogLease && moveInMutation.mutate(moveInDialogLease)}
+				disabled={!moveInDialogLease || moveInMutation.isPending}
+				data-testid="unit-move-in-confirm"
+			>
+				{moveInMutation.isPending ? 'Confirming…' : 'Confirm move-in'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <Dialog.Root open={showEditUnit} onOpenChange={(v) => { if (!v) closeEditUnit(); }}>
 	<Dialog.Content class="max-w-sm" data-testid="unit-detail-edit-dialog">
