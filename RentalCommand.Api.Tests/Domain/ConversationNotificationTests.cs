@@ -43,6 +43,28 @@ public class ConversationNotificationTests : IDisposable
     }
 
     [Fact]
+    public async Task LandlordStartAsync_WithPortalChannel_CreatesTenantNotification()
+    {
+        var tenant = SeedTenantWithStaffAndTenantUsers();
+        var sut = new ConversationService(
+            _ctx.Db, new NoopDataUpdateService(), new NoopFairHousingReviewService(),
+            NullLogger<ConversationService>.Instance);
+
+        var result = await sut.StartAsync(
+            1,
+            tenant.Id,
+            "Rent reminder",
+            "Please check the payment portal.",
+            ["Portal"]);
+
+        result.Should().NotBeNull();
+        var notification = _ctx.Db.Notifications.Should().ContainSingle(n => n.Type == "TenantNotice").Subject;
+        notification.UserId.Should().Be(20);
+        notification.ActionUrl.Should().Be($"/portal/messages?conversation={result!.Id}");
+        _ctx.Db.OutboxMessages.Should().NotContain(m => m.MessageType == "push");
+    }
+
+    [Fact]
     public async Task ListAsync_HidesTenantMessageNotificationsFromTenantOnlyUsers()
     {
         SeedTenantWithStaffAndTenantUsers();
