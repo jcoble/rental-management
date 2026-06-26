@@ -16,6 +16,9 @@ export default defineConfig(({ mode }) => {
 
 	return {
 		plugins: [tailwindcss(), sveltekit()],
+		// Pre-bundle GSAP (incl. the deep ScrollTrigger entry) so the hero's dynamic
+		// import doesn't hit a dev-only "Outdated Optimize Dep" 504 on first load.
+		optimizeDeps: { include: ['gsap', 'gsap/ScrollTrigger'] },
 		server: {
 			port: 5667,
 			strictPort: true,
