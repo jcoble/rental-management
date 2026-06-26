@@ -165,6 +165,36 @@ public class ReportsServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetDelinquencyAsync_ExcludesEndedFixedTermLeasePaymentsFromActivePastDue()
+    {
+        var now = DateTime.UtcNow;
+        var property = SeedProperty("Maple");
+        var stale = SeedLease(
+            property,
+            SeedUnit("1", property.Id),
+            SeedTenant("Ann", "Acre"),
+            rent: 1000m,
+            start: now.Date.AddYears(-1),
+            end: now.Date.AddDays(-1));
+        var current = SeedLease(
+            property,
+            SeedUnit("2", property.Id),
+            SeedTenant("Bob", "Birch"),
+            rent: 900m,
+            start: now.Date.AddMonths(-2),
+            end: now.Date.AddMonths(10));
+
+        SeedPayment(stale, 1000m, dueDate: now.AddDays(-40), PaymentStatus.Late);
+        SeedPayment(current, 900m, dueDate: now.AddDays(-5), PaymentStatus.Scheduled);
+
+        var report = await _sut.GetDelinquencyAsync(PortfolioId, new ReportRangeQuery(), CancellationToken.None);
+
+        report.Rows.Should().ContainSingle();
+        report.Rows[0].LeaseId.Should().Be(current.Id);
+        report.TotalOutstanding.Should().Be(900m);
+    }
+
+    [Fact]
     public async Task GetDelinquencyAsync_OrdersAndTotalsInSql()
     {
         var now = DateTime.UtcNow;
@@ -877,6 +907,33 @@ public class ReportsServiceTests : IDisposable
     }
 
     // ── Property filter IDOR guard (DB) ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task GetRentRollAsync_ExcludesEndedFixedTermLeasesFromCurrentRoll()
+    {
+        var now = DateTime.UtcNow;
+        var property = SeedProperty("Maple");
+        SeedLease(
+            property,
+            SeedUnit("1", property.Id),
+            SeedTenant("Ann", "Acre"),
+            rent: 1000m,
+            start: now.Date.AddYears(-1),
+            end: now.Date.AddDays(-1));
+        var current = SeedLease(
+            property,
+            SeedUnit("2", property.Id),
+            SeedTenant("Bob", "Birch"),
+            rent: 900m,
+            start: now.Date.AddMonths(-2),
+            end: now.Date.AddMonths(10));
+
+        var report = await _sut.GetRentRollAsync(PortfolioId, new ReportRangeQuery(), CancellationToken.None);
+
+        report.Rows.Should().ContainSingle();
+        report.Rows[0].LeaseId.Should().Be(current.Id);
+        report.TotalMonthlyRent.Should().Be(900m);
+    }
 
     [Fact]
     public async Task RentRoll_PropertyFilter_DropsOutOfPortfolioIds_AndScopesToRequestedProperty()

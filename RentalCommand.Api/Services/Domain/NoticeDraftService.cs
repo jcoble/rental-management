@@ -140,6 +140,7 @@ public class NoticeDraftService : INoticeDraftService
                 .Include(p => p.Lease).ThenInclude(l => l!.Tenant)
                 .Include(p => p.Lease).ThenInclude(l => l!.Property)
                 .Include(p => p.Lease).ThenInclude(l => l!.Unit)
+                .ForCurrentLeaseAttention(today)
                 .Where(p =>
                     p.PortfolioId == portfolioId &&
                     p.DueDate.Date < today &&

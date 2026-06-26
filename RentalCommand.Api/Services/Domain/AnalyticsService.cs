@@ -44,20 +44,17 @@ public class AnalyticsService : IAnalyticsService
         var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var monthEnd = monthStart.AddMonths(1); // exclusive upper bound
 
-        // This-month rent (scheduled vs collected) and overdue rent are all computed SQL-side over the
-        // rent-payment set as conditional SUM/COUNT aggregates in a single grouped round-trip — no
-        // payment rows are loaded into memory.
-        var rentAgg = await _db.Payments
+        // Scheduled/overdue rent is limited to current leases; collected rent remains historical cash.
+        // Both are computed SQL-side as conditional SUM/COUNT aggregates — no payment rows are loaded.
+        var rentReceivables = await _db.Payments
             .AsNoTracking()
+            .ForCurrentLeaseAttention(now)
             .Where(p => p.PortfolioId == portfolioId && p.PaymentType == PaymentType.Rent)
             .GroupBy(_ => 1)
             .Select(g => new
             {
                 MonthScheduled = g.Sum(p =>
                     p.DueDate >= monthStart && p.DueDate < monthEnd ? p.Amount : 0m),
-                MonthCollected = g.Sum(p =>
-                    p.Status == PaymentStatus.Paid && p.PaidDate != null
-                    && p.PaidDate >= monthStart && p.PaidDate < monthEnd ? p.Amount : 0m),
                 OverdueAmount = g.Sum(p =>
                     (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Partial)
                     && p.DueDate.Date < today ? p.Amount : 0m),
@@ -67,8 +64,20 @@ public class AnalyticsService : IAnalyticsService
             })
             .FirstOrDefaultAsync(ct);
 
-        var monthRentScheduled = rentAgg?.MonthScheduled ?? 0m;
-        var monthRentCollected = rentAgg?.MonthCollected ?? 0m;
+        var rentCollected = await _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == portfolioId && p.PaymentType == PaymentType.Rent)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                MonthCollected = g.Sum(p =>
+                    p.Status == PaymentStatus.Paid && p.PaidDate != null
+                    && p.PaidDate >= monthStart && p.PaidDate < monthEnd ? p.Amount : 0m),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        var monthRentScheduled = rentReceivables?.MonthScheduled ?? 0m;
+        var monthRentCollected = rentCollected?.MonthCollected ?? 0m;
 
         var collectionRate = monthRentScheduled > 0
             ? Math.Round(100m * monthRentCollected / monthRentScheduled, 1)
@@ -76,8 +85,8 @@ public class AnalyticsService : IAnalyticsService
 
         // ── 3. Overdue ────────────────────────────────────────────────────────────────────────────
         var overdue = new CountAmount(
-            rentAgg?.OverdueCount ?? 0,
-            Math.Round(rentAgg?.OverdueAmount ?? 0m, 2));
+            rentReceivables?.OverdueCount ?? 0,
+            Math.Round(rentReceivables?.OverdueAmount ?? 0m, 2));
 
         // ── 4. 12-month trend ─────────────────────────────────────────────────────────────────────
         // Income (paid rent) and expenses for the 12-month window are each aggregated SQL-side with ONE
