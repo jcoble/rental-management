@@ -1,10 +1,12 @@
 using FluentAssertions;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 using RentalCommand.Engine.Services;
@@ -62,6 +64,7 @@ public sealed class PushDispatchTests : IDisposable
     [Fact]
     public async Task Notifier_enqueues_a_push_row_when_push_is_enabled()
     {
+        await SeedStaffUser();
         var channels = new NotificationChannelPreference
         {
             EnableInApp = false, EnableEmail = false, EnableSms = false, EnablePush = true,
@@ -75,6 +78,7 @@ public sealed class PushDispatchTests : IDisposable
         push.PortfolioId.Should().Be(1);
         push.Payload.Should().Contain("/payments/123");
         push.Payload.Should().Contain("RentConfirmation");
+        push.Payload.Should().Contain("userIds");
     }
 
     [Fact]
@@ -93,7 +97,7 @@ public sealed class PushDispatchTests : IDisposable
     }
 
     [Fact]
-    public async Task Worker_fans_a_push_row_out_to_every_device_token()
+    public async Task Worker_fans_a_push_row_out_to_every_device_token_when_no_user_target_is_set()
     {
         await SeedDeviceTokens("tok-A", "tok-B");
         await SeedPushRow(actionUrl: "/work-orders/42");
@@ -108,6 +112,19 @@ public sealed class PushDispatchTests : IDisposable
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         (await db.OutboxMessages.SingleAsync(m => m.MessageType == "push")).SentAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Worker_fans_a_targeted_push_row_only_to_the_requested_user_tokens()
+    {
+        await SeedDeviceToken("staff-token", userId: 10);
+        await SeedDeviceToken("tenant-token", userId: 20);
+        await SeedPushRow(userIds: [20]);
+
+        await RunCycle();
+
+        _push.Sent.Should().ContainSingle();
+        _push.Sent[0].Token.Should().Be("tenant-token");
     }
 
     [Fact]
@@ -157,20 +174,47 @@ public sealed class PushDispatchTests : IDisposable
 
     private async Task SeedDeviceTokens(params string[] tokens)
     {
-        using var scope = _provider.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
         foreach (var t in tokens)
         {
-            db.DeviceTokens.Add(new DeviceToken
-            {
-                PortfolioId = 1, UserId = 10, Token = t, Platform = "android",
-                CreatedAt = DateTime.UtcNow, LastSeenAt = DateTime.UtcNow,
-            });
+            await SeedDeviceToken(t, userId: 10);
         }
+    }
+
+    private async Task SeedDeviceToken(string token, int userId)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        db.DeviceTokens.Add(new DeviceToken
+        {
+            PortfolioId = 1, UserId = userId, Token = token, Platform = "android",
+            CreatedAt = DateTime.UtcNow, LastSeenAt = DateTime.UtcNow,
+        });
         await db.SaveChangesAsync();
     }
 
-    private async Task SeedPushRow(string? actionUrl = null)
+    private async Task SeedStaffUser()
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        db.Roles.Add(new IdentityRole<int>(UserRole.Admin.ToString())
+        {
+            Id = 1,
+            NormalizedName = UserRole.Admin.ToString().ToUpperInvariant(),
+        });
+        db.Users.Add(new ApplicationUser
+        {
+            Id = 10,
+            PortfolioId = 1,
+            UserName = "admin@example.test",
+            NormalizedUserName = "ADMIN@EXAMPLE.TEST",
+            Email = "admin@example.test",
+            NormalizedEmail = "ADMIN@EXAMPLE.TEST",
+        });
+        db.UserRoles.Add(new IdentityUserRole<int> { UserId = 10, RoleId = 1 });
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SeedPushRow(string? actionUrl = null, int[]? userIds = null)
     {
         using var scope = _provider.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
@@ -179,7 +223,7 @@ public sealed class PushDispatchTests : IDisposable
             PortfolioId = 1,
             MessageType = "push",
             Payload = System.Text.Json.JsonSerializer.Serialize(
-                new { title = "Hi", body = "There", actionUrl, type = "System" }),
+                new { title = "Hi", body = "There", actionUrl, type = "System", userIds }),
             CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();

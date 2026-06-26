@@ -1,8 +1,10 @@
 using FluentAssertions;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using System.Text.Json;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -155,6 +157,53 @@ public class RentChargeServiceTests : IDisposable
         _ctx.Db.Payments.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task NotifyTenants_CreatesStaffAndTenantInAppNotifications_AndTargetsPush()
+    {
+        var today = DateTime.UtcNow.Date;
+        var start = new DateTime(today.Year, today.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        tenant.Email = "jane@example.test";
+        tenant.Phone = "6145550101";
+        SeedNotificationUsers(tenant.Id);
+        SeedActiveLease(
+            property.Id,
+            unit.Id,
+            tenant.Id,
+            monthlyRent: 1000m,
+            rentDueDay: today.Day,
+            startDate: start);
+        var publisher = new CapturingPublisher();
+        var cfg = new NotificationsConfig
+        {
+            EnableRentCharges = true,
+            RentChargeLeadDays = 5,
+            NotifyTenants = true,
+            ChannelPreferences =
+            {
+                [NotificationType.RentCharge] = new NotificationChannelPreference
+                {
+                    EnableInApp = true,
+                    EnableEmail = false,
+                    EnableSms = false,
+                    EnablePush = true,
+                },
+            },
+        };
+        var sut = BuildService(cfg, publisher);
+
+        var result = await sut.GenerateAsync();
+
+        result.Should().Be(1);
+        _ctx.Db.Notifications
+            .Where(n => n.Type == "RentCharge")
+            .Select(n => n.UserId)
+            .Should().BeEquivalentTo(new int?[] { 10, 20 });
+        _ctx.Db.Notifications.Single(n => n.UserId == 20).ActionUrl.Should().Be("/portal/payments");
+        publisher.TargetedPushUserIds().Should().ContainEquivalentOf(new[] { 10 });
+        publisher.TargetedPushUserIds().Should().ContainEquivalentOf(new[] { 20 });
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
 
@@ -167,9 +216,14 @@ public class RentChargeServiceTests : IDisposable
             NotifyTenants        = false,
         };
 
+        return BuildService(cfg, _publisher.Object);
+    }
+
+    private RentChargeService BuildService(NotificationsConfig cfg, IMessagePublisher publisher)
+    {
         return new RentChargeService(
             _ctx.Db,
-            _publisher.Object,
+            publisher,
             new FakeNotificationSettingsService(cfg),
             Mock.Of<IDataUpdateService>(),
             new ConfigurationBuilder().Build(),
@@ -217,6 +271,47 @@ public class RentChargeServiceTests : IDisposable
         return (property, unit, tenant);
     }
 
+    private void SeedNotificationUsers(int tenantId)
+    {
+        _ctx.Db.Roles.AddRange(
+            new IdentityRole<int>(nameof(UserRole.Admin))
+            {
+                Id = 1,
+                NormalizedName = nameof(UserRole.Admin).ToUpperInvariant(),
+            },
+            new IdentityRole<int>(nameof(UserRole.Tenant))
+            {
+                Id = 2,
+                NormalizedName = nameof(UserRole.Tenant).ToUpperInvariant(),
+            });
+
+        _ctx.Db.Users.AddRange(
+            new ApplicationUser
+            {
+                Id = 10,
+                PortfolioId = 1,
+                UserName = "admin@example.test",
+                NormalizedUserName = "ADMIN@EXAMPLE.TEST",
+                Email = "admin@example.test",
+                NormalizedEmail = "ADMIN@EXAMPLE.TEST",
+            },
+            new ApplicationUser
+            {
+                Id = 20,
+                PortfolioId = 1,
+                TenantId = tenantId,
+                UserName = "jane@example.test",
+                NormalizedUserName = "JANE@EXAMPLE.TEST",
+                Email = "jane@example.test",
+                NormalizedEmail = "JANE@EXAMPLE.TEST",
+            });
+
+        _ctx.Db.UserRoles.AddRange(
+            new IdentityUserRole<int> { UserId = 10, RoleId = 1 },
+            new IdentityUserRole<int> { UserId = 20, RoleId = 2 });
+        _ctx.Db.SaveChanges();
+    }
+
     private Lease SeedActiveLease(
         int propertyId, int unitId, int tenantId,
         decimal monthlyRent, int rentDueDay = 1, DateTime? startDate = null, DateTime? rentTrackingStartDate = null)
@@ -243,5 +338,36 @@ public class RentChargeServiceTests : IDisposable
         _ctx.Db.Leases.Add(lease);
         _ctx.Db.SaveChanges();
         return lease;
+    }
+
+    private sealed class CapturingPublisher : IMessagePublisher
+    {
+        private readonly List<string> _pushPayloads = [];
+
+        public Task PublishAsync<TPayload>(
+            int portfolioId,
+            string messageType,
+            TPayload payload,
+            CancellationToken ct = default)
+        {
+            if (messageType == "push")
+            {
+                _pushPayloads.Add(JsonSerializer.Serialize(payload));
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public IReadOnlyList<int[]> TargetedPushUserIds() =>
+            _pushPayloads
+                .Select(payload =>
+                {
+                    using var doc = JsonDocument.Parse(payload);
+                    return doc.RootElement.GetProperty("userIds")
+                        .EnumerateArray()
+                        .Select(e => e.GetInt32())
+                        .ToArray();
+                })
+                .ToList();
     }
 }

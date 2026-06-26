@@ -1,8 +1,10 @@
 using FluentAssertions;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Moq;
+using System.Text.Json;
 using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -85,6 +87,49 @@ public class LateFeeServiceTests : IDisposable
         _ctx.Db.Payments.Find(rentPayment.Id)!.Status.Should().Be(PaymentStatus.Scheduled);
     }
 
+    [Fact]
+    public async Task NotifyTenants_CreatesStaffAndTenantInAppNotifications_AndTargetsPush()
+    {
+        var (lease, _) = SeedOverdueScenario();
+        var tenant = _ctx.Db.Tenants.Find(lease.TenantId)!;
+        tenant.Email = "bob@example.test";
+        tenant.Phone = "6145550102";
+        SeedNotificationUsers(tenant.Id);
+        var publisher = new CapturingPublisher();
+        var cfg = new NotificationsConfig
+        {
+            EnableLateFees = true,
+            LateFeeGraceDays = 5,
+            NotifyTenants = true,
+            StateLateFeeCaps = new Dictionary<string, LateFeeCap>
+            {
+                ["CA"] = new() { MaxPercentOfRent = 6m },
+            },
+            ChannelPreferences =
+            {
+                [NotificationType.LateFee] = new NotificationChannelPreference
+                {
+                    EnableInApp = true,
+                    EnableEmail = false,
+                    EnableSms = false,
+                    EnablePush = true,
+                },
+            },
+        };
+        var sut = BuildService(cfg, publisher);
+
+        var count = await sut.AssessAsync();
+
+        count.Should().Be(1);
+        _ctx.Db.Notifications
+            .Where(n => n.Type == "LateFee")
+            .Select(n => n.UserId)
+            .Should().BeEquivalentTo(new int?[] { 10, 20 });
+        _ctx.Db.Notifications.Single(n => n.UserId == 20).ActionUrl.Should().Be("/portal/payments");
+        publisher.TargetedPushUserIds().Should().ContainEquivalentOf(new[] { 10 });
+        publisher.TargetedPushUserIds().Should().ContainEquivalentOf(new[] { 20 });
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
 
@@ -104,9 +149,14 @@ public class LateFeeServiceTests : IDisposable
             StateLateFeeCaps  = caps,
         };
 
+        return BuildService(cfg, _publisher.Object);
+    }
+
+    private LateFeeService BuildService(NotificationsConfig cfg, IMessagePublisher publisher)
+    {
         return new LateFeeService(
             _ctx.Db,
-            _publisher.Object,
+            publisher,
             new FakeNotificationSettingsService(cfg),
             Mock.Of<IDataUpdateService>(),
             Options.Create(cfg),
@@ -198,5 +248,77 @@ public class LateFeeServiceTests : IDisposable
         _ctx.Db.SaveChanges();
 
         return (lease, rentPayment);
+    }
+
+    private void SeedNotificationUsers(int tenantId)
+    {
+        _ctx.Db.Roles.AddRange(
+            new IdentityRole<int>(nameof(UserRole.Admin))
+            {
+                Id = 1,
+                NormalizedName = nameof(UserRole.Admin).ToUpperInvariant(),
+            },
+            new IdentityRole<int>(nameof(UserRole.Tenant))
+            {
+                Id = 2,
+                NormalizedName = nameof(UserRole.Tenant).ToUpperInvariant(),
+            });
+
+        _ctx.Db.Users.AddRange(
+            new ApplicationUser
+            {
+                Id = 10,
+                PortfolioId = 1,
+                UserName = "admin@example.test",
+                NormalizedUserName = "ADMIN@EXAMPLE.TEST",
+                Email = "admin@example.test",
+                NormalizedEmail = "ADMIN@EXAMPLE.TEST",
+            },
+            new ApplicationUser
+            {
+                Id = 20,
+                PortfolioId = 1,
+                TenantId = tenantId,
+                UserName = "bob@example.test",
+                NormalizedUserName = "BOB@EXAMPLE.TEST",
+                Email = "bob@example.test",
+                NormalizedEmail = "BOB@EXAMPLE.TEST",
+            });
+
+        _ctx.Db.UserRoles.AddRange(
+            new IdentityUserRole<int> { UserId = 10, RoleId = 1 },
+            new IdentityUserRole<int> { UserId = 20, RoleId = 2 });
+        _ctx.Db.SaveChanges();
+    }
+
+    private sealed class CapturingPublisher : IMessagePublisher
+    {
+        private readonly List<string> _pushPayloads = [];
+
+        public Task PublishAsync<TPayload>(
+            int portfolioId,
+            string messageType,
+            TPayload payload,
+            CancellationToken ct = default)
+        {
+            if (messageType == "push")
+            {
+                _pushPayloads.Add(JsonSerializer.Serialize(payload));
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public IReadOnlyList<int[]> TargetedPushUserIds() =>
+            _pushPayloads
+                .Select(payload =>
+                {
+                    using var doc = JsonDocument.Parse(payload);
+                    return doc.RootElement.GetProperty("userIds")
+                        .EnumerateArray()
+                        .Select(e => e.GetInt32())
+                        .ToArray();
+                })
+                .ToList();
     }
 }

@@ -10,15 +10,13 @@ namespace RentalCommand.Engine.Services;
 
 /// <summary>
 /// Fans an automation event out across exactly the channels enabled for its
-/// <see cref="NotificationChannelPreference"/>: an in-app <see cref="Notification"/> per staff user
-/// (when In-app is on), an email outbox row (when Email is on and an address is present), an
-/// SMS outbox row (when SMS is on and a phone is present), and/or a <c>push</c> outbox row (when Push
-/// is on) that the <see cref="Workers.OutboxDispatchWorker"/> fans out to the portfolio's registered
-/// devices. Email/SMS/push go through <see cref="IMessagePublisher"/> so they enlist in the caller's
-/// transaction; the in-app rows are added to the shared <see cref="RentalCommandDbContext"/> for the
-/// caller to commit. Broadcasting the in-app rows is deferred to the caller (after commit) via the
-/// returned list. The push title/body/deep-link are derived from the same <see cref="InAppContent"/>
-/// so existing callers get push for free.
+/// <see cref="NotificationChannelPreference"/>: an in-app <see cref="Notification"/> per targeted
+/// staff/tenant user (when In-app is on), an email outbox row (when Email is on and an address is
+/// present), an SMS outbox row (when SMS is on and a phone is present), and/or targeted <c>push</c>
+/// outbox rows (when Push is on). Email/SMS/push go through <see cref="IMessagePublisher"/> so they
+/// enlist in the caller's transaction; the in-app rows are added to the shared
+/// <see cref="RentalCommandDbContext"/> for the caller to commit. Broadcasting the in-app rows is
+/// deferred to the caller (after commit) via the returned list.
 /// </summary>
 public sealed class AutomationNotifier
 {
@@ -48,28 +46,31 @@ public sealed class AutomationNotifier
         EmailContent? email,
         SmsContent? sms,
         DateTime now,
-        CancellationToken ct)
+        CancellationToken ct,
+        AudienceTargets? audience = null)
     {
         var created = new List<Notification>();
+        var targets = audience ?? AudienceTargets.StaffOnly;
+        var staffUserIds = targets.IncludeStaff
+            ? await StaffUserIdsAsync(portfolioId, ct)
+            : Array.Empty<int>();
+        var tenantUserId = targets.TenantId.HasValue
+            ? await TenantUserIdAsync(portfolioId, targets.TenantId.Value, ct)
+            : null;
+        var tenantInApp = targets.TenantInApp ?? inApp;
 
         if (channels.EnableInApp)
         {
-            var staffUserIds = await StaffUserIdsAsync(portfolioId, ct);
             foreach (var userId in staffUserIds)
             {
-                var notification = new Notification
-                {
-                    PortfolioId = portfolioId,
-                    UserId = userId,
-                    Type = inApp.Type,
-                    Title = inApp.Title,
-                    Message = inApp.Message,
-                    Severity = inApp.Severity,
-                    ActionUrl = inApp.ActionUrl,
-                    RelatedEntityType = inApp.RelatedEntityType,
-                    RelatedEntityId = inApp.RelatedEntityId,
-                    CreatedAt = now,
-                };
+                var notification = BuildNotification(portfolioId, userId, inApp, now);
+                _db.Notifications.Add(notification);
+                created.Add(notification);
+            }
+
+            if (tenantUserId is int tenantNotificationUserId)
+            {
+                var notification = BuildNotification(portfolioId, tenantNotificationUserId, tenantInApp, now);
                 _db.Notifications.Add(notification);
                 created.Add(notification);
             }
@@ -95,25 +96,55 @@ public sealed class AutomationNotifier
 
         if (channels.EnablePush)
         {
-            // One portfolio-scoped push outbox row; the dispatch worker resolves the portfolio's
-            // device tokens and fans the FCM send out (and prunes dead tokens). The data map carries
-            // the deep link (actionUrl) + type so the tapped notification routes to the right screen.
-            await _publisher.PublishAsync(
-                portfolioId,
-                "push",
-                new
-                {
-                    title = inApp.Title,
-                    body = inApp.Message,
-                    actionUrl = inApp.ActionUrl,
-                    type = inApp.Type,
-                    relatedEntityType = inApp.RelatedEntityType,
-                    relatedEntityId = inApp.RelatedEntityId,
-                },
-                ct);
+            await PublishPushAsync(portfolioId, staffUserIds, inApp, ct);
+            if (tenantUserId is int userId)
+                await PublishPushAsync(portfolioId, [userId], tenantInApp, ct);
         }
 
         return created;
+    }
+
+    private static Notification BuildNotification(
+        int portfolioId,
+        int userId,
+        InAppContent content,
+        DateTime now) => new()
+        {
+            PortfolioId = portfolioId,
+            UserId = userId,
+            Type = content.Type,
+            Title = content.Title,
+            Message = content.Message,
+            Severity = content.Severity,
+            ActionUrl = content.ActionUrl,
+            RelatedEntityType = content.RelatedEntityType,
+            RelatedEntityId = content.RelatedEntityId,
+            CreatedAt = now,
+        };
+
+    private async Task PublishPushAsync(
+        int portfolioId,
+        IReadOnlyCollection<int> userIds,
+        InAppContent content,
+        CancellationToken ct)
+    {
+        if (userIds.Count == 0)
+            return;
+
+        await _publisher.PublishAsync(
+            portfolioId,
+            "push",
+            new
+            {
+                title = content.Title,
+                body = content.Message,
+                actionUrl = content.ActionUrl,
+                type = content.Type,
+                relatedEntityType = content.RelatedEntityType,
+                relatedEntityId = content.RelatedEntityId,
+                userIds = userIds.Distinct().OrderBy(id => id).ToArray(),
+            },
+            ct);
     }
 
     private async Task<IReadOnlyList<int>> StaffUserIdsAsync(int portfolioId, CancellationToken ct) =>
@@ -125,6 +156,14 @@ public sealed class AutomationNotifier
                 select user.Id)
             .Distinct()
             .ToListAsync(ct);
+
+    private async Task<int?> TenantUserIdAsync(int portfolioId, int tenantId, CancellationToken ct) =>
+        await _db.Users
+            .AsNoTracking()
+            .Where(u => u.PortfolioId == portfolioId && u.TenantId == tenantId)
+            .OrderBy(u => u.Id)
+            .Select(u => (int?)u.Id)
+            .FirstOrDefaultAsync(ct);
 
     public sealed record InAppContent(
         string Type,
@@ -138,4 +177,12 @@ public sealed class AutomationNotifier
     public sealed record EmailContent(string? To, string Subject, string Body);
 
     public sealed record SmsContent(string? To, string Message);
+
+    public sealed record AudienceTargets(
+        bool IncludeStaff,
+        int? TenantId = null,
+        InAppContent? TenantInApp = null)
+    {
+        public static AudienceTargets StaffOnly { get; } = new(IncludeStaff: true);
+    }
 }
