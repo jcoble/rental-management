@@ -18,15 +18,19 @@ public class AnthropicLlmProviderTests
         new ExtractionFieldSpec("amount",      "number", "Amount",      Required: true),
     ];
 
-    private static AnthropicLlmProvider BuildProvider(string? apiKey, HttpMessageHandler handler)
+    private static AnthropicLlmProvider BuildProvider(
+        string? apiKey,
+        HttpMessageHandler handler,
+        AssistantConfig? configOverride = null,
+        IImageTextExtractor? imageTextExtractor = null)
     {
-        var config = Options.Create(new AssistantConfig
+        var config = Options.Create(configOverride ?? new AssistantConfig
         {
             ApiKey  = apiKey,
             ModelId = "claude-test-model",
         });
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.anthropic.com/") };
-        return new AnthropicLlmProvider(http, config, NullLogger<AnthropicLlmProvider>.Instance);
+        return new AnthropicLlmProvider(http, config, NullLogger<AnthropicLlmProvider>.Instance, imageTextExtractor);
     }
 
     // ----- No-op fallback -----
@@ -118,6 +122,59 @@ public class AnthropicLlmProviderTests
         stubHandler.WasCalled.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task ExtractAsync_ImageOcrHybrid_SendsImageWithOcrHint_NotOcrOnly()
+    {
+        var anthropicJson = """
+            {
+              "model": "claude-3-5-sonnet-20241022",
+              "content": [
+                {
+                  "type": "tool_use",
+                  "id": "tool_abc123",
+                  "name": "record_extraction",
+                  "input": {
+                    "vendor_name": "ACME Hardware",
+                    "vendor_name_confidence": 0.95,
+                    "amount": "42.50",
+                    "amount_confidence": 0.88
+                  }
+                }
+              ],
+              "usage": { "input_tokens": 20, "output_tokens": 10 }
+            }
+            """;
+        var handler = new CaptureRequestHandler(HttpStatusCode.OK, anthropicJson);
+        var config = new AssistantConfig
+        {
+            ApiKey = "test-api-key",
+            ModelId = "claude-test-model",
+            UseImageOcr = true,
+            ImageOcrMode = "hybrid",
+        };
+        var provider = BuildProvider(
+            "test-api-key",
+            handler,
+            config,
+            new StubImageTextExtractor("ACME OCR text receipt total 42.50 paid by card"));
+
+        await provider.ExtractAsync(
+            new byte[] { 0xFF, 0xD8, 0xFF, 0x00 },
+            "image/jpeg",
+            "Extract fields",
+            TwoFields());
+
+        handler.RequestBody.Should().NotBeNullOrWhiteSpace();
+        using var doc = JsonDocument.Parse(handler.RequestBody!);
+        var content = doc.RootElement.GetProperty("messages")[0].GetProperty("content");
+
+        content.ValueKind.Should().Be(JsonValueKind.Array);
+        content.GetRawText().Should().Contain("OCR text from local image extraction");
+        content.GetRawText().Should().Contain("ACME OCR text receipt total 42.50 paid by card");
+        content.GetRawText().Should().Contain("\"type\":\"image\"");
+        content.GetRawText().Should().Contain("\"media_type\":\"image/jpeg\"");
+    }
+
     // ----- Shared stub handlers -----
 
     private sealed class ThrowIfCalledHandler : HttpMessageHandler
@@ -145,5 +202,27 @@ public class AnthropicLlmProviderTests
                 Content = new StringContent(body, Encoding.UTF8, "application/json")
             });
         }
+    }
+
+    private sealed class CaptureRequestHandler(HttpStatusCode status, string body) : HttpMessageHandler
+    {
+        public string? RequestBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        }
+    }
+
+    private sealed class StubImageTextExtractor(string text) : IImageTextExtractor
+    {
+        public string? TryExtractText(byte[] documentBytes, string contentType) => text;
     }
 }

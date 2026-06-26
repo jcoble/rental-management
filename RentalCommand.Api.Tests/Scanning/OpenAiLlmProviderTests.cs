@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -17,15 +18,19 @@ public class OpenAiLlmProviderTests
         new ExtractionFieldSpec("amount",      "number", "Amount",      Required: true),
     ];
 
-    private static OpenAiLlmProvider BuildProvider(string? apiKey, HttpMessageHandler handler)
+    private static OpenAiLlmProvider BuildProvider(
+        string? apiKey,
+        HttpMessageHandler handler,
+        AssistantConfig? configOverride = null,
+        IImageTextExtractor? imageTextExtractor = null)
     {
-        var config = Options.Create(new AssistantConfig
+        var config = Options.Create(configOverride ?? new AssistantConfig
         {
             ApiKey  = apiKey,
             ModelId = "gpt-4o",
         });
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.openai.com/") };
-        return new OpenAiLlmProvider(http, config, NullLogger<OpenAiLlmProvider>.Instance);
+        return new OpenAiLlmProvider(http, config, NullLogger<OpenAiLlmProvider>.Instance, imageTextExtractor);
     }
 
     // ----- No-op fallback -----
@@ -125,6 +130,67 @@ public class OpenAiLlmProviderTests
         stubHandler.WasCalled.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task ExtractAsync_ImageOcrHybrid_SendsImageWithOcrHint_NotOcrOnly()
+    {
+        var argsJson = """{"vendor_name":"ACME Supply Co","vendor_name_confidence":0.92,"amount":"78.00","amount_confidence":0.85}""";
+        var openAiJson = $$"""
+            {
+              "model": "gpt-4o-2024-11-20",
+              "choices": [
+                {
+                  "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                      {
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {
+                          "name": "record_extraction",
+                          "arguments": {{JsonEscape(argsJson)}}
+                        }
+                      }
+                    ]
+                  },
+                  "finish_reason": "tool_calls"
+                }
+              ],
+              "usage": { "prompt_tokens": 20, "completion_tokens": 10 }
+            }
+            """;
+        var handler = new CaptureRequestHandler(HttpStatusCode.OK, openAiJson);
+        var config = new AssistantConfig
+        {
+            ApiKey = "sk-test-key",
+            ModelId = "gpt-4o",
+            UseImageOcr = true,
+            ImageOcrMode = "hybrid",
+            ImageDetail = "high",
+        };
+        var provider = BuildProvider(
+            "sk-test-key",
+            handler,
+            config,
+            new StubImageTextExtractor("ACME OCR text invoice total 78.00 paid by card"));
+
+        await provider.ExtractAsync(
+            new byte[] { 0xFF, 0xD8, 0xFF, 0x00 },
+            "image/jpeg",
+            "Extract fields",
+            TwoFields());
+
+        handler.RequestBody.Should().NotBeNullOrWhiteSpace();
+        using var doc = JsonDocument.Parse(handler.RequestBody!);
+        var body = doc.RootElement.GetProperty("messages")[1].GetProperty("content");
+
+        body.ValueKind.Should().Be(JsonValueKind.Array);
+        body.GetRawText().Should().Contain("OCR text from local image extraction");
+        body.GetRawText().Should().Contain("ACME OCR text invoice total 78.00 paid by card");
+        body.GetRawText().Should().Contain("image_url");
+        body.GetRawText().Should().Contain("data:image/jpeg;base64");
+        body.GetRawText().Should().Contain("\"detail\":\"high\"");
+    }
+
     // ----- helpers -----
 
     /// <summary>
@@ -159,5 +225,27 @@ public class OpenAiLlmProviderTests
                 Content = new StringContent(body, Encoding.UTF8, "application/json")
             });
         }
+    }
+
+    private sealed class CaptureRequestHandler(HttpStatusCode status, string body) : HttpMessageHandler
+    {
+        public string? RequestBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestBody = request.Content is null
+                ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        }
+    }
+
+    private sealed class StubImageTextExtractor(string text) : IImageTextExtractor
+    {
+        public string? TryExtractText(byte[] documentBytes, string contentType) => text;
     }
 }
