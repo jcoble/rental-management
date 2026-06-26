@@ -35,6 +35,7 @@ public class PublicUnitOption
 {
     public int Id { get; set; }
     public string UnitNumber { get; set; } = string.Empty;
+    public UnitStatus Status { get; set; }
 }
 
 /// <summary>

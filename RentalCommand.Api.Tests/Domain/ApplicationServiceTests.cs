@@ -189,6 +189,68 @@ public class ApplicationServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetPublicFormInfoAsync_ReturnsUnitStatusesAndFiltersOfflineUnitsDbSide()
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Maple Grove",
+            Status = PropertyStatus.Active,
+            AddressLine1 = "1100 Maple Ave",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Properties.Add(property);
+        await _db.SaveChangesAsync();
+
+        _db.Units.AddRange(
+            new Unit
+            {
+                PropertyId = property.Id,
+                UnitNumber = "1A",
+                Status = UnitStatus.Vacant,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            },
+            new Unit
+            {
+                PropertyId = property.Id,
+                UnitNumber = "2B",
+                Status = UnitStatus.Occupied,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            },
+            new Unit
+            {
+                PropertyId = property.Id,
+                UnitNumber = "3C",
+                Status = UnitStatus.Offline,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            });
+        await _db.SaveChangesAsync();
+
+        _commands.Clear();
+        var info = await _sut.GetPublicFormInfoAsync(Token);
+
+        info.Should().NotBeNull();
+        var units = info!.Properties.Should().ContainSingle().Subject.Units;
+        units.Select(u => u.UnitNumber).Should().Equal("1A", "2B");
+        units.Single(u => u.UnitNumber == "1A").Status.Should().Be(UnitStatus.Vacant);
+        units.Single(u => u.UnitNumber == "2B").Status.Should().Be(UnitStatus.Occupied);
+
+        _commands.Should().HaveCountLessThanOrEqualTo(3);
+        _commands.Should().Contain(sql =>
+            sql.Contains("\"Units\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"Status\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            (sql.Contains("<>") || sql.Contains("!=")));
+    }
+
+    [Fact]
     public async Task SubmitAsync_ForeignPropertyId_IsDroppedNotLeaked()
     {
         // A property in a DIFFERENT portfolio must never attach to this submission (IDOR guard).

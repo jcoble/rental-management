@@ -10,6 +10,7 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import { getUnitsEmptyStateCopy } from '$lib/units/unit-list-state';
 	import { Home } from '@lucide/svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { page } from '$app/state';
@@ -61,6 +62,8 @@
 
 	const list = $derived(unitsQuery.data?.items ?? []);
 	const totalCount = $derived(unitsQuery.data?.totalCount ?? 0);
+	const hasActiveFilters = $derived(Boolean(search.trim() || propertyFilter));
+	const emptyStateCopy = $derived(getUnitsEmptyStateCopy({ hasActiveFilters }));
 
 	// Simplified-stage badge map. Reuses the app's tone-chip recipes (the same class strings StatusBadge
 	// uses internally) so the colors flip correctly in dark/light — never raw Tailwind palette literals.
@@ -115,8 +118,8 @@
 		data={list}
 		{columns}
 		loading={unitsQuery.isLoading || unitsQuery.isFetching}
-		emptyMessage="No units yet"
-		emptyDescription="Units live under a property. Add a property and its units to start managing them here."
+		emptyMessage={emptyStateCopy.message}
+		emptyDescription={emptyStateCopy.description}
 		emptyIcon={Home}
 		emptyTone="primary"
 		onRowClick={(unit) => goto('/units/' + unit.id)}
