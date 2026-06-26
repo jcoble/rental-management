@@ -85,6 +85,7 @@ public class LeaseService : ILeaseService
         securityDeposit = l.SecurityDeposit,
         lateFeeAmount = l.LateFeeAmount,
         rentDueDay = l.RentDueDay,
+        rentTrackingStartDate = l.RentTrackingStartDate,
         notes = l.Notes,
         tenantId = l.TenantId,
         propertyId = l.PropertyId,
@@ -136,6 +137,39 @@ public class LeaseService : ILeaseService
         }
     }
 
+    private static DateTime RentChargeGenerationStart(Lease lease)
+    {
+        var leaseStart = lease.StartDate.Date;
+        var trackingStart = lease.RentTrackingStartDate?.Date;
+        if (!trackingStart.HasValue || trackingStart.Value < leaseStart)
+        {
+            return leaseStart;
+        }
+
+        return trackingStart.Value;
+    }
+
+    private static DateTime? ResolveRentTrackingStartDate(
+        DateTime leaseStart,
+        RentTrackingStartMode mode,
+        DateTime? requestedStartDate,
+        DateTime today)
+    {
+        var leaseStartDate = leaseStart.Date;
+        return mode switch
+        {
+            RentTrackingStartMode.BackfillFromLeaseStart => null,
+            RentTrackingStartMode.ForwardOnly => MaxDate(leaseStartDate, today.Date),
+            RentTrackingStartMode.CustomCutoffDate => requestedStartDate.HasValue
+                ? MaxDate(leaseStartDate, requestedStartDate.Value.ToUtc().Date)
+                : throw new DomainValidationException("Rent tracking cutoff date is required."),
+            _ => throw new DomainValidationException("Rent tracking start mode is invalid."),
+        };
+    }
+
+    private static DateTime MaxDate(DateTime left, DateTime right)
+        => left >= right ? left : right;
+
     private async Task<IReadOnlyList<Payment>> EnsureRentChargesThroughTodayAsync(Lease lease, CancellationToken ct)
     {
         if (lease.Status != LeaseStatus.Active || lease.MonthlyRent <= 0)
@@ -144,7 +178,7 @@ public class LeaseService : ILeaseService
         }
 
         var periods = RentChargeSchedule.GetDuePeriods(
-            lease.StartDate,
+            RentChargeGenerationStart(lease),
             lease.EndDate,
             lease.RentDueDay,
             DateTime.UtcNow.Date);
@@ -575,6 +609,9 @@ public class LeaseService : ILeaseService
         }
 
         var now = DateTime.UtcNow;
+        var rentTrackingStartDate = request.Status == LeaseStatus.Active
+            ? ResolveRentTrackingStartDate(startUtc, request.RentTrackingStartMode, request.RentTrackingStartDate, now.Date)
+            : null;
         var entity = new Lease
         {
             PortfolioId = portfolioId,
@@ -591,6 +628,7 @@ public class LeaseService : ILeaseService
             SecurityDeposit = request.SecurityDeposit,
             LateFeeAmount = request.LateFeeAmount,
             RentDueDay = request.RentDueDay,
+            RentTrackingStartDate = rentTrackingStartDate,
             Notes = request.Notes,
             ExtractedData = request.ExtractedData,
             CreatedAt = now,
@@ -641,6 +679,7 @@ public class LeaseService : ILeaseService
         var prevEnd = entity.EndDate;
         var prevDeposit = entity.SecurityDeposit;
         var prevMoveOutDate = entity.MoveOutDate;
+        var prevRentTrackingStartDate = entity.RentTrackingStartDate;
         var prevNotes = entity.Notes;
 
         // Resolve the post-update status + date range up front (request value when supplied, else current)
@@ -682,6 +721,12 @@ public class LeaseService : ILeaseService
         if (request.SecurityDeposit.HasValue) entity.SecurityDeposit = request.SecurityDeposit.Value;
         if (request.LateFeeAmount.HasValue) entity.LateFeeAmount = request.LateFeeAmount.Value;
         if (request.RentDueDay.HasValue) entity.RentDueDay = request.RentDueDay.Value;
+        if (request.RentTrackingStartMode.HasValue)
+        {
+            entity.RentTrackingStartDate = newStatus == LeaseStatus.Active
+                ? ResolveRentTrackingStartDate(entity.StartDate, request.RentTrackingStartMode.Value, request.RentTrackingStartDate, DateTime.UtcNow.Date)
+                : null;
+        }
         if (request.Notes != null) entity.Notes = request.Notes;
         entity.UpdatedAt = DateTime.UtcNow;
 
@@ -702,6 +747,10 @@ public class LeaseService : ILeaseService
         if (entity.EndDate != prevEnd) changes.Add($"end date {prevEnd:yyyy-MM-dd}→{entity.EndDate:yyyy-MM-dd}");
         if (entity.SecurityDeposit != prevDeposit) changes.Add($"deposit {prevDeposit:0.##}→{entity.SecurityDeposit:0.##}");
         if (entity.MoveOutDate != prevMoveOutDate) changes.Add($"move-out date {FormatDateChange(prevMoveOutDate)}→{FormatDateChange(entity.MoveOutDate)}");
+        if (entity.RentTrackingStartDate != prevRentTrackingStartDate)
+        {
+            changes.Add($"rent tracking start {FormatDateChange(prevRentTrackingStartDate)}→{FormatDateChange(entity.RentTrackingStartDate)}");
+        }
         if (!string.Equals(entity.Notes, prevNotes, StringComparison.Ordinal)) changes.Add("notes updated");
         var reason = changes.Count > 0
             ? $"Lease {entity.LeaseNumber}: {string.Join("; ", changes)}"
@@ -709,7 +758,8 @@ public class LeaseService : ILeaseService
         await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
             oldValues: before, newValues: Snapshot(entity), changeReason: reason, ct: ct);
 
-        if (prevStatus != LeaseStatus.Active && entity.Status == LeaseStatus.Active)
+        if ((prevStatus != LeaseStatus.Active && entity.Status == LeaseStatus.Active)
+            || (entity.Status == LeaseStatus.Active && request.RentTrackingStartMode.HasValue))
         {
             await EnsureRentChargesThroughTodayAsync(entity, ct);
         }

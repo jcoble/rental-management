@@ -22,6 +22,7 @@ public class LeaseResponse
     public decimal SecurityDeposit { get; set; }
     public decimal LateFeeAmount { get; set; }
     public int RentDueDay { get; set; }
+    public DateTime? RentTrackingStartDate { get; set; }
     public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
@@ -63,6 +64,7 @@ public class LeaseResponse
             SecurityDeposit = e.SecurityDeposit,
             LateFeeAmount = e.LateFeeAmount,
             RentDueDay = e.RentDueDay,
+            RentTrackingStartDate = e.RentTrackingStartDate,
             Notes = e.Notes,
             CreatedAt = e.CreatedAt,
             UpdatedAt = e.UpdatedAt,
@@ -268,6 +270,11 @@ public class CreateLeaseRequest
     [Range(1, 31)]
     public int RentDueDay { get; set; } = 1;
 
+    [EnumDataType(typeof(RentTrackingStartMode))]
+    public RentTrackingStartMode RentTrackingStartMode { get; set; } = RentTrackingStartMode.BackfillFromLeaseStart;
+
+    public DateTime? RentTrackingStartDate { get; set; }
+
     [MaxLength(2000)]
     public string? Notes { get; set; }
 
@@ -299,6 +306,11 @@ public class UpdateLeaseRequest
 
     [Range(1, 31)]
     public int? RentDueDay { get; set; }
+
+    [EnumDataType(typeof(RentTrackingStartMode))]
+    public RentTrackingStartMode? RentTrackingStartMode { get; set; }
+
+    public DateTime? RentTrackingStartDate { get; set; }
 
     [MaxLength(2000)]
     public string? Notes { get; set; }

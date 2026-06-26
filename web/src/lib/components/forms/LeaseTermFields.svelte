@@ -14,6 +14,16 @@
 	import { STEP_FIELD_TO_EXTRACTION } from '$lib/scan/lease-prefill';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 
+	const rentTrackingStartOptions = [
+		{ value: 'ForwardOnly', label: 'Start from today' },
+		{ value: 'BackfillFromLeaseStart', label: 'Backfill from lease start' },
+		{ value: 'CustomCutoffDate', label: 'Use cutoff date' }
+	] as const;
+
+	function rentTrackingStartLabel(value: string | undefined) {
+		return rentTrackingStartOptions.find((option) => option.value === value)?.label ?? 'Select start';
+	}
+
 	let {
 		form = $bindable(),
 		errors = {},
@@ -22,7 +32,19 @@
 		statuses = ['Draft', 'Active', 'Expired', 'Terminated'],
 		testidPrefix = 'lease'
 	}: {
-		form: { leaseNumber: string; startDate: string; endDate: string; monthlyRent: string; securityDeposit: string; lateFeeAmount: string; rentDueDay: string; status: string; notes: string };
+		form: {
+			leaseNumber: string;
+			startDate: string;
+			endDate: string;
+			monthlyRent: string;
+			securityDeposit: string;
+			lateFeeAmount: string;
+			rentDueDay: string;
+			rentTrackingStartMode?: string;
+			rentTrackingStartDate?: string;
+			status: string;
+			notes: string;
+		};
 		errors?: Record<string, string>;
 		autoFilled?: Set<string>;
 		confidence?: Record<string, number>;
@@ -104,4 +126,28 @@
 			</Select.Content>
 		</Select.Root>
 	</div>
+	{#if form.status === 'Active'}
+		<div class="md:col-span-2 grid gap-3 md:grid-cols-2" data-testid={`${testidPrefix}-rent-tracking-fields`}>
+			<div class={form.rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'md:col-span-2'}>
+				<span class="mb-1 block text-xs font-medium text-muted-foreground">Rent tracking start</span>
+				<Select.Root type="single" bind:value={form.rentTrackingStartMode}>
+					<Select.Trigger class="w-full" data-testid={`${testidPrefix}-rent-tracking-mode`}>
+						{rentTrackingStartLabel(form.rentTrackingStartMode)}
+					</Select.Trigger>
+					<Select.Content>
+						{#each rentTrackingStartOptions as option}
+							<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</div>
+			{#if form.rentTrackingStartMode === 'CustomCutoffDate'}
+				<div>
+					<span class="mb-1 block text-xs font-medium text-muted-foreground">Cutoff date</span>
+					<DatePicker testid={`${testidPrefix}-rent-tracking-date`} bind:value={form.rentTrackingStartDate} placeholder="Cutoff date" min={form.startDate || undefined} />
+					{#if errors.rentTrackingStartDate}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-rent-tracking-date-error`}>{errors.rentTrackingStartDate}</p>{/if}
+				</div>
+			{/if}
+		</div>
+	{/if}
 </div>
