@@ -45,8 +45,15 @@ public class RentChargeServiceTests : IDisposable
     public async Task CreatesOneRentPaymentPerMonth_AndIsIdempotent()
     {
         var today = DateTime.UtcNow.Date;
+        var start = new DateTime(today.Year, today.Month, 1, 0, 0, 0, DateTimeKind.Utc);
         var (property, unit, tenant) = SeedPropertyUnitTenant();
-        SeedActiveLease(property.Id, unit.Id, tenant.Id, monthlyRent: 1000m, rentDueDay: today.Day);
+        SeedActiveLease(
+            property.Id,
+            unit.Id,
+            tenant.Id,
+            monthlyRent: 1000m,
+            rentDueDay: today.Day,
+            startDate: start);
 
         var sut = BuildService(enable: true, leadDays: 5);
 
@@ -67,6 +74,56 @@ public class RentChargeServiceTests : IDisposable
         p.Status.Should().Be(PaymentStatus.Scheduled);
         p.Amount.Should().Be(1000m);
         p.PeriodKey.Should().Be(today.ToString("yyyy-MM"));
+    }
+
+    [Fact]
+    public async Task PastStartLease_CatchesUpMissingRentPeriodsThroughToday()
+    {
+        var today = DateTime.UtcNow.Date;
+        var start = new DateTime(today.Year, today.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(-2);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        SeedActiveLease(
+            property.Id,
+            unit.Id,
+            tenant.Id,
+            monthlyRent: 1000m,
+            rentDueDay: 1,
+            startDate: start);
+
+        var sut = BuildService(enable: true, leadDays: 5);
+
+        var result = await sut.GenerateAsync();
+
+        result.Should().Be(3);
+        _ctx.Db.Payments
+            .OrderBy(p => p.PeriodKey)
+            .Select(p => p.PeriodKey)
+            .Should().Equal(
+                start.ToString("yyyy-MM"),
+                start.AddMonths(1).ToString("yyyy-MM"),
+                today.ToString("yyyy-MM"));
+    }
+
+    [Fact]
+    public async Task FutureStartLease_CreatesNothingEvenWhenCurrentPeriodIsInLeadWindow()
+    {
+        var today = DateTime.UtcNow.Date;
+        var futureStart = new DateTime(today.Year, today.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddMonths(1);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        SeedActiveLease(
+            property.Id,
+            unit.Id,
+            tenant.Id,
+            monthlyRent: 1000m,
+            rentDueDay: today.Day,
+            startDate: futureStart);
+
+        var sut = BuildService(enable: true, leadDays: 5);
+
+        var result = await sut.GenerateAsync();
+
+        result.Should().Be(0);
+        _ctx.Db.Payments.Should().BeEmpty();
     }
 
     // -----------------------------------------------------------------------
@@ -133,7 +190,7 @@ public class RentChargeServiceTests : IDisposable
 
     private Lease SeedActiveLease(
         int propertyId, int unitId, int tenantId,
-        decimal monthlyRent, int rentDueDay = 1)
+        decimal monthlyRent, int rentDueDay = 1, DateTime? startDate = null)
     {
         var today = DateTime.UtcNow.Date;
         var lease = new Lease
@@ -144,7 +201,7 @@ public class RentChargeServiceTests : IDisposable
             TenantId        = tenantId,
             LeaseNumber     = "L-001",
             Status          = LeaseStatus.Active,
-            StartDate       = today.AddMonths(-6),
+            StartDate       = startDate ?? today.AddMonths(-6),
             EndDate         = today.AddMonths(6),
             MonthlyRent     = monthlyRent,
             SecurityDeposit = 0m,
