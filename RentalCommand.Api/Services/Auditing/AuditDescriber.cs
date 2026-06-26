@@ -47,6 +47,7 @@ public sealed class AuditDescriber
         "Lease" => "lease",
         "Tenant" => "tenant",
         "Property" => "property",
+        "Unit" => "unit",
         "WorkOrder" => "work order",
         "Vendor" => "vendor",
         "OwnerEntity" => "owner",
