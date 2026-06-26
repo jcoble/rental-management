@@ -31,4 +31,17 @@ describe('unit lifecycle next action handoff', () => {
 		assert.match(tenantPageSource, /openNoticeDialog\(action\.noticeType\)/);
 		assert.match(tenantPageSource, /data-testid="tenant-notice-dialog"/);
 	});
+
+	test('tenant renewal notice deep links can be handled more than once', () => {
+		const tenantPageSource = readFileSync(
+			new URL('../../../routes/(protected)/tenants/[id]/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(tenantPageSource, /tenantNoticeActionKey\(id, action\)/);
+		assert.match(tenantPageSource, /handledNoticeActionKey/);
+		assert.match(tenantPageSource, /clearTenantNoticeActionUrl\(page\.url\)/);
+		assert.doesNotMatch(tenantPageSource, /noticeActionHandled/);
+		assert.doesNotMatch(tenantPageSource, /tenantLeases\.filter\(\(lease\) => lease\.status === 'Active'\)/);
+	});
 });
