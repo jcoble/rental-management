@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Entities;
@@ -14,11 +15,13 @@ public class UnitService : IUnitService
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
+    private readonly IAuditTrailService _audit;
 
-    public UnitService(RentalCommandDbContext db, IDataUpdateService dataUpdate)
+    public UnitService(RentalCommandDbContext db, IDataUpdateService dataUpdate, IAuditTrailService audit)
     {
         _db = db;
         _dataUpdate = dataUpdate;
+        _audit = audit;
     }
 
     public async Task<IReadOnlyList<UnitResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
@@ -287,6 +290,15 @@ public class UnitService : IUnitService
         _db.Units.Add(entity);
         await _db.SaveChangesAsync(ct);
 
+        await _audit.LogAsync(
+            portfolioId,
+            EntityType,
+            entity.Id,
+            AuditLogOperation.Created,
+            newValues: Snapshot(entity),
+            changeReason: $"Unit {entity.UnitNumber} created",
+            ct: ct);
+
         var response = UnitResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
@@ -301,21 +313,75 @@ public class UnitService : IUnitService
             return null;
         }
 
-        if (request.UnitNumber != null) entity.UnitNumber = request.UnitNumber;
-        if (request.FloorPlan != null) entity.FloorPlan = request.FloorPlan;
-        if (request.Bedrooms.HasValue) entity.Bedrooms = request.Bedrooms.Value;
-        if (request.Bathrooms.HasValue) entity.Bathrooms = request.Bathrooms.Value;
-        if (request.SquareFeet.HasValue) entity.SquareFeet = request.SquareFeet;
-        if (request.MarketRent.HasValue) entity.MarketRent = request.MarketRent.Value;
-        if (request.Status.HasValue) entity.Status = request.Status.Value;
-        if (request.Notes != null) entity.Notes = request.Notes;
+        var oldValues = new Dictionary<string, object?>();
+        var newValues = new Dictionary<string, object?>();
+
+        ApplyStringIfChanged(request.UnitNumber, entity.UnitNumber, "UnitNumber", v => entity.UnitNumber = v);
+        ApplyStringIfChanged(request.FloorPlan, entity.FloorPlan, "FloorPlan", v => entity.FloorPlan = v);
+        ApplyValueIfChanged(request.Bedrooms, entity.Bedrooms, "Bedrooms", v => entity.Bedrooms = v);
+        ApplyValueIfChanged(request.Bathrooms, entity.Bathrooms, "Bathrooms", v => entity.Bathrooms = v);
+        ApplyNullableValueIfChanged(request.SquareFeet, entity.SquareFeet, "SquareFeet", v => entity.SquareFeet = v);
+        ApplyValueIfChanged(request.MarketRent, entity.MarketRent, "MarketRent", v => entity.MarketRent = v);
+        ApplyValueIfChanged(request.Status, entity.Status, "Status", v => entity.Status = v);
+        ApplyStringIfChanged(request.Notes, entity.Notes, "Notes", v => entity.Notes = v);
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(ct);
 
+        if (oldValues.Count > 0)
+        {
+            await _audit.LogAsync(
+                portfolioId,
+                EntityType,
+                entity.Id,
+                AuditLogOperation.Updated,
+                oldValues: Serialize(oldValues),
+                newValues: Serialize(newValues),
+                changeReason: $"Unit {entity.UnitNumber} updated",
+                ct: ct);
+        }
+
         var response = UnitResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
+
+        void ApplyStringIfChanged(string? requested, string? current, string field, Action<string> apply)
+        {
+            if (requested is null || string.Equals(requested, current, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            oldValues[field] = current;
+            newValues[field] = requested;
+            apply(requested);
+        }
+
+        void ApplyValueIfChanged<T>(T? requested, T current, string field, Action<T> apply)
+            where T : struct
+        {
+            if (!requested.HasValue || EqualityComparer<T>.Default.Equals(requested.Value, current))
+            {
+                return;
+            }
+
+            oldValues[field] = current;
+            newValues[field] = requested.Value;
+            apply(requested.Value);
+        }
+
+        void ApplyNullableValueIfChanged<T>(T? requested, T? current, string field, Action<T?> apply)
+            where T : struct
+        {
+            if (!requested.HasValue || EqualityComparer<T?>.Default.Equals(requested, current))
+            {
+                return;
+            }
+
+            oldValues[field] = current;
+            newValues[field] = requested.Value;
+            apply(requested.Value);
+        }
     }
 
     public async Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
@@ -330,7 +396,31 @@ public class UnitService : IUnitService
         entity.DeletedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
+        await _audit.LogAsync(
+            portfolioId,
+            EntityType,
+            id,
+            AuditLogOperation.Deleted,
+            oldValues: Snapshot(entity),
+            changeReason: $"Unit {entity.UnitNumber} deleted",
+            ct: ct);
+
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
     }
+
+    private static string Snapshot(Unit entity) => Serialize(new Dictionary<string, object?>
+    {
+        ["PropertyId"] = entity.PropertyId,
+        ["UnitNumber"] = entity.UnitNumber,
+        ["FloorPlan"] = entity.FloorPlan,
+        ["Bedrooms"] = entity.Bedrooms,
+        ["Bathrooms"] = entity.Bathrooms,
+        ["SquareFeet"] = entity.SquareFeet,
+        ["MarketRent"] = entity.MarketRent,
+        ["Status"] = entity.Status,
+        ["Notes"] = entity.Notes,
+    });
+
+    private static string Serialize(Dictionary<string, object?> values) => JsonSerializer.Serialize(values);
 }
