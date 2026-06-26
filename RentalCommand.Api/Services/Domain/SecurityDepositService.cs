@@ -103,6 +103,14 @@ public class SecurityDepositService : ISecurityDepositService
 
     public async Task<SecurityDepositResponse?> CreateAsync(int portfolioId, CreateDepositRequest request, CancellationToken ct = default)
     {
+        var existing = await _db.SecurityDepositHoldings
+            .Include(h => h.Lease).ThenInclude(l => l!.Tenant)
+            .FirstOrDefaultAsync(h => h.PortfolioId == portfolioId && h.LeaseId == request.LeaseId, ct);
+        if (existing is not null)
+        {
+            return SecurityDepositResponse.FromEntity(existing);
+        }
+
         // Verify the lease belongs to this portfolio. Pull the tenant nav too so the create
         // response carries the tenant name for the grid row (Lease / Tenant column).
         var lease = await _db.Leases
