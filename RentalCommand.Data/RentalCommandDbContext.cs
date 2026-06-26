@@ -1012,6 +1012,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Email).HasMaxLength(200);
             entity.Property(e => e.Phone).HasMaxLength(50);
             entity.Property(e => e.TaxId).HasMaxLength(50);
+            entity.Property(e => e.AddressLine1).HasMaxLength(250);
+            entity.Property(e => e.City).HasMaxLength(120);
+            entity.Property(e => e.State).HasMaxLength(60);
+            entity.Property(e => e.PostalCode).HasMaxLength(20);
             entity.Property(e => e.Notes).HasMaxLength(2000);
             entity.HasIndex(e => e.PortfolioId);
             entity.HasQueryFilter(e => e.DeletedAt == null);

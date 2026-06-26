@@ -3,6 +3,10 @@ class Vendor {
   final int portfolioId;
   final String name;
   final String serviceType;
+  final String? addressLine1;
+  final String? city;
+  final String? state;
+  final String? postalCode;
   final String? email;
   final String? phone;
   final String? taxId;
@@ -18,6 +22,10 @@ class Vendor {
     required this.portfolioId,
     required this.name,
     required this.serviceType,
+    this.addressLine1,
+    this.city,
+    this.state,
+    this.postalCode,
     this.email,
     this.phone,
     this.taxId,
@@ -35,6 +43,10 @@ class Vendor {
       portfolioId: (json['portfolioId'] as num).toInt(),
       name: json['name'] as String? ?? '',
       serviceType: json['serviceType'] as String? ?? '',
+      addressLine1: json['addressLine1'] as String?,
+      city: json['city'] as String?,
+      state: json['state'] as String?,
+      postalCode: json['postalCode'] as String?,
       email: json['email'] as String?,
       phone: json['phone'] as String?,
       taxId: json['taxId'] as String?,
@@ -42,8 +54,10 @@ class Vendor {
       w9OnFile: json['w9OnFile'] as bool? ?? false,
       preferred: json['preferred'] as bool? ?? false,
       notes: json['notes'] as String?,
-      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
-      updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
     );
   }
 }
