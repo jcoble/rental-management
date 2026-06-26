@@ -27,5 +27,8 @@ describe('status display labels', () => {
 		assert.equal(formatAuditChangeValue('Amount', '21.49'), '$21.49');
 		assert.equal(formatAuditChangeValue('Charge Amount', '1275'), '$1,275.00');
 		assert.equal(formatAuditChangeValue('Original amount', '250000.5'), '$250,000.50');
+		assert.equal(formatAuditChangeValue('Market rent', '1025'), '$1,025.00');
+		assert.equal(formatAuditChangeValue('Market rent', '1,025'), '$1,025.00');
+		assert.equal(formatAuditChangeValue('Security deposit', '1025'), '$1,025.00');
 	});
 });

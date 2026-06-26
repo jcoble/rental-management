@@ -23,7 +23,7 @@ public class UnitServiceListTests : IDisposable
     public UnitServiceListTests()
     {
         _ctx = new SqliteTestContext([new RecordingCommandInterceptor(_commands)]);
-        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>());
+        _sut = new UnitService(_ctx.Db, Mock.Of<IDataUpdateService>(), Mock.Of<IAuditTrailService>());
     }
 
     public void Dispose() => _ctx.Dispose();
