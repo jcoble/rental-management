@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createdRecordArticle, isTerminalScanReview, shouldDisableScanReviewControls } from './scan-review-state.ts';
+import {
+	createdRecordArticle,
+	createdRecordHref,
+	createdRecordLabel,
+	isTerminalScanReview,
+	shouldDisableScanReviewControls
+} from './scan-review-state.ts';
 
 describe('scan review terminal state', () => {
 	it('treats confirmed, rejected, and freshly confirmed scans as terminal', () => {
@@ -24,5 +30,16 @@ describe('scan review terminal state', () => {
 		assert.equal(createdRecordArticle('Application'), 'an');
 		assert.equal(createdRecordArticle('Payment'), 'a');
 		assert.equal(createdRecordArticle('Work Order'), 'a');
+	});
+
+	it('links confirmed application scans to the application record', () => {
+		assert.equal(createdRecordLabel('Application'), 'Application');
+		assert.equal(createdRecordHref('Application', 123), '/applications/123');
+		assert.equal(createdRecordHref('Payment', 45), '/accounting/payments/45');
+		assert.equal(createdRecordHref('WorkOrder', 46), '/maintenance/46');
+		assert.equal(createdRecordHref('Lease', 47), '/leases/47');
+		assert.equal(createdRecordHref('Expense', 48), '/accounting/expenses/48');
+		assert.equal(createdRecordHref(null, 48), '/accounting');
+		assert.equal(createdRecordHref('Application', null), '/accounting');
 	});
 });
