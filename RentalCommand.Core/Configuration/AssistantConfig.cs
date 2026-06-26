@@ -28,6 +28,14 @@ public class AssistantConfig
     public string ImageDetail { get; set; } = "low";
 
     /// <summary>
+    /// Image OCR routing mode for photographed documents. Supported values:
+    /// "disabled" (default), "text-only" (legacy OCR-first), and "hybrid" (send image plus OCR hint).
+    /// When empty, <see cref="UseImageOcr"/> preserves the old boolean behavior: true = text-only,
+    /// false = disabled.
+    /// </summary>
+    public string? ImageOcrMode { get; set; }
+
+    /// <summary>
     /// When <c>true</c>, attempts to OCR image documents locally via the <c>tesseract</c> CLI
     /// (must be on PATH) and sends the extracted text to the LLM instead of the vision path.
     /// Falls back to vision automatically if the binary is absent, returns an error, or yields

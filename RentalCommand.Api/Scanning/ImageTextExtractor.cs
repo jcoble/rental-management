@@ -2,6 +2,11 @@ using System.Diagnostics;
 
 namespace RentalCommand.Api.Scanning;
 
+public interface IImageTextExtractor
+{
+    string? TryExtractText(byte[] documentBytes, string contentType);
+}
+
 /// <summary>
 /// Attempts to extract plain text from an image file using the <c>tesseract</c> CLI.
 /// Returns <c>null</c> on any failure (binary missing, non-zero exit, exception, or too little
@@ -75,4 +80,10 @@ public static class ImageTextExtractor
             "image/heic" => ".heic",
             _            => ".png"   // default to .png; covers image/jpeg and unknowns
         };
+}
+
+public sealed class TesseractImageTextExtractor : IImageTextExtractor
+{
+    public string? TryExtractText(byte[] documentBytes, string contentType) =>
+        ImageTextExtractor.TryExtractText(documentBytes, contentType);
 }
