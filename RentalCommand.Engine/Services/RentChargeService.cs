@@ -26,6 +26,11 @@ public sealed class RentChargeService : IRentChargeService
     private readonly TimeZoneInfo _businessTimeZone;
     private readonly ILogger<RentChargeService> _logger;
 
+    private readonly record struct RentChargeCandidate(
+        Lease Lease,
+        RentChargePeriod Period,
+        NotificationsConfig Config);
+
     public RentChargeService(
         RentalCommandDbContext db,
         IMessagePublisher publisher,
@@ -55,51 +60,82 @@ public sealed class RentChargeService : IRentChargeService
         // Business "today" in the landlord's local zone (drives period key + due-day math only).
         // Every value WRITTEN to the DB below stays UTC (DateTime.UtcNow / Kind=Utc).
         var today = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, _businessTimeZone).Date;
-        var periodKey = today.ToString("yyyy-MM");
 
         var leases = await _db.Leases
             .Where(l => l.Status == LeaseStatus.Active)
             .Include(l => l.Tenant)
             .ToListAsync(ct);
 
-        var notifier = new AutomationNotifier(_db, _publisher);
         var configCache = new Dictionary<int, NotificationsConfig>();
-        var created = 0;
+        var candidates = new List<RentChargeCandidate>();
 
         foreach (var lease in leases)
         {
             ct.ThrowIfCancellationRequested();
 
-            // Settings are per-portfolio now. Resolve (and memoize) this lease's portfolio config;
-            // the master EnableRentCharges flag is the outer gate for that portfolio.
             if (!configCache.TryGetValue(lease.PortfolioId, out var cfg))
             {
                 cfg = await _settings.GetRuntimeAsync(lease.PortfolioId, ct);
                 configCache[lease.PortfolioId] = cfg;
             }
 
-            if (!cfg.EnableRentCharges)
+            if (!cfg.EnableRentCharges || lease.MonthlyRent <= 0)
                 continue;
 
-            // Don't create $0 scheduled rent (e.g. unset/peppercorn leases) — nothing to bill.
-            if (lease.MonthlyRent <= 0)
-                continue;
+            var periods = RentChargeSchedule.GetDuePeriods(
+                lease.StartDate,
+                lease.EndDate,
+                lease.RentDueDay,
+                today,
+                cfg.RentChargeLeadDays);
 
-            // Clamp due-day to actual days in month (e.g. lease.RentDueDay = 31 in February → 28/29).
-            // Use the 7-arg constructor to pin Kind=Utc; the 3-arg form produces Kind=Unspecified.
-            var dueDay = Math.Min(lease.RentDueDay, DateTime.DaysInMonth(today.Year, today.Month));
-            var dueDate = new DateTime(today.Year, today.Month, dueDay, 0, 0, 0, DateTimeKind.Utc);
+            foreach (var period in periods)
+            {
+                candidates.Add(new RentChargeCandidate(lease, period, cfg));
+            }
+        }
 
-            // Only act within the lead window: [dueDate - leadDays … dueDate].
-            if (today < dueDate.AddDays(-cfg.RentChargeLeadDays) || today > dueDate)
-                continue;
+        if (candidates.Count == 0)
+        {
+            _logger.LogInformation(
+                "RentChargeService created 0 scheduled rent payment(s) through {BusinessDate}",
+                today);
+            return 0;
+        }
 
-            // Idempotency: skip if a rent payment for this period already exists for this lease.
-            if (await _db.Payments.AnyAsync(
-                    p => p.LeaseId == lease.Id
-                         && p.PaymentType == PaymentType.Rent
-                         && p.PeriodKey == periodKey,
-                    ct))
+        var candidateLeaseIds = candidates
+            .Select(c => c.Lease.Id)
+            .Distinct()
+            .ToList();
+        var candidatePeriodKeys = candidates
+            .Select(c => c.Period.PeriodKey)
+            .Distinct()
+            .ToList();
+
+        var existingRows = await _db.Payments
+            .AsNoTracking()
+            .Where(p => candidateLeaseIds.Contains(p.LeaseId)
+                && p.PaymentType == PaymentType.Rent
+                && p.PeriodKey != null
+                && candidatePeriodKeys.Contains(p.PeriodKey))
+            .Select(p => new { p.LeaseId, p.PeriodKey })
+            .ToListAsync(ct);
+
+        var existing = existingRows
+            .Select(p => (p.LeaseId, p.PeriodKey!))
+            .ToHashSet();
+
+        var notifier = new AutomationNotifier(_db, _publisher);
+        var created = 0;
+
+        foreach (var candidate in candidates)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var lease = candidate.Lease;
+            var period = candidate.Period;
+            var cfg = candidate.Config;
+            if (existing.Contains((lease.Id, period.PeriodKey)))
             {
                 continue;
             }
@@ -111,8 +147,8 @@ public sealed class RentChargeService : IRentChargeService
                 PaymentType = PaymentType.Rent,
                 Status = PaymentStatus.Scheduled,
                 Amount = lease.MonthlyRent,
-                DueDate = dueDate,
-                PeriodKey = periodKey,
+                DueDate = period.DueDate,
+                PeriodKey = period.PeriodKey,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
             };
@@ -132,22 +168,22 @@ public sealed class RentChargeService : IRentChargeService
                 // Optional notification on exactly the channels enabled for RentCharge in this
                 // portfolio (in-app for staff + tenant email/SMS). NotifyTenants stays the gate for
                 // tenant-facing email/SMS; the publisher shares this DbContext so inserts enlist here.
-                if (cfg.NotifyTenants && lease.Tenant is { } tenant)
+                if (cfg.NotifyTenants && period.DueDate.Date >= today && lease.Tenant is { } tenant)
                 {
                     var channels = cfg.ResolveChannels(NotificationType.RentCharge);
-                    var message = $"Hi {tenant.FirstName}, your rent of {lease.MonthlyRent:C} is due on {dueDate:MMMM d}.";
+                    var message = $"Hi {tenant.FirstName}, your rent of {lease.MonthlyRent:C} is due on {period.DueDate:MMMM d}.";
                     inAppRows = await notifier.SendAsync(
                         lease.PortfolioId,
                         channels,
                         new AutomationNotifier.InAppContent(
                             Type: "RentCharge",
-                            Title: $"Rent due {dueDate:MMM d}",
-                            Message: $"{tenant.FirstName} {tenant.LastName}".Trim() + $" — rent of {lease.MonthlyRent:C} due {dueDate:MMMM d}.",
+                            Title: $"Rent due {period.DueDate:MMM d}",
+                            Message: $"{tenant.FirstName} {tenant.LastName}".Trim() + $" — rent of {lease.MonthlyRent:C} due {period.DueDate:MMMM d}.",
                             Severity: "Info",
                             ActionUrl: $"/payments/{payment.Id}",
                             RelatedEntityType: "Payment",
                             RelatedEntityId: payment.Id),
-                        new AutomationNotifier.EmailContent(tenant.Email, $"Rent due {dueDate:MMM d}", message),
+                        new AutomationNotifier.EmailContent(tenant.Email, $"Rent due {period.DueDate:MMM d}", message),
                         new AutomationNotifier.SmsContent(tenant.Phone, message),
                         DateTime.UtcNow,
                         ct);
@@ -159,6 +195,7 @@ public sealed class RentChargeService : IRentChargeService
 
                 await tx.CommitAsync(ct);
                 created++;
+                existing.Add((lease.Id, period.PeriodKey));
 
                 foreach (var row in inAppRows)
                     await _dataUpdate.BroadcastEntityUpdateAsync(
@@ -172,7 +209,7 @@ public sealed class RentChargeService : IRentChargeService
                 _logger.LogDebug(
                     ex,
                     "Rent charge already exists for lease {LeaseId} period {PeriodKey} (DB unique violation — skipping)",
-                    lease.Id, periodKey);
+                    lease.Id, period.PeriodKey);
 
                 // Detach the failed entity so the context remains usable for the next iteration.
                 _db.Entry(payment).State = EntityState.Detached;
@@ -186,7 +223,7 @@ public sealed class RentChargeService : IRentChargeService
                 _logger.LogWarning(
                     ex,
                     "Failed to create rent charge + notice for lease {LeaseId} period {PeriodKey}; rolled back, will retry",
-                    lease.Id, periodKey);
+                    lease.Id, period.PeriodKey);
 
                 _db.Entry(payment).State = EntityState.Detached;
                 continue;
@@ -194,8 +231,8 @@ public sealed class RentChargeService : IRentChargeService
         }
 
         _logger.LogInformation(
-            "RentChargeService created {Count} scheduled rent payment(s) for period {PeriodKey}",
-            created, periodKey);
+            "RentChargeService created {Count} scheduled rent payment(s) through {BusinessDate}",
+            created, today);
 
         return created;
     }
