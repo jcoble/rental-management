@@ -28,11 +28,16 @@ class BankingRepository {
 
   Future<List<BankTransaction>> transactions({String? status}) async {
     try {
-      final response = await _dio.get<List<dynamic>>(
+      final query = <String, dynamic>{
+        'skip': 0,
+        'take': 50,
+      };
+      if (status != null) query['status'] = status;
+      final response = await _dio.get<Map<String, dynamic>>(
         '/banking/transactions',
-        queryParameters: status == null ? null : {'status': status},
+        queryParameters: query,
       );
-      return (response.data ?? [])
+      return (response.data?['items'] as List? ?? [])
           .whereType<Map<String, dynamic>>()
           .map(BankTransaction.fromJson)
           .toList();

@@ -10,7 +10,7 @@ public interface IBankingService
     Task<BankConnectionResponse> ExchangePlaidPublicTokenAsync(int portfolioId, ExchangePlaidPublicTokenRequest request, CancellationToken ct = default);
     Task<SyncBankConnectionResponse?> SyncPlaidConnectionAsync(int portfolioId, int connectionId, CancellationToken ct = default);
     Task<IReadOnlyList<BankConnectionResponse>> ListConnectionsAsync(int portfolioId, CancellationToken ct = default);
-    Task<IReadOnlyList<BankTransactionResponse>> ListTransactionsAsync(int portfolioId, string? status, CancellationToken ct = default);
+    Task<BankTransactionListResponse> ListTransactionsAsync(int portfolioId, string? status, int skip = 0, int take = ListQuery.DefaultTake, CancellationToken ct = default);
     Task<ImportBankTransactionsResponse> ImportAsync(int portfolioId, ImportBankTransactionsRequest request, CancellationToken ct = default);
     Task<BankTransactionResponse?> MatchAsync(int portfolioId, int transactionId, MatchBankTransactionRequest request, CancellationToken ct = default);
     Task<BankTransactionResponse?> ClearMatchAsync(int portfolioId, int transactionId, CancellationToken ct = default);
