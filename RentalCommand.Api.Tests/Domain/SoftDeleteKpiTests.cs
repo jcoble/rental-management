@@ -239,7 +239,7 @@ public sealed class SoftDeleteKpiTests : IDisposable
     }
 
     [Fact]
-    public async Task DashboardNetThisMonth_IncludesUnmatchedBankCashMovementAndNonRentPaymentsLikeMoneySnapshot()
+    public async Task DashboardNetThisMonth_IncludesUnmatchedBankCashMovementAndNonRentPaymentsButNotSecurityDeposits()
     {
         var now = DateTime.UtcNow;
         var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
@@ -254,6 +254,18 @@ public sealed class SoftDeleteKpiTests : IDisposable
             PaymentType = PaymentType.LateFee,
             Status = PaymentStatus.Paid,
             Amount = 20m,
+            DueDate = inMonth,
+            PaidDate = inMonth,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.Payments.Add(new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.SecurityDeposit,
+            Status = PaymentStatus.Paid,
+            Amount = 1200m,
             DueDate = inMonth,
             PaidDate = inMonth,
             CreatedAt = now,
