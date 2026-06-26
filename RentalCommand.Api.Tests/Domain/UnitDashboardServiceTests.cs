@@ -272,6 +272,46 @@ public class UnitDashboardServiceTests : IDisposable
             .Be($"/tenants/{tenant.Id}?action=create-notice&noticeType=RenewalOffer");
     }
 
+    [Fact]
+    public async Task GetDashboardAsync_LinksMoveInNextActionToConcreteWorkflow()
+    {
+        var now = DateTime.UtcNow;
+        var (_, unit, _, _) = SeedMoveInUnit(now);
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.MoveIn.ToString());
+        dashboard.NextBestAction.Label.Should().Be("Confirm move-in / collect deposit");
+        dashboard.NextBestAction.Href.Should()
+            .Be($"/units/{unit.Id}?tab=lease&action=confirm-move-in");
+    }
+
+    [Fact]
+    public async Task GetDashboardAsync_RecentMoveInWithHeldDepositResolvesToActive()
+    {
+        var now = DateTime.UtcNow;
+        var (_, unit, _, lease) = SeedMoveInUnit(now);
+        _db.SecurityDepositHoldings.Add(new SecurityDepositHolding
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            Amount = lease.SecurityDeposit,
+            Status = SecurityDepositStatus.Held,
+            HeldAt = now,
+            DeductionsJson = "[]",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _db.SaveChanges();
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        dashboard!.LifecycleStage.Should().Be(UnitLifecycleStage.Active.ToString());
+        dashboard.NextBestAction.Label.Should().Be("Rent on track");
+    }
+
     private static bool IsChildIdPreload(string command)
         => IsBareIdSelect(command, "Leases")
             || IsBareIdSelect(command, "Payments")
@@ -354,6 +394,57 @@ public class UnitDashboardServiceTests : IDisposable
             EndDate = now.AddDays(44),
             MonthlyRent = 975m,
             SecurityDeposit = 975m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.AddRange(property, unit, tenant, lease);
+        _db.SaveChanges();
+
+        return (property, unit, tenant, lease);
+    }
+
+    private (Property Property, Unit Unit, Tenant Tenant, Lease Lease) SeedMoveInUnit(DateTime now)
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Maple Heights",
+            AddressLine1 = "200 Maple",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43219",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "2A",
+            Status = UnitStatus.Occupied,
+            MarketRent = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Morgan",
+            LastName = "Movein",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var lease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = "L-MOVEIN",
+            Status = LeaseStatus.Active,
+            StartDate = now.AddDays(-5),
+            EndDate = now.AddMonths(12),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
             CreatedAt = now,
             UpdatedAt = now,
         };

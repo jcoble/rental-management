@@ -33,7 +33,10 @@ public class UnitLifecycleStageResolverTests
             outstandingRentBalance);
 
     private static LeaseSnapshot ActiveLease(DateTime? start, DateTime? end, LeaseStatus status = LeaseStatus.Active)
-        => new(status, start, end);
+        => new(status, start, end, SecurityDeposit: 1200m);
+
+    private static LeaseSnapshot ActiveLeaseWithDepositHeld(DateTime? start, DateTime? end)
+        => new(LeaseStatus.Active, start, end, SecurityDeposit: 1200m, HasHeldSecurityDeposit: true);
 
     [Fact]
     public void OccupiedSteadyState_ResolvesToActive()
@@ -98,6 +101,21 @@ public class UnitLifecycleStageResolverTests
         var (stage, _) = UnitLifecycleStageResolver.Resolve(inputs, Now);
 
         stage.Should().Be(UnitLifecycleStage.MoveIn);
+    }
+
+    [Fact]
+    public void ActiveLease_StartedWithinLast14DaysWithDepositHeld_ResolvesToActive()
+    {
+        // The Move-In next action is complete once the required deposit is held, so a recent start
+        // should not keep nagging the landlord after the workflow is done.
+        var inputs = Inputs(
+            unitStatus: UnitStatus.Occupied,
+            currentLease: ActiveLeaseWithDepositHeld(Now.AddDays(-5), Now.AddMonths(12)));
+
+        var (stage, label) = UnitLifecycleStageResolver.Resolve(inputs, Now);
+
+        stage.Should().Be(UnitLifecycleStage.Active);
+        label.Should().Be("Rent on track");
     }
 
     [Fact]
