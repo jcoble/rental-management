@@ -21,6 +21,21 @@ describe('unit lifecycle next action handoff', () => {
 		assert.match(pageSource, /<LifecycleRail[^>]+nextBestAction=\{dashboard\.nextBestAction\}/s);
 	});
 
+	test('move-in next action opens a concrete deposit and appointment workflow', () => {
+		const pageSource = readFileSync(
+			new URL('../../../routes/(protected)/units/[id]/+page.svelte', import.meta.url),
+			'utf8'
+		);
+
+		assert.match(pageSource, /import \{ securityDeposits \} from '\$lib\/api\/endpoints\/securityDeposits';/);
+		assert.match(pageSource, /import \{ appointments \} from '\$lib\/api\/endpoints\/appointments';/);
+		assert.match(pageSource, /page\.url\.searchParams\.get\('action'\) === 'confirm-move-in'/);
+		assert.match(pageSource, /data-testid="unit-move-in-dialog"/);
+		assert.match(pageSource, /securityDeposits\.create\(\{\s*leaseId: lease\.id/s);
+		assert.match(pageSource, /appointments\.update\(moveInAppointment\.id,\s*\{\s*status: 'Completed'\s*\}\)/s);
+		assert.match(pageSource, /queryClient\.invalidateQueries\(\{ queryKey: \['unit-dashboard', id\] \}\)/);
+	});
+
 	test('tenant renewal notice deep links open the notice dialog with the forced notice type', () => {
 		const tenantPageSource = readFileSync(
 			new URL('../../../routes/(protected)/tenants/[id]/+page.svelte', import.meta.url),
