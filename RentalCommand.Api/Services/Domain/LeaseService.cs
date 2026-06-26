@@ -13,6 +13,7 @@ namespace RentalCommand.Api.Services.Domain;
 public class LeaseService : ILeaseService
 {
     private const string EntityType = "Lease";
+    private const string PaymentEntityType = "Payment";
     private const string GeneratedAgreementContentType = "application/pdf";
 
     // Allowed lease lifecycle transitions. A lease is a legal contract, so status may only move along
@@ -133,6 +134,75 @@ public class LeaseService : ILeaseService
         {
             unit.Status = UnitStatus.Vacant;
         }
+    }
+
+    private async Task<IReadOnlyList<Payment>> EnsureRentChargesThroughTodayAsync(Lease lease, CancellationToken ct)
+    {
+        if (lease.Status != LeaseStatus.Active || lease.MonthlyRent <= 0)
+        {
+            return [];
+        }
+
+        var periods = RentChargeSchedule.GetDuePeriods(
+            lease.StartDate,
+            lease.EndDate,
+            lease.RentDueDay,
+            DateTime.UtcNow.Date);
+        if (periods.Count == 0)
+        {
+            return [];
+        }
+
+        var periodKeys = periods
+            .Select(p => p.PeriodKey)
+            .ToList();
+        var existingPeriodKeys = await _db.Payments
+            .AsNoTracking()
+            .Where(p => p.PortfolioId == lease.PortfolioId
+                && p.LeaseId == lease.Id
+                && p.PaymentType == PaymentType.Rent
+                && p.PeriodKey != null
+                && periodKeys.Contains(p.PeriodKey))
+            .Select(p => p.PeriodKey!)
+            .ToListAsync(ct);
+
+        var existing = existingPeriodKeys.ToHashSet(StringComparer.Ordinal);
+        var now = DateTime.UtcNow;
+        var created = periods
+            .Where(p => !existing.Contains(p.PeriodKey))
+            .Select(period => new Payment
+            {
+                PortfolioId = lease.PortfolioId,
+                LeaseId = lease.Id,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Scheduled,
+                Amount = lease.MonthlyRent,
+                DueDate = period.DueDate,
+                PeriodKey = period.PeriodKey,
+                CreatedAt = now,
+                UpdatedAt = now,
+            })
+            .ToList();
+
+        if (created.Count == 0)
+        {
+            return [];
+        }
+
+        _db.Payments.AddRange(created);
+        await _db.SaveChangesAsync(ct);
+
+        foreach (var payment in created)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                lease.PortfolioId,
+                PaymentEntityType,
+                payment.Id,
+                PaymentResponse.FromEntity(payment),
+                ct);
+        }
+
+        return created;
     }
 
     // Reject a status move that isn't on the lifecycle graph. A same→same move is always allowed (a PATCH
@@ -543,6 +613,8 @@ public class LeaseService : ILeaseService
         await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Created,
             changeReason: $"Lease {entity.LeaseNumber} created (status {entity.Status})", ct: ct);
 
+        await EnsureRentChargesThroughTodayAsync(entity, ct);
+
         var response = LeaseResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
@@ -636,6 +708,11 @@ public class LeaseService : ILeaseService
             : $"Lease {entity.LeaseNumber} details updated";
         await _audit.LogAsync(portfolioId, EntityType, entity.Id, AuditLogOperation.Updated,
             oldValues: before, newValues: Snapshot(entity), changeReason: reason, ct: ct);
+
+        if (prevStatus != LeaseStatus.Active && entity.Status == LeaseStatus.Active)
+        {
+            await EnsureRentChargesThroughTodayAsync(entity, ct);
+        }
 
         var response = LeaseResponse.FromEntity(entity, includeNavigations: true);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
