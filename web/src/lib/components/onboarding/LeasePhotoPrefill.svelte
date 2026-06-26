@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { createQuery, createMutation } from '@tanstack/svelte-query';
 	import { Camera, Loader2, Check, X, ArrowRight } from '@lucide/svelte';
-	import { scan, type ScanDraftResponse, type ScanFieldDto } from '$lib/api/scan';
+	import { scan, type ScanFieldDto } from '$lib/api/scan';
 	import { Button } from '$lib/components/ui/button';
 	import FileDrop from '$lib/components/FileDrop.svelte';
+	import { prepareScanDocumentUpload } from '$lib/scan/scan-upload';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
 
 	/**
@@ -46,6 +47,7 @@
 
 	let draftId = $state<number | null>(null);
 	let open = $state(false);
+	let isPreparingUpload = $state(false);
 	// Per-row include/value the user reviews before applying.
 	let review = $state<{ name: string; label: string; key: keyof PrefillValues; value: string; confidence: number; include: boolean }[]>([]);
 
@@ -90,8 +92,15 @@
 		review = rows;
 	});
 
-	function handleFile(file: File) {
-		uploadMutation.mutate(file);
+	async function handleFiles(files: File[]) {
+		try {
+			isPreparingUpload = true;
+			uploadMutation.mutate(await prepareScanDocumentUpload(files, { targetEntityType: 'Lease' }));
+		} catch (err) {
+			showError(apiErrorMessage(err, 'Could not prepare those files. Try one PDF or a few clear photos.'));
+		} finally {
+			isPreparingUpload = false;
+		}
 	}
 
 	function applyConfirmed() {
@@ -124,18 +133,18 @@
 				</span>
 				<div>
 					<p class="text-sm font-medium text-foreground">Have the lease on paper?</p>
-					<p class="text-xs text-muted-foreground">Snap a photo and we'll fill in the rent, dates, and deposit for you to confirm.</p>
+					<p class="text-xs text-muted-foreground">Snap one or more photos and we'll fill in the rent, dates, and deposit for you to confirm.</p>
 				</div>
 			</div>
 			<Button variant="outline" size="sm" class="gap-1.5" data-testid="lease-photo-prefill-start" onclick={() => (open = true)}>
 				<Camera class="h-4 w-4" />
-				Snap a photo
+				Snap photos
 			</Button>
 		</div>
-	{:else if uploadMutation.isPending || isProcessing}
+	{:else if isPreparingUpload || uploadMutation.isPending || isProcessing}
 		<div class="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground" data-testid="lease-photo-prefill-processing">
 			<Loader2 class="h-4 w-4 animate-spin" />
-			Reading your lease… this takes a few seconds.
+			{isPreparingUpload ? 'Preparing files…' : 'Reading your lease… this takes a few seconds.'}
 		</div>
 	{:else if isFailed}
 		<div class="space-y-2" data-testid="lease-photo-prefill-failed">
@@ -194,9 +203,10 @@
 	{:else}
 		<div class="space-y-2">
 			<FileDrop
+				multiple
 				title="Drop a lease photo or PDF here"
-				helperText="or click to browse — PDF, JPG, PNG, HEIC accepted"
-				onselected={handleFile}
+				helperText="or click to browse — one PDF or multiple photos accepted"
+				onselectedmany={handleFiles}
 			/>
 			<div class="flex flex-wrap items-center gap-x-4 gap-y-1">
 				<button type="button" class="text-xs text-muted-foreground underline-offset-4 hover:underline" onclick={reset} data-testid="lease-photo-prefill-back">

@@ -23,12 +23,13 @@ describe('prepareNewRentalPhotoUpload', () => {
 		const second = new File(['second'], 'second.jpg', { type: 'image/jpeg' });
 		const pdf = new File(['pdf bytes'], 'lease-scan.pdf', { type: 'application/pdf' });
 
-		const upload = await prepareNewRentalPhotoUpload([first, second], async (files) => {
+		const upload = await prepareNewRentalPhotoUpload([first, second], async (files, outputName) => {
 			assert.deepEqual(files, [first, second]);
-			return pdf;
+			assert.equal(outputName, 'lease-scan.pdf');
+			return new File([await pdf.arrayBuffer()], outputName, { type: pdf.type });
 		});
 
-		assert.equal(upload, pdf);
+		assert.equal(upload.name, 'lease-scan.pdf');
 		assert.equal(upload.type, 'application/pdf');
 	});
 });
