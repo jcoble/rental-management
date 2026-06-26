@@ -118,18 +118,9 @@ builder.Services.AddHttpClient<RentalCommand.Api.Services.Places.GooglePlacesSer
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
 
 // Fail fast on an unconfigured signing key. HS256 needs >= 256 bits (32 chars), and the
-// committed placeholder must never be used outside local dev — otherwise anyone could
-// forge tokens. The placeholder stays usable in Development so local dev needs no secret.
-if (string.IsNullOrWhiteSpace(jwtSettings.SecretKey) || jwtSettings.SecretKey.Length < 32)
-{
-    throw new InvalidOperationException(
-        "Jwt:SecretKey is missing or too short (need >= 32 chars). Set it via configuration or a secret store.");
-}
-if (!builder.Environment.IsDevelopment() && jwtSettings.SecretKey.Contains("CHANGE_ME_IN_PRODUCTION"))
-{
-    throw new InvalidOperationException(
-        "Jwt:SecretKey is still the committed placeholder. Set a real secret (env Jwt__SecretKey or a secret store) before deploying.");
-}
+// committed placeholders must never be used outside local dev — otherwise anyone could forge tokens.
+// Placeholder values stay usable in Development so local dev needs no secret.
+JwtSecretGuard.Validate(jwtSettings.SecretKey, builder.Environment.IsDevelopment());
 
 // --- Database ---
 // The scoped AuditSaveChangesInterceptor is resolved from the same scope as the DbContext (the
