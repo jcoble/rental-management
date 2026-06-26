@@ -9,6 +9,7 @@
 		scannedLeaseDocumentLinkLabel,
 		tabForLeaseEdit,
 	} from '$lib/leases/lease-detail-state';
+	import { ensureSelectedOption } from '$lib/leases/lease-edit-options';
 	import { getLeaseDeleteState } from '$lib/leases/lease-delete-state';
 	import {
 		canSendLeaseForSignature,
@@ -455,24 +456,42 @@
 
 	// Select options for inline FK/enum fields
 	const statusOptions = $derived(LEASE_STATUSES.map((value) => ({ value, label: formatStatusLabel(value) })));
-	const propertyOptions = $derived([
-		{ value: '', label: 'Select property' },
-		...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
-	]);
-	const unitOptions = $derived([
-		{ value: '', label: 'Select unit' },
-		...(unitsForPropertyQuery.data ?? []).map((u) => ({
-			value: String(u.id),
-			label: `Unit ${u.unitNumber} (${u.status})`,
-		})),
-	]);
-	const tenantOptions = $derived([
-		{ value: '', label: 'Select tenant' },
-		...(tenantsQuery.data ?? []).map((t) => ({
-			value: String(t.id),
-			label: t.fullName || `${t.firstName} ${t.lastName}`,
-		})),
-	]);
+	const propertyOptions = $derived(
+		ensureSelectedOption(
+			[
+				{ value: '', label: 'Select property' },
+				...(propertiesQuery.data ?? []).map((p) => ({ value: String(p.id), label: p.name })),
+			],
+			form.propertyId,
+			lease?.propertyName ?? ''
+		)
+	);
+	const unitOptions = $derived(
+		ensureSelectedOption(
+			[
+				{ value: '', label: 'Select unit' },
+				...(unitsForPropertyQuery.data ?? []).map((u) => ({
+					value: String(u.id),
+					label: `Unit ${u.unitNumber} (${u.status})`,
+				})),
+			],
+			form.unitId,
+			lease?.unitNumber ? `Unit ${lease.unitNumber}` : ''
+		)
+	);
+	const tenantOptions = $derived(
+		ensureSelectedOption(
+			[
+				{ value: '', label: 'Select tenant' },
+				...(tenantsQuery.data ?? []).map((t) => ({
+					value: String(t.id),
+					label: t.fullName || `${t.firstName} ${t.lastName}`,
+				})),
+			],
+			form.tenantId,
+			lease?.tenantName ?? ''
+		)
+	);
 
 	// Payments DataGrid columns
 	const paymentColumns: ColumnDef<Payment>[] = [
