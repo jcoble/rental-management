@@ -1,12 +1,10 @@
-import { stitchImagesToPdf } from './stitch-pdf.ts';
+import { prepareScanDocumentUpload } from './scan-upload.ts';
 
-type Stitcher = (files: File[]) => Promise<File>;
+type Stitcher = (files: File[], outputName: string) => Promise<File>;
 
 export async function prepareNewRentalPhotoUpload(
 	files: File[],
-	stitcher: Stitcher = stitchImagesToPdf
+	stitcher?: Stitcher
 ): Promise<File> {
-	if (files.length === 0) throw new Error('No photos to upload');
-	if (files.length === 1) return files[0];
-	return stitcher(files);
+	return prepareScanDocumentUpload(files, { targetEntityType: 'Lease', stitcher });
 }

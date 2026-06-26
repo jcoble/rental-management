@@ -7,7 +7,7 @@ describe('scan document-type copy', () => {
 	it('uses application-specific upload and processing copy', () => {
 		assert.deepEqual(scanUploadCopy('Application'), {
 			title: 'Drop a rental application here',
-			helperText: 'or click to browse — PDF, JPG, PNG accepted'
+			helperText: 'or click to browse — one PDF or multiple photos accepted'
 		});
 
 		assert.equal(

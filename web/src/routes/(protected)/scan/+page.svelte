@@ -16,6 +16,7 @@
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { appendScanContext, parseScanContext, type ScanDocType } from '$lib/scan/scan-context';
 	import { scanUploadCopy } from '$lib/scan/scan-copy';
+	import { prepareScanDocumentUpload } from '$lib/scan/scan-upload';
 	import { SCAN_HISTORY_FILTERS, formatScanHistoryEmptyMessage, resolveScanHistoryFilter, type ScanHistoryFilter } from '$lib/scans/scan-history-filters';
 
 	const queryClient = useQueryClient();
@@ -60,6 +61,7 @@
 	] as const;
 	let docType = $state<ScanDocType>(initialScanContext.type ?? 'Expense');
 	const uploadCopy = $derived(scanUploadCopy(docType));
+	let isPreparingUpload = $state(false);
 	let isRecording = $state(false);
 	let recorder: MediaRecorder | null = null;
 	let voiceChunks: Blob[] = [];
@@ -102,8 +104,15 @@
 		}
 	}));
 
-	function handleFileSelected(file: File) {
-		uploadMutation.mutate(file);
+	async function handleFilesSelected(files: File[]) {
+		try {
+			isPreparingUpload = true;
+			uploadMutation.mutate(await prepareScanDocumentUpload(files, { targetEntityType: docType }));
+		} catch (err) {
+			toast.error(err instanceof Error ? err.message : 'Could not prepare those files');
+		} finally {
+			isPreparingUpload = false;
+		}
 	}
 
 	async function startVoiceCapture() {
@@ -249,7 +258,7 @@
 	</a>
 
 	<!-- Document type selector -->
-	{#if !uploadMutation.isPending}
+	{#if !uploadMutation.isPending && !isPreparingUpload}
 		<div class="mb-4" data-testid="scan-doc-type">
 			<div class="mb-1.5 flex items-center gap-1.5">
 				<span class="block text-sm font-medium">What are you scanning?</span>
@@ -281,17 +290,17 @@
 
 	<!-- Upload zone -->
 	<div class="mb-6" data-testid="scan-upload">
-		{#if uploadMutation.isPending}
+		{#if uploadMutation.isPending || isPreparingUpload}
 			<Card.Root class="flex items-center justify-center px-6 py-8 border-2 border-dashed">
 				<Card.Content class="p-0">
 					<div class="text-center">
 						<div class="mx-auto mb-3 h-8 w-8 animate-spin rounded-full border-2 border-accent border-t-transparent"></div>
-						<p class="text-sm text-muted-foreground">Uploading…</p>
+						<p class="text-sm text-muted-foreground">{isPreparingUpload ? 'Preparing files…' : 'Uploading…'}</p>
 					</div>
 				</Card.Content>
 			</Card.Root>
 		{:else}
-			<FileDrop onselected={handleFileSelected} title={uploadCopy.title} helperText={uploadCopy.helperText} />
+			<FileDrop multiple onselectedmany={handleFilesSelected} title={uploadCopy.title} helperText={uploadCopy.helperText} />
 		{/if}
 	</div>
 
