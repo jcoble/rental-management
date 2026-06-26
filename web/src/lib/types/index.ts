@@ -694,6 +694,13 @@ export interface BankTransaction {
 	suggestedMatch?: BankMatchSuggestion;
 }
 
+export interface BankTransactionListResponse {
+	totalCount: number;
+	skip: number;
+	take: number;
+	items: BankTransaction[];
+}
+
 export interface BankMatchSuggestion {
 	entityType: 'Payment' | 'Expense' | string;
 	entityId: number;

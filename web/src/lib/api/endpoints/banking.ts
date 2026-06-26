@@ -3,6 +3,7 @@ import type {
 	BankConnection,
 	BankReviewQueueResponse,
 	BankTransaction,
+	BankTransactionListResponse,
 	ConfirmBankMatchRequest,
 	ExchangePlaidPublicTokenRequest,
 	ImportBankTransactionsRequest,
@@ -23,8 +24,14 @@ export const banking = {
 	exchangePlaidPublicToken: (request: ExchangePlaidPublicTokenRequest) =>
 		api.post<BankConnection>('/banking/plaid/exchange-public-token', request),
 	syncConnection: (id: number) => api.post<SyncBankConnectionResponse>(`/banking/connections/${id}/sync`, {}),
-	transactions: (status?: string) =>
-		api.get<BankTransaction[]>(`/banking/transactions${status ? `?status=${encodeURIComponent(status)}` : ''}`),
+	transactions: (params: { status?: string; skip?: number; take?: number } = {}) => {
+		const query = new URLSearchParams();
+		if (params.status) query.set('status', params.status);
+		if (params.skip !== undefined) query.set('skip', String(params.skip));
+		if (params.take !== undefined) query.set('take', String(params.take));
+		const suffix = query.toString();
+		return api.get<BankTransactionListResponse>(`/banking/transactions${suffix ? `?${suffix}` : ''}`);
+	},
 	importTransactions: (request: ImportBankTransactionsRequest) =>
 		api.post<ImportBankTransactionsResponse>('/banking/transactions/import', request),
 	match: (id: number, request: MatchBankTransactionRequest) =>
