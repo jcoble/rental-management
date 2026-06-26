@@ -16,6 +16,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
+	import { clearFieldError } from '$lib/forms/form-errors';
 	import {
 		LEASE_STATUSES,
 		getLeaseStatusOptions,
@@ -96,6 +97,42 @@
 	let formErrors = $state<Record<string, string>>({});
 	let deleteTarget = $state<Lease | null>(null);
 	let appliedCreatePrefillKey = $state('');
+
+	function clearLeaseError(field: string) {
+		const next = clearFieldError(formErrors, field);
+		if (next !== formErrors) formErrors = next;
+	}
+
+	$effect(() => {
+		if (form.propertyId) clearLeaseError('propertyId');
+	});
+	$effect(() => {
+		if (form.unitId) clearLeaseError('unitId');
+	});
+	$effect(() => {
+		if (form.tenantId) clearLeaseError('tenantId');
+	});
+	$effect(() => {
+		if (form.leaseNumber.trim()) clearLeaseError('leaseNumber');
+	});
+	$effect(() => {
+		if (form.startDate) clearLeaseError('startDate');
+	});
+	$effect(() => {
+		if (form.endDate) clearLeaseError('endDate');
+	});
+	$effect(() => {
+		if (form.monthlyRent) clearLeaseError('monthlyRent');
+	});
+	$effect(() => {
+		if (form.securityDeposit) clearLeaseError('securityDeposit');
+	});
+	$effect(() => {
+		if (form.lateFeeAmount) clearLeaseError('lateFeeAmount');
+	});
+	$effect(() => {
+		if (form.rentDueDay) clearLeaseError('rentDueDay');
+	});
 
 	$effect(() => {
 		if (form.propertyId !== formPropertyId) {

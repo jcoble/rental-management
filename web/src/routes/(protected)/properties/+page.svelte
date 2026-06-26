@@ -16,6 +16,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import PropertyFields from '$lib/components/forms/PropertyFields.svelte';
+	import { clearFieldError } from '$lib/forms/form-errors';
 	import { Plus, Pencil, Trash2, Building } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -118,6 +119,27 @@
 	let form = $state(createEmptyPropertyDraft());
 	let formErrors = $state<Record<string, string>>({});
 	let deleteTarget = $state<Property | null>(null);
+
+	function clearPropertyError(field: string) {
+		const next = clearFieldError(formErrors, field);
+		if (next !== formErrors) formErrors = next;
+	}
+
+	$effect(() => {
+		if (form.name.trim()) clearPropertyError('name');
+	});
+	$effect(() => {
+		if (form.addressLine1.trim()) clearPropertyError('addressLine1');
+	});
+	$effect(() => {
+		if (form.city.trim()) clearPropertyError('city');
+	});
+	$effect(() => {
+		if (form.state.trim()) clearPropertyError('state');
+	});
+	$effect(() => {
+		if (form.postalCode.trim()) clearPropertyError('postalCode');
+	});
 
 	function invalidateList() {
 		queryClient.invalidateQueries({ queryKey: ['properties'] });
