@@ -736,6 +736,41 @@ public class ScanServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ConfirmAndCreateAsync_LeaseDraftWithPropertyTypeOverride_CreatesPropertyWithSelectedType()
+    {
+        const string extractedJson =
+            """
+            {"target_entity_type":{"value":"Lease","confidence":0.95},
+             "tenant_name":{"value":"Taylor Stone","confidence":0.9},
+             "property_name":{"value":"Cedar House","confidence":0.7},
+             "property_address":{"value":"44 Cedar Ave","confidence":0.9},
+             "property_city":{"value":"Dayton","confidence":0.9},
+             "property_state":{"value":"OH","confidence":0.9},
+             "property_postal_code":{"value":"45402","confidence":0.9},
+             "unit_number":{"value":"Main","confidence":0.85},
+             "start_date":{"value":"2026-04-01","confidence":0.9},
+             "end_date":{"value":"2027-03-31","confidence":0.9},
+             "monthly_rent":{"value":"1450.00","confidence":0.9}}
+            """;
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Lease");
+        SeedStoredFile(draft.FilePath);
+        _leases.SetupResponse(new LeaseResponse { Id = 903, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(
+            PortfolioId,
+            draft.Id,
+            userId: 7,
+            overridesJson: """{"propertyType":"SingleFamily"}""");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _properties.LastRequest!.PropertyType.Should().Be(PropertyType.SingleFamily);
+
+        var property = await _db.Properties.SingleAsync();
+        property.PropertyType.Should().Be(PropertyType.SingleFamily);
+    }
+
+    [Fact]
     public async Task ConfirmAndCreateAsync_LeaseDomainValidation_ReturnsSpecificUserMessage()
     {
         const string error =
