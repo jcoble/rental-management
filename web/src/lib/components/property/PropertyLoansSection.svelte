@@ -285,6 +285,7 @@
 				Escrow covers insurance
 			</label>
 			<InlineField label="Status" bind:value={form.status} editing type="select" options={statusOptions} testid="loan-status" />
+			<InlineField label="Notes" bind:value={form.notes} editing type="textarea" error={formErrors.notes} testid="loan-notes" />
 		</div>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button variant="outline" onclick={closeForm}>Cancel</Button>
