@@ -858,6 +858,8 @@ public sealed class ScanService : IScanService
             SecurityDeposit = fields.SecurityDeposit ?? 0m,
             LateFeeAmount   = fields.LateFee ?? 0m,
             RentDueDay      = fields.RentDueDay is >= 1 and <= 31 ? fields.RentDueDay.Value : 1,
+            RentTrackingStartMode = fields.RentTrackingStartMode ?? RentTrackingStartMode.BackfillFromLeaseStart,
+            RentTrackingStartDate = fields.RentTrackingStartDate,
             Notes           = "Imported from scanned lease document.",
             // Keep the full scan extraction superset as jsonb extras.
             ExtractedData   = NormalizeExtractedData(draft.ExtractedFields),
@@ -2185,6 +2187,18 @@ public sealed class ScanService : IScanService
                 fields.LateFee = lateFee;
             if (TryGetOverrideInt(root, out var dueDay, "rentDueDay", "rent_due_day"))
                 fields.RentDueDay = dueDay;
+            if (TryGetOverrideString(root, out var rentTrackingMode, "rentTrackingStartMode", "rent_tracking_start_mode") &&
+                Enum.TryParse<RentTrackingStartMode>(rentTrackingMode, ignoreCase: true, out var parsedRentTrackingMode))
+            {
+                fields.RentTrackingStartMode = parsedRentTrackingMode;
+            }
+            if (TryGetOverrideString(root, out var rentTrackingStartStr, "rentTrackingStartDate", "rent_tracking_start_date") &&
+                DateTime.TryParse(rentTrackingStartStr, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var rentTrackingStart))
+            {
+                fields.RentTrackingStartDate = rentTrackingStart;
+            }
         }
         catch (Exception ex)
         {
@@ -2467,6 +2481,8 @@ public sealed class ScanService : IScanService
         public decimal? SecurityDeposit { get; set; }
         public decimal? LateFee { get; set; }
         public int? RentDueDay { get; set; }
+        public RentTrackingStartMode? RentTrackingStartMode { get; set; }
+        public DateTime? RentTrackingStartDate { get; set; }
     }
 
     private sealed class ApplicationDraftFields

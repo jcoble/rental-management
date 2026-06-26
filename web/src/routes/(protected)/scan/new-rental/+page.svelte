@@ -16,7 +16,7 @@
 	import UnitFields from '$lib/components/forms/UnitFields.svelte';
 	import TenantFields from '$lib/components/forms/TenantFields.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
-	import { propertySchema, unitSchema, tenantSchema, leaseSchema, parseForm } from '$lib/schemas';
+	import { propertySchema, unitSchema, tenantSchema, leaseSchema, leaseRentTrackingErrors, parseForm } from '$lib/schemas';
 	import { toLeasePrefill, type PrefillConfidence } from '$lib/scan/lease-prefill';
 	import { beginNewRentalDraftNavigation, createNewRentalPropertyForm, findNewRentalExistingUnitId, formatNewRentalStepLabel, formatNewRentalStepPosition, parseNewRentalDraftId, seedNewRentalLateFeeAmount, type NewRentalPhase } from '$lib/scan/new-rental-state';
 	import { prepareNewRentalPhotoUpload } from '$lib/scan/new-rental-upload';
@@ -39,7 +39,19 @@
 	let propertyForm = $state(createNewRentalPropertyForm());
 	let unitForm = $state({ unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' });
 	let tenantForm = $state({ firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' });
-	let leaseForm = $state({ leaseNumber: '', startDate: '', endDate: '', monthlyRent: '', securityDeposit: '', lateFeeAmount: '', rentDueDay: '1', status: 'Active', notes: '' });
+	let leaseForm = $state({
+		leaseNumber: '',
+		startDate: '',
+		endDate: '',
+		monthlyRent: '',
+		securityDeposit: '',
+		lateFeeAmount: '',
+		rentDueDay: '1',
+		rentTrackingStartMode: 'ForwardOnly',
+		rentTrackingStartDate: '',
+		status: 'Active',
+		notes: ''
+	});
 
 	let propertyErrors = $state<Record<string, string>>({});
 	let unitErrors = $state<Record<string, string>>({});
@@ -77,7 +89,19 @@
 		propertyForm = createNewRentalPropertyForm();
 		unitForm = { unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' };
 		tenantForm = { firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' };
-		leaseForm = { leaseNumber: '', startDate: '', endDate: '', monthlyRent: '', securityDeposit: '', lateFeeAmount: '', rentDueDay: '1', status: 'Active', notes: '' };
+		leaseForm = {
+			leaseNumber: '',
+			startDate: '',
+			endDate: '',
+			monthlyRent: '',
+			securityDeposit: '',
+			lateFeeAmount: '',
+			rentDueDay: '1',
+			rentTrackingStartMode: 'ForwardOnly',
+			rentTrackingStartDate: '',
+			status: 'Active',
+			notes: ''
+		};
 		propertyErrors = {};
 		unitErrors = {};
 		tenantErrors = {};
@@ -208,6 +232,11 @@
 		phase = 'steps';
 		step = 0;
 	});
+	$effect(() => {
+		if (leaseForm.rentTrackingStartMode !== 'CustomCutoffDate' && leaseForm.rentTrackingStartDate) {
+			leaseForm.rentTrackingStartDate = '';
+		}
+	});
 
 	$effect(() => {
 		if (phase !== 'steps' || isCreatingProperty || unitChoiceSeeded || unitChoice !== CREATE) return;
@@ -250,8 +279,8 @@
 			// drop id errors (they aren't user-entered here)
 			const e = { ...(r.errors ?? {}) };
 			delete e.propertyId; delete e.unitId; delete e.tenantId;
-			leaseErrors = e;
-			return Object.keys(e).length === 0;
+			leaseErrors = { ...e, ...leaseRentTrackingErrors(probe) };
+			return Object.keys(leaseErrors).length === 0;
 		}
 		return true;
 	}
@@ -308,6 +337,10 @@
 		if (leaseForm.securityDeposit.trim()) o.securityDeposit = Number(leaseForm.securityDeposit);
 		if (leaseForm.lateFeeAmount.trim()) o.lateFee = Number(leaseForm.lateFeeAmount);
 		if (leaseForm.rentDueDay.trim()) o.rentDueDay = Number(leaseForm.rentDueDay);
+		o.rentTrackingStartMode = leaseForm.rentTrackingStartMode;
+		if (leaseForm.rentTrackingStartMode === 'CustomCutoffDate') {
+			o.rentTrackingStartDate = leaseForm.rentTrackingStartDate;
+		}
 		return JSON.stringify(o);
 	}
 

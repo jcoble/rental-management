@@ -181,9 +181,30 @@ export const leaseSchema = z.object({
 	lateFeeAmount: nonNegativeNumeric('Late fee'),
 	// rentDueDay: server [Range(1, 31)]
 	rentDueDay: numericString('Due day').refine((v) => v >= 1 && v <= 31, 'Due day must be between 1 and 31'),
+	rentTrackingStartMode: z
+		.enum(['BackfillFromLeaseStart', 'ForwardOnly', 'CustomCutoffDate'])
+		.optional()
+		.default('BackfillFromLeaseStart'),
+	rentTrackingStartDate: optionalText,
 	status: z.string(),
 	notes: optionalText,
 });
+
+export function leaseRentTrackingErrors(value: {
+	status?: unknown;
+	rentTrackingStartMode?: unknown;
+	rentTrackingStartDate?: unknown;
+}): Record<string, string> {
+	if (
+		value.status === 'Active' &&
+		value.rentTrackingStartMode === 'CustomCutoffDate' &&
+		!String(value.rentTrackingStartDate ?? '').trim()
+	) {
+		return { rentTrackingStartDate: 'Cutoff date is required' };
+	}
+
+	return {};
+}
 
 export const paymentSchema = z
 	.object({

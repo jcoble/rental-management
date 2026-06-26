@@ -105,6 +105,79 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateAsync_ActivePastStartLease_ForwardOnlyCreatesCurrentDueChargeWithoutHistory()
+    {
+        var today = DateTime.UtcNow.Date;
+        var start = FirstOfMonth(today).AddMonths(-2);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+
+        var result = await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-FORWARD-001",
+            Status = LeaseStatus.Active,
+            StartDate = start,
+            EndDate = FirstOfMonth(today).AddMonths(10),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 1275m,
+            LateFeeAmount = 75m,
+            RentDueDay = today.Day,
+            RentTrackingStartMode = RentTrackingStartMode.ForwardOnly,
+        });
+
+        result.Should().NotBeNull();
+        var payments = await _ctx.Db.Payments
+            .AsNoTracking()
+            .Where(p => p.LeaseId == result!.Id)
+            .OrderBy(p => p.PeriodKey)
+            .ToListAsync();
+
+        payments.Should().ContainSingle();
+        payments[0].PeriodKey.Should().Be(today.ToString("yyyy-MM"));
+        payments[0].DueDate.Should().Be(today);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ActivePastStartLease_CustomCutoffCreatesOnlyCutoffAndLaterCharges()
+    {
+        var today = DateTime.UtcNow.Date;
+        var start = FirstOfMonth(today).AddMonths(-3);
+        var cutoff = FirstOfMonth(today).AddMonths(-1);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+
+        var result = await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-CUTOFF-001",
+            Status = LeaseStatus.Active,
+            StartDate = start,
+            EndDate = FirstOfMonth(today).AddMonths(10),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 1275m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+            RentTrackingStartMode = RentTrackingStartMode.CustomCutoffDate,
+            RentTrackingStartDate = cutoff,
+        });
+
+        result.Should().NotBeNull();
+        var payments = await _ctx.Db.Payments
+            .AsNoTracking()
+            .Where(p => p.LeaseId == result!.Id)
+            .OrderBy(p => p.PeriodKey)
+            .ToListAsync();
+
+        payments.Should().HaveCount(2);
+        payments.Select(p => p.PeriodKey).Should().Equal(
+            cutoff.ToString("yyyy-MM"),
+            today.ToString("yyyy-MM"));
+    }
+
+    [Fact]
     public async Task UpdateAsync_ActivatingPastStartLease_CreatesRentChargesThroughToday()
     {
         var today = DateTime.UtcNow.Date;
@@ -133,6 +206,32 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
             p.PaymentType == PaymentType.Rent
             && p.Status == PaymentStatus.Scheduled
             && p.Amount == 1275m);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ActivatingPastStartLease_ForwardOnlyCreatesCurrentDueChargeWithoutHistory()
+    {
+        var today = DateTime.UtcNow.Date;
+        var start = FirstOfMonth(today).AddMonths(-2);
+        var (property, unit, tenant) = SeedPropertyUnitTenant();
+        var lease = SeedLease(property, unit, tenant, LeaseStatus.Draft, start, today.Day);
+
+        var result = await _sut.UpdateAsync(PortfolioId, lease.Id, new UpdateLeaseRequest
+        {
+            Status = LeaseStatus.Active,
+            RentTrackingStartMode = RentTrackingStartMode.ForwardOnly,
+        });
+
+        result.Should().NotBeNull();
+        var payments = await _ctx.Db.Payments
+            .AsNoTracking()
+            .Where(p => p.LeaseId == lease.Id)
+            .OrderBy(p => p.PeriodKey)
+            .ToListAsync();
+
+        payments.Should().ContainSingle();
+        payments[0].PeriodKey.Should().Be(today.ToString("yyyy-MM"));
+        payments[0].DueDate.Should().Be(today);
     }
 
     private static DateTime FirstOfMonth(DateTime value)
@@ -179,7 +278,7 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
         return (property, unit, tenant);
     }
 
-    private Lease SeedLease(Property property, Unit unit, Tenant tenant, LeaseStatus status, DateTime start)
+    private Lease SeedLease(Property property, Unit unit, Tenant tenant, LeaseStatus status, DateTime start, int rentDueDay = 1)
     {
         var now = DateTime.UtcNow;
         var lease = new Lease
@@ -195,7 +294,7 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
             MonthlyRent = 1275m,
             SecurityDeposit = 1275m,
             LateFeeAmount = 75m,
-            RentDueDay = 1,
+            RentDueDay = rentDueDay,
             CreatedAt = now,
             UpdatedAt = now,
         };

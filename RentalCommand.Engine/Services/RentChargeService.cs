@@ -83,7 +83,7 @@ public sealed class RentChargeService : IRentChargeService
                 continue;
 
             var periods = RentChargeSchedule.GetDuePeriods(
-                lease.StartDate,
+                RentChargeGenerationStart(lease),
                 lease.EndDate,
                 lease.RentDueDay,
                 today,
@@ -235,5 +235,17 @@ public sealed class RentChargeService : IRentChargeService
             created, today);
 
         return created;
+    }
+
+    private static DateTime RentChargeGenerationStart(Lease lease)
+    {
+        var leaseStart = lease.StartDate.Date;
+        var trackingStart = lease.RentTrackingStartDate?.Date;
+        if (!trackingStart.HasValue || trackingStart.Value < leaseStart)
+        {
+            return leaseStart;
+        }
+
+        return trackingStart.Value;
     }
 }

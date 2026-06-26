@@ -20,6 +20,7 @@ public class Lease : IAuditable, IPortfolioScoped
     public decimal SecurityDeposit { get; set; }
     public decimal LateFeeAmount { get; set; }
     public int RentDueDay { get; set; } = 1;
+    public DateTime? RentTrackingStartDate { get; set; }
     public string? Notes { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
