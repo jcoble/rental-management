@@ -2,6 +2,7 @@
 	import type { Component, Snippet } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { cn } from '$lib/utils.js';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 
 	type Accent = 'primary' | 'success' | 'warning' | 'destructive' | 'muted';
 
@@ -13,6 +14,9 @@
 		testid,
 		class: className = '',
 		contentClass = '',
+		help,
+		helpDetail,
+		helpTestid,
 		actions,
 		children,
 	}: {
@@ -26,6 +30,12 @@
 		class?: string;
 		/** Extra classes for the content wrapper (e.g. a grid layout). */
 		contentClass?: string;
+		/** Short summary shown in the help popover. When set, a help trigger renders in the header. */
+		help?: string;
+		/** Longer detail paragraph shown below the summary in the help popover. */
+		helpDetail?: string;
+		/** data-testid for the help trigger button. */
+		helpTestid?: string;
 		/** Optional header-right actions (e.g. an Add button). */
 		actions?: Snippet;
 		children: Snippet;
@@ -50,6 +60,15 @@
 					<IconComponent class={cn('h-4 w-4 shrink-0', accentClass[accent])} />
 				{/if}
 				<span class="truncate">{title}</span>
+				{#if help}
+					<HelpPopover
+						title="About {title}"
+						summary={help}
+						detail={helpDetail}
+						learnMoreUrl={undefined}
+						testid={helpTestid}
+					/>
+				{/if}
 			</Card.Title>
 			{#if description}
 				<Card.Description class="mt-1">{description}</Card.Description>
