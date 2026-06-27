@@ -539,7 +539,17 @@
 				<InlineField label="ZIP" bind:value={propertyForm.postalCode} display={property.postalCode} editing={editingProperty} error={propertyFormErrors.postalCode} testid="property-detail-zip" />
 			</DetailCard>
 
-			<DetailCard title="Details" icon={Info} accent="muted" testid="property-detail-meta-card" class="lg:col-span-2" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+			<DetailCard
+				title="Details"
+				icon={Info}
+				accent="muted"
+				testid="property-detail-meta-card"
+				class="lg:col-span-2"
+				contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3"
+				help="Summary counts rolled up from the property's units. 'Occupied' counts units whose status is Occupied."
+				helpDetail="Unit count and occupancy are read-only — they update automatically as you add, remove, or change the status of individual units."
+				helpTestid="detailcard-help-details"
+			>
 				{#if !editingProperty && property.yearBuilt}
 					<div>
 						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Year Built</dt>
@@ -567,7 +577,17 @@
 			</DetailCard>
 
 			<!-- Cost basis (depreciation): the inputs the year-end tax picture needs. Land is not depreciable. -->
-			<DetailCard title="Cost basis (depreciation)" icon={Info} accent="muted" testid="property-detail-basis-card" class="lg:col-span-2" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
+			<DetailCard
+				title="Cost basis (depreciation)"
+				icon={Info}
+				accent="muted"
+				testid="property-detail-basis-card"
+				class="lg:col-span-2"
+				contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4"
+				help="These fields capture what you paid and when the property was put into service — the inputs your accountant needs for annual depreciation."
+				helpDetail="Purchase price minus land value gives the depreciable basis (land is NOT depreciable). In-service date starts the depreciation clock. Leave Manual annual depreciation blank to use the automatic straight-line calculation; fill it in to override with a custom amount."
+				helpTestid="detailcard-help-cost-basis"
+			>
 				<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? fmtMoney(property.purchasePrice) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.purchasePrice} testid="property-basis-purchase-price" />
 				<InlineField label="Land value" bind:value={propertyForm.landValue} display={property.landValue != null ? fmtMoney(property.landValue) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.landValue} testid="property-basis-land-value" />
 				<InlineField label="In-service date" bind:value={propertyForm.inServiceDate} display={property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—'} editing={editingProperty} type="date" error={propertyFormErrors.inServiceDate} testid="property-basis-in-service" />
