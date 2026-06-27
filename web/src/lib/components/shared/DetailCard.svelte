@@ -16,6 +16,7 @@
 		contentClass = '',
 		help,
 		helpDetail,
+		helpLearnMoreUrl,
 		helpTestid,
 		actions,
 		children,
@@ -34,6 +35,8 @@
 		help?: string;
 		/** Longer detail paragraph shown below the summary in the help popover. */
 		helpDetail?: string;
+		/** "Learn more" URL passed to the help popover. When omitted the link is hidden. */
+		helpLearnMoreUrl?: string;
 		/** data-testid for the help trigger button. */
 		helpTestid?: string;
 		/** Optional header-right actions (e.g. an Add button). */
@@ -65,7 +68,7 @@
 						title="About {title}"
 						summary={help}
 						detail={helpDetail}
-						learnMoreUrl={undefined}
+						learnMoreUrl={helpLearnMoreUrl}
 						testid={helpTestid}
 					/>
 				{/if}
