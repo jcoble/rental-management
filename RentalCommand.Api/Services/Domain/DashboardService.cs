@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auditing;
@@ -260,8 +261,9 @@ public class DashboardService : IDashboardService
 
     private async Task<IReadOnlyList<DashboardActivity>> BuildRecentActivityAsync(int portfolioId, CancellationToken ct)
     {
-        // The dashboard "recent activity" widget now reads the unified audit trail. The humanized
-        // description (via AuditDescriber) is what the user sees; Action carries the operation name.
+        // The dashboard "recent activity" widget reads the unified audit trail. The humanized
+        // description (via AuditDescriber) is the verb+noun; Label names the specific record it touched
+        // and EntityId lets the web deep-link to it. Action carries the raw operation name.
         var rows = await _db.AuditLogs
             .AsNoTracking()
             .Where(a => a.PortfolioId == portfolioId)
@@ -270,17 +272,177 @@ public class DashboardService : IDashboardService
             .Take(10)
             .ToListAsync(ct);
 
+        var labels = await ResolveActivityLabelsAsync(rows, portfolioId, ct);
+
         return rows
             .Select(a => new DashboardActivity
             {
                 Id = a.Id,
                 Type = a.EntityType,
+                EntityId = a.EntityId,
                 Action = a.Operation.ToString(),
                 Description = _auditDescriber.Describe(a),
+                Label = labels.GetValueOrDefault((a.EntityType, a.EntityId)),
                 Actor = a.ActorLabel ?? (a.UserId.HasValue ? $"User #{a.UserId.Value}" : "system"),
                 CreatedAt = a.Timestamp,
             })
             .ToList();
+    }
+
+    /// <summary>
+    /// Resolves a display label for each audit row's touched entity. The ≤10 rows are grouped by entity
+    /// type and each present type issues exactly ONE batched, portfolio-scoped, projected query over its
+    /// distinct ids (set-based — never one query per row). Types with no cheap DB-side label are left
+    /// unmapped and the caller falls back to the verb-only description. Every query filters by
+    /// <paramref name="portfolioId"/> as a cross-tenant guard.
+    /// </summary>
+    private async Task<Dictionary<(string EntityType, int EntityId), string>> ResolveActivityLabelsAsync(
+        IReadOnlyList<AuditLog> rows, int portfolioId, CancellationToken ct)
+    {
+        var labels = new Dictionary<(string, int), string>();
+        if (rows.Count == 0)
+        {
+            return labels;
+        }
+
+        // Distinct ids per entity type across the ≤10 rows. Each present type drives one IN-query below.
+        var idsByType = rows
+            .GroupBy(r => r.EntityType)
+            .ToDictionary(g => g.Key, g => g.Select(r => r.EntityId).Distinct().ToList());
+
+        List<int>? Ids(string type) => idsByType.TryGetValue(type, out var ids) ? ids : null;
+
+        // Record each non-blank (type,id) → label from one already-projected, set-based query.
+        async Task AddAsync(string type, IQueryable<LabelRow> projected)
+        {
+            foreach (var row in await projected.ToListAsync(ct))
+            {
+                if (!string.IsNullOrWhiteSpace(row.Label))
+                {
+                    labels[(type, row.Id)] = row.Label!.Trim();
+                }
+            }
+        }
+
+        // --- One batched, portfolio-scoped query per present entity type ---
+
+        if (Ids("Tenant") is { } tenantIds)
+        {
+            await AddAsync("Tenant", _db.Tenants.AsNoTracking()
+                .Where(t => tenantIds.Contains(t.Id) && t.PortfolioId == portfolioId)
+                .Select(t => new LabelRow { Id = t.Id, Label = t.FirstName + " " + t.LastName }));
+        }
+
+        if (Ids("Property") is { } propertyIds)
+        {
+            await AddAsync("Property", _db.Properties.AsNoTracking()
+                .Where(p => propertyIds.Contains(p.Id) && p.PortfolioId == portfolioId)
+                .Select(p => new LabelRow { Id = p.Id, Label = p.Name }));
+        }
+
+        // Units carry their portfolio via the parent property; scope and label through the Property
+        // join so it stays a single set-based SQL statement.
+        if (Ids("Unit") is { } unitIds)
+        {
+            await AddAsync("Unit", _db.Units.AsNoTracking()
+                .Where(u => unitIds.Contains(u.Id) && u.Property!.PortfolioId == portfolioId)
+                .Select(u => new LabelRow { Id = u.Id, Label = u.Property!.Name + " · Unit " + u.UnitNumber }));
+        }
+
+        if (Ids("Lease") is { } leaseIds)
+        {
+            await AddAsync("Lease", _db.Leases.AsNoTracking()
+                .Where(l => leaseIds.Contains(l.Id) && l.PortfolioId == portfolioId)
+                .Select(l => new LabelRow { Id = l.Id, Label = l.LeaseNumber }));
+        }
+
+        if (Ids("WorkOrder") is { } workOrderIds)
+        {
+            await AddAsync("WorkOrder", _db.WorkOrders.AsNoTracking()
+                .Where(w => workOrderIds.Contains(w.Id) && w.PortfolioId == portfolioId)
+                .Select(w => new LabelRow { Id = w.Id, Label = w.Title }));
+        }
+
+        if (Ids("Expense") is { } expenseIds)
+        {
+            await AddAsync("Expense", _db.Expenses.AsNoTracking()
+                .Where(e => expenseIds.Contains(e.Id) && e.PortfolioId == portfolioId)
+                .Select(e => new LabelRow { Id = e.Id, Label = e.Description }));
+        }
+
+        if (Ids("Vendor") is { } vendorIds)
+        {
+            await AddAsync("Vendor", _db.Vendors.AsNoTracking()
+                .Where(v => vendorIds.Contains(v.Id) && v.PortfolioId == portfolioId)
+                .Select(v => new LabelRow { Id = v.Id, Label = v.Name }));
+        }
+
+        if (Ids("OwnerEntity") is { } ownerIds)
+        {
+            await AddAsync("OwnerEntity", _db.OwnerEntities.AsNoTracking()
+                .Where(o => ownerIds.Contains(o.Id) && o.PortfolioId == portfolioId)
+                .Select(o => new LabelRow { Id = o.Id, Label = o.Name }));
+        }
+
+        if (Ids("Appointment") is { } appointmentIds)
+        {
+            await AddAsync("Appointment", _db.Appointments.AsNoTracking()
+                .Where(a => appointmentIds.Contains(a.Id) && a.PortfolioId == portfolioId)
+                .Select(a => new LabelRow { Id = a.Id, Label = a.Title }));
+        }
+
+        // Inspections have no title of their own; name them by the property they belong to.
+        if (Ids("Inspection") is { } inspectionIds)
+        {
+            await AddAsync("Inspection", _db.Inspections.AsNoTracking()
+                .Where(i => inspectionIds.Contains(i.Id) && i.PortfolioId == portfolioId)
+                .Select(i => new LabelRow { Id = i.Id, Label = i.Property!.Name }));
+        }
+
+        if (Ids("RentalApplication") is { } applicationIds)
+        {
+            await AddAsync("RentalApplication", _db.RentalApplications.AsNoTracking()
+                .Where(r => applicationIds.Contains(r.Id) && r.PortfolioId == portfolioId)
+                .Select(r => new LabelRow { Id = r.Id, Label = r.FirstName + " " + r.LastName }));
+        }
+
+        // Payment / SecurityDeposit carry no name column, so compose a short descriptor from projected
+        // scalars. The filter + projection run in SQL; only the string formatting happens here.
+        if (Ids("Payment") is { } paymentIds)
+        {
+            var found = await _db.Payments.AsNoTracking()
+                .Where(p => paymentIds.Contains(p.Id) && p.PortfolioId == portfolioId)
+                .Select(p => new { p.Id, p.PaymentType, p.Amount })
+                .ToListAsync(ct);
+            foreach (var p in found)
+            {
+                labels[("Payment", p.Id)] = $"{p.PaymentType} · {Money(p.Amount)}";
+            }
+        }
+
+        if (Ids("SecurityDeposit") is { } depositIds)
+        {
+            var found = await _db.SecurityDepositHoldings.AsNoTracking()
+                .Where(d => depositIds.Contains(d.Id) && d.PortfolioId == portfolioId)
+                .Select(d => new { d.Id, d.Amount })
+                .ToListAsync(ct);
+            foreach (var d in found)
+            {
+                labels[("SecurityDeposit", d.Id)] = Money(d.Amount);
+            }
+        }
+
+        return labels;
+    }
+
+    private static string Money(decimal amount) =>
+        "$" + amount.ToString("N2", CultureInfo.InvariantCulture);
+
+    /// <summary>Projection holder for a batched entity-label lookup (<c>Id</c> + display <c>Label</c>).</summary>
+    private sealed class LabelRow
+    {
+        public int Id { get; set; }
+        public string? Label { get; set; }
     }
 
     private async Task<IReadOnlyList<DashboardAppointment>> BuildUpcomingAppointmentsAsync(
