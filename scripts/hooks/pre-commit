@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Rental Command — pre-commit hook (fast hygiene only, <1s).
+#
+# The real checks (svelte-check / dotnet build) run on PRE-PUSH so that commits
+# stay snappy. This hook only blocks obviously-broken commits.
+#
+# Install: ./scripts/install-git-hooks.sh   (sets core.hooksPath=scripts/hooks)
+# Bypass:  git commit --no-verify
+set -u
+
+# Block unresolved merge-conflict markers in staged additions. Match only the
+# unambiguous start/end markers (trailing space + ref) so a bare "=======" used
+# legitimately in markdown/comments never false-blocks.
+markers="$(git diff --cached --no-color 2>/dev/null | grep -nE '^\+(<<<<<<< |>>>>>>> )' || true)"
+if [ -n "$markers" ]; then
+  echo "pre-commit BLOCKED: unresolved merge-conflict markers in staged changes:"
+  printf '%s\n' "$markers" | head -20
+  echo ""
+  echo "Resolve them before committing (or bypass: git commit --no-verify)."
+  exit 1
+fi
+
+exit 0
