@@ -9,7 +9,8 @@
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
-	import { Plus, Pencil, Trash2, AlertTriangle, ChevronDown, ChevronRight } from '@lucide/svelte';
+	import { Plus, Pencil, Trash2, AlertTriangle, ChevronDown, ChevronRight, ScanLine } from '@lucide/svelte';
+	import { scanHref } from '$lib/scan/scan-context';
 
 	let { propertyId }: { propertyId: number } = $props();
 
@@ -196,6 +197,15 @@
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1"></div>
+			<Button
+				variant="outline"
+				class="gap-2 shrink-0"
+				href={scanHref({ type: 'Loan', propertyId, returnTo: `/properties/${propertyId}` })}
+				data-testid="loan-scan-button"
+			>
+				<ScanLine class="h-4 w-4" />
+				Scan / import
+			</Button>
 			<Button class="gap-2 shrink-0" onclick={openAdd} data-testid="loan-add-button">
 				<Plus class="h-4 w-4" />
 				Add Loan
