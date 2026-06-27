@@ -5,7 +5,7 @@
 	import { ai, type BriefingBullet } from '$lib/api/endpoints/ai';
 	import { messages } from '$lib/api/endpoints/messages';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
-	import type { Dashboard } from '$lib/types';
+	import type { Dashboard, DashboardActivity } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { Home, AlertTriangle, CalendarClock, Wallet, Wrench, Building, Sparkles, MessageSquare, HandCoins, Receipt, PiggyBank, ArrowRight, ChevronRight, CircleCheckBig, ListChecks } from '@lucide/svelte';
 	import * as Card from '$lib/components/ui/card';
@@ -57,6 +57,43 @@
 				return `/appointments/${bullet.entityId}`;
 			case 'Inspection':
 				return `/maintenance/inspections/${bullet.entityId}`;
+			default:
+				return null;
+		}
+	}
+
+	// Resolve a Recent Activity row to the record it touched, so each row deep-links to that entity's
+	// detail page (or its closest parent). Keep in sync with the server's audit EntityType strings
+	// (DashboardService.ResolveActivityLabelsAsync / AuditDescriber). Types without a page → no link.
+	function activityHref(activity: DashboardActivity): string | null {
+		if (!activity.entityId) return null;
+		switch (activity.type) {
+			case 'Tenant':
+				return `/tenants/${activity.entityId}`;
+			case 'Unit':
+				return `/units/${activity.entityId}`;
+			case 'Property':
+				return `/properties/${activity.entityId}`;
+			case 'Lease':
+				return `/leases/${activity.entityId}`;
+			case 'WorkOrder':
+				return `/maintenance/${activity.entityId}`;
+			case 'Payment':
+				return `/accounting/payments/${activity.entityId}`;
+			case 'Expense':
+				return `/accounting/expenses/${activity.entityId}`;
+			case 'RentalApplication':
+				return `/applications/${activity.entityId}`;
+			case 'Vendor':
+				return `/vendors/${activity.entityId}`;
+			case 'OwnerEntity':
+				return `/owners/${activity.entityId}`;
+			case 'Appointment':
+				return `/appointments/${activity.entityId}`;
+			case 'Inspection':
+				return `/maintenance/inspections/${activity.entityId}`;
+			case 'SecurityDeposit':
+				return `/deposits/${activity.entityId}`;
 			default:
 				return null;
 		}
@@ -585,11 +622,32 @@
 					</Card.Header>
 					<Card.Content class="px-4 pb-4 pt-0">
 						<div class="space-y-2">
+							{#snippet activityBody(activity: DashboardActivity)}
+								<p class="text-foreground">
+									{activity.description || activity.action || activity.type}{#if activity.label}<span class="text-muted-foreground"> — {activity.label}</span>{/if}
+								</p>
+								<p class="font-mono tabular-nums text-xs text-muted-foreground">{new Date(activity.createdAt).toLocaleString()}</p>
+							{/snippet}
 							{#each data.recentActivity.slice(0, 8) as activity}
-								<div class="rounded border border-border bg-background px-3 py-2 text-sm">
-									<p class="text-foreground">{activity.description || activity.action || activity.type}</p>
-									<p class="font-mono tabular-nums text-xs text-muted-foreground">{new Date(activity.createdAt).toLocaleString()}</p>
-								</div>
+								{@const href = activityHref(activity)}
+								{#if href}
+									<a
+										{href}
+										data-testid="dashboard-activity-row"
+										data-activity-type={activity.type}
+										class="block rounded border border-border bg-background px-3 py-2 text-sm transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+									>
+										{@render activityBody(activity)}
+									</a>
+								{:else}
+									<div
+										data-testid="dashboard-activity-row"
+										data-activity-type={activity.type}
+										class="rounded border border-border bg-background px-3 py-2 text-sm"
+									>
+										{@render activityBody(activity)}
+									</div>
+								{/if}
 							{/each}
 						</div>
 					</Card.Content>

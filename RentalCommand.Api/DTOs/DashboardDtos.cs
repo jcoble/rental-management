@@ -83,8 +83,16 @@ public class DashboardActivity
     public int Id { get; set; }
     /// <summary>Activity type as its string name (e.g. <c>PaymentRecorded</c>).</summary>
     public string Type { get; set; } = string.Empty;
+    /// <summary>Primary key of the entity this row touched, so the web can deep-link to its detail page.</summary>
+    public int EntityId { get; set; }
     public string? Action { get; set; }
     public string? Description { get; set; }
+    /// <summary>
+    /// Human label naming the specific record this row touched (e.g. the tenant's name or the
+    /// work-order title), composed alongside <see cref="Description"/>. Null when the entity type has
+    /// no cheap DB-side label; the web then shows the verb-only description.
+    /// </summary>
+    public string? Label { get; set; }
     public string? Actor { get; set; }
     public DateTime CreatedAt { get; set; }
 }
