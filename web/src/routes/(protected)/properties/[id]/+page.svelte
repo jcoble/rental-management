@@ -548,6 +548,7 @@
 				contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3"
 				help="Summary counts rolled up from the property's units. 'Occupied' counts units whose status is Occupied."
 				helpDetail="Unit count and occupancy are read-only — they update automatically as you add, remove, or change the status of individual units."
+				helpLearnMoreUrl="/docs/property-details"
 				helpTestid="detailcard-help-details"
 			>
 				{#if !editingProperty && property.yearBuilt}
@@ -586,6 +587,7 @@
 				contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4"
 				help="These fields capture what you paid and when the property was put into service — the inputs your accountant needs for annual depreciation."
 				helpDetail="Purchase price minus land value gives the depreciable basis (land is NOT depreciable). In-service date starts the depreciation clock. Leave Manual annual depreciation blank to use the automatic straight-line calculation; fill it in to override with a custom amount."
+				helpLearnMoreUrl="/docs/cost-basis-depreciation"
 				helpTestid="detailcard-help-cost-basis"
 			>
 				<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? fmtMoney(property.purchasePrice) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.purchasePrice} testid="property-basis-purchase-price" />
