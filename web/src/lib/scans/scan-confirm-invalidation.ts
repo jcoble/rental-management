@@ -9,7 +9,8 @@ const ENTITY_KEYS: Record<string, unknown[][]> = {
 	Application: [['applications'], ['dashboard']],
 	Payment: [['payments'], ['accounting-summary'], ['accounting-transactions'], ['dashboard']],
 	Expense: [['expenses'], ['accounting-summary'], ['accounting-transactions'], ['dashboard']],
-	WorkOrder: [['work-orders'], ['maintenance'], ['dashboard']]
+	WorkOrder: [['work-orders'], ['maintenance'], ['dashboard']],
+	Loan: [['loans'], ['properties'], ['dashboard']]
 };
 
 export function invalidateQueriesAfterScanConfirm(queryClient: QueryInvalidator, entityType: string | null | undefined): void {

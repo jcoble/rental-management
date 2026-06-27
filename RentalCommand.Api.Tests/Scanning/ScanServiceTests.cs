@@ -35,6 +35,7 @@ public class ScanServiceTests : IDisposable
     private readonly RecordingPropertyService _properties;
     private readonly RecordingUnitService _units;
     private readonly RecordingApplicationService _applications;
+    private readonly RecordingLoanService _loans;
     private readonly RecordingAuditService _audit;
     private readonly ScanService _sut;
 
@@ -72,6 +73,7 @@ public class ScanServiceTests : IDisposable
         _properties   = new RecordingPropertyService(_db);
         _units        = new RecordingUnitService(_db);
         _applications = new RecordingApplicationService();
+        _loans        = new RecordingLoanService();
         _audit        = new RecordingAuditService();
 
         _sut = new ScanService(
@@ -85,6 +87,7 @@ public class ScanServiceTests : IDisposable
             _properties,
             _units,
             _applications,
+            _loans,
             _audit,
             NullLogger<ScanService>.Instance);
     }
@@ -995,6 +998,155 @@ public class ScanServiceTests : IDisposable
     }
 
     // -------------------------------------------------------------------------
+    // Confirm: a scanned mortgage statement / closing disclosure becomes an Active Loan on the
+    // property (the "scan your mortgage" path). The DebtServiceWorker then owns the schedule.
+    // -------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_ReviewingLoanDraft_CreatesActiveLoanWithMappedFields()
+    {
+        const string extractedJson =
+            """
+            {"target_entity_type":{"value":"Loan","confidence":0.95},
+             "lender":{"value":"Rocket Mortgage","confidence":0.95},
+             "original_amount":{"value":"250000","confidence":0.9},
+             "current_balance":{"value":"238450.55","confidence":0.9},
+             "annual_interest_rate_pct":{"value":"6.5","confidence":0.9},
+             "term_months":{"value":"360","confidence":0.9},
+             "start_date":{"value":"2021-03-01","confidence":0.9},
+             "day_of_month_due":{"value":"1","confidence":0.8},
+             "monthly_principal_interest":{"value":"1580.17","confidence":0.9},
+             "monthly_escrow":{"value":"420.33","confidence":0.85},
+             "escrow_covers_taxes":{"value":"true","confidence":0.8},
+             "escrow_covers_insurance":{"value":"false","confidence":0.8},
+             "property_id":{"value":"10","confidence":0.7}}
+            """;
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit(); // property 10 is the grounded id the draft carries
+        _loans.SetupResponse(new LoanResponse { Id = 770, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        result.EntityType.Should().Be("Loan");
+        result.CreatedEntityId.Should().Be(770);
+
+        _loans.LastRequest.Should().NotBeNull();
+        var req = _loans.LastRequest!;
+        req.PropertyId.Should().Be(10);
+        req.Lender.Should().Be("Rocket Mortgage");
+        req.OriginalAmount.Should().Be(250000m);
+        req.CurrentBalance.Should().Be(238450.55m);
+        req.AnnualInterestRatePct.Should().Be(6.5m);
+        req.TermMonths.Should().Be(360);
+        req.StartDate.Should().Be(new DateTime(2021, 3, 1, 0, 0, 0, DateTimeKind.Utc));
+        req.DayOfMonthDue.Should().Be(1);
+        req.MonthlyPrincipalInterest.Should().Be(1580.17m);
+        req.MonthlyEscrow.Should().Be(420.33m);
+        req.EscrowCoversTaxes.Should().BeTrue();
+        req.EscrowCoversInsurance.Should().BeFalse();
+        // Active so the Engine's DebtServiceWorker generates the amortization schedule.
+        req.Status.Should().Be(LoanStatus.Active);
+        req.Notes.Should().Contain("Imported from scanned mortgage document.");
+
+        // Draft confirmed + source document re-keyed to the loan.
+        string? draftStatus;
+        using (var cmd = _conn.CreateCommand())
+        {
+            cmd.CommandText = $"SELECT Status FROM ScanDrafts WHERE Id = {draft.Id}";
+            draftStatus = (string?)cmd.ExecuteScalar();
+        }
+        draftStatus.Should().Be("Confirmed");
+        _audit.Calls.Should().Contain(c => c.entityType == "Loan" && c.entityId == 770);
+    }
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LoanDraft_WithOverridePropertyId_UsesScanContextPropertyAndDefaultsBalance()
+    {
+        // No property_id on the document — the property comes from the scan-context deep-link the
+        // landlord launched the scan from (sent as a propertyId override). current_balance is absent,
+        // so ScanService passes null and LoanService defaults it to the original amount.
+        const string extractedJson =
+            """{"lender":{"value":"Wells Fargo Home Mortgage","confidence":0.9},"original_amount":{"value":"180000","confidence":0.9},"annual_interest_rate_pct":{"value":"5.25","confidence":0.9},"term_months":{"value":"360","confidence":0.9},"start_date":{"value":"2020-07-01","confidence":0.9},"monthly_principal_interest":{"value":"993.61","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _loans.SetupResponse(new LoanResponse { Id = 771, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(
+            PortfolioId, draft.Id, userId: 7, overridesJson: """{"propertyId":10}""");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _loans.LastRequest.Should().NotBeNull();
+        _loans.LastRequest!.PropertyId.Should().Be(10);
+        _loans.LastRequest.Lender.Should().Be("Wells Fargo Home Mortgage");
+        // Null balance is intentional: LoanService.CreateAsync defaults it to OriginalAmount.
+        _loans.LastRequest.CurrentBalance.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LoanDraft_WithForeignExtractedPropertyId_RequiresPropertySelection()
+    {
+        // property_id 999 is NOT in this portfolio: it must be dropped to 0 (IDOR guard), and with no
+        // override property the confirm fails rather than linking a foreign property.
+        const string extractedJson =
+            """{"lender":{"value":"Some Bank","confidence":0.9},"original_amount":{"value":"100000","confidence":0.9},"property_id":{"value":"999","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _loans.SetupResponse(new LoanResponse { Id = 999, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("property");
+        _loans.LastRequest.Should().BeNull(); // loan service was never called
+    }
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LoanDraft_WithForeignOverridePropertyId_IsRejected()
+    {
+        // A raw override propertyId is never trusted — 999 is not in this portfolio, so confirm is
+        // rejected before the loan service is called (cross-tenant IDOR guard).
+        const string extractedJson =
+            """{"lender":{"value":"Some Bank","confidence":0.9},"original_amount":{"value":"100000","confidence":0.9},"property_id":{"value":"10","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _loans.SetupResponse(new LoanResponse { Id = 999, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(
+            PortfolioId, draft.Id, userId: 7, overridesJson: """{"propertyId":999}""");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("not in this portfolio");
+        _loans.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LoanDraft_WithoutLender_ReturnsError()
+    {
+        const string extractedJson =
+            """{"original_amount":{"value":"100000","confidence":0.9},"property_id":{"value":"10","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _loans.SetupResponse(new LoanResponse { Id = 772, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Lender");
+        _loans.LastRequest.Should().BeNull();
+    }
+
+    // -------------------------------------------------------------------------
     // Reject: happy path
     // -------------------------------------------------------------------------
 
@@ -1230,6 +1382,41 @@ public class ScanServiceTests : IDisposable
             => throw new NotSupportedException("Not needed for ScanService tests.");
 
         public Task<ApplicationLinkResult> GenerateLinkAsync(int portfolioId, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+    }
+
+    private sealed class RecordingLoanService : ILoanService
+    {
+        private LoanResponse? _response = new() { Id = 0, PortfolioId = PortfolioId };
+        private Exception? _createException;
+
+        public CreateLoanRequest? LastRequest { get; private set; }
+
+        public void SetupResponse(LoanResponse? response) => _response = response;
+
+        public void ThrowOnCreate(Exception exception) => _createException = exception;
+
+        public Task<LoanResponse?> CreateAsync(int portfolioId, CreateLoanRequest request, CancellationToken ct = default)
+        {
+            LastRequest = request;
+            if (_createException is not null)
+                throw _createException;
+            return Task.FromResult(_response);
+        }
+
+        public Task<IReadOnlyList<LoanResponse>> ListAsync(int portfolioId, int? propertyId, ListQuery query, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<LoanResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<LoanResponse?> UpdateAsync(int portfolioId, int id, UpdateLoanRequest request, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<bool> DeleteAsync(int portfolioId, int id, CancellationToken ct = default)
+            => throw new NotSupportedException("Not needed for ScanService tests.");
+
+        public Task<IReadOnlyList<LoanPaymentResponse>?> GetPaymentsAsync(int portfolioId, int loanId, CancellationToken ct = default)
             => throw new NotSupportedException("Not needed for ScanService tests.");
     }
 

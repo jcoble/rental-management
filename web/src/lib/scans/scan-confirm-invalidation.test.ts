@@ -28,4 +28,12 @@ describe('invalidateQueriesAfterScanConfirm', () => {
 			['dashboard']
 		]);
 	});
+
+	it('refreshes the loans and properties caches after a scanned mortgage created a loan', () => {
+		const { client, invalidated } = createQueryClientSpy();
+
+		invalidateQueriesAfterScanConfirm(client, 'Loan');
+
+		assert.deepEqual(invalidated, [['scans'], ['loans'], ['properties'], ['dashboard']]);
+	});
 });
