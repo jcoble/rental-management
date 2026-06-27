@@ -764,12 +764,8 @@
 
   .m3-tabs-list {
     min-height: 48px;
-    border: 1px solid color-mix(in srgb, var(--m3c-outline-variant) 76%, transparent);
     border-radius: var(--m3-shape-extra-large);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--m3c-surface-container-lowest) 48%, transparent), transparent),
-      var(--m3c-surface-container);
-    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
+    background: var(--m3c-surface-container);
   }
 
   .m3-tabs-trigger {
@@ -784,12 +780,8 @@
   }
 
   .m3-tabs-trigger[data-state='active'] {
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--m3c-primary) 8%, transparent), transparent),
-      var(--m3c-secondary-container);
+    background: var(--m3c-secondary-container);
     color: var(--m3c-on-secondary-container);
-    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--m3c-primary) 14%, transparent);
-    transform: translateY(-1px);
   }
 
   .m3-field-surface {
@@ -1150,15 +1142,8 @@
     width: 100%;
     min-width: max-content;
     padding: 0.35rem;
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--m3c-surface-container-lowest) 14%, transparent), transparent),
-      color-mix(in srgb, var(--m3c-surface-container-low) 74%, var(--m3c-surface-container-high));
+    background: var(--m3c-surface-container);
     backdrop-filter: blur(18px) saturate(1.04);
-  }
-
-  :root.light .m3-tabs-list--sticky,
-  .light .m3-tabs-list--sticky {
-    box-shadow: var(--m3-elevation-1);
   }
 
   .m3-tabs-list--sticky .m3-tabs-trigger {
