@@ -40,7 +40,9 @@ public class ScanProcessingWorker : EngineWorkerBase
                 ? new ExtractionSchema(LeaseExtractionSchema.Instructions, LeaseExtractionSchema.Fields)
                 : IsApplicationTarget(targetEntityType)
                     ? new ExtractionSchema(ApplicationExtractionSchema.Instructions, ApplicationExtractionSchema.Fields)
-                    : new ExtractionSchema(ReceiptExtractionSchema.Instructions, ReceiptExtractionSchema.Fields);
+                    : IsLoanTarget(targetEntityType)
+                        ? new ExtractionSchema(LoanExtractionSchema.Instructions, LoanExtractionSchema.Fields)
+                        : new ExtractionSchema(ReceiptExtractionSchema.Instructions, ReceiptExtractionSchema.Fields);
 
     /// <summary>
     /// A lease import is requested either by the explicit upload target "Lease", or by a document the
@@ -58,6 +60,14 @@ public class ScanProcessingWorker : EngineWorkerBase
     /// </summary>
     private static bool IsApplicationTarget(string? targetEntityType) =>
         string.Equals(targetEntityType, "Application", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A loan import is requested by the explicit upload target "Loan" (a landlord scanning a mortgage
+    /// statement or closing disclosure). It picks the loan extraction schema and confirms as a Loan on
+    /// the property — the scan-IN counterpart of the manual loan form.
+    /// </summary>
+    private static bool IsLoanTarget(string? targetEntityType) =>
+        string.Equals(targetEntityType, "Loan", StringComparison.OrdinalIgnoreCase);
 
     protected override async Task<int> ExecuteCycleAsync(IServiceProvider scoped, CancellationToken ct)
     {
@@ -194,6 +204,12 @@ public class ScanProcessingWorker : EngineWorkerBase
                     // A completed rental application was uploaded with the Application target: it was
                     // extracted with the application schema, so confirm it as an Application.
                     draft.TargetEntityType = "Application";
+                }
+                else if (IsLoanTarget(draft.TargetEntityType))
+                {
+                    // A mortgage statement / closing disclosure was uploaded with the Loan target: it was
+                    // extracted with the loan schema, so confirm it as a Loan on the property.
+                    draft.TargetEntityType = "Loan";
                 }
                 else
                 {

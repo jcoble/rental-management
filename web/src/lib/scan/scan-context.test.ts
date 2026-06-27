@@ -62,6 +62,18 @@ describe('scan context helpers', () => {
 		assert.deepEqual(workOrderOverrides, { propertyId: 10, unitId: 20 });
 	});
 
+	it('applies the deep-linked property to a loan confirm without overwriting an explicit choice', () => {
+		// A loan attaches to the property the scan was launched from (deep-link propertyId).
+		const fromContext: Record<string, unknown> = {};
+		applyScanContextOverrides(fromContext, { propertyId: 10, unitId: 20 }, 'Loan');
+		assert.deepEqual(fromContext, { propertyId: 10 });
+
+		// An explicit property the reviewer already chose wins over the context fallback.
+		const explicit: Record<string, unknown> = { propertyId: 99 };
+		applyScanContextOverrides(explicit, { propertyId: 10 }, 'Loan');
+		assert.deepEqual(explicit, { propertyId: 99 });
+	});
+
 	it('rejects unsafe return targets when parsing scan context', () => {
 		assert.deepEqual(parseScanContext(new URLSearchParams('returnTo=https://evil.test/units/20')), {});
 		assert.deepEqual(parseScanContext(new URLSearchParams('returnTo=//evil.test/units/20')), {});

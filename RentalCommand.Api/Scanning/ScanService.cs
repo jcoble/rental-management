@@ -29,6 +29,7 @@ public sealed class ScanService : IScanService
     private readonly IPropertyService _properties;
     private readonly IUnitService _units;
     private readonly IApplicationService _applications;
+    private readonly ILoanService _loans;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<ScanService> _logger;
     private static readonly Regex ExpenseUnitReferenceRegex = new(
@@ -51,6 +52,7 @@ public sealed class ScanService : IScanService
         IPropertyService properties,
         IUnitService units,
         IApplicationService applications,
+        ILoanService loans,
         IAuditTrailService audit,
         ILogger<ScanService> logger)
     {
@@ -64,6 +66,7 @@ public sealed class ScanService : IScanService
         _properties = properties;
         _units = units;
         _applications = applications;
+        _loans = loans;
         _audit = audit;
         _logger = logger;
     }
@@ -171,7 +174,7 @@ public sealed class ScanService : IScanService
         if (draft.Status != "Reviewing")
             return new ScanConfirmResult(false, null, "Draft is not ready to confirm; it must be reviewed first.");
 
-        if (draft.TargetEntityType is not ("Expense" or "Payment" or "WorkOrder" or "Lease" or "Application"))
+        if (draft.TargetEntityType is not ("Expense" or "Payment" or "WorkOrder" or "Lease" or "Application" or "Loan"))
             return new ScanConfirmResult(false, null, $"Unsupported target '{draft.TargetEntityType}'");
 
         // Start from the extracted fields, then apply the user's reviewed overrides (overrides win).
@@ -210,6 +213,7 @@ public sealed class ScanService : IScanService
             "WorkOrder" => await ConfirmAsWorkOrderAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
             "Lease" => await ConfirmAsLeaseAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
             "Application" => await ConfirmAsApplicationAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
+            "Loan" => await ConfirmAsLoanAsync(portfolioId, draftId, userId, draft, overridesJson, ct),
             _ => await ConfirmAsExpenseAsync(portfolioId, draftId, userId, draft, dto, overridesJson, ct),
         };
 
@@ -1032,6 +1036,127 @@ public sealed class ScanService : IScanService
             ct: ct);
 
         return new ScanConfirmResult(true, application.Id, null, "Application");
+    }
+
+    // -------------------------------------------------------------------------
+    // ConfirmAsLoanAsync  (called by the router) — the "scan your mortgage statement" path
+    // -------------------------------------------------------------------------
+
+    private async Task<ScanConfirmResult> ConfirmAsLoanAsync(
+        int portfolioId,
+        int draftId,
+        int userId,
+        ScanDraft draft,
+        string overridesJson,
+        CancellationToken ct)
+    {
+        var fields = BuildLoanFields(draft.ExtractedFields);
+
+        // The property id came straight from the LLM. Drop it if it isn't actually in THIS portfolio
+        // before we trust it (IDOR) — same pattern as the lease/application paths. The reviewer's
+        // selection (the scan-context deep-link sends the property they launched the scan from) then
+        // wins and is re-validated in-portfolio below.
+        await ValidateLoanIdsInPortfolioAsync(portfolioId, fields, ct);
+        ApplyLoanOverrides(fields, overridesJson);
+
+        if (fields.PropertyId <= 0)
+            return new ScanConfirmResult(false, null, "Select a property for this loan");
+
+        // Re-validate the (possibly override-supplied) id — never trust a raw override id either.
+        if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId, ct))
+            return new ScanConfirmResult(false, null, "Selected property is not in this portfolio");
+
+        if (string.IsNullOrWhiteSpace(fields.Lender))
+            return new ScanConfirmResult(false, null, "Lender is required");
+
+        var request = new CreateLoanRequest
+        {
+            PropertyId = fields.PropertyId,
+            Lender = fields.Lender!.Trim(),
+            OriginalAmount = fields.OriginalAmount ?? 0m,
+            // null lets LoanService default the balance to the original amount (closing disclosures
+            // show only the original; monthly statements show the live balance).
+            CurrentBalance = fields.CurrentBalance,
+            AnnualInterestRatePct = fields.AnnualInterestRatePct ?? 0m,
+            // Clamp to the column's [1,1200] range; default a 30-year term when unreadable.
+            TermMonths = fields.TermMonths is >= 1 and <= 1200 ? fields.TermMonths.Value : 360,
+            StartDate = fields.StartDate ?? DateTime.UtcNow,
+            DayOfMonthDue = fields.DayOfMonthDue is >= 1 and <= 31 ? fields.DayOfMonthDue.Value : 1,
+            MonthlyPrincipalInterest = fields.MonthlyPrincipalInterest ?? 0m,
+            MonthlyEscrow = fields.MonthlyEscrow ?? 0m,
+            EscrowCoversTaxes = fields.EscrowCoversTaxes ?? false,
+            EscrowCoversInsurance = fields.EscrowCoversInsurance ?? false,
+            // Active so the Engine's DebtServiceWorker picks it up and generates the amortization schedule.
+            Status = LoanStatus.Active,
+            Notes = BuildLoanNotes(fields.Notes),
+        };
+
+        LoanResponse? loan;
+        try
+        {
+            loan = await _loans.CreateAsync(portfolioId, request, ct);
+        }
+        catch (DomainValidationException ex)
+        {
+            _logger.LogInformation(ex, "Loan creation was rejected while confirming scan draft {DraftId}", draftId);
+            return new ScanConfirmResult(false, null, ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Loan creation threw while confirming scan draft {DraftId}", draftId);
+            loan = null;
+        }
+
+        if (loan is null)
+            // Null means the entity service rejected the request (e.g. a property not in this
+            // portfolio) or failed; the caller's transaction rollback releases the claim.
+            return new ScanConfirmResult(false, null, "Loan creation failed");
+
+        // Re-attach the source document to the created loan (re-key the StoredFile + mark Confirmed).
+        await FinalizeDraft(portfolioId, draftId, userId, draft.FilePath, "Loan", loan.Id, ct);
+
+        var appliedJson = JsonSerializer.Serialize(new
+        {
+            request.PropertyId,
+            request.Lender,
+            request.OriginalAmount,
+            request.CurrentBalance,
+            request.AnnualInterestRatePct,
+            request.TermMonths,
+            request.StartDate,
+            request.DayOfMonthDue,
+            request.MonthlyPrincipalInterest,
+            request.MonthlyEscrow,
+            request.EscrowCoversTaxes,
+            request.EscrowCoversInsurance,
+            Status = request.Status.ToString(),
+        });
+
+        await _audit.LogAsync(
+            portfolioId,
+            "Loan",
+            loan.Id,
+            AuditLogOperation.Created,
+            userId: userId,
+            oldValues: draft.ExtractedFields,
+            newValues: appliedJson,
+            changeReason: "Created from scan draft #" + draftId,
+            ct: ct);
+
+        return new ScanConfirmResult(true, loan.Id, null, "Loan");
+    }
+
+    /// <summary>
+    /// Builds the loan Notes: the reviewer/extracted free-text note (if any) plus a provenance suffix,
+    /// capped to the column's 2000-char bound. Always records that the loan came from a scanned document.
+    /// </summary>
+    private static string BuildLoanNotes(string? extractedNotes)
+    {
+        const string provenance = "Imported from scanned mortgage document.";
+        var note = string.IsNullOrWhiteSpace(extractedNotes)
+            ? provenance
+            : $"{extractedNotes!.Trim()} ({provenance})";
+        return note.Length > 2000 ? note[..2000] : note;
     }
 
     /// <summary>
@@ -2324,6 +2449,108 @@ public sealed class ScanService : IScanService
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Loan extraction helpers (scan a mortgage statement / closing disclosure)
+    // -------------------------------------------------------------------------
+
+    private LoanDraftFields BuildLoanFields(string? extractedFieldsJson)
+    {
+        var fields = new LoanDraftFields();
+        if (string.IsNullOrWhiteSpace(extractedFieldsJson))
+            return fields;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(extractedFieldsJson);
+            var root = doc.RootElement;
+
+            fields.PropertyId = ParseIntField(root, "property_id") ?? ParseIntField(root, "propertyId") ?? 0;
+            fields.Lender = ReadFieldValue(root, "lender");
+            fields.OriginalAmount = ParseDecimalField(root, "original_amount") ?? ParseDecimalField(root, "originalAmount");
+            fields.CurrentBalance = ParseDecimalField(root, "current_balance") ?? ParseDecimalField(root, "currentBalance");
+            fields.AnnualInterestRatePct = ParseDecimalField(root, "annual_interest_rate_pct") ?? ParseDecimalField(root, "annualInterestRatePct");
+            fields.TermMonths = ParseIntField(root, "term_months") ?? ParseIntField(root, "termMonths");
+            fields.StartDate = ParseDateField(root, "start_date") ?? ParseDateField(root, "startDate");
+            fields.DayOfMonthDue = ParseIntField(root, "day_of_month_due") ?? ParseIntField(root, "dayOfMonthDue");
+            fields.MonthlyPrincipalInterest = ParseDecimalField(root, "monthly_principal_interest") ?? ParseDecimalField(root, "monthlyPrincipalInterest");
+            fields.MonthlyEscrow = ParseDecimalField(root, "monthly_escrow") ?? ParseDecimalField(root, "monthlyEscrow");
+            fields.EscrowCoversTaxes = ParseBoolField(root, "escrow_covers_taxes") ?? ParseBoolField(root, "escrowCoversTaxes");
+            fields.EscrowCoversInsurance = ParseBoolField(root, "escrow_covers_insurance") ?? ParseBoolField(root, "escrowCoversInsurance");
+            fields.Notes = ReadFieldValue(root, "notes");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse loan extraction JSON.");
+        }
+
+        return fields;
+    }
+
+    /// <summary>
+    /// Drops the LLM-suggested property id when it doesn't belong to this portfolio (IDOR-safe) — same
+    /// pattern as the lease/application paths. A bad id falls back to 0 so the reviewer's property
+    /// selection (from the scan-context deep-link) is required instead of linking a foreign property.
+    /// </summary>
+    private async Task ValidateLoanIdsInPortfolioAsync(
+        int portfolioId, LoanDraftFields fields, CancellationToken ct)
+    {
+        if (fields.PropertyId > 0 &&
+            !await _db.EnsurePropertyInPortfolioAsync(portfolioId, fields.PropertyId, ct))
+        {
+            fields.PropertyId = 0;
+        }
+    }
+
+    private void ApplyLoanOverrides(LoanDraftFields fields, string overridesJson)
+    {
+        if (string.IsNullOrWhiteSpace(overridesJson))
+            return;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(overridesJson);
+            var root = doc.RootElement;
+
+            // The review UI sends the property the landlord picked (the scan-context deep-link's
+            // propertyId) — it wins and is re-validated in-portfolio by the caller.
+            if (TryGetOverrideNullableInt(root, out var propertyId, "propertyId", "property_id"))
+                fields.PropertyId = propertyId.GetValueOrDefault();
+            if (TryGetOverrideString(root, out var lender, "lender"))
+                fields.Lender = lender;
+            if (TryGetOverrideDecimal(root, out var original, "originalAmount", "original_amount"))
+                fields.OriginalAmount = original;
+            if (TryGetOverrideDecimal(root, out var balance, "currentBalance", "current_balance"))
+                fields.CurrentBalance = balance;
+            if (TryGetOverrideDecimal(root, out var rate, "annualInterestRatePct", "annual_interest_rate_pct"))
+                fields.AnnualInterestRatePct = rate;
+            if (TryGetOverrideInt(root, out var term, "termMonths", "term_months"))
+                fields.TermMonths = term;
+            if (TryGetOverrideString(root, out var startStr, "startDate", "start_date") &&
+                DateTime.TryParse(startStr, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AdjustToUniversal |
+                    System.Globalization.DateTimeStyles.AssumeUniversal, out var start))
+            {
+                fields.StartDate = start;
+            }
+            if (TryGetOverrideInt(root, out var dueDay, "dayOfMonthDue", "day_of_month_due"))
+                fields.DayOfMonthDue = dueDay;
+            if (TryGetOverrideDecimal(root, out var pi, "monthlyPrincipalInterest", "monthly_principal_interest"))
+                fields.MonthlyPrincipalInterest = pi;
+            if (TryGetOverrideDecimal(root, out var escrow, "monthlyEscrow", "monthly_escrow"))
+                fields.MonthlyEscrow = escrow;
+            if (TryGetOverrideBool(root, out var coversTaxes, "escrowCoversTaxes", "escrow_covers_taxes"))
+                fields.EscrowCoversTaxes = coversTaxes;
+            if (TryGetOverrideBool(root, out var coversInsurance, "escrowCoversInsurance", "escrow_covers_insurance"))
+                fields.EscrowCoversInsurance = coversInsurance;
+            if (TryGetOverrideString(root, out var notes, "notes"))
+                fields.Notes = notes;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not parse loan overridesJson; skipping overrides.");
+        }
+    }
+
     /// <summary>Parses an ISO date from a field's "value" sub-property, normalized to UTC. Null on failure.</summary>
     private static DateTime? ParseDateField(JsonElement root, string key)
     {
@@ -2340,6 +2567,25 @@ public sealed class ScanService : IScanService
     {
         var str = ReadFieldValue(root, key);
         return int.TryParse(str, out var value) ? value : null;
+    }
+
+    /// <summary>
+    /// Parses a boolean from a field's "value" sub-property. Accepts true/false plus the common
+    /// yes/no/1/0 spellings a model may emit. Returns null when absent or unrecognized.
+    /// </summary>
+    private static bool? ParseBoolField(JsonElement root, string key)
+    {
+        var str = ReadFieldValue(root, key);
+        if (string.IsNullOrWhiteSpace(str))
+            return null;
+
+        var normalized = str.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "true" or "yes" or "y" or "1" => true,
+            "false" or "no" or "n" or "0" => false,
+            _ => null,
+        };
     }
 
     private static string? BlankToNull(string? value)
@@ -2393,6 +2639,30 @@ public sealed class ScanService : IScanService
             }
         }
         value = 0;
+        return false;
+    }
+
+    /// <summary>First present key wins. Accepts a JSON boolean or a true/false/yes/no/1/0 string.</summary>
+    private static bool TryGetOverrideBool(JsonElement root, out bool value, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (!root.TryGetProperty(key, out var el))
+                continue;
+
+            if (el.ValueKind == JsonValueKind.True) { value = true; return true; }
+            if (el.ValueKind == JsonValueKind.False) { value = false; return true; }
+            if (el.ValueKind == JsonValueKind.String)
+            {
+                var normalized = (el.GetString() ?? string.Empty).Trim().ToLowerInvariant();
+                switch (normalized)
+                {
+                    case "true" or "yes" or "y" or "1": value = true; return true;
+                    case "false" or "no" or "n" or "0": value = false; return true;
+                }
+            }
+        }
+        value = false;
         return false;
     }
 
@@ -2506,5 +2776,25 @@ public sealed class ScanService : IScanService
         // Optional in-portfolio property/unit the applicant is applying for (validated before trust).
         public int? PropertyId { get; set; }
         public int? UnitId { get; set; }
+    }
+
+    private sealed class LoanDraftFields
+    {
+        // The mortgaged property. Grounded id (validated in-portfolio) or, in practice, supplied by the
+        // scan-context deep-link the landlord launched the scan from. Required on confirm.
+        public int PropertyId { get; set; }
+
+        public string? Lender { get; set; }
+        public decimal? OriginalAmount { get; set; }
+        public decimal? CurrentBalance { get; set; }
+        public decimal? AnnualInterestRatePct { get; set; }
+        public int? TermMonths { get; set; }
+        public DateTime? StartDate { get; set; }
+        public int? DayOfMonthDue { get; set; }
+        public decimal? MonthlyPrincipalInterest { get; set; }
+        public decimal? MonthlyEscrow { get; set; }
+        public bool? EscrowCoversTaxes { get; set; }
+        public bool? EscrowCoversInsurance { get; set; }
+        public string? Notes { get; set; }
     }
 }

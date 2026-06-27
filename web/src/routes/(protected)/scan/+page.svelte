@@ -57,7 +57,8 @@
 		{ value: 'Payment', label: 'Rent Check / Payment', hint: 'Becomes a payment record' },
 		{ value: 'WorkOrder', label: 'Maintenance Request', hint: 'Becomes a work order' },
 		{ value: 'Lease', label: 'Lease Agreement', hint: 'Becomes a lease record' },
-		{ value: 'Application', label: 'Rental Application', hint: 'Becomes an applicant record' }
+		{ value: 'Application', label: 'Rental Application', hint: 'Becomes an applicant record' },
+		{ value: 'Loan', label: 'Mortgage / Loan', hint: 'Becomes a loan on the property' }
 	] as const;
 	let docType = $state<ScanDocType>(initialScanContext.type ?? 'Expense');
 	const uploadCopy = $derived(scanUploadCopy(docType));
@@ -205,6 +206,9 @@
 		if (type === 'WorkOrder') return `/maintenance/${id}`;
 		if (type === 'Lease') return `/leases/${id}`;
 		if (type === 'Application') return `/applications/${id}`;
+		// A Loan has no standalone detail page (it lives under its property) — fall back to the
+		// read-only draft rather than linking to a non-existent loan record.
+		if (type === 'Loan') return null;
 		return `/accounting/expenses/${id}`;
 	}
 
