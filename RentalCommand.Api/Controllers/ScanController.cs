@@ -33,7 +33,7 @@ public class ScanController : ManagementControllerBase
     // a batch always has a concrete target (defaulting to "Lease", the migration on-ramp).
     private static readonly HashSet<string> ValidTargets = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Expense", "Payment", "WorkOrder", "Lease", "Application"
+        "Expense", "Payment", "WorkOrder", "Lease", "Application", "Loan"
     };
 
     // Cap per batch so one request can't enqueue an unbounded number of (paid) LLM extractions.
@@ -66,7 +66,7 @@ public class ScanController : ManagementControllerBase
         // Empty/null is allowed — the LLM worker will classify it during processing.
         if (!string.IsNullOrEmpty(targetEntityType) && !ValidTargets.Contains(targetEntityType))
         {
-            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease, Application (or omit to auto-classify)." });
+            return BadRequest(new { error = $"targetEntityType '{targetEntityType}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease, Application, Loan (or omit to auto-classify)." });
         }
 
         using var ms = new MemoryStream();
@@ -119,7 +119,7 @@ public class ScanController : ManagementControllerBase
         // A batch always targets a concrete entity; default to the lease-import on-ramp.
         var target = string.IsNullOrWhiteSpace(targetEntityType) ? "Lease" : targetEntityType.Trim();
         if (!ValidTargets.Contains(target))
-            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease, Application." });
+            return BadRequest(new { error = $"targetEntityType '{target}' is not valid. Allowed values: Expense, Payment, WorkOrder, Lease, Application, Loan." });
 
         // Normalize to the canonical casing so the worker's case-sensitive target checks match.
         target = ValidTargets.First(t => string.Equals(t, target, StringComparison.OrdinalIgnoreCase));
@@ -618,6 +618,7 @@ public class ScanController : ManagementControllerBase
             "WorkOrder" => Ok(new { workOrderId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
             "Lease" => Ok(new { leaseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
             "Application" => Ok(new { applicationId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
+            "Loan" => Ok(new { loanId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
             _ => Ok(new { expenseId = result.CreatedEntityId, entityType = result.EntityType, entityId = result.CreatedEntityId }),
         };
     }
