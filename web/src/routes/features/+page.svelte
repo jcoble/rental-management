@@ -267,23 +267,14 @@
 				</div>
 
 				<div class="act-visual" data-parallax="34">
-					{#if act.frame === 'phone'}
-						<div class="phone">
-							<span class="frame-glow" aria-hidden="true"></span>
-							<div class="phone-screen">
-								<img src={act.shot} alt={`${act.eyebrow} on mobile — Rental Command`} width="720" height="1560" loading="lazy" decoding="async" />
-							</div>
+					<div class="window window-lg">
+						<span class="win-glow" aria-hidden="true"></span>
+						<div class="chrome" aria-hidden="true">
+							<span class="dots"><i></i><i></i><i></i></span>
+							<span class="url">rentalcommand.app</span>
 						</div>
-					{:else}
-						<div class="window window-lg">
-							<span class="win-glow" aria-hidden="true"></span>
-							<div class="chrome" aria-hidden="true">
-								<span class="dots"><i></i><i></i><i></i></span>
-								<span class="url">rentalcommand.app</span>
-							</div>
-							<img src={act.shot} alt={`${act.eyebrow} in Rental Command`} width="1600" height="888" loading="lazy" decoding="async" />
-						</div>
-					{/if}
+						<img src={act.shot} alt={`${act.eyebrow} in Rental Command`} width="1600" height="888" loading="lazy" decoding="async" />
+					</div>
 				</div>
 			</div>
 		</section>
@@ -379,7 +370,7 @@
 		opacity: 0.6;
 	}
 
-	/* ---- shared browser window + phone frames ---- */
+	/* ---- shared browser window frame ---- */
 	.window {
 		position: relative;
 		border-radius: 0.85rem;
@@ -439,42 +430,6 @@
 		object-position: top left;
 	}
 
-	.phone {
-		position: relative;
-		width: clamp(210px, 60%, 270px);
-		margin: 0 auto;
-		aspect-ratio: 1080 / 2340;
-		border-radius: 2.4rem;
-		padding: 0.42rem;
-		background: linear-gradient(155deg, #20202a, #0a0a0f 60%);
-		box-shadow:
-			0 50px 90px -34px rgba(0, 0, 0, 0.9),
-			inset 0 0 0 1px rgba(255, 255, 255, 0.07);
-	}
-	.frame-glow {
-		position: absolute;
-		inset: -14% -24%;
-		z-index: 0;
-		pointer-events: none;
-		background: radial-gradient(circle, color-mix(in oklab, var(--accent, #7c5cff) 40%, transparent), transparent 62%);
-		filter: blur(34px);
-	}
-	.phone-screen {
-		position: relative;
-		z-index: 1;
-		height: 100%;
-		border-radius: 2.05rem;
-		overflow: hidden;
-		background: #000;
-	}
-	.phone-screen img {
-		display: block;
-		width: 100%;
-		height: 100%;
-		object-fit: cover;
-		object-position: top center;
-	}
-
 	.hero-shot {
 		position: relative;
 		transform: perspective(1800px) rotateX(6deg);
@@ -531,12 +486,10 @@
 	}
 
 	/* hover to lean the screenshot in (desktop) */
-	.act-visual .window,
-	.act-visual .phone {
+	.act-visual .window {
 		transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.45s;
 	}
-	.act-visual:hover .window,
-	.act-visual:hover .phone {
+	.act-visual:hover .window {
 		transform: scale(1.04);
 	}
 

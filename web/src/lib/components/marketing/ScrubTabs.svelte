@@ -149,8 +149,8 @@
 			<div class="body">
 				<ol class="rail" role="tablist">
 					{#each tabs as t, i (t.key)}
-						<li>
-							<button type="button" class="tab {active === i ? 'on' : ''}" aria-selected={active === i}>
+						<li role="presentation">
+							<button type="button" role="tab" class="tab {active === i ? 'on' : ''}" aria-selected={active === i}>
 								<span class="tab-ic"><t.icon class="h-4 w-4" /></span>
 								<span>{t.label}</span>
 							</button>
