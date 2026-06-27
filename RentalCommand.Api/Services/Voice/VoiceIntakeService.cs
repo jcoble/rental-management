@@ -37,8 +37,11 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         string? providedTranscript,
         CancellationToken ct = default)
     {
+        // Whisper picks its decoder from the upload's file extension, so name the
+        // file from the real recording format (Safari/iOS sends audio/mp4, not webm).
+        var voiceFileName = TranscriptionFileName(contentType);
         var transcript = string.IsNullOrWhiteSpace(providedTranscript)
-            ? await _transcriber.TranscribeAsync(audioBytes, contentType ?? "application/octet-stream", "voice.webm", ct)
+            ? await _transcriber.TranscribeAsync(audioBytes, contentType ?? "application/octet-stream", voiceFileName, ct)
             : providedTranscript.Trim();
 
         if (string.IsNullOrWhiteSpace(transcript))
@@ -51,14 +54,14 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         {
             filePath = await _storage.UploadAsync(
                 new MemoryStream(audioBytes),
-                $"voice-{DateTime.UtcNow:yyyyMMddHHmmss}.webm",
+                $"voice-{DateTime.UtcNow:yyyyMMddHHmmss}{Path.GetExtension(voiceFileName)}",
                 contentType ?? "application/octet-stream",
                 ct);
 
             _db.StoredFiles.Add(new StoredFile
             {
                 PortfolioId = portfolioId,
-                FileName = "voice.webm",
+                FileName = voiceFileName,
                 FilePath = filePath,
                 ContentType = contentType ?? "application/octet-stream",
                 FileSize = audioBytes.Length,
@@ -101,7 +104,7 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
             ?? throw new KeyNotFoundException($"Voice draft {draftId} not found.");
 
         var answer = string.IsNullOrWhiteSpace(providedTranscript)
-            ? await _transcriber.TranscribeAsync(audioBytes, contentType ?? "application/octet-stream", "voice.webm", ct)
+            ? await _transcriber.TranscribeAsync(audioBytes, contentType ?? "application/octet-stream", TranscriptionFileName(contentType), ct)
             : providedTranscript.Trim();
 
         if (string.IsNullOrWhiteSpace(answer))
@@ -122,6 +125,29 @@ public sealed class VoiceIntakeService : IVoiceIntakeService
         draft.ReviewedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
         return draft;
+    }
+
+    /// <summary>
+    /// Filename to hand the transcriber for a recorded note. Whisper selects its
+    /// audio decoder from the file extension, so it must match the bytes' real
+    /// container — Safari/iOS records <c>audio/mp4</c> while other browsers record
+    /// <c>audio/webm</c>. Derive the extension from the content-type the browser
+    /// sent (codec parameters stripped), falling back to <c>.webm</c>.
+    /// </summary>
+    private static string TranscriptionFileName(string? contentType)
+    {
+        var mime = contentType?.Split(';', 2)[0].Trim().ToLowerInvariant();
+        var ext = mime switch
+        {
+            "audio/webm" => ".webm",
+            "audio/ogg" => ".ogg",
+            "audio/mp4" => ".mp4",
+            "audio/x-m4a" or "audio/m4a" => ".m4a",
+            "audio/mpeg" => ".mp3",
+            "audio/wav" or "audio/wave" or "audio/x-wav" => ".wav",
+            _ => ".webm",
+        };
+        return $"voice{ext}";
     }
 
     /// <summary>Reads the accumulated transcript from a draft's extracted-fields JSON.</summary>

@@ -1,5 +1,6 @@
 import { api } from '$lib/api/client';
 import { buildListQuery, type ListParams } from '$lib/api/list-params';
+import { voiceUploadFileName } from '$lib/scan/voice-capture';
 
 // ---- TypeScript types mirroring ScanDtos.cs ----
 
@@ -164,9 +165,12 @@ export const scan = {
 	retry: (id: number): Promise<unknown> =>
 		api.post(`/scans/${id}/retry`, {}),
 
-	createVoiceDraft: (audio: Blob): Promise<ScanDraftResponse> => {
+	createVoiceDraft: (audio: Blob, mimeType?: string): Promise<ScanDraftResponse> => {
 		const fd = new FormData();
-		fd.append('audio', audio, 'voice.webm');
+		// Name the part from the real recording format (Safari/iOS records mp4, not
+		// webm) so Whisper decodes the right container. The blob's own type carries
+		// the matching Content-Type for the multipart part.
+		fd.append('audio', audio, voiceUploadFileName(mimeType ?? audio.type));
 		return api.upload<ScanDraftResponse>('/voice/drafts', fd);
 	},
 
