@@ -17,6 +17,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Arm the local git hooks (free, $0 — these replace CI). Idempotent + quiet.
+if [ "$(git config --get core.hooksPath 2>/dev/null || true)" != "scripts/hooks" ]; then
+    ./scripts/install-git-hooks.sh >/dev/null 2>&1 || true
+fi
+
 # ─── Config (override via env) ───────────────────────────────────────────────
 PG_CONTAINER="${PG_CONTAINER:-rentalcommand-dev-db}"
 PG_PORT="${PG_PORT:-5432}"          # shared dev Postgres (e.g. edi-postgres); reused if already up

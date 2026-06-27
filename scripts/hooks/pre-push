@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Rental Command — pre-push hook (the local gate, ON by default; free, $0, no CI).
+#
+# Runs ONLY the checks relevant to what changed in the push range:
+#   - web/ changed        -> pnpm check (svelte-check): blocks on ERRORS (warnings are fine).
+#   - *.cs/*.csproj/*.sln  -> dotnet build (compile check): blocks on failure.
+#   - docs-only push       -> skipped entirely.
+#   - full .NET test suite -> opt-in per push:  RC_PRE_PUSH_FULL=1 git push
+#
+# This is ADVISORY (there is no server-side gate). Bypass with: git push --no-verify
+# Inspect the plan without running checks:  RC_HOOK_DRYRUN=1 git push
+#
+# Install: ./scripts/install-git-hooks.sh   (sets core.hooksPath=scripts/hooks)
+set -u
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$ROOT" || exit 0
+ZERO="0000000000000000000000000000000000000000"
+
+# ── Collect changed files across every ref being pushed ──────────────────────
+# git feeds lines on stdin: <local ref> <local sha> <remote ref> <remote sha>
+CHANGED=""
+read_any=false
+while read -r local_ref local_sha remote_ref remote_sha; do
+  read_any=true
+  [ -z "${local_sha:-}" ] && continue
+  [ "$local_sha" = "$ZERO" ] && continue          # branch deletion — nothing to check
+  if [ "${remote_sha:-$ZERO}" = "$ZERO" ]; then
+    # New branch upstream: diff against the merge-base with origin/main (fallback: last commit).
+    base="$(git merge-base "$local_sha" origin/main 2>/dev/null || true)"
+    if [ -n "$base" ]; then
+      CHANGED+="$(git diff --name-only "$base" "$local_sha" 2>/dev/null || true)"$'\n'
+    else
+      CHANGED+="$(git diff --name-only "${local_sha}~1" "$local_sha" 2>/dev/null || true)"$'\n'
+    fi
+  else
+    CHANGED+="$(git diff --name-only "$remote_sha" "$local_sha" 2>/dev/null || true)"$'\n'
+  fi
+done
+
+if [ "$read_any" = false ]; then
+  # Manual invocation (no stdin): diff HEAD vs its upstream, else last commit.
+  CHANGED="$(git diff --name-only '@{upstream}' HEAD 2>/dev/null || git diff --name-only HEAD~1 HEAD 2>/dev/null || true)"
+fi
+
+CHANGED="$(printf '%s\n' "$CHANGED" | sed '/^[[:space:]]*$/d' | sort -u)"
+
+if [ -z "$CHANGED" ]; then
+  echo "pre-push: no changed files detected — nothing to check."
+  exit 0
+fi
+
+# ── Classify ─────────────────────────────────────────────────────────────────
+HAS_WEB=false
+HAS_DOTNET=false
+NON_DOCS=false
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  case "$f" in
+    Docs/*|*.md|.claude/*) : ;;                                  # docs-ish → no gate
+    web/*)                 HAS_WEB=true;    NON_DOCS=true ;;
+    *.cs|*.csproj|*.sln)   HAS_DOTNET=true; NON_DOCS=true ;;
+    *)                     NON_DOCS=true ;;                        # scripts/configs/etc.
+  esac
+done <<< "$CHANGED"
+
+if [ "$NON_DOCS" = false ]; then
+  echo "pre-push: docs-only push — skipping checks."
+  exit 0
+fi
+
+if [ "${RC_HOOK_DRYRUN:-0}" = "1" ]; then
+  echo "pre-push DRY RUN — would check: web=$HAS_WEB dotnet=$HAS_DOTNET"
+  echo "changed files:"; printf '  %s\n' $CHANGED
+  exit 0
+fi
+
+FAILED=false
+
+# ── Web: svelte-check (blocks on errors; warnings do not fail) ────────────────
+if [ "$HAS_WEB" = true ]; then
+  if [ ! -d "$ROOT/web/node_modules" ]; then
+    echo "pre-push: web/ changed but web/node_modules is missing — skipping svelte-check (run: pnpm -C web install)."
+  elif ! command -v pnpm >/dev/null 2>&1; then
+    echo "pre-push: web/ changed but pnpm not found on PATH — skipping svelte-check."
+  else
+    echo "pre-push: web/ changed → svelte-check (pnpm check)…"
+    if (cd "$ROOT/web" && pnpm check); then
+      echo "pre-push: svelte-check OK"
+    else
+      echo ""
+      echo "pre-push BLOCKED: svelte-check found errors in web/. Fix them, or bypass: git push --no-verify"
+      FAILED=true
+    fi
+  fi
+fi
+
+# ── Backend: compile check (full tests only when opted in) ───────────────────
+if [ "$HAS_DOTNET" = true ]; then
+  if ! command -v dotnet >/dev/null 2>&1; then
+    echo "pre-push: .NET changed but dotnet not found on PATH — skipping build."
+  else
+    echo "pre-push: .NET changed → dotnet build (compile check)…"
+    if dotnet build "$ROOT/RentalCommand.sln" --nologo -v quiet; then
+      echo "pre-push: dotnet build OK"
+      if [ "${RC_PRE_PUSH_FULL:-0}" = "1" ]; then
+        echo "pre-push: RC_PRE_PUSH_FULL=1 → running tests…"
+        if dotnet test "$ROOT/RentalCommand.sln" --no-build --nologo -v quiet; then
+          echo "pre-push: tests OK"
+        else
+          echo ""
+          echo "pre-push BLOCKED: tests failed. Fix them, or bypass: git push --no-verify"
+          FAILED=true
+        fi
+      else
+        echo "pre-push: (full test suite skipped — run with RC_PRE_PUSH_FULL=1 git push to include it)"
+      fi
+    else
+      echo ""
+      echo "pre-push BLOCKED: dotnet build failed. Fix the compile error, or bypass: git push --no-verify"
+      FAILED=true
+    fi
+  fi
+fi
+
+if [ "$FAILED" = true ]; then
+  exit 1
+fi
+echo "pre-push: all checks passed."
+exit 0
