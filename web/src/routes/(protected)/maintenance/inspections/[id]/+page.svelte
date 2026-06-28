@@ -6,6 +6,7 @@
 	import { documents, fileObjectUrl } from '$lib/api/endpoints/documents';
 	import type { InspectionCompleteResult, InspectionDetail, InspectionItem } from '$lib/types';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { recordHref } from '$lib/navigation/record-href';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
@@ -315,7 +316,7 @@
 						<div class="mt-1 flex flex-wrap gap-2" data-testid="inspection-created-work-orders">
 							{#each createdWorkOrderIds as woId (woId)}
 								<a
-									href="/maintenance/{woId}"
+									href={recordHref('workOrder', { id: woId, unitId: inspection.unitId })}
 									class="m3-tone-chip border m3-tone--success rounded px-2 py-1 text-xs font-medium"
 									data-testid="inspection-work-order-link-{woId}"
 								>
