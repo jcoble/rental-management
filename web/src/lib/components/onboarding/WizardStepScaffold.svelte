@@ -23,10 +23,10 @@
 
 <div data-testid={`onboarding-step-${step.key}`}>
 	<div class="mb-3 flex items-center gap-2">
-		<span class="flex h-9 w-9 items-center justify-center rounded-[var(--m3-shape-large,0.75rem)] bg-primary/10 text-primary">
+		<span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--m3-shape-large,0.75rem)] bg-primary/10 text-primary">
 			<Icon class="h-5 w-5" />
 		</span>
-		<h2 class="text-lg font-semibold">{step.title}</h2>
+		<h2 class="min-w-0 flex-1 text-lg font-semibold leading-tight">{step.title}</h2>
 	</div>
 
 	<!-- Plain-English: WHAT this is and WHY it's needed. -->
