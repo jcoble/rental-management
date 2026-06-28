@@ -37,10 +37,10 @@ public interface IApplicationService
         int portfolioId, CreateApplicationRequest request, int userId, CancellationToken ct = default);
 
     Task<IReadOnlyList<ApplicationResponse>> ListAsync(
-        int portfolioId, string? status, ListQuery query, CancellationToken ct = default);
+        int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default);
 
     Task<ApplicationListResponse> ListPageAsync(
-        int portfolioId, string? status, ListQuery query, CancellationToken ct = default);
+        int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default);
 
     Task<ApplicationResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 

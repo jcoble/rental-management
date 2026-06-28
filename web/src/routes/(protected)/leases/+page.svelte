@@ -5,6 +5,7 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import type { Lease } from '$lib/types';
+	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { leaseRentTrackingErrors, leaseSchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -353,7 +354,7 @@
 		emptyActionLabel={emptyCopy.actionLabel}
 		emptyOnAction={openCreate}
 		emptyTone="primary"
-		onRowClick={(lease) => goto('/leases/' + lease.id)}
+		onRowClick={(lease) => goto(recordHref('lease', lease))}
 		getRowKey={(l) => l.id}
 		data-testid="leases-list"
 		pageSize={PAGE_SIZE}

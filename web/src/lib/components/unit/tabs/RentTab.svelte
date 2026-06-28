@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import type { UnitDashboard, Payment } from '$lib/types';
 	import { payments as paymentsApi } from '$lib/api/endpoints/payments';
@@ -9,13 +11,13 @@
 	import { money } from '../money';
 	import { formatDateOnly } from '$lib/utils/date';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
-	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import PaymentDetail from '$lib/components/records/PaymentDetail.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
-	import { Plus, X, ScanLine, ChevronDown, ChevronRight } from '@lucide/svelte';
+	import { Plus, X, ScanLine, ArrowLeft } from '@lucide/svelte';
 
 	let {
 		dashboard,
@@ -28,6 +30,19 @@
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const leaseId = $derived(dashboard.currentLease?.id);
+
+	// A selected payment folds its full detail inline (?payment=<id> on the unit URL); otherwise the list shows.
+	const selectedPayment = $derived(Number(page.url.searchParams.get('payment')) || null);
+
+	// Selecting a row is a real navigation step (no replaceState) so Back returns to the list.
+	function openPayment(id: number) {
+		goto('/units/' + dashboard.unit.id + '?tab=rent&payment=' + id, { keepFocus: true, noScroll: true });
+	}
+
+	// Clearing the selection drops ?payment= (replaceState — peer of the list, not a new history step).
+	function clearSelection() {
+		goto('/units/' + dashboard.unit.id + '?tab=rent', { replaceState: true, keepFocus: true, noScroll: true });
+	}
 
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
 	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived', 'Failed', 'Refunded'];
@@ -147,64 +162,16 @@
 		if (createForm.status === 'Paid' && !data.paidDate) data.paidDate = createForm.dueDate;
 		createMut.mutate(data);
 	}
-
-	// ── Expandable payment cards with on-card view/edit (mirrors the lease-detail edit pattern) ──
-	let expandedId = $state<number | null>(null);
-	let editingId = $state<number | null>(null);
-	let editForm = $state<Record<string, string>>({});
-	let editErrors = $state<Record<string, string>>({});
-
-	function toggleExpand(p: Payment) {
-		if (expandedId === p.id) {
-			expandedId = null;
-			editingId = null;
-			return;
-		}
-		expandedId = p.id;
-		editingId = null;
-	}
-
-	function startEdit(p: Payment) {
-		editForm = {
-			amount: String(p.amount),
-			dueDate: p.dueDate?.slice(0, 10) ?? '',
-			paymentType: p.paymentType,
-			status: p.status,
-			paidDate: p.paidDate?.slice(0, 10) ?? '',
-			method: p.method ?? '',
-			externalReference: p.externalReference ?? '',
-			notes: p.notes ?? '',
-		};
-		editErrors = {};
-		editingId = p.id;
-	}
-	function cancelEdit() {
-		editingId = null;
-		editErrors = {};
-	}
-
-	const editMut = createMutation(() => ({
-		mutationFn: ({ id, data }: { id: number; data: Record<string, unknown> }) => paymentsApi.update(id, data),
-		onSuccess: () => {
-			showSuccess('Payment updated.');
-			editingId = null;
-			invalidate();
-		},
-		onError: (e) => showError(apiErrorMessage(e)),
-	}));
-
-	function submitEdit(p: Payment) {
-		const result = parseForm(paymentSchema, { ...editForm, leaseId: String(p.leaseId) });
-		if (result.errors) {
-			editErrors = result.errors;
-			return;
-		}
-		editErrors = {};
-		editMut.mutate({ id: p.id, data: { ...result.data } });
-	}
 </script>
 
 <div class="space-y-4" data-testid="unit-rent-tab">
+{#if selectedPayment}
+	<!-- Folded payment detail: the same <PaymentDetail> the generic /accounting/payments/[id] page mounts. -->
+	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="payment-back-to-list">
+		<ArrowLeft class="h-4 w-4" /> Back to payments
+	</Button>
+	<PaymentDetail paymentId={selectedPayment} onDeleted={clearSelection} />
+{:else}
 	<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
 		<div>
 			<p class="text-sm text-muted-foreground">Outstanding balance</p>
@@ -301,55 +268,17 @@
 	{:else if list.length === 0}
 		<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">No payments yet. Post a payment or scan a rent check.</p>
 	{:else}
-		<!-- Payment list as expandable cards (view ↔ edit on the same card). -->
+		<!-- Payment list: each row selects (folds in its full detail) rather than expanding. -->
 		<ul class="space-y-2" data-testid="rent-payments">
 			{#each list as p (p.id)}
 				<li class="rounded-xl border bg-card" data-testid="rent-payment-{p.id}">
-					<button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left" onclick={() => toggleExpand(p)}>
-						<span class="flex items-center gap-2 text-sm">
-							{#if expandedId === p.id}<ChevronDown class="h-4 w-4 text-muted-foreground" />{:else}<ChevronRight class="h-4 w-4 text-muted-foreground" />{/if}
+					<button type="button" class="flex w-full items-center justify-between gap-2 p-3 text-left" onclick={() => openPayment(p.id)} data-testid="rent-payment-open-{p.id}">
+						<span class="flex min-w-0 items-center gap-2 text-sm">
 							<span class="font-medium">{formatDateOnly(p.dueDate)}</span>
-							<span class="text-muted-foreground">· {p.paymentType}</span>
+							<span class="shrink-0 text-muted-foreground">· {p.paymentType}</span>
 						</span>
-						<span class="flex items-center gap-2"><StatusBadge status={p.status} /><span class="font-semibold">{money(p.amount)}</span></span>
+						<span class="flex shrink-0 items-center gap-2"><StatusBadge status={p.status} /><span class="font-semibold">{money(p.amount)}</span></span>
 					</button>
-
-					{#if expandedId === p.id}
-						<div class="border-t p-3">
-							{#if editingId === p.id}
-								<div class="grid gap-3 sm:grid-cols-2" data-testid="rent-edit-form">
-									<InlineField label="Amount" bind:value={editForm.amount} editing type="number" error={editErrors.amount} testid="rent-edit-amount" />
-									<InlineField label="Due date" bind:value={editForm.dueDate} editing type="date" error={editErrors.dueDate} testid="rent-edit-due" />
-									<InlineField label="Type" bind:value={editForm.paymentType} editing type="select" options={PAYMENT_TYPES.map((t) => ({ value: t, label: t }))} testid="rent-edit-type" />
-									<InlineField label="Status" bind:value={editForm.status} editing type="select" options={PAYMENT_STATUSES.map((s) => ({ value: s, label: s }))} testid="rent-edit-status" />
-									<InlineField label="Paid date" bind:value={editForm.paidDate} editing type="date" testid="rent-edit-paid" />
-									<InlineField label="Method" bind:value={editForm.method} editing type="text" testid="rent-edit-method" />
-									<InlineField label="Reference" bind:value={editForm.externalReference} editing type="text" testid="rent-edit-reference" />
-									<InlineField label="Notes" bind:value={editForm.notes} editing type="textarea" testid="rent-edit-notes" class="sm:col-span-2" />
-								</div>
-								<div class="mt-3 flex justify-end gap-2">
-									<Button variant="outline" size="sm" onclick={cancelEdit} disabled={editMut.isPending}>Cancel</Button>
-									<Button size="sm" onclick={() => submitEdit(p)} disabled={editMut.isPending} data-testid="rent-edit-save">
-										{editMut.isPending ? 'Saving…' : 'Save'}
-									</Button>
-								</div>
-							{:else}
-								<dl class="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
-									<div><dt class="text-muted-foreground">Amount</dt><dd class="font-medium">{money(p.amount)}</dd></div>
-									<div><dt class="text-muted-foreground">Due</dt><dd>{formatDateOnly(p.dueDate)}</dd></div>
-									<div><dt class="text-muted-foreground">Paid</dt><dd>{p.paidDate ? formatDateOnly(p.paidDate) : '—'}</dd></div>
-									<div><dt class="text-muted-foreground">Type</dt><dd>{p.paymentType}</dd></div>
-									<div><dt class="text-muted-foreground">Status</dt><dd><StatusBadge status={p.status} /></dd></div>
-									{#if p.method}<div><dt class="text-muted-foreground">Method</dt><dd>{p.method}</dd></div>{/if}
-									<div><dt class="text-muted-foreground">Reference</dt><dd>{p.externalReference || '—'}</dd></div>
-									<div class="sm:col-span-2"><dt class="text-muted-foreground">Notes</dt><dd class="whitespace-pre-wrap">{p.notes || '—'}</dd></div>
-								</dl>
-								<div class="mt-3 flex justify-end">
-									<Button variant="outline" size="sm" onclick={() => startEdit(p)} data-testid="rent-edit-{p.id}">Edit</Button>
-								</div>
-							{/if}
-						</div>
-					{/if}
 				</li>
 			{/each}
 		</ul>
@@ -361,4 +290,5 @@
 			</div>
 		{/if}
 	{/if}
+{/if}
 </div>

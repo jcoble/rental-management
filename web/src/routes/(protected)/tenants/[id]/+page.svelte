@@ -6,6 +6,7 @@
 	import { leases } from '$lib/api/endpoints/leases';
 	import { notices } from '$lib/api/endpoints/notices';
 	import type { Lease, NoticeDraft, Tenant } from '$lib/types';
+	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { tenantSchema, parseForm } from '$lib/schemas';
 	import { formatDateOnly } from '$lib/utils/date';
@@ -424,7 +425,7 @@
 				columns={leaseColumns}
 				loading={leasesQuery.isLoading}
 				emptyMessage="No leases found for this tenant."
-				onRowClick={(lease) => goto(`/leases/${lease.id}`)}
+				onRowClick={(lease) => goto(recordHref('lease', lease))}
 				getRowKey={(l) => l.id}
 				pageSize={10}
 				data-testid="tenant-leases-grid"

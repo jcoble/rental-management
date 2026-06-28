@@ -13,6 +13,7 @@
 	import UnitTimelineRail from '$lib/components/unit/UnitTimelineRail.svelte';
 	import OverviewTab from '$lib/components/unit/tabs/OverviewTab.svelte';
 	import LeaseTab from '$lib/components/unit/tabs/LeaseTab.svelte';
+	import ApplicationsTab from '$lib/components/unit/tabs/ApplicationsTab.svelte';
 	import RentTab from '$lib/components/unit/tabs/RentTab.svelte';
 	import MaintenanceTab from '$lib/components/unit/tabs/MaintenanceTab.svelte';
 	import DocumentsTab from '$lib/components/unit/tabs/DocumentsTab.svelte';
@@ -210,6 +211,7 @@
 						<Tabs.List class="flex w-full flex-wrap" data-testid="unit-tabs">
 							<Tabs.Trigger value="overview" data-testid="tab-overview">Overview</Tabs.Trigger>
 							<Tabs.Trigger value="lease" data-testid="tab-lease">Lease</Tabs.Trigger>
+							<Tabs.Trigger value="applications" data-testid="tab-applications">Applications</Tabs.Trigger>
 							<Tabs.Trigger value="rent" data-testid="tab-rent">Rent</Tabs.Trigger>
 							<Tabs.Trigger value="maintenance" data-testid="tab-maintenance">Maintenance</Tabs.Trigger>
 							<Tabs.Trigger value="documents" data-testid="tab-documents">Documents</Tabs.Trigger>
@@ -222,6 +224,9 @@
 						</Tabs.Content>
 						<Tabs.Content value="lease" class="mt-4">
 							<LeaseTab {dashboard} onScan={() => goScan({ type: 'Lease', returnTo: `/units/${dashboard.unit.id}?tab=lease` })} />
+						</Tabs.Content>
+						<Tabs.Content value="applications" class="mt-4">
+							<ApplicationsTab {dashboard} />
 						</Tabs.Content>
 						<Tabs.Content value="rent" class="mt-4">
 							<RentTab {dashboard} onScan={() => goScan({ type: 'Payment', leaseId: dashboard.currentLease?.id, returnTo: `/units/${dashboard.unit.id}?tab=rent` })} />
