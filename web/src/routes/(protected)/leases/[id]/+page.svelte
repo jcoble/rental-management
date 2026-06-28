@@ -2,6 +2,7 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { recordHref } from '$lib/navigation/record-href';
 	import { leases } from '$lib/api/endpoints/leases';
 	import {
 		hasNoticeMoveOutDate,
@@ -1080,7 +1081,7 @@
 				loading={paymentsQuery.isLoading}
 				emptyMessage="No payments recorded for this lease."
 				getRowKey={(p) => p.id}
-				onRowClick={(p) => goto(`/accounting/payments/${p.id}`)}
+				onRowClick={(p) => goto(recordHref('payment', p))}
 				data-testid="lease-payments-grid"
 			/>
 		</div>
