@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/tabbed_form_sheet.dart';
 import '../properties/properties_repository.dart';
 import 'appointments_repository.dart';
 import 'appointments_shared.dart';
@@ -23,8 +24,7 @@ Map<String, List<Appointment>> _groupAppointments(List<Appointment> all) {
 
   for (final appt in sorted) {
     final inFuture = !appt.scheduledStart.isBefore(now);
-    final isActive =
-        appt.status == 'Scheduled' || appt.status == 'Confirmed';
+    final isActive = appt.status == 'Scheduled' || appt.status == 'Confirmed';
     if (inFuture || isActive) {
       upcoming.add(appt);
     } else {
@@ -46,21 +46,17 @@ class AppointmentsScreen extends ConsumerStatefulWidget {
   const AppointmentsScreen({super.key});
 
   @override
-  ConsumerState<AppointmentsScreen> createState() =>
-      _AppointmentsScreenState();
+  ConsumerState<AppointmentsScreen> createState() => _AppointmentsScreenState();
 }
 
 class _AppointmentsScreenState extends ConsumerState<AppointmentsScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(
-      () => ref.read(appointmentsProvider.notifier).load(),
-    );
+    Future.microtask(() => ref.read(appointmentsProvider.notifier).load());
   }
 
-  Future<void> _refresh() =>
-      ref.read(appointmentsProvider.notifier).refresh();
+  Future<void> _refresh() => ref.read(appointmentsProvider.notifier).refresh();
 
   void _openDetail(BuildContext context, Appointment appt) {
     Navigator.of(context).push<void>(
@@ -114,7 +110,9 @@ class _AppointmentsScreenState extends ConsumerState<AppointmentsScreen> {
             return ListView.builder(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
               itemCount: sections.fold<int>(
-                  0, (sum, e) => sum + 1 + e.value.length),
+                0,
+                (sum, e) => sum + 1 + e.value.length,
+              ),
               itemBuilder: (context, index) {
                 var offset = 0;
                 for (final section in sections) {
@@ -168,10 +166,7 @@ class _SectionHeader extends StatelessWidget {
 // ── Appointment card ──────────────────────────────────────────────────────────
 
 class _AppointmentCard extends StatelessWidget {
-  const _AppointmentCard({
-    required this.appointment,
-    required this.onTap,
-  });
+  const _AppointmentCard({required this.appointment, required this.onTap});
 
   final Appointment appointment;
   final VoidCallback onTap;
@@ -198,8 +193,9 @@ class _AppointmentCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       appt.title,
-                      style: theme.textTheme.bodyLarge
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -211,26 +207,34 @@ class _AppointmentCard extends StatelessWidget {
               const SizedBox(height: 6),
               Row(
                 children: [
-                  Icon(Icons.event_outlined,
-                      size: 14, color: colorScheme.primary),
+                  Icon(
+                    Icons.event_outlined,
+                    size: 14,
+                    color: colorScheme.primary,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     friendlyAppointmentType(appt.type),
                     style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: colorScheme.primary),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: colorScheme.primary,
+                    ),
                   ),
                   const SizedBox(width: 12),
-                  Icon(Icons.schedule_outlined,
-                      size: 14, color: colorScheme.onSurfaceVariant),
+                  Icon(
+                    Icons.schedule_outlined,
+                    size: 14,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
                       formatAppointmentDateTime(appt.scheduledStart),
                       style: TextStyle(
-                          fontSize: 12,
-                          color: colorScheme.onSurfaceVariant),
+                        fontSize: 12,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -241,15 +245,19 @@ class _AppointmentCard extends StatelessWidget {
                 Row(
                   children: [
                     if (appt.propertyName != null) ...[
-                      Icon(Icons.apartment_outlined,
-                          size: 13, color: colorScheme.onSurfaceVariant),
+                      Icon(
+                        Icons.apartment_outlined,
+                        size: 13,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
                       const SizedBox(width: 4),
                       Flexible(
                         child: Text(
                           appt.propertyName!,
                           style: TextStyle(
-                              fontSize: 12,
-                              color: colorScheme.onSurfaceVariant),
+                            fontSize: 12,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -257,15 +265,19 @@ class _AppointmentCard extends StatelessWidget {
                     if (appt.propertyName != null && appt.tenantName != null)
                       const SizedBox(width: 12),
                     if (appt.tenantName != null) ...[
-                      Icon(Icons.person_outline,
-                          size: 13, color: colorScheme.onSurfaceVariant),
+                      Icon(
+                        Icons.person_outline,
+                        size: 13,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
                       const SizedBox(width: 4),
                       Flexible(
                         child: Text(
                           appt.tenantName!,
                           style: TextStyle(
-                              fontSize: 12,
-                              color: colorScheme.onSurfaceVariant),
+                            fontSize: 12,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
@@ -277,15 +289,19 @@ class _AppointmentCard extends StatelessWidget {
                 const SizedBox(height: 4),
                 Row(
                   children: [
-                    Icon(Icons.person_search_outlined,
-                        size: 13, color: colorScheme.onSurfaceVariant),
+                    Icon(
+                      Icons.person_search_outlined,
+                      size: 13,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
                     const SizedBox(width: 4),
                     Flexible(
                       child: Text(
                         appt.prospectName!,
                         style: TextStyle(
-                            fontSize: 12,
-                            color: colorScheme.onSurfaceVariant),
+                          fontSize: 12,
+                          color: colorScheme.onSurfaceVariant,
+                        ),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
@@ -312,14 +328,17 @@ class _EmptyBody extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.event_outlined,
-              size: 48, color: colorScheme.onSurfaceVariant),
+          Icon(
+            Icons.event_outlined,
+            size: 48,
+            color: colorScheme.onSurfaceVariant,
+          ),
           const SizedBox(height: 12),
           Text(
             'No appointments yet',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
+              color: colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 4),
           Text(
@@ -355,10 +374,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: colorScheme.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
@@ -410,10 +426,8 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
     super.initState();
     final e = widget.existing;
     _titleCtrl = TextEditingController(text: e?.title ?? '');
-    _prospectNameCtrl =
-        TextEditingController(text: e?.prospectName ?? '');
-    _prospectEmailCtrl =
-        TextEditingController(text: e?.prospectEmail ?? '');
+    _prospectNameCtrl = TextEditingController(text: e?.prospectName ?? '');
+    _prospectEmailCtrl = TextEditingController(text: e?.prospectEmail ?? '');
     _assignedToCtrl = TextEditingController(text: e?.assignedTo ?? '');
     _notesCtrl = TextEditingController(text: e?.notes ?? '');
     _selectedType = e?.type ?? 'Showing';
@@ -486,8 +500,7 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
 
   DateTime? _combineDateAndTime(DateTime? date, TimeOfDay? time) {
     if (date == null || time == null) return null;
-    return DateTime(
-        date.year, date.month, date.day, time.hour, time.minute);
+    return DateTime(date.year, date.month, date.day, time.hour, time.minute);
   }
 
   String? _startDisplayText() {
@@ -525,8 +538,7 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
         'prospectEmail': _prospectEmailCtrl.text.trim(),
       if (_assignedToCtrl.text.trim().isNotEmpty)
         'assignedTo': _assignedToCtrl.text.trim(),
-      if (_notesCtrl.text.trim().isNotEmpty)
-        'notes': _notesCtrl.text.trim(),
+      if (_notesCtrl.text.trim().isNotEmpty) 'notes': _notesCtrl.text.trim(),
     };
 
     setState(() {
@@ -552,233 +564,195 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
     final propertiesAsync = ref.watch(propertiesProvider);
     final tenantsAsync = ref.watch(_tenantsProvider);
     final isEdit = widget.existing != null;
+    const gap = SizedBox(height: 12);
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
-      child: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Header
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      isEdit ? 'Edit Appointment' : 'New Appointment',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              // Title
-              TextFormField(
-                controller: _titleCtrl,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(labelText: 'Title'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty)
-                        ? 'Title is required'
-                        : null,
-              ),
-              const SizedBox(height: 12),
-
-              // Type
-              DropdownButtonFormField<String>(
-                initialValue: _selectedType,
-                decoration: const InputDecoration(labelText: 'Type'),
-                items: appointmentTypes
-                    .map((t) => DropdownMenuItem(
+    return Form(
+      key: _formKey,
+      child: TabbedFormSheet(
+        title: isEdit ? 'Edit Appointment' : 'New Appointment',
+        saveLabel: isEdit ? 'Save Changes' : 'Create Appointment',
+        saving: _saving,
+        error: _error,
+        onSave: _submit,
+        tabs: [
+          TabbedFormStepSpec(
+            label: 'Details',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _titleCtrl,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(labelText: 'Title'),
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? 'Title is required'
+                      : null,
+                ),
+                gap,
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedType,
+                  decoration: const InputDecoration(labelText: 'Type'),
+                  items: appointmentTypes
+                      .map(
+                        (t) => DropdownMenuItem(
                           value: t,
                           child: Text(friendlyAppointmentType(t)),
-                        ))
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) setState(() => _selectedType = v);
-                },
-              ),
-              const SizedBox(height: 12),
-
-              // Status
-              DropdownButtonFormField<String>(
-                initialValue: _selectedStatus,
-                decoration: const InputDecoration(labelText: 'Status'),
-                items: appointmentStatuses
-                    .map((s) => DropdownMenuItem(
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _selectedType = v);
+                  },
+                ),
+                gap,
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedStatus,
+                  decoration: const InputDecoration(labelText: 'Status'),
+                  items: appointmentStatuses
+                      .map(
+                        (s) => DropdownMenuItem(
                           value: s,
                           child: Text(s == 'NoShow' ? 'No Show' : s),
-                        ))
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) setState(() => _selectedStatus = v);
-                },
-              ),
-              const SizedBox(height: 12),
-
-              // Start date/time
-              _DateTimePickerField(
-                label: 'Start date & time',
-                displayText: _startDisplayText(),
-                onTap: _pickStartDateTime,
-              ),
-              const SizedBox(height: 12),
-
-              // End date/time (optional)
-              _DateTimePickerField(
-                label: 'End date & time (optional)',
-                displayText: _endDisplayText(),
-                onTap: _pickEndDateTime,
-                trailing: _endDate != null
-                    ? IconButton(
-                        icon: const Icon(Icons.clear, size: 18),
-                        onPressed: () => setState(() {
-                          _endDate = null;
-                          _endTime = null;
-                        }),
+                        ),
                       )
-                    : null,
-              ),
-              const SizedBox(height: 12),
-
-              // Property dropdown
-              propertiesAsync.when(
-                loading: () => const LinearProgressIndicator(),
-                error: (e, st) => const SizedBox.shrink(),
-                data: (properties) => DropdownButtonFormField<int?>(
-                  initialValue: _selectedPropertyId,
-                  decoration:
-                      const InputDecoration(labelText: 'Property (optional)'),
-                  items: [
-                    const DropdownMenuItem<int?>(
-                        value: null, child: Text('None')),
-                    ...properties.map(
-                      (p) => DropdownMenuItem<int?>(
-                          value: p.id, child: Text(p.name)),
-                    ),
-                  ],
-                  onChanged: (v) =>
-                      setState(() => _selectedPropertyId = v),
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _selectedStatus = v);
+                  },
                 ),
-              ),
-              const SizedBox(height: 12),
-
-              // Tenant dropdown
-              tenantsAsync.when(
-                loading: () => const LinearProgressIndicator(),
-                error: (e, st) => const SizedBox.shrink(),
-                data: (tenants) => DropdownButtonFormField<int?>(
-                  initialValue: _selectedTenantId,
-                  decoration:
-                      const InputDecoration(labelText: 'Tenant (optional)'),
-                  items: [
-                    const DropdownMenuItem<int?>(
-                        value: null, child: Text('None')),
-                    ...tenants.map(
-                      (t) => DropdownMenuItem<int?>(
-                        value: t.id,
-                        child: Text(
-                            t.fullName ?? '${t.firstName} ${t.lastName}'),
+                gap,
+                _DateTimePickerField(
+                  label: 'Start date & time',
+                  displayText: _startDisplayText(),
+                  onTap: _pickStartDateTime,
+                ),
+              ],
+            ),
+          ),
+          TabbedFormStepSpec(
+            label: 'Schedule',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _DateTimePickerField(
+                  label: 'End date & time (optional)',
+                  displayText: _endDisplayText(),
+                  onTap: _pickEndDateTime,
+                  trailing: _endDate != null
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, size: 18),
+                          onPressed: () => setState(() {
+                            _endDate = null;
+                            _endTime = null;
+                          }),
+                        )
+                      : null,
+                ),
+                gap,
+                propertiesAsync.when(
+                  loading: () => const LinearProgressIndicator(),
+                  error: (e, st) => const SizedBox.shrink(),
+                  data: (properties) => DropdownButtonFormField<int?>(
+                    initialValue: _selectedPropertyId,
+                    decoration: const InputDecoration(
+                      labelText: 'Property (optional)',
+                    ),
+                    items: [
+                      const DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text('None'),
                       ),
-                    ),
-                  ],
-                  onChanged: (v) =>
-                      setState(() => _selectedTenantId = v),
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // Prospect name
-              TextFormField(
-                controller: _prospectNameCtrl,
-                textInputAction: TextInputAction.next,
-                decoration:
-                    const InputDecoration(labelText: 'Prospect name (optional)'),
-              ),
-              const SizedBox(height: 12),
-
-              // Prospect email
-              TextFormField(
-                controller: _prospectEmailCtrl,
-                keyboardType: TextInputType.emailAddress,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(
-                    labelText: 'Prospect email (optional)'),
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) return null;
-                  final emailRe = RegExp(r'^[^@]+@[^@]+\.[^@]+$');
-                  return emailRe.hasMatch(v.trim())
-                      ? null
-                      : 'Enter a valid email';
-                },
-              ),
-              const SizedBox(height: 12),
-
-              // Assigned to
-              TextFormField(
-                controller: _assignedToCtrl,
-                textInputAction: TextInputAction.next,
-                decoration:
-                    const InputDecoration(labelText: 'Assigned to (optional)'),
-              ),
-              const SizedBox(height: 12),
-
-              // Notes
-              TextFormField(
-                controller: _notesCtrl,
-                textInputAction: TextInputAction.done,
-                maxLines: 3,
-                decoration:
-                    const InputDecoration(labelText: 'Notes (optional)'),
-              ),
-
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(8),
+                      ...properties.map(
+                        (p) => DropdownMenuItem<int?>(
+                          value: p.id,
+                          child: Text(p.name),
+                        ),
+                      ),
+                    ],
+                    onChanged: (v) => setState(() => _selectedPropertyId = v),
                   ),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                        color: colorScheme.onErrorContainer, fontSize: 13),
+                ),
+                gap,
+                tenantsAsync.when(
+                  loading: () => const LinearProgressIndicator(),
+                  error: (e, st) => const SizedBox.shrink(),
+                  data: (tenants) => DropdownButtonFormField<int?>(
+                    initialValue: _selectedTenantId,
+                    decoration: const InputDecoration(
+                      labelText: 'Tenant (optional)',
+                    ),
+                    items: [
+                      const DropdownMenuItem<int?>(
+                        value: null,
+                        child: Text('None'),
+                      ),
+                      ...tenants.map(
+                        (t) => DropdownMenuItem<int?>(
+                          value: t.id,
+                          child: Text(
+                            t.fullName ?? '${t.firstName} ${t.lastName}',
+                          ),
+                        ),
+                      ),
+                    ],
+                    onChanged: (v) => setState(() => _selectedTenantId = v),
                   ),
                 ),
               ],
-
-              const SizedBox(height: 20),
-
-              FilledButton(
-                onPressed: _saving ? null : _submit,
-                child: _saving
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(isEdit ? 'Save Changes' : 'Create Appointment'),
-              ),
-              const SizedBox(height: 8),
-            ],
+            ),
           ),
-        ),
+          TabbedFormStepSpec(
+            label: 'Contact',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _prospectNameCtrl,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Prospect name (optional)',
+                  ),
+                ),
+                gap,
+                TextFormField(
+                  controller: _prospectEmailCtrl,
+                  keyboardType: TextInputType.emailAddress,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Prospect email (optional)',
+                  ),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) return null;
+                    final emailRe = RegExp(r'^[^@]+@[^@]+\.[^@]+$');
+                    return emailRe.hasMatch(v.trim())
+                        ? null
+                        : 'Enter a valid email';
+                  },
+                ),
+                gap,
+                TextFormField(
+                  controller: _assignedToCtrl,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Assigned to (optional)',
+                  ),
+                ),
+                gap,
+                TextFormField(
+                  controller: _notesCtrl,
+                  textInputAction: TextInputAction.done,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Notes (optional)',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -808,8 +782,8 @@ class _DateTimePickerField extends StatelessWidget {
       child: InputDecorator(
         decoration: InputDecoration(
           labelText: label,
-          suffixIcon: trailing ??
-              const Icon(Icons.calendar_today_outlined, size: 18),
+          suffixIcon:
+              trailing ?? const Icon(Icons.calendar_today_outlined, size: 18),
         ),
         child: Text(
           displayText ?? 'Tap to select',
@@ -849,5 +823,5 @@ class _TenantsNotifier extends Notifier<AsyncValue<List<Tenant>>> {
 
 final _tenantsProvider =
     NotifierProvider<_TenantsNotifier, AsyncValue<List<Tenant>>>(
-  _TenantsNotifier.new,
-);
+      _TenantsNotifier.new,
+    );

@@ -9,17 +9,17 @@ import '../../features/auth/login_screen.dart';
 import '../../features/auth/register_screen.dart';
 import '../../features/auth/reset_password_screen.dart';
 import '../../features/home/home_shell.dart';
+import '../../features/home/mobile_domain_hub.dart';
 import '../../features/onboarding/onboarding_choice_screen.dart';
 import '../../features/onboarding/onboarding_live_setup_screen.dart';
 import '../../features/onboarding/onboarding_seeding_screen.dart';
-import '../../features/maintenance/work_order_detail_screen.dart';
-import '../../features/maintenance/work_orders_screen.dart';
+import '../../features/maintenance/work_order_unit_aware_loader.dart';
 import '../../features/messages/message_detail_screen.dart';
 import '../../features/money/expense_detail_screen.dart';
-import '../../features/money/money_screen.dart';
 import '../../features/notifications/notifications_inbox_screen.dart';
 import '../../features/payments/payment_detail_screen.dart';
 import '../../features/scan/scan_review_screen.dart';
+import '../../features/units/unit_command_center_screen.dart';
 
 const _loginPath = '/login';
 const _registerPath = '/register';
@@ -41,10 +41,7 @@ const _publicAuthPaths = <String>{
 
 /// First-login onboarding gate routes — an authenticated-but-undecided user is
 /// allowed to sit on these (and only these); everything else bounces here.
-const _onboardingGatePaths = <String>{
-  _chooseSetupPath,
-  _settingUpPath,
-};
+const _onboardingGatePaths = <String>{_chooseSetupPath, _settingUpPath};
 
 /// True for voice / App Actions deep links (`rentalcommand://voice/...`).
 ///
@@ -158,46 +155,58 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       // deep links (`context.go('/work-orders/142')`) resolve to the right
       // screen by id. The bottom-nav shell itself stays an IndexedStack.
       GoRoute(
+        path: '/rentals',
+        builder: (context, state) => const RentalsHubScreen(),
+      ),
+      GoRoute(
         path: '/work',
-        builder: (context, state) => const WorkOrdersScreen(),
+        builder: (context, state) => const WorkHubScreen(),
       ),
       GoRoute(
         path: '/work-orders/:id',
-        builder: (context, state) => WorkOrderDetailScreen(
-          workOrderId: _idParam(state),
+        builder: (context, state) =>
+            WorkOrderShellTargetLoaderScreen(workOrderId: _idParam(state)),
+      ),
+      GoRoute(
+        path: '/units/:id',
+        builder: (context, state) => UnitCommandCenterLoaderScreen(
+          unitId: _idParam(state),
+          initialTab: unitCommandCenterTabFromName(
+            state.uri.queryParameters['tab'],
+          ),
         ),
       ),
       GoRoute(
         path: '/money',
-        builder: (context, state) => const MoneyScreen(),
+        builder: (context, state) => const MoneyHubScreen(),
       ),
       GoRoute(
         path: '/payments/:id',
-        builder: (context, state) => PaymentDetailScreen(
-          paymentId: _idParam(state),
-        ),
+        builder: (context, state) =>
+            PaymentDetailScreen(paymentId: _idParam(state)),
       ),
       GoRoute(
         path: '/expenses/:id',
-        builder: (context, state) => ExpenseDetailScreen(
-          expenseId: _idParam(state),
-        ),
+        builder: (context, state) =>
+            ExpenseDetailScreen(expenseId: _idParam(state)),
       ),
       GoRoute(
         path: '/scan/:draftId',
-        builder: (context, state) => ScanReviewScreen(
-          draftId: _idParam(state, 'draftId'),
-        ),
+        builder: (context, state) =>
+            ScanReviewScreen(draftId: _idParam(state, 'draftId')),
       ),
       GoRoute(
         path: '/messages/:id',
-        builder: (context, state) => MessageDetailScreen(
-          conversationId: _idParam(state),
-        ),
+        builder: (context, state) =>
+            MessageDetailScreen(conversationId: _idParam(state)),
       ),
       GoRoute(
         path: '/notifications',
         builder: (context, state) => const NotificationsInboxScreen(),
+      ),
+      GoRoute(
+        path: '/inbox',
+        builder: (context, state) => const InboxHubScreen(),
       ),
     ],
     errorBuilder: (context, state) =>

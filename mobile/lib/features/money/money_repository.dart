@@ -95,6 +95,27 @@ class MoneyRepository {
     }
   }
 
+  /// POST /expenses — create a manual expense. Pass enum wire names for
+  /// category/status.
+  Future<Expense> createExpense(Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/expenses',
+        data: data,
+      );
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Expense.fromJson(responseData);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// PATCH /expenses/{id} — partial update. Pass enum wire names for
   /// category/status. Omit a key to leave it unchanged.
   Future<Expense> updateExpense(int id, Map<String, dynamic> data) async {
@@ -152,13 +173,15 @@ final expensesListProvider = FutureProvider.autoDispose<List<Expense>>((ref) {
 });
 
 /// A single expense (with line items), keyed by id.
-final expenseDetailProvider =
-    FutureProvider.autoDispose.family<Expense, int>((ref, id) {
+final expenseDetailProvider = FutureProvider.autoDispose.family<Expense, int>((
+  ref,
+  id,
+) {
   return ref.watch(moneyRepositoryProvider).getExpense(id);
 });
 
 /// Receipt bytes for an expense, keyed by id.
-final expenseReceiptProvider =
-    FutureProvider.autoDispose.family<Uint8List, int>((ref, id) {
-  return ref.watch(moneyRepositoryProvider).receiptBytes(id);
-});
+final expenseReceiptProvider = FutureProvider.autoDispose
+    .family<Uint8List, int>((ref, id) {
+      return ref.watch(moneyRepositoryProvider).receiptBytes(id);
+    });

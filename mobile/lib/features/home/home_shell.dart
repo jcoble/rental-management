@@ -10,12 +10,12 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/theme/app_recipes.dart';
+import '../../core/theme/app_tokens.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/auth/auth_models.dart';
 import '../../core/models/models.dart';
 import '../../core/push/push_service.dart';
 import '../../core/realtime/realtime_providers.dart';
-import '../notifications/notifications_repository.dart';
 import '../../core/voice/voice_command.dart';
 import '../../core/voice/voice_command_controller.dart';
 import '../accounting/accounting_repository.dart';
@@ -27,27 +27,34 @@ import '../capture/capture_fab_sheet.dart';
 import '../appointments/appointments_screen.dart';
 import '../appointments/tenant_appointments_screen.dart';
 import '../inspections/inspections_list_screen.dart';
+import '../leases/lease_detail_screen.dart';
 import '../leases/leases_list_screen.dart';
-import '../maintenance/work_order_detail_screen.dart';
+import '../maintenance/work_order_unit_aware_loader.dart';
 import '../maintenance/work_orders_repository.dart';
-import '../maintenance/work_orders_screen.dart';
 import '../messages/message_detail_screen.dart';
 import '../messages/message_models.dart';
 import '../messages/messages_list_screen.dart';
 import '../messages/messages_repository.dart';
-import '../money/money_screen.dart';
+import '../money/expense_detail_screen.dart';
 import '../money/money_snapshot_card.dart';
 import '../money/overdue_screen.dart';
+import '../notifications/notifications_repository.dart';
 import '../onboarding/go_live_sheet.dart';
 import '../onboarding/getting_started_provider.dart';
 import '../onboarding/getting_started_screen.dart';
 import '../onboarding/getting_started_tasks.dart';
+import '../payments/payment_detail_screen.dart';
 import '../portal/tenant_account_history_screen.dart';
 import '../portal/tenant_portal_repository.dart';
 import '../portal/tenant_work_order_detail_screen.dart';
+import '../scan/scan_review_screen.dart';
+import '../tenants/tenant_detail_screen.dart';
 import '../tenants/tenants_list_screen.dart';
 import '../tenants/tenant_lease_screen.dart';
-import 'more_tab.dart';
+import '../units/unit_command_center_screen.dart';
+import 'mobile_domain_hub.dart';
+import 'mobile_domain_navigation.dart';
+import 'mobile_shell_actions.dart';
 
 // ---------------------------------------------------------------------------
 // Briefing provider (home-tab only, autoDispose)
@@ -102,8 +109,7 @@ final _fieldQueueProvider = FutureProvider.autoDispose<List<WorkOrder>>((
 
 /// Bottom-navigation app shell.
 ///
-/// Landlord tabs: Today · Money · [Capture FAB] · Work · Messages
-/// (the center slot is a docked Capture FAB, not a destination).
+/// Landlord tabs: Today · Rentals · Money · Work · Inbox.
 /// Tenant tabs: Home · Messages · Maintenance · More
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
@@ -114,15 +120,16 @@ class HomeShell extends ConsumerStatefulWidget {
 
 class _HomeShellState extends ConsumerState<HomeShell>
     with WidgetsBindingObserver {
+  final _domainNavigators = <MobileShellTabId, MobileDomainNavigator>{};
+  late final MobileShellNavigator _shellNavigator;
   int _selectedIndex = 0;
 
-  /// Landlord destinations, in tab order. The Capture FAB sits visually between
-  /// index 1 (Money) and index 2 (Work) but is not itself a destination.
   static const _tabs = [
     _TabItem(label: 'Today', icon: Symbols.home_rounded),
+    _TabItem(label: 'Rentals', icon: Symbols.apartment_rounded),
     _TabItem(label: 'Money', icon: Symbols.savings_rounded),
     _TabItem(label: 'Work', icon: Symbols.build_rounded),
-    _TabItem(label: 'Messages', icon: Symbols.forum_rounded),
+    _TabItem(label: 'Inbox', icon: Symbols.inbox_rounded),
   ];
 
   static const _tenantTabs = [
@@ -135,9 +142,180 @@ class _HomeShellState extends ConsumerState<HomeShell>
   /// Opens the TSK-138 capture menu (camera / gallery / PDF / voice / type).
   void _openCapture() => showCaptureFabSheet(context);
 
+  void _registerDomain(MobileShellTabId tab, MobileDomainNavigator controller) {
+    _domainNavigators[tab] = controller;
+  }
+
+  void _unregisterDomain(
+    MobileShellTabId tab,
+    MobileDomainNavigator controller,
+  ) {
+    if (identical(_domainNavigators[tab], controller)) {
+      _domainNavigators.remove(tab);
+    }
+  }
+
+  int _tabIndexFor(MobileShellTabId tab) {
+    return switch (tab) {
+      MobileShellTabId.today => 0,
+      MobileShellTabId.rentals => 1,
+      MobileShellTabId.money => 2,
+      MobileShellTabId.work => 3,
+      MobileShellTabId.inbox => 4,
+    };
+  }
+
+  void _openShellTab(
+    MobileShellTabId tab, {
+    MobileDestinationId? destination,
+    MobileDetailBuilder? detailBuilder,
+  }) {
+    final authState = ref.read(authControllerProvider);
+    final tenantMode =
+        authState is AuthStateAuthenticated && authState.user.isTenant;
+    if (tenantMode) {
+      if (detailBuilder != null) {
+        Navigator.of(
+          context,
+        ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
+      }
+      return;
+    }
+
+    final index = _tabIndexFor(tab);
+    if (_selectedIndex != index) {
+      setState(() => _selectedIndex = index);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      final domainNavigator = _domainNavigators[tab];
+      if (destination != null && domainNavigator != null) {
+        domainNavigator.openDestination(
+          destination,
+          detailBuilder: detailBuilder,
+        );
+        return;
+      }
+
+      if (detailBuilder != null) {
+        Navigator.of(
+          context,
+        ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
+      }
+    });
+  }
+
+  bool _openShellRoute(String route) {
+    final uri = Uri.tryParse(route);
+    if (uri == null) return false;
+
+    final path = uri.path;
+    final segments = uri.pathSegments;
+    final id = segments.length >= 2 ? int.tryParse(segments[1]) : null;
+
+    switch (path) {
+      case '/rentals':
+        _openShellTab(MobileShellTabId.rentals);
+        return true;
+      case '/units':
+        _openShellTab(
+          MobileShellTabId.rentals,
+          destination: MobileDestinationId.units,
+        );
+        return true;
+      case '/work':
+        _openShellTab(
+          MobileShellTabId.work,
+          destination: MobileDestinationId.workOrders,
+        );
+        return true;
+      case '/money':
+        _openShellTab(
+          MobileShellTabId.money,
+          destination: MobileDestinationId.moneyOverview,
+        );
+        return true;
+      case '/inbox':
+        _openShellTab(
+          MobileShellTabId.inbox,
+          destination: MobileDestinationId.messages,
+        );
+        return true;
+      case '/notifications':
+        _openShellTab(
+          MobileShellTabId.inbox,
+          destination: MobileDestinationId.notifications,
+        );
+        return true;
+    }
+
+    final unitTarget = parseUnitCommandCenterRoute(route);
+    if (unitTarget != null) {
+      _openShellTab(
+        MobileShellTabId.rentals,
+        destination: MobileDestinationId.units,
+        detailBuilder: (_) => UnitCommandCenterLoaderScreen(
+          unitId: unitTarget.unitId,
+          initialTab: unitTarget.initialTab,
+        ),
+      );
+      return true;
+    }
+
+    if (segments.length != 2 || id == null) return false;
+
+    switch (segments.first) {
+      case 'work-orders':
+        _openShellTab(
+          MobileShellTabId.work,
+          destination: MobileDestinationId.workOrders,
+          detailBuilder: (_) =>
+              WorkOrderShellTargetLoaderScreen(workOrderId: id),
+        );
+        return true;
+      case 'payments':
+        _openShellTab(
+          MobileShellTabId.money,
+          destination: MobileDestinationId.moneyLedger,
+          detailBuilder: (_) => PaymentDetailScreen(paymentId: id),
+        );
+        return true;
+      case 'expenses':
+        _openShellTab(
+          MobileShellTabId.money,
+          destination: MobileDestinationId.moneyLedger,
+          detailBuilder: (_) => ExpenseDetailScreen(expenseId: id),
+        );
+        return true;
+      case 'messages':
+        _openShellTab(
+          MobileShellTabId.inbox,
+          destination: MobileDestinationId.messages,
+          detailBuilder: (_) => MessageDetailScreen(conversationId: id),
+        );
+        return true;
+      case 'scan':
+        Navigator.of(context).push<void>(
+          MaterialPageRoute<void>(
+            builder: (_) => ScanReviewScreen(draftId: id),
+          ),
+        );
+        return true;
+    }
+
+    return false;
+  }
+
   @override
   void initState() {
     super.initState();
+    _shellNavigator = MobileShellNavigator(
+      openTab: _openShellTab,
+      openRoute: _openShellRoute,
+    );
+    MobileShellNavigationRegistry.attach(_shellNavigator);
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -146,7 +324,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
       // mirroring the web's per-navigation re-check. No-op once resolved, so a
       // returning user pays nothing; a genuinely-new account gets gated here
       // instead of slipping past the Sandbox/Live choice.
-      ref.read(authControllerProvider.notifier).reresolveOnboardingIfUnresolved();
+      ref
+          .read(authControllerProvider.notifier)
+          .reresolveOnboardingIfUnresolved();
       // Initialise the realtime watcher so it stays alive for the shell. The
       // updates hub also carries in-app Notification events (see
       // realtime_providers' `_invalidateForEntity` 'Notification' case).
@@ -164,6 +344,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   @override
   void dispose() {
+    MobileShellNavigationRegistry.detach(_shellNavigator);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -189,7 +370,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
         // which REPLACES the stack) so a detail screen opened from a
         // notification tap keeps a working back button to the dashboard
         // instead of stranding the user with no way back.
-        context.push(route);
+        if (!_shellNavigator.openRoute(route)) {
+          context.push(route);
+        }
       }
       ref.read(pendingPushLinkProvider.notifier).consume();
     });
@@ -226,12 +409,15 @@ class _HomeShellState extends ConsumerState<HomeShell>
           navigator.popUntil((route) => route.isFirst);
           _openCapture();
         case VoiceAction.showOverdueRent:
-          navigator.push<void>(
-            MaterialPageRoute<void>(builder: (_) => const OverdueScreen()),
+          _openShellTab(
+            MobileShellTabId.money,
+            destination: MobileDestinationId.moneyOverview,
+            detailBuilder: (_) => const OverdueScreen(),
           );
         case VoiceAction.openWorkOrders:
-          navigator.push<void>(
-            MaterialPageRoute<void>(builder: (_) => const WorkOrdersScreen()),
+          _openShellTab(
+            MobileShellTabId.work,
+            destination: MobileDestinationId.workOrders,
           );
       }
 
@@ -264,65 +450,110 @@ class _HomeShellState extends ConsumerState<HomeShell>
         ? tabs.length - 1
         : _selectedIndex;
 
-    return Scaffold(
-      body: Column(
-        children: [
-          // App-wide "Sandbox mode" indicator: a slim bar above the tabs, shown only while the
-          // account is a seeded demo sandbox. Inert (zero-height) once the account is Live.
-          const _SandboxIndicator(),
-          Expanded(
-            child: IndexedStack(
-              index: selectedIndex,
-              children: tenantMode
-                  ? [
-                      _TenantHomeTab(user: user),
-                      const MessagesListScreen(),
-                      const _TenantMaintenanceTab(),
-                      const _TenantMoreTab(),
-                    ]
-                  : [
-                      _HomeTab(
-                        user: user,
-                        onOpenCapture: _openCapture,
-                        onOpenOverdue: () => Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder: (_) => const OverdueScreen(),
+    return MobileShellNavigation(
+      controller: _shellNavigator,
+      child: Scaffold(
+        body: Column(
+          children: [
+            // App-wide "Sandbox mode" indicator: a slim bar above the tabs, shown only while the
+            // account is a seeded demo sandbox. Inert (zero-height) once the account is Live.
+            const _SandboxIndicator(),
+            Expanded(
+              child: IndexedStack(
+                index: selectedIndex,
+                children: tenantMode
+                    ? [
+                        _TenantHomeTab(user: user),
+                        const MessagesListScreen(),
+                        const _TenantMaintenanceTab(),
+                        const _TenantMoreTab(),
+                      ]
+                    : [
+                        _HomeTab(
+                          user: user,
+                          onOpenCapture: _openCapture,
+                          onOpenOverdue: () => _openShellTab(
+                            MobileShellTabId.money,
+                            destination: MobileDestinationId.moneyOverview,
+                            detailBuilder: (_) => const OverdueScreen(),
                           ),
+                          onSwitchToTab: (index) =>
+                              setState(() => _selectedIndex = index),
+                          onOpenAssistant: () {
+                            Navigator.of(context).push<void>(
+                              MaterialPageRoute<void>(
+                                builder: (_) => const AiTab(),
+                              ),
+                            );
+                          },
                         ),
-                        onSwitchToTab: (index) =>
-                            setState(() => _selectedIndex = index),
-                        onOpenAssistant: () {
-                          Navigator.of(context).push<void>(
-                            MaterialPageRoute<void>(
-                                builder: (_) => const AiTab()),
-                          );
-                        },
-                      ),
-                      const MoneyScreen(),
-                      const WorkOrdersScreen(),
-                      const MessagesListScreen(),
-                    ],
+                        RentalsHubScreen(
+                          onControllerReady: (controller) => _registerDomain(
+                            MobileShellTabId.rentals,
+                            controller,
+                          ),
+                          onControllerDisposed: (controller) =>
+                              _unregisterDomain(
+                                MobileShellTabId.rentals,
+                                controller,
+                              ),
+                        ),
+                        MoneyHubScreen(
+                          onControllerReady: (controller) => _registerDomain(
+                            MobileShellTabId.money,
+                            controller,
+                          ),
+                          onControllerDisposed: (controller) =>
+                              _unregisterDomain(
+                                MobileShellTabId.money,
+                                controller,
+                              ),
+                        ),
+                        WorkHubScreen(
+                          onControllerReady: (controller) => _registerDomain(
+                            MobileShellTabId.work,
+                            controller,
+                          ),
+                          onControllerDisposed: (controller) =>
+                              _unregisterDomain(
+                                MobileShellTabId.work,
+                                controller,
+                              ),
+                        ),
+                        InboxHubScreen(
+                          onControllerReady: (controller) => _registerDomain(
+                            MobileShellTabId.inbox,
+                            controller,
+                          ),
+                          onControllerDisposed: (controller) =>
+                              _unregisterDomain(
+                                MobileShellTabId.inbox,
+                                controller,
+                              ),
+                        ),
+                      ],
+              ),
             ),
-          ),
-        ],
-      ),
-      floatingActionButton: tenantMode
-          ? null
-          : FloatingActionButton(
-        heroTag: 'home-capture-fab',
-              onPressed: _openCapture,
-              tooltip: 'Scan / Add',
-              elevation: 2,
-              child: const Icon(Symbols.add_a_photo_rounded, fill: 1),
-            ),
-      floatingActionButtonLocation:
-          FloatingActionButtonLocation.centerDocked,
-      bottomNavigationBar: _MorphNavBar(
-        tabs: tabs,
-        selectedIndex: selectedIndex,
-        // Landlord nav leaves a gap in the middle for the docked Capture FAB.
-        centerGap: !tenantMode,
-        onSelected: (index) => setState(() => _selectedIndex = index),
+          ],
+        ),
+        floatingActionButton: tenantMode || selectedIndex != 0
+            ? null
+            : FloatingActionButton(
+                heroTag: 'home-capture-fab',
+                onPressed: _openCapture,
+                tooltip: 'Scan / Add',
+                elevation: 2,
+                child: const Icon(Symbols.add_a_photo_rounded, fill: 1),
+              ),
+        floatingActionButtonLocation: tenantMode || selectedIndex != 0
+            ? null
+            : FloatingActionButtonLocation.endFloat,
+        bottomNavigationBar: _MorphNavBar(
+          tabs: tabs,
+          selectedIndex: selectedIndex,
+          centerGap: false,
+          onSelected: (index) => setState(() => _selectedIndex = index),
+        ),
       ),
     );
   }
@@ -363,8 +594,11 @@ class _SandboxIndicator extends ConsumerWidget {
             bottom: false,
             child: Row(
               children: [
-                Icon(Icons.science_outlined,
-                    size: 15, color: scheme.onTertiaryContainer),
+                Icon(
+                  Icons.science_outlined,
+                  size: 15,
+                  color: scheme.onTertiaryContainer,
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -378,8 +612,11 @@ class _SandboxIndicator extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                Icon(Icons.arrow_forward_rounded,
-                    size: 15, color: scheme.onTertiaryContainer),
+                Icon(
+                  Icons.arrow_forward_rounded,
+                  size: 15,
+                  color: scheme.onTertiaryContainer,
+                ),
               ],
             ),
           ),
@@ -414,6 +651,38 @@ class _MorphNavBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final mid = tabs.length ~/ 2;
+    if (!centerGap && tabs.length >= 5) {
+      return Container(
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerLow,
+          border: Border(
+            top: BorderSide(
+              color: scheme.outlineVariant.withValues(alpha: 0.4),
+            ),
+          ),
+        ),
+        child: SafeArea(
+          top: false,
+          child: SizedBox(
+            height: 68,
+            child: Row(
+              children: [
+                for (var i = 0; i < tabs.length; i++)
+                  Expanded(
+                    child: _CompactNavItem(
+                      icon: tabs[i].icon,
+                      label: tabs[i].label,
+                      selected: i == selectedIndex,
+                      onTap: () => onSelected(i),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return Container(
       decoration: BoxDecoration(
         color: scheme.surfaceContainerLow,
@@ -439,6 +708,73 @@ class _MorphNavBar extends StatelessWidget {
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactNavItem extends StatelessWidget {
+  const _CompactNavItem({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final fg = selected ? scheme.onPrimaryContainer : scheme.onSurfaceVariant;
+
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedContainer(
+              duration: M3Motion.medium3,
+              curve: M3Motion.emphasizedDecelerate,
+              width: 40,
+              height: 30,
+              decoration: BoxDecoration(
+                color: selected ? scheme.primaryContainer : Colors.transparent,
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Center(
+                child: TweenAnimationBuilder<double>(
+                  duration: M3Motion.medium2,
+                  curve: M3Motion.emphasizedDecelerate,
+                  tween: Tween(end: selected ? 1.0 : 0.0),
+                  builder: (context, fill, _) => Icon(
+                    icon,
+                    color: fg,
+                    size: 22,
+                    fill: fill,
+                    weight: selected ? 500 : 400,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: fg,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -576,9 +912,7 @@ class _TenantHomeTabState extends ConsumerState<_TenantHomeTab> {
       ref.invalidate(tenantAutopayStatusProvider(leaseId));
       messenger
         ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(content: Text('Autopay turned off.')),
-        );
+        ..showSnackBar(const SnackBar(content: Text('Autopay turned off.')));
     } on ApiException catch (e) {
       messenger
         ..hideCurrentSnackBar()
@@ -776,9 +1110,7 @@ class _PayItemCard extends StatelessWidget {
     final isLate = payment.dueDate.isBefore(
       DateTime.now().subtract(const Duration(days: 1)),
     );
-    final dueLabel = isLate
-        ? 'Past due'
-        : 'Due ${_shortDate(payment.dueDate)}';
+    final dueLabel = isLate ? 'Past due' : 'Due ${_shortDate(payment.dueDate)}';
 
     return Card(
       child: Padding(
@@ -1117,8 +1449,9 @@ class _TenantMaintenanceTabState extends ConsumerState<_TenantMaintenanceTab> {
                           trailing: const Icon(Icons.chevron_right),
                           onTap: () => Navigator.of(context).push<void>(
                             MaterialPageRoute<void>(
-                              builder: (_) =>
-                                  TenantWorkOrderDetailScreen(workOrderId: w.id),
+                              builder: (_) => TenantWorkOrderDetailScreen(
+                                workOrderId: w.id,
+                              ),
                             ),
                           ),
                         ),
@@ -1337,8 +1670,9 @@ class _HomeTab extends ConsumerWidget {
   /// Drills into the Money "Who's behind" overdue view.
   final VoidCallback onOpenOverdue;
 
-  /// Index of the Money tab in the landlord shell (Today · Money · …).
-  static const _moneyTabIndex = 1;
+  static const _moneyTabIndex = 2;
+  static const _workTabIndex = 3;
+  static const _inboxTabIndex = 4;
 
   String get _greeting {
     final hour = DateTime.now().hour;
@@ -1367,25 +1701,7 @@ class _HomeTab extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Rental Command'),
-        actions: [
-          const _NotificationBell(),
-          IconButton(
-            icon: const Icon(Icons.grid_view_outlined),
-            tooltip: 'Browse',
-            onPressed: () => Navigator.of(context).push<void>(
-              MaterialPageRoute<void>(builder: (_) => const MoreTab()),
-            ),
-          ),
-          // A4: the duplicate AppBar "Assistant" sparkle was removed — the
-          // single AI entry point is now the "Ask" quick-action tile below.
-          IconButton(
-            icon: const Icon(Icons.logout_outlined),
-            tooltip: 'Sign out',
-            onPressed: () async {
-              await ref.read(authControllerProvider.notifier).logout();
-            },
-          ),
-        ],
+        actions: const [MobileNotificationBell(), MobileAccountMenu()],
       ),
       body: RefreshIndicator(
         onRefresh: () async {
@@ -1489,7 +1805,7 @@ class _HomeTab extends ConsumerWidget {
                   _HomeSectionHeader(
                     title: 'Latest messages',
                     actionLabel: 'Open inbox',
-                    onAction: () => onSwitchToTab(3),
+                    onAction: () => onSwitchToTab(_inboxTabIndex),
                   ),
                   const SizedBox(height: 8),
                   _LatestMessagesSection(messagesAsync: messagesAsync),
@@ -1499,11 +1815,7 @@ class _HomeTab extends ConsumerWidget {
                     // "things to fix" concept (was "Field queue").
                     title: 'Work Orders',
                     actionLabel: 'View all',
-                    onAction: () => Navigator.of(context).push<void>(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const WorkOrdersScreen(),
-                      ),
-                    ),
+                    onAction: () => onSwitchToTab(_workTabIndex),
                   ),
                   const SizedBox(height: 8),
                   _FieldQueueSection(queueAsync: fieldQueueAsync),
@@ -1658,15 +1970,27 @@ class _MessageCard extends StatelessWidget {
 
     return Card(
       child: ListTile(
-        onTap: () => Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-            builder: (_) => MessageDetailScreen(
-              conversationId: conversation.id,
-              title: conversation.tenantName,
-              subtitle: conversation.subject,
-            ),
-          ),
-        ),
+        onTap: () {
+          Widget detailBuilder(BuildContext _) => MessageDetailScreen(
+            conversationId: conversation.id,
+            title: conversation.tenantName,
+            subtitle: conversation.subject,
+          );
+          final shellNavigator = mobileShellNavigatorOf(context);
+          if (shellNavigator != null) {
+            shellNavigator.openTab(
+              MobileShellTabId.inbox,
+              destination: MobileDestinationId.messages,
+              detailBuilder: detailBuilder,
+            );
+            revealMobileShellIfDetached(context);
+            return;
+          }
+
+          Navigator.of(
+            context,
+          ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
+        },
         leading: CircleAvatar(
           backgroundColor: conversation.hasUnread
               ? cs.primaryContainer
@@ -1714,11 +2038,24 @@ class _FieldQueueCard extends StatelessWidget {
 
     return Card(
       child: ListTile(
-        onTap: () => Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-            builder: (_) => WorkOrderDetailScreen(workOrderId: workOrder.id),
-          ),
-        ),
+        onTap: () {
+          Widget detailBuilder(BuildContext _) =>
+              WorkOrderUnitAwareLoaderScreen(workOrderId: workOrder.id);
+          final shellNavigator = mobileShellNavigatorOf(context);
+          if (shellNavigator != null) {
+            shellNavigator.openTab(
+              MobileShellTabId.work,
+              destination: MobileDestinationId.workOrders,
+              detailBuilder: detailBuilder,
+            );
+            revealMobileShellIfDetached(context);
+            return;
+          }
+
+          Navigator.of(
+            context,
+          ).push<void>(MaterialPageRoute<void>(builder: detailBuilder));
+        },
         leading: CircleAvatar(
           backgroundColor: _priorityBg(workOrder.priority, cs),
           child: Icon(
@@ -1850,10 +2187,9 @@ class _GettingStartedCard extends ConsumerWidget {
     // autoDispose cache with the _SandboxIndicator). While it's still loading we
     // fall back to the honest "not sandbox" path — the card already hides itself
     // until the checklist signals settle, so nothing flashes.
-    final isSandbox = ref.watch(sandboxStateProvider).maybeWhen(
-          data: (s) => s.isSandbox,
-          orElse: () => false,
-        );
+    final isSandbox = ref
+        .watch(sandboxStateProvider)
+        .maybeWhen(data: (s) => s.isSandbox, orElse: () => false);
 
     final progress = ref.watch(gettingStartedProgressProvider);
     // Hidden until data settles. In Live, also hidden once everything's done. In
@@ -1869,10 +2205,8 @@ class _GettingStartedCard extends ConsumerWidget {
         : progress.doneCount / progress.totalCount;
 
     void openChecklist() => Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-            builder: (_) => const GettingStartedScreen(),
-          ),
-        );
+      MaterialPageRoute<void>(builder: (_) => const GettingStartedScreen()),
+    );
 
     // The next not-yet-done task, surfaced inline as a one-tap hint (Live only —
     // in Sandbox the seeded records auto-check everything, so there is no "next").
@@ -1909,8 +2243,12 @@ class _GettingStartedCard extends ConsumerWidget {
                         color: cs.primary.withValues(alpha: 0.14),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Icon(Symbols.checklist_rounded,
-                          color: cs.primary, size: 22, fill: 1),
+                      child: Icon(
+                        Symbols.checklist_rounded,
+                        color: cs.primary,
+                        size: 22,
+                        fill: 1,
+                      ),
                     ),
                     const SizedBox(width: 14),
                     Expanded(
@@ -1927,9 +2265,9 @@ class _GettingStartedCard extends ConsumerWidget {
                           Text(
                             isSandbox
                                 ? "This is example data so you can look around. "
-                                    "When you're ready, set up your own rentals."
+                                      "When you're ready, set up your own rentals."
                                 : 'A short checklist to get your rentals set up '
-                                    '— each step takes you to the right spot.',
+                                      '— each step takes you to the right spot.',
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: cs.onSurfaceVariant,
                             ),
@@ -1937,8 +2275,10 @@ class _GettingStartedCard extends ConsumerWidget {
                         ],
                       ),
                     ),
-                    Icon(Symbols.chevron_right_rounded,
-                        color: cs.onSurfaceVariant),
+                    Icon(
+                      Symbols.chevron_right_rounded,
+                      color: cs.onSurfaceVariant,
+                    ),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -1988,15 +2328,21 @@ class _GettingStartedCard extends ConsumerWidget {
                     const SizedBox(height: 14),
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                       decoration: BoxDecoration(
                         color: cs.surface.withValues(alpha: 0.6),
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: Row(
                         children: [
-                          Icon(nextTask.icon,
-                              size: 18, color: cs.primary, fill: 1),
+                          Icon(
+                            nextTask.icon,
+                            size: 18,
+                            color: cs.primary,
+                            fill: 1,
+                          ),
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
@@ -2035,10 +2381,7 @@ class _GettingStartedCard extends ConsumerWidget {
 /// capability is lost: the capture sheet still covers scan / gallery / PDF /
 /// voice ("Tell me") / type. A4 also makes "Ask" the single AI entry point.
 class _QuickActions extends StatelessWidget {
-  const _QuickActions({
-    required this.onScanOrAdd,
-    required this.onAskAi,
-  });
+  const _QuickActions({required this.onScanOrAdd, required this.onAskAi});
 
   /// Opens the capture sheet (scan / gallery / PDF / voice / type).
   final VoidCallback onScanOrAdd;
@@ -2211,7 +2554,7 @@ class _BulletRow extends StatelessWidget {
     final cs = theme.colorScheme;
     final (iconData, iconColor, bgColor) = _severityStyle(bullet.severity, cs);
 
-    final destination = _destinationFor(bullet);
+    final target = _targetFor(bullet);
 
     final content = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -2251,7 +2594,7 @@ class _BulletRow extends StatelessWidget {
               ],
             ),
           ),
-          if (destination != null) ...[
+          if (target != null) ...[
             const SizedBox(width: 8),
             Icon(Icons.chevron_right, color: cs.onSurfaceVariant, size: 18),
           ],
@@ -2259,56 +2602,121 @@ class _BulletRow extends StatelessWidget {
       ),
     );
 
-    if (destination == null) {
+    if (target == null) {
       return Card(child: content);
     }
 
     return Card(
       child: InkWell(
-        onTap: () => Navigator.of(
-          context,
-        ).push<void>(MaterialPageRoute<void>(builder: destination)),
+        onTap: () => _openTarget(context, target),
         borderRadius: BorderRadius.circular(12),
         child: content,
       ),
     );
   }
 
+  void _openTarget(BuildContext context, _BriefingTarget target) {
+    final shellNavigator = mobileShellNavigatorOf(context);
+    if (shellNavigator != null) {
+      shellNavigator.openTab(
+        target.tab,
+        destination: target.destination,
+        detailBuilder: target.detailBuilder,
+      );
+      revealMobileShellIfDetached(context);
+      return;
+    }
+
+    if (target.fallbackBuilder != null) {
+      Navigator.of(
+        context,
+      ).push<void>(MaterialPageRoute<void>(builder: target.fallbackBuilder!));
+    }
+  }
+
   /// Maps a briefing bullet's referenced entity to the screen that shows it.
   ///
   /// Returns `null` when the bullet has no entity reference or the type isn't
   /// navigable, in which case the card is rendered without a tap handler.
-  /// Only [WorkOrder] has a detail screen that can be opened from an id alone;
-  /// the others (which need a fully-loaded model) fall back to their list
-  /// screen so the landlord still lands in the right place.
-  WidgetBuilder? _destinationFor(BriefingBullet bullet) {
-    // An overdue-rent bullet must land on the actionable "Who's behind" view
-    // (Mark paid / Text / edit per tenant), NOT the generic payments list. The
-    // server tags these with category "RentLate".
-    if (bullet.category == 'RentLate') {
-      return (_) => const OverdueScreen();
-    }
-
+  _BriefingTarget? _targetFor(BriefingBullet bullet) {
     final type = bullet.entityType;
     final id = bullet.entityId;
+
+    // An overdue-rent bullet must land on the actionable "Who's behind" view
+    // (Mark paid / Text / edit per tenant), NOT the generic payments list. The
+    // server tags these with category "RentLate". If the bullet includes a
+    // specific payment id, the entity detail route below is more precise.
+    if (bullet.category == 'RentLate' && !(type == 'Payment' && id != null)) {
+      return _BriefingTarget(
+        tab: MobileShellTabId.money,
+        destination: MobileDestinationId.moneyOverview,
+        detailBuilder: (_) => const OverdueScreen(),
+      );
+    }
+
     if (type == null) return null;
 
     switch (type) {
       case 'WorkOrder':
         if (id == null) return null;
-        return (_) => WorkOrderDetailScreen(workOrderId: id);
+        return _BriefingTarget(
+          tab: MobileShellTabId.work,
+          destination: MobileDestinationId.workOrders,
+          detailBuilder: (_) => WorkOrderUnitAwareLoaderScreen(workOrderId: id),
+        );
       case 'Payment':
-        return (_) => const OverdueScreen();
+        if (id != null) {
+          return _BriefingTarget(
+            tab: MobileShellTabId.money,
+            destination: MobileDestinationId.moneyLedger,
+            detailBuilder: (_) => PaymentDetailScreen(paymentId: id),
+          );
+        }
+        return _BriefingTarget(
+          tab: MobileShellTabId.money,
+          destination: MobileDestinationId.moneyOverview,
+          detailBuilder: (_) => const OverdueScreen(),
+        );
       case 'Lease':
-        return (_) => const LeasesListScreen();
+        if (id != null) {
+          return _BriefingTarget(
+            tab: MobileShellTabId.rentals,
+            destination: MobileDestinationId.units,
+            detailBuilder: (_) => LeaseDetailLoaderScreen(leaseId: id),
+          );
+        }
+        return _BriefingTarget(
+          tab: MobileShellTabId.rentals,
+          destination: MobileDestinationId.leases,
+          fallbackBuilder: (_) => const LeasesListScreen(),
+        );
       case 'Tenant':
-        return (_) => const TenantsListScreen();
+        if (id != null) {
+          return _BriefingTarget(
+            tab: MobileShellTabId.rentals,
+            destination: MobileDestinationId.tenants,
+            detailBuilder: (_) => TenantDetailLoaderScreen(tenantId: id),
+          );
+        }
+        return _BriefingTarget(
+          tab: MobileShellTabId.rentals,
+          destination: MobileDestinationId.tenants,
+          fallbackBuilder: (_) => const TenantsListScreen(),
+        );
       // Appointment/Inspection detail screens need a fully-loaded model (or are a
       // "run" action), so land on their list — still actionable, never a dead end.
       case 'Appointment':
-        return (_) => const AppointmentsScreen();
+        return _BriefingTarget(
+          tab: MobileShellTabId.work,
+          destination: MobileDestinationId.calendar,
+          fallbackBuilder: (_) => const AppointmentsScreen(),
+        );
       case 'Inspection':
-        return (_) => const InspectionsListScreen();
+        return _BriefingTarget(
+          tab: MobileShellTabId.work,
+          destination: MobileDestinationId.inspections,
+          fallbackBuilder: (_) => const InspectionsListScreen(),
+        );
       default:
         return null;
     }
@@ -2331,6 +2739,20 @@ class _BulletRow extends StatelessWidget {
         return (Icons.info_outline, cs.primary, cs.primaryContainer);
     }
   }
+}
+
+class _BriefingTarget {
+  const _BriefingTarget({
+    required this.tab,
+    required this.destination,
+    this.detailBuilder,
+    this.fallbackBuilder,
+  });
+
+  final MobileShellTabId tab;
+  final MobileDestinationId destination;
+  final MobileDetailBuilder? detailBuilder;
+  final WidgetBuilder? fallbackBuilder;
 }
 
 // ---------------------------------------------------------------------------
@@ -2378,28 +2800,4 @@ class _TabItem {
   /// A `Symbols.*_rounded` glyph (Material Symbols Rounded) whose FILL axis is
   /// animated 0→1 when the tab is active.
   final IconData icon;
-}
-
-/// AppBar notification bell with an unread-count badge. Tapping opens the
-/// inbox at `/notifications`; the badge count comes from [unreadCountProvider]
-/// (refreshed on app resume, SignalR event, and inbox close).
-class _NotificationBell extends ConsumerWidget {
-  const _NotificationBell();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final count = ref.watch(unreadCountProvider).maybeWhen(
-          data: (c) => c,
-          orElse: () => 0,
-        );
-    return IconButton(
-      tooltip: 'Notifications',
-      onPressed: () => context.push('/notifications'),
-      icon: Badge(
-        isLabelVisible: count > 0,
-        label: Text(count > 99 ? '99+' : '$count'),
-        child: const Icon(Icons.notifications_none),
-      ),
-    );
-  }
 }

@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
-import '../leases/lease_detail_screen.dart';
+import '../../core/widgets/tabbed_form_sheet.dart';
+import '../units/unit_command_center_screen.dart';
+import '../units/unit_navigation.dart';
 import 'properties_repository.dart';
 
 String _formatCurrency(double amount) {
@@ -21,12 +23,39 @@ String _formatCurrency(double amount) {
 }
 
 const _monthNames = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  '',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
-String _formatDate(DateTime d) =>
-    '${_monthNames[d.month]} ${d.day}, ${d.year}';
+String _formatDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
+
+void _openLeaseDetail(BuildContext context, Lease lease) {
+  openUnitCommandCenter(
+    context,
+    unitId: lease.unitId,
+    initialTab: UnitCommandCenterTab.lease,
+    lease: lease,
+  );
+}
+
+void _openUnitOverview(BuildContext context, Unit unit) {
+  openUnitCommandCenter(
+    context,
+    unitId: unit.id,
+    initialTab: UnitCommandCenterTab.overview,
+  );
+}
 
 /// Loads a property by id, then shows [PropertyDetailScreen]. Use this when the
 /// caller only has a property id (e.g. a lease, which carries `propertyId` but
@@ -40,9 +69,8 @@ class PropertyDetailLoaderScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(propertyDetailProvider(propertyId));
     return async.when(
-      loading: () => const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      ),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (e, _) => Scaffold(
         appBar: AppBar(title: const Text('Property')),
         body: Center(
@@ -75,8 +103,7 @@ class PropertyDetailScreen extends ConsumerStatefulWidget {
       _PropertyDetailScreenState();
 }
 
-class _PropertyDetailScreenState
-    extends ConsumerState<PropertyDetailScreen> {
+class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
   // unitsProvider and propertyLeasesProvider both self-load on first watch
   // (their notifier build() calls Future.microtask(load)), so no explicit
   // initState load is needed — adding one just double-fetches.
@@ -146,9 +173,10 @@ class _PropertyDetailScreenState
           children: [
             // ── Property header ────────────────────────────────────────────
             _PropertyHeader(
-                property: property,
-                theme: theme,
-                colorScheme: colorScheme),
+              property: property,
+              theme: theme,
+              colorScheme: colorScheme,
+            ),
             const SizedBox(height: 24),
 
             // ── Units section ──────────────────────────────────────────────
@@ -157,8 +185,9 @@ class _PropertyDetailScreenState
                 Expanded(
                   child: Text(
                     'Units',
-                    style: theme.textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w700),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
                 TextButton.icon(
@@ -171,8 +200,7 @@ class _PropertyDetailScreenState
             const SizedBox(height: 8),
 
             unitsAsync.when(
-              loading: () =>
-                  const Center(child: CircularProgressIndicator()),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => _InlineError(
                 message: e is ApiException ? e.message : e.toString(),
               ),
@@ -208,14 +236,14 @@ class _PropertyDetailScreenState
             // ── Leases section ─────────────────────────────────────────────
             Text(
               'Active Leases',
-              style: theme.textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w700),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
 
             leasesAsync.when(
-              loading: () =>
-                  const Center(child: CircularProgressIndicator()),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => _InlineError(
                 message: e is ApiException ? e.message : e.toString(),
               ),
@@ -228,15 +256,12 @@ class _PropertyDetailScreenState
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Text(
                       'No active leases on this property.',
-                      style:
-                          TextStyle(color: colorScheme.onSurfaceVariant),
+                      style: TextStyle(color: colorScheme.onSurfaceVariant),
                     ),
                   );
                 }
                 return Column(
-                  children: active
-                      .map((l) => _LeaseTile(lease: l))
-                      .toList(),
+                  children: active.map((l) => _LeaseTile(lease: l)).toList(),
                 );
               },
             ),
@@ -276,26 +301,27 @@ class _PropertyHeader extends StatelessWidget {
                 Expanded(
                   child: Text(
                     property.name,
-                    style: theme.textTheme.titleLarge
-                        ?.copyWith(fontWeight: FontWeight.w700),
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                _StatusBadge(
-                    status: property.status,
-                    colorScheme: colorScheme),
+                _StatusBadge(status: property.status, colorScheme: colorScheme),
               ],
             ),
             const SizedBox(height: 4),
             Text(
               property.addressLine1,
               style: theme.textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurfaceVariant),
+                color: colorScheme.onSurfaceVariant,
+              ),
             ),
             Text(
               '${property.city}, ${property.state} ${property.postalCode}',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: colorScheme.onSurfaceVariant),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 12),
             Wrap(
@@ -303,10 +329,7 @@ class _PropertyHeader extends StatelessWidget {
               runSpacing: 4,
               children: [
                 _KeyValue(label: 'Type', value: property.type),
-                _KeyValue(
-                  label: 'Units',
-                  value: '${property.unitCount ?? 0}',
-                ),
+                _KeyValue(label: 'Units', value: '${property.unitCount ?? 0}'),
                 _KeyValue(
                   label: 'Occupied',
                   value: '${property.occupiedUnits ?? 0}',
@@ -366,11 +389,16 @@ class _KeyValue extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label,
-            style: TextStyle(fontSize: 11, color: colorScheme.onSurfaceVariant)),
-        Text(value,
-            style: theme.textTheme.bodyMedium
-                ?.copyWith(fontWeight: FontWeight.w600)),
+        Text(
+          label,
+          style: TextStyle(fontSize: 11, color: colorScheme.onSurfaceVariant),
+        ),
+        Text(
+          value,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ],
     );
   }
@@ -379,11 +407,7 @@ class _KeyValue extends StatelessWidget {
 // ── Unit tile ─────────────────────────────────────────────────────────────────
 
 class _UnitTile extends StatelessWidget {
-  const _UnitTile({
-    required this.unit,
-    required this.onEdit,
-    this.activeLease,
-  });
+  const _UnitTile({required this.unit, required this.onEdit, this.activeLease});
 
   final Unit unit;
   final VoidCallback onEdit;
@@ -401,13 +425,9 @@ class _UnitTile extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: ListTile(
-        onTap: lease == null
-            ? null
-            : () => Navigator.of(context).push<void>(
-                  MaterialPageRoute<void>(
-                    builder: (_) => LeaseDetailScreen(lease: lease),
-                  ),
-                ),
+        onTap: () => lease == null
+            ? _openUnitOverview(context, unit)
+            : _openLeaseDetail(context, lease),
         leading: CircleAvatar(
           radius: 20,
           backgroundColor: isOccupied
@@ -423,23 +443,23 @@ class _UnitTile extends StatelessWidget {
         ),
         title: Text(
           'Unit ${unit.unitNumber}',
-          style: theme.textTheme.bodyMedium
-              ?.copyWith(fontWeight: FontWeight.w600),
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
         ),
         subtitle: Text(
           lease != null && lease.tenantName != null
               ? '${unit.bedrooms} bd / ${unit.bathrooms} ba  ·  '
-                  '${lease.tenantName} · tap for lease'
+                    '${lease.tenantName} · tap for lease'
               : '${unit.bedrooms} bd / ${unit.bathrooms} ba  ·  '
-                  '${_formatCurrency(unit.marketRent)}/mo',
+                    '${_formatCurrency(unit.marketRent)}/mo',
           style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
         ),
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
               decoration: BoxDecoration(
                 color: isOccupied
                     ? colorScheme.primaryContainer
@@ -484,11 +504,7 @@ class _LeaseTile extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: InkWell(
-        onTap: () => Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-            builder: (_) => LeaseDetailScreen(lease: lease),
-          ),
-        ),
+        onTap: () => _openLeaseDetail(context, lease),
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(12),
@@ -500,8 +516,9 @@ class _LeaseTile extends StatelessWidget {
                   Expanded(
                     child: Text(
                       lease.tenantName ?? 'Lease #${lease.leaseNumber}',
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   Text(
@@ -512,8 +529,11 @@ class _LeaseTile extends StatelessWidget {
                     ),
                   ),
                   const Text('/mo', style: TextStyle(fontSize: 12)),
-                  Icon(Icons.chevron_right,
-                      size: 18, color: colorScheme.onSurfaceVariant),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ],
               ),
               const SizedBox(height: 4),
@@ -521,7 +541,9 @@ class _LeaseTile extends StatelessWidget {
                 'Unit ${lease.unitNumber ?? lease.unitId}  ·  '
                 '${_formatDate(lease.startDate)} – ${_formatDate(lease.endDate)}',
                 style: TextStyle(
-                    fontSize: 12, color: colorScheme.onSurfaceVariant),
+                  fontSize: 12,
+                  color: colorScheme.onSurfaceVariant,
+                ),
               ),
             ],
           ),
@@ -603,16 +625,15 @@ class _AddUnitSheetState extends ConsumerState<_AddUnitSheet> {
     });
 
     try {
-      await ref.read(propertiesRepositoryProvider).createUnit(
-        widget.propertyId,
-        {
-          'unitNumber': _numberCtrl.text.trim(),
-          'bedrooms': int.tryParse(_bedsCtrl.text) ?? 1,
-          'bathrooms': double.tryParse(_bathsCtrl.text) ?? 1.0,
-          'marketRent': double.tryParse(_rentCtrl.text) ?? 0.0,
-          'status': _selectedStatus,
-        },
-      );
+      await ref
+          .read(propertiesRepositoryProvider)
+          .createUnit(widget.propertyId, {
+            'unitNumber': _numberCtrl.text.trim(),
+            'bedrooms': int.tryParse(_bedsCtrl.text) ?? 1,
+            'bathrooms': double.tryParse(_bathsCtrl.text) ?? 1.0,
+            'marketRent': double.tryParse(_rentCtrl.text) ?? 0.0,
+            'status': _selectedStatus,
+          });
 
       widget.onSaved();
       if (mounted) Navigator.of(context).pop();
@@ -625,137 +646,98 @@ class _AddUnitSheetState extends ConsumerState<_AddUnitSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
+    const gap = SizedBox(height: 12);
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
-      child: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Add Unit',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
+    return Form(
+      key: _formKey,
+      child: TabbedFormSheet(
+        title: 'Add Unit',
+        saveLabel: 'Add Unit',
+        saving: _saving,
+        error: _error,
+        onSave: _submit,
+        tabs: [
+          TabbedFormStepSpec(
+            label: 'Details',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _numberCtrl,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(labelText: 'Unit number'),
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? 'Unit number is required'
+                      : null,
+                ),
+                gap,
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _bedsCtrl,
+                        keyboardType: TextInputType.number,
+                        textInputAction: TextInputAction.next,
+                        decoration: const InputDecoration(labelText: 'Beds'),
+                        validator: (v) => (v == null || int.tryParse(v) == null)
+                            ? 'Enter a number'
+                            : null,
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              TextFormField(
-                controller: _numberCtrl,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(labelText: 'Unit number'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty)
-                        ? 'Unit number is required'
-                        : null,
-              ),
-              const SizedBox(height: 12),
-
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _bedsCtrl,
-                      keyboardType: TextInputType.number,
-                      textInputAction: TextInputAction.next,
-                      decoration: const InputDecoration(labelText: 'Beds'),
-                      validator: (v) =>
-                          (v == null || int.tryParse(v) == null)
-                              ? 'Enter a number'
-                              : null,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _bathsCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        textInputAction: TextInputAction.next,
+                        decoration: const InputDecoration(labelText: 'Baths'),
+                        validator: (v) =>
+                            (v == null || double.tryParse(v) == null)
+                            ? 'Enter a number'
+                            : null,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _bathsCtrl,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      textInputAction: TextInputAction.next,
-                      decoration: const InputDecoration(labelText: 'Baths'),
-                      validator: (v) =>
-                          (v == null || double.tryParse(v) == null)
-                              ? 'Enter a number'
-                              : null,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              TextFormField(
-                controller: _rentCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                textInputAction: TextInputAction.done,
-                decoration:
-                    const InputDecoration(labelText: 'Market rent (\$)'),
-                validator: (v) =>
-                    (v == null || double.tryParse(v) == null)
-                        ? 'Enter an amount'
-                        : null,
-                onFieldSubmitted: (_) => _saving ? null : _submit(),
-              ),
-              const SizedBox(height: 12),
-
-              DropdownButtonFormField<String>(
-                initialValue: _selectedStatus,
-                decoration: const InputDecoration(labelText: 'Status'),
-                items: _statuses
-                    .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) setState(() => _selectedStatus = v);
-                },
-              ),
-
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                        color: colorScheme.onErrorContainer, fontSize: 13),
-                  ),
+                  ],
                 ),
               ],
-
-              const SizedBox(height: 20),
-
-              FilledButton(
-                onPressed: _saving ? null : _submit,
-                child: _saving
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Add Unit'),
-              ),
-            ],
+            ),
           ),
-        ),
+          TabbedFormStepSpec(
+            label: 'Rent',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _rentCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  textInputAction: TextInputAction.done,
+                  decoration: const InputDecoration(
+                    labelText: 'Market rent (\$)',
+                  ),
+                  validator: (v) => (v == null || double.tryParse(v) == null)
+                      ? 'Enter an amount'
+                      : null,
+                  onFieldSubmitted: (_) => _saving ? null : _submit(),
+                ),
+                gap,
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedStatus,
+                  decoration: const InputDecoration(labelText: 'Status'),
+                  items: _statuses
+                      .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _selectedStatus = v);
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -790,14 +772,10 @@ class _EditUnitSheetState extends ConsumerState<_EditUnitSheet> {
   @override
   void initState() {
     super.initState();
-    _numberCtrl =
-        TextEditingController(text: widget.unit.unitNumber);
-    _bedsCtrl =
-        TextEditingController(text: widget.unit.bedrooms.toString());
-    _bathsCtrl =
-        TextEditingController(text: widget.unit.bathrooms.toString());
-    _rentCtrl =
-        TextEditingController(text: widget.unit.marketRent.toString());
+    _numberCtrl = TextEditingController(text: widget.unit.unitNumber);
+    _bedsCtrl = TextEditingController(text: widget.unit.bedrooms.toString());
+    _bathsCtrl = TextEditingController(text: widget.unit.bathrooms.toString());
+    _rentCtrl = TextEditingController(text: widget.unit.marketRent.toString());
     _selectedStatus = _statuses.contains(widget.unit.status)
         ? widget.unit.status
         : _statuses.first;
@@ -821,18 +799,13 @@ class _EditUnitSheetState extends ConsumerState<_EditUnitSheet> {
     });
 
     try {
-      await ref.read(propertiesRepositoryProvider).updateUnit(
-        widget.unit.id,
-        {
-          'unitNumber': _numberCtrl.text.trim(),
-          'bedrooms': int.tryParse(_bedsCtrl.text) ?? widget.unit.bedrooms,
-          'bathrooms':
-              double.tryParse(_bathsCtrl.text) ?? widget.unit.bathrooms,
-          'marketRent':
-              double.tryParse(_rentCtrl.text) ?? widget.unit.marketRent,
-          'status': _selectedStatus,
-        },
-      );
+      await ref.read(propertiesRepositoryProvider).updateUnit(widget.unit.id, {
+        'unitNumber': _numberCtrl.text.trim(),
+        'bedrooms': int.tryParse(_bedsCtrl.text) ?? widget.unit.bedrooms,
+        'bathrooms': double.tryParse(_bathsCtrl.text) ?? widget.unit.bathrooms,
+        'marketRent': double.tryParse(_rentCtrl.text) ?? widget.unit.marketRent,
+        'status': _selectedStatus,
+      });
 
       widget.onSaved();
       if (mounted) Navigator.of(context).pop();
@@ -845,137 +818,98 @@ class _EditUnitSheetState extends ConsumerState<_EditUnitSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
+    const gap = SizedBox(height: 12);
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
-      child: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Edit Unit ${widget.unit.unitNumber}',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
+    return Form(
+      key: _formKey,
+      child: TabbedFormSheet(
+        title: 'Edit Unit ${widget.unit.unitNumber}',
+        saveLabel: 'Save Changes',
+        saving: _saving,
+        error: _error,
+        onSave: _submit,
+        tabs: [
+          TabbedFormStepSpec(
+            label: 'Details',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _numberCtrl,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(labelText: 'Unit number'),
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? 'Unit number is required'
+                      : null,
+                ),
+                gap,
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _bedsCtrl,
+                        keyboardType: TextInputType.number,
+                        textInputAction: TextInputAction.next,
+                        decoration: const InputDecoration(labelText: 'Beds'),
+                        validator: (v) => (v == null || int.tryParse(v) == null)
+                            ? 'Enter a number'
+                            : null,
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              TextFormField(
-                controller: _numberCtrl,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(labelText: 'Unit number'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty)
-                        ? 'Unit number is required'
-                        : null,
-              ),
-              const SizedBox(height: 12),
-
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _bedsCtrl,
-                      keyboardType: TextInputType.number,
-                      textInputAction: TextInputAction.next,
-                      decoration: const InputDecoration(labelText: 'Beds'),
-                      validator: (v) =>
-                          (v == null || int.tryParse(v) == null)
-                              ? 'Enter a number'
-                              : null,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _bathsCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        textInputAction: TextInputAction.next,
+                        decoration: const InputDecoration(labelText: 'Baths'),
+                        validator: (v) =>
+                            (v == null || double.tryParse(v) == null)
+                            ? 'Enter a number'
+                            : null,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _bathsCtrl,
-                      keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true),
-                      textInputAction: TextInputAction.next,
-                      decoration: const InputDecoration(labelText: 'Baths'),
-                      validator: (v) =>
-                          (v == null || double.tryParse(v) == null)
-                              ? 'Enter a number'
-                              : null,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              TextFormField(
-                controller: _rentCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                textInputAction: TextInputAction.done,
-                decoration:
-                    const InputDecoration(labelText: 'Market rent (\$)'),
-                validator: (v) =>
-                    (v == null || double.tryParse(v) == null)
-                        ? 'Enter an amount'
-                        : null,
-                onFieldSubmitted: (_) => _saving ? null : _submit(),
-              ),
-              const SizedBox(height: 12),
-
-              DropdownButtonFormField<String>(
-                initialValue: _selectedStatus,
-                decoration: const InputDecoration(labelText: 'Status'),
-                items: _statuses
-                    .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) setState(() => _selectedStatus = v);
-                },
-              ),
-
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                        color: colorScheme.onErrorContainer, fontSize: 13),
-                  ),
+                  ],
                 ),
               ],
-
-              const SizedBox(height: 20),
-
-              FilledButton(
-                onPressed: _saving ? null : _submit,
-                child: _saving
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Save Changes'),
-              ),
-            ],
+            ),
           ),
-        ),
+          TabbedFormStepSpec(
+            label: 'Rent',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _rentCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  textInputAction: TextInputAction.done,
+                  decoration: const InputDecoration(
+                    labelText: 'Market rent (\$)',
+                  ),
+                  validator: (v) => (v == null || double.tryParse(v) == null)
+                      ? 'Enter an amount'
+                      : null,
+                  onFieldSubmitted: (_) => _saving ? null : _submit(),
+                ),
+                gap,
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedStatus,
+                  decoration: const InputDecoration(labelText: 'Status'),
+                  items: _statuses
+                      .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _selectedStatus = v);
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
