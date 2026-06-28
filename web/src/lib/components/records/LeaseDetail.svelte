@@ -51,7 +51,7 @@
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, DollarSign, Users, StickyNote, CalendarRange, Library, ExternalLink, Mail, RefreshCw } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, DollarSign, Users, StickyNote, CalendarRange, Library, ExternalLink, Mail, RefreshCw, Copy } from '@lucide/svelte';
 	import { ApiError } from '$lib/api/client';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
@@ -358,6 +358,7 @@
 	// show a calm, unobtrusive note instead of a scary error.
 	let esignNotConfigured = $state(false);
 	let downloadingSignedDocument = $state(false);
+	let copiedSigningUrlItemId = $state<number | null>(null);
 
 	const signatureStatusQuery = createQuery(() => ({
 		queryKey: ['lease-signature-status', leaseId],
@@ -447,6 +448,20 @@
 			showError('Could not download the signed lease. Please try again.');
 		} finally {
 			downloadingSignedDocument = false;
+		}
+	}
+
+	async function copySigningUrl(item: LeaseSignatureQueueItemResponse) {
+		if (!item.signingUrl) return;
+		try {
+			await navigator.clipboard.writeText(item.signingUrl);
+			copiedSigningUrlItemId = item.id;
+			showSuccess('Signing link copied.');
+			setTimeout(() => {
+				if (copiedSigningUrlItemId === item.id) copiedSigningUrlItemId = null;
+			}, 2000);
+		} catch {
+			showError('Could not copy the signing link.');
 		}
 	}
 
@@ -1102,7 +1117,7 @@
 						</p>
 					{:else if signature?.esignStatus === 'Sent' && latestSignatureEmailStatus === 'DeliveryDisabled'}
 						<p class="mt-2 text-xs text-warning" data-testid="lease-esign-delivery-disabled-note">
-							Signing request created, but email delivery is disabled right now. Configure email delivery, then resend for signature.
+							Signing request created, but email delivery is disabled right now. Open the signing link from the queue below, or configure email delivery and resend.
 						</p>
 					{:else if signature?.esignStatus === 'Sent' && latestSignatureEmailStatus === 'Failed'}
 						<p class="mt-2 text-xs text-destructive" data-testid="lease-esign-delivery-failed-note">
@@ -1177,6 +1192,32 @@
 										<p class="mt-1 text-xs text-muted-foreground">{queueWhenLabel(item)}</p>
 										{#if item.error}
 											<p class={queueErrorClass(item.status)}>{item.error}</p>
+										{/if}
+										{#if item.status === 'DeliveryDisabled' && item.signingUrl}
+											<div class="mt-2 flex flex-wrap items-center gap-2">
+												<Button
+													variant="outline"
+													size="sm"
+													class="h-8 gap-1.5"
+													href={item.signingUrl}
+													target="_blank"
+													rel="noreferrer"
+													data-testid="lease-esign-open-signing-link-{item.id}"
+												>
+													<ExternalLink class="h-3.5 w-3.5" />
+													Open signing link
+												</Button>
+												<Button
+													variant="ghost"
+													size="sm"
+													class="h-8 gap-1.5"
+													onclick={() => copySigningUrl(item)}
+													data-testid="lease-esign-copy-signing-link-{item.id}"
+												>
+													<Copy class="h-3.5 w-3.5" />
+													{copiedSigningUrlItemId === item.id ? 'Copied' : 'Copy link'}
+												</Button>
+											</div>
 										{/if}
 									</div>
 								{/each}

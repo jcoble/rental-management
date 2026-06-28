@@ -2,6 +2,7 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using QuestPDF.Fluent;
 using RentalCommand.Api.DTOs;
@@ -27,6 +28,9 @@ public sealed class LeaseEsignServiceTests : IDisposable
     private readonly SqliteConnection _conn;
     private readonly RentalCommandDbContext _db;
     private readonly InMemoryFileStorage _storage = new();
+    private readonly IConfiguration _config = new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?> { ["App:WebBaseUrl"] = "https://localhost:5667" })
+        .Build();
 
     public LeaseEsignServiceTests()
     {
@@ -363,6 +367,75 @@ public sealed class LeaseEsignServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetSignatureQueue_DeliveryDisabledItem_IncludesCurrentSignerUrl()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.PendingSignature, tenantEmail: "tenant-on-lease@example.com");
+        var now = new DateTime(2026, 6, 28, 14, 0, 0, DateTimeKind.Utc);
+        var originalFile = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            FileName = "lease.pdf",
+            FilePath = "leases/lease.pdf",
+            ContentType = "application/pdf",
+            FileSize = 100,
+            EntityType = "Lease",
+            EntityId = lease.Id,
+            UploadedAt = now,
+        };
+        _db.StoredFiles.Add(originalFile);
+        await _db.SaveChangesAsync();
+
+        var currentRequest = new SignatureRequest
+        {
+            PortfolioId = PortfolioId,
+            LeaseId = lease.Id,
+            PublicId = "current-envelope",
+            DocumentName = "lease-current.pdf",
+            Subject = "Lease L-2026-7",
+            OriginalStoredFileId = originalFile.Id,
+            CreatedAtUtc = now,
+        };
+        currentRequest.Signers.Add(new SignatureSigner
+        {
+            Name = "Marcus Williams",
+            Email = "tenant-on-lease@example.com",
+            Token = "signer-token-123",
+            ExpiresAtUtc = DateTime.UtcNow.AddDays(7),
+            Status = SignatureSignerStatus.Pending,
+        });
+        _db.SignatureRequests.Add(currentRequest);
+        lease.EsignEnvelopeId = currentRequest.PublicId;
+        await _db.SaveChangesAsync();
+
+        _db.OutboxMessages.Add(new OutboxMessage
+        {
+            PortfolioId = PortfolioId,
+            MessageType = "email",
+            Payload = JsonSerializer.Serialize(new
+            {
+                source = OutboxPayloadSources.LeaseEsignSigningLink,
+                signatureRequestId = currentRequest.Id,
+                leaseId = lease.Id,
+                to = "tenant-on-lease@example.com",
+                subject = "Lease L-2026-7",
+            }),
+            CreatedAt = now.AddMinutes(-6),
+            SentAt = now.AddMinutes(-5),
+            Error = "Email delivery is not configured for this environment.",
+        });
+        await _db.SaveChangesAsync();
+
+        var sut = CreateService(new FakeEsignProvider { Configured = false });
+
+        var queue = await sut.GetSignatureQueueAsync(PortfolioId, lease.Id);
+
+        queue.Should().NotBeNull();
+        queue!.Items.Should().ContainSingle();
+        queue.Items[0].Status.Should().Be("DeliveryDisabled");
+        queue.Items[0].SigningUrl.Should().Be("https://localhost:5667/sign/signer-token-123");
+    }
+
+    [Fact]
     public async Task GetSignatureQueue_ReturnsRecentLeaseSigningEmailsWithRecipientAndSendTime()
     {
         var lease = SeedLeaseWithGraph(LeaseStatus.PendingSignature, tenantEmail: "tenant-on-lease@example.com");
@@ -562,6 +635,7 @@ public sealed class LeaseEsignServiceTests : IDisposable
             _storage,
             new NoopDataUpdateService(),
             new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
+            _config,
             NullLogger<LeaseEsignService>.Instance);
     }
 

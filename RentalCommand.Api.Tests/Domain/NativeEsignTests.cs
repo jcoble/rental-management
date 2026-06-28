@@ -438,7 +438,9 @@ public sealed class NativeEsignTests : IDisposable
 
         return new LeaseEsignService(
             _db, leaseService, provider, _storage, new NoopDataUpdateService(),
-            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()), NullLogger<LeaseEsignService>.Instance);
+            new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
+            _config,
+            NullLogger<LeaseEsignService>.Instance);
     }
 
     private NativeSigningService CreateSigningService()

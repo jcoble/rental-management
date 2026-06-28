@@ -305,6 +305,12 @@ public sealed class LeaseSignatureQueueItemResponse
     public int RetryCount { get; init; }
     public string? Error { get; init; }
     public string? SignatureRequestId { get; init; }
+
+    /// <summary>
+    /// Authenticated landlord fallback for local/demo delivery-disabled sends. Null when email was delivered,
+    /// the request is no longer active, or the signer token cannot be resolved.
+    /// </summary>
+    public string? SigningUrl { get; init; }
 }
 
 public class CreateLeaseRequest
