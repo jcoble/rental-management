@@ -1,7 +1,6 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { SERVER_API_BASE_URL } from '$lib/server/config';
-import { getAccessToken } from '$lib/server/auth-cookies';
 
 const INLINE_SAFE = new Set([
 	'image/jpeg',
@@ -12,8 +11,8 @@ const INLINE_SAFE = new Set([
 	'application/pdf'
 ]);
 
-export const GET: RequestHandler = async ({ params, cookies, url }) => {
-	const token = getAccessToken(cookies);
+export const GET: RequestHandler = async ({ params, locals, url }) => {
+	const token = locals.accessToken;
 	if (!token) {
 		throw error(401, 'Unauthorized');
 	}
