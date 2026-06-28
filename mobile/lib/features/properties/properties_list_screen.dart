@@ -414,12 +414,7 @@ class _AddPropertySheetState extends ConsumerState<_AddPropertySheet> {
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    // The Places-backed address field is a plain TextField (no Form validator),
-    // so enforce the required-address rule here to match the other fields.
-    if (_addressCtrl.text.trim().isEmpty) {
-      setState(() => _error = 'Address is required');
-      return;
-    }
+    if (!_validateDetailsStep()) return;
 
     setState(() {
       _saving = true;
@@ -445,6 +440,19 @@ class _AddPropertySheetState extends ConsumerState<_AddPropertySheet> {
     }
   }
 
+  bool _validateDetailsStep() {
+    // The Places-backed address field is a plain TextField, so enforce the
+    // required-address rule through the step validator.
+    if (_addressCtrl.text.trim().isEmpty) {
+      setState(() => _error = 'Address is required');
+      return false;
+    }
+    if (_error == 'Address is required') {
+      setState(() => _error = null);
+    }
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
     const gap = SizedBox(height: 12);
@@ -460,6 +468,7 @@ class _AddPropertySheetState extends ConsumerState<_AddPropertySheet> {
         tabs: [
           TabbedFormStepSpec(
             label: 'Details',
+            validate: _validateDetailsStep,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -530,7 +539,6 @@ class _AddPropertySheetState extends ConsumerState<_AddPropertySheet> {
                         decoration: const InputDecoration(labelText: 'ZIP'),
                         validator: (v) =>
                             (v == null || v.trim().isEmpty) ? 'Required' : null,
-                        onFieldSubmitted: (_) => _saving ? null : _submit(),
                       ),
                     ),
                   ],

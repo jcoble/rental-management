@@ -499,16 +499,42 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
         } else {
           _endDate = picked;
         }
+        if ((_startDate != null && _endDate != null) ||
+            (isStart && _error == 'Please select a start date.') ||
+            (!isStart && _error == 'Please select an end date.')) {
+          _error = null;
+        }
       });
     }
   }
 
+  bool _validateUnitStep() {
+    if (_startDate == null) {
+      setState(() => _error = 'Please select a start date.');
+      return false;
+    }
+    if (_error == 'Please select a start date.' ||
+        _error == 'Please select start and end dates.') {
+      setState(() => _error = null);
+    }
+    return true;
+  }
+
+  bool _validateTermsStep() {
+    if (_endDate == null) {
+      setState(() => _error = 'Please select an end date.');
+      return false;
+    }
+    if (_error == 'Please select an end date.' ||
+        _error == 'Please select start and end dates.') {
+      setState(() => _error = null);
+    }
+    return true;
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (_startDate == null || _endDate == null) {
-      setState(() => _error = 'Please select start and end dates.');
-      return;
-    }
+    if (!_validateUnitStep() || !_validateTermsStep()) return;
 
     setState(() {
       _saving = true;
@@ -569,6 +595,7 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
         tabs: [
           TabbedFormStepSpec(
             label: 'Unit',
+            validate: _validateUnitStep,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -659,6 +686,7 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
           ),
           TabbedFormStepSpec(
             label: 'Terms',
+            validate: _validateTermsStep,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [

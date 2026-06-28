@@ -41,6 +41,11 @@ void main() {
     await tester.tap(find.text('Oak Terrace · Unit 2B — Jesse Coble').last);
     await tester.pumpAndSettle();
 
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Next'));
+    await tester.pumpAndSettle();
+
     await tester.ensureVisible(find.text('Save'));
     await tester.tap(find.text('Save'));
     await tester.pumpAndSettle();

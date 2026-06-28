@@ -62,6 +62,13 @@ void main() {
         find.byKey(const Key('work-order-description-field')),
         'Water is dripping under the kitchen sink.',
       );
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+
       await tester.ensureVisible(find.text('Save Work Order'));
       await tester.tap(find.text('Save Work Order'));
       await tester.pumpAndSettle();
