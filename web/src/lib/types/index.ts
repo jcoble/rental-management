@@ -295,6 +295,9 @@ export interface Payment {
 	id: number;
 	portfolioId: number;
 	leaseId: number;
+	/** Unit/Property the payment's lease is on; resolved DB-side via the lease join so the UI can route to the unit's tab. */
+	unitId?: number;
+	propertyId?: number;
 	paymentType: PaymentType;
 	status: PaymentStatus;
 	amount: number;
