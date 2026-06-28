@@ -8,6 +8,7 @@ import '../../core/models/work_order.dart';
 import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
 import '../home/mobile_domain_navigation.dart';
+import '../leases/lease_form_defaults.dart';
 import '../leases/lease_detail_screen.dart';
 import '../leases/leases_list_screen.dart';
 import '../leases/leases_repository.dart';
@@ -276,9 +277,18 @@ class _UnitLeaseTab extends ConsumerWidget {
     final property = dashboard.propertyName.trim().isEmpty
         ? 'Property'
         : dashboard.propertyName.trim();
+    final leaseDefaults = buildUnitLeaseFormDefaults(
+      unit: dashboard.unit,
+      propertyName: property,
+    );
 
     if (lease != null) {
-      return LeaseDetailScreen(lease: lease);
+      return LeaseDetailScreen(
+        lease: lease,
+        leadingContent: _UnitLeaseAddAction(
+          onPressed: () => _showLeaseSheet(context, ref, leaseDefaults),
+        ),
+      );
     }
 
     if (summary == null) {
@@ -289,7 +299,7 @@ class _UnitLeaseTab extends ConsumerWidget {
         action: FilledButton.icon(
           icon: const Icon(Icons.add),
           label: const Text('Add lease'),
-          onPressed: () => _showLeaseSheet(context, ref, property),
+          onPressed: () => _showLeaseSheet(context, ref, leaseDefaults),
         ),
       );
     }
@@ -302,11 +312,20 @@ class _UnitLeaseTab extends ConsumerWidget {
         onRetry: () =>
             ref.read(leaseDetailProvider(summary.id).notifier).refresh(),
       ),
-      data: (loadedLease) => LeaseDetailScreen(lease: loadedLease),
+      data: (loadedLease) => LeaseDetailScreen(
+        lease: loadedLease,
+        leadingContent: _UnitLeaseAddAction(
+          onPressed: () => _showLeaseSheet(context, ref, leaseDefaults),
+        ),
+      ),
     );
   }
 
-  void _showLeaseSheet(BuildContext context, WidgetRef ref, String property) {
+  void _showLeaseSheet(
+    BuildContext context,
+    WidgetRef ref,
+    UnitLeaseFormDefaults defaults,
+  ) {
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -314,14 +333,29 @@ class _UnitLeaseTab extends ConsumerWidget {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => LeaseFormSheet(
-        initialPropertyId: dashboard.unit.propertyId,
-        initialUnitId: dashboard.unit.id,
-        initialPropertyLabel: property,
-        initialUnitLabel: _unitLabel(dashboard.unit.unitNumber),
+        unitDefaults: defaults,
         onSaved: () {
           ref.invalidate(unitDashboardProvider(dashboard.unit.id));
           ref.read(leasesProvider.notifier).refresh();
         },
+      ),
+    );
+  }
+}
+
+class _UnitLeaseAddAction extends StatelessWidget {
+  const _UnitLeaseAddAction({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: FilledButton.icon(
+        icon: const Icon(Icons.add),
+        label: const Text('Add lease'),
+        onPressed: onPressed,
       ),
     );
   }
