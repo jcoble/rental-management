@@ -35,8 +35,7 @@ void main() {
       'Coble',
     );
     await tester.tap(find.text('Emergency'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 260));
+    await tester.pumpAndSettle();
 
     expect(find.text('Emergency contact (optional)'), findsOneWidget);
     expect(find.byKey(const Key('tabbed-form-complete-0')), findsOneWidget);

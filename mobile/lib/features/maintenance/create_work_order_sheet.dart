@@ -203,9 +203,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
     return 'image/jpeg';
   }
 
-  Future<void> _submit() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-
+  bool _validateArrivalWindow() {
     final scheduledFor = _combine(_scheduledDate, _startTime);
     final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
 
@@ -215,8 +213,21 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
       setState(
         () => _error = 'Arrival window end must be after the start time.',
       );
-      return;
+      return false;
     }
+    if (_error == 'Arrival window end must be after the start time.') {
+      setState(() => _error = null);
+    }
+    return true;
+  }
+
+  Future<void> _submit() async {
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    final scheduledFor = _combine(_scheduledDate, _startTime);
+    final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
+
+    if (!_validateArrivalWindow()) return;
 
     setState(() {
       _saving = true;
@@ -556,6 +567,7 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
           ),
           WorkOrderFormTabSpec(
             label: 'Assign',
+            validate: _validateArrivalWindow,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [

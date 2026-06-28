@@ -665,15 +665,44 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
       firstDate: DateTime(now.year - 2),
       lastDate: DateTime(now.year + 5),
     );
-    if (picked != null) setState(() => _dueDate = picked);
+    if (picked != null) {
+      setState(() {
+        _dueDate = picked;
+        if (_error == 'Please select a due date.') _error = null;
+      });
+    }
+  }
+
+  String? _partialAmountError() {
+    if (_status != 'Partial') return null;
+    final amount = double.tryParse(_amountCtrl.text.trim());
+    final amountPaid = double.tryParse(_amountPaidCtrl.text.trim());
+    if (amountPaid == null) {
+      return 'Amount paid is required for a partial payment';
+    }
+    if (amountPaid <= 0) {
+      return 'Amount paid must be greater than zero';
+    }
+    if (amount != null && amountPaid >= amount) {
+      return 'Amount paid must be less than the full amount';
+    }
+    return null;
+  }
+
+  bool _validateDetailsStep() {
+    if (_dueDate == null) {
+      setState(() => _error = 'Please select a due date.');
+      return false;
+    }
+    if (_error == 'Please select a due date.') {
+      setState(() => _error = null);
+    }
+    return true;
   }
 
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (_dueDate == null) {
-      setState(() => _error = 'Please select a due date.');
-      return;
-    }
+    if (!_validateDetailsStep()) return;
 
     final amount = double.tryParse(_amountCtrl.text.trim()) ?? 0;
     // Partial-payment split: the server requires an Amount paid strictly between
@@ -746,6 +775,7 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
         tabs: [
           TabbedFormStepSpec(
             label: 'Details',
+            validate: _validateDetailsStep,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -874,6 +904,7 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
                       helperText:
                           'How much was collected. The rest stays owed.',
                     ),
+                    validator: (_) => _partialAmountError(),
                   ),
                 ],
                 gap,

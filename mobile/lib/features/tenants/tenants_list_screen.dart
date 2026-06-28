@@ -582,7 +582,6 @@ class _TenantFormSheetState extends ConsumerState<TenantFormSheet> {
                   decoration: const InputDecoration(
                     labelText: 'Emergency contact (optional)',
                   ),
-                  onFieldSubmitted: (_) => _saving ? null : _submit(),
                 ),
               ],
             ),
