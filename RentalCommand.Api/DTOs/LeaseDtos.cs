@@ -205,7 +205,7 @@ public sealed record LeaseDocumentStatusResponse(
 
 /// <summary>
 /// Body for <c>POST /leases/{id}/send-for-signature</c>. Signer override fields are retained for
-/// request compatibility, but the lease workflow sends to the tenant tied to the lease.
+/// request compatibility, but the lease workflow sends to the tenant(s) tied to the lease.
 /// </summary>
 public sealed class SendForSignatureRequest
 {
