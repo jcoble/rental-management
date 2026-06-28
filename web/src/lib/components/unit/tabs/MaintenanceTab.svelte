@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import type { UnitDashboard, WorkOrder, Expense } from '$lib/types';
 	import type { ScanContext } from '$lib/scan/scan-context';
@@ -13,15 +14,15 @@
 	import { formatDateOnly } from '$lib/utils/date';
 	import {
 		defaultWorkOrderReceiptScanContext,
-		workOrderDetailHref,
 		workOrderReceiptScanContext
 	} from '$lib/components/unit/maintenance-actions';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import WorkOrderDetail from '$lib/components/records/WorkOrderDetail.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import { Wrench, Receipt, Plus, X, ExternalLink } from '@lucide/svelte';
+	import { Wrench, Receipt, Plus, X, ExternalLink, ArrowLeft } from '@lucide/svelte';
 
 	let {
 		dashboard,
@@ -35,6 +36,9 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const unitId = $derived(dashboard.unit.id);
 	const propertyId = $derived(dashboard.unit.propertyId);
+
+	// A selected work order folds its full detail inline (?wo=<id> on the unit URL); otherwise the list shows.
+	const selectedWo = $derived(Number(page.url.searchParams.get('wo')) || null);
 
 	const WO_PRIORITIES = ['Low', 'Normal', 'High', 'Emergency'];
 	const TAB_PAGE_SIZE = 20;
@@ -129,8 +133,14 @@
 		receiptPage += 1;
 	}
 
-	function openWorkOrder(id: number | string) {
-		goto(workOrderDetailHref(id));
+	// Selecting a row is a real navigation step (no replaceState) so Back returns to the list.
+	function openWorkOrder(id: number) {
+		goto('/units/' + unitId + '?tab=maintenance&wo=' + id, { keepFocus: true, noScroll: true });
+	}
+
+	// Clearing the selection drops ?wo= (replaceState — it's a peer of the list, not a new history step).
+	function clearSelection() {
+		goto('/units/' + unitId + '?tab=maintenance', { replaceState: true, keepFocus: true, noScroll: true });
 	}
 
 	// ── Inline "new work order" form (reuses workOrderSchema + the app's form conventions) ──
@@ -189,6 +199,13 @@
 </script>
 
 <div class="space-y-4" data-testid="unit-maintenance-tab">
+{#if selectedWo}
+	<!-- Folded work-order detail: the same <WorkOrderDetail> the generic /maintenance/[id] page mounts. -->
+	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="wo-back-to-list">
+		<ArrowLeft class="h-4 w-4" /> Back to work orders
+	</Button>
+	<WorkOrderDetail workOrderId={selectedWo} onDeleted={clearSelection} />
+{:else}
 	<div class="flex flex-wrap justify-end gap-2">
 		<Button class="gap-2" onclick={() => (showCreate ? closeCreate() : openCreate())} data-testid="maintenance-create">
 			{#if showCreate}<X class="h-4 w-4" /> Cancel{:else}<Plus class="h-4 w-4" /> New work order{/if}
@@ -313,4 +330,5 @@
 			{/if}
 		{/if}
 	</DetailCard>
+{/if}
 </div>
