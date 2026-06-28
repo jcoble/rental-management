@@ -9,6 +9,7 @@ import '../tenants/tenants_repository.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
 import 'lease_form_defaults.dart';
+import 'lease_form_payload.dart';
 import 'leases_repository.dart';
 
 const _monthNames = [
@@ -509,7 +510,9 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
     // Load dropdowns
     Future.microtask(() {
       ref.read(propertiesProvider.notifier).load();
-      ref.read(tenantsProvider.notifier).load();
+      if (_isEdit) {
+        ref.read(tenantsProvider.notifier).load();
+      }
       final propertyId = _selectedPropertyId;
       if (propertyId != null) {
         ref.read(unitsProvider(propertyId).notifier).load();
@@ -588,6 +591,21 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
     return true;
   }
 
+  String _generatedLeaseNumber() {
+    final unitLabel = (_initialUnitLabel ?? 'Unit $_selectedUnitId').trim();
+    final propertyLabel = (_initialPropertyLabel ?? '').trim();
+    final dateLabel = _startDate == null ? '' : _fmtIso(_startDate!);
+    final label = [
+      if (propertyLabel.isNotEmpty) propertyLabel,
+      if (unitLabel.isNotEmpty) unitLabel,
+      if (dateLabel.isNotEmpty) dateLabel,
+    ].join(' - ');
+    final candidate = label.isEmpty
+        ? 'Lease ${DateTime.now().millisecondsSinceEpoch}'
+        : label;
+    return candidate.length <= 100 ? candidate : candidate.substring(0, 100);
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (!_validateUnitStep() || !_validateTermsStep()) return;
@@ -597,18 +615,20 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
       _error = null;
     });
 
-    final body = <String, dynamic>{
-      'unitId': _selectedUnitId,
-      'tenantId': _selectedTenantIds.first,
-      'tenantIds': _selectedTenantIds,
-      'startDate': _fmtIso(_startDate!),
-      'endDate': _fmtIso(_endDate!),
-      'monthlyRent': double.tryParse(_rentCtrl.text) ?? 0.0,
-      'securityDeposit': double.tryParse(_depositCtrl.text) ?? 0.0,
-      'lateFeeAmount': double.tryParse(_lateFeeCtrl.text) ?? 0.0,
-      'rentDueDay': int.tryParse(_dueDayCtrl.text) ?? 1,
-      'status': _selectedStatus,
-    };
+    final body = buildLeaseSubmitPayload(
+      isEdit: _isEdit,
+      propertyId: _selectedPropertyId!,
+      unitId: _selectedUnitId!,
+      tenantIds: _selectedTenantIds,
+      startDate: _startDate!,
+      endDate: _endDate!,
+      monthlyRent: _rentCtrl.text,
+      securityDeposit: _depositCtrl.text,
+      lateFeeAmount: _lateFeeCtrl.text,
+      rentDueDay: _dueDayCtrl.text,
+      status: _selectedStatus,
+      leaseNumber: _generatedLeaseNumber(),
+    );
 
     try {
       final repo = ref.read(leasesRepositoryProvider);
@@ -629,7 +649,9 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
   @override
   Widget build(BuildContext context) {
     final propertiesAsync = ref.watch(propertiesProvider);
-    final tenantsAsync = ref.watch(tenantsProvider);
+    final tenantsAsync = _isEdit
+        ? ref.watch(tenantsProvider)
+        : ref.watch(availableForLeaseTenantsProvider);
 
     final properties = propertiesAsync.value ?? <Property>[];
     final tenants = tenantsAsync.value ?? <Tenant>[];
@@ -732,6 +754,9 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                 _TenantMultiSelect(
                   tenants: tenants,
                   selectedTenantIds: _selectedTenantIds,
+                  emptyText: _isEdit
+                      ? 'No tenants yet.'
+                      : 'No available tenants.',
                   errorText: _error == 'Select at least one tenant.'
                       ? _error
                       : null,
@@ -879,12 +904,14 @@ class _TenantMultiSelect extends StatelessWidget {
     required this.tenants,
     required this.selectedTenantIds,
     required this.onChanged,
+    this.emptyText = 'No tenants yet.',
     this.errorText,
   });
 
   final List<Tenant> tenants;
   final List<int> selectedTenantIds;
   final ValueChanged<List<int>> onChanged;
+  final String emptyText;
   final String? errorText;
 
   @override
@@ -896,7 +923,7 @@ class _TenantMultiSelect extends StatelessWidget {
       decoration: InputDecoration(labelText: 'Tenants', errorText: errorText),
       child: tenants.isEmpty
           ? Text(
-              'No tenants yet.',
+              emptyText,
               style: theme.textTheme.bodyMedium?.copyWith(
                 color: colorScheme.onSurfaceVariant,
               ),
