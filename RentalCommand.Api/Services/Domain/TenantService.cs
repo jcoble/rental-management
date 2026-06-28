@@ -36,6 +36,16 @@ public class TenantService : ITenantService
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId);
 
+        if (query.AvailableForLease == true)
+        {
+            q = q.Where(t =>
+                !t.Leases.Any(l => l.PortfolioId == portfolioId
+                    && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)) &&
+                !t.LeaseTenants.Any(lt => lt.PortfolioId == portfolioId
+                    && lt.Lease != null
+                    && (lt.Lease.Status == LeaseStatus.Active || lt.Lease.Status == LeaseStatus.NoticeGiven)));
+        }
+
         if (!string.IsNullOrWhiteSpace(query.Search))
         {
             var tokens = SearchTokens(query.Search);

@@ -86,7 +86,40 @@ public class TenantServiceTests : IDisposable
             sql.Contains("ILIKE", StringComparison.OrdinalIgnoreCase));
     }
 
-    private void SeedTenant(string firstName, string lastName, int activeLeaseCount)
+    [Fact]
+    public async Task ListPageAsync_AvailableForLeaseExcludesTenantsAlreadyOccupyingLeasesInSql()
+    {
+        SeedTenant("Avery", "Available", activeLeaseCount: 0);
+        SeedTenant("Blair", "Primary", activeLeaseCount: 1);
+        var noticeTenant = SeedTenant("Casey", "Notice", activeLeaseCount: 0);
+        var expiredTenant = SeedTenant("Devon", "Expired", activeLeaseCount: 0);
+        var pendingTenant = SeedTenant("Emery", "Pending", activeLeaseCount: 0);
+        SeedLeaseTenantMembership(noticeTenant, LeaseStatus.NoticeGiven, withSeparatePrimaryTenant: true);
+        SeedLeaseTenantMembership(expiredTenant, LeaseStatus.Expired);
+        SeedLeaseTenantMembership(pendingTenant, LeaseStatus.PendingSignature);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new TenantListQuery
+        {
+            AvailableForLease = true,
+            Sort = "name",
+            Skip = 0,
+            Take = 20,
+        });
+
+        result.TotalCount.Should().Be(3);
+        result.Items.Select(t => $"{t.FirstName} {t.LastName}")
+            .Should().Equal("Avery Available", "Devon Expired", "Emery Pending");
+
+        _commands.Should().HaveCount(2);
+        _commands.Should().OnlyContain(sql =>
+            sql.Contains("NOT EXISTS", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("LeaseTenants", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private Tenant SeedTenant(string firstName, string lastName, int activeLeaseCount)
     {
         var now = DateTime.UtcNow;
         var tenant = new Tenant
@@ -139,6 +172,79 @@ public class TenantServiceTests : IDisposable
             });
         }
 
+        _ctx.Db.SaveChanges();
+        return tenant;
+    }
+
+    private void SeedLeaseTenantMembership(
+        Tenant tenant,
+        LeaseStatus status,
+        bool withSeparatePrimaryTenant = false)
+    {
+        var now = DateTime.UtcNow;
+        var primaryTenant = tenant;
+        if (withSeparatePrimaryTenant)
+        {
+            primaryTenant = new Tenant
+            {
+                PortfolioId = PortfolioId,
+                FirstName = $"{tenant.FirstName} Primary",
+                LastName = "Holder",
+                Email = $"{tenant.FirstName.ToLowerInvariant()}-primary@example.local",
+                Phone = "555-0101",
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+            _ctx.Db.Tenants.Add(primaryTenant);
+            _ctx.Db.SaveChanges();
+        }
+
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = $"{tenant.FirstName} Membership Property",
+            AddressLine1 = "100 Main Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = $"{tenant.FirstName[0]}1",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var lease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            TenantId = primaryTenant.Id,
+            LeaseNumber = $"{tenant.FirstName}-membership",
+            Status = status,
+            StartDate = now.Date.AddMonths(-1),
+            EndDate = now.Date.AddMonths(11),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+            LeaseTenants =
+            [
+                new LeaseTenant
+                {
+                    PortfolioId = PortfolioId,
+                    TenantId = tenant.Id,
+                    IsPrimary = !withSeparatePrimaryTenant,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                },
+            ],
+        };
+
+        _ctx.Db.Leases.Add(lease);
         _ctx.Db.SaveChanges();
     }
 

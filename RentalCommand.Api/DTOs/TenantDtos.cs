@@ -50,7 +50,10 @@ public class TenantListResponse
     public int Take { get; set; }
 }
 
-public class TenantListQuery : ListQuery;
+public class TenantListQuery : ListQuery
+{
+    public bool? AvailableForLease { get; set; }
+}
 
 public class CreateTenantRequest
 {

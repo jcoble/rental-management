@@ -25,4 +25,11 @@ describe('unit lease tab create action', () => {
 		assert.match(source, /data-testid="unit-lease-history"/);
 		assert.match(source, /data-testid=\{`unit-lease-history-item-\$\{lease\.id\}`\}/);
 	});
+
+	it('loads only tenants available for a new lease in the Add Lease picker', () => {
+		assert.match(source, /queryKey:\s*\['tenants',\s*portfolioId,\s*'unit-lease-create',\s*'available-for-lease'\]/);
+		assert.match(source, /tenants\.listPage\(portfolioId,\s*\{/);
+		assert.match(source, /availableForLease:\s*true/);
+		assert.match(source, /tenants=\{availableTenants\}/);
+	});
 });
