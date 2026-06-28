@@ -6,6 +6,7 @@ using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Engine.Services;
 
 namespace RentalCommand.Engine.Workers;
 
@@ -124,7 +125,7 @@ public class OutboxDispatchWorker : EngineWorkerBase
                             message.Id, message.MessageType, message.PortfolioId);
                         message.SentAt = DateTime.UtcNow;
                         message.FailedAt = null;
-                        message.Error = null;
+                        message.Error = "Sandbox delivery suppressed because no portfolio owner contact is configured.";
                         await db.SaveChangesAsync(CancellationToken.None);
                         continue;
                     }
@@ -178,6 +179,20 @@ public class OutboxDispatchWorker : EngineWorkerBase
             {
                 // Shutdown / cycle timeout — bail out; nothing to persist for this message yet.
                 break;
+            }
+            catch (NotificationDeliverySuppressedException ex)
+            {
+                message.SentAt = DateTime.UtcNow;
+                message.FailedAt = null;
+                message.Error = ex.Message;
+                dispatched++;
+
+                logger.LogInformation(
+                    ex,
+                    "OutboxMessage {MessageId} ({MessageType}) delivery suppressed without retry.",
+                    message.Id, message.MessageType);
+
+                await db.SaveChangesAsync(CancellationToken.None);
             }
             catch (Exception ex)
             {
