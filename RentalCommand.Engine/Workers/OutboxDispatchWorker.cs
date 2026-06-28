@@ -239,11 +239,11 @@ public class OutboxDispatchWorker : EngineWorkerBase
     }
 
     /// <summary>
-    /// Resolves the portfolio owner's contact (email/phone) for a sandbox redirect. The owner is the
-    /// landlord ApplicationUser that owns the portfolio (<c>PortfolioId == message.PortfolioId</c> and
-    /// not a tenant-portal account, i.e. <c>TenantId == null</c>). Returns null when no usable address
-    /// exists for the requested channel — the caller then fail-closes (suppresses) rather than risk
-    /// reaching the original recipient.
+    /// Resolves the portfolio owner's contact (email/phone) for a sandbox redirect. Prefer a user
+    /// linked to an <see cref="OwnerEntity"/> because a real landlord can also have a tenant portal
+    /// link; fall back to the original non-tenant owner/admin account. Returns null when no usable
+    /// address exists for the requested channel — the caller then fail-closes (suppresses) rather than
+    /// risk reaching the original recipient.
     /// </summary>
     private static async Task<SandboxContact?> ResolveSandboxRedirectTargetAsync(
         RentalCommandDbContext db, OutboxMessage message, CancellationToken ct)
@@ -253,25 +253,42 @@ public class OutboxDispatchWorker : EngineWorkerBase
             return null;
         }
 
-        // The landlord/owner account that created the portfolio: earliest non-tenant user on it.
-        var owner = await db.Users
-            .Where(u => u.PortfolioId == portfolioId && u.TenantId == null)
-            .OrderBy(u => u.Id)
-            .Select(u => new { u.Email, u.PhoneNumber })
+        var type = message.MessageType?.Trim().ToLowerInvariant();
+        if (type == "sms")
+        {
+            var smsOwner = await db.Users
+                .Where(u => u.PortfolioId == portfolioId
+                    && (u.OwnerEntityId != null || u.TenantId == null)
+                    && u.PhoneNumber != null
+                    && u.PhoneNumber != string.Empty)
+                .OrderByDescending(u => u.OwnerEntityId != null)
+                .ThenBy(u => u.Id)
+                .Select(u => new { u.PhoneNumber })
+                .FirstOrDefaultAsync(ct);
+            if (smsOwner is null)
+            {
+                return null;
+            }
+
+            return string.IsNullOrWhiteSpace(smsOwner.PhoneNumber) ? null : new SandboxContact(null, smsOwner.PhoneNumber);
+        }
+
+        // email (default)
+        var emailOwner = await db.Users
+            .Where(u => u.PortfolioId == portfolioId
+                && (u.OwnerEntityId != null || u.TenantId == null)
+                && u.Email != null
+                && u.Email != string.Empty)
+            .OrderByDescending(u => u.OwnerEntityId != null)
+            .ThenBy(u => u.Id)
+            .Select(u => new { u.Email })
             .FirstOrDefaultAsync(ct);
-        if (owner is null)
+        if (emailOwner is null)
         {
             return null;
         }
 
-        var type = message.MessageType?.Trim().ToLowerInvariant();
-        if (type == "sms")
-        {
-            return string.IsNullOrWhiteSpace(owner.PhoneNumber) ? null : new SandboxContact(null, owner.PhoneNumber);
-        }
-
-        // email (default)
-        return string.IsNullOrWhiteSpace(owner.Email) ? null : new SandboxContact(owner.Email, null);
+        return string.IsNullOrWhiteSpace(emailOwner.Email) ? null : new SandboxContact(emailOwner.Email, null);
     }
 
     /// <summary>
