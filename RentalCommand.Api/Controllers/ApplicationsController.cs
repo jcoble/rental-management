@@ -36,18 +36,18 @@ public class ApplicationsController : ManagementControllerBase
     [HttpGet]
     [ProducesResponseType(typeof(IReadOnlyList<ApplicationResponse>), StatusCodes.Status200OK)]
     public async Task<ActionResult<IReadOnlyList<ApplicationResponse>>> List(
-        [FromQuery] string? status, [FromQuery] ListQuery query, CancellationToken ct)
+        [FromQuery] string? status, [FromQuery] int? unitId, [FromQuery] ListQuery query, CancellationToken ct)
     {
-        var items = await _service.ListAsync(GetPortfolioId(), status, query, ct);
+        var items = await _service.ListAsync(GetPortfolioId(), status, query, unitId, ct);
         return Ok(items);
     }
 
     [HttpGet("page")]
     [ProducesResponseType(typeof(ApplicationListResponse), StatusCodes.Status200OK)]
     public async Task<ActionResult<ApplicationListResponse>> ListPage(
-        [FromQuery] string? status, [FromQuery] ListQuery query, CancellationToken ct)
+        [FromQuery] string? status, [FromQuery] int? unitId, [FromQuery] ListQuery query, CancellationToken ct)
     {
-        var page = await _service.ListPageAsync(GetPortfolioId(), status, query, ct);
+        var page = await _service.ListPageAsync(GetPortfolioId(), status, query, unitId, ct);
         return Ok(page);
     }
 

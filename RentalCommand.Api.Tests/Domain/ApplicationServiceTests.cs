@@ -108,6 +108,59 @@ public class ApplicationServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ListPageAsync_UnitIdFilter_ReturnsOnlyThatUnitsApplicationsDbSide()
+    {
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Maple Grove",
+            AddressLine1 = "1100 Maple Ave",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Properties.Add(property);
+        await _db.SaveChangesAsync();
+
+        var unitA = new Unit
+        {
+            PropertyId = property.Id,
+            UnitNumber = "A",
+            Status = UnitStatus.Vacant,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        var unitB = new Unit
+        {
+            PropertyId = property.Id,
+            UnitNumber = "B",
+            Status = UnitStatus.Vacant,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _db.Units.AddRange(unitA, unitB);
+        await _db.SaveChangesAsync();
+
+        SeedApplicationForUnit("Ada", "Alpha", unitA.Id, property.Id);
+        SeedApplicationForUnit("Bea", "Bravo", unitA.Id, property.Id);
+        SeedApplicationForUnit("Cora", "Cedar", unitB.Id, property.Id);
+        SeedApplicationForUnit("Dee", "Delta", unitId: null, propertyId: property.Id);
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, status: null, new ListQuery(), unitId: unitA.Id);
+
+        result.TotalCount.Should().Be(2, "only the two applications tied to unit A are in scope");
+        result.Items.Select(a => a.LastName).Should().BeEquivalentTo(["Alpha", "Bravo"]);
+
+        // The unit scope must run as a SQL WHERE on UnitId (DB-side), never an in-memory filter.
+        _commands.Should().Contain(sql =>
+            sql.Contains("\"UnitId\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task SubmitAsync_GoodToken_CreatesApplicationInTokensPortfolio()
     {
         var request = new SubmitApplicationRequest
@@ -564,6 +617,24 @@ public class ApplicationServiceTests : IDisposable
             Phone = "555-0100",
             MonthlyIncome = 4_000m,
             Status = status,
+            SubmittedAtUtc = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _db.SaveChanges();
+    }
+
+    private void SeedApplicationForUnit(string firstName, string lastName, int? unitId, int propertyId)
+    {
+        _db.RentalApplications.Add(new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = propertyId,
+            UnitId = unitId,
+            FirstName = firstName,
+            LastName = lastName,
+            Email = $"{firstName}.{lastName}@example.local".ToLowerInvariant(),
+            Status = ApplicationStatus.Submitted,
             SubmittedAtUtc = DateTime.UtcNow,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,

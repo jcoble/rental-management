@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
 	import { scan } from '$lib/api/scan';
+	import { recordHref } from '$lib/navigation/record-href';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
@@ -349,8 +350,12 @@
 		onSuccess: (res) => {
 			toast.success('Your rental is set up.');
 			phase = 'done';
-			if (res.leaseId) goto(`/leases/${res.leaseId}`);
-			else goto('/leases');
+			if (res.leaseId) {
+				// Existing unit chosen → unit Command Center Lease tab; a freshly created unit
+				// (unitChoice === CREATE) has no id in scope, so recordHref falls back to /leases/{id}.
+				const unitId = unitChoice !== CREATE ? Number(unitChoice) : null;
+				goto(recordHref('lease', { id: res.leaseId, unitId }));
+			} else goto('/leases');
 		},
 		onError: (err) => showError(apiErrorMessage(err, 'Could not create the rental. Check the details and try again.'))
 	}));

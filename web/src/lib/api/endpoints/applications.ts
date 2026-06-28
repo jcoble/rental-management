@@ -57,6 +57,8 @@ export interface ApplicationLinkResult {
 
 export interface ApplicationListParams extends ListParams {
 	status?: ApplicationStatus | '';
+	/** Scope to one unit's applications (DB-side `?unitId=` filter; used by the Unit Command Center). */
+	unitId?: number;
 }
 
 export interface ApplicationListResponse {
@@ -104,7 +106,7 @@ export interface AdverseActionNoticeResponse {
 }
 
 function buildQuery(params?: ApplicationListParams): string {
-	return buildListQuery(params, { status: params?.status || undefined });
+	return buildListQuery(params, { status: params?.status || undefined, unitId: params?.unitId });
 }
 
 /** Authed, portfolio-scoped landlord application endpoints (JWT). */

@@ -273,6 +273,7 @@ public class AccountingService : IAccountingService
             .Select(x => new PastDueLeaseResponse
             {
                 LeaseId = x.Group.LeaseId,
+                UnitId = x.Lease.UnitId,
                 TenantName = x.Lease.Tenant == null
                     ? null
                     : (x.Lease.Tenant.FirstName + " " + x.Lease.Tenant.LastName).Trim(),
@@ -576,6 +577,7 @@ public class AccountingService : IAccountingService
                     Status = r.Status,
                     Amount = r.Amount,
                     PropertyId = r.PropertyId,
+                    UnitId = r.UnitId,
                     PropertyName = r.PropertyName,
                     Counterparty = r.Counterparty,
                     DetailHref = DetailHrefFor(r.Kind, r.Id),

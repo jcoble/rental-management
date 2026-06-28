@@ -6,8 +6,10 @@ import {
 	readLeaseCreatePrefill,
 } from '../leases/lease-create-prefill.ts';
 
+// TSK-457: the approved-application create-lease banner moved out of the thin [id] route
+// wrapper into the extracted ApplicationDetail record component.
 const applicationDetailSource = readFileSync(
-	new URL('../../routes/(protected)/applications/[id]/+page.svelte', import.meta.url),
+	new URL('../components/records/ApplicationDetail.svelte', import.meta.url),
 	'utf8'
 );
 const leasesPageSource = readFileSync(

@@ -1,9 +1,5 @@
 import type { ScanContext } from '$lib/scan/scan-context';
 
-export function workOrderDetailHref(workOrderId: number | string): string {
-	return `/maintenance/${workOrderId}`;
-}
-
 export function unitMaintenanceReturnTo(unitId: number | string): string {
 	return `/units/${unitId}?tab=maintenance`;
 }
