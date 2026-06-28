@@ -3,8 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
-import '../../core/widgets/tabbed_form_sheet.dart';
-import '../places/address_autocomplete_field.dart';
+import 'property_form_sheet.dart';
 import 'properties_repository.dart';
 import 'property_detail_screen.dart';
 
@@ -17,15 +16,12 @@ import 'property_detail_screen.dart';
 Future<bool?> showAddPropertySheet(
   BuildContext context, {
   VoidCallback? onSaved,
-}) {
-  return showModalBottomSheet<bool>(
-    context: context,
-    isScrollControlled: true,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
-    builder: (_) => _AddPropertySheet(onSaved: onSaved),
+}) async {
+  final saved = await showPropertyFormSheet(
+    context,
+    onSaved: (_) => onSaved?.call(),
   );
+  return saved == null ? null : true;
 }
 
 /// Full-page list of properties with pull-to-refresh and an add-property FAB.
@@ -364,189 +360,6 @@ class _ErrorBody extends StatelessWidget {
             FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
-      ),
-    );
-  }
-}
-
-// ── Add Property Bottom Sheet ─────────────────────────────────────────────────
-
-class _AddPropertySheet extends ConsumerStatefulWidget {
-  const _AddPropertySheet({this.onSaved});
-
-  final VoidCallback? onSaved;
-
-  @override
-  ConsumerState<_AddPropertySheet> createState() => _AddPropertySheetState();
-}
-
-class _AddPropertySheetState extends ConsumerState<_AddPropertySheet> {
-  final _formKey = GlobalKey<FormState>();
-
-  final _nameCtrl = TextEditingController();
-  final _addressCtrl = TextEditingController();
-  final _cityCtrl = TextEditingController();
-  final _stateCtrl = TextEditingController();
-  final _zipCtrl = TextEditingController();
-
-  static const _types = [
-    'SingleFamily',
-    'MultiFamily',
-    'Condo',
-    'Townhome',
-    'Commercial',
-    'MixedUse',
-  ];
-  String _selectedType = 'MultiFamily';
-
-  bool _saving = false;
-  String? _error;
-
-  @override
-  void dispose() {
-    _nameCtrl.dispose();
-    _addressCtrl.dispose();
-    _cityCtrl.dispose();
-    _stateCtrl.dispose();
-    _zipCtrl.dispose();
-    super.dispose();
-  }
-
-  Future<void> _submit() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
-    if (!_validateDetailsStep()) return;
-
-    setState(() {
-      _saving = true;
-      _error = null;
-    });
-
-    try {
-      await ref.read(propertiesRepositoryProvider).createProperty({
-        'name': _nameCtrl.text.trim(),
-        'type': _selectedType,
-        'addressLine1': _addressCtrl.text.trim(),
-        'city': _cityCtrl.text.trim(),
-        'state': _stateCtrl.text.trim(),
-        'postalCode': _zipCtrl.text.trim(),
-      });
-
-      widget.onSaved?.call();
-      if (mounted) Navigator.of(context).pop(true);
-    } on ApiException catch (e) {
-      setState(() => _error = e.message);
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  bool _validateDetailsStep() {
-    // The Places-backed address field is a plain TextField, so enforce the
-    // required-address rule through the step validator.
-    if (_addressCtrl.text.trim().isEmpty) {
-      setState(() => _error = 'Address is required');
-      return false;
-    }
-    if (_error == 'Address is required') {
-      setState(() => _error = null);
-    }
-    return true;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    const gap = SizedBox(height: 12);
-
-    return Form(
-      key: _formKey,
-      child: TabbedFormSheet(
-        title: 'New Property',
-        saveLabel: 'Save Property',
-        saving: _saving,
-        error: _error,
-        onSave: _submit,
-        tabs: [
-          TabbedFormStepSpec(
-            label: 'Details',
-            validate: _validateDetailsStep,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextFormField(
-                  controller: _nameCtrl,
-                  textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(labelText: 'Property name'),
-                  validator: (v) => (v == null || v.trim().isEmpty)
-                      ? 'Name is required'
-                      : null,
-                ),
-                gap,
-                DropdownButtonFormField<String>(
-                  initialValue: _selectedType,
-                  decoration: const InputDecoration(labelText: 'Type'),
-                  items: _types
-                      .map((t) => DropdownMenuItem(value: t, child: Text(t)))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v != null) setState(() => _selectedType = v);
-                  },
-                ),
-                gap,
-                AddressAutocompleteField(
-                  controller: _addressCtrl,
-                  label: 'Address',
-                  onResolved: (a) {
-                    if (a.city.isNotEmpty) _cityCtrl.text = a.city;
-                    if (a.state.isNotEmpty) _stateCtrl.text = a.state;
-                    if (a.zip.isNotEmpty) _zipCtrl.text = a.zip;
-                  },
-                ),
-              ],
-            ),
-          ),
-          TabbedFormStepSpec(
-            label: 'Location',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextFormField(
-                  controller: _cityCtrl,
-                  textInputAction: TextInputAction.next,
-                  decoration: const InputDecoration(labelText: 'City'),
-                  validator: (v) => (v == null || v.trim().isEmpty)
-                      ? 'City is required'
-                      : null,
-                ),
-                gap,
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextFormField(
-                        controller: _stateCtrl,
-                        textInputAction: TextInputAction.next,
-                        textCapitalization: TextCapitalization.characters,
-                        decoration: const InputDecoration(labelText: 'State'),
-                        validator: (v) =>
-                            (v == null || v.trim().isEmpty) ? 'Required' : null,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextFormField(
-                        controller: _zipCtrl,
-                        textInputAction: TextInputAction.done,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(labelText: 'ZIP'),
-                        validator: (v) =>
-                            (v == null || v.trim().isEmpty) ? 'Required' : null,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
