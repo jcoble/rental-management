@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Scanning;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
+using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
 
 namespace RentalCommand.Api.Services.Domain;
@@ -11,11 +13,13 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
 {
     private readonly RentalCommandDbContext _db;
     private readonly IDocumentTemplateFieldCatalog _catalog;
+    private readonly IFileStorage _files;
 
-    public DocumentTemplateService(RentalCommandDbContext db, IDocumentTemplateFieldCatalog catalog)
+    public DocumentTemplateService(RentalCommandDbContext db, IDocumentTemplateFieldCatalog catalog, IFileStorage files)
     {
         _db = db;
         _catalog = catalog;
+        _files = files;
     }
 
     public async Task<IReadOnlyList<DocumentTemplateResponse>> ListAsync(
@@ -66,10 +70,24 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .ToListAsync(ct);
+        var itemIds = items.Select(t => t.Id).ToList();
+        var fieldCounts = itemIds.Count == 0
+            ? new Dictionary<int, int>()
+            : await _db.DocumentTemplateFields
+                .AsNoTracking()
+                .Where(f => itemIds.Contains(f.DocumentTemplateId))
+                .GroupBy(f => f.DocumentTemplateId)
+                .Select(g => new { DocumentTemplateId = g.Key, Count = g.Count() })
+                .ToDictionaryAsync(x => x.DocumentTemplateId, x => x.Count, ct);
 
         return new DocumentTemplateListResponse
         {
-            Items = items.Select(t => DocumentTemplateResponse.FromEntity(t, [])).ToList(),
+            Items = items
+                .Select(t => DocumentTemplateResponse.FromEntity(
+                    t,
+                    [],
+                    fieldCounts.GetValueOrDefault(t.Id)))
+                .ToList(),
             TotalCount = totalCount,
             Skip = query.NormalizedSkip,
             Take = query.NormalizedTake,
@@ -134,6 +152,90 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
 
         return DocumentTemplateOperationResult<DocumentTemplateResponse>.Success(
             DocumentTemplateResponse.FromEntity(template, []));
+    }
+
+    public async Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UploadPdfAsync(
+        int portfolioId,
+        Stream content,
+        string fileName,
+        string contentType,
+        long sizeBytes,
+        string name,
+        string? description,
+        bool defaultForPortfolio,
+        int? propertyId,
+        CancellationToken ct = default)
+    {
+        var normalizedName = string.IsNullOrWhiteSpace(name)
+            ? Path.GetFileNameWithoutExtension(fileName)
+            : name.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedName))
+        {
+            return DocumentTemplateOperationResult<DocumentTemplateResponse>.Invalid("Template name is required.");
+        }
+
+        var validation = await ValidateReferencesAsync(
+            portfolioId, propertyId, originalFileId: null, compiledFileId: null, ct);
+        if (validation is not null)
+        {
+            return DocumentTemplateOperationResult<DocumentTemplateResponse>.Invalid(validation);
+        }
+
+        var safeFileName = DiskFileStorage.SanitizeFileName(fileName);
+        var storageKey = await _files.UploadAsync(content, safeFileName, contentType, ct);
+        try
+        {
+            var now = DateTime.UtcNow;
+            await using var tx = await _db.Database.BeginTransactionAsync(ct);
+
+            var stored = new StoredFile
+            {
+                PortfolioId = portfolioId,
+                EntityType = "DocumentTemplate",
+                FileName = safeFileName,
+                FilePath = storageKey,
+                ContentType = contentType,
+                FileSize = sizeBytes,
+                UploadedAt = now,
+            };
+
+            var template = new DocumentTemplate
+            {
+                PortfolioId = portfolioId,
+                Kind = DocumentTemplateKind.Lease,
+                RenderMode = DocumentTemplateRenderMode.Overlay,
+                Status = DocumentTemplateStatus.Draft,
+                Name = normalizedName,
+                Description = NormalizeNullable(description),
+                OriginalStoredFile = stored,
+                DefaultForPortfolio = defaultForPortfolio,
+                PropertyId = propertyId,
+                CreatedAtUtc = now,
+                UpdatedAtUtc = now,
+            };
+
+            if (defaultForPortfolio)
+            {
+                await ClearOtherDefaultsAsync(
+                    portfolioId, DocumentTemplateKind.Lease, propertyId, exceptId: null, now, ct);
+            }
+
+            _db.StoredFiles.Add(stored);
+            _db.DocumentTemplates.Add(template);
+            await _db.SaveChangesAsync(ct);
+
+            stored.EntityId = template.Id;
+            await _db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            return DocumentTemplateOperationResult<DocumentTemplateResponse>.Success(
+                DocumentTemplateResponse.FromEntity(template, []));
+        }
+        catch
+        {
+            try { await _files.DeleteAsync(storageKey, ct); } catch { /* best-effort orphan cleanup */ }
+            throw;
+        }
     }
 
     public async Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UpdateAsync(
@@ -386,4 +488,3 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
     private static string? NormalizeNullable(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
-
