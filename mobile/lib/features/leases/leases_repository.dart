@@ -18,10 +18,9 @@ import '../../core/models/models.dart';
 ///
 /// Create / update body shape:
 ///   {
-///     unitId, tenantId, startDate, endDate, monthlyRent, securityDeposit,
+///     propertyId, unitId, tenantId, tenantIds, startDate, endDate,
+///     monthlyRent, securityDeposit,
 ///     lateFeeAmount, rentDueDay, status?,
-///     (on create: propertyId is inferred server-side from unitId,
-///      but we still pass it for completeness)
 ///   }
 class LeasesRepository {
   LeasesRepository(this._dio);
@@ -66,8 +65,9 @@ class LeasesRepository {
   }
 
   /// Create body:
-  /// { unitId, tenantId, startDate (yyyy-MM-dd), endDate (yyyy-MM-dd),
-  ///   monthlyRent, securityDeposit, lateFeeAmount, rentDueDay, status? }
+  /// { propertyId, unitId, tenantId, tenantIds, leaseNumber,
+  ///   startDate (yyyy-MM-dd), endDate (yyyy-MM-dd), monthlyRent,
+  ///   securityDeposit, lateFeeAmount, rentDueDay, status? }
   Future<Lease> createLease(Map<String, dynamic> data) async {
     try {
       final response =
