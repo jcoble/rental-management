@@ -5,6 +5,20 @@ import '../../core/api/api_exception.dart';
 import '../../core/api/dio_client.dart';
 import '../../core/models/models.dart';
 
+class PropertyOwnerOption {
+  const PropertyOwnerOption({required this.id, required this.name});
+
+  final int id;
+  final String name;
+
+  factory PropertyOwnerOption.fromJson(Map<String, dynamic> json) {
+    return PropertyOwnerOption(
+      id: (json['id'] as num).toInt(),
+      name: json['name'] as String? ?? '',
+    );
+  }
+}
+
 /// Repository for properties, units, and (read-only) leases.
 ///
 /// Endpoints used:
@@ -17,6 +31,7 @@ import '../../core/models/models.dart';
 ///   POST   /units  (body includes propertyId) — add a unit
 ///   PATCH  /units/{id}                       — update a unit
 ///   GET    /leases?propertyId={id}           — leases filtered by property
+///   GET    /owner-entities?take=200          — owner selector options
 class PropertiesRepository {
   PropertiesRepository(this._dio);
 
@@ -39,8 +54,7 @@ class PropertiesRepository {
 
   Future<Property> getProperty(int id) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/properties/$id');
+      final response = await _dio.get<Map<String, dynamic>>('/properties/$id');
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -57,8 +71,10 @@ class PropertiesRepository {
   /// Create body: { name, type, addressLine1, city, state, postalCode, ownerId? }
   Future<Property> createProperty(Map<String, dynamic> data) async {
     try {
-      final response =
-          await _dio.post<Map<String, dynamic>>('/properties', data: data);
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/properties',
+        data: data,
+      );
       final responseData = response.data;
       if (responseData == null) {
         throw const ApiException(
@@ -100,6 +116,22 @@ class PropertiesRepository {
     }
   }
 
+  Future<List<PropertyOwnerOption>> listOwnerOptions() async {
+    try {
+      final response = await _dio.get<List<dynamic>>(
+        '/owner-entities',
+        queryParameters: {'take': 200},
+      );
+      final data = response.data ?? [];
+      return data
+          .whereType<Map<String, dynamic>>()
+          .map(PropertyOwnerOption.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   // ── Units ──────────────────────────────────────────────────────────────────
 
   Future<List<Unit>> listUnits(int propertyId) async {
@@ -109,10 +141,7 @@ class PropertiesRepository {
         queryParameters: {'propertyId': propertyId},
       );
       final data = response.data ?? [];
-      return data
-          .whereType<Map<String, dynamic>>()
-          .map(Unit.fromJson)
-          .toList();
+      return data.whereType<Map<String, dynamic>>().map(Unit.fromJson).toList();
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
@@ -208,8 +237,8 @@ class PropertiesNotifier extends Notifier<AsyncValue<List<Property>>> {
 
 final propertiesProvider =
     NotifierProvider<PropertiesNotifier, AsyncValue<List<Property>>>(
-  PropertiesNotifier.new,
-);
+      PropertiesNotifier.new,
+    );
 
 // ── Units for a specific property ─────────────────────────────────────────────
 
@@ -241,8 +270,8 @@ class UnitsNotifier extends Notifier<AsyncValue<List<Unit>>> {
 
 final unitsProvider =
     NotifierProvider.family<UnitsNotifier, AsyncValue<List<Unit>>, int>(
-  UnitsNotifier.new,
-);
+      UnitsNotifier.new,
+    );
 
 // ── Leases for a specific property ────────────────────────────────────────────
 
@@ -273,17 +302,19 @@ class PropertyLeasesNotifier extends Notifier<AsyncValue<List<Lease>>> {
 }
 
 final propertyLeasesProvider =
-    NotifierProvider.family<PropertyLeasesNotifier, AsyncValue<List<Lease>>,
-        int>(
-  PropertyLeasesNotifier.new,
-);
+    NotifierProvider.family<
+      PropertyLeasesNotifier,
+      AsyncValue<List<Lease>>,
+      int
+    >(PropertyLeasesNotifier.new);
 
 // ── Single property (by id) ───────────────────────────────────────────────────
 
 /// Fetches one property by id. Backs by-id drill-through (e.g. a lease's
 /// property link, which only carries `propertyId`). autoDispose so it refetches
 /// when reopened.
-final propertyDetailProvider =
-    FutureProvider.autoDispose.family<Property, int>((ref, id) {
-  return ref.watch(propertiesRepositoryProvider).getProperty(id);
-});
+final propertyDetailProvider = FutureProvider.autoDispose.family<Property, int>(
+  (ref, id) {
+    return ref.watch(propertiesRepositoryProvider).getProperty(id);
+  },
+);

@@ -7,6 +7,7 @@ import '../../core/widgets/tabbed_form_sheet.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
 import 'properties_repository.dart';
+import 'property_form_sheet.dart';
 
 String _formatCurrency(double amount) {
   final rounded = amount.round();
@@ -104,14 +105,37 @@ class PropertyDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
+  late Property _property;
+
+  @override
+  void initState() {
+    super.initState();
+    _property = widget.property;
+  }
+
+  @override
+  void didUpdateWidget(covariant PropertyDetailScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.property.id != widget.property.id ||
+        oldWidget.property.updatedAt != widget.property.updatedAt) {
+      _property = widget.property;
+    }
+  }
+
   // unitsProvider and propertyLeasesProvider both self-load on first watch
   // (their notifier build() calls Future.microtask(load)), so no explicit
   // initState load is needed — adding one just double-fetches.
 
   Future<void> _refresh() async {
+    final propertyId = _property.id;
     await Future.wait<void>([
-      ref.read(unitsProvider(widget.property.id).notifier).refresh(),
-      ref.read(propertyLeasesProvider(widget.property.id).notifier).refresh(),
+      ref.read(unitsProvider(propertyId).notifier).refresh(),
+      ref.read(propertyLeasesProvider(propertyId).notifier).refresh(),
+      ref.read(propertiesRepositoryProvider).getProperty(propertyId).then((
+        property,
+      ) {
+        if (mounted) setState(() => _property = property);
+      }),
     ]);
   }
 
@@ -132,9 +156,8 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => _AddUnitSheet(
-        propertyId: widget.property.id,
-        onSaved: () =>
-            ref.read(unitsProvider(widget.property.id).notifier).refresh(),
+        propertyId: _property.id,
+        onSaved: () => ref.read(unitsProvider(_property.id).notifier).refresh(),
       ),
     );
   }
@@ -148,15 +171,28 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
       ),
       builder: (_) => _EditUnitSheet(
         unit: unit,
-        onSaved: () =>
-            ref.read(unitsProvider(widget.property.id).notifier).refresh(),
+        onSaved: () => ref.read(unitsProvider(_property.id).notifier).refresh(),
       ),
     );
   }
 
+  Future<void> _showEditPropertySheet(BuildContext context) async {
+    final saved = await showPropertyFormSheet(
+      context,
+      property: _property,
+      onSaved: (property) {
+        ref.invalidate(propertyDetailProvider(property.id));
+        ref.read(propertiesProvider.notifier).refresh();
+      },
+    );
+    if (saved != null && mounted) {
+      setState(() => _property = saved);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final property = widget.property;
+    final property = _property;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final unitsAsync = ref.watch(unitsProvider(property.id));
@@ -165,6 +201,13 @@ class _PropertyDetailScreenState extends ConsumerState<PropertyDetailScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(property.name, overflow: TextOverflow.ellipsis),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.edit_outlined),
+            tooltip: 'Edit property',
+            onPressed: () => _showEditPropertySheet(context),
+          ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
