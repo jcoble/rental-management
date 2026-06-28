@@ -22,8 +22,8 @@ namespace RentalCommand.Api.Controllers;
 /// rather than the staff-only <see cref="ManagementControllerBase"/>. Portfolio scoping alone is NOT
 /// sufficient for a Tenant principal — every other tenant in the same portfolio shares that scope — so a
 /// tenant caller is additionally constrained to documents on a <c>WorkOrder</c> they own (their only
-/// legitimate document surface). Staff callers (no <c>tenantId</c> claim) keep full portfolio access. See
-/// <see cref="TenantMayAccessEntityAsync"/>.
+/// legitimate document surface). Staff callers keep full portfolio access, even when an example/demo user
+/// also carries a <c>tenantId</c> claim. See <see cref="TenantMayAccessEntityAsync"/>.
 /// </para>
 /// </summary>
 [ApiController]
@@ -64,6 +64,10 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
         ".xls", ".xlsx",
         ".ppt", ".pptx"
     };
+
+    private static readonly HashSet<string> StaffDocumentRoles = ManagementControllerBase.StaffRoles
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private readonly IDocumentService _documents;
     private readonly IFileStorage _storage;
@@ -295,19 +299,24 @@ public sealed class DocumentsController : AuthenticatedPortfolioControllerBase
 
     /// <summary>
     /// Whether the CALLER may act on a document attached to <paramref name="entityType"/>/
-    /// <paramref name="entityId"/>. Staff callers (no <c>tenantId</c> claim) always may — portfolio scope
-    /// is enforced elsewhere. A tenant caller may ONLY when the entity is a <c>WorkOrder</c> that belongs
-    /// to that tenant (their single legitimate document surface — a maintenance-request photo). Every other
-    /// entity type, or a work order owned by a different tenant, is denied. Fail-closed: an unknown/missing
-    /// entity reference returns <c>false</c> for a tenant.
+    /// <paramref name="entityId"/>. Staff callers always may — portfolio scope is enforced elsewhere —
+    /// even if their token also carries a <c>tenantId</c> claim. A tenant-only caller may ONLY when the
+    /// entity is a <c>WorkOrder</c> that belongs to that tenant (their single legitimate document surface —
+    /// a maintenance-request photo). Every other entity type, or a work order owned by a different tenant,
+    /// is denied. Fail-closed: an unknown/missing entity reference returns <c>false</c> for a tenant.
     /// </summary>
     private async Task<bool> TenantMayAccessEntityAsync(
         string? entityType, int? entityId, int portfolioId, CancellationToken ct)
     {
+        if (GetRoles().Any(role => StaffDocumentRoles.Contains(role)))
+        {
+            // Staff/owner/manager/agent: not tenant-constrained (portfolio scope already applied).
+            return true;
+        }
+
         var tenantId = GetTenantIdOrNull();
         if (tenantId is null)
         {
-            // Staff/owner/manager/agent: not tenant-constrained (portfolio scope already applied).
             return true;
         }
 
