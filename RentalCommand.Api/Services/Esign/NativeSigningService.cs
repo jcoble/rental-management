@@ -356,22 +356,11 @@ public sealed class NativeSigningService : INativeSigningService
             YearBuilt = property?.YearBuilt,
         };
 
-        var signers = sigRequest.Signers
-            .OrderBy(s => s.Id)
-            .Select(s => new ExecutedSigner
-            {
-                Name = s.Name,
-                Email = s.Email,
-                SignatureType = s.SignatureType,
-                TypedName = s.TypedName,
-                DrawnSignatureImage = s.DrawnSignatureImage,
-                SignedAtUtc = s.SignedAtUtc,
-                IpAddress = s.IpAddress,
-                UserAgent = s.UserAgent,
-                ViewedAtUtc = s.ViewedAtUtc,
-                ConsentGiven = s.ConsentGiven,
-            })
-            .ToList();
+        var originalDocumentBytes = sigRequest.DocumentTemplateId.HasValue
+            ? await TryLoadOriginalDocumentBytesAsync(sigRequest, ct)
+            : null;
+
+        var signers = BuildExecutedSigners(sigRequest.Signers.OrderBy(s => s.Id).ToList(), tenantName, lease.Tenant?.Email);
 
         return new ExecutedLeaseData
         {
@@ -379,8 +368,110 @@ public sealed class NativeSigningService : INativeSigningService
             Signers = signers,
             LandlordName = landlordName,
             EnvelopeId = sigRequest.PublicId,
+            DocumentName = sigRequest.DocumentName,
+            OriginalDocumentBytes = originalDocumentBytes,
+            TemplateFieldSnapshotJson = sigRequest.TemplateFieldSnapshotJson,
             CompletedAtUtc = now,
         };
+    }
+
+    private async Task<byte[]?> TryLoadOriginalDocumentBytesAsync(SignatureRequest sigRequest, CancellationToken ct)
+    {
+        var file = await _db.StoredFiles.AsNoTracking()
+            .FirstOrDefaultAsync(f => f.Id == sigRequest.OriginalStoredFileId
+                && f.PortfolioId == sigRequest.PortfolioId
+                && f.DeletedAt == null, ct);
+        if (file is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            await using var stream = await _storage.DownloadAsync(file.FilePath, ct);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms, ct);
+            return ms.ToArray();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Native e-sign: original template document missing for request {PublicId}.",
+                sigRequest.PublicId);
+            return null;
+        }
+    }
+
+    private static List<ExecutedSigner> BuildExecutedSigners(
+        IReadOnlyList<SignatureSigner> source,
+        string tenantName,
+        string? tenantEmail)
+    {
+        var roles = new DocumentTemplateSignerRole[source.Count];
+        var signers = new List<ExecutedSigner>(source.Count);
+        var tenantAssigned = false;
+        var landlordAssigned = false;
+
+        for (var i = 0; i < source.Count; i++)
+        {
+            var signer = source[i];
+            var role = DocumentTemplateSignerRole.None;
+            if (!tenantAssigned && IsTenantSigner(signer, tenantName, tenantEmail))
+            {
+                role = DocumentTemplateSignerRole.Tenant;
+                tenantAssigned = true;
+            }
+            else if (!landlordAssigned)
+            {
+                role = DocumentTemplateSignerRole.Landlord;
+                landlordAssigned = true;
+            }
+
+            roles[i] = role;
+        }
+
+        if (!tenantAssigned && source.Count > 0)
+        {
+            roles[0] = DocumentTemplateSignerRole.Tenant;
+            if (!roles.Contains(DocumentTemplateSignerRole.Landlord) && source.Count > 1)
+            {
+                roles[1] = DocumentTemplateSignerRole.Landlord;
+            }
+        }
+
+        for (var i = 0; i < source.Count; i++)
+        {
+            var signer = source[i];
+            signers.Add(new ExecutedSigner
+            {
+                Name = signer.Name,
+                Email = signer.Email,
+                SignerRole = roles[i],
+                SignatureType = signer.SignatureType,
+                TypedName = signer.TypedName,
+                DrawnSignatureImage = signer.DrawnSignatureImage,
+                SignedAtUtc = signer.SignedAtUtc,
+                IpAddress = signer.IpAddress,
+                UserAgent = signer.UserAgent,
+                ViewedAtUtc = signer.ViewedAtUtc,
+                ConsentGiven = signer.ConsentGiven,
+            });
+        }
+
+        return signers;
+    }
+
+    private static bool IsTenantSigner(SignatureSigner signer, string tenantName, string? tenantEmail)
+    {
+        if (!string.IsNullOrWhiteSpace(tenantEmail)
+            && string.Equals(signer.Email.Trim(), tenantEmail.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(tenantName)
+            && string.Equals(signer.Name.Trim(), tenantName.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
     // -------------------------------------------------------------------------

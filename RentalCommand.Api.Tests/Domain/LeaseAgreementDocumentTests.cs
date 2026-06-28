@@ -117,6 +117,27 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
     }
 
     [Fact]
+    public async Task PreviewLeasePdfAsync_UsesTemplatePdfAndLeaseValues()
+    {
+        var lease = SeedLeaseWithGraph();
+        var template = await SeedActiveOverlayTemplateAsync(lease.PropertyId);
+        var templates = new DocumentTemplateService(_db, new DocumentTemplateFieldCatalog(), _storage);
+
+        var result = await templates.PreviewLeasePdfAsync(PortfolioId, template.Id, lease.Id);
+
+        result.Outcome.Should().Be(DocumentTemplateOperationOutcome.Success);
+        result.Value!.FileName.Should().Be($"lease-template-{template.Id}-lease-{lease.Id}-preview.pdf");
+
+        var text = RentalCommand.Api.Scanning.PdfTextExtractor.TryExtractText(result.Value.PdfBytes);
+        text.Should().NotBeNull();
+        text!.Should().Contain("Custom Landlord Lease");
+        text.Should().Contain("Marcus");
+        text.Should().Contain("Williams");
+        text.Should().Contain("$1,450.00");
+        text.Should().NotContain("Residential Lease Agreement");
+    }
+
+    [Fact]
     public async Task GetDocumentAsync_AfterGenerate_StreamsNonEmptyPdf()
     {
         var lease = SeedLeaseWithGraph();

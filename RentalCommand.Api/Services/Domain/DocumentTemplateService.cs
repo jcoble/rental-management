@@ -410,6 +410,70 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
         return DocumentTemplateOperationResult<bool>.Success(true);
     }
 
+    public async Task<DocumentTemplateOperationResult<DocumentTemplatePreviewResult>> PreviewLeasePdfAsync(
+        int portfolioId,
+        int templateId,
+        int leaseId,
+        CancellationToken ct = default)
+    {
+        var template = await _db.DocumentTemplates
+            .AsNoTracking()
+            .Include(t => t.OriginalStoredFile)
+            .Include(t => t.Fields)
+            .FirstOrDefaultAsync(t => t.Id == templateId && t.PortfolioId == portfolioId, ct);
+        if (template is null)
+        {
+            return DocumentTemplateOperationResult<DocumentTemplatePreviewResult>.NotFound("Document template not found");
+        }
+
+        if (template.Kind != DocumentTemplateKind.Lease ||
+            template.RenderMode != DocumentTemplateRenderMode.Overlay ||
+            template.OriginalStoredFile is null)
+        {
+            return DocumentTemplateOperationResult<DocumentTemplatePreviewResult>.Invalid(
+                "Only uploaded lease PDF templates can be previewed against a lease.");
+        }
+
+        var lease = await _db.Leases
+            .AsNoTracking()
+            .Include(l => l.Tenant)
+            .Include(l => l.Unit)
+            .Include(l => l.Property)
+            .FirstOrDefaultAsync(l => l.Id == leaseId && l.PortfolioId == portfolioId, ct);
+        if (lease is null)
+        {
+            return DocumentTemplateOperationResult<DocumentTemplatePreviewResult>.NotFound("Lease not found");
+        }
+
+        if (template.PropertyId.HasValue && template.PropertyId.Value != lease.PropertyId)
+        {
+            return DocumentTemplateOperationResult<DocumentTemplatePreviewResult>.Invalid(
+                "Choose a lease from the property this template is assigned to.");
+        }
+
+        var portfolio = await _db.Portfolios
+            .AsNoTracking()
+            .FirstOrDefaultAsync(p => p.Id == portfolioId, ct);
+
+        byte[] originalBytes;
+        try
+        {
+            originalBytes = await DownloadTemplateBytesAsync(template.OriginalStoredFile.FilePath, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return DocumentTemplateOperationResult<DocumentTemplatePreviewResult>.Invalid(
+                "Template source PDF is unavailable.");
+        }
+
+        var data = BuildLeaseAgreementData(lease, portfolio);
+        var previewBytes = LeaseAgreementRenderer.RenderOverlayPreview(originalBytes, template.Fields, data);
+        var fileName = $"lease-template-{template.Id}-lease-{lease.Id}-preview.pdf";
+
+        return DocumentTemplateOperationResult<DocumentTemplatePreviewResult>.Success(
+            new DocumentTemplatePreviewResult(previewBytes, fileName));
+    }
+
     private async Task<string?> ValidateReferencesAsync(
         int portfolioId, int? propertyId, int? originalFileId, int? compiledFileId, CancellationToken ct)
     {
@@ -439,6 +503,47 @@ public sealed class DocumentTemplateService : IDocumentTemplateService
 
     private Task<bool> StoredFileExistsAsync(int portfolioId, int fileId, CancellationToken ct) =>
         _db.StoredFiles.AsNoTracking().AnyAsync(f => f.Id == fileId && f.PortfolioId == portfolioId, ct);
+
+    private async Task<byte[]> DownloadTemplateBytesAsync(string filePath, CancellationToken ct)
+    {
+        await using var source = await _files.DownloadAsync(filePath, ct);
+        using var ms = new MemoryStream();
+        await source.CopyToAsync(ms, ct);
+        return ms.ToArray();
+    }
+
+    private static LeaseAgreementData BuildLeaseAgreementData(Lease lease, Portfolio? portfolio)
+    {
+        var landlordName = !string.IsNullOrWhiteSpace(portfolio?.ManagementCompanyName)
+            ? portfolio!.ManagementCompanyName
+            : portfolio?.Name ?? "Landlord";
+
+        var tenantName = lease.Tenant == null
+            ? string.Empty
+            : $"{lease.Tenant.FirstName} {lease.Tenant.LastName}".Trim();
+
+        var property = lease.Property;
+        var propertyAddress = property == null
+            ? string.Empty
+            : string.Join(", ", new[]
+            {
+                property.AddressLine1,
+                property.AddressLine2,
+                $"{property.City}, {property.State} {property.PostalCode}".Trim(),
+            }.Where(s => !string.IsNullOrWhiteSpace(s)));
+
+        return new LeaseAgreementData
+        {
+            Lease = lease,
+            LandlordName = landlordName,
+            TenantName = tenantName,
+            PropertyName = property?.Name ?? string.Empty,
+            PropertyAddress = propertyAddress,
+            UnitNumber = lease.Unit?.UnitNumber,
+            State = property?.State ?? string.Empty,
+            YearBuilt = property?.YearBuilt,
+        };
+    }
 
     private Task ClearOtherDefaultsAsync(
         int portfolioId,

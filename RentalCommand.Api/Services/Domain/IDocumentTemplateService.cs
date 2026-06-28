@@ -39,7 +39,12 @@ public interface IDocumentTemplateService
 
     Task<DocumentTemplateOperationResult<bool>> DeleteFieldAsync(
         int portfolioId, int templateId, int fieldId, CancellationToken ct = default);
+
+    Task<DocumentTemplateOperationResult<DocumentTemplatePreviewResult>> PreviewLeasePdfAsync(
+        int portfolioId, int templateId, int leaseId, CancellationToken ct = default);
 }
+
+public sealed record DocumentTemplatePreviewResult(byte[] PdfBytes, string FileName);
 
 public enum DocumentTemplateOperationOutcome
 {

@@ -1,3 +1,8 @@
+using System.Text.Json;
+using PdfSharp.Drawing;
+using PdfSharp.Drawing.Layout;
+using PdfSharp.Fonts;
+using PdfSharp.Pdf.IO;
 using QuestPDF.Fluent;
 using QuestPDF.Helpers;
 using QuestPDF.Infrastructure;
@@ -11,6 +16,7 @@ public sealed class ExecutedSigner
 {
     public string Name { get; init; } = string.Empty;
     public string Email { get; init; } = string.Empty;
+    public DocumentTemplateSignerRole SignerRole { get; init; } = DocumentTemplateSignerRole.None;
     public SignatureSignatureType SignatureType { get; init; }
     public string? TypedName { get; init; }
     public byte[]? DrawnSignatureImage { get; init; }
@@ -33,15 +39,23 @@ public sealed class ExecutedLeaseData
     /// <summary>The opaque envelope id (request PublicId), printed on the certificate.</summary>
     public string EnvelopeId { get; init; } = string.Empty;
 
+    /// <summary>Display name of the submitted document.</summary>
+    public string DocumentName { get; init; } = string.Empty;
+
+    /// <summary>The exact PDF bytes sent for signature, when the request used a landlord template.</summary>
+    public byte[]? OriginalDocumentBytes { get; init; }
+
+    /// <summary>Frozen template field anchors for stamping signatures/date fields on the original PDF.</summary>
+    public string? TemplateFieldSnapshotJson { get; init; }
+
     public DateTime CompletedAtUtc { get; init; } = DateTime.UtcNow;
 }
 
 /// <summary>
-/// Produces the EXECUTED lease PDF: the standard residential agreement with the signature block replaced
-/// by the captured signatures (typed-in-script or the drawn image) + signed dates, followed by a
-/// Certificate of Completion page listing every signer (name, email, signed timestamp, IP, user-agent),
-/// the document SHA-256 hash, and the ESIGN/UETA statement. v1 produces a clean appended
-/// signature+certificate section (no in-line field placement, no PKI/PAdES crypto — hash + audit trail).
+/// Produces the EXECUTED lease PDF. Template-backed requests preserve the exact PDF sent to signers,
+/// stamp captured signatures into the frozen template anchors, and append a Certificate of Completion.
+/// Built-in agreements keep the generated agreement body with captured signatures plus the same
+/// certificate. This is an audit-trail/native e-signature renderer, not a PKI/PAdES cryptographic signer.
 /// </summary>
 public interface IExecutedLeasePdfGenerator
 {
@@ -61,8 +75,26 @@ public sealed class ExecutedLeasePdfGenerator : IExecutedLeasePdfGenerator
 {
     private static readonly string Accent = Colors.Blue.Darken2;
     private static readonly string MutedColor = Colors.Grey.Darken1;
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+    private static readonly object FontResolverLock = new();
+    private static readonly LatoFontResolver FontResolver = new();
 
     public byte[] Generate(ExecutedLeaseData data, string contentSha256)
+    {
+        if (data.OriginalDocumentBytes is { Length: > 0 } originalBytes)
+        {
+            var body = StampTemplateSigningFields(originalBytes, data);
+            var certificate = GenerateCertificatePdf(data, contentSha256);
+            return AppendPdf(body, certificate);
+        }
+
+        return GenerateStandardExecutedPdf(data, contentSha256);
+    }
+
+    private static byte[] GenerateStandardExecutedPdf(ExecutedLeaseData data, string contentSha256)
     {
         var document = Document.Create(container =>
         {
@@ -91,6 +123,225 @@ public sealed class ExecutedLeasePdfGenerator : IExecutedLeasePdfGenerator
         });
 
         return document.GeneratePdf();
+    }
+
+    private static byte[] GenerateCertificatePdf(ExecutedLeaseData data, string contentSha256)
+    {
+        var document = Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(PageSizes.A4);
+                page.Margin(40);
+                page.DefaultTextStyle(t => t.FontSize(10).FontColor(Colors.Black).LineHeight(1.3f));
+
+                page.Content().Element(e => ComposeCertificate(e, data, contentSha256));
+                page.Footer().Element(ComposeFooter);
+            });
+        });
+
+        return document.GeneratePdf();
+    }
+
+    private static byte[] StampTemplateSigningFields(byte[] originalBytes, ExecutedLeaseData data)
+    {
+        var fields = ParseTemplateFields(data.TemplateFieldSnapshotJson);
+        if (fields.Count == 0)
+        {
+            return originalBytes;
+        }
+
+        EnsureFontResolver();
+
+        using var input = new MemoryStream(originalBytes);
+        using var pdf = PdfReader.Open(input, PdfDocumentOpenMode.Modify);
+
+        foreach (var pageGroup in fields.GroupBy(f => f.PageNumber))
+        {
+            var pageIndex = pageGroup.Key - 1;
+            if (pageIndex < 0 || pageIndex >= pdf.Pages.Count)
+            {
+                continue;
+            }
+
+            var page = pdf.Pages[pageIndex];
+            using var gfx = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
+
+            foreach (var field in pageGroup)
+            {
+                if (!TryParseKind(field.Kind, out var kind)
+                    || kind is not (DocumentTemplateFieldKind.Signature
+                        or DocumentTemplateFieldKind.Initial
+                        or DocumentTemplateFieldKind.DateSigned))
+                {
+                    continue;
+                }
+
+                if (!TryParseRole(field.SignerRole, out var role))
+                {
+                    continue;
+                }
+
+                var signer = FindSigner(data.Signers, role);
+                if (signer is null)
+                {
+                    continue;
+                }
+
+                var rect = ToPageRect(field, page.Width.Point, page.Height.Point);
+                switch (kind)
+                {
+                    case DocumentTemplateFieldKind.Signature:
+                        DrawSignature(gfx, rect, signer);
+                        break;
+                    case DocumentTemplateFieldKind.Initial:
+                        DrawText(gfx, Initials(signer), rect, italic: true);
+                        break;
+                    case DocumentTemplateFieldKind.DateSigned:
+                        DrawText(
+                            gfx,
+                            signer.SignedAtUtc?.ToString("MMM d, yyyy", System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+                            rect,
+                            italic: false);
+                        break;
+                }
+            }
+        }
+
+        using var output = new MemoryStream();
+        pdf.Save(output, false);
+        return output.ToArray();
+    }
+
+    private static byte[] AppendPdf(byte[] bodyBytes, byte[] certificateBytes)
+    {
+        using var output = new PdfSharp.Pdf.PdfDocument();
+        using var bodyStream = new MemoryStream(bodyBytes);
+        using var body = PdfReader.Open(bodyStream, PdfDocumentOpenMode.Import);
+        for (var i = 0; i < body.PageCount; i++)
+        {
+            output.AddPage(body.Pages[i]);
+        }
+
+        using var certificateStream = new MemoryStream(certificateBytes);
+        using var certificate = PdfReader.Open(certificateStream, PdfDocumentOpenMode.Import);
+        for (var i = 0; i < certificate.PageCount; i++)
+        {
+            output.AddPage(certificate.Pages[i]);
+        }
+
+        using var ms = new MemoryStream();
+        output.Save(ms, false);
+        return ms.ToArray();
+    }
+
+    private static List<TemplateFieldSnapshot> ParseTemplateFields(string? snapshotJson)
+    {
+        if (string.IsNullOrWhiteSpace(snapshotJson))
+        {
+            return [];
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<TemplateFieldSnapshot>>(snapshotJson, JsonOptions) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static bool TryParseKind(string? value, out DocumentTemplateFieldKind kind) =>
+        Enum.TryParse(value, ignoreCase: true, out kind);
+
+    private static bool TryParseRole(string? value, out DocumentTemplateSignerRole role) =>
+        Enum.TryParse(value, ignoreCase: true, out role) && role != DocumentTemplateSignerRole.None;
+
+    private static ExecutedSigner? FindSigner(
+        IReadOnlyList<ExecutedSigner> signers,
+        DocumentTemplateSignerRole role)
+    {
+        var exact = signers.FirstOrDefault(s => s.SignerRole == role);
+        if (exact is not null)
+        {
+            return exact;
+        }
+
+        return role switch
+        {
+            DocumentTemplateSignerRole.Tenant => signers.FirstOrDefault(),
+            DocumentTemplateSignerRole.Landlord => signers.Skip(1).FirstOrDefault(),
+            _ => null,
+        };
+    }
+
+    private static XRect ToPageRect(TemplateFieldSnapshot field, double pageWidth, double pageHeight)
+    {
+        var x = Clamp01(field.XPct) * pageWidth;
+        var y = Clamp01(field.YPct) * pageHeight;
+        var width = Clamp01(field.WidthPct) * pageWidth;
+        var height = Clamp01(field.HeightPct) * pageHeight;
+        return new XRect(x, y, width, height);
+    }
+
+    private static double Clamp01(double value) => Math.Min(1, Math.Max(0, value));
+
+    private static void DrawSignature(XGraphics gfx, XRect rect, ExecutedSigner signer)
+    {
+        if (signer.SignatureType == SignatureSignatureType.Drawn
+            && signer.DrawnSignatureImage is { Length: > 0 } imageBytes)
+        {
+            try
+            {
+                using var imageStream = new MemoryStream(imageBytes);
+                using var image = XImage.FromStream(imageStream);
+                var scale = Math.Min(rect.Width / image.PointWidth, rect.Height / image.PointHeight);
+                var width = image.PointWidth * scale;
+                var height = image.PointHeight * scale;
+                var x = rect.X;
+                var y = rect.Y + Math.Max(0, (rect.Height - height) / 2);
+                gfx.DrawImage(image, x, y, width, height);
+                return;
+            }
+            catch
+            {
+                // If a captured image cannot be decoded, fall back to the signer's typed/name mark.
+            }
+        }
+
+        var text = string.IsNullOrWhiteSpace(signer.TypedName) ? signer.Name : signer.TypedName!;
+        DrawText(gfx, text, rect, italic: true, fontScale: 0.7, maxSize: 24);
+    }
+
+    private static void DrawText(
+        XGraphics gfx,
+        string text,
+        XRect rect,
+        bool italic,
+        double fontScale = 0.58,
+        double maxSize = 12)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        var font = new XFont("Lato", Math.Clamp(rect.Height * fontScale, 7, maxSize),
+            italic ? XFontStyleEx.Italic : XFontStyleEx.Regular);
+        var formatter = new XTextFormatter(gfx);
+        formatter.DrawString(text.Trim(), font, XBrushes.Black, rect, XStringFormats.TopLeft);
+    }
+
+    private static string Initials(ExecutedSigner signer)
+    {
+        var source = string.IsNullOrWhiteSpace(signer.TypedName) ? signer.Name : signer.TypedName!;
+        var initials = source
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(part => part[0])
+            .Take(3)
+            .ToArray();
+        return initials.Length == 0 ? signer.Name : new string(initials).ToUpperInvariant();
     }
 
     // ---------------------------------------------------------------------
@@ -258,9 +509,12 @@ public sealed class ExecutedLeasePdfGenerator : IExecutedLeasePdfGenerator
                 row.RelativeItem().Column(c =>
                 {
                     c.Spacing(2);
-                    CertRow(c, "Document", data.Agreement.Lease.LeaseNumber is { Length: > 0 } ln
-                        ? $"Residential Lease Agreement — {ln}"
-                        : "Residential Lease Agreement");
+                    var documentLabel = !string.IsNullOrWhiteSpace(data.DocumentName)
+                        ? data.DocumentName
+                        : data.Agreement.Lease.LeaseNumber is { Length: > 0 } ln
+                            ? $"Lease agreement - {ln}"
+                            : "Lease agreement";
+                    CertRow(c, "Document", documentLabel);
                     CertRow(c, "Sender", string.IsNullOrWhiteSpace(data.LandlordName) ? "—" : data.LandlordName);
                     CertRow(c, "Envelope ID", string.IsNullOrWhiteSpace(data.EnvelopeId) ? "—" : data.EnvelopeId);
                     CertRow(c, "Completed (UTC)", data.CompletedAtUtc.ToString("MMM d, yyyy HH:mm:ss 'UTC'", System.Globalization.CultureInfo.InvariantCulture));
@@ -353,5 +607,58 @@ public sealed class ExecutedLeasePdfGenerator : IExecutedLeasePdfGenerator
             ? "th"
             : (day % 10) switch { 1 => "st", 2 => "nd", 3 => "rd", _ => "th" };
         return $"{day}{suffix}";
+    }
+
+    private static void EnsureFontResolver()
+    {
+        lock (FontResolverLock)
+        {
+            GlobalFontSettings.FontResolver ??= FontResolver;
+        }
+    }
+
+    private sealed class TemplateFieldSnapshot
+    {
+        public string? Kind { get; init; }
+        public string? SignerRole { get; init; }
+        public int PageNumber { get; init; } = 1;
+        public double XPct { get; init; }
+        public double YPct { get; init; }
+        public double WidthPct { get; init; } = 0.12;
+        public double HeightPct { get; init; } = 0.03;
+    }
+
+    private sealed class LatoFontResolver : IFontResolver
+    {
+        private const string Regular = "Lato#Regular";
+        private const string Bold = "Lato#Bold";
+        private const string Italic = "Lato#Italic";
+        private const string BoldItalic = "Lato#BoldItalic";
+
+        public FontResolverInfo? ResolveTypeface(string familyName, bool bold, bool italic)
+        {
+            var face = (bold, italic) switch
+            {
+                (true, true) => BoldItalic,
+                (true, false) => Bold,
+                (false, true) => Italic,
+                _ => Regular,
+            };
+
+            return new FontResolverInfo(face);
+        }
+
+        public byte[] GetFont(string faceName)
+        {
+            var fileName = faceName switch
+            {
+                Bold => "Lato-Bold.ttf",
+                Italic => "Lato-Italic.ttf",
+                BoldItalic => "Lato-BoldItalic.ttf",
+                _ => "Lato-Regular.ttf",
+            };
+
+            return File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "LatoFont", fileName));
+        }
     }
 }

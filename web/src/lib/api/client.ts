@@ -313,7 +313,9 @@ export const api = {
  * parsing JSON, so streamed exports flow straight to a file save without being buffered as text.
  */
 export async function downloadFile(endpoint: string): Promise<Blob> {
-	const headers: Record<string, string> = {};
+	const headers: Record<string, string> = {
+		Accept: 'application/pdf, text/csv, application/octet-stream, application/json, */*'
+	};
 
 	if (browser && isTokenExpired(120)) {
 		try {
