@@ -205,6 +205,16 @@ public class LeaseController : ManagementControllerBase
         return status == null ? NotFound(new { error = "Lease not found" }) : Ok(status);
     }
 
+    /// <summary>Recent email queue activity for this lease's e-sign requests.</summary>
+    [HttpGet("{id:int}/signature-queue")]
+    [ProducesResponseType(typeof(LeaseSignatureQueueResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<LeaseSignatureQueueResponse>> SignatureQueue(int id, CancellationToken ct)
+    {
+        var queue = await _esign.GetSignatureQueueAsync(GetPortfolioId(), id, ct);
+        return queue == null ? NotFound(new { error = "Lease not found" }) : Ok(queue);
+    }
+
     /// <summary>Download the stored fully-signed agreement PDF (404 until a signed document has been stored).</summary>
     [HttpGet("{id:int}/signed-document")]
     [ProducesResponseType(StatusCodes.Status200OK)]

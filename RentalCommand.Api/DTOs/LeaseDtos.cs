@@ -228,6 +228,29 @@ public sealed class LeaseSignatureStatusResponse
     public string TestId => $"lease-signature-{LeaseId}";
 }
 
+/// <summary>Recent outbox activity for lease e-sign emails.</summary>
+public sealed class LeaseSignatureQueueResponse
+{
+    public int LeaseId { get; init; }
+    public IReadOnlyList<LeaseSignatureQueueItemResponse> Items { get; init; } = [];
+}
+
+/// <summary>One lease e-sign email queue item, scoped to a single lease.</summary>
+public sealed class LeaseSignatureQueueItemResponse
+{
+    public long Id { get; init; }
+    public string RecipientEmail { get; init; } = string.Empty;
+    public string? Subject { get; init; }
+    public string Status { get; init; } = "Queued";
+    public DateTime QueuedAt { get; init; }
+    public DateTime StatusAt { get; init; }
+    public DateTime? SentAt { get; init; }
+    public DateTime? FailedAt { get; init; }
+    public int RetryCount { get; init; }
+    public string? Error { get; init; }
+    public string? SignatureRequestId { get; init; }
+}
+
 public class CreateLeaseRequest
 {
     [Required]
