@@ -283,6 +283,7 @@
 		onPageChange={(page) => (gridPage = page)}
 		sort={gridSort}
 		onSortChange={(s) => { gridSort = s ?? ''; gridPage = 1; }}
+		mobileActions={vendorActionsCell}
 	>
 		{#snippet toolbar()}
 			<div class="flex flex-1 items-center gap-2">
