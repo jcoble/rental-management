@@ -337,6 +337,22 @@ public sealed class LeaseEsignServiceTests : IDisposable
                 Payload = JsonSerializer.Serialize(new
                 {
                     source = OutboxPayloadSources.LeaseEsignSigningLink,
+                    signatureRequestId = "sig_suppressed",
+                    leaseId = lease.Id,
+                    to = "tenant-on-lease@example.com",
+                    subject = "Lease L-2026-7",
+                }),
+                CreatedAt = now.AddMinutes(-6),
+                SentAt = now.AddMinutes(-5),
+                Error = "Email delivery is not configured for this environment.",
+            },
+            new OutboxMessage
+            {
+                PortfolioId = PortfolioId,
+                MessageType = "email",
+                Payload = JsonSerializer.Serialize(new
+                {
+                    source = OutboxPayloadSources.LeaseEsignSigningLink,
                     signatureRequestId = "sig_other_lease",
                     leaseId = otherLease.Id,
                     to = "other-tenant@example.com",
@@ -380,13 +396,15 @@ public sealed class LeaseEsignServiceTests : IDisposable
 
         queue.Should().NotBeNull();
         queue!.LeaseId.Should().Be(lease.Id);
-        queue.Items.Should().HaveCount(2);
+        queue.Items.Should().HaveCount(3);
         queue.Items.Select(i => i.RecipientEmail).Should().Equal(
             "tenant-on-lease@example.com",
+            "tenant-on-lease@example.com",
             "tenant-on-lease@example.com");
-        queue.Items.Select(i => i.Status).Should().Equal("Failed", "Sent");
-        queue.Items.Select(i => i.StatusAt).Should().Equal(now.AddMinutes(-2), now.AddMinutes(-9));
+        queue.Items.Select(i => i.Status).Should().Equal("Failed", "DeliveryDisabled", "Sent");
+        queue.Items.Select(i => i.StatusAt).Should().Equal(now.AddMinutes(-2), now.AddMinutes(-5), now.AddMinutes(-9));
         queue.Items[0].Error.Should().Be("SMTP rejected the message.");
+        queue.Items[1].Error.Should().Be("Email delivery is not configured for this environment.");
     }
 
     private LeaseEsignService CreateService(IEsignProvider provider)

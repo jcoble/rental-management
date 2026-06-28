@@ -12,8 +12,8 @@ namespace RentalCommand.Engine.Services;
 /// Phase 4 <see cref="INotificationChannel"/>: routes SMS through the pluggable
 /// <see cref="ISmsDispatcher"/> (per-portfolio BYO provider with platform-env fallback) and email
 /// through a config-selectable transport — SMTP (e.g. Zoho) when <c>Notifications:Email:Transport</c>
-/// is "Smtp" and SMTP creds are present, otherwise the SendGrid HTTP API. Both fall back to a
-/// suppression log when nothing is configured so callers never need to guard on provider state.
+/// is "Smtp" and SMTP creds are present, otherwise the SendGrid HTTP API. Email with no configured
+/// provider raises a typed suppression so the outbox can show "not delivered" without retrying.
 /// Register via <c>AddHttpClient&lt;INotificationChannel, RoutingNotificationChannel&gt;()</c>
 /// in Program.cs.
 /// </summary>
@@ -51,10 +51,10 @@ public sealed class RoutingNotificationChannel : INotificationChannel
     public async Task SendEmailAsync(
         string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default)
     {
-        // Transport selection (config-gated; no creds → no behaviour change vs the original SendGrid-only path):
+        // Transport selection (config-gated):
         //   1. Transport == "Smtp" AND SMTP configured (host+user+pass) → send via SMTP (e.g. Zoho).
-        //   2. else SendGrid configured                                 → send via SendGrid (unchanged).
-        //   3. else                                                     → suppression log, never throw.
+        //   2. else SendGrid configured                                 → send via SendGrid.
+        //   3. else                                                     → terminal suppression, no retry.
         // The upstream sandbox suppression lives in OutboxDispatchWorker and is intentionally untouched.
         var smtp = _cfg.Smtp;
         if (_cfg.Email.UseSmtp && smtp.Enabled)
@@ -72,6 +72,8 @@ public sealed class RoutingNotificationChannel : INotificationChannel
         _logger.LogInformation(
             "[Email suppressed — not configured] to {To}: {Subject}",
             toEmail, subject);
+        throw new NotificationDeliverySuppressedException(
+            "Email delivery is not configured for this environment. No external email provider accepted this message.");
     }
 
     // SMTP (e.g. Zoho): delegates the connect/auth/send to ISmtpEmailSender. Logs success/failure
