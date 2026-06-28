@@ -295,6 +295,9 @@ export interface Payment {
 	id: number;
 	portfolioId: number;
 	leaseId: number;
+	/** Unit/Property the payment's lease is on; resolved DB-side via the lease join so the UI can route to the unit's tab. */
+	unitId?: number;
+	propertyId?: number;
 	paymentType: PaymentType;
 	status: PaymentStatus;
 	amount: number;
@@ -518,6 +521,9 @@ export interface AccountingTransaction {
 	status: string;
 	amount: number;
 	propertyId?: number;
+	/** Unit id for the row (via Lease for payments, direct for expenses; null for bank rows).
+	 * Lets the ledger route Payment/Expense rows into their unit's Command Center tab. */
+	unitId?: number | null;
 	propertyName?: string;
 	counterparty?: string;
 	detailHref?: string;
@@ -594,6 +600,9 @@ export interface PastDueResponse {
 /** One behind lease/tenant row (PastDueLeaseResponse). */
 export interface PastDueLease {
 	leaseId: number;
+	/** Unit id on the behind lease, so the "open oldest payment" link deep-links into the unit's
+	 * Command Center Rent tab rather than the generic payment detail page. */
+	unitId: number;
 	tenantName?: string | null;
 	/** Tenant phone, for a one-tap reminder text; null when not on file. */
 	tenantPhone?: string | null;
