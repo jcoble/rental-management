@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -6,6 +7,7 @@ using QuestPDF.Fluent;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -93,6 +95,30 @@ public sealed class LeaseEsignServiceTests : IDisposable
         reloaded.Status.Should().Be(LeaseStatus.PendingSignature);
         reloaded.EsignStatus.Should().Be(EsignStatus.Sent);
         reloaded.EsignEnvelopeId.Should().Be("sig_abc123");
+    }
+
+    [Fact]
+    public async Task SendForSignature_UsesLeaseTenantEmailEvenWhenOverrideProvided()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.Draft, tenantEmail: "tenant-on-lease@example.com");
+        var provider = new FakeEsignProvider { Configured = true, EnvelopeId = "sig_tenant_only" };
+        var sut = CreateService(provider);
+
+        var result = await sut.SendForSignatureAsync(
+            PortfolioId,
+            lease.Id,
+            new SendForSignatureRequest
+            {
+                SignerName = "Owner Admin",
+                SignerEmail = "owner-admin@example.com",
+            },
+            changedByUserId: 7,
+            ipAddress: null);
+
+        result.Outcome.Should().Be(SendForSignatureOutcome.Sent);
+        provider.LastSigners.Should().ContainSingle();
+        provider.LastSigners[0].Name.Should().Be("Marcus Williams");
+        provider.LastSigners[0].Email.Should().Be("tenant-on-lease@example.com");
     }
 
     [Fact]
@@ -241,6 +267,105 @@ public sealed class LeaseEsignServiceTests : IDisposable
         var status = await sut.GetSignatureStatusAsync(PortfolioId, leaseId: 99999);
 
         status.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GetSignatureQueue_ReturnsRecentLeaseSigningEmailsWithRecipientAndSendTime()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.PendingSignature, tenantEmail: "tenant-on-lease@example.com");
+        var otherLease = SeedLeaseWithGraph(LeaseStatus.PendingSignature, tenantEmail: "other-tenant@example.com");
+        var now = new DateTime(2026, 6, 28, 14, 0, 0, DateTimeKind.Utc);
+
+        _db.OutboxMessages.AddRange(
+            new OutboxMessage
+            {
+                PortfolioId = PortfolioId,
+                MessageType = "email",
+                Payload = JsonSerializer.Serialize(new
+                {
+                    source = OutboxPayloadSources.LeaseEsignSigningLink,
+                    signatureRequestId = "sig_sent",
+                    leaseId = lease.Id,
+                    to = "tenant-on-lease@example.com",
+                    subject = "Lease L-2026-7",
+                }),
+                CreatedAt = now.AddMinutes(-10),
+                SentAt = now.AddMinutes(-9),
+            },
+            new OutboxMessage
+            {
+                PortfolioId = PortfolioId,
+                MessageType = "email",
+                Payload = JsonSerializer.Serialize(new
+                {
+                    source = OutboxPayloadSources.LeaseEsignSigningLink,
+                    signatureRequestId = "sig_failed",
+                    leaseId = lease.Id,
+                    to = "tenant-on-lease@example.com",
+                    subject = "Lease L-2026-7",
+                }),
+                CreatedAt = now.AddMinutes(-4),
+                FailedAt = now.AddMinutes(-2),
+                RetryCount = 5,
+                Error = "SMTP rejected the message.",
+            },
+            new OutboxMessage
+            {
+                PortfolioId = PortfolioId,
+                MessageType = "email",
+                Payload = JsonSerializer.Serialize(new
+                {
+                    source = OutboxPayloadSources.LeaseEsignSigningLink,
+                    signatureRequestId = "sig_other_lease",
+                    leaseId = otherLease.Id,
+                    to = "other-tenant@example.com",
+                    subject = "Lease L-2026-7",
+                }),
+                CreatedAt = now.AddMinutes(-1),
+                SentAt = now,
+            },
+            new OutboxMessage
+            {
+                PortfolioId = PortfolioId,
+                MessageType = "email",
+                Payload = JsonSerializer.Serialize(new
+                {
+                    source = OutboxPayloadSources.LeaseEsignSigningLink,
+                    signatureRequestId = "sig_prefix_collision",
+                    leaseId = int.Parse($"{lease.Id}0"),
+                    to = "wrong-tenant@example.com",
+                    subject = "Lease collision",
+                }),
+                CreatedAt = now.AddMinutes(-3),
+                SentAt = now.AddMinutes(-2),
+            },
+            new OutboxMessage
+            {
+                PortfolioId = PortfolioId,
+                MessageType = "email",
+                Payload = JsonSerializer.Serialize(new
+                {
+                    to = "owner@example.com",
+                    subject = "Unrelated email",
+                }),
+                CreatedAt = now,
+                SentAt = now,
+            });
+        await _db.SaveChangesAsync();
+
+        var sut = CreateService(new FakeEsignProvider { Configured = false });
+
+        var queue = await sut.GetSignatureQueueAsync(PortfolioId, lease.Id);
+
+        queue.Should().NotBeNull();
+        queue!.LeaseId.Should().Be(lease.Id);
+        queue.Items.Should().HaveCount(2);
+        queue.Items.Select(i => i.RecipientEmail).Should().Equal(
+            "tenant-on-lease@example.com",
+            "tenant-on-lease@example.com");
+        queue.Items.Select(i => i.Status).Should().Equal("Failed", "Sent");
+        queue.Items.Select(i => i.StatusAt).Should().Equal(now.AddMinutes(-2), now.AddMinutes(-9));
+        queue.Items[0].Error.Should().Be("SMTP rejected the message.");
     }
 
     private LeaseEsignService CreateService(IEsignProvider provider)
@@ -429,6 +554,7 @@ public sealed class LeaseEsignServiceTests : IDisposable
         public string EnvelopeId { get; init; } = "sig_fake";
         public byte[]? SignedPdf { get; init; }
         public byte[]? LastDocumentBytes { get; private set; }
+        public IReadOnlyList<EsignSigner> LastSigners { get; private set; } = Array.Empty<EsignSigner>();
         public int SendCalls { get; private set; }
 
         public bool IsConfigured => Configured;
@@ -437,6 +563,9 @@ public sealed class LeaseEsignServiceTests : IDisposable
         {
             SendCalls++;
             LastDocumentBytes = request.DocumentBytes;
+            LastSigners = request.Signers
+                .Select(s => new EsignSigner { Name = s.Name, Email = s.Email })
+                .ToArray();
             return Task.FromResult(Configured
                 ? EsignResult.Sent(EnvelopeId, "Sent")
                 : EsignResult.NotConfigured());

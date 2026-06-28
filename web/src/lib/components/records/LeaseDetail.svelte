@@ -3,7 +3,7 @@
 	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { recordHref } from '$lib/navigation/record-href';
-	import { leases } from '$lib/api/endpoints/leases';
+	import { leases, type LeaseSignatureQueueItemResponse } from '$lib/api/endpoints/leases';
 	import { documentTemplates } from '$lib/api/endpoints/document-templates';
 	import {
 		hasNoticeMoveOutDate,
@@ -47,7 +47,7 @@
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, DollarSign, Users, StickyNote, CalendarRange, Library, ExternalLink } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, DollarSign, Users, StickyNote, CalendarRange, Library, ExternalLink, Mail, RefreshCw } from '@lucide/svelte';
 	import { ApiError } from '$lib/api/client';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
@@ -364,6 +364,17 @@
 		refetchInterval: (query) => (query.state.data?.esignStatus === 'Sent' ? 5000 : false),
 	}));
 	const signature = $derived(signatureStatusQuery.data);
+
+	const signatureQueueQuery = createQuery(() => ({
+		queryKey: ['lease-signature-queue', leaseId],
+		queryFn: () => leases.signatureQueue(leaseId),
+		enabled: leaseId > 0,
+		refetchInterval: (query) =>
+			(query.state.data?.items ?? []).some((item) => item.status === 'Queued' || item.status === 'Retrying')
+				? 5000
+				: false,
+	}));
+	const signatureQueueItems = $derived(signatureQueueQuery.data?.items ?? []);
 	const canSendForSignature = $derived(canSendLeaseForSignature(signature?.leaseStatus, signature?.esignStatus));
 	const visibleStatus = $derived(visibleLeaseStatus(lease?.status, signature));
 	const visibleLease = $derived(lease && visibleStatus ? { ...lease, status: visibleStatus } : lease);
@@ -394,6 +405,10 @@
 		invalidateLease();
 	}
 
+	function invalidateSignatureQueue() {
+		queryClient.invalidateQueries({ queryKey: ['lease-signature-queue', leaseId] });
+	}
+
 	const sendForSignatureMutation = createMutation(() => ({
 		mutationFn: () => leases.sendForSignature(leaseId),
 		onSuccess: (result) => {
@@ -401,6 +416,7 @@
 			hasDocument = hasAgreementAfterSignatureSend(hasDocument, result);
 			showSuccess(`Sent to ${lease?.tenantName ?? 'the tenant'} for signature.`);
 			invalidateSignatureStatus();
+			invalidateSignatureQueue();
 		},
 		onError: (err) => {
 			// 503 = no e-sign provider configured. Stay calm: show an inline note, not a toast.
@@ -555,6 +571,49 @@
 		// Date-only fields (start/end/move-in/move-out, ledger dates) are stored as
 		// UTC-midnight; format UTC-pinned so they don't slip back a day. See formatDateOnly.
 		return formatDateOnly(val) || val;
+	}
+
+	function formatDateTime(val: string | null | undefined): string {
+		if (!val) return '—';
+		const date = new Date(val);
+		if (Number.isNaN(date.getTime())) return val;
+		return new Intl.DateTimeFormat('en-US', {
+			month: 'short',
+			day: 'numeric',
+			hour: 'numeric',
+			minute: '2-digit',
+		}).format(date);
+	}
+
+	function queueStatusLabel(status: string): string {
+		if (status === 'Retrying') return 'Retrying';
+		if (status === 'Failed') return 'Failed';
+		if (status === 'Sent') return 'Sent';
+		return 'Queued';
+	}
+
+	function queueStatusClass(status: string): string {
+		const base = 'inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium';
+		if (status === 'Sent') return `${base} border-success/40 bg-success/10 text-success`;
+		if (status === 'Failed') return `${base} border-destructive/40 bg-destructive/10 text-destructive`;
+		if (status === 'Retrying') return `${base} border-warning/40 bg-warning/10 text-warning`;
+		return `${base} border-border bg-muted/40 text-muted-foreground`;
+	}
+
+	function queueWhenLabel(item: LeaseSignatureQueueItemResponse): string {
+		const label =
+			item.status === 'Sent'
+				? 'Sent'
+				: item.status === 'Failed'
+					? 'Failed'
+					: item.status === 'Retrying'
+						? 'Retrying since'
+						: 'Queued';
+		const parts = [`${label} ${formatDateTime(item.statusAt)}`];
+		if (item.retryCount > 0 && item.status !== 'Sent') {
+			parts.push(`${item.retryCount} ${item.retryCount === 1 ? 'attempt' : 'attempts'}`);
+		}
+		return parts.join(' · ');
 	}
 
 	// Active tab for the detail page. Kept as LOCAL state (not a URL param) so the inner
@@ -1007,6 +1066,58 @@
 							Send this lease to {lease?.tenantName ?? 'the tenant'} to sign electronically. We’ll generate the agreement if needed.
 						</p>
 					{/if}
+
+					<div class="mt-4 rounded-md border border-border bg-muted/20 p-3" data-testid="lease-esign-queue">
+						<div class="flex items-center justify-between gap-2">
+							<div class="flex min-w-0 items-center gap-2">
+								<Mail class="h-4 w-4 shrink-0 text-muted-foreground" />
+								<p class="truncate text-sm font-medium">Email queue</p>
+							</div>
+							<Button
+								variant="ghost"
+								size="icon"
+								class="h-8 w-8"
+								aria-label="Refresh e-sign queue"
+								data-testid="lease-esign-queue-refresh"
+								onclick={invalidateSignatureQueue}
+							>
+								<RefreshCw class="h-4 w-4 {signatureQueueQuery.isFetching ? 'animate-spin' : ''}" />
+							</Button>
+						</div>
+
+						{#if signatureQueueQuery.isLoading}
+							<div class="mt-3 space-y-2" data-testid="lease-esign-queue-loading">
+								<div class="h-10 animate-pulse rounded bg-muted/60"></div>
+								<div class="h-10 animate-pulse rounded bg-muted/40"></div>
+							</div>
+						{:else if signatureQueueQuery.isError}
+							<p class="mt-2 text-xs text-muted-foreground" data-testid="lease-esign-queue-error">
+								Email queue is unavailable right now.
+							</p>
+						{:else if signatureQueueItems.length === 0}
+							<p class="mt-2 text-xs text-muted-foreground" data-testid="lease-esign-queue-empty">
+								No signing emails have been queued yet.
+							</p>
+						{:else}
+							<div class="mt-3 divide-y divide-border/70" data-testid="lease-esign-queue-list">
+								{#each signatureQueueItems as item (item.id)}
+									<div class="py-2 first:pt-0 last:pb-0">
+										<div class="flex items-start justify-between gap-3">
+											<div class="min-w-0">
+												<p class="truncate text-sm font-medium">{item.recipientEmail || 'No recipient email'}</p>
+												<p class="mt-0.5 truncate text-xs text-muted-foreground">{item.subject || 'Lease signing email'}</p>
+											</div>
+											<span class={queueStatusClass(item.status)}>{queueStatusLabel(item.status)}</span>
+										</div>
+										<p class="mt-1 text-xs text-muted-foreground">{queueWhenLabel(item)}</p>
+										{#if item.error}
+											<p class="mt-1 line-clamp-2 text-xs text-destructive">{item.error}</p>
+										{/if}
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
 				</div>
 			</Card.Content>
 		</Card.Root>

@@ -2,10 +2,10 @@ namespace RentalCommand.Core.Interfaces;
 
 /// <summary>
 /// Account-wide sandbox check. A portfolio in Sandbox is a demo account seeded with fake data; while
-/// sandboxed, all real outbound (email/SMS/Stripe/e-sign) must be HARD-suppressed so demo play never
-/// contacts real people or moves real money. Implementations resolve <c>Portfolio.IsSandbox</c> for the
-/// given portfolio id (treating an unknown/unscoped portfolio as NOT sandbox — fail-open to Live so a
-/// legitimate system message is never silently dropped).
+/// sandboxed, outbound side effects must follow their channel-specific guardrails so demo play does
+/// not accidentally contact the wrong people or move real money. Implementations resolve
+/// <c>Portfolio.IsSandbox</c> for the given portfolio id (treating an unknown/unscoped portfolio as
+/// NOT sandbox — fail-open to Live so a legitimate system message is never silently dropped).
 /// </summary>
 public interface ISandboxGuard
 {
