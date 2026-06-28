@@ -10,6 +10,7 @@
 		learnMoreLabel?: string;
 		side?: "top" | "bottom" | "left" | "right";
 		iconClass?: string;
+		testid?: string;
 	};
 
 	let {
@@ -20,6 +21,7 @@
 		learnMoreLabel = "Learn more",
 		side = "bottom",
 		iconClass = "h-3.5 w-3.5 text-muted-foreground",
+		testid,
 	}: Props = $props();
 
 	function stopClickOpen(event: MouseEvent) {
@@ -32,6 +34,7 @@
 	<Tooltip.Trigger
 		class="m3-state-layer inline-flex items-center justify-center rounded-[var(--m3-shape-full)] p-0.5 text-muted-foreground hover:text-foreground"
 		aria-label="Help for {title}"
+		data-testid={testid}
 		onmousedown={stopClickOpen}
 		onclick={stopClickOpen}
 	>

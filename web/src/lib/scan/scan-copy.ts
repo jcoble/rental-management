@@ -32,6 +32,10 @@ const UPLOAD_COPY: Record<ScanDocType, ScanUploadCopy> = {
 	Application: {
 		title: 'Drop a rental application here',
 		helperText: DEFAULT_HELPER
+	},
+	Loan: {
+		title: 'Drop a mortgage statement or closing disclosure here',
+		helperText: DEFAULT_HELPER
 	}
 };
 
@@ -55,11 +59,15 @@ const PROCESSING_COPY: Record<ScanDocType, ScanProcessingCopy> = {
 	Application: {
 		title: 'Reading your rental application…',
 		body: 'The computer is pulling out applicant, income, and requested-home details for you. This usually takes just a few seconds.'
+	},
+	Loan: {
+		title: 'Reading your mortgage statement…',
+		body: 'The computer is pulling out lender, balance, rate, and payment details for you. This usually takes just a few seconds.'
 	}
 };
 
 function normalizeDocType(type: ScanDocType | string | null | undefined): ScanDocType {
-	return type === 'Payment' || type === 'WorkOrder' || type === 'Lease' || type === 'Application'
+	return type === 'Payment' || type === 'WorkOrder' || type === 'Lease' || type === 'Application' || type === 'Loan'
 		? type
 		: 'Expense';
 }

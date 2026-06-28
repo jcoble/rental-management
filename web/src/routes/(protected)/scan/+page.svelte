@@ -17,6 +17,13 @@
 	import { appendScanContext, parseScanContext, type ScanDocType } from '$lib/scan/scan-context';
 	import { scanUploadCopy } from '$lib/scan/scan-copy';
 	import { prepareScanDocumentUpload } from '$lib/scan/scan-upload';
+	import {
+		VOICE_MAX_AUDIO_BYTES,
+		VOICE_MAX_RECORDING_SECONDS,
+		formatRecordingTime,
+		voiceCaptureErrorMessage,
+		voiceDraftErrorMessage
+	} from '$lib/scan/voice-capture';
 	import { SCAN_HISTORY_FILTERS, formatScanHistoryEmptyMessage, resolveScanHistoryFilter, type ScanHistoryFilter } from '$lib/scans/scan-history-filters';
 
 	const queryClient = useQueryClient();
@@ -57,13 +64,17 @@
 		{ value: 'Payment', label: 'Rent Check / Payment', hint: 'Becomes a payment record' },
 		{ value: 'WorkOrder', label: 'Maintenance Request', hint: 'Becomes a work order' },
 		{ value: 'Lease', label: 'Lease Agreement', hint: 'Becomes a lease record' },
-		{ value: 'Application', label: 'Rental Application', hint: 'Becomes an applicant record' }
+		{ value: 'Application', label: 'Rental Application', hint: 'Becomes an applicant record' },
+		{ value: 'Loan', label: 'Mortgage / Loan', hint: 'Becomes a loan on the property' }
 	] as const;
 	let docType = $state<ScanDocType>(initialScanContext.type ?? 'Expense');
 	const uploadCopy = $derived(scanUploadCopy(docType));
 	let isPreparingUpload = $state(false);
 	let isRecording = $state(false);
+	let recordingSeconds = $state(0);
 	let recorder: MediaRecorder | null = null;
+	let voiceStream: MediaStream | null = null;
+	let recordingTimer: ReturnType<typeof setInterval> | null = null;
 	let voiceChunks: Blob[] = [];
 
 	const scansQuery = createQuery(() => ({
@@ -94,13 +105,14 @@
 	}));
 
 	const voiceMutation = createMutation(() => ({
-		mutationFn: (audio: Blob) => scan.createVoiceDraft(audio),
+		mutationFn: ({ audio, mimeType }: { audio: Blob; mimeType: string }) =>
+			scan.createVoiceDraft(audio, mimeType),
 		onSuccess: (draft) => {
 			queryClient.invalidateQueries({ queryKey: ['scans'] });
 			goto(appendScanContext(`/scan/${draft.id}`, { ...scanContext, type: docType }));
 		},
 		onError: (err) => {
-			toast.error(err instanceof Error ? err.message : 'Voice capture failed');
+			toast.error(voiceDraftErrorMessage(err));
 		}
 	}));
 
@@ -115,38 +127,111 @@
 		}
 	}
 
+	function clearRecordingTimer() {
+		if (recordingTimer) {
+			clearInterval(recordingTimer);
+			recordingTimer = null;
+		}
+	}
+
+	// Stop the mic, timer, and recorder WITHOUT submitting a draft. Used on unmount
+	// so navigating away mid-recording never leaves the microphone live in the
+	// background (the onstop handler is detached first so teardown can't fire the
+	// upload as the page is torn down).
+	function teardownVoiceCapture() {
+		clearRecordingTimer();
+		if (recorder) {
+			recorder.ondataavailable = null;
+			recorder.onstop = null;
+			if (recorder.state !== 'inactive') {
+				try {
+					recorder.stop();
+				} catch {
+					// already inactive — nothing to stop
+				}
+			}
+			recorder = null;
+		}
+		if (voiceStream) {
+			voiceStream.getTracks().forEach((track) => track.stop());
+			voiceStream = null;
+		}
+		isRecording = false;
+		recordingSeconds = 0;
+	}
+
 	async function startVoiceCapture() {
 		if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-			toast.error('Voice recording is not available in this browser.');
+			// An insecure (non-https) origin hides mediaDevices entirely; say that's
+			// why rather than implying the browser can never record.
+			toast.error(
+				typeof window !== 'undefined' && window.isSecureContext === false
+					? 'Recording needs a secure (https) connection. Open the site over https and try again.'
+					: 'Voice recording is not available in this browser.'
+			);
 			return;
 		}
 
 		try {
 			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			voiceStream = stream;
 			voiceChunks = [];
+			recordingSeconds = 0;
 			const nextRecorder = new MediaRecorder(stream);
 			nextRecorder.ondataavailable = (event) => {
 				if (event.data.size > 0) voiceChunks.push(event.data);
 			};
 			nextRecorder.onstop = () => {
+				clearRecordingTimer();
 				stream.getTracks().forEach((track) => track.stop());
-				const audio = new Blob(voiceChunks, { type: nextRecorder.mimeType || 'audio/webm' });
-				voiceMutation.mutate(audio);
+				voiceStream = null;
 				recorder = null;
+				isRecording = false;
+				const mimeType = nextRecorder.mimeType || 'audio/webm';
+				const audio = new Blob(voiceChunks, { type: mimeType });
+				if (audio.size === 0) {
+					toast.error("Couldn't hear that — try again.");
+					return;
+				}
+				if (audio.size > VOICE_MAX_AUDIO_BYTES) {
+					toast.error('That recording is too large to send. Keep voice notes under about two minutes.');
+					return;
+				}
+				voiceMutation.mutate({ audio, mimeType });
 			};
 			recorder = nextRecorder;
 			nextRecorder.start();
 			isRecording = true;
+			// One interval drives both the elapsed-time display and the hard cap: at
+			// the limit we auto-stop so a forgotten recording can't grow past Whisper's
+			// size limit.
+			recordingTimer = setInterval(() => {
+				recordingSeconds += 1;
+				if (recordingSeconds >= VOICE_MAX_RECORDING_SECONDS) {
+					toast.info('Reached the two-minute limit — sending what we captured.');
+					stopVoiceCapture();
+				}
+			}, 1000);
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : 'Could not start recording');
+			if (voiceStream) {
+				voiceStream.getTracks().forEach((track) => track.stop());
+				voiceStream = null;
+			}
+			toast.error(voiceCaptureErrorMessage(err));
 		}
 	}
 
 	function stopVoiceCapture() {
 		if (!recorder || recorder.state === 'inactive') return;
+		clearRecordingTimer();
 		isRecording = false;
 		recorder.stop();
 	}
+
+	// Navigating away mid-recording must not leave the mic live: stop tracks + timer on unmount.
+	$effect(() => {
+		return () => teardownVoiceCapture();
+	});
 
 	// Scan statuses not in StatusBadge default map — pass a custom map
 	const scanStatusMap: Record<string, { label?: string; class: string }> = {
@@ -205,6 +290,9 @@
 		if (type === 'WorkOrder') return `/maintenance/${id}`;
 		if (type === 'Lease') return `/leases/${id}`;
 		if (type === 'Application') return `/applications/${id}`;
+		// A Loan has no standalone detail page (it lives under its property) — fall back to the
+		// read-only draft rather than linking to a non-existent loan record.
+		if (type === 'Loan') return null;
 		return `/accounting/expenses/${id}`;
 	}
 
@@ -330,7 +418,9 @@
 		{#if voiceMutation.isPending}
 			<span class="text-sm text-muted-foreground">Creating draft...</span>
 		{:else if isRecording}
-			<span class="text-sm text-muted-foreground">Recording...</span>
+			<span class="text-sm text-muted-foreground tabular-nums" data-testid="voice-recording-status">
+				Recording… {formatRecordingTime(recordingSeconds)} / {formatRecordingTime(VOICE_MAX_RECORDING_SECONDS)}
+			</span>
 		{/if}
 	</div>
 

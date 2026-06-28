@@ -66,4 +66,24 @@ public class ScanProcessingWorkerSchemaTests
             "rent_due_day",
         ]);
     }
+
+    [Fact]
+    public void ChooseExtractionSchema_LoanTarget_UsesLoanSchema()
+    {
+        var schema = ScanProcessingWorker.ChooseExtractionSchema("Loan");
+
+        schema.Instructions.Should().Be(LoanExtractionSchema.Instructions);
+        schema.Fields.Select(f => f.Name).Should().Contain([
+            "lender",
+            "original_amount",
+            "current_balance",
+            "annual_interest_rate_pct",
+            "term_months",
+            "start_date",
+            "day_of_month_due",
+            "monthly_principal_interest",
+            "monthly_escrow",
+            "property_id",
+        ]);
+    }
 }

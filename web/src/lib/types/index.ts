@@ -1059,8 +1059,12 @@ export interface AdminAuditEntry extends AuditEntry {
 export interface DashboardActivity {
 	id: number;
 	type: string;
+	/** Primary key of the touched entity, for deep-linking to its detail page. */
+	entityId: number;
 	action?: string;
 	description?: string;
+	/** Human label naming the specific record this row touched (null when the type has no cheap label). */
+	label?: string;
 	actor?: string;
 	createdAt: string;
 }
