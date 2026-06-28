@@ -65,7 +65,11 @@ class ApiException implements Exception {
       }
       // ASP.NET ProblemDetails — { "title": "...", "status": 4xx }
       final title = body['title'];
-      if (title is String && title.isNotEmpty) return title;
+      final validationDetails = _extractValidationErrors(body['errors']);
+      if (title is String && title.isNotEmpty) {
+        return validationDetails == null ? title : '$title $validationDetails';
+      }
+      if (validationDetails != null) return validationDetails;
       // Generic message field
       final message = body['message'];
       if (message is String && message.isNotEmpty) return message;
@@ -84,6 +88,29 @@ class ApiException implements Exception {
       if (messages.isNotEmpty) return messages.join(' ');
     }
     return null;
+  }
+
+  static String? _extractValidationErrors(dynamic errors) {
+    if (errors is! Map) return null;
+
+    final messages = <String>[];
+    for (final entry in errors.entries) {
+      final field = entry.key?.toString() ?? '';
+      final value = entry.value;
+      if (value is List) {
+        for (final item in value.whereType<String>()) {
+          final message = item.trim();
+          if (message.isNotEmpty) {
+            messages.add(field.isEmpty ? message : '$field: $message');
+          }
+        }
+      } else if (value is String && value.trim().isNotEmpty) {
+        final message = value.trim();
+        messages.add(field.isEmpty ? message : '$field: $message');
+      }
+    }
+
+    return messages.isEmpty ? null : messages.join(' ');
   }
 
   static String _fallbackMessage(int statusCode) {
