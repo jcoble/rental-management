@@ -56,11 +56,11 @@
 				This unit has no current lease. Scan an existing signed lease to extract its terms, or create one from the Leases page.
 			</p>
 		</DetailCard>
-
-		<div class="flex flex-wrap gap-2">
-			<Button variant="outline" class="gap-2" onclick={() => onScan()} data-testid="lease-scan">
-				<ScanLine class="h-4 w-4" /> Scan / upload lease
-			</Button>
-		</div>
 	{/if}
+
+	<div class="flex flex-wrap gap-2">
+		<Button variant="outline" class="gap-2" onclick={() => onScan()} data-testid="lease-scan">
+			<ScanLine class="h-4 w-4" /> Scan / upload lease
+		</Button>
+	</div>
 </div>
