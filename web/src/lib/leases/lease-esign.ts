@@ -5,12 +5,34 @@ const SIGNABLE_LEASE_STATUSES = new Set<LeaseStatus>(['Draft', 'PendingSignature
 interface SignatureSendState {
 	esignStatus?: EsignStatus | null;
 	leaseStatus?: LeaseStatus | null;
+	hasSignedDocument?: boolean | null;
 }
 
-export function canSendLeaseForSignature(leaseStatus?: LeaseStatus | null, esignStatus?: EsignStatus | null): boolean {
+export function canSendLeaseForSignature(
+	leaseStatus?: LeaseStatus | null,
+	esignStatus?: EsignStatus | null,
+	hasSignedDocument = false
+): boolean {
 	if (esignStatus === 'Signed') return false;
+	if (hasSignedDocument) return false;
 	if (!leaseStatus) return false;
 	return SIGNABLE_LEASE_STATUSES.has(leaseStatus);
+}
+
+export function canShowLeaseSignatureSendAction(
+	leaseStatus?: LeaseStatus | null,
+	signatureStatus?: SignatureSendState | null
+): boolean {
+	return canSendLeaseForSignature(
+		visibleLeaseStatus(leaseStatus, signatureStatus),
+		signatureStatus?.esignStatus,
+		signatureStatus?.hasSignedDocument === true
+	);
+}
+
+export function leaseSignatureQueuedMessage(tenantName?: string | null): string {
+	const recipient = tenantName?.trim() || 'the tenant';
+	return `Signing request queued for ${recipient}. Watch the email queue below for delivery status.`;
 }
 
 export function hasAgreementAfterSignatureSend(currentHasDocument: boolean, result?: SignatureSendState | null): boolean {

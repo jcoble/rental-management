@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
 	canSendLeaseForSignature,
+	canShowLeaseSignatureSendAction,
 	hasAgreementAfterSignatureSend,
+	leaseSignatureQueuedMessage,
 	signableStateMessage,
 	visibleLeaseStatus,
 } from './lease-esign.ts';
@@ -57,6 +59,23 @@ describe('lease e-sign state helpers', () => {
 		assert.equal(
 			visibleLeaseStatus('Terminated', { esignStatus: 'Signed', leaseStatus: 'Active' }),
 			'Terminated'
+		);
+	});
+
+	it('keeps the send action available while signature status is still loading', () => {
+		assert.equal(canShowLeaseSignatureSendAction('Active', undefined), true);
+		assert.equal(canShowLeaseSignatureSendAction('Draft', undefined), true);
+		assert.equal(canShowLeaseSignatureSendAction('Terminated', undefined), false);
+	});
+
+	it('does not call a queued signing request a delivered email', () => {
+		assert.equal(
+			leaseSignatureQueuedMessage('Leah Garcia'),
+			'Signing request queued for Leah Garcia. Watch the email queue below for delivery status.'
+		);
+		assert.equal(
+			leaseSignatureQueuedMessage(undefined),
+			'Signing request queued for the tenant. Watch the email queue below for delivery status.'
 		);
 	});
 });
