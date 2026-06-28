@@ -47,6 +47,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
     {
         var lease = await _db.Leases
             .Include(l => l.Tenant)
+            .Include(l => l.Property)
             .FirstOrDefaultAsync(l => l.Id == leaseId && l.PortfolioId == portfolioId, ct);
         if (lease is null)
         {
@@ -84,8 +85,8 @@ public sealed class LeaseEsignService : ILeaseEsignService
             return SendForSignatureResult.NotConfigured();
         }
 
-        // Resolve the signer from the lease itself. Landlords recognize the property/unit/tenant, not
-        // an internal envelope recipient override, so send/resend always follows the lease tenant.
+        // Resolve the tenant signer from the lease itself. Landlords recognize the property/unit/tenant,
+        // not an internal envelope recipient override, so send/resend always follows the lease tenant.
         var signerName = $"{lease.Tenant?.FirstName} {lease.Tenant?.LastName}".Trim();
         var signerEmail = lease.Tenant?.Email?.Trim();
 
@@ -94,7 +95,15 @@ public sealed class LeaseEsignService : ILeaseEsignService
             return SendForSignatureResult.MissingSigner();
         }
 
-        // Ensure a generated agreement PDF exists; generate one on demand if none has been created yet.
+        var landlordSigner = await ResolveLandlordSignerAsync(portfolioId, lease.PropertyId, ct);
+        if (landlordSigner is null)
+        {
+            return SendForSignatureResult.MissingSigner(
+                "A landlord name and email are required before sending a lease for signature.");
+        }
+
+        // Render the agreement at send time so send/resend uses the current lease-template selection,
+        // not an older generated agreement file that may predate the landlord's template.
         var pdf = await GetOrGenerateAgreementBytesAsync(portfolioId, leaseId, ct);
         if (pdf is null)
         {
@@ -112,7 +121,11 @@ public sealed class LeaseEsignService : ILeaseEsignService
             DocumentName = $"lease-{lease.Id}-agreement.pdf",
             Subject = string.IsNullOrWhiteSpace(lease.LeaseNumber) ? $"Lease #{lease.Id}" : $"Lease {lease.LeaseNumber}",
             DocumentBytes = pdf,
-            Signers = new[] { new EsignSigner { Name = signerName, Email = signerEmail } },
+            Signers = new[]
+            {
+                new EsignSigner { Name = signerName, Email = signerEmail },
+                landlordSigner,
+            },
             DocumentTemplateId = lease.DocumentTemplateId,
             DocumentTemplateVersion = lease.DocumentTemplateVersion,
             TemplateFieldSnapshotJson = templateFieldSnapshot,
@@ -359,24 +372,21 @@ public sealed class LeaseEsignService : ILeaseEsignService
     }
 
     /// <summary>
-    /// Returns the latest generated agreement PDF bytes for the lease, generating one first if none exists.
+    /// Renders and returns the latest agreement PDF bytes for the lease.
     /// Null only when the lease is not in scope.
     /// </summary>
     private async Task<byte[]?> GetOrGenerateAgreementBytesAsync(int portfolioId, int leaseId, CancellationToken ct)
     {
+        var generated = await _leaseService.GenerateDocumentAsync(portfolioId, leaseId, ct);
+        if (generated is null)
+        {
+            return null;
+        }
+
         var existing = await _leaseService.GetDocumentAsync(portfolioId, leaseId, ct);
         if (existing is null)
         {
-            var generated = await _leaseService.GenerateDocumentAsync(portfolioId, leaseId, ct);
-            if (generated is null)
-            {
-                return null;
-            }
-            existing = await _leaseService.GetDocumentAsync(portfolioId, leaseId, ct);
-            if (existing is null)
-            {
-                return null;
-            }
+            return null;
         }
 
         await using var stream = existing.Value.Stream;
@@ -451,6 +461,79 @@ public sealed class LeaseEsignService : ILeaseEsignService
             .ToListAsync(ct);
 
         return fields.Count == 0 ? null : JsonSerializer.Serialize(fields);
+    }
+
+    private async Task<EsignSigner?> ResolveLandlordSignerAsync(
+        int portfolioId,
+        int propertyId,
+        CancellationToken ct)
+    {
+        var propertyOwner = await _db.Properties
+            .AsNoTracking()
+            .Where(p => p.Id == propertyId && p.PortfolioId == portfolioId)
+            .Select(p => new { p.OwnerEntityId, p.OwnerId })
+            .FirstOrDefaultAsync(ct);
+
+        if (propertyOwner is null)
+        {
+            return null;
+        }
+
+        var ownerEntity = await _db.OwnerEntities
+            .AsNoTracking()
+            .Where(o => o.PortfolioId == portfolioId
+                && o.DeletedAt == null
+                && ((propertyOwner.OwnerEntityId.HasValue && o.Id == propertyOwner.OwnerEntityId.Value)
+                    || o.IsPrimary))
+            .OrderByDescending(o => propertyOwner.OwnerEntityId.HasValue && o.Id == propertyOwner.OwnerEntityId.Value)
+            .ThenByDescending(o => o.IsPrimary)
+            .ThenBy(o => o.Id)
+            .Select(o => new
+            {
+                o.Name,
+                Email = o.Email != null && o.Email != string.Empty
+                    ? o.Email
+                    : _db.Users
+                        .Where(u => u.PortfolioId == portfolioId
+                            && u.OwnerEntityId == o.Id
+                            && u.Email != null
+                            && u.Email != string.Empty)
+                        .OrderBy(u => u.Id)
+                        .Select(u => u.Email)
+                        .FirstOrDefault(),
+            })
+            .FirstOrDefaultAsync(ct);
+
+        var ownerEntitySigner = ToSigner(ownerEntity?.Name, ownerEntity?.Email);
+        if (ownerEntitySigner is not null)
+        {
+            return ownerEntitySigner;
+        }
+
+        if (!propertyOwner.OwnerId.HasValue)
+        {
+            return null;
+        }
+
+        var legacyOwner = await _db.Owners
+            .AsNoTracking()
+            .Where(o => o.Id == propertyOwner.OwnerId.Value && o.PortfolioId == portfolioId)
+            .Select(o => new { o.Name, o.Email })
+            .FirstOrDefaultAsync(ct);
+
+        return ToSigner(legacyOwner?.Name, legacyOwner?.Email);
+    }
+
+    private static EsignSigner? ToSigner(string? name, string? email)
+    {
+        var trimmedName = name?.Trim();
+        var trimmedEmail = email?.Trim();
+        if (string.IsNullOrWhiteSpace(trimmedName) || string.IsNullOrWhiteSpace(trimmedEmail))
+        {
+            return null;
+        }
+
+        return new EsignSigner { Name = trimmedName, Email = trimmedEmail };
     }
 
     private async Task<IReadOnlyList<OutboxMessage>> QueryLeaseSignatureQueueMessagesAsync(

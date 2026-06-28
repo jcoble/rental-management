@@ -79,14 +79,8 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
             return new LeaseAgreementRenderResult(_fallbackPdf.Generate(data), null, null, null);
         }
 
+        var renderedBytes = RenderOverlayPreview(originalBytes, template.Fields, data);
         var valueMap = BuildValueMap(data);
-        var renderableFields = template.Fields
-            .Where(f => IsAutoFillField(f) && ResolveValue(f, valueMap) is { Length: > 0 })
-            .OrderBy(f => f.SortOrder)
-            .ThenBy(f => f.Id)
-            .ToList();
-
-        var renderedBytes = StampValues(originalBytes, renderableFields, valueMap);
         return new LeaseAgreementRenderResult(
             renderedBytes,
             template.Id,
@@ -114,6 +108,21 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
             .ThenByDescending(t => t.UpdatedAtUtc)
             .ThenByDescending(t => t.Id)
             .FirstOrDefaultAsync(ct);
+    }
+
+    internal static byte[] RenderOverlayPreview(
+        byte[] originalBytes,
+        IReadOnlyList<DocumentTemplateField> fields,
+        LeaseAgreementData data)
+    {
+        var valueMap = BuildValueMap(data);
+        var renderableFields = fields
+            .Where(f => IsAutoFillField(f) && ResolveValue(f, valueMap) is { Length: > 0 })
+            .OrderBy(f => f.SortOrder)
+            .ThenBy(f => f.Id)
+            .ToList();
+
+        return StampValues(originalBytes, renderableFields, valueMap);
     }
 
     private static bool IsAutoFillField(DocumentTemplateField field) =>
