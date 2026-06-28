@@ -6,7 +6,9 @@
 	import { leases, type LeaseSignatureQueueItemResponse } from '$lib/api/endpoints/leases';
 	import { documentTemplates } from '$lib/api/endpoints/document-templates';
 	import {
+		canSetLeaseActive,
 		hasNoticeMoveOutDate,
+		leaseStatusOptionsForCurrentStatus,
 		resolveLeaseDetailTab,
 		scannedLeaseDocumentLinkLabel,
 		tabForLeaseEdit,
@@ -61,7 +63,7 @@
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
-	const LEASE_STATUSES = ['Draft', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
+	const LEASE_STATUSES = ['Draft', 'PendingSignature', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
 
 	const leaseQuery = createQuery(() => ({
 		queryKey: ['lease', leaseId],
@@ -380,6 +382,7 @@
 	const latestSignatureQueueItem = $derived(signatureQueueItems[0] ?? null);
 	const latestSignatureEmailStatus = $derived(latestSignatureQueueItem?.status ?? null);
 	const visibleStatus = $derived(visibleLeaseStatus(lease?.status, signature));
+	const canActivateLease = $derived(canSetLeaseActive(visibleStatus ?? lease?.status));
 	const canSendForSignature = $derived(canShowLeaseSignatureSendAction(lease?.status, signature));
 	const visibleLease = $derived(lease && visibleStatus ? { ...lease, status: visibleStatus } : lease);
 	const leaseDeleteState = $derived(getLeaseDeleteState(visibleLease));
@@ -502,7 +505,12 @@
 	}
 
 	// Select options for inline FK/enum fields
-	const statusOptions = $derived(LEASE_STATUSES.map((value) => ({ value, label: formatStatusLabel(value) })));
+	const statusOptions = $derived(
+		leaseStatusOptionsForCurrentStatus(visibleStatus ?? lease?.status, LEASE_STATUSES).map((value) => ({
+			value,
+			label: formatStatusLabel(value),
+		}))
+	);
 	const propertyOptions = $derived(
 		ensureSelectedOption(
 			[
@@ -747,11 +755,11 @@
 						{saveMutation.isPending ? 'Saving…' : 'Save'}
 					</Button>
 				{:else}
-					{#if visibleStatus !== 'Active'}
+					{#if canActivateLease}
 						<Button data-testid="lease-set-active" variant="outline" size="sm" onclick={() => (showSetActiveConfirm = true)} disabled={statusMutation.isPending}>
 							Set Active
 						</Button>
-					{:else}
+					{:else if visibleStatus === 'Active'}
 						<Button data-testid="lease-give-notice" variant="outline" size="sm" onclick={openGiveNotice} disabled={statusMutation.isPending}>
 							Give Notice
 						</Button>
@@ -810,7 +818,7 @@
 								</div>
 							{/if}
 							{#if !editing}
-								{#if visibleStatus === 'Active'}
+								{#if visibleStatus === 'Active' || !canActivateLease}
 									<Button data-testid="lease-hero-cta" size="sm" class="gap-1.5" onclick={() => setTab('ledger')}>
 										<DollarSign class="h-4 w-4" />
 										View ledger
