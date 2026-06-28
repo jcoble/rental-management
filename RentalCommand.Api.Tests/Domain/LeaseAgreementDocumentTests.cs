@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using QuestPDF.Fluent;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
@@ -57,7 +58,12 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
             _storage,
             new LeaseAgreementPdfGenerator(),
             new RentalCommand.Api.Services.AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
-            NullLogger<LeaseService>.Instance);
+            NullLogger<LeaseService>.Instance,
+            new LeaseAgreementRenderer(
+                _db,
+                _storage,
+                new LeaseAgreementPdfGenerator(),
+                NullLogger<LeaseAgreementRenderer>.Instance));
     }
 
     public void Dispose()
@@ -86,6 +92,28 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         stored.EntityId.Should().Be(lease.Id);
         stored.ContentType.Should().Be("application/pdf");
         stored.PortfolioId.Should().Be(PortfolioId);
+    }
+
+    [Fact]
+    public async Task GenerateDocumentAsync_ActiveDefaultOverlayTemplate_StampsLeaseValuesAndFreezesTemplateVersion()
+    {
+        var lease = SeedLeaseWithGraph();
+        var template = await SeedActiveOverlayTemplateAsync(lease.PropertyId);
+
+        var doc = await _sut.GenerateDocumentAsync(PortfolioId, lease.Id);
+
+        doc.Should().NotBeNull();
+
+        var reloaded = await _db.Leases.AsNoTracking().FirstAsync(l => l.Id == lease.Id);
+        reloaded.DocumentTemplateId.Should().Be(template.Id);
+        reloaded.DocumentTemplateVersion.Should().Be(template.Version);
+
+        var text = await ExtractGeneratedPdfTextAsync(lease.Id);
+        text.Should().Contain("Custom Landlord Lease");
+        text.Should().Contain("Marcus");
+        text.Should().Contain("Williams");
+        text.Should().Contain("$1,450.00");
+        text.Should().NotContain("Residential Lease Agreement", "the landlord's exact PDF should be the rendered source");
     }
 
     [Fact]
@@ -375,6 +403,94 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         _db.Leases.Add(lease);
         _db.SaveChanges();
         return lease;
+    }
+
+    private async Task<DocumentTemplate> SeedActiveOverlayTemplateAsync(int propertyId)
+    {
+        var pdfBytes = LeaseTemplateFixturePdf();
+        var storageKey = await _storage.UploadAsync(
+            new MemoryStream(pdfBytes),
+            "custom-landlord-lease.pdf",
+            "application/pdf");
+
+        var stored = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            FileName = "custom-landlord-lease.pdf",
+            FilePath = storageKey,
+            ContentType = "application/pdf",
+            FileSize = pdfBytes.Length,
+            EntityType = "DocumentTemplate",
+            UploadedAt = DateTime.UtcNow,
+        };
+
+        var template = new DocumentTemplate
+        {
+            PortfolioId = PortfolioId,
+            Kind = DocumentTemplateKind.Lease,
+            Status = DocumentTemplateStatus.Active,
+            RenderMode = DocumentTemplateRenderMode.Overlay,
+            Name = "Custom landlord lease",
+            OriginalStoredFile = stored,
+            DefaultForPortfolio = true,
+            PropertyId = propertyId,
+            Version = 7,
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+        };
+
+        template.Fields.Add(new DocumentTemplateField
+        {
+            FieldKey = "tenant.fullName",
+            Label = "Tenant full name",
+            Kind = DocumentTemplateFieldKind.Text,
+            PageNumber = 1,
+            XPct = 0.18,
+            YPct = 0.34,
+            WidthPct = 0.62,
+            HeightPct = 0.04,
+            SortOrder = 1,
+        });
+        template.Fields.Add(new DocumentTemplateField
+        {
+            FieldKey = "lease.monthlyRent",
+            Label = "Monthly rent",
+            Kind = DocumentTemplateFieldKind.Currency,
+            PageNumber = 1,
+            XPct = 0.18,
+            YPct = 0.42,
+            WidthPct = 0.24,
+            HeightPct = 0.04,
+            SortOrder = 2,
+        });
+
+        _db.DocumentTemplates.Add(template);
+        await _db.SaveChangesAsync();
+
+        stored.EntityId = template.Id;
+        await _db.SaveChangesAsync();
+        return template;
+    }
+
+    private static byte[] LeaseTemplateFixturePdf()
+    {
+        var document = QuestPDF.Fluent.Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(QuestPDF.Helpers.PageSizes.A4);
+                page.Margin(40);
+                page.DefaultTextStyle(t => t.FontSize(12));
+                page.Content().Column(col =>
+                {
+                    col.Item().Text("Custom Landlord Lease").FontSize(18).Bold();
+                    col.Item().PaddingTop(60).Text("Tenant:");
+                    col.Item().PaddingTop(30).Text("Monthly rent:");
+                });
+            });
+        });
+
+        return document.GeneratePdf();
     }
 
     private sealed class NoopDataUpdateService : IDataUpdateService
