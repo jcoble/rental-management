@@ -52,6 +52,7 @@ public class LeaseService : ILeaseService
     private readonly IDataUpdateService _dataUpdate;
     private readonly IFileStorage _storage;
     private readonly ILeaseAgreementPdfGenerator _pdf;
+    private readonly ILeaseAgreementRenderer? _agreementRenderer;
     private readonly IAuditTrailService _audit;
     private readonly ILogger<LeaseService> _logger;
 
@@ -61,12 +62,14 @@ public class LeaseService : ILeaseService
         IFileStorage storage,
         ILeaseAgreementPdfGenerator pdf,
         IAuditTrailService audit,
-        ILogger<LeaseService> logger)
+        ILogger<LeaseService> logger,
+        ILeaseAgreementRenderer? agreementRenderer = null)
     {
         _db = db;
         _dataUpdate = dataUpdate;
         _storage = storage;
         _pdf = pdf;
+        _agreementRenderer = agreementRenderer;
         _audit = audit;
         _logger = logger;
     }
@@ -902,7 +905,10 @@ public class LeaseService : ILeaseService
             YearBuilt = property?.YearBuilt,
         };
 
-        var pdfBytes = _pdf.Generate(data);
+        var rendered = _agreementRenderer is null
+            ? new LeaseAgreementRenderResult(_pdf.Generate(data), null, null, null)
+            : await _agreementRenderer.RenderAsync(portfolioId, data, ct);
+        var pdfBytes = rendered.PdfBytes;
 
         // Write the blob first to get its key, then persist the StoredFile row; clean up the blob if the
         // row fails (mirrors the inspection-report storage pattern).
@@ -936,6 +942,13 @@ public class LeaseService : ILeaseService
             throw;
         }
 
+        await FreezeDocumentTemplateAsync(
+            portfolioId,
+            lease.Id,
+            rendered.DocumentTemplateId,
+            rendered.DocumentTemplateVersion,
+            ct);
+
         return new LeaseDocumentResponse(
             stored.Id,
             lease.Id,
@@ -943,6 +956,22 @@ public class LeaseService : ILeaseService
             stored.FileSize,
             $"/api/v1/leases/{lease.Id}/document",
             stored.UploadedAt);
+    }
+
+    private Task FreezeDocumentTemplateAsync(
+        int portfolioId,
+        int leaseId,
+        int? documentTemplateId,
+        int? documentTemplateVersion,
+        CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+        return _db.Leases
+            .Where(l => l.Id == leaseId && l.PortfolioId == portfolioId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(l => l.DocumentTemplateId, documentTemplateId)
+                .SetProperty(l => l.DocumentTemplateVersion, documentTemplateVersion)
+                .SetProperty(l => l.UpdatedAt, now), ct);
     }
 
     public async Task<LeaseDocumentStatusResponse?> GetDocumentStatusAsync(int portfolioId, int id, CancellationToken ct = default)

@@ -108,6 +108,18 @@ export interface UpdateDocumentTemplateFieldRequest {
 	defaultText?: string | null;
 }
 
+export interface UpdateDocumentTemplateRequest {
+	status?: DocumentTemplateStatus;
+	renderMode?: DocumentTemplateRenderMode;
+	name?: string | null;
+	description?: string | null;
+	originalStoredFileId?: number | null;
+	compiledStoredFileId?: number | null;
+	propertyId?: number | null;
+	defaultForPortfolio?: boolean | null;
+	draftHtml?: string | null;
+}
+
 function buildTemplateQuery(params?: DocumentTemplateListParams): string {
 	return buildListQuery(params, {
 		kind: params?.kind || undefined,
@@ -121,6 +133,8 @@ export const documentTemplates = {
 	listPage: (params?: DocumentTemplateListParams) =>
 		api.get<DocumentTemplateListResponse>(`/document-templates/page${buildTemplateQuery(params)}`),
 	get: (id: number) => api.get<DocumentTemplate>(`/document-templates/${id}`),
+	update: (id: number, request: UpdateDocumentTemplateRequest) =>
+		api.patch<DocumentTemplate>(`/document-templates/${id}`, request),
 	fieldCatalog: (kind: DocumentTemplateKind = 'Lease') =>
 		api.get<DocumentTemplateFieldCatalogItem[]>(
 			`/document-templates/field-catalog?kind=${encodeURIComponent(kind)}`

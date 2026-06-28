@@ -40,6 +40,7 @@ public static class ServiceCollectionExtensions
             RentalCommand.Api.Services.Security.EsignWebhookSignatureValidator>();
         // Residential lease agreement PDF rendering (QuestPDF). Stateless → singleton.
         services.AddSingleton<ILeaseAgreementPdfGenerator, LeaseAgreementPdfGenerator>();
+        services.AddScoped<ILeaseAgreementRenderer, LeaseAgreementRenderer>();
         // Native e-sign: executed-PDF/certificate renderer (stateless → singleton) + the public,
         // token-scoped signing flow used by SignController.
         services.AddSingleton<RentalCommand.Api.Services.Esign.IExecutedLeasePdfGenerator,

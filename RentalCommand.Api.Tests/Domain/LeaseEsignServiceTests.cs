@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using QuestPDF.Fluent;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
@@ -92,6 +93,31 @@ public sealed class LeaseEsignServiceTests : IDisposable
         reloaded.Status.Should().Be(LeaseStatus.PendingSignature);
         reloaded.EsignStatus.Should().Be(EsignStatus.Sent);
         reloaded.EsignEnvelopeId.Should().Be("sig_abc123");
+    }
+
+    [Fact]
+    public async Task SendForSignature_ActiveDefaultOverlayTemplate_SendsRenderedTemplateDocument()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.Draft);
+        var template = await SeedActiveOverlayTemplateAsync(lease.PropertyId);
+        var provider = new FakeEsignProvider { Configured = true, EnvelopeId = "sig_template_1" };
+        var sut = CreateService(provider);
+
+        var result = await sut.SendForSignatureAsync(PortfolioId, lease.Id, new SendForSignatureRequest(), changedByUserId: 7, ipAddress: null);
+
+        result.Outcome.Should().Be(SendForSignatureOutcome.Sent);
+        provider.LastDocumentBytes.Should().NotBeNull();
+
+        var sentText = RentalCommand.Api.Scanning.PdfTextExtractor.TryExtractText(provider.LastDocumentBytes!);
+        sentText.Should().Contain("Custom Landlord Lease");
+        sentText.Should().Contain("Marcus");
+        sentText.Should().Contain("Williams");
+        sentText.Should().Contain("$1,450.00");
+        sentText.Should().NotContain("Residential Lease Agreement");
+
+        var reloaded = await _db.Leases.AsNoTracking().FirstAsync(l => l.Id == lease.Id);
+        reloaded.DocumentTemplateId.Should().Be(template.Id);
+        reloaded.DocumentTemplateVersion.Should().Be(template.Version);
     }
 
     [Fact]
@@ -225,7 +251,12 @@ public sealed class LeaseEsignServiceTests : IDisposable
             _storage,
             new LeaseAgreementPdfGenerator(),
             new AuditTrailService(_db, new RentalCommand.Data.Auditing.AuditScope()),
-            NullLogger<LeaseService>.Instance);
+            NullLogger<LeaseService>.Instance,
+            new LeaseAgreementRenderer(
+                _db,
+                _storage,
+                new LeaseAgreementPdfGenerator(),
+                NullLogger<LeaseAgreementRenderer>.Instance));
 
         return new LeaseEsignService(
             _db,
@@ -303,12 +334,101 @@ public sealed class LeaseEsignServiceTests : IDisposable
         return lease;
     }
 
+    private async Task<DocumentTemplate> SeedActiveOverlayTemplateAsync(int propertyId)
+    {
+        var pdfBytes = LeaseTemplateFixturePdf();
+        var storageKey = await _storage.UploadAsync(
+            new MemoryStream(pdfBytes),
+            "custom-landlord-lease.pdf",
+            "application/pdf");
+
+        var stored = new StoredFile
+        {
+            PortfolioId = PortfolioId,
+            FileName = "custom-landlord-lease.pdf",
+            FilePath = storageKey,
+            ContentType = "application/pdf",
+            FileSize = pdfBytes.Length,
+            EntityType = "DocumentTemplate",
+            UploadedAt = DateTime.UtcNow,
+        };
+
+        var template = new DocumentTemplate
+        {
+            PortfolioId = PortfolioId,
+            Kind = DocumentTemplateKind.Lease,
+            Status = DocumentTemplateStatus.Active,
+            RenderMode = DocumentTemplateRenderMode.Overlay,
+            Name = "Custom landlord lease",
+            OriginalStoredFile = stored,
+            DefaultForPortfolio = true,
+            PropertyId = propertyId,
+            Version = 7,
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+        };
+
+        template.Fields.Add(new DocumentTemplateField
+        {
+            FieldKey = "tenant.fullName",
+            Label = "Tenant full name",
+            Kind = DocumentTemplateFieldKind.Text,
+            PageNumber = 1,
+            XPct = 0.18,
+            YPct = 0.34,
+            WidthPct = 0.62,
+            HeightPct = 0.04,
+            SortOrder = 1,
+        });
+        template.Fields.Add(new DocumentTemplateField
+        {
+            FieldKey = "lease.monthlyRent",
+            Label = "Monthly rent",
+            Kind = DocumentTemplateFieldKind.Currency,
+            PageNumber = 1,
+            XPct = 0.18,
+            YPct = 0.42,
+            WidthPct = 0.24,
+            HeightPct = 0.04,
+            SortOrder = 2,
+        });
+
+        _db.DocumentTemplates.Add(template);
+        await _db.SaveChangesAsync();
+
+        stored.EntityId = template.Id;
+        await _db.SaveChangesAsync();
+        return template;
+    }
+
+    private static byte[] LeaseTemplateFixturePdf()
+    {
+        var document = QuestPDF.Fluent.Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(QuestPDF.Helpers.PageSizes.A4);
+                page.Margin(40);
+                page.DefaultTextStyle(t => t.FontSize(12));
+                page.Content().Column(col =>
+                {
+                    col.Item().Text("Custom Landlord Lease").FontSize(18).Bold();
+                    col.Item().PaddingTop(60).Text("Tenant:");
+                    col.Item().PaddingTop(30).Text("Monthly rent:");
+                });
+            });
+        });
+
+        return document.GeneratePdf();
+    }
+
     /// <summary>Configurable fake provider — gating, send, status, and signed-file download are all controllable.</summary>
     private sealed class FakeEsignProvider : IEsignProvider
     {
         public bool Configured { get; init; }
         public string EnvelopeId { get; init; } = "sig_fake";
         public byte[]? SignedPdf { get; init; }
+        public byte[]? LastDocumentBytes { get; private set; }
         public int SendCalls { get; private set; }
 
         public bool IsConfigured => Configured;
@@ -316,6 +436,7 @@ public sealed class LeaseEsignServiceTests : IDisposable
         public Task<EsignResult> SendForSignatureAsync(EsignRequest request, CancellationToken ct = default)
         {
             SendCalls++;
+            LastDocumentBytes = request.DocumentBytes;
             return Task.FromResult(Configured
                 ? EsignResult.Sent(EnvelopeId, "Sent")
                 : EsignResult.NotConfigured());

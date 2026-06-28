@@ -84,6 +84,9 @@ public sealed class NativeEsignProvider : IEsignProvider
             DocumentName = request.DocumentName,
             Subject = request.Subject,
             OriginalStoredFileId = originalFileId,
+            DocumentTemplateId = request.DocumentTemplateId,
+            DocumentTemplateVersion = request.DocumentTemplateVersion,
+            TemplateFieldSnapshotJson = request.TemplateFieldSnapshotJson,
             Status = SignatureRequestStatus.Sent,
             CreatedAtUtc = now,
         };

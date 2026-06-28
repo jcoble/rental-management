@@ -52,6 +52,7 @@
 	let defaultForPortfolio = $state(false);
 	let fileInput = $state<HTMLInputElement | null>(null);
 	let designerTemplateId = $state<number | null>(null);
+	let activatingTemplateId = $state<number | null>(null);
 
 	const catalogGroups = $derived.by(() => {
 		const groups = new Map<DocumentTemplateSignerRole, DocumentTemplateFieldCatalogItem[]>();
@@ -91,6 +92,24 @@
 		onError: (err) => showError(apiErrorMessage(err, 'Lease template upload failed.')),
 	}));
 
+	const activateTemplateMutation = createMutation(() => ({
+		mutationFn: (template: DocumentTemplate) => {
+			activatingTemplateId = template.id;
+			return documentTemplates.update(template.id, {
+				status: 'Active',
+				defaultForPortfolio: true,
+			});
+		},
+		onSuccess: (template) => {
+			showSuccess(`${template.name} is now the default lease PDF.`);
+			queryClient.invalidateQueries({ queryKey: ['document-templates'] });
+		},
+		onError: (err) => showError(apiErrorMessage(err, 'Could not activate lease template.')),
+		onSettled: () => {
+			activatingTemplateId = null;
+		},
+	}));
+
 	function handleFileSelected(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		const file = input.files?.[0] ?? null;
@@ -113,6 +132,14 @@
 			return;
 		}
 		uploadMutation.mutate();
+	}
+
+	function activateDefault(template: DocumentTemplate) {
+		if (template.fieldCount === 0) {
+			showError('Place at least one dynamic field before using this lease PDF as the default.');
+			return;
+		}
+		activateTemplateMutation.mutate(template);
 	}
 
 	function statusVariant(status: DocumentTemplate['status']): 'default' | 'secondary' | 'outline' {
@@ -152,6 +179,10 @@
 	function fieldSummary(template: DocumentTemplate) {
 		if (template.fieldCount === 0) return 'No fields placed yet';
 		return `${template.fieldCount} field${template.fieldCount === 1 ? '' : 's'} placed`;
+	}
+
+	function isActiveDefault(template: DocumentTemplate) {
+		return template.status === 'Active' && template.defaultForPortfolio;
 	}
 </script>
 
@@ -341,6 +372,19 @@
 										<PenLine class="h-4 w-4" />
 										Design fields
 									</Button>
+									{#if !isActiveDefault(template)}
+										<Button
+											size="sm"
+											class="gap-1.5"
+											onclick={() => activateDefault(template)}
+											disabled={activateTemplateMutation.isPending || template.fieldCount === 0}
+											title={template.fieldCount === 0 ? 'Place fields before activating this template.' : 'Use this PDF for new lease agreements'}
+											data-testid="lease-template-use-default-{template.id}"
+										>
+											<CheckCircle2 class="h-4 w-4" />
+											{activatingTemplateId === template.id ? 'Saving…' : 'Use as default'}
+										</Button>
+									{/if}
 								</div>
 							</div>
 							<div class="mt-4 grid gap-2 text-sm sm:grid-cols-3">
