@@ -16,6 +16,18 @@ public interface IDocumentTemplateService
     Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> CreateAsync(
         int portfolioId, CreateDocumentTemplateRequest request, CancellationToken ct = default);
 
+    Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UploadPdfAsync(
+        int portfolioId,
+        Stream content,
+        string fileName,
+        string contentType,
+        long sizeBytes,
+        string name,
+        string? description,
+        bool defaultForPortfolio,
+        int? propertyId,
+        CancellationToken ct = default);
+
     Task<DocumentTemplateOperationResult<DocumentTemplateResponse>> UpdateAsync(
         int portfolioId, int id, UpdateDocumentTemplateRequest request, CancellationToken ct = default);
 
@@ -45,4 +57,3 @@ public sealed record DocumentTemplateOperationResult<T>(
     public static DocumentTemplateOperationResult<T> NotFound(string error) => new(DocumentTemplateOperationOutcome.NotFound, default, error);
     public static DocumentTemplateOperationResult<T> Invalid(string error) => new(DocumentTemplateOperationOutcome.Invalid, default, error);
 }
-
