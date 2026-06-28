@@ -12,7 +12,10 @@
 		type DocumentTemplateSignerRole,
 		type UpdateDocumentTemplateFieldRequest
 	} from '$lib/api/endpoints/document-templates';
+	import { leases } from '$lib/api/endpoints/leases';
 	import { documentFileHref, fileObjectUrl } from '$lib/api/endpoints/documents';
+	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import type { Lease } from '$lib/types';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -35,11 +38,14 @@
 		ArrowLeftRight,
 		ArrowUpDown,
 		CheckCircle2,
+		Eraser,
 		ExternalLink,
+		Eye,
 		FileText,
 		GripHorizontal,
 		Loader2,
 		Maximize2,
+		MousePointer2,
 		PanelLeft,
 		RefreshCw,
 		Save,
@@ -67,6 +73,8 @@
 	};
 	type FieldPoint = { xPct: number; yPct: number };
 	type CatalogTabId = 'autofill' | 'tenant' | 'landlord';
+	type DesignerViewMode = 'design' | 'preview';
+	type DesignerTool = 'place' | 'erase';
 
 	let {
 		templateId,
@@ -83,13 +91,16 @@
 	let pdfjs: PdfJsModule | null = null;
 	let pdfDoc = $state<PdfDocument | null>(null);
 	let pdfObjectUrl = $state<string | null>(null);
-	let loadedFileId = $state<number | null>(null);
+	let loadedPdfKey = $state<string | null>(null);
 	let pageCount = $state(1);
 	let selectedPage = $state(1);
 	let activeCatalogTab = $state<CatalogTabId>('autofill');
 	let selectedCatalogKey = $state('');
 	let draggingCatalogKey = $state<string | null>(null);
 	let selectedFieldId = $state<number | null>(null);
+	let viewMode = $state<DesignerViewMode>('design');
+	let designerTool = $state<DesignerTool>('place');
+	let previewLeaseId = $state<number | null>(null);
 	let draftRects = $state<Record<number, FieldRect>>({});
 	let canvasEl = $state<HTMLCanvasElement | null>(null);
 	let pageFrameEl = $state<HTMLDivElement | null>(null);
@@ -110,7 +121,7 @@
 		roles: DocumentTemplateSignerRole[];
 	}[] = [
 		{ id: 'autofill', label: 'Auto-fill', roles: ['None'] },
-		{ id: 'tenant', label: 'Tenant', roles: ['Tenant', 'CoSigner'] },
+		{ id: 'tenant', label: 'Tenant', roles: ['Tenant', 'CoTenant'] },
 		{ id: 'landlord', label: 'Landlord', roles: ['Landlord'] }
 	];
 
@@ -121,10 +132,25 @@
 	}));
 
 	const template = $derived<DocumentTemplate | null>(templateQuery.data ?? null);
+	const portfolioId = $derived(getCurrentPortfolioId());
+	const previewLeasesQuery = createQuery(() => ({
+		queryKey: ['document-template-preview-leases', portfolioId, template?.propertyId ?? null],
+		enabled: viewMode === 'preview' && portfolioId > 0 && !!template,
+		queryFn: () =>
+			leases.listPage(portfolioId, {
+				take: 50,
+				sort: '-updatedAt',
+				propertyId: template?.propertyId ?? undefined
+			})
+	}));
 	const selectedCatalogItem = $derived(
 		catalog.find((item) => item.fieldKey === selectedCatalogKey) ?? null
 	);
 	const fields = $derived(template?.fields ?? []);
+	const previewLeases = $derived<Lease[]>(previewLeasesQuery.data?.items ?? []);
+	const selectedPreviewLease = $derived(
+		previewLeases.find((lease) => lease.id === previewLeaseId) ?? null
+	);
 	const pageFields = $derived(
 		fields
 			.filter((field) => field.pageNumber === selectedPage)
@@ -152,8 +178,11 @@
 			lastTemplateId = templateId;
 			selectedPage = 1;
 			selectedFieldId = null;
+			viewMode = 'design';
+			designerTool = 'place';
+			previewLeaseId = null;
 			draftRects = {};
-			loadedFileId = null;
+			loadedPdfKey = null;
 			pdfError = null;
 			saveErrorMessage = null;
 			lastSavedAt = null;
@@ -178,10 +207,45 @@
 	});
 
 	$effect(() => {
+		if (viewMode !== 'preview') return;
+		const leases = previewLeases;
+		if (leases.length === 0) {
+			previewLeaseId = null;
+			return;
+		}
+		if (!previewLeaseId || !leases.some((lease) => lease.id === previewLeaseId)) {
+			previewLeaseId = leases[0].id;
+		}
+	});
+
+	$effect(() => {
+		if (viewMode === 'preview') {
+			selectedFieldId = null;
+			cleanupActiveDrag?.();
+			cleanupActiveDrag = null;
+		}
+	});
+
+	$effect(() => {
 		const fileId = template?.originalStoredFileId ?? null;
-		if (!fileId || fileId === loadedFileId) return;
-		loadedFileId = fileId;
-		void loadPdf(fileId);
+		const mode = viewMode;
+		const leaseId = previewLeaseId;
+		const version = template?.version ?? 0;
+		if (!fileId) return;
+
+		if (mode === 'preview') {
+			if (!leaseId) return;
+			const key = `preview:${templateId}:${leaseId}:${version}`;
+			if (key === loadedPdfKey) return;
+			loadedPdfKey = key;
+			void loadPreviewPdf(leaseId, key);
+			return;
+		}
+
+		const key = `source:${fileId}`;
+		if (key === loadedPdfKey) return;
+		loadedPdfKey = key;
+		void loadSourcePdf(fileId, key);
 	});
 
 	$effect(() => {
@@ -294,12 +358,42 @@
 		return pdfjs;
 	}
 
-	async function loadPdf(fileId: number) {
+	async function loadSourcePdf(fileId: number, key: string) {
+		try {
+			const objectUrl = await fileObjectUrl(fileId);
+			if (loadedPdfKey !== key) {
+				URL.revokeObjectURL(objectUrl);
+				return;
+			}
+			await loadPdfObjectUrl(objectUrl);
+		} catch (err) {
+			if (loadedPdfKey === key) {
+				pdfError = err instanceof Error ? err.message : 'PDF preview failed.';
+			}
+		}
+	}
+
+	async function loadPreviewPdf(leaseId: number, key: string) {
+		try {
+			const blob = await documentTemplates.previewLeasePdf(templateId, leaseId);
+			const objectUrl = URL.createObjectURL(blob);
+			if (loadedPdfKey !== key) {
+				URL.revokeObjectURL(objectUrl);
+				return;
+			}
+			await loadPdfObjectUrl(objectUrl);
+		} catch (err) {
+			if (loadedPdfKey === key) {
+				pdfError = apiErrorMessage(err, 'Lease-filled preview failed.');
+			}
+		}
+	}
+
+	async function loadPdfObjectUrl(objectUrl: string) {
 		pageRendering = true;
 		pdfError = null;
 		try {
 			const pdf = await getPdfJs();
-			const objectUrl = await fileObjectUrl(fileId);
 			if (pdfObjectUrl) URL.revokeObjectURL(pdfObjectUrl);
 			pdfObjectUrl = objectUrl;
 			await pdfDoc?.destroy?.();
@@ -365,12 +459,14 @@
 	}
 
 	function placeSelectedField(event: MouseEvent) {
+		if (viewMode !== 'design' || designerTool !== 'place') return;
 		const point = pointFromEvent(event);
 		if (!point) return;
 		placeCatalogFieldAt(selectedCatalogKey, point);
 	}
 
 	function placeCatalogFieldAt(fieldKey: string, point: FieldPoint) {
+		if (viewMode !== 'design' || designerTool !== 'place') return;
 		if (addFieldMutation.isPending || pageRendering) return;
 		const catalogItem = catalog.find((item) => item.fieldKey === fieldKey);
 		if (!catalogItem) return;
@@ -404,6 +500,10 @@
 	}
 
 	function startCatalogDrag(event: DragEvent, item: DocumentTemplateFieldCatalogItem) {
+		if (viewMode !== 'design' || designerTool !== 'place') {
+			event.preventDefault();
+			return;
+		}
 		selectCatalogItem(item);
 		draggingCatalogKey = item.fieldKey;
 		if (!event.dataTransfer) return;
@@ -417,6 +517,7 @@
 	}
 
 	function handlePdfDragOver(event: DragEvent) {
+		if (viewMode !== 'design' || designerTool !== 'place') return;
 		const fieldKey = draggedCatalogKey(event);
 		if (!fieldKey) return;
 		event.preventDefault();
@@ -424,6 +525,7 @@
 	}
 
 	function handlePdfDrop(event: DragEvent) {
+		if (viewMode !== 'design' || designerTool !== 'place') return;
 		const fieldKey = draggedCatalogKey(event);
 		if (!fieldKey) return;
 		event.preventDefault();
@@ -440,6 +542,23 @@
 			draggingCatalogKey ||
 			'';
 		return catalog.some((item) => item.fieldKey === fieldKey) ? fieldKey : '';
+	}
+
+	function handleFieldPointerDown(event: PointerEvent, field: DocumentTemplateField) {
+		if (viewMode !== 'design') return;
+		if (designerTool === 'erase') {
+			eraseField(event, field);
+			return;
+		}
+		startFieldDrag(event, field);
+	}
+
+	function eraseField(event: PointerEvent, field: DocumentTemplateField) {
+		event.preventDefault();
+		event.stopPropagation();
+		if (deleteFieldMutation.isPending) return;
+		selectedFieldId = field.id;
+		deleteFieldMutation.mutate(field);
 	}
 
 	function startFieldDrag(event: PointerEvent, field: DocumentTemplateField) {
@@ -498,6 +617,7 @@
 	) {
 		event.preventDefault();
 		event.stopPropagation();
+		if (viewMode !== 'design' || designerTool !== 'place') return;
 		selectedFieldId = field.id;
 		if (field.locked || moveFieldMutation.isPending) return;
 
@@ -662,7 +782,7 @@
 
 	function tabForSigner(role: DocumentTemplateSignerRole): CatalogTabId {
 		if (role === 'Landlord') return 'landlord';
-		if (role === 'Tenant' || role === 'CoSigner') return 'tenant';
+		if (role === 'Tenant' || role === 'CoTenant') return 'tenant';
 		return 'autofill';
 	}
 
@@ -676,8 +796,8 @@
 				return 'Tenant';
 			case 'Landlord':
 				return 'Landlord';
-			case 'CoSigner':
-				return 'Co-signer';
+			case 'CoTenant':
+				return 'Co-tenant';
 			default:
 				return 'Auto-fill';
 		}
@@ -689,11 +809,41 @@
 				return 'border-sky-500/80 bg-sky-500/15 text-sky-700 dark:text-sky-100';
 			case 'Landlord':
 				return 'border-emerald-500/80 bg-emerald-500/15 text-emerald-700 dark:text-emerald-100';
-			case 'CoSigner':
+			case 'CoTenant':
 				return 'border-amber-500/80 bg-amber-500/15 text-amber-700 dark:text-amber-100';
 			default:
 				return 'border-slate-500/80 bg-slate-500/15 text-slate-700 dark:text-slate-100';
 		}
+	}
+
+	function switchView(nextMode: DesignerViewMode) {
+		if (viewMode === nextMode) return;
+		viewMode = nextMode;
+		designerTool = 'place';
+		selectedFieldId = null;
+		cleanupActiveDrag?.();
+		cleanupActiveDrag = null;
+	}
+
+	function refreshCurrentPdf() {
+		loadedPdfKey = null;
+		void templateQuery.refetch();
+		if (viewMode === 'preview') {
+			void previewLeasesQuery.refetch();
+		}
+	}
+
+	function leasePreviewLabel(lease: Lease) {
+		const place = [lease.propertyName, lease.unitNumber ? `Unit ${lease.unitNumber}` : '']
+			.filter(Boolean)
+			.join(' · ');
+		const tenant = lease.tenantName ? ` · ${lease.tenantName}` : '';
+		return `${place || `Lease ${lease.leaseNumber}`}${tenant}`;
+	}
+
+	function canvasCursorClass() {
+		if (viewMode === 'preview') return 'cursor-default';
+		return designerTool === 'erase' ? 'cursor-pointer' : 'cursor-crosshair';
 	}
 
 	function pageNumbers() {
@@ -735,7 +885,7 @@
 					variant="outline"
 					size="sm"
 					class="gap-1.5"
-					onclick={() => templateQuery.refetch()}
+					onclick={refreshCurrentPdf}
 					disabled={templateQuery.isFetching}
 					data-testid="lease-template-designer-refresh"
 				>
@@ -790,87 +940,193 @@
 		{:else}
 			<div class="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)_300px]">
 				<aside class="space-y-4">
-					<div class="rounded-lg border border-border bg-background p-3" data-testid="lease-template-field-palette">
-						<div class="flex items-center justify-between gap-2 px-1">
-							<div class="flex items-center gap-2">
-								<PanelLeft class="h-4 w-4 text-primary" />
-								<h3 class="text-sm font-semibold">Dynamic Fields</h3>
+					{#if viewMode === 'design'}
+						<div class="rounded-lg border border-border bg-background p-3" data-testid="lease-template-field-palette">
+							<div class="flex items-center justify-between gap-2 px-1">
+								<div class="flex items-center gap-2">
+									<PanelLeft class="h-4 w-4 text-primary" />
+									<h3 class="text-sm font-semibold">Dynamic Fields</h3>
+								</div>
+								<Badge variant="secondary">{catalog.length}</Badge>
 							</div>
-							<Badge variant="secondary">{catalog.length}</Badge>
-						</div>
 
-						<Tabs.Root bind:value={activeCatalogTab} class="mt-3 gap-3">
-							<Tabs.List class="grid w-full grid-cols-3 p-0.5">
+							<Tabs.Root bind:value={activeCatalogTab} class="mt-3 gap-3">
+								<Tabs.List class="grid w-full grid-cols-3 p-0.5">
+									{#each catalogTabs as tab}
+										<Tabs.Trigger value={tab.id} class="px-2 py-1.5 text-xs">
+											{tab.label}
+										</Tabs.Trigger>
+									{/each}
+								</Tabs.List>
+
 								{#each catalogTabs as tab}
-									<Tabs.Trigger value={tab.id} class="px-2 py-1.5 text-xs">
-										{tab.label}
-									</Tabs.Trigger>
-								{/each}
-							</Tabs.List>
-
-							{#each catalogTabs as tab}
-								<Tabs.Content value={tab.id} class="m-0">
-									{#if tab.items.length === 0}
-										<div class="rounded-md border border-dashed border-border bg-muted/20 p-4 text-sm text-muted-foreground">
-											No fields in this group.
-										</div>
-									{:else}
-										<div class="max-h-[560px] space-y-2 overflow-y-auto pr-1">
-											{#each tab.items as item (item.fieldKey)}
-												<button
-													type="button"
-													draggable={true}
-													class="w-full rounded-md border px-3 py-2 text-left transition hover:bg-muted/35 active:translate-y-px {selectedCatalogKey === item.fieldKey ? 'border-primary bg-primary/8 ring-1 ring-primary/20' : 'border-border bg-background'} {draggingCatalogKey === item.fieldKey ? 'opacity-60' : ''}"
-													onclick={() => selectCatalogItem(item)}
-													ondragstart={(event) => startCatalogDrag(event, item)}
-													ondragend={endCatalogDrag}
-													data-testid="lease-template-field-palette-item-{item.fieldKey}"
-												>
-													<span class="flex items-start justify-between gap-2">
-														<span class="min-w-0">
-															<span class="block truncate text-sm font-semibold">{item.label}</span>
-															<span class="mt-1 block line-clamp-2 text-xs leading-snug text-muted-foreground">
-																{item.description}
+									<Tabs.Content value={tab.id} class="m-0">
+										{#if tab.items.length === 0}
+											<div class="rounded-md border border-dashed border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+												No fields in this group.
+											</div>
+										{:else}
+											<div class="max-h-[560px] space-y-2 overflow-y-auto pr-1">
+												{#each tab.items as item (item.fieldKey)}
+													<button
+														type="button"
+														draggable={true}
+														class="w-full rounded-md border px-3 py-2 text-left transition hover:bg-muted/35 active:translate-y-px {selectedCatalogKey === item.fieldKey ? 'border-primary bg-primary/8 ring-1 ring-primary/20' : 'border-border bg-background'} {draggingCatalogKey === item.fieldKey ? 'opacity-60' : ''}"
+														onclick={() => selectCatalogItem(item)}
+														ondragstart={(event) => startCatalogDrag(event, item)}
+														ondragend={endCatalogDrag}
+														data-testid="lease-template-field-palette-item-{item.fieldKey}"
+													>
+														<span class="flex items-start justify-between gap-2">
+															<span class="min-w-0">
+																<span class="block truncate text-sm font-semibold">{item.label}</span>
+																<span class="mt-1 block line-clamp-2 text-xs leading-snug text-muted-foreground">
+																	{item.description}
+																</span>
+															</span>
+															<span class="shrink-0 space-y-1 text-right">
+																<Badge variant="outline" class="text-[10px]">
+																	{formatSigner(item.signerRole)}
+																</Badge>
+																{#if item.requiredForSignature}
+																	<Badge variant="secondary" class="block text-[10px]">Required</Badge>
+																{/if}
 															</span>
 														</span>
-														<span class="shrink-0 space-y-1 text-right">
-															<Badge variant="outline" class="text-[10px]">
-																{formatSigner(item.signerRole)}
-															</Badge>
-															{#if item.requiredForSignature}
-																<Badge variant="secondary" class="block text-[10px]">Required</Badge>
-															{/if}
-														</span>
-													</span>
-												</button>
-											{/each}
-										</div>
-									{/if}
-								</Tabs.Content>
-							{/each}
-						</Tabs.Root>
+													</button>
+												{/each}
+											</div>
+										{/if}
+									</Tabs.Content>
+								{/each}
+							</Tabs.Root>
 
-						{#if selectedCatalogItem}
-							<div class="mt-3 rounded-md border border-primary/20 bg-primary/5 px-3 py-2">
-								<div class="flex flex-wrap items-center gap-2">
-									<Badge variant="outline">{formatSigner(selectedCatalogItem.signerRole)}</Badge>
-									<Badge variant={selectedCatalogItem.requiredForSignature ? 'default' : 'secondary'}>
-										{selectedCatalogItem.requiredForSignature ? 'Required' : selectedCatalogItem.kind}
-									</Badge>
+							{#if designerTool === 'erase'}
+								<div class="mt-3 rounded-md border border-destructive/25 bg-destructive/8 px-3 py-2">
+									<div class="flex items-center gap-2 text-xs font-semibold text-destructive">
+										<Eraser class="h-3.5 w-3.5" />
+										Erase mode
+									</div>
 								</div>
-								<p class="mt-2 truncate text-xs font-medium">{selectedCatalogItem.label}</p>
+							{:else if selectedCatalogItem}
+								<div class="mt-3 rounded-md border border-primary/20 bg-primary/5 px-3 py-2">
+									<div class="flex flex-wrap items-center gap-2">
+										<Badge variant="outline">{formatSigner(selectedCatalogItem.signerRole)}</Badge>
+										<Badge variant={selectedCatalogItem.requiredForSignature ? 'default' : 'secondary'}>
+											{selectedCatalogItem.requiredForSignature ? 'Required' : selectedCatalogItem.kind}
+										</Badge>
+									</div>
+									<p class="mt-2 truncate text-xs font-medium">{selectedCatalogItem.label}</p>
+								</div>
+							{/if}
+						</div>
+					{:else}
+						<div class="rounded-lg border border-border bg-background p-4" data-testid="lease-template-preview-picker">
+							<div class="flex items-center gap-2">
+								<Eye class="h-4 w-4 text-primary" />
+								<h3 class="text-sm font-semibold">Preview Lease</h3>
 							</div>
-						{/if}
-					</div>
+							<label class="mt-4 block space-y-1 text-xs font-medium">
+								<span class="text-muted-foreground">Fill fields from</span>
+								<select
+									bind:value={previewLeaseId}
+									class="h-10 w-full rounded-md border border-input bg-background px-2 text-sm"
+									disabled={previewLeasesQuery.isLoading || previewLeases.length === 0}
+									data-testid="lease-template-preview-lease-select"
+								>
+									{#each previewLeases as lease (lease.id)}
+										<option value={lease.id}>
+											{leasePreviewLabel(lease)} · {lease.leaseNumber}
+										</option>
+									{/each}
+								</select>
+							</label>
+
+							{#if previewLeasesQuery.isLoading}
+								<div class="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+									<Loader2 class="h-3.5 w-3.5 animate-spin" />
+									Loading leases
+								</div>
+							{:else if previewLeases.length === 0}
+								<div class="mt-3 rounded-md border border-dashed border-border bg-muted/20 p-3 text-sm text-muted-foreground">
+									No leases are available to preview.
+								</div>
+							{:else if selectedPreviewLease}
+								<div class="mt-3 rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
+									<p class="font-semibold">{selectedPreviewLease.propertyName ?? 'Property'}{selectedPreviewLease.unitNumber ? ` · Unit ${selectedPreviewLease.unitNumber}` : ''}</p>
+									<p class="mt-1 text-muted-foreground">{selectedPreviewLease.tenantName ?? 'Tenant'} · {selectedPreviewLease.leaseNumber}</p>
+								</div>
+							{/if}
+
+							<Button
+								variant="outline"
+								size="sm"
+								class="mt-3 w-full gap-1.5"
+								onclick={() => {
+									loadedPdfKey = null;
+									void previewLeasesQuery.refetch();
+								}}
+								disabled={pageRendering || previewLeasesQuery.isFetching}
+								data-testid="lease-template-preview-refresh"
+							>
+								<RefreshCw class="h-4 w-4 {previewLeasesQuery.isFetching ? 'animate-spin' : ''}" />
+								Refresh preview
+							</Button>
+						</div>
+					{/if}
 				</aside>
 
 				<section class="min-w-0">
 					<div class="rounded-lg border border-border bg-muted/25 p-3" data-testid="lease-template-pdf-preview">
 						<div class="mb-3 flex flex-wrap items-center justify-between gap-2">
-							<div class="inline-flex items-center gap-2 text-sm font-semibold">
-								<FileText class="h-4 w-4 text-primary" />
-								<span>PDF Preview</span>
-								<Badge variant="outline">Page {selectedPage}</Badge>
+							<div class="flex flex-wrap items-center gap-2">
+								<div class="inline-flex items-center gap-2 text-sm font-semibold">
+									<FileText class="h-4 w-4 text-primary" />
+									<span>{viewMode === 'preview' ? 'Filled Preview' : 'PDF Preview'}</span>
+									<Badge variant="outline">Page {selectedPage}</Badge>
+								</div>
+								<div class="inline-flex rounded-md border border-border bg-background p-0.5">
+									<button
+										type="button"
+										class="inline-flex h-8 items-center gap-1.5 rounded px-3 text-xs font-semibold transition {viewMode === 'design' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+										onclick={() => switchView('design')}
+										data-testid="lease-template-design-tab"
+									>
+										<MousePointer2 class="h-3.5 w-3.5" />
+										Design
+									</button>
+									<button
+										type="button"
+										class="inline-flex h-8 items-center gap-1.5 rounded px-3 text-xs font-semibold transition {viewMode === 'preview' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+										onclick={() => switchView('preview')}
+										data-testid="lease-template-preview-tab"
+									>
+										<Eye class="h-3.5 w-3.5" />
+										Preview
+									</button>
+								</div>
+								{#if viewMode === 'design'}
+									<div class="inline-flex rounded-md border border-border bg-background p-0.5">
+										<button
+											type="button"
+											class="inline-flex h-8 items-center gap-1.5 rounded px-3 text-xs font-semibold transition {designerTool === 'place' ? 'bg-secondary text-secondary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+											onclick={() => (designerTool = 'place')}
+											data-testid="lease-template-place-tool"
+										>
+											<MousePointer2 class="h-3.5 w-3.5" />
+											Place
+										</button>
+										<button
+											type="button"
+											class="inline-flex h-8 items-center gap-1.5 rounded px-3 text-xs font-semibold transition {designerTool === 'erase' ? 'bg-destructive text-destructive-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+											onclick={() => (designerTool = 'erase')}
+											data-testid="lease-template-erase-tool"
+										>
+											<Eraser class="h-3.5 w-3.5" />
+											Erase
+										</button>
+									</div>
+								{/if}
 							</div>
 							<div class="flex items-center gap-1">
 								<Button
@@ -921,13 +1177,13 @@
 								<div
 									class="relative mx-auto inline-block touch-none rounded-sm bg-white shadow-md ring-1 ring-slate-300"
 									role="region"
-									aria-label="PDF field placement area"
+									aria-label={viewMode === 'preview' ? 'PDF filled preview area' : 'PDF field placement area'}
 									ondragover={handlePdfDragOver}
 									ondrop={handlePdfDrop}
 								>
 									<canvas
 										bind:this={canvasEl}
-										class="block cursor-crosshair bg-white"
+										class="block bg-white {canvasCursorClass()}"
 										onclick={placeSelectedField}
 										data-testid="lease-template-pdf-canvas"
 									></canvas>
@@ -939,27 +1195,33 @@
 											</span>
 										</div>
 									{/if}
-									{#each pageFields as field (field.id)}
-										<button
-											type="button"
-											style={markerStyle(field)}
-											class="absolute z-[1] flex min-h-5 items-center gap-1 rounded border px-1.5 text-left text-[11px] font-semibold leading-tight shadow-sm backdrop-blur-sm transition {fieldTone(field.signerRole)} {selectedFieldId === field.id ? 'ring-2 ring-primary ring-offset-1' : ''}"
-											data-template-field-marker
-											data-testid={field.testId}
-											title={`${field.label} · ${formatSigner(field.signerRole)}`}
-											onpointerdown={(event) => startFieldDrag(event, field)}
-										>
-											<GripHorizontal class="h-3 w-3 shrink-0" />
-											<span class="min-w-0 truncate">{field.label}</span>
-											{#if selectedFieldId === field.id && !field.locked}
-												<span
-													class="absolute -bottom-1 -right-1 h-3.5 w-3.5 cursor-nwse-resize rounded-full border border-background bg-primary shadow-sm ring-1 ring-primary/40"
-													onpointerdown={(event) => startFieldResize(event, field, 'southEast')}
-													aria-hidden="true"
-												></span>
-											{/if}
-										</button>
-									{/each}
+									{#if viewMode === 'design'}
+										{#each pageFields as field (field.id)}
+											<button
+												type="button"
+												style={markerStyle(field)}
+												class="absolute z-[1] flex min-h-5 items-center gap-1 rounded border px-1.5 text-left text-[11px] font-semibold leading-tight shadow-sm backdrop-blur-sm transition {fieldTone(field.signerRole)} {selectedFieldId === field.id ? 'ring-2 ring-primary ring-offset-1' : ''} {designerTool === 'erase' ? 'outline outline-2 outline-destructive/40' : ''}"
+												data-template-field-marker
+												data-testid={field.testId}
+												title={designerTool === 'erase' ? `Erase ${field.label}` : `${field.label} · ${formatSigner(field.signerRole)}`}
+												onpointerdown={(event) => handleFieldPointerDown(event, field)}
+											>
+												{#if designerTool === 'erase'}
+													<Eraser class="h-3 w-3 shrink-0" />
+												{:else}
+													<GripHorizontal class="h-3 w-3 shrink-0" />
+												{/if}
+												<span class="min-w-0 truncate">{field.label}</span>
+												{#if selectedFieldId === field.id && !field.locked && designerTool === 'place'}
+													<span
+														class="absolute -bottom-1 -right-1 h-3.5 w-3.5 cursor-nwse-resize rounded-full border border-background bg-primary shadow-sm ring-1 ring-primary/40"
+														onpointerdown={(event) => startFieldResize(event, field, 'southEast')}
+														aria-hidden="true"
+													></span>
+												{/if}
+											</button>
+										{/each}
+									{/if}
 								</div>
 							</div>
 						</div>

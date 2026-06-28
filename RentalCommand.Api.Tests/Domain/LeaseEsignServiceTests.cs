@@ -51,6 +51,15 @@ public sealed class LeaseEsignServiceTests : IDisposable
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         });
+        _db.OwnerEntities.Add(new OwnerEntity
+        {
+            PortfolioId = PortfolioId,
+            Name = "Owner Admin",
+            Email = "owner-admin@example.com",
+            IsPrimary = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
         _db.SaveChanges();
     }
 
@@ -119,7 +128,7 @@ public sealed class LeaseEsignServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task SendForSignature_UsesLeaseTenantEmailEvenWhenOverrideProvided()
+    public async Task SendForSignature_UsesLeaseTenantEmailAndAddsLandlordSigner()
     {
         var lease = SeedLeaseWithGraph(LeaseStatus.Draft, tenantEmail: "tenant-on-lease@example.com");
         var provider = new FakeEsignProvider { Configured = true, EnvelopeId = "sig_tenant_only" };
@@ -137,9 +146,11 @@ public sealed class LeaseEsignServiceTests : IDisposable
             ipAddress: null);
 
         result.Outcome.Should().Be(SendForSignatureOutcome.Sent);
-        provider.LastSigners.Should().ContainSingle();
+        provider.LastSigners.Should().HaveCount(2);
         provider.LastSigners[0].Name.Should().Be("Marcus Williams");
         provider.LastSigners[0].Email.Should().Be("tenant-on-lease@example.com");
+        provider.LastSigners[1].Name.Should().Be("Owner Admin");
+        provider.LastSigners[1].Email.Should().Be("owner-admin@example.com");
     }
 
     [Fact]
@@ -197,6 +208,24 @@ public sealed class LeaseEsignServiceTests : IDisposable
         var result = await sut.SendForSignatureAsync(PortfolioId, lease.Id, new SendForSignatureRequest(), changedByUserId: 1, ipAddress: null);
 
         result.Outcome.Should().Be(SendForSignatureOutcome.MissingSigner);
+    }
+
+    [Fact]
+    public async Task SendForSignature_LandlordHasNoEmail_ReturnsMissingSigner()
+    {
+        var owner = await _db.OwnerEntities.FirstAsync(o => o.PortfolioId == PortfolioId && o.IsPrimary);
+        owner.Email = null;
+        await _db.SaveChangesAsync();
+
+        var lease = SeedLeaseWithGraph(LeaseStatus.Draft);
+        var provider = new FakeEsignProvider { Configured = true, EnvelopeId = "sig_no_landlord" };
+        var sut = CreateService(provider);
+
+        var result = await sut.SendForSignatureAsync(PortfolioId, lease.Id, new SendForSignatureRequest(), changedByUserId: 1, ipAddress: null);
+
+        result.Outcome.Should().Be(SendForSignatureOutcome.MissingSigner);
+        result.Error.Should().Contain("landlord");
+        provider.SendCalls.Should().Be(0);
     }
 
     [Fact]

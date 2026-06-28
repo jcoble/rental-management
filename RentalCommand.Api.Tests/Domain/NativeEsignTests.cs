@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using QuestPDF.Fluent;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
@@ -223,6 +224,80 @@ public sealed class NativeEsignTests : IDisposable
     }
 
     [Fact]
+    public async Task Sign_TemplateBackedRequest_UsesOriginalTemplatePdf_AndStampsBothSignatures()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.PendingSignature);
+        _db.DocumentTemplates.Add(new DocumentTemplate
+        {
+            Id = 42,
+            PortfolioId = PortfolioId,
+            Kind = DocumentTemplateKind.Lease,
+            Status = DocumentTemplateStatus.Active,
+            RenderMode = DocumentTemplateRenderMode.Overlay,
+            Name = "Custom landlord lease",
+            DefaultForPortfolio = true,
+            Version = 7,
+            CreatedAtUtc = DateTime.UtcNow,
+            UpdatedAtUtc = DateTime.UtcNow,
+        });
+        await _db.SaveChangesAsync();
+
+        var provider = CreateProvider();
+        var sendResult = await provider.SendForSignatureAsync(new EsignRequest
+        {
+            DocumentName = $"lease-{lease.Id}-agreement.pdf",
+            Subject = $"Lease {lease.LeaseNumber}",
+            DocumentBytes = LeaseTemplateFixturePdf(),
+            Signers = new[]
+            {
+                new EsignSigner { Name = "Marcus Williams", Email = "tenant@example.com" },
+                new EsignSigner { Name = "Owner Admin", Email = "owner-admin@example.com" },
+            },
+            DocumentTemplateId = 42,
+            DocumentTemplateVersion = 7,
+            TemplateFieldSnapshotJson = TemplateSignatureFieldSnapshotJson(),
+        });
+
+        var signers = await _db.SignatureSigners.AsNoTracking()
+            .Where(s => s.SignatureRequest!.PublicId == sendResult.EnvelopeId)
+            .OrderBy(s => s.Id)
+            .ToListAsync();
+
+        var signing = CreateSigningService();
+
+        var tenant = await signing.SignAsync(signers[0].Token, new SubmitSignatureRequest
+        {
+            Consent = true,
+            SignatureType = "Typed",
+            TypedName = "Marcus Williams",
+        }, "10.0.0.1", "UA-tenant", default);
+        tenant.Value!.RequestCompleted.Should().BeFalse();
+
+        var landlord = await signing.SignAsync(signers[1].Token, new SubmitSignatureRequest
+        {
+            Consent = true,
+            SignatureType = "Typed",
+            TypedName = "Owner Admin",
+        }, "10.0.0.2", "UA-landlord", default);
+        landlord.Value!.RequestCompleted.Should().BeTrue();
+
+        var signedBytes = await provider.DownloadSignedDocumentAsync(sendResult.EnvelopeId!);
+        signedBytes.Should().NotBeNull();
+
+        var text = RentalCommand.Api.Scanning.PdfTextExtractor.TryExtractText(signedBytes!);
+        text.Should().Contain("Custom Landlord Lease");
+        text.Should().Contain("Marcus Williams");
+        text.Should().Contain("Owner Admin");
+        text.Should().Contain("Certificate of Completion");
+        text.Should().NotContain("This Residential Lease Agreement");
+
+        using var executedDoc = UglyToad.PdfPig.PdfDocument.Open(signedBytes!);
+        var firstPageText = executedDoc.GetPage(1).Text;
+        firstPageText.Replace(" ", string.Empty).Should().Contain("MarcusWilliams");
+        firstPageText.Replace(" ", string.Empty).Should().Contain("OwnerAdmin");
+    }
+
+    [Fact]
     public async Task Sign_WithoutConsent_IsRejected_AndDoesNotChangeSigner()
     {
         var (token, _) = await SendAndGetTokenAsync();
@@ -410,6 +485,97 @@ public sealed class NativeEsignTests : IDisposable
         var signer = await _db.SignatureSigners.AsNoTracking()
             .FirstAsync(s => s.SignatureRequest!.PublicId == result.EnvelopeId);
         return (signer.Token, result.EnvelopeId!);
+    }
+
+    private static string TemplateSignatureFieldSnapshotJson()
+        => JsonSerializer.Serialize(new[]
+        {
+            new
+            {
+                Id = 1,
+                FieldKey = "lease.signature.tenant",
+                Label = "Tenant signature",
+                Kind = nameof(DocumentTemplateFieldKind.Signature),
+                SignerRole = nameof(DocumentTemplateSignerRole.Tenant),
+                PageNumber = 1,
+                XPct = 0.16,
+                YPct = 0.48,
+                WidthPct = 0.30,
+                HeightPct = 0.06,
+                Required = true,
+                Locked = false,
+                SortOrder = 1,
+            },
+            new
+            {
+                Id = 2,
+                FieldKey = "lease.signature.landlord",
+                Label = "Landlord signature",
+                Kind = nameof(DocumentTemplateFieldKind.Signature),
+                SignerRole = nameof(DocumentTemplateSignerRole.Landlord),
+                PageNumber = 1,
+                XPct = 0.16,
+                YPct = 0.62,
+                WidthPct = 0.30,
+                HeightPct = 0.06,
+                Required = true,
+                Locked = false,
+                SortOrder = 2,
+            },
+            new
+            {
+                Id = 3,
+                FieldKey = "lease.dateSigned.tenant",
+                Label = "Tenant date signed",
+                Kind = nameof(DocumentTemplateFieldKind.DateSigned),
+                SignerRole = nameof(DocumentTemplateSignerRole.Tenant),
+                PageNumber = 1,
+                XPct = 0.58,
+                YPct = 0.48,
+                WidthPct = 0.18,
+                HeightPct = 0.03,
+                Required = true,
+                Locked = false,
+                SortOrder = 3,
+            },
+            new
+            {
+                Id = 4,
+                FieldKey = "lease.dateSigned.landlord",
+                Label = "Landlord date signed",
+                Kind = nameof(DocumentTemplateFieldKind.DateSigned),
+                SignerRole = nameof(DocumentTemplateSignerRole.Landlord),
+                PageNumber = 1,
+                XPct = 0.58,
+                YPct = 0.62,
+                WidthPct = 0.18,
+                HeightPct = 0.03,
+                Required = true,
+                Locked = false,
+                SortOrder = 4,
+            },
+        });
+
+    private static byte[] LeaseTemplateFixturePdf()
+    {
+        var document = QuestPDF.Fluent.Document.Create(container =>
+        {
+            container.Page(page =>
+            {
+                page.Size(QuestPDF.Helpers.PageSizes.A4);
+                page.Margin(40);
+                page.DefaultTextStyle(t => t.FontSize(12));
+                page.Content().Column(col =>
+                {
+                    col.Item().Text("Custom Landlord Lease").FontSize(18).Bold();
+                    col.Item().PaddingTop(45).Text("Tenant signer");
+                    col.Item().PaddingTop(70).Text("Landlord signer");
+                    col.Item().PaddingTop(35).Text("This template text must survive execution.");
+                });
+            });
+        });
+
+        return document.GeneratePdf();
     }
 
     private Lease SeedLeaseWithGraph(LeaseStatus status, string? tenantEmail = "tenant@example.com")

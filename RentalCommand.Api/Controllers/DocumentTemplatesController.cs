@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
@@ -69,6 +70,25 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
     {
         var template = await _service.GetAsync(GetPortfolioId(), id, ct);
         return template is null ? NotFound(new { error = "Document template not found" }) : Ok(template);
+    }
+
+    [HttpGet("{id:int}/preview/leases/{leaseId:int}")]
+    [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK, "application/pdf")]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> PreviewLeasePdf(int id, int leaseId, CancellationToken ct)
+    {
+        var result = await _service.PreviewLeasePdfAsync(GetPortfolioId(), id, leaseId, ct);
+        return result.Outcome switch
+        {
+            DocumentTemplateOperationOutcome.Success => File(
+                result.Value!.PdfBytes,
+                "application/pdf",
+                result.Value.FileName),
+            DocumentTemplateOperationOutcome.NotFound => JsonError(StatusCodes.Status404NotFound, result.Error),
+            DocumentTemplateOperationOutcome.Invalid => JsonError(StatusCodes.Status400BadRequest, result.Error),
+            _ => StatusCode(StatusCodes.Status500InternalServerError),
+        };
     }
 
     [HttpPost]
@@ -218,6 +238,13 @@ public sealed class DocumentTemplatesController : ManagementControllerBase
         DocumentTemplateOperationOutcome.NotFound => NotFound(new { error = result.Error }),
         DocumentTemplateOperationOutcome.Invalid => BadRequest(new { error = result.Error }),
         _ => StatusCode(StatusCodes.Status500InternalServerError),
+    };
+
+    private static ContentResult JsonError(int statusCode, string? error) => new()
+    {
+        StatusCode = statusCode,
+        ContentType = "application/json",
+        Content = JsonSerializer.Serialize(new { error = error ?? "Request failed." })
     };
 
     private string? ValidatePdfUpload(string fileName, string contentType, long sizeBytes)
