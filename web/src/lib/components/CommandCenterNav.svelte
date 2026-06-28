@@ -1,5 +1,5 @@
 <!--
-  Command Center nav entry (pinned, directly below "Scan / Add"). Surfaces the per-unit
+  Command Center nav entry (pinned, directly below "Scan / Edit"). Surfaces the per-unit
   Command Center (/units/[id]) that was otherwise buried under Rentals → Units. Expands to a
   searchable list of every unit labelled by property + unit number; each opens that unit's
   Command Center. In the collapsed rail it degrades to an icon link to the units list.
@@ -10,14 +10,25 @@
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { page } from '$app/state';
 	import { debounced } from '$lib/utils/debounce.svelte';
-	import { Boxes, ChevronDown, ChevronRight, Search } from '@lucide/svelte';
+	import MaterialSymbol from '$lib/components/m3/MaterialSymbol.svelte';
+	import M3NavGroup from '$lib/components/m3/NavGroup.svelte';
+	import M3NavItem from '$lib/components/m3/NavItem.svelte';
+	import { Search } from '@lucide/svelte';
 
-	let { collapsed = false, onNavigate }: { collapsed?: boolean; onNavigate?: () => void } = $props();
+	let {
+		collapsed = false,
+		open = false,
+		onOpenChange,
+		onNavigate
+	}: {
+		collapsed?: boolean;
+		open?: boolean;
+		onOpenChange?: (open: boolean) => void;
+		onNavigate?: () => void;
+	} = $props();
 
 	const portfolioId = $derived(getCurrentPortfolioId());
 
-	// Closed by default; the user opens it, picks a unit, and it collapses again on selection.
-	let open = $state(false);
 	let search = $state('');
 	const debouncedSearch = debounced(() => search, 250);
 
@@ -39,47 +50,53 @@
 	const activeUnitId = $derived(
 		page.url.pathname.startsWith('/units/') ? Number(page.params.id) : NaN
 	);
+	const active = $derived(page.url.pathname.startsWith('/units/'));
+
+	function setOpen(next: boolean) {
+		onOpenChange?.(next);
+	}
 
 	function go() {
 		// Collapse the dropdown when a unit (or "browse all") is chosen, then run the shell's nav
 		// handler (which closes the mobile sidebar). Without resetting `open` it stays expanded after
 		// navigating to the unit.
-		open = false;
+		setOpen(false);
 		onNavigate?.();
 	}
 </script>
 
 {#if collapsed}
-	<a
+	<M3NavItem
 		href="/units"
+		label="Command Center"
+		active={active}
+		collapsed
+		tone={active ? 'primary' : 'neutral'}
+		variant="surface"
+		class="mb-1"
 		onclick={go}
-		class="m3-nav-link m3-state-layer flex items-center justify-center rounded-[var(--m3-shape-full)] px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
-		aria-label="Command Center"
-		data-m3-tooltip="Command Center"
 		data-testid="nav-command-center"
 	>
-		<Boxes class="h-4 w-4 shrink-0" />
-	</a>
+		{#snippet icon()}
+			<MaterialSymbol name="monitor_heart" size={20} data-testid="nav-command-center-icon" />
+		{/snippet}
+	</M3NavItem>
 {:else}
 	<div data-testid="command-center-nav">
-		<button
-			type="button"
-			onclick={() => (open = !open)}
-			class="m3-nav-link m3-state-layer flex w-full items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
-			aria-expanded={open}
+		<M3NavGroup
+			label="Command Center"
+			active={active}
+			expanded={open}
+			onclick={() => setOpen(!open)}
 			data-testid="nav-command-center"
 		>
-			<Boxes class="h-4 w-4 shrink-0" />
-			<span class="flex-1 truncate text-left">Command Center</span>
-			{#if open}
-				<ChevronDown class="h-3.5 w-3.5 shrink-0 opacity-60" />
-			{:else}
-				<ChevronRight class="h-3.5 w-3.5 shrink-0 opacity-60" />
-			{/if}
-		</button>
+			{#snippet icon()}
+				<MaterialSymbol name="monitor_heart" size={20} data-testid="nav-command-center-icon" />
+			{/snippet}
+		</M3NavGroup>
 
 		{#if open}
-			<div class="mb-1 ml-2 mt-0.5 space-y-0.5 border-l border-sidebar-border pl-2">
+			<div class="m3-motion-reveal-list mt-0.5 space-y-0.5 pl-3">
 				{#if totalMatches > 6 || search.trim().length > 0}
 					<div class="relative mb-1">
 						<Search
@@ -103,31 +120,36 @@
 						<p class="px-2 py-1.5 text-xs text-muted-foreground">No units yet.</p>
 					{:else}
 						{#each matchedUnits as u (u.id)}
-							<a
+							<M3NavItem
 								href="/units/{u.id}"
 								onclick={go}
-								class="m3-state-layer flex items-center gap-2 rounded-[var(--m3-shape-full)] px-2 py-1.5 text-xs transition-colors
-									{u.id === activeUnitId
-									? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
-									: 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'}"
+								label="{u.propertyName} · Unit {u.unitNumber}"
+								active={u.id === activeUnitId}
+								tone={u.id === activeUnitId ? 'primary' : 'neutral'}
+								class="min-h-9 py-1.5"
 								data-testid="command-center-unit-{u.id}"
 							>
-								<span class="min-w-0 flex-1 truncate">
-									{u.propertyName}<span class="opacity-60"> · Unit {u.unitNumber}</span>
-								</span>
-							</a>
+								{#snippet icon()}
+									<MaterialSymbol name="home" size={18} data-testid="command-center-unit-{u.id}-icon" />
+								{/snippet}
+							</M3NavItem>
 						{/each}
 					{/if}
 				</div>
 
-				<a
+				<M3NavItem
 					href="/units"
 					onclick={go}
-					class="block rounded-[var(--m3-shape-full)] px-2 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-sidebar-accent"
+					label="Browse all units"
+					active={page.url.pathname === '/units'}
+					tone={page.url.pathname === '/units' ? 'primary' : 'neutral'}
+					class="min-h-9 py-1.5"
 					data-testid="command-center-all"
 				>
-					Browse all units →
-				</a>
+					{#snippet icon()}
+						<MaterialSymbol name="home" size={18} data-testid="command-center-all-icon" />
+					{/snippet}
+				</M3NavItem>
 			</div>
 		{/if}
 	</div>
