@@ -158,6 +158,9 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
             ),
           );
       }
+    } catch (_) {
+      // Form callbacks own their visible error state. Do not show the success
+      // snackbar when the save path reports a failure.
     } finally {
       if (mounted) {
         setState(() {
