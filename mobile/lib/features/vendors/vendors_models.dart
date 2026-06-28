@@ -14,6 +14,8 @@ class Vendor {
     this.postalCode,
     this.email,
     this.phone,
+    this.taxId,
+    this.is1099Eligible = false,
     this.preferred = false,
     this.w9OnFile = false,
     this.notes,
@@ -31,6 +33,8 @@ class Vendor {
   final String? postalCode;
   final String? email;
   final String? phone;
+  final String? taxId;
+  final bool is1099Eligible;
   final bool preferred;
 
   /// True when a signed W-9 has been collected from this vendor (needed before
@@ -71,6 +75,8 @@ class Vendor {
       postalCode: asString('postalCode'),
       email: asString('email'),
       phone: asString('phone'),
+      taxId: asString('taxId'),
+      is1099Eligible: json['is1099Eligible'] as bool? ?? false,
       preferred: json['preferred'] as bool? ?? false,
       w9OnFile: json['w9OnFile'] as bool? ?? false,
       notes: asString('notes'),
@@ -80,7 +86,11 @@ class Vendor {
     );
   }
 
-  Vendor copyWith({bool? w9OnFile}) {
+  Vendor copyWith({
+    bool? is1099Eligible,
+    bool? w9OnFile,
+    bool? preferred,
+  }) {
     return Vendor(
       id: id,
       name: name,
@@ -91,7 +101,9 @@ class Vendor {
       postalCode: postalCode,
       email: email,
       phone: phone,
-      preferred: preferred,
+      taxId: taxId,
+      is1099Eligible: is1099Eligible ?? this.is1099Eligible,
+      preferred: preferred ?? this.preferred,
       w9OnFile: w9OnFile ?? this.w9OnFile,
       notes: notes,
       averageRating: averageRating,
