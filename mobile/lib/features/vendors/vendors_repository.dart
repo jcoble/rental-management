@@ -9,10 +9,12 @@ import 'vendors_models.dart';
 ///
 /// Endpoints (all JWT-scoped, portfolio from claim):
 ///   GET    /vendors                         — list (incl. rating summary)
+///   POST   /vendors                         — create vendor
+///   PATCH  /vendors/{id}                    — update vendor
+///   DELETE /vendors/{id}                    — delete vendor
 ///   GET    /vendors/{id}/scorecard          — performance scorecard
 ///   POST   /vendors/{id}/ratings            — record a 1–5 star rating
 ///   POST   /vendors/{id}/request-w9         — text the vendor a W-9 request
-///   PATCH  /vendors/{id}                    — update vendor fields (e.g. w9OnFile)
 ///   POST   /work-orders/{id}/dispatch       — text a vendor the job
 class VendorsRepository {
   VendorsRepository(this._dio);
@@ -26,6 +28,50 @@ class VendorsRepository {
           .whereType<Map<String, dynamic>>()
           .map(Vendor.fromJson)
           .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<Vendor> createVendor(Map<String, dynamic> data) async {
+    try {
+      final response =
+          await _dio.post<Map<String, dynamic>>('/vendors', data: data);
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Vendor.fromJson(responseData);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<Vendor> updateVendor(int id, Map<String, dynamic> data) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/vendors/$id',
+        data: data,
+      );
+      final responseData = response.data;
+      if (responseData == null) {
+        throw const ApiException(
+          statusCode: 0,
+          message: 'Empty response from server.',
+        );
+      }
+      return Vendor.fromJson(responseData);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<void> deleteVendor(int id) async {
+    try {
+      await _dio.delete<dynamic>('/vendors/$id');
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
     }
