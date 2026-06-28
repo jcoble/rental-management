@@ -4,6 +4,17 @@ export interface DispatchVendorContact {
 	phone?: string | null;
 }
 
+export const USER_ASSIGNABLE_WORK_ORDER_STATUSES = [
+	'New',
+	'Scheduled',
+	'InProgress',
+	'WaitingParts',
+	'Completed',
+	'Cancelled'
+] as const;
+
+export type UserAssignableWorkOrderStatus = (typeof USER_ASSIGNABLE_WORK_ORDER_STATUSES)[number];
+
 export function canDispatchToVendor(vendor: DispatchVendorContact | null | undefined): boolean {
 	return Boolean(vendor?.phone?.trim());
 }
@@ -19,6 +30,12 @@ export function formatStatusTransitionCopy(
 	nextStatus: string | null | undefined
 ): string {
 	return `Change status from ${formatStatusLabel(currentStatus)} to ${formatStatusLabel(nextStatus)}.`;
+}
+
+export function workOrderStatusActionTargets(
+	currentStatus: string | null | undefined
+): UserAssignableWorkOrderStatus[] {
+	return USER_ASSIGNABLE_WORK_ORDER_STATUSES.filter((status) => status !== currentStatus);
 }
 
 export function shouldShowActiveDispatchHint(
