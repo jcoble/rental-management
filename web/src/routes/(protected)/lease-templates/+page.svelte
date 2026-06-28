@@ -22,6 +22,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
+	import LeaseTemplateDesigner from '$lib/components/document-templates/LeaseTemplateDesigner.svelte';
 	import * as Card from '$lib/components/ui/card';
 
 	const queryClient = useQueryClient();
@@ -50,6 +51,7 @@
 	let templateDescription = $state('');
 	let defaultForPortfolio = $state(false);
 	let fileInput = $state<HTMLInputElement | null>(null);
+	let designerTemplateId = $state<number | null>(null);
 
 	const catalogGroups = $derived.by(() => {
 		const groups = new Map<DocumentTemplateSignerRole, DocumentTemplateFieldCatalogItem[]>();
@@ -78,6 +80,7 @@
 		},
 		onSuccess: (template) => {
 			showSuccess(`${template.name} uploaded as a draft lease template.`);
+			designerTemplateId = template.id;
 			selectedFile = null;
 			templateName = '';
 			templateDescription = '';
@@ -234,7 +237,7 @@
 					/>
 					<span>
 						<span class="block font-medium">Use as portfolio default</span>
-						<span class="block text-xs text-muted-foreground">New lease workflows can prefer this template once field placement is finished.</span>
+						<span class="block text-xs text-muted-foreground">New lease workflows can prefer this template after its fields are placed.</span>
 					</span>
 				</label>
 
@@ -332,11 +335,11 @@
 										variant="outline"
 										size="sm"
 										class="gap-1.5"
-										disabled
+										onclick={() => (designerTemplateId = template.id)}
 										data-testid="lease-template-designer-{template.id}"
 									>
 										<PenLine class="h-4 w-4" />
-										Field designer next
+										Design fields
 									</Button>
 								</div>
 							</div>
@@ -360,6 +363,16 @@
 			{/if}
 		</section>
 	</div>
+
+	{#if designerTemplateId}
+		<section class="mt-6" aria-label="Lease template field designer">
+			<LeaseTemplateDesigner
+				templateId={designerTemplateId}
+				catalog={catalogQuery.data ?? []}
+				onClose={() => (designerTemplateId = null)}
+			/>
+		</section>
+	{/if}
 
 	<section class="mt-8 space-y-4" aria-labelledby="lease-template-fields-heading" data-testid="lease-template-field-catalog">
 		<div>

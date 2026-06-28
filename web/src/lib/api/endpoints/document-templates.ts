@@ -9,7 +9,7 @@ export type DocumentTemplateFieldKind =
 	| 'Currency'
 	| 'Date'
 	| 'Signature'
-	| 'Initials'
+	| 'Initial'
 	| 'Checkbox'
 	| 'DateSigned';
 export type DocumentTemplateSignerRole = 'None' | 'Tenant' | 'Landlord' | 'CoSigner';
@@ -76,6 +76,38 @@ export interface DocumentTemplateFieldCatalogItem {
 	description: string;
 }
 
+export interface CreateDocumentTemplateFieldRequest {
+	fieldKey: string;
+	label?: string | null;
+	kind: DocumentTemplateFieldKind;
+	signerRole: DocumentTemplateSignerRole;
+	pageNumber: number;
+	xPct: number;
+	yPct: number;
+	widthPct: number;
+	heightPct: number;
+	required?: boolean;
+	locked?: boolean;
+	sortOrder?: number;
+	defaultText?: string | null;
+}
+
+export interface UpdateDocumentTemplateFieldRequest {
+	fieldKey?: string | null;
+	label?: string | null;
+	kind?: DocumentTemplateFieldKind;
+	signerRole?: DocumentTemplateSignerRole;
+	pageNumber?: number;
+	xPct?: number;
+	yPct?: number;
+	widthPct?: number;
+	heightPct?: number;
+	required?: boolean;
+	locked?: boolean;
+	sortOrder?: number;
+	defaultText?: string | null;
+}
+
 function buildTemplateQuery(params?: DocumentTemplateListParams): string {
 	return buildListQuery(params, {
 		kind: params?.kind || undefined,
@@ -93,6 +125,15 @@ export const documentTemplates = {
 		api.get<DocumentTemplateFieldCatalogItem[]>(
 			`/document-templates/field-catalog?kind=${encodeURIComponent(kind)}`
 		),
+	addField: (templateId: number, request: CreateDocumentTemplateFieldRequest) =>
+		api.post<DocumentTemplateField>(`/document-templates/${templateId}/fields`, request),
+	updateField: (
+		templateId: number,
+		fieldId: number,
+		request: UpdateDocumentTemplateFieldRequest
+	) => api.put<DocumentTemplateField>(`/document-templates/${templateId}/fields/${fieldId}`, request),
+	deleteField: (templateId: number, fieldId: number) =>
+		api.delete<void>(`/document-templates/${templateId}/fields/${fieldId}`),
 	uploadLeasePdf: (file: File, values: {
 		name?: string;
 		description?: string;
