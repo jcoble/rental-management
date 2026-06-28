@@ -154,8 +154,8 @@ public sealed record LeaseDocumentStatusResponse(
     DateTime? GeneratedAt);
 
 /// <summary>
-/// Body for <c>POST /leases/{id}/send-for-signature</c>. Both fields are optional; when omitted the
-/// lease's tenant name/email is used as the signer.
+/// Body for <c>POST /leases/{id}/send-for-signature</c>. Signer override fields are retained for
+/// request compatibility, but the lease workflow sends to the tenant tied to the lease.
 /// </summary>
 public sealed class SendForSignatureRequest
 {
