@@ -195,6 +195,64 @@ public class PaymentServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetAsync_ExposesUnitIdAndPropertyId_ResolvedViaLeaseJoin()
+    {
+        // TSK-457: the Command Center detail-folding needs to route a payment to its unit's tab, so the
+        // Payment DTO carries unitId/propertyId resolved DB-side from the already-joined lease — no extra
+        // query and no per-row lease fetch (HARD SQL rule).
+        var now = DateTime.UtcNow;
+        var created = await _sut.CreateAsync(PortfolioId, new CreatePaymentRequest
+        {
+            LeaseId = LeaseId,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1200.00m,
+            DueDate = now,
+        });
+        created.Should().NotBeNull();
+
+        _commands.Clear();
+        var fetched = await _sut.GetAsync(PortfolioId, created!.Id);
+
+        fetched.Should().NotBeNull();
+        // Seeded lease LeaseId=100 is on UnitId=20 / PropertyId=10.
+        fetched!.UnitId.Should().Be(20);
+        fetched.PropertyId.Should().Be(10);
+
+        // SQL rule: the lease is JOINed into the same payment read — no standalone Leases fetch.
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("JOIN", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"Leases\"", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().NotContain(sql =>
+            sql.Contains("FROM \"Leases\"", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("\"Payments\"", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ListPageAsync_ExposesUnitIdAndPropertyId_ResolvedViaLeaseJoin()
+    {
+        var now = DateTime.UtcNow;
+        SeedPayment(LeaseId, "Rent A", now.AddDays(-1), 100m);
+
+        _commands.Clear();
+        var page = await _sut.ListPageAsync(PortfolioId, LeaseId, new ListQuery { Take = 10 });
+
+        var item = page.Items.Should().ContainSingle().Subject;
+        item.UnitId.Should().Be(20);
+        item.PropertyId.Should().Be(10);
+
+        // SQL rule: the listing JOINs the lease in the same statement, not per-row.
+        _commands.Should().Contain(sql =>
+            sql.Contains("FROM \"Payments\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("JOIN", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"Leases\"", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().NotContain(sql =>
+            sql.Contains("FROM \"Leases\"", StringComparison.OrdinalIgnoreCase) &&
+            !sql.Contains("\"Payments\"", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task GetAsync_DoesNotAdvertiseScanWhenStoredFileBlobIsMissing()
     {
         // A StoredFiles row without a readable blob makes the web detail page request

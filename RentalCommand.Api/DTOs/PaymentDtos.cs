@@ -10,6 +10,19 @@ public class PaymentResponse
     public int Id { get; set; }
     public int PortfolioId { get; set; }
     public int LeaseId { get; set; }
+
+    /// <summary>
+    /// Unit the payment's lease is on; resolved DB-side via the lease join so the web client can route the
+    /// payment to its unit's Command Center tab. Null only if the lease navigation wasn't loaded.
+    /// </summary>
+    public int? UnitId { get; set; }
+
+    /// <summary>
+    /// Property the payment's lease is on; resolved DB-side via the lease join so the web client can route the
+    /// payment to its unit's Command Center tab. Null only if the lease navigation wasn't loaded.
+    /// </summary>
+    public int? PropertyId { get; set; }
+
     public PaymentType PaymentType { get; set; }
     public PaymentStatus Status { get; set; }
     public decimal Amount { get; set; }
@@ -74,6 +87,8 @@ public class PaymentResponse
         // Lease label for the detail/list view. Only set when the Lease navigation was loaded
         // (Include'd); left null otherwise so callers that don't join don't pay for it.
         LeaseNumber = e.Lease?.LeaseNumber,
+        UnitId = e.Lease?.UnitId,
+        PropertyId = e.Lease?.PropertyId,
         TenantName = e.Lease?.Tenant == null
             ? null
             : $"{e.Lease.Tenant.FirstName} {e.Lease.Tenant.LastName}".Trim(),

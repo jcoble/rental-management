@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 
+// TSK-457: the delete/ConfirmDialog flow moved out of the thin [id] route wrapper into the
+// extracted PaymentDetail record component (folded into the Rent tab on ?payment= select).
 const source = readFileSync(
-	new URL('../../routes/(protected)/accounting/payments/[id]/+page.svelte', import.meta.url),
+	new URL('../components/records/PaymentDetail.svelte', import.meta.url),
 	'utf8'
 );
 

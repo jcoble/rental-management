@@ -53,8 +53,10 @@ describe('hasNoticeMoveOutDate', () => {
 
 describe('lease detail hero CTA', () => {
 	it('opens the ledger through the tab router so URL sync cannot reset it', () => {
+		// The lease detail body was folded into the reusable LeaseDetail component (TSK-457);
+		// the hero-CTA wiring it guards now lives there, not in the thin [id] route wrapper.
 		const pageSource = readFileSync(
-			new URL('../../routes/(protected)/leases/[id]/+page.svelte', import.meta.url),
+			new URL('../components/records/LeaseDetail.svelte', import.meta.url),
 			'utf8'
 		);
 

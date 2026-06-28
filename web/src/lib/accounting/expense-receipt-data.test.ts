@@ -36,7 +36,7 @@ describe('buildExpenseReceiptDataForSave', () => {
 
 	it('is wired into the expense detail save payload', () => {
 		const pageSource = readFileSync(
-			new URL('../../routes/(protected)/accounting/expenses/[id]/+page.svelte', import.meta.url),
+			new URL('../components/records/ExpenseDetail.svelte', import.meta.url),
 			'utf8'
 		);
 

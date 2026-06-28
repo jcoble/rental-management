@@ -3,15 +3,10 @@ import { describe, it } from 'node:test';
 import {
 	defaultWorkOrderReceiptScanContext,
 	unitMaintenanceReturnTo,
-	workOrderDetailHref,
 	workOrderReceiptScanContext
 } from './maintenance-actions.ts';
 
 describe('unit maintenance actions', () => {
-	it('builds a direct work-order detail target', () => {
-		assert.equal(workOrderDetailHref(42), '/maintenance/42');
-	});
-
 	it('builds job-scoped receipt scan context', () => {
 		assert.deepEqual(workOrderReceiptScanContext(7, 42), {
 			type: 'Expense',

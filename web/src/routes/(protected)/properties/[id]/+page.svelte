@@ -6,6 +6,7 @@
 	import { owners } from '$lib/api/endpoints/owners';
 	import { leases } from '$lib/api/endpoints/leases';
 	import type { Lease, Property, Unit } from '$lib/types';
+	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { propertySchema, propertyBasisSchema, unitSchema, parseForm } from '$lib/schemas';
 	import PropertyLoansSection from '$lib/components/property/PropertyLoansSection.svelte';
@@ -640,7 +641,7 @@
 				columns={leaseColumns}
 				loading={leasesQuery.isLoading}
 				emptyMessage="No leases for this property."
-				onRowClick={(l) => goto(`/leases/${l.id}`)}
+				onRowClick={(l) => goto(recordHref('lease', l))}
 				getRowKey={(l) => l.id}
 				pageSize={10}
 				data-testid="property-leases-grid"

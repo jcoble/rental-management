@@ -8,6 +8,7 @@
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import type { WorkOrder } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
+	import { recordHref } from '$lib/navigation/record-href';
 	import { workOrderSchema, inspectionSchema, parseForm } from '$lib/schemas';
 	import { localInputToOffsetIso } from '$lib/utils/date';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -362,7 +363,7 @@
 		columns={woColumns}
 		loading={workOrdersQuery.isLoading || workOrdersQuery.isFetching}
 		emptyMessage="No work orders found."
-		onRowClick={(wo) => goto('/maintenance/' + wo.id)}
+		onRowClick={(wo) => goto(recordHref('workOrder', wo))}
 		getRowKey={(wo) => wo.id}
 		data-testid="work-orders-list"
 		pageSize={PAGE_SIZE}
