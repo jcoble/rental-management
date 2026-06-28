@@ -3,6 +3,7 @@ using System.Data.Common;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using RentalCommand.Core;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
@@ -168,6 +169,53 @@ public class PaymentServiceTests : IDisposable
 
         var fromDb = await _db.Payments.AsNoTracking().SingleAsync(p => p.Id == created.Id);
         fromDb.LeaseId.Should().Be(OtherLeaseId);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ReassignsGeneratedPeriodPayment_ToLeaseWithSamePeriodPayment_ReturnsDomainConflict()
+    {
+        var now = DateTime.UtcNow;
+        var source = new Payment
+        {
+            PortfolioId = PortfolioId,
+            LeaseId = LeaseId,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1200m,
+            DueDate = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc),
+            PaidDate = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc),
+            PeriodKey = "2026-03",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.Payments.AddRange(
+            source,
+            new Payment
+            {
+                PortfolioId = PortfolioId,
+                LeaseId = OtherLeaseId,
+                PaymentType = PaymentType.Rent,
+                Status = PaymentStatus.Scheduled,
+                Amount = 1300m,
+                DueDate = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc),
+                PeriodKey = "2026-03",
+                CreatedAt = now,
+                UpdatedAt = now,
+            });
+        await _db.SaveChangesAsync();
+
+        var act = async () => await _sut.UpdateAsync(PortfolioId, source.Id, new UpdatePaymentRequest
+        {
+            LeaseId = OtherLeaseId,
+        });
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.StatusCode.Should().Be(409);
+        ex.Which.Message.Should().Contain("already has");
+        ex.Which.Message.Should().Contain("March 2026");
+
+        var unchanged = await _db.Payments.AsNoTracking().SingleAsync(p => p.Id == source.Id);
+        unchanged.LeaseId.Should().Be(LeaseId);
     }
 
     [Fact]
