@@ -43,6 +43,15 @@ public class Lease : IAuditable, IPortfolioScoped
     public int? SignedDocumentStoredFileId { get; set; }
 
     /// <summary>
+    /// Reusable document template used to render this lease agreement. Null means the legacy built-in
+    /// QuestPDF generator was used.
+    /// </summary>
+    public int? DocumentTemplateId { get; set; }
+
+    /// <summary>Template version frozen when the agreement is rendered/sent.</summary>
+    public int? DocumentTemplateVersion { get; set; }
+
+    /// <summary>
     /// JSON object (stored as jsonb) holding the full scan extraction superset for leases imported
     /// from a scanned PDF. Null for manually entered leases.
     /// </summary>
@@ -52,6 +61,7 @@ public class Lease : IAuditable, IPortfolioScoped
     public Property? Property { get; set; }
     public Unit? Unit { get; set; }
     public Tenant? Tenant { get; set; }
+    public DocumentTemplate? DocumentTemplate { get; set; }
     public List<Payment> Payments { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];

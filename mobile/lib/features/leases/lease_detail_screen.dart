@@ -4,18 +4,31 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/models/models.dart';
+import '../home/mobile_domain_navigation.dart';
 import '../payments/payment_detail_screen.dart';
 import '../payments/payments_repository.dart';
 import '../payments/record_payment_sheet.dart';
 import '../properties/property_detail_screen.dart';
-import '../tenants/tenant_detail_screen.dart';
+import '../units/unit_command_center_screen.dart';
+import '../units/unit_navigation.dart';
 import 'lease_ledger_view.dart';
 import 'leases_list_screen.dart';
 import 'leases_repository.dart';
 
 const _monthNames = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  '',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 String _fmt(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
@@ -33,9 +46,47 @@ String _formatCurrency(double amount) {
   return buf.toString();
 }
 
-/// Loads a lease by id, then shows [LeaseDetailScreen]. Use this when the caller
-/// only has a lease id (e.g. a payment, which carries `leaseId` but not the full
-/// model). Mirrors the by-id loader pattern used elsewhere in the app.
+void _openTenantDetail(BuildContext context, Lease lease) {
+  openUnitCommandCenter(
+    context,
+    unitId: lease.unitId,
+    initialTab: UnitCommandCenterTab.tenants,
+    lease: lease,
+    tenantId: lease.tenantId,
+  );
+}
+
+void _openPropertyDetail(BuildContext context, int propertyId) {
+  final shellNavigator = mobileShellNavigatorOf(context);
+  if (shellNavigator != null) {
+    shellNavigator.openTab(
+      MobileShellTabId.rentals,
+      destination: MobileDestinationId.properties,
+      detailBuilder: (_) => PropertyDetailLoaderScreen(propertyId: propertyId),
+    );
+    revealMobileShellIfDetached(context);
+    return;
+  }
+
+  final domainNavigator = MobileDomainNavigation.maybeOf(context);
+  if (domainNavigator != null) {
+    domainNavigator.openDestination(
+      MobileDestinationId.properties,
+      detailBuilder: (_) => PropertyDetailLoaderScreen(propertyId: propertyId),
+    );
+    return;
+  }
+
+  Navigator.of(context).push<void>(
+    MaterialPageRoute<void>(
+      builder: (_) => PropertyDetailLoaderScreen(propertyId: propertyId),
+    ),
+  );
+}
+
+/// Loads a lease by id, then lands in the Unit command center's Lease tab. Use
+/// this when the caller only has a lease id (e.g. a payment, which carries
+/// `leaseId` but not the full model).
 class LeaseDetailLoaderScreen extends ConsumerWidget {
   const LeaseDetailLoaderScreen({super.key, required this.leaseId});
 
@@ -45,9 +96,8 @@ class LeaseDetailLoaderScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(leaseDetailProvider(leaseId));
     return async.when(
-      loading: () => const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      ),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (e, _) => Scaffold(
         appBar: AppBar(title: const Text('Lease')),
         body: Center(
@@ -61,7 +111,11 @@ class LeaseDetailLoaderScreen extends ConsumerWidget {
           ),
         ),
       ),
-      data: (lease) => LeaseDetailScreen(lease: lease),
+      data: (lease) => UnitCommandCenterLoaderScreen(
+        unitId: lease.unitId,
+        initialTab: UnitCommandCenterTab.lease,
+        initialLease: lease,
+      ),
     );
   }
 }
@@ -75,8 +129,7 @@ class LeaseDetailScreen extends ConsumerStatefulWidget {
   final Lease lease;
 
   @override
-  ConsumerState<LeaseDetailScreen> createState() =>
-      _LeaseDetailScreenState();
+  ConsumerState<LeaseDetailScreen> createState() => _LeaseDetailScreenState();
 }
 
 class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
@@ -128,10 +181,7 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (_) => LeaseFormSheet(
-        existing: _lease,
-        onSaved: _refresh,
-      ),
+      builder: (_) => LeaseFormSheet(existing: _lease, onSaved: _refresh),
     );
   }
 
@@ -165,7 +215,9 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
     });
 
     try {
-      final response = await ref.read(leasesRepositoryProvider).ask(_lease.id, question);
+      final response = await ref
+          .read(leasesRepositoryProvider)
+          .ask(_lease.id, question);
       if (mounted) setState(() => _leaseAnswer = response.answer);
     } on ApiException catch (e) {
       if (mounted) setState(() => _leaseAskError = e.message);
@@ -208,8 +260,9 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
       _docError = null;
     });
     try {
-      final bytes =
-          await ref.read(leasesRepositoryProvider).documentBytes(_lease.id);
+      final bytes = await ref
+          .read(leasesRepositoryProvider)
+          .documentBytes(_lease.id);
       await DocumentOpener.openBytes(
         bytes: bytes,
         fileName: 'lease-${_lease.id}-agreement.pdf',
@@ -231,8 +284,9 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
       _signatureError = null;
     });
     try {
-      final status =
-          await ref.read(leasesRepositoryProvider).signatureStatus(_lease.id);
+      final status = await ref
+          .read(leasesRepositoryProvider)
+          .signatureStatus(_lease.id);
       if (mounted) setState(() => _signature = status);
     } on ApiException catch (e) {
       // 503 = gated/not configured; leave the card in its neutral state.
@@ -254,8 +308,9 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
     });
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final status =
-          await ref.read(leasesRepositoryProvider).sendForSignature(_lease.id);
+      final status = await ref
+          .read(leasesRepositoryProvider)
+          .sendForSignature(_lease.id);
       if (!mounted) return;
       setState(() => _signature = status);
       messenger
@@ -269,9 +324,7 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
         messenger
           ..hideCurrentSnackBar()
           ..showSnackBar(
-            const SnackBar(
-              content: Text('E-signature isn’t set up yet.'),
-            ),
+            const SnackBar(content: Text('E-signature isn’t set up yet.')),
           );
       } else {
         setState(() => _signatureError = e.message);
@@ -419,24 +472,12 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
               theme: theme,
               colorScheme: colorScheme,
               children: [
-                _RowKV(
-                  label: 'Start date',
-                  value: _fmt(_lease.startDate),
-                ),
-                _RowKV(
-                  label: 'End date',
-                  value: _fmt(_lease.endDate),
-                ),
+                _RowKV(label: 'Start date', value: _fmt(_lease.startDate)),
+                _RowKV(label: 'End date', value: _fmt(_lease.endDate)),
                 if (_lease.moveInDate != null)
-                  _RowKV(
-                    label: 'Move-in',
-                    value: _fmt(_lease.moveInDate!),
-                  ),
+                  _RowKV(label: 'Move-in', value: _fmt(_lease.moveInDate!)),
                 if (_lease.moveOutDate != null)
-                  _RowKV(
-                    label: 'Move-out',
-                    value: _fmt(_lease.moveOutDate!),
-                  ),
+                  _RowKV(label: 'Move-out', value: _fmt(_lease.moveOutDate!)),
               ],
             ),
             const SizedBox(height: 16),
@@ -499,7 +540,9 @@ class _LeaseAskCard extends StatelessWidget {
           children: [
             Text(
               'Ask This Lease',
-              style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 10),
             TextField(
@@ -578,8 +621,9 @@ class _LeaseDocumentCard extends StatelessWidget {
           children: [
             Text(
               'Lease Agreement',
-              style:
-                  theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 4),
             Text(
@@ -712,8 +756,9 @@ class _LeaseSignatureCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     'E-Signature',
-                    style: theme.textTheme.titleSmall
-                        ?.copyWith(fontWeight: FontWeight.w700),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
                 if (loading)
@@ -725,7 +770,9 @@ class _LeaseSignatureCard extends StatelessWidget {
                 else
                   Container(
                     padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: chip.bg,
                       borderRadius: BorderRadius.circular(20),
@@ -831,13 +878,7 @@ class _LeaseHeaderCard extends StatelessWidget {
                     children: [
                       // Tenant — tappable drill-through to the tenant page.
                       InkWell(
-                        onTap: () => Navigator.of(context).push<void>(
-                          MaterialPageRoute<void>(
-                            builder: (_) => TenantDetailLoaderScreen(
-                              tenantId: lease.tenantId,
-                            ),
-                          ),
-                        ),
+                        onTap: () => _openTenantDetail(context, lease),
                         child: Row(
                           children: [
                             Flexible(
@@ -850,8 +891,11 @@ class _LeaseHeaderCard extends StatelessWidget {
                                 ),
                               ),
                             ),
-                            Icon(Icons.chevron_right,
-                                size: 18, color: colorScheme.onSurfaceVariant),
+                            Icon(
+                              Icons.chevron_right,
+                              size: 18,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
                           ],
                         ),
                       ),
@@ -859,13 +903,8 @@ class _LeaseHeaderCard extends StatelessWidget {
                         const SizedBox(height: 2),
                         // Property/unit — tappable drill-through to the property.
                         InkWell(
-                          onTap: () => Navigator.of(context).push<void>(
-                            MaterialPageRoute<void>(
-                              builder: (_) => PropertyDetailLoaderScreen(
-                                propertyId: lease.propertyId,
-                              ),
-                            ),
-                          ),
+                          onTap: () =>
+                              _openPropertyDetail(context, lease.propertyId),
                           child: Row(
                             children: [
                               Flexible(
@@ -873,12 +912,15 @@ class _LeaseHeaderCard extends StatelessWidget {
                                   '${lease.propertyName}'
                                   '${lease.unitNumber != null ? ' · Unit ${lease.unitNumber}' : ''}',
                                   style: theme.textTheme.bodyMedium?.copyWith(
-                                      color: colorScheme.primary),
+                                    color: colorScheme.primary,
+                                  ),
                                 ),
                               ),
-                              Icon(Icons.chevron_right,
-                                  size: 16,
-                                  color: colorScheme.onSurfaceVariant),
+                              Icon(
+                                Icons.chevron_right,
+                                size: 16,
+                                color: colorScheme.onSurfaceVariant,
+                              ),
                             ],
                           ),
                         ),
@@ -887,8 +929,7 @@ class _LeaseHeaderCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 8),
-                _StatusBadge(
-                    status: lease.status, colorScheme: colorScheme),
+                _StatusBadge(status: lease.status, colorScheme: colorScheme),
               ],
             ),
             const SizedBox(height: 12),
@@ -1019,8 +1060,9 @@ class _SectionCard extends StatelessWidget {
           children: [
             Text(
               title,
-              style: theme.textTheme.titleSmall
-                  ?.copyWith(fontWeight: FontWeight.w700),
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 12),
             ...children,
@@ -1050,14 +1092,17 @@ class _RowKV extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                  fontSize: 13, color: colorScheme.onSurfaceVariant),
+                fontSize: 13,
+                color: colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
           Expanded(
             child: Text(
               value,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],
@@ -1095,8 +1140,7 @@ class _StatusActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final available =
-        _transitions[currentStatus] ?? <String>[];
+    final available = _transitions[currentStatus] ?? <String>[];
 
     if (available.isEmpty && error == null) {
       return const SizedBox.shrink();
@@ -1107,8 +1151,9 @@ class _StatusActions extends StatelessWidget {
       children: [
         Text(
           'Status Actions',
-          style: theme.textTheme.titleSmall
-              ?.copyWith(fontWeight: FontWeight.w700),
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
         ),
         const SizedBox(height: 8),
         if (available.isNotEmpty)
@@ -1164,8 +1209,9 @@ class _LeasePaymentsSection extends ConsumerWidget {
           children: [
             Text(
               'Payments',
-              style: theme.textTheme.titleSmall
-                  ?.copyWith(fontWeight: FontWeight.w700),
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
             async.when(
@@ -1236,11 +1282,13 @@ class _LeasePaymentTile extends ConsumerWidget {
       elevation: 0,
       color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
       child: InkWell(
-        onTap: () => Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-            builder: (_) => PaymentDetailScreen(paymentId: payment.id),
-          ),
-        ),
+        onTap: () {
+          Navigator.of(context).push<void>(
+            MaterialPageRoute<void>(
+              builder: (_) => PaymentDetailScreen(paymentId: payment.id),
+            ),
+          );
+        },
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(12),
@@ -1255,13 +1303,16 @@ class _LeasePaymentTile extends ConsumerWidget {
                       children: [
                         Text(
                           _formatCurrency(payment.amount),
-                          style: theme.textTheme.bodyMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                         const SizedBox(width: 8),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 7, vertical: 3),
+                            horizontal: 7,
+                            vertical: 3,
+                          ),
                           decoration: BoxDecoration(
                             color: statusBg(),
                             borderRadius: BorderRadius.circular(20),
@@ -1282,7 +1333,9 @@ class _LeasePaymentTile extends ConsumerWidget {
                       '${payment.type.isEmpty ? 'Payment' : payment.type}  ·  '
                       'Due ${_fmt(payment.dueDate)}',
                       style: TextStyle(
-                          fontSize: 12, color: cs.onSurfaceVariant),
+                        fontSize: 12,
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -1303,7 +1356,9 @@ class _LeasePaymentTile extends ConsumerWidget {
                     },
                     style: FilledButton.styleFrom(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 6),
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       textStyle: const TextStyle(fontSize: 12),

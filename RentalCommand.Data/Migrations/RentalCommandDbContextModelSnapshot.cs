@@ -1070,6 +1070,171 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable("DeviceTokens");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.DocumentTemplate", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime?>("ArchivedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("CompiledStoredFileId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("DefaultForPortfolio")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("DraftHtml")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<int?>("OriginalStoredFileId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("PropertyId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RenderMode")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CompiledStoredFileId");
+
+                    b.HasIndex("OriginalStoredFileId");
+
+                    b.HasIndex("PortfolioId");
+
+                    b.HasIndex("PropertyId");
+
+                    b.HasIndex("PortfolioId", "Kind", "DefaultForPortfolio");
+
+                    b.HasIndex("PortfolioId", "Kind", "Status");
+
+                    b.ToTable("DocumentTemplates", t =>
+                        {
+                            t.HasCheckConstraint("CK_DocumentTemplate_Version", "\"Version\" >= 1");
+                        });
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.DocumentTemplateField", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("DefaultText")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<int>("DocumentTemplateId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("FieldKey")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<double>("HeightPct")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<bool>("Locked")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("PageNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("Required")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("SignerRole")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<double>("WidthPct")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("XPct")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("YPct")
+                        .HasColumnType("double precision");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DocumentTemplateId");
+
+                    b.HasIndex("DocumentTemplateId", "FieldKey");
+
+                    b.ToTable("DocumentTemplateFields", t =>
+                        {
+                            t.HasCheckConstraint("CK_DocumentTemplateField_HeightPct", "\"HeightPct\" > 0 AND \"HeightPct\" <= 1");
+
+                            t.HasCheckConstraint("CK_DocumentTemplateField_Page", "\"PageNumber\" >= 1");
+
+                            t.HasCheckConstraint("CK_DocumentTemplateField_WidthPct", "\"WidthPct\" > 0 AND \"WidthPct\" <= 1");
+
+                            t.HasCheckConstraint("CK_DocumentTemplateField_XExtent", "\"XPct\" + \"WidthPct\" <= 1");
+
+                            t.HasCheckConstraint("CK_DocumentTemplateField_XPct", "\"XPct\" >= 0 AND \"XPct\" <= 1");
+
+                            t.HasCheckConstraint("CK_DocumentTemplateField_YExtent", "\"YPct\" + \"HeightPct\" <= 1");
+
+                            t.HasCheckConstraint("CK_DocumentTemplateField_YPct", "\"YPct\" >= 0 AND \"YPct\" <= 1");
+                        });
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.EngineWorkerHeartbeat", b =>
                 {
                     b.Property<int>("Id")
@@ -1459,6 +1624,12 @@ namespace RentalCommand.Data.Migrations
                     b.Property<DateTime?>("DeletedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<int?>("DocumentTemplateId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("DocumentTemplateVersion")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime>("EndDate")
                         .HasColumnType("timestamp with time zone");
 
@@ -1533,6 +1704,8 @@ namespace RentalCommand.Data.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("DocumentTemplateId");
 
                     b.HasIndex("EsignEnvelopeId");
 
@@ -3342,6 +3515,12 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(260)
                         .HasColumnType("character varying(260)");
 
+                    b.Property<int?>("DocumentTemplateId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("DocumentTemplateVersion")
+                        .HasColumnType("integer");
+
                     b.Property<int>("LeaseId")
                         .HasColumnType("integer");
 
@@ -3368,7 +3547,12 @@ namespace RentalCommand.Data.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<string>("TemplateFieldSnapshotJson")
+                        .HasColumnType("jsonb");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("DocumentTemplateId");
 
                     b.HasIndex("LeaseId");
 
@@ -4356,6 +4540,49 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Portfolio");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.DocumentTemplate", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.StoredFile", "CompiledStoredFile")
+                        .WithMany()
+                        .HasForeignKey("CompiledStoredFileId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("RentalCommand.Core.Entities.StoredFile", "OriginalStoredFile")
+                        .WithMany()
+                        .HasForeignKey("OriginalStoredFileId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany("DocumentTemplates")
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("RentalCommand.Core.Entities.Property", "Property")
+                        .WithMany()
+                        .HasForeignKey("PropertyId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("CompiledStoredFile");
+
+                    b.Navigation("OriginalStoredFile");
+
+                    b.Navigation("Portfolio");
+
+                    b.Navigation("Property");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.DocumentTemplateField", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.DocumentTemplate", "DocumentTemplate")
+                        .WithMany("Fields")
+                        .HasForeignKey("DocumentTemplateId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("DocumentTemplate");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.Expense", b =>
                 {
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
@@ -4487,6 +4714,11 @@ namespace RentalCommand.Data.Migrations
 
             modelBuilder.Entity("RentalCommand.Core.Entities.Lease", b =>
                 {
+                    b.HasOne("RentalCommand.Core.Entities.DocumentTemplate", "DocumentTemplate")
+                        .WithMany()
+                        .HasForeignKey("DocumentTemplateId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
                         .WithMany("Leases")
                         .HasForeignKey("PortfolioId")
@@ -4510,6 +4742,8 @@ namespace RentalCommand.Data.Migrations
                         .HasForeignKey("UnitId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("DocumentTemplate");
 
                     b.Navigation("Portfolio");
 
@@ -4976,6 +5210,11 @@ namespace RentalCommand.Data.Migrations
 
             modelBuilder.Entity("RentalCommand.Core.Entities.SignatureRequest", b =>
                 {
+                    b.HasOne("RentalCommand.Core.Entities.DocumentTemplate", "DocumentTemplate")
+                        .WithMany()
+                        .HasForeignKey("DocumentTemplateId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("RentalCommand.Core.Entities.Lease", "Lease")
                         .WithMany()
                         .HasForeignKey("LeaseId")
@@ -4998,6 +5237,8 @@ namespace RentalCommand.Data.Migrations
                         .WithMany()
                         .HasForeignKey("SignedStoredFileId")
                         .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("DocumentTemplate");
 
                     b.Navigation("Lease");
 
@@ -5216,6 +5457,11 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Messages");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.DocumentTemplate", b =>
+                {
+                    b.Navigation("Fields");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.Expense", b =>
                 {
                     b.Navigation("LineItems");
@@ -5257,6 +5503,8 @@ namespace RentalCommand.Data.Migrations
             modelBuilder.Entity("RentalCommand.Core.Entities.Portfolio", b =>
                 {
                     b.Navigation("Appointments");
+
+                    b.Navigation("DocumentTemplates");
 
                     b.Navigation("Expenses");
 

@@ -4,6 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { recordHref } from '$lib/navigation/record-href';
 	import { leases } from '$lib/api/endpoints/leases';
+	import { documentTemplates } from '$lib/api/endpoints/document-templates';
 	import {
 		hasNoticeMoveOutDate,
 		resolveLeaseDetailTab,
@@ -46,7 +47,7 @@
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, DollarSign, Users, StickyNote, CalendarRange } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, DollarSign, Users, StickyNote, CalendarRange, Library, ExternalLink } from '@lucide/svelte';
 	import { ApiError } from '$lib/api/client';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
@@ -66,7 +67,20 @@
 		enabled: leaseId > 0,
 	}));
 
+	const leaseTemplatesQuery = createQuery(() => ({
+		queryKey: ['document-templates', 'lease', 'agreement-preview', portfolioId],
+		queryFn: () =>
+			documentTemplates.listPage({
+				kind: 'Lease',
+				sort: '-updatedAt',
+				take: 3,
+			}),
+		enabled: portfolioId > 0,
+	}));
+
 	const lease = $derived(leaseQuery.data);
+	const leaseTemplateCount = $derived(leaseTemplatesQuery.data?.totalCount ?? 0);
+	const leaseTemplatePreview = $derived(leaseTemplatesQuery.data?.items ?? []);
 
 	// Payments for this lease
 	const paymentsQuery = createQuery(() => ({
@@ -811,6 +825,62 @@
 
 			<!-- ───────────────────── AGREEMENT & SIGNING ───────────────────── -->
 			<Tabs.Content value="agreement" class="space-y-6">
+				<Card.Root data-testid="lease-template-availability-card">
+					<Card.Header>
+						<div class="flex flex-wrap items-start justify-between gap-3">
+							<div>
+								<Card.Title class="flex items-center gap-2 text-base">
+									<Library class="h-4 w-4 text-primary" />
+									Custom lease templates
+								</Card.Title>
+								<Card.Description>
+									Use landlord-uploaded PDFs once their dynamic fields have been placed.
+								</Card.Description>
+							</div>
+							<Button href="/lease-templates" variant="outline" size="sm" class="gap-1.5" data-testid="lease-template-library-link">
+								<ExternalLink class="h-4 w-4" />
+								Open library
+							</Button>
+						</div>
+					</Card.Header>
+					<Card.Content>
+						{#if leaseTemplatesQuery.isLoading}
+							<div class="grid gap-2 sm:grid-cols-3" data-testid="lease-template-availability-loading">
+								{#each Array.from({ length: 3 }) as _}
+									<div class="h-16 animate-pulse rounded-md bg-muted/35"></div>
+								{/each}
+							</div>
+						{:else if leaseTemplatesQuery.isError}
+							<p class="text-sm text-muted-foreground" data-testid="lease-template-availability-error">
+								Template library is unavailable right now.
+							</p>
+						{:else if leaseTemplateCount === 0}
+							<p class="text-sm text-muted-foreground" data-testid="lease-template-availability-empty">
+								No custom lease template has been uploaded yet.
+							</p>
+						{:else}
+							<div class="space-y-3" data-testid="lease-template-availability-list">
+								<div class="flex flex-wrap items-center gap-2 text-sm">
+									<span class="font-medium">{leaseTemplateCount} custom lease {leaseTemplateCount === 1 ? 'template' : 'templates'} available</span>
+									<span class="text-muted-foreground">The current generated agreement remains available below.</span>
+								</div>
+								<div class="grid gap-2 sm:grid-cols-3">
+									{#each leaseTemplatePreview as template (template.id)}
+										<div class="rounded-md border border-border bg-muted/20 px-3 py-2">
+											<p class="truncate text-sm font-medium">{template.name}</p>
+											<p class="mt-0.5 text-xs text-muted-foreground">
+												{template.fieldCount === 0
+													? 'No fields placed yet'
+													: `${template.fieldCount} field${template.fieldCount === 1 ? '' : 's'} placed`}
+											</p>
+										</div>
+									{/each}
+								</div>
+							</div>
+						{/if}
+					</Card.Content>
+				</Card.Root>
+
 		<!-- Lease agreement PDF — generate, then download an authed blob -->
 		<Card.Root data-testid="lease-agreement-card">
 			<Card.Header>

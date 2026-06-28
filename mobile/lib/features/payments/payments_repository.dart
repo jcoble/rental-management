@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -141,8 +143,7 @@ class PaymentsRepository {
 
   Future<Payment> getPayment(int id) async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/payments/$id');
+      final response = await _dio.get<Map<String, dynamic>>('/payments/$id');
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -156,11 +157,27 @@ class PaymentsRepository {
     }
   }
 
+  /// Streams the latest uploaded payment scan/receipt bytes. The shared Dio
+  /// auth interceptor attaches the Bearer token.
+  Future<Uint8List> scanBytes(int id) async {
+    try {
+      final response = await _dio.get<List<int>>(
+        '/payments/$id/scan',
+        options: Options(responseType: ResponseType.bytes),
+      );
+      return Uint8List.fromList(response.data ?? const []);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Create body: { leaseId, amount, dueDate (yyyy-MM-dd), type, status }
   Future<Payment> createPayment(Map<String, dynamic> data) async {
     try {
-      final response =
-          await _dio.post<Map<String, dynamic>>('/payments', data: data);
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/payments',
+        data: data,
+      );
       final responseData = response.data;
       if (responseData == null) {
         throw const ApiException(
@@ -231,8 +248,9 @@ class PaymentsRepository {
   /// GET /accounting/summary — JWT-scoped, no portfolioId param needed.
   Future<AccountingSummary> accountingSummary() async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/accounting/summary');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/accounting/summary',
+      );
       final data = response.data;
       if (data == null) {
         throw const ApiException(
@@ -289,10 +307,10 @@ class AccountingSummaryNotifier
   Future<void> refresh() => load();
 }
 
-final accountingSummaryProvider = NotifierProvider<AccountingSummaryNotifier,
-    AsyncValue<AccountingSummary>>(
-  AccountingSummaryNotifier.new,
-);
+final accountingSummaryProvider =
+    NotifierProvider<AccountingSummaryNotifier, AsyncValue<AccountingSummary>>(
+      AccountingSummaryNotifier.new,
+    );
 
 // ── Payments list ─────────────────────────────────────────────────────────────
 
@@ -317,8 +335,7 @@ class PaymentsNotifier extends Notifier<AsyncValue<List<Payment>>> {
   /// Marks a payment as paid and updates the in-memory list.
   Future<void> markPaid(int id) async {
     try {
-      final today =
-          DateTime.now().toIso8601String().split('T').first;
+      final today = DateTime.now().toIso8601String().split('T').first;
       final updated = await _repo.markPaid(id, paidDate: today);
       state.whenData((list) {
         state = AsyncValue.data([
@@ -334,8 +351,8 @@ class PaymentsNotifier extends Notifier<AsyncValue<List<Payment>>> {
 
 final paymentsProvider =
     NotifierProvider<PaymentsNotifier, AsyncValue<List<Payment>>>(
-  PaymentsNotifier.new,
-);
+      PaymentsNotifier.new,
+    );
 
 // ── Payments for a specific lease ─────────────────────────────────────────────
 
@@ -343,10 +360,18 @@ final paymentsProvider =
 /// the lease detail screen (`GET /payments?leaseId=…`). autoDispose so it
 /// refetches whenever the lease screen is reopened, and invalidate-able after an
 /// inline mark-paid.
-final leasePaymentsProvider =
-    FutureProvider.autoDispose.family<List<Payment>, int>((ref, leaseId) {
-  return ref.watch(paymentsRepositoryProvider).listPayments(leaseId: leaseId);
-});
+final leasePaymentsProvider = FutureProvider.autoDispose
+    .family<List<Payment>, int>((ref, leaseId) {
+      return ref
+          .watch(paymentsRepositoryProvider)
+          .listPayments(leaseId: leaseId);
+    });
+
+/// Receipt/scan bytes for a payment, keyed by id.
+final paymentReceiptProvider = FutureProvider.autoDispose
+    .family<Uint8List, int>((ref, id) {
+      return ref.watch(paymentsRepositoryProvider).scanBytes(id);
+    });
 
 // ── Leases (for the create-payment dropdown) ──────────────────────────────────
 
@@ -369,5 +394,5 @@ class LeasesNotifier extends Notifier<AsyncValue<List<Lease>>> {
 
 final leasesForPaymentProvider =
     NotifierProvider<LeasesNotifier, AsyncValue<List<Lease>>>(
-  LeasesNotifier.new,
-);
+      LeasesNotifier.new,
+    );

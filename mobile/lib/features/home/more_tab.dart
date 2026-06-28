@@ -1,47 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
-import '../ai/ai_tab.dart';
-import '../analytics/insights_screen.dart';
-import '../applications/applications_list_screen.dart';
-import '../appointments/appointments_screen.dart';
-import '../banking/banking_screen.dart';
-import '../deposits/deposits_screen.dart';
-import '../inspections/inspections_list_screen.dart';
-import '../leases/leases_list_screen.dart';
-import '../recurring_maintenance/recurring_maintenance_list_screen.dart';
-import '../money/expenses_list_screen.dart';
-import '../notices/notices_screen.dart';
-import '../onboarding/getting_started_screen.dart';
-import '../owner_reports/owner_reports_screen.dart';
-import '../payments/payments_screen.dart';
-import '../properties/properties_tab.dart';
-import '../settings/settings_screen.dart';
-import '../team/team_screen.dart';
-import '../tenants/tenants_list_screen.dart';
-import '../vendors/vendors_list_screen.dart';
-
-/// One browsable destination.
-class _BrowseItem {
-  const _BrowseItem({
-    required this.icon,
-    required this.label,
-    required this.subtitle,
-    required this.builder,
-  });
-
-  final IconData icon;
-  final String label;
-  final String subtitle;
-  final WidgetBuilder builder;
-}
-
-class _BrowseGroup {
-  const _BrowseGroup({required this.title, required this.items});
-
-  final String title;
-  final List<_BrowseItem> items;
-}
+import 'mobile_destination.dart';
 
 /// Grouped, searchable "Browse" screen — the replacement for the flat 17-tile
 /// More list. The Rentals group name is frozen across web + mobile (web nav
@@ -60,157 +20,13 @@ class _MoreTabState extends State<MoreTab> {
   final _searchCtrl = TextEditingController();
   String _query = '';
 
-  static final _groups = <_BrowseGroup>[
-    _BrowseGroup(
-      title: 'Rentals',
-      items: [
-        _BrowseItem(
-          icon: Symbols.rocket_launch_rounded,
-          label: 'Getting started',
-          subtitle: 'Set-up checklist for your rentals',
-          builder: (_) => const GettingStartedScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.apartment_rounded,
-          label: 'Properties',
-          subtitle: 'Buildings, units and details',
-          builder: (_) => const PropertiesTab(),
-        ),
-        _BrowseItem(
-          icon: Symbols.group_rounded,
-          label: 'Tenants',
-          subtitle: 'People and contacts',
-          builder: (_) => const TenantsListScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.description_rounded,
-          label: 'Leases',
-          subtitle: 'Agreements and terms',
-          builder: (_) => const LeasesListScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.assignment_ind_rounded,
-          label: 'Applications',
-          subtitle: 'Review and approve applicants',
-          builder: (_) => const ApplicationsListScreen(),
-        ),
-      ],
-    ),
-    _BrowseGroup(
-      // "Work" is the frozen cross-surface group name (web nav group "Work";
-      // see Docs/label-glossary.md). Was "Operations" on mobile Browse (aligned).
-      title: 'Work',
-      items: [
-        _BrowseItem(
-          icon: Symbols.event_repeat_rounded,
-          label: 'Recurring maintenance',
-          subtitle: 'Scheduled tasks that auto-create work orders',
-          builder: (_) => const RecurringMaintenanceListScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.fact_check_rounded,
-          label: 'Inspections',
-          subtitle: 'Walk units with smart checklists',
-          builder: (_) => const InspectionsListScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.handyman_rounded,
-          label: 'Vendors',
-          subtitle: 'Text jobs, ratings and scorecards',
-          builder: (_) => const VendorsListScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.event_rounded,
-          label: 'Appointments',
-          subtitle: 'Showings and visits',
-          builder: (_) => const AppointmentsScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.mark_email_unread_rounded,
-          label: 'Notices',
-          subtitle: 'Renewal, late rent and move-out drafts',
-          builder: (_) => const NoticesScreen(),
-        ),
-      ],
-    ),
-    _BrowseGroup(
-      title: 'Money',
-      items: [
-        _BrowseItem(
-          icon: Symbols.receipt_long_rounded,
-          label: 'Payments',
-          subtitle: 'Track rent and fees',
-          builder: (_) => const PaymentsScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.shopping_bag_rounded,
-          label: 'Expenses',
-          subtitle: 'Receipts, bills and deductions',
-          builder: (_) => const ExpensesListScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.shield_rounded,
-          label: 'Security deposits',
-          subtitle: 'Holdings, deductions and returns',
-          builder: (_) => const DepositsScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.account_balance_rounded,
-          label: 'Banking',
-          subtitle: 'Reconciliation and matches',
-          builder: (_) => const BankingScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.bar_chart_rounded,
-          label: 'Owner reports',
-          subtitle: 'Annual statements by owner',
-          builder: (_) => const OwnerReportsScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.insights_rounded,
-          label: 'Insights',
-          subtitle: 'Occupancy, collections and trends',
-          builder: (_) => const InsightsScreen(),
-        ),
-      ],
-    ),
-    _BrowseGroup(
-      title: 'AI',
-      items: [
-        _BrowseItem(
-          icon: Symbols.auto_awesome_rounded,
-          label: 'Assistant',
-          subtitle: 'Daily briefing and questions',
-          builder: (_) => const AiTab(),
-        ),
-      ],
-    ),
-    _BrowseGroup(
-      title: 'Admin',
-      items: [
-        _BrowseItem(
-          icon: Symbols.groups_rounded,
-          label: 'Team',
-          subtitle: 'Members, roles and access',
-          builder: (_) => const TeamScreen(),
-        ),
-        _BrowseItem(
-          icon: Symbols.settings_rounded,
-          label: 'Settings',
-          subtitle: 'Notifications and reminders',
-          builder: (_) => const SettingsScreen(),
-        ),
-      ],
-    ),
-  ];
-
   @override
   void dispose() {
     _searchCtrl.dispose();
     super.dispose();
   }
 
-  bool _matches(_BrowseItem item) {
+  bool _matches(MobileDestination item) {
     if (_query.isEmpty) return true;
     final q = _query.toLowerCase();
     return item.label.toLowerCase().contains(q) ||
@@ -223,11 +39,11 @@ class _MoreTabState extends State<MoreTab> {
     final cs = theme.colorScheme;
 
     // Filter groups to those with at least one matching item.
-    final groups = <_BrowseGroup>[];
-    for (final g in _groups) {
-      final items = g.items.where(_matches).toList();
+    final groups = <MobileDestinationGroup>[];
+    for (final g in browseDestinationGroups) {
+      final items = g.destinations.where(_matches).toList();
       if (items.isNotEmpty) {
-        groups.add(_BrowseGroup(title: g.title, items: items));
+        groups.add(MobileDestinationGroup(title: g.title, destinations: items));
       }
     }
 
@@ -259,8 +75,9 @@ class _MoreTabState extends State<MoreTab> {
                 ? Center(
                     child: Text(
                       'No matches for "$_query".',
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(color: cs.onSurfaceVariant),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
                   )
                 : ListView(
@@ -278,15 +95,13 @@ class _MoreTabState extends State<MoreTab> {
                             ),
                           ),
                         ),
-                        for (final item in group.items) ...[
+                        for (final item in group.destinations) ...[
                           _MenuTile(
                             icon: item.icon,
                             label: item.label,
                             subtitle: item.subtitle,
                             color: cs.primary,
-                            onTap: () => Navigator.of(context).push<void>(
-                              MaterialPageRoute<void>(builder: item.builder),
-                            ),
+                            onTap: () => item.open(context),
                           ),
                           const SizedBox(height: 10),
                         ],
@@ -353,8 +168,10 @@ class _MenuTile extends StatelessWidget {
                   ],
                 ),
               ),
-              Icon(Symbols.chevron_right_rounded,
-                  color: colorScheme.onSurfaceVariant),
+              Icon(
+                Symbols.chevron_right_rounded,
+                color: colorScheme.onSurfaceVariant,
+              ),
             ],
           ),
         ),

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/tabbed_form_sheet.dart';
 import '../tenants/tenants_repository.dart';
 import 'message_models.dart';
 import 'message_detail_screen.dart';
@@ -128,7 +129,7 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
       floatingActionButton: tenantMode
           ? null
           : FloatingActionButton(
-        heroTag: 'messages-fab',
+              heroTag: 'messages-fab',
               onPressed: () => _startNewConversation(context),
               tooltip: 'New conversation',
               child: const Icon(Icons.edit_outlined),
@@ -486,153 +487,105 @@ class _ComposeConversationSheetState
   @override
   Widget build(BuildContext context) {
     final tenantsAsync = ref.watch(tenantsProvider);
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
+    final colorScheme = Theme.of(context).colorScheme;
+    const gap = SizedBox(height: 12);
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
-      child: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Header
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'New Conversation',
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+    return Form(
+      key: _formKey,
+      child: TabbedFormSheet(
+        title: 'New Conversation',
+        saveLabel: 'Send',
+        saving: _saving,
+        error: _error,
+        onSave: _submit,
+        tabs: [
+          TabbedFormStepSpec(
+            label: 'Message',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                tenantsAsync.when(
+                  loading: () => const Center(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: CircularProgressIndicator(),
                     ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
+                  error: (e, _) => Text(
+                    'Could not load tenants: ${e is ApiException ? e.message : e}',
+                    style: TextStyle(color: colorScheme.error, fontSize: 13),
                   ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              // Tenant picker
-              tenantsAsync.when(
-                loading: () => const Center(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: CircularProgressIndicator(),
-                  ),
-                ),
-                error: (e, _) => Text(
-                  'Could not load tenants: ${e is ApiException ? e.message : e}',
-                  style: TextStyle(color: colorScheme.error, fontSize: 13),
-                ),
-                data: (tenants) => DropdownButtonFormField<int>(
-                  initialValue: _selectedTenantId,
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'To (tenant)'),
-                  items: tenants
-                      .map(
-                        (t) => DropdownMenuItem(
-                          value: t.id,
-                          child: Text(
-                            _tenantDisplayName(t),
-                            overflow: TextOverflow.ellipsis,
+                  data: (tenants) => DropdownButtonFormField<int>(
+                    initialValue: _selectedTenantId,
+                    isExpanded: true,
+                    decoration: const InputDecoration(labelText: 'To (tenant)'),
+                    items: tenants
+                        .map(
+                          (t) => DropdownMenuItem(
+                            value: t.id,
+                            child: Text(
+                              _tenantDisplayName(t),
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) => setState(() => _selectedTenantId = v),
-                  validator: (v) => v == null ? 'Please choose a tenant' : null,
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // Subject
-              TextFormField(
-                controller: _subjectCtrl,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(labelText: 'Subject'),
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? 'Subject is required'
-                    : null,
-              ),
-              const SizedBox(height: 12),
-
-              // First message
-              TextFormField(
-                controller: _bodyCtrl,
-                maxLines: 4,
-                minLines: 2,
-                textInputAction: TextInputAction.newline,
-                decoration: const InputDecoration(
-                  labelText: 'Message',
-                  alignLabelWithHint: true,
-                ),
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? 'Message is required'
-                    : null,
-              ),
-              const SizedBox(height: 16),
-
-              // Channels
-              Text(
-                'Send via',
-                style: theme.textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 8),
-              _ChannelChips(
-                portal: _portal,
-                email: _email,
-                sms: _sms,
-                onPortal: (v) => setState(() => _portal = v),
-                onEmail: (v) => setState(() => _email = v),
-                onSms: (v) => setState(() => _sms = v),
-              ),
-
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
+                        )
+                        .toList(),
+                    onChanged: (v) => setState(() => _selectedTenantId = v),
+                    validator: (v) =>
+                        v == null ? 'Please choose a tenant' : null,
                   ),
-                  decoration: BoxDecoration(
-                    color: colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(8),
+                ),
+                gap,
+                TextFormField(
+                  controller: _subjectCtrl,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(labelText: 'Subject'),
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? 'Subject is required'
+                      : null,
+                ),
+                gap,
+                TextFormField(
+                  controller: _bodyCtrl,
+                  maxLines: 4,
+                  minLines: 2,
+                  textInputAction: TextInputAction.newline,
+                  decoration: const InputDecoration(
+                    labelText: 'Message',
+                    alignLabelWithHint: true,
                   ),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                      color: colorScheme.onErrorContainer,
-                      fontSize: 13,
-                    ),
-                  ),
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? 'Message is required'
+                      : null,
                 ),
               ],
-
-              const SizedBox(height: 20),
-
-              FilledButton.icon(
-                onPressed: _saving ? null : _submit,
-                icon: _saving
-                    ? const SizedBox(
-                        height: 18,
-                        width: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.send, size: 18),
-                label: const Text('Send'),
-              ),
-            ],
+            ),
           ),
-        ),
+          TabbedFormStepSpec(
+            label: 'Channels',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Send via',
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _ChannelChips(
+                  portal: _portal,
+                  email: _email,
+                  sms: _sms,
+                  onPortal: (v) => setState(() => _portal = v),
+                  onEmail: (v) => setState(() => _email = v),
+                  onSms: (v) => setState(() => _sms = v),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

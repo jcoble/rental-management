@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../units/unit_command_center_screen.dart';
+import '../units/unit_navigation.dart';
 import 'application_detail_screen.dart';
 import 'applications_models.dart';
 import 'applications_repository.dart';
@@ -28,6 +30,17 @@ class _ApplicationsListScreenState
       ref.invalidate(applicationsProvider(_statusFilter));
 
   void _openDetail(RentalApplication app) {
+    final unitId = app.unitId;
+    if (unitId != null) {
+      openUnitCommandCenter(
+        context,
+        unitId: unitId,
+        initialTab: UnitCommandCenterTab.applications,
+        application: app,
+      );
+      return;
+    }
+
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => ApplicationDetailScreen(applicationId: app.id),
@@ -47,9 +60,9 @@ class _ApplicationsListScreenState
       );
     } on ApiException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message)),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } finally {
       if (mounted) setState(() => _sharing = false);
     }
@@ -86,8 +99,7 @@ class _ApplicationsListScreenState
             child: RefreshIndicator(
               onRefresh: _refresh,
               child: applicationsAsync.when(
-                loading: () =>
-                    const Center(child: CircularProgressIndicator()),
+                loading: () => const Center(child: CircularProgressIndicator()),
                 error: (e, _) => _ErrorBody(
                   message: e is ApiException ? e.message : e.toString(),
                   onRetry: _refresh,
@@ -216,8 +228,9 @@ class _ApplicationCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       app.fullName,
-                      style: theme.textTheme.titleSmall
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -227,21 +240,26 @@ class _ApplicationCard extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 appliedFor.toString(),
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: cs.onSurfaceVariant),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
               ),
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Icon(Icons.schedule_outlined,
-                      size: 14, color: cs.onSurfaceVariant),
+                  Icon(
+                    Icons.schedule_outlined,
+                    size: 14,
+                    color: cs.onSurfaceVariant,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     app.submittedAtUtc != null
                         ? 'Submitted ${formatApplicationDate(app.submittedAtUtc!.toLocal())}'
                         : 'Not yet submitted',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: cs.onSurfaceVariant),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
                   ),
                   const Spacer(),
                   if (app.monthlyIncome != null)
@@ -284,8 +302,9 @@ class _ShareLinkDialog extends StatelessWidget {
           Text(
             'Share this link with applicants. They can fill out the '
             'application on the web.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: cs.onSurfaceVariant),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: cs.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 12),
           Container(
@@ -335,8 +354,9 @@ class _EmptyBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label =
-        filter == null ? '' : ' with status "${friendlyApplicationStatus(filter!)}"';
+    final label = filter == null
+        ? ''
+        : ' with status "${friendlyApplicationStatus(filter!)}"';
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       children: [
@@ -344,21 +364,26 @@ class _EmptyBody extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(24, 80, 24, 24),
           child: Column(
             children: [
-              Icon(Icons.inbox_outlined,
-                  size: 40, color: Theme.of(context).colorScheme.onSurfaceVariant),
+              Icon(
+                Icons.inbox_outlined,
+                size: 40,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
               const SizedBox(height: 12),
               Text(
                 'No applications$label yet.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
               const SizedBox(height: 6),
               Text(
                 'Share the application link to invite applicants.',
                 textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
             ],
           ),
@@ -387,9 +412,11 @@ class _ErrorBody extends StatelessWidget {
             children: [
               Icon(Icons.error_outline, size: 40, color: cs.error),
               const SizedBox(height: 12),
-              Text(message,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: cs.error)),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: cs.error),
+              ),
               const SizedBox(height: 16),
               FilledButton.tonal(
                 onPressed: onRetry,

@@ -34,7 +34,8 @@
 		Contact,
 		BookOpen,
 		HelpCircle,
-		Activity
+		Activity,
+		Upload
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -123,6 +124,7 @@
 				{ href: '/units', label: 'Units', icon: Home, roles: ['Admin', 'Manager', 'Agent'] },
 				{ href: '/tenants', label: 'Tenants', icon: Users, roles: ['Admin', 'Manager', 'Agent'] },
 				{ href: '/leases', label: 'Leases', icon: FileText, roles: ['Admin', 'Manager', 'Agent'] },
+				{ href: '/lease-templates', label: 'Lease Templates', icon: Upload, roles: ['Admin', 'Manager', 'Agent'] },
 				{ href: '/applications', label: 'Applications', icon: ClipboardList, roles: ['Admin', 'Manager', 'Agent'] }
 			]
 		},
@@ -186,6 +188,7 @@
 		'/units': 'home',
 		'/tenants': 'group',
 		'/leases': 'description',
+		'/lease-templates': 'upload_file',
 		'/applications': 'assignment',
 		'/maintenance': 'build',
 		'/appointments': 'event',
