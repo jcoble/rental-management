@@ -453,6 +453,11 @@ public class LeaseService : ILeaseService
             q = q.Where(l => l.PropertyId == query.PropertyId.Value);
         }
 
+        if (query.UnitId.HasValue)
+        {
+            q = q.Where(l => l.UnitId == query.UnitId.Value);
+        }
+
         if (query.Status.HasValue)
         {
             q = q.Where(l => l.Status == query.Status.Value);

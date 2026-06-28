@@ -16,4 +16,13 @@ describe('unit lease tab create action', () => {
 		assert.match(source, /unitId:\s*String\(dashboard\.unit\.id\)/);
 		assert.doesNotMatch(source, /Emergency contact/);
 	});
+
+	it('loads unit-scoped lease history so prior leases stay selectable', () => {
+		assert.match(source, /queryKey:\s*\['unit-leases',\s*portfolioId,\s*dashboard\.unit\.id\]/);
+		assert.match(source, /leases\.listPage\(portfolioId,\s*\{/);
+		assert.match(source, /unitId:\s*dashboard\.unit\.id/);
+		assert.match(source, /sort:\s*'-startDate'/);
+		assert.match(source, /data-testid="unit-lease-history"/);
+		assert.match(source, /data-testid=\{`unit-lease-history-item-\$\{lease\.id\}`\}/);
+	});
 });

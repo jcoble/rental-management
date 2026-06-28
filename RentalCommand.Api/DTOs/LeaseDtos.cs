@@ -147,6 +147,7 @@ public class LeaseListQuery : ListQuery
 {
     public int? TenantId { get; set; }
     public int? PropertyId { get; set; }
+    public int? UnitId { get; set; }
     public LeaseStatus? Status { get; set; }
 }
 

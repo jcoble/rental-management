@@ -4,8 +4,9 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { leases } from '$lib/api/endpoints/leases';
 	import { tenants } from '$lib/api/endpoints/tenants';
-	import type { UnitDashboard } from '$lib/types';
+	import type { Lease, UnitDashboard } from '$lib/types';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import LeaseDetail from '$lib/components/records/LeaseDetail.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
 	import TenantMultiSelect from '$lib/components/forms/TenantMultiSelect.svelte';
@@ -17,6 +18,7 @@
 	import { LEASE_STATUSES } from '$lib/leases/lease-list-state';
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatDateOnly } from '$lib/utils/date';
 	import {
 		buildSimpleTenantPayload,
 		createSimpleTenantForm,
@@ -49,7 +51,17 @@
 		queryFn: () => tenants.list(portfolioId, { take: 200, sort: 'name' }),
 	}));
 
+	const unitLeasesQuery = createQuery(() => ({
+		queryKey: ['unit-leases', portfolioId, dashboard.unit.id],
+		queryFn: () => leases.listPage(portfolioId, {
+			unitId: dashboard.unit.id,
+			take: 50,
+			sort: '-startDate',
+		}),
+	}));
+
 	const unitLabel = $derived(`${dashboard.propertyName} · Unit ${dashboard.unit.unitNumber}`);
+	const unitLeases = $derived(unitLeasesQuery.data?.items ?? []);
 
 	// Which lease to show: an explicit ?lease=<id> (e.g. a prior lease) wins, otherwise the
 	// unit's current lease. Inner lease tabs live in LeaseDetail's local state, so they never
@@ -69,6 +81,28 @@
 			keepFocus: true,
 			noScroll: true,
 		});
+	}
+
+	function selectLease(leaseId: number) {
+		goto(`/units/${dashboard.unit.id}?tab=lease&lease=${leaseId}`, {
+			replaceState: true,
+			keepFocus: true,
+			noScroll: true,
+		});
+	}
+
+	function leaseLabel(lease: Lease): string {
+		return lease.leaseNumber?.trim() || `Lease #${lease.id}`;
+	}
+
+	function leaseTenantLabel(lease: Lease): string {
+		if (lease.tenantName?.trim()) return lease.tenantName;
+		const tenantNames = lease.tenants?.map((tenant) => tenant.name).filter(Boolean) ?? [];
+		return tenantNames.length > 0 ? tenantNames.join(', ') : 'No tenant name';
+	}
+
+	function leaseTermLabel(lease: Lease): string {
+		return `${formatDateOnly(lease.startDate)} - ${formatDateOnly(lease.endDate)}`;
 	}
 
 	function clearLeaseError(field: string) {
@@ -207,6 +241,7 @@
 			showSuccess('Lease created.');
 			closeCreateLease();
 			queryClient.invalidateQueries({ queryKey: ['unit-dashboard', dashboard.unit.id] });
+			queryClient.invalidateQueries({ queryKey: ['unit-leases', portfolioId, dashboard.unit.id] });
 			queryClient.invalidateQueries({ queryKey: ['leases', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['units'] });
 			queryClient.invalidateQueries({ queryKey: ['properties'] });
@@ -272,7 +307,14 @@
 				<ArrowLeft class="h-4 w-4" /> Back to current lease
 			</Button>
 		{/if}
-		<LeaseDetail leaseId={selectedLeaseId} onDeleted={clearSelection} />
+		<LeaseDetail
+			leaseId={selectedLeaseId}
+			onDeleted={() => {
+				queryClient.invalidateQueries({ queryKey: ['unit-dashboard', dashboard.unit.id] });
+				queryClient.invalidateQueries({ queryKey: ['unit-leases', portfolioId, dashboard.unit.id] });
+				clearSelection();
+			}}
+		/>
 	{:else}
 		<DetailCard title="No current lease" icon={FileText} accent="muted" testid="lease-empty">
 			<p class="text-sm text-muted-foreground">
@@ -288,6 +330,51 @@
 		<Button variant="outline" class="gap-2" onclick={() => onScan()} data-testid="lease-scan">
 			<ScanLine class="h-4 w-4" /> Scan / upload lease
 		</Button>
+	</div>
+
+	<div class="rounded-lg border border-border bg-card p-4" data-testid="unit-lease-history">
+		<div class="flex flex-wrap items-start justify-between gap-2">
+			<div>
+				<h3 class="text-base font-semibold">Lease history</h3>
+				<p class="text-sm text-muted-foreground">Past and current leases attached to this unit.</p>
+			</div>
+			{#if unitLeasesQuery.isFetching}
+				<span class="text-xs text-muted-foreground">Loading...</span>
+			{:else if unitLeases.length > 0}
+				<span class="text-xs text-muted-foreground">{unitLeases.length} {unitLeases.length === 1 ? 'lease' : 'leases'}</span>
+			{/if}
+		</div>
+
+		{#if unitLeasesQuery.isError}
+			<p class="mt-3 text-sm text-destructive">Lease history could not be loaded.</p>
+		{:else if unitLeases.length === 0 && !unitLeasesQuery.isLoading}
+			<p class="mt-3 text-sm text-muted-foreground">No lease history yet.</p>
+		{:else}
+			<div class="mt-3 divide-y divide-border" role="list">
+				{#each unitLeases as lease (lease.id)}
+					<button
+						type="button"
+						class={`grid w-full gap-2 py-3 text-left transition hover:bg-muted/40 sm:grid-cols-[minmax(0,1fr)_auto] ${lease.id === selectedLeaseId ? 'bg-muted' : ''}`}
+						aria-current={lease.id === selectedLeaseId ? 'true' : undefined}
+						onclick={() => selectLease(lease.id)}
+						data-testid={`unit-lease-history-item-${lease.id}`}
+					>
+						<span class="min-w-0">
+							<span class="block truncate font-medium">{leaseLabel(lease)}</span>
+							<span class="block truncate text-sm text-muted-foreground">
+								{leaseTenantLabel(lease)} · {leaseTermLabel(lease)}
+							</span>
+						</span>
+						<span class="flex shrink-0 items-center gap-2">
+							<StatusBadge status={lease.status} />
+							<span class="text-sm font-medium tabular-nums">
+								{new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(lease.monthlyRent)}
+							</span>
+						</span>
+					</button>
+				{/each}
+			</div>
+		{/if}
 	</div>
 </div>
 

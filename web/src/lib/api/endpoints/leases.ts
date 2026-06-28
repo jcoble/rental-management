@@ -60,6 +60,10 @@ export interface LeaseSignatureQueueItemResponse {
 export interface LeaseListParams extends ListParams {
 	tenantId?: number;
 	propertyId?: number;
+}
+
+export interface LeaseListPageParams extends LeaseListParams {
+	unitId?: number;
 	status?: string;
 }
 
@@ -75,10 +79,10 @@ export const leases = {
 		const { tenantId, propertyId, ...list } = params ?? {};
 		return api.get<Lease[]>(`/leases${buildListQuery(list, { portfolioId, tenantId, propertyId })}`);
 	},
-	listPage: (portfolioId: number, params?: LeaseListParams) => {
-		const { tenantId, propertyId, status, ...list } = params ?? {};
+	listPage: (portfolioId: number, params?: LeaseListPageParams) => {
+		const { tenantId, propertyId, unitId, status, ...list } = params ?? {};
 		return api.get<LeaseListResponse>(
-			`/leases/page${buildListQuery(list, { portfolioId, tenantId, propertyId, status })}`
+			`/leases/page${buildListQuery(list, { portfolioId, tenantId, propertyId, unitId, status })}`
 		);
 	},
 	get: (id: number) => api.get<Lease>(`/leases/${id}`),
