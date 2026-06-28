@@ -27,6 +27,7 @@
 		dispatchVendorBlockReason,
 		formatStatusTransitionCopy,
 		shouldShowActiveDispatchHint,
+		workOrderStatusActionTargets,
 	} from '$lib/maintenance/work-order-dispatch';
 
 	let { workOrderId, onDeleted }: { workOrderId: number; onDeleted: () => void } = $props();
@@ -35,16 +36,6 @@
 	const portfolioId = $derived(getCurrentPortfolioId());
 
 	const WO_PRIORITIES = ['Low', 'Normal', 'High', 'Emergency'];
-
-	// Status transitions: map current status → allowed next statuses
-	const STATUS_TRANSITIONS: Record<string, string[]> = {
-		New: ['Scheduled', 'InProgress', 'Cancelled'],
-		Scheduled: ['InProgress', 'WaitingParts', 'Cancelled'],
-		InProgress: ['WaitingParts', 'Completed', 'Cancelled'],
-		WaitingParts: ['InProgress', 'Completed', 'Cancelled'],
-		Completed: [],
-		Cancelled: ['New'],
-	};
 
 	const workOrderQuery = createQuery(() => ({
 		queryKey: ['work-order', workOrderId],
@@ -265,7 +256,7 @@
 	}
 
 	const availableTransitions = $derived(
-		wo ? (STATUS_TRANSITIONS[wo.status] ?? []) : []
+		wo ? workOrderStatusActionTargets(wo.status) : []
 	);
 
 	function formatCurrency(val: number | undefined | null): string {
@@ -498,12 +489,12 @@
 			{/if}
 		</DetailCard>
 
-		<!-- Status history timeline -->
+		<!-- Status timeline -->
 		<Card.Root class="mt-6" data-testid="work-order-detail-timeline">
 			<Card.Header>
 				<Card.Title class="flex items-center gap-2 text-base">
 					<History class="h-4 w-4 text-muted-foreground" />
-					Status history
+					Status timeline
 				</Card.Title>
 			</Card.Header>
 			<Card.Content>
