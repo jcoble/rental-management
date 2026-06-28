@@ -66,6 +66,36 @@ public class LeaseServiceListTests : IDisposable
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task ListPageAsync_UnitIdFilter_ReturnsUnitLeaseHistoryDbSide()
+    {
+        var sharedUnit = SeedLeaseHistoryUnit();
+        var otherUnit = SeedLeaseHistoryUnit("202");
+        SeedLease(sharedUnit, "L-OLD", "Avery", "Ellis", LeaseStatus.Expired, new DateTime(2024, 1, 1), new DateTime(2024, 12, 31));
+        SeedLease(sharedUnit, "L-NEW", "Blair", "Kline", LeaseStatus.Active, new DateTime(2025, 1, 1), new DateTime(2025, 12, 31));
+        SeedLease(otherUnit, "L-OTHER", "Casey", "Moss", LeaseStatus.Active, new DateTime(2025, 1, 1), new DateTime(2025, 12, 31));
+
+        _commands.Clear();
+        var result = await _sut.ListPageAsync(PortfolioId, new LeaseListQuery
+        {
+            UnitId = sharedUnit.Id,
+            Sort = "-startDate",
+            Take = 20,
+        });
+
+        result.TotalCount.Should().Be(2);
+        result.Items.Select(l => l.LeaseNumber).Should().Equal("L-NEW", "L-OLD");
+        result.Items.Should().OnlyContain(l => l.UnitId == sharedUnit.Id);
+
+        _commands.Should().Contain(sql =>
+            sql.Contains("COUNT", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"UnitId\"", StringComparison.OrdinalIgnoreCase));
+        _commands.Should().Contain(sql =>
+            sql.Contains("ORDER BY", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("\"StartDate\"", StringComparison.OrdinalIgnoreCase) &&
+            sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase));
+    }
+
     private void SeedLease(string leaseNumber, string firstName, string lastName, LeaseStatus status)
     {
         var now = DateTime.UtcNow;
@@ -107,6 +137,64 @@ public class LeaseServiceListTests : IDisposable
             Status = status,
             StartDate = now.Date,
             EndDate = now.Date.AddYears(1),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
+    }
+
+    private Unit SeedLeaseHistoryUnit(string unitNumber = "101")
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = $"History Property {unitNumber}",
+            AddressLine1 = "100 History Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = unitNumber,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+        _ctx.Db.Units.Add(unit);
+        _ctx.Db.SaveChanges();
+        return unit;
+    }
+
+    private void SeedLease(Unit unit, string leaseNumber, string firstName, string lastName, LeaseStatus status, DateTime startDate, DateTime endDate)
+    {
+        var now = DateTime.UtcNow;
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = firstName,
+            LastName = lastName,
+            Email = $"{firstName.ToLowerInvariant()}@example.local",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+
+        _ctx.Db.Leases.Add(new Lease
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = unit.PropertyId,
+            UnitId = unit.Id,
+            Tenant = tenant,
+            LeaseNumber = leaseNumber,
+            Status = status,
+            StartDate = startDate,
+            EndDate = endDate,
             MonthlyRent = 1200m,
             SecurityDeposit = 1200m,
             CreatedAt = now,
