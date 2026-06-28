@@ -46,7 +46,7 @@
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, Building2, DollarSign, Users, StickyNote, CalendarRange } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, DollarSign, Users, StickyNote, CalendarRange } from '@lucide/svelte';
 	import { ApiError } from '$lib/api/client';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
