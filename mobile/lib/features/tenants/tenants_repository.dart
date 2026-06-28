@@ -9,6 +9,7 @@ import '../../core/models/models.dart';
 ///
 /// Endpoints used:
 ///   GET    /tenants            — list all tenants (JWT-scoped, portfolio from claim)
+///   GET    /tenants/page       — paged/filterable tenant list
 ///   GET    /tenants/{id}       — single tenant
 ///   POST   /tenants            — create tenant
 ///   PATCH  /tenants/{id}       — update tenant (partial)
@@ -23,6 +24,27 @@ class TenantsRepository {
     try {
       final response = await _dio.get<List<dynamic>>('/tenants');
       final data = response.data ?? [];
+      return data
+          .whereType<Map<String, dynamic>>()
+          .map(Tenant.fromJson)
+          .toList();
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
+  Future<List<Tenant>> listAvailableForLeaseTenants({int take = 200}) async {
+    try {
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/tenants/page',
+        queryParameters: {
+          'take': take,
+          'sort': 'name',
+          'availableForLease': true,
+        },
+      );
+      final items = response.data?['items'];
+      final data = items is List ? items : const [];
       return data
           .whereType<Map<String, dynamic>>()
           .map(Tenant.fromJson)
@@ -127,6 +149,13 @@ final tenantsProvider =
     NotifierProvider<TenantsNotifier, AsyncValue<List<Tenant>>>(
   TenantsNotifier.new,
 );
+
+final availableForLeaseTenantsProvider =
+    FutureProvider.autoDispose<List<Tenant>>((ref) {
+      return ref
+          .watch(tenantsRepositoryProvider)
+          .listAvailableForLeaseTenants();
+    });
 
 // ── Single tenant ─────────────────────────────────────────────────────────────
 

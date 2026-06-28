@@ -8,6 +8,7 @@ import 'package:rental_command/core/models/models.dart';
 import 'package:rental_command/features/leases/lease_form_defaults.dart';
 import 'package:rental_command/features/leases/leases_repository.dart';
 import 'package:rental_command/features/payments/payments_repository.dart';
+import 'package:rental_command/features/tenants/tenants_repository.dart';
 import 'package:rental_command/features/units/unit_command_center_screen.dart';
 import 'package:rental_command/features/units/units_repository.dart';
 
@@ -41,6 +42,7 @@ void main() {
           paymentsRepositoryProvider.overrideWithValue(
             _FakePaymentsRepository(),
           ),
+          tenantsRepositoryProvider.overrideWithValue(_FakeTenantsRepository()),
         ],
         child: MaterialApp(
           home: UnitCommandCenterScreen(
@@ -62,6 +64,7 @@ void main() {
     expect(find.text('New Lease'), findsOneWidget);
     expect(find.text('Maple Ridge'), findsAtLeastNWidgets(1));
     expect(find.text('Unit 4B'), findsAtLeastNWidgets(1));
+    expect(find.text('Avery Available'), findsOneWidget);
   });
 }
 
@@ -164,4 +167,28 @@ class _FakePaymentsRepository extends PaymentsRepository {
 
   @override
   Future<Uint8List> scanBytes(int id) async => Uint8List(0);
+}
+
+class _FakeTenantsRepository extends TenantsRepository {
+  _FakeTenantsRepository() : super(Dio());
+
+  @override
+  Future<List<Tenant>> listTenants() async {
+    throw StateError('Add Lease should load lease-available tenants.');
+  }
+
+  @override
+  Future<List<Tenant>> listAvailableForLeaseTenants({int take = 200}) async {
+    return [
+      Tenant(
+        id: 3,
+        portfolioId: 1,
+        firstName: 'Avery',
+        lastName: 'Available',
+        email: 'avery@example.test',
+        createdAt: DateTime(2026),
+        updatedAt: DateTime(2026),
+      ),
+    ];
+  }
 }
