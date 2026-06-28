@@ -20,7 +20,6 @@
 		Shield,
 		LogOut,
 		ChevronDown,
-		ChevronRight,
 		Menu,
 		X,
 		History,
@@ -49,6 +48,8 @@
 	} from '$lib/components/ui/dropdown-menu';
 	import PortfolioSelector from '$lib/components/shared/PortfolioSelector.svelte';
 	import NotificationBell from '$lib/components/notifications/NotificationBell.svelte';
+	import M3NavGroup from '$lib/components/m3/NavGroup.svelte';
+	import M3NavItem from '$lib/components/m3/NavItem.svelte';
 	import MaterialSymbol from '$lib/components/m3/MaterialSymbol.svelte';
 	import CommandCenterNav from '$lib/components/CommandCenterNav.svelte';
 	import { clearAuthState } from '$lib/stores/auth.svelte';
@@ -94,10 +95,10 @@
 	};
 
 	// Pinned single links above all groups (IA Wave 1 §4.2): the dashboard + the flagship
-	// "Scan / Add" action, one tap away and outside any group.
+	// "Scan / Edit" action, one tap away and outside any group.
 	const pinnedNavItems: NavItem[] = [
 		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
-		{ href: '/scan', label: 'Scan / Add', icon: ScanLine, roles: ['Admin', 'Manager', 'Agent'] }
+		{ href: '/scan', label: 'Scan / Edit', icon: ScanLine, roles: ['Admin', 'Manager', 'Agent'] }
 	];
 
 	// Grouped navigation (IA Wave 1 §4.2): four landlord-noun groups in frequency order —
@@ -231,6 +232,7 @@
 	const portalUtilityItems: NavItem[] = [
 		{ href: '/portal/security', label: 'Security', icon: Shield }
 	];
+	const commandCenterTitleItem: NavItem = { href: '/units/', label: 'Command Center', icon: Home };
 
 	function itemVisible(item: NavItem): boolean {
 		if (!item.roles || item.roles.length === 0) return true;
@@ -244,10 +246,10 @@
 			.filter((g) => g.items.length > 0)
 	);
 
-	// Pinned single links (Dashboard, Scan / Add) above the groups.
+	// Pinned single links (Dashboard, Scan / Edit) above the groups.
 	let visiblePinned = $derived.by(() => pinnedNavItems.filter(itemVisible));
 
-	// Command Center (the per-unit drill-down) is surfaced as its own pinned entry below Scan / Add;
+	// Command Center (the per-unit drill-down) is surfaced as its own pinned entry below Scan / Edit;
 	// staff-only, gated to the same roles as the Units nav item.
 	let canSeeCommandCenter = $derived(hasRole(currentUser, 'Admin', 'Manager', 'Agent'));
 
@@ -264,22 +266,28 @@
 	let allItems = $derived.by(() =>
 		portalUser
 			? [...portalNavItems, ...portalUtilityItems]
-			: [
-					...visiblePinned,
-					...visibleGroups.flatMap((g) => g.items),
-					...visibleBottomRail,
-					...(visibleSettingsGroup?.items ?? [])
+				: [
+						...visiblePinned,
+						...(canSeeCommandCenter ? [commandCenterTitleItem] : []),
+						...visibleGroups.flatMap((g) => g.items),
+						...visibleBottomRail,
+						...(visibleSettingsGroup?.items ?? [])
 				]
 	);
 
 	function isActive(href: string): boolean {
 		const currentPath = page.url.pathname;
 		if (href === '/') return currentPath === '/';
+		if (href === '/units') return currentPath === '/units';
 		return currentPath.startsWith(href);
 	}
 
 	function groupHasActive(group: NavGroup): boolean {
 		return group.items.some((i) => isActive(i.href));
+	}
+
+	function commandCenterHasActive(): boolean {
+		return page.url.pathname.startsWith('/units/');
 	}
 
 	// --- Collapsible group open/closed state (remembered) -----------------------
@@ -320,12 +328,19 @@
 		const next = { ...current };
 		let changed = false;
 		const groupsForState = visibleSettingsGroup ? [...visibleGroups, visibleSettingsGroup] : visibleGroups;
-		const activeGroup = groupsForState.find((g) => groupHasActive(g));
-		if (activeGroup) {
-			for (const g of groupsForState) {
-				const shouldOpen = g.id === activeGroup.id;
-				if ((next[g.id] ?? false) !== shouldOpen) {
-					next[g.id] = shouldOpen;
+		const groupIdsForState = [
+			...groupsForState.map((g) => g.id),
+			...(canSeeCommandCenter ? ['command-center'] : [])
+		];
+		const activeGroupId =
+			canSeeCommandCenter && commandCenterHasActive()
+				? 'command-center'
+				: groupsForState.find((g) => groupHasActive(g))?.id;
+		if (activeGroupId) {
+			for (const id of groupIdsForState) {
+				const shouldOpen = id === activeGroupId;
+				if ((next[id] ?? false) !== shouldOpen) {
+					next[id] = shouldOpen;
 					changed = true;
 				}
 			}
@@ -335,11 +350,7 @@
 
 	// Accordion: only one group open at a time. Opening a group closes every other group; clicking
 	// the open group's header just closes it. Persisted so the choice survives reloads.
-	function toggleGroup(id: string) {
-		const willOpen = !openGroups[id];
-		const next: Record<string, boolean> = {};
-		for (const key of Object.keys(openGroups)) next[key] = false;
-		next[id] = willOpen;
+	function writeOpenGroups(next: Record<string, boolean>) {
 		openGroups = next;
 		if (browser) {
 			try {
@@ -348,6 +359,39 @@
 				/* storage may be unavailable */
 			}
 		}
+	}
+
+	function toggleGroup(id: string) {
+		const willOpen = !openGroups[id];
+		const next: Record<string, boolean> = {};
+		for (const key of Object.keys(openGroups)) next[key] = false;
+		next[id] = willOpen;
+		writeOpenGroups(next);
+	}
+
+	function openOnlyGroup(id: string) {
+		const next: Record<string, boolean> = {};
+		for (const key of Object.keys(openGroups)) next[key] = false;
+		next[id] = true;
+		writeOpenGroups(next);
+	}
+
+	function setGroupOpen(id: string, open: boolean) {
+		if (open) {
+			openOnlyGroup(id);
+			return;
+		}
+		writeOpenGroups({ ...openGroups, [id]: false });
+	}
+
+	function expandCollapsedGroup(id: string) {
+		sidebarCollapsed = false;
+		openOnlyGroup(id);
+	}
+
+	function navTestId(href: string): string {
+		const path = href.split('?')[0].replace(/^\/+/, '').replaceAll('/', '-');
+		return `nav-${path || 'dashboard'}`;
 	}
 
 	// Title shown in the mobile top bar — the label of the deepest matching nav item.
@@ -437,78 +481,99 @@
 {#snippet navLink(item: NavItem)}
 	{@const active = isActive(item.href)}
 	{@const glyph = navGlyphByHref[item.href]}
-	<a
+	<M3NavItem
 		href={item.href}
+		label={item.label}
+		active={active}
+		tone={active ? 'primary' : 'neutral'}
+		variant={item.href === '/' || item.href === '/scan' ? 'surface' : 'plain'}
+		class={item.href === '/' || item.href === '/scan' ? 'mb-2' : 'min-h-9 py-1.5'}
 		onclick={handleNavClick}
-		class="m3-nav-link m3-state-layer flex items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
-			{active
-			? 'is-active bg-sidebar-accent font-medium text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
-			: 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'}"
-		data-testid="nav-{item.href.replace('/', '').replace('/', '-') || 'dashboard'}"
+		data-testid={navTestId(item.href)}
 	>
-		{#if glyph}
-			<MaterialSymbol name={glyph} size={20} class="shrink-0 {active ? 'text-primary' : ''}" />
-		{:else}
-			<item.icon class="h-4 w-4 shrink-0 {active ? 'text-primary' : ''}" />
-		{/if}
-		<span class="truncate">{item.label}</span>
-	</a>
+		{#snippet icon()}
+			{#if glyph}
+				<MaterialSymbol name={glyph} size={20} data-testid="{navTestId(item.href)}-icon" />
+			{:else}
+				<item.icon class="h-4 w-4 shrink-0" data-testid="{navTestId(item.href)}-icon" />
+			{/if}
+		{/snippet}
+	</M3NavItem>
 {/snippet}
 
 <!-- A single collapsed-rail nav link (icon only, tooltip on hover). -->
 {#snippet navLinkCollapsed(item: NavItem)}
 	{@const active = isActive(item.href)}
 	{@const glyph = navGlyphByHref[item.href]}
-	<a
+	<M3NavItem
 		href={item.href}
+		label={item.label}
+		active={active}
+		collapsed
+		tone={active ? 'primary' : 'neutral'}
+		variant={item.href === '/' || item.href === '/scan' ? 'surface' : 'plain'}
+		class="mb-1"
 		onclick={handleNavClick}
-		class="m3-nav-link m3-state-layer flex items-center justify-center rounded-[var(--m3-shape-full)] px-3 py-2 text-sm transition-colors
-			{active
-			? 'is-active bg-sidebar-accent text-sidebar-accent-foreground shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--primary)_24%,transparent)]'
-			: 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'}"
-		aria-label={item.label}
-		data-m3-tooltip={item.label}
-		data-testid="nav-{item.href.replace('/', '').replace('/', '-') || 'dashboard'}"
+		data-testid={navTestId(item.href)}
 	>
-		{#if glyph}
-			<MaterialSymbol name={glyph} size={20} class="shrink-0 {active ? 'text-primary' : ''}" />
-		{:else}
-			<item.icon class="h-4 w-4 shrink-0" />
-		{/if}
-	</a>
+		{#snippet icon()}
+			{#if glyph}
+				<MaterialSymbol name={glyph} size={20} data-testid="{navTestId(item.href)}-icon" />
+			{:else}
+				<item.icon class="h-4 w-4 shrink-0" data-testid="{navTestId(item.href)}-icon" />
+			{/if}
+		{/snippet}
+	</M3NavItem>
 {/snippet}
 
 <!-- An expanded collapsible group (header + its items). -->
 {#snippet navGroup(group: NavGroup)}
 	{@const open = openGroups[group.id] ?? false}
+	{@const active = groupHasActive(group)}
 	<div class="mb-0.5">
-		<button
-			type="button"
+		<M3NavGroup
+			label={group.label}
+			active={active}
+			expanded={open}
 			onclick={() => toggleGroup(group.id)}
-			class="m3-state-layer flex w-full items-center gap-2 rounded-[var(--m3-shape-full)] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/70 transition-colors hover:bg-sidebar-accent/70 hover:text-sidebar-foreground"
-			aria-expanded={open}
 			data-testid="nav-group-{group.id}"
 		>
-			{#if navGlyphByGroup[group.id]}
-				<MaterialSymbol name={navGlyphByGroup[group.id]} size={16} class="shrink-0 opacity-70" />
-			{:else}
-				<group.icon class="h-3.5 w-3.5 shrink-0 opacity-70" />
-			{/if}
-			<span class="flex-1 truncate text-left">{group.label}</span>
-			{#if open}
-				<ChevronDown class="h-3.5 w-3.5 shrink-0 opacity-60" />
-			{:else}
-				<ChevronRight class="h-3.5 w-3.5 shrink-0 opacity-60" />
-			{/if}
-		</button>
+			{#snippet icon()}
+				{#if navGlyphByGroup[group.id]}
+					<MaterialSymbol name={navGlyphByGroup[group.id]} size={20} data-testid="nav-group-{group.id}-icon" />
+				{:else}
+					<group.icon class="h-4 w-4 shrink-0" data-testid="nav-group-{group.id}-icon" />
+				{/if}
+			{/snippet}
+		</M3NavGroup>
 		{#if open}
-			<div class="mb-1 ml-2 space-y-0.5 border-l border-sidebar-border pl-2">
+			<div class="m3-motion-reveal-list mt-0.5 space-y-0.5 pl-3">
 				{#each group.items as item}
 					{@render navLink(item)}
 				{/each}
 			</div>
 		{/if}
 	</div>
+{/snippet}
+
+<!-- A collapsed group header mirrors EdiPlatform: icon-only group, expands rail on click. -->
+{#snippet navGroupCollapsed(group: NavGroup)}
+	<M3NavGroup
+		label={group.label}
+		active={groupHasActive(group)}
+		collapsed
+		class="mb-1"
+		onclick={() => expandCollapsedGroup(group.id)}
+		data-testid="nav-group-{group.id}"
+	>
+		{#snippet icon()}
+			{#if navGlyphByGroup[group.id]}
+				<MaterialSymbol name={navGlyphByGroup[group.id]} size={20} data-testid="nav-group-{group.id}-icon" />
+			{:else}
+				<group.icon class="h-4 w-4 shrink-0" data-testid="nav-group-{group.id}-icon" />
+			{/if}
+		{/snippet}
+	</M3NavGroup>
 {/snippet}
 
 <div class="flex h-full w-full overflow-hidden bg-background">
@@ -566,26 +631,27 @@
 					</a>
 				{/each}
 			{:else if sidebarCollapsed && !isMobile}
-				<!-- Collapsed rail: flat icon list, grouping hidden -->
+				<!-- Collapsed rail: pinned links plus icon-only group headers, matching EdiPlatform. -->
 				{#each visiblePinned as item}
 					{@render navLinkCollapsed(item)}
 				{/each}
 				{#if canSeeCommandCenter}
-					<CommandCenterNav collapsed onNavigate={handleNavClick} />
+					<CommandCenterNav
+						collapsed
+						open={openGroups['command-center'] ?? false}
+						onOpenChange={(next) => setGroupOpen('command-center', next)}
+						onNavigate={handleNavClick}
+					/>
 				{/if}
 				{#each visibleGroups as group}
-					{#each group.items as item}
-						{@render navLinkCollapsed(item)}
-					{/each}
+					{@render navGroupCollapsed(group)}
 				{/each}
 				<div class="my-2 border-t border-sidebar-border"></div>
 				{#each visibleBottomRail as item}
 					{@render navLinkCollapsed(item)}
 				{/each}
 				{#if visibleSettingsGroup}
-					{#each visibleSettingsGroup.items as item}
-						{@render navLinkCollapsed(item)}
-					{/each}
+					{@render navGroupCollapsed(visibleSettingsGroup)}
 				{/if}
 			{:else}
 				<!-- Expanded: pinned links, then collapsible groups, then bottom rail -->
@@ -593,7 +659,11 @@
 					{@render navLink(item)}
 				{/each}
 				{#if canSeeCommandCenter}
-					<CommandCenterNav onNavigate={handleNavClick} />
+					<CommandCenterNav
+						open={openGroups['command-center'] ?? false}
+						onOpenChange={(next) => setGroupOpen('command-center', next)}
+						onNavigate={handleNavClick}
+					/>
 				{/if}
 				<div class="my-2"></div>
 				{#each visibleGroups as group}
@@ -770,12 +840,12 @@
 
 			<div class="ml-auto flex items-center gap-1">
 				{#if showStaffHeader}
-					<!-- Scan -->
+					<!-- Scan / Edit -->
 					<a
 						href="/scan"
 						class="m3-state-layer relative flex items-center justify-center rounded-[var(--m3-shape-full)] p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
-						aria-label="Scan / Add"
-						data-m3-tooltip="Scan / Add"
+						aria-label="Scan / Edit"
+						data-m3-tooltip="Scan / Edit"
 						data-testid="header-scan"
 					>
 						<ScanLine class="h-5 w-5" />
@@ -848,13 +918,3 @@
 		data-testid="sidebar-overlay"
 	></button>
 {/if}
-
-<style>
-	/* Active nav item morphs its Material Symbol outline → filled (FILL axis 0 → 1).
-	   MaterialSymbol animates font-variation-settings, so flipping --msym-fill on the
-	   active link drives the transition. Mirrors the m3/NavItem behavior for the
-	   AppShell's inline nav links. */
-	.m3-nav-link.is-active :global(.material-symbol) {
-		--msym-fill: 1;
-	}
-</style>

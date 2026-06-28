@@ -24,6 +24,8 @@
 		parseForm,
 	} from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
+	import { formatPhoneInput } from '$lib/utils/phone';
+	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
@@ -531,6 +533,15 @@
 		rentTrackingStartMode: 'ForwardOnly',
 		rentTrackingStartDate: '',
 	});
+	// Pre-fill security deposit with monthly rent (common default) once — stays
+	// editable; if the user clears it we do not re-fill.
+	let securityDepositDefaulted = $state(false);
+	$effect(() => {
+		if (!securityDepositDefaulted && leaseForm.monthlyRent && !leaseForm.securityDeposit) {
+			securityDepositDefaulted = true;
+			leaseForm.securityDeposit = leaseForm.monthlyRent;
+		}
+	});
 	let leaseErrors = $state<Record<string, string>>({});
 	let leasePrefilled = false;
 	let leasePrefillDraftId = $state<number | null>(null);
@@ -781,7 +792,14 @@
 			propertySub = PROPERTY_SUBSTEPS[PROPERTY_SUBSTEPS.indexOf(propertySub) - 1];
 			return;
 		}
-		if (stepIndex > 0) stepIndex -= 1;
+		if (stepIndex > 0) {
+			// When stepping back into the property step from a later step, always
+			// land on the address sub-step so Back reads as exactly one step.
+			if (STEPS[stepIndex - 1]?.key === 'property') {
+				propertySub = 'address';
+			}
+			stepIndex -= 1;
+		}
 	}
 	function skip() {
 		next();
@@ -1119,18 +1137,18 @@
 													</div>
 													<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Beds</span>
-														<Input data-testid="onboarding-unit-beds-{i}" bind:value={row.bedrooms} placeholder="2" />
+														<Input type="number" min="0" step="1" data-testid="onboarding-unit-beds-{i}" bind:value={row.bedrooms} placeholder="2" />
 														{#if unitRowErrors[i]?.bedrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bedrooms}</p>{/if}
 													</div>
 													<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Baths</span>
-														<Input data-testid="onboarding-unit-baths-{i}" bind:value={row.bathrooms} placeholder="1" />
+														<Input type="number" min="0" step="0.5" data-testid="onboarding-unit-baths-{i}" bind:value={row.bathrooms} placeholder="1" />
 														{#if unitRowErrors[i]?.bathrooms}<p class="mt-1 text-[11px] text-destructive">{unitRowErrors[i].bathrooms}</p>{/if}
 													</div>
 													<div>
 														<span class="mb-1 block text-[11px] text-muted-foreground">Market rent</span>
 														<div class="flex items-center gap-1">
-															<Input data-testid="onboarding-unit-rent-{i}" bind:value={row.marketRent} placeholder="1500" />
+															<Input type="number" min="0" step="0.01" data-testid="onboarding-unit-rent-{i}" bind:value={row.marketRent} placeholder="1500" />
 															{#if unitRows.length > 1}
 																<button type="button" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Remove unit" data-testid="onboarding-unit-remove-{i}" onclick={() => removeUnitRow(i)}>
 																	<Trash2 class="h-4 w-4" />
@@ -1181,7 +1199,7 @@
 											<div>
 												<span class="mb-1 block text-[11px] text-muted-foreground">Phone (optional)</span>
 												<div class="flex items-center gap-1">
-													<Input data-testid="onboarding-tenant-phone-{i}" bind:value={row.phone} placeholder="(555) 555-5555" />
+													<Input data-testid="onboarding-tenant-phone-{i}" bind:value={row.phone} placeholder="(555) 555-5555" oninput={(e) => { row.phone = formatPhoneInput((e.target as HTMLInputElement).value); }} />
 													{#if tenantRows.length > 1}
 														<button type="button" class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive" aria-label="Remove tenant" data-testid="onboarding-tenant-remove-{i}" onclick={() => removeTenantRow(i)}>
 															<Trash2 class="h-4 w-4" />
@@ -1278,12 +1296,12 @@
 										{#if leaseErrors.securityDeposit}<p class="mt-1 text-xs text-destructive">{leaseErrors.securityDeposit}</p>{/if}
 									</div>
 									<div>
-										<label for="ob-lease-dueday" class="mb-1 block text-xs font-medium text-muted-foreground">Rent due day</label>
+										<label for="ob-lease-dueday" class="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">Rent due day<HelpPopover title="Rent due day" summary="The day of the month rent is expected — e.g. 1 means the 1st of each month. The system posts rent charges and calculates late fees based on this date." testid="help-rent-due-day" /></label>
 										<Input id="ob-lease-dueday" data-testid="onboarding-lease-dueday" bind:value={leaseForm.rentDueDay} placeholder="1" />
 										{#if leaseErrors.rentDueDay}<p class="mt-1 text-xs text-destructive">{leaseErrors.rentDueDay}</p>{/if}
 									</div>
 									<div class={leaseForm.rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
-										<span class="mb-1 block text-xs font-medium text-muted-foreground">Rent tracking start</span>
+										<span class="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">Rent tracking start<HelpPopover title="Rent tracking start" summary="Controls when the system starts generating rent records for this lease." detail="Start from today: only future months are tracked (good for new leases). Backfill from lease start: creates past records back to the lease start date (use when catching up). Use cutoff date: you choose a specific date to start from, useful if you've already been tracking rent elsewhere and want to pick up mid-lease." testid="help-rent-tracking-start" /></span>
 										<Select.Root type="single" bind:value={leaseForm.rentTrackingStartMode}>
 											<Select.Trigger class="w-full" data-testid="onboarding-lease-rent-tracking-mode">{rentTrackingStartLabel(leaseForm.rentTrackingStartMode)}</Select.Trigger>
 											<Select.Content>

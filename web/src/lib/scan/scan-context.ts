@@ -1,4 +1,4 @@
-export const SCAN_DOC_TYPES = ['Expense', 'Payment', 'WorkOrder', 'Lease', 'Application'] as const;
+export const SCAN_DOC_TYPES = ['Expense', 'Payment', 'WorkOrder', 'Lease', 'Application', 'Loan'] as const;
 export type ScanDocType = (typeof SCAN_DOC_TYPES)[number];
 
 export interface ScanContext {
@@ -108,6 +108,12 @@ export function applyScanContextOverrides(
 	if (targetEntityType === 'Application') {
 		setIfMissing(overrides, 'propertyId', context.propertyId);
 		setIfMissing(overrides, 'unitId', context.unitId);
+		return;
+	}
+
+	if (targetEntityType === 'Loan') {
+		// The property the loan attaches to comes from the deep-link the landlord launched the scan from.
+		setIfMissing(overrides, 'propertyId', context.propertyId);
 	}
 }
 

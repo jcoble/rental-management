@@ -21,4 +21,12 @@ describe('scan document-type copy', () => {
 		assert.equal(scanUploadCopy('WorkOrder').title, 'Drop a maintenance request, estimate, or repair photo here');
 		assert.equal(scanUploadCopy('Expense').title, 'Drop a receipt or invoice here');
 	});
+
+	it('uses mortgage-specific upload and processing copy for loans', () => {
+		assert.equal(scanUploadCopy('Loan').title, 'Drop a mortgage statement or closing disclosure here');
+		assert.equal(
+			scanProcessingCopy('Loan').body,
+			'The computer is pulling out lender, balance, rate, and payment details for you. This usually takes just a few seconds.'
+		);
+	});
 });
