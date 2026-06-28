@@ -8,23 +8,26 @@ import {
 } from './lease-esign.ts';
 
 describe('lease e-sign state helpers', () => {
-	it('allows draft and pending-signature leases to be sent', () => {
+	it('allows draft, pending-signature, and active unsigned leases to be sent', () => {
 		assert.equal(canSendLeaseForSignature('Draft', 'None'), true);
 		assert.equal(canSendLeaseForSignature('PendingSignature', 'Sent'), true);
 		assert.equal(canSendLeaseForSignature('PendingSignature', 'Declined'), true);
+		assert.equal(canSendLeaseForSignature('Active', 'None'), true);
+		assert.equal(canSendLeaseForSignature('Active', 'Sent'), true);
+		assert.equal(canSendLeaseForSignature('Active', 'Declined'), true);
 	});
 
-	it('blocks signed, active, and notice-given leases', () => {
+	it('blocks signed and closed leases', () => {
 		assert.equal(canSendLeaseForSignature('Draft', 'Signed'), false);
-		assert.equal(canSendLeaseForSignature('Active', 'None'), false);
+		assert.equal(canSendLeaseForSignature('Active', 'Signed'), false);
 		assert.equal(canSendLeaseForSignature('NoticeGiven', 'None'), false);
 		assert.equal(canSendLeaseForSignature('Expired', 'None'), false);
 		assert.equal(canSendLeaseForSignature('Terminated', 'None'), false);
 	});
 
-	it('explains why active and notice-given leases cannot be sent', () => {
-		assert.match(signableStateMessage('Active'), /already active/);
+	it('explains why closed leases cannot be sent', () => {
 		assert.match(signableStateMessage('NoticeGiven'), /notice given/);
+		assert.match(signableStateMessage('Expired'), /closed/);
 	});
 
 	it('treats a successful signature send as proof the agreement exists', () => {

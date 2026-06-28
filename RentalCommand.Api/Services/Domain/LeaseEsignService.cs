@@ -53,12 +53,16 @@ public sealed class LeaseEsignService : ILeaseEsignService
             return SendForSignatureResult.NotFound();
         }
 
-        // Precondition: only pre-execution leases may enter the e-sign send flow. Lifecycle states like
-        // Active or NoticeGiven must not be silently reverted to PendingSignature — that can reopen a
-        // closed/active contract or leave inconsistent move-out state behind.
+        var isSignableLifecycleState =
+            lease.Status == LeaseStatus.Draft
+            || lease.Status == LeaseStatus.PendingSignature
+            || lease.Status == LeaseStatus.Active;
+
+        // Active unsigned leases can still be sent for tenant signature, but closed or notice-given
+        // leases must not be reopened or have inconsistent move-out state left behind.
         if (lease.EsignStatus == EsignStatus.Signed
             || lease.SignedDocumentStoredFileId.HasValue
-            || (lease.Status != LeaseStatus.Draft && lease.Status != LeaseStatus.PendingSignature))
+            || !isSignableLifecycleState)
         {
             _logger.LogInformation(
                 "Send-for-signature refused for lease {LeaseId}: not in a signable state (status {Status}, esign {Esign}, hasSignedDoc {HasDoc}).",
@@ -127,7 +131,10 @@ public sealed class LeaseEsignService : ILeaseEsignService
 
         lease.EsignEnvelopeId = providerResult.EnvelopeId;
         lease.EsignStatus = EsignStatus.Sent;
-        lease.Status = LeaseStatus.PendingSignature;
+        if (lease.Status != LeaseStatus.Active)
+        {
+            lease.Status = LeaseStatus.PendingSignature;
+        }
         lease.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 

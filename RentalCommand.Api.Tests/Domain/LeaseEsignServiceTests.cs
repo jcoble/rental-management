@@ -98,6 +98,27 @@ public sealed class LeaseEsignServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SendForSignature_ActiveUnsignedLease_SendsAndKeepsLeaseActive()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.Active);
+        var provider = new FakeEsignProvider { Configured = true, EnvelopeId = "sig_active_send" };
+        var sut = CreateService(provider);
+
+        var result = await sut.SendForSignatureAsync(PortfolioId, lease.Id, new SendForSignatureRequest(), changedByUserId: 7, ipAddress: null);
+
+        result.Outcome.Should().Be(SendForSignatureOutcome.Sent);
+        result.Status!.EsignStatus.Should().Be(EsignStatus.Sent);
+        result.Status.LeaseStatus.Should().Be(LeaseStatus.Active);
+        result.Status.EnvelopeId.Should().Be("sig_active_send");
+        provider.SendCalls.Should().Be(1);
+
+        var reloaded = await _db.Leases.AsNoTracking().FirstAsync(l => l.Id == lease.Id);
+        reloaded.Status.Should().Be(LeaseStatus.Active);
+        reloaded.EsignStatus.Should().Be(EsignStatus.Sent);
+        reloaded.EsignEnvelopeId.Should().Be("sig_active_send");
+    }
+
+    [Fact]
     public async Task SendForSignature_UsesLeaseTenantEmailEvenWhenOverrideProvided()
     {
         var lease = SeedLeaseWithGraph(LeaseStatus.Draft, tenantEmail: "tenant-on-lease@example.com");
