@@ -8,6 +8,7 @@ import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../units/unit_command_center_screen.dart';
 import '../units/unit_navigation.dart';
+import 'lease_form_defaults.dart';
 import 'leases_repository.dart';
 
 const _monthNames = [
@@ -417,6 +418,7 @@ class LeaseFormSheet extends ConsumerStatefulWidget {
     this.initialUnitId,
     this.initialPropertyLabel,
     this.initialUnitLabel,
+    this.unitDefaults,
   });
 
   final VoidCallback onSaved;
@@ -425,6 +427,7 @@ class LeaseFormSheet extends ConsumerStatefulWidget {
   final int? initialUnitId;
   final String? initialPropertyLabel;
   final String? initialUnitLabel;
+  final UnitLeaseFormDefaults? unitDefaults;
 
   @override
   ConsumerState<LeaseFormSheet> createState() => _LeaseFormSheetState();
@@ -454,22 +457,41 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
 
   bool get _isEdit => widget.existing != null;
   bool get _isUnitPrefilled =>
-      widget.initialPropertyId != null && widget.initialUnitId != null;
+      widget.unitDefaults != null ||
+      (widget.initialPropertyId != null && widget.initialUnitId != null);
+
+  int? get _initialPropertyId =>
+      widget.unitDefaults?.propertyId ?? widget.initialPropertyId;
+
+  int? get _initialUnitId =>
+      widget.unitDefaults?.unitId ?? widget.initialUnitId;
+
+  String? get _initialPropertyLabel =>
+      widget.unitDefaults?.propertyLabel ?? widget.initialPropertyLabel;
+
+  String? get _initialUnitLabel =>
+      widget.unitDefaults?.unitLabel ?? widget.initialUnitLabel;
 
   @override
   void initState() {
     super.initState();
     final e = widget.existing;
-    _selectedPropertyId = widget.initialPropertyId;
-    _selectedUnitId = widget.initialUnitId;
-    _rentCtrl = TextEditingController(text: e?.monthlyRent.toString() ?? '');
+    final defaults = widget.unitDefaults;
+    _selectedPropertyId = _initialPropertyId;
+    _selectedUnitId = _initialUnitId;
+    _rentCtrl = TextEditingController(
+      text: e?.monthlyRent.toString() ?? defaults?.monthlyRent ?? '',
+    );
     _depositCtrl = TextEditingController(
-      text: e?.securityDeposit.toString() ?? '',
+      text: e?.securityDeposit.toString() ?? defaults?.securityDeposit ?? '',
     );
     _lateFeeCtrl = TextEditingController(
-      text: e?.lateFeeAmount.toString() ?? '50',
+      text: e?.lateFeeAmount.toString() ?? defaults?.lateFeeAmount ?? '50',
     );
-    _dueDayCtrl = TextEditingController(text: e?.rentDueDay.toString() ?? '1');
+    _dueDayCtrl = TextEditingController(
+      text: e?.rentDueDay.toString() ?? defaults?.rentDueDay ?? '1',
+    );
+    _selectedStatus = defaults?.status ?? _selectedStatus;
 
     if (e != null) {
       _selectedPropertyId = e.propertyId;
@@ -638,8 +660,8 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                   _ReadOnlyFormValue(
                     label: 'Property',
                     value:
-                        widget.initialPropertyLabel ??
-                        'Property #${widget.initialPropertyId}',
+                        _initialPropertyLabel ??
+                        'Property #$_initialPropertyId',
                   )
                 else
                   DropdownButtonFormField<int>(
@@ -676,9 +698,7 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
                 if (_isUnitPrefilled)
                   _ReadOnlyFormValue(
                     label: 'Unit',
-                    value:
-                        widget.initialUnitLabel ??
-                        'Unit #${widget.initialUnitId}',
+                    value: _initialUnitLabel ?? 'Unit #$_initialUnitId',
                   )
                 else
                   DropdownButtonFormField<int>(
