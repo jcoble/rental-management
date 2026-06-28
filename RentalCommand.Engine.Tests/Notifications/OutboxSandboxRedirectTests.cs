@@ -84,6 +84,42 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
     }
 
     [Fact]
+    public async Task Sandbox_email_prefers_self_owner_user_even_when_that_user_has_tenant_link()
+    {
+        using (var scope = _provider.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+            db.OwnerEntities.Add(new OwnerEntity
+            {
+                Id = 77,
+                PortfolioId = 1,
+                Name = "Real Owner",
+                Email = "real-owner@example.com",
+                IsPrimary = true,
+            });
+            db.Users.Add(new ApplicationUser
+            {
+                Id = 88,
+                Email = "real-owner@example.com",
+                PortfolioId = 1,
+                TenantId = 99,
+                OwnerEntityId = 77,
+                UserName = "real-owner@example.com",
+            });
+            await db.SaveChangesAsync();
+        }
+
+        await SeedEmail(portfolioId: 1, to: "real-tenant@example.com", subject: "Please sign your lease");
+        await RunCycle();
+
+        _channel.Emails.Should().HaveCount(1);
+        var (to, subject, body, _) = _channel.Emails[0];
+        to.Should().Be("real-owner@example.com");
+        subject.Should().StartWith("[Sandbox]");
+        body.Should().Contain("real-tenant@example.com");
+    }
+
+    [Fact]
     public async Task Live_email_goes_to_the_original_recipient_unchanged()
     {
         await SeedEmail(portfolioId: 2, to: "real-tenant@example.com", subject: "Please sign your lease");
