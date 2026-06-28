@@ -2,9 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../accounting/accounting_repository.dart';
+import '../home/mobile_domain_navigation.dart';
 import '../payments/payment_detail_screen.dart';
+import '../payments/payments_screen.dart';
 import 'expense_detail_screen.dart';
+import 'expense_form_sheet.dart';
 import 'money_format.dart';
+import 'money_repository.dart';
 import 'money_snapshot_card.dart';
 import 'overdue_screen.dart';
 import 'transaction_models.dart';
@@ -44,9 +48,43 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
   }
 
   void _openOverdue() {
+    final shellNavigator = mobileShellNavigatorOf(context);
+    if (shellNavigator != null) {
+      shellNavigator.openTab(
+        MobileShellTabId.money,
+        destination: MobileDestinationId.moneyOverview,
+        detailBuilder: (_) => const OverdueScreen(),
+      );
+      revealMobileShellIfDetached(context);
+      return;
+    }
+
+    final domainNavigator = MobileDomainNavigation.maybeOf(context);
+    if (domainNavigator != null) {
+      domainNavigator.openDestination(
+        MobileDestinationId.moneyOverview,
+        detailBuilder: (_) => const OverdueScreen(),
+      );
+      return;
+    }
+
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(builder: (_) => const OverdueScreen()),
     );
+  }
+
+  void _refreshAfterManualEntry() {
+    ref.invalidate(moneySnapshotProvider);
+    ref.invalidate(expensesListProvider);
+    ref.read(transactionsProvider.notifier).refresh();
+  }
+
+  void _addPayment() {
+    showCreatePaymentSheet(context, ref, onSaved: _refreshAfterManualEntry);
+  }
+
+  void _addExpense() {
+    showCreateExpenseSheet(context, ref, onSaved: _refreshAfterManualEntry);
   }
 
   @override
@@ -70,6 +108,13 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
                 onRetry: () => ref.invalidate(moneySnapshotProvider),
                 onPastDueTap: _openOverdue,
               ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: MoneyQuickActions(
+              onAddPayment: _addPayment,
+              onAddExpense: _addExpense,
             ),
           ),
           const Expanded(child: _LedgerTab()),
@@ -112,14 +157,16 @@ class _CollapsibleSnapshot extends StatelessWidget {
                 const SizedBox(width: 8),
                 Text(
                   'Your money',
-                  style: theme.textTheme.titleSmall
-                      ?.copyWith(fontWeight: FontWeight.w700),
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const Spacer(),
                 Text(
                   expanded ? 'Hide' : 'Show',
-                  style: theme.textTheme.labelMedium
-                      ?.copyWith(color: cs.onSurfaceVariant),
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: cs.onSurfaceVariant,
+                  ),
                 ),
                 Icon(
                   expanded ? Icons.expand_less : Icons.expand_more,
@@ -131,13 +178,48 @@ class _CollapsibleSnapshot extends StatelessWidget {
         ),
         AnimatedCrossFade(
           duration: const Duration(milliseconds: 180),
-          crossFadeState:
-              expanded ? CrossFadeState.showFirst : CrossFadeState.showSecond,
+          crossFadeState: expanded
+              ? CrossFadeState.showFirst
+              : CrossFadeState.showSecond,
           firstChild: Padding(
             padding: const EdgeInsets.only(top: 8),
             child: child,
           ),
           secondChild: const SizedBox(width: double.infinity),
+        ),
+      ],
+    );
+  }
+}
+
+class MoneyQuickActions extends StatelessWidget {
+  const MoneyQuickActions({
+    super.key,
+    required this.onAddPayment,
+    required this.onAddExpense,
+  });
+
+  final VoidCallback onAddPayment;
+  final VoidCallback onAddExpense;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: FilledButton.icon(
+            onPressed: onAddPayment,
+            icon: const Icon(Icons.add_card_outlined),
+            label: const Text('Add payment'),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: FilledButton.tonalIcon(
+            onPressed: onAddExpense,
+            icon: const Icon(Icons.receipt_long_outlined),
+            label: const Text('Add expense'),
+          ),
         ),
       ],
     );
@@ -160,8 +242,7 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
   void initState() {
     super.initState();
     _scroll.addListener(() {
-      if (_scroll.position.pixels >=
-          _scroll.position.maxScrollExtent - 240) {
+      if (_scroll.position.pixels >= _scroll.position.maxScrollExtent - 240) {
         ref.read(transactionsProvider.notifier).loadMore();
       }
     });
@@ -175,9 +256,9 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
 
   void _setKind(String? kind) {
     final current = ref.read(transactionsProvider).filter;
-    ref.read(transactionsProvider.notifier).setFilter(
-          current.copyWith(kind: kind, clearKind: kind == null),
-        );
+    ref
+        .read(transactionsProvider.notifier)
+        .setFilter(current.copyWith(kind: kind, clearKind: kind == null));
   }
 
   @override
@@ -196,11 +277,17 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
             children: [
               _filterChip('All', kind == null, () => _setKind(null)),
               const SizedBox(width: 8),
-              _filterChip('Payments', kind == 'Payment',
-                  () => _setKind('Payment')),
+              _filterChip(
+                'Payments',
+                kind == 'Payment',
+                () => _setKind('Payment'),
+              ),
               const SizedBox(width: 8),
-              _filterChip('Expenses', kind == 'Expense',
-                  () => _setKind('Expense')),
+              _filterChip(
+                'Expenses',
+                kind == 'Expense',
+                () => _setKind('Expense'),
+              ),
             ],
           ),
         ),
@@ -210,44 +297,40 @@ class _LedgerTabState extends ConsumerState<_LedgerTab> {
             child: state.loading && state.items.isEmpty
                 ? const Center(child: CircularProgressIndicator())
                 : state.error != null && state.items.isEmpty
-                    ? ListView(
-                        children: [
-                          const SizedBox(height: 120),
-                          Center(child: Text(state.error!)),
-                        ],
-                      )
-                    : state.items.isEmpty
-                        ? ListView(
-                            children: const [
-                              SizedBox(height: 120),
-                              Center(child: Text('No transactions yet.')),
-                            ],
-                          )
-                        : ListView.separated(
-                            controller: _scroll,
-                            padding:
-                                const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                            itemCount:
-                                state.items.length + (state.hasMore ? 1 : 0),
-                            separatorBuilder: (_, _) =>
-                                const SizedBox(height: 8),
-                            itemBuilder: (_, i) {
-                              if (i >= state.items.length) {
-                                return const Padding(
-                                  padding: EdgeInsets.all(16),
-                                  child: Center(
-                                    child: SizedBox(
-                                      width: 22,
-                                      height: 22,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2),
-                                    ),
-                                  ),
-                                );
-                              }
-                              return _TransactionCard(tx: state.items[i]);
-                            },
+                ? ListView(
+                    children: [
+                      const SizedBox(height: 120),
+                      Center(child: Text(state.error!)),
+                    ],
+                  )
+                : state.items.isEmpty
+                ? ListView(
+                    children: const [
+                      SizedBox(height: 120),
+                      Center(child: Text('No transactions yet.')),
+                    ],
+                  )
+                : ListView.separated(
+                    controller: _scroll,
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                    itemCount: state.items.length + (state.hasMore ? 1 : 0),
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) {
+                      if (i >= state.items.length) {
+                        return const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Center(
+                            child: SizedBox(
+                              width: 22,
+                              height: 22,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
                           ),
+                        );
+                      }
+                      return _TransactionCard(tx: state.items[i]);
+                    },
+                  ),
           ),
         ),
       ],
@@ -278,6 +361,29 @@ class _TransactionCard extends StatelessWidget {
     return Card(
       child: ListTile(
         onTap: () {
+          final MobileDetailBuilder detailBuilder = isPayment
+              ? (BuildContext _) => PaymentDetailScreen(paymentId: tx.id)
+              : (BuildContext _) => ExpenseDetailScreen(expenseId: tx.id);
+          final shellNavigator = mobileShellNavigatorOf(context);
+          if (shellNavigator != null) {
+            shellNavigator.openTab(
+              MobileShellTabId.money,
+              destination: MobileDestinationId.moneyLedger,
+              detailBuilder: detailBuilder,
+            );
+            revealMobileShellIfDetached(context);
+            return;
+          }
+
+          final domainNavigator = MobileDomainNavigation.maybeOf(context);
+          if (domainNavigator != null) {
+            domainNavigator.openDestination(
+              MobileDestinationId.moneyLedger,
+              detailBuilder: detailBuilder,
+            );
+            return;
+          }
+
           if (isPayment) {
             Navigator.of(context).push<void>(
               MaterialPageRoute<void>(
@@ -293,8 +399,7 @@ class _TransactionCard extends StatelessWidget {
           }
         },
         leading: CircleAvatar(
-          backgroundColor:
-              isPayment ? cs.primaryContainer : cs.errorContainer,
+          backgroundColor: isPayment ? cs.primaryContainer : cs.errorContainer,
           child: Icon(
             isPayment ? Icons.south_west : Icons.north_east,
             color: isPayment ? cs.onPrimaryContainer : cs.onErrorContainer,

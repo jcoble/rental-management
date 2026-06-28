@@ -6,22 +6,36 @@ import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
-import '../../core/models/models.dart';
+import '../../core/models/models.dart' hide Vendor;
+import '../../core/utils/date_wire.dart';
 import '../properties/properties_repository.dart';
+import '../tenants/tenants_repository.dart';
 import '../vendors/dispatch_vendor_sheet.dart';
 import '../vendors/rate_vendor_sheet.dart';
+import '../vendors/vendors_repository.dart';
+import 'work_order_form_shell.dart';
 import 'work_order_timeline.dart';
 import 'work_orders_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const _months = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  '',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
-String _fmtDate(DateTime d) =>
-    '${_months[d.month]} ${d.day}, ${d.year}';
+String _fmtDate(DateTime d) => '${_months[d.month]} ${d.day}, ${d.year}';
 
 String _fmtCost(double cost) {
   final parts = cost.toStringAsFixed(2).split('.');
@@ -132,14 +146,12 @@ class WorkOrderDetailScreen extends ConsumerStatefulWidget {
       _WorkOrderDetailScreenState();
 }
 
-class _WorkOrderDetailScreenState
-    extends ConsumerState<WorkOrderDetailScreen> {
+class _WorkOrderDetailScreenState extends ConsumerState<WorkOrderDetailScreen> {
   bool _statusUpdating = false;
   bool _uploadingPhoto = false;
 
-  Future<void> _refresh() => ref
-      .read(workOrderDetailProvider(widget.workOrderId).notifier)
-      .refresh();
+  Future<void> _refresh() =>
+      ref.read(workOrderDetailProvider(widget.workOrderId).notifier).refresh();
 
   void _showError(Object error) {
     if (!mounted) return;
@@ -183,7 +195,9 @@ class _WorkOrderDetailScreenState
     setState(() => _uploadingPhoto = true);
     try {
       final bytes = Uint8List.fromList(await picked.readAsBytes());
-      await ref.read(workOrdersRepositoryProvider).uploadWorkOrderPhoto(
+      await ref
+          .read(workOrdersRepositoryProvider)
+          .uploadWorkOrderPhoto(
             workOrderId: widget.workOrderId,
             bytes: bytes,
             fileName: picked.name,
@@ -350,8 +364,7 @@ class _WorkOrderDetailScreenState
 
   @override
   Widget build(BuildContext context) {
-    final detailAsync =
-        ref.watch(workOrderDetailProvider(widget.workOrderId));
+    final detailAsync = ref.watch(workOrderDetailProvider(widget.workOrderId));
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
@@ -372,16 +385,14 @@ class _WorkOrderDetailScreenState
       body: RefreshIndicator(
         onRefresh: _refresh,
         child: detailAsync.when(
-          loading: () =>
-              const Center(child: CircularProgressIndicator()),
+          loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.error_outline,
-                      size: 40, color: colorScheme.error),
+                  Icon(Icons.error_outline, size: 40, color: colorScheme.error),
                   const SizedBox(height: 12),
                   Text(
                     e is ApiException ? e.message : e.toString(),
@@ -448,8 +459,9 @@ class _DetailBody extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final workOrder = detail.workOrder;
-    final otherStatuses =
-        _allStatuses.where((s) => s != workOrder.status).toList();
+    final otherStatuses = _allStatuses
+        .where((s) => s != workOrder.status)
+        .toList();
     final isCompleted = workOrder.status.toLowerCase() == 'completed';
     final hasVendor = workOrder.vendorId != null;
 
@@ -460,8 +472,9 @@ class _DetailBody extends StatelessWidget {
         // ── Title + chips ──────────────────────────────────────────────
         Text(
           workOrder.title,
-          style: theme.textTheme.headlineSmall
-              ?.copyWith(fontWeight: FontWeight.w700),
+          style: theme.textTheme.headlineSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+          ),
         ),
         const SizedBox(height: 8),
         Wrap(
@@ -469,10 +482,14 @@ class _DetailBody extends StatelessWidget {
           runSpacing: 8,
           children: [
             _PriorityChip(
-                priority: workOrder.priority, colorScheme: colorScheme),
+              priority: workOrder.priority,
+              colorScheme: colorScheme,
+            ),
             _StatusChip(status: workOrder.status, colorScheme: colorScheme),
             _CategoryChip(
-                category: workOrder.category, colorScheme: colorScheme),
+              category: workOrder.category,
+              colorScheme: colorScheme,
+            ),
           ],
         ),
 
@@ -523,14 +540,19 @@ class _DetailBody extends StatelessWidget {
         _SectionLabel(label: 'Details', theme: theme),
         const SizedBox(height: 8),
         _DetailGrid(
-            workOrder: workOrder, colorScheme: colorScheme, theme: theme),
+          workOrder: workOrder,
+          colorScheme: colorScheme,
+          theme: theme,
+        ),
 
         const SizedBox(height: 20),
 
         // ── Photos ─────────────────────────────────────────────────────
         Row(
           children: [
-            Expanded(child: _SectionLabel(label: 'Photos', theme: theme)),
+            Expanded(
+              child: _SectionLabel(label: 'Photos', theme: theme),
+            ),
             TextButton.icon(
               onPressed: uploadingPhoto ? null : onAddPhoto,
               icon: uploadingPhoto
@@ -571,7 +593,9 @@ class _DetailBody extends StatelessWidget {
                     onPressed: () => onTransition(s),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 8),
+                        horizontal: 14,
+                        vertical: 8,
+                      ),
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
@@ -649,10 +673,7 @@ class _PhotoStripMessage extends StatelessWidget {
           Icon(icon, color: cs.onSurfaceVariant, size: 20),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              text,
-              style: TextStyle(color: cs.onSurfaceVariant),
-            ),
+            child: Text(text, style: TextStyle(color: cs.onSurfaceVariant)),
           ),
         ],
       ),
@@ -675,9 +696,7 @@ class _PhotoThumb extends ConsumerWidget {
             backgroundColor: Colors.black,
             foregroundColor: Colors.white,
           ),
-          body: Center(
-            child: InteractiveViewer(child: Image.memory(bytes)),
-          ),
+          body: Center(child: InteractiveViewer(child: Image.memory(bytes))),
         ),
       ),
     );
@@ -716,12 +735,7 @@ class _PhotoThumb extends ConsumerWidget {
         onTap: () => _openFullScreen(context, bytes),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(12),
-          child: Image.memory(
-            bytes,
-            width: 96,
-            height: 96,
-            fit: BoxFit.cover,
-          ),
+          child: Image.memory(bytes, width: 96, height: 96, fit: BoxFit.cover),
         ),
       ),
     );
@@ -762,14 +776,16 @@ class _StatusNoteSheetState extends State<_StatusNoteSheet> {
         children: [
           Text(
             'Set status: ${_statusLabel(widget.status)}',
-            style:
-                theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            style: theme.textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
           ),
           const SizedBox(height: 4),
           Text(
             'Add an optional note for the timeline.',
-            style: theme.textTheme.bodyMedium
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 16),
           TextField(
@@ -830,7 +846,8 @@ class _DetailGrid extends StatelessWidget {
         children: [
           _DetailRow(
             label: 'Property',
-            value: workOrder.propertyName ?? 'Property #${workOrder.propertyId}',
+            value:
+                workOrder.propertyName ?? 'Property #${workOrder.propertyId}',
             theme: theme,
             colorScheme: colorScheme,
           ),
@@ -926,9 +943,7 @@ class _DetailRow extends StatelessWidget {
       decoration: BoxDecoration(
         border: isLast
             ? null
-            : Border(
-                bottom: BorderSide(color: colorScheme.outlineVariant),
-              ),
+            : Border(bottom: BorderSide(color: colorScheme.outlineVariant)),
       ),
       child: Row(
         children: [
@@ -944,8 +959,9 @@ class _DetailRow extends StatelessWidget {
           Expanded(
             child: Text(
               value,
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(fontWeight: FontWeight.w500),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
         ],
@@ -976,8 +992,7 @@ class _SectionLabel extends StatelessWidget {
 // ── Chip helpers (same as list screen, kept local) ────────────────────────────
 
 class _PriorityChip extends StatelessWidget {
-  const _PriorityChip(
-      {required this.priority, required this.colorScheme});
+  const _PriorityChip({required this.priority, required this.colorScheme});
 
   final String priority;
   final ColorScheme colorScheme;
@@ -1003,8 +1018,7 @@ class _PriorityChip extends StatelessWidget {
 }
 
 class _StatusChip extends StatelessWidget {
-  const _StatusChip(
-      {required this.status, required this.colorScheme});
+  const _StatusChip({required this.status, required this.colorScheme});
 
   final String status;
   final ColorScheme colorScheme;
@@ -1030,8 +1044,7 @@ class _StatusChip extends StatelessWidget {
 }
 
 class _CategoryChip extends StatelessWidget {
-  const _CategoryChip(
-      {required this.category, required this.colorScheme});
+  const _CategoryChip({required this.category, required this.colorScheme});
 
   final String category;
   final ColorScheme colorScheme;
@@ -1046,10 +1059,7 @@ class _CategoryChip extends StatelessWidget {
       ),
       child: Text(
         category,
-        style: TextStyle(
-          fontSize: 12,
-          color: colorScheme.onSurfaceVariant,
-        ),
+        style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
       ),
     );
   }
@@ -1058,10 +1068,7 @@ class _CategoryChip extends StatelessWidget {
 // ── Edit Work Order Bottom Sheet ──────────────────────────────────────────────
 
 class _EditWorkOrderSheet extends ConsumerStatefulWidget {
-  const _EditWorkOrderSheet({
-    required this.workOrder,
-    required this.onSaved,
-  });
+  const _EditWorkOrderSheet({required this.workOrder, required this.onSaved});
 
   final WorkOrder workOrder;
   final VoidCallback onSaved;
@@ -1071,10 +1078,19 @@ class _EditWorkOrderSheet extends ConsumerStatefulWidget {
       _EditWorkOrderSheetState();
 }
 
-class _EditWorkOrderSheetState
-    extends ConsumerState<_EditWorkOrderSheet> {
+class _EditWorkOrderSheetState extends ConsumerState<_EditWorkOrderSheet> {
+  final _formKey = GlobalKey<FormState>();
   late final TextEditingController _titleCtrl;
   late final TextEditingController _descCtrl;
+  late final TextEditingController _estCostCtrl;
+  late final TextEditingController _actualCostCtrl;
+  late int _selectedPropertyId;
+  int? _selectedUnitId;
+  int? _selectedTenantId;
+  int? _selectedVendorId;
+  DateTime? _scheduledDate;
+  TimeOfDay? _startTime;
+  TimeOfDay? _windowEndTime;
   late String _priority;
   late String _category;
 
@@ -1099,29 +1115,122 @@ class _EditWorkOrderSheetState
   @override
   void initState() {
     super.initState();
-    _titleCtrl =
-        TextEditingController(text: widget.workOrder.title);
-    _descCtrl =
-        TextEditingController(text: widget.workOrder.description);
+    _titleCtrl = TextEditingController(text: widget.workOrder.title);
+    _descCtrl = TextEditingController(text: widget.workOrder.description);
+    _estCostCtrl = TextEditingController(
+      text: widget.workOrder.estimatedCost?.toStringAsFixed(2) ?? '',
+    );
+    _actualCostCtrl = TextEditingController(
+      text: widget.workOrder.actualCost?.toStringAsFixed(2) ?? '',
+    );
+    _selectedPropertyId = widget.workOrder.propertyId;
+    _selectedUnitId = widget.workOrder.unitId;
+    _selectedTenantId = widget.workOrder.tenantId;
+    _selectedVendorId = widget.workOrder.vendorId;
+
+    final scheduledFor = widget.workOrder.scheduledFor?.toLocal();
+    final scheduledWindowEnd = widget.workOrder.scheduledWindowEnd?.toLocal();
+    if (scheduledFor != null) {
+      _scheduledDate = DateTime(
+        scheduledFor.year,
+        scheduledFor.month,
+        scheduledFor.day,
+      );
+      _startTime = TimeOfDay.fromDateTime(scheduledFor);
+    } else if (scheduledWindowEnd != null) {
+      _scheduledDate = DateTime(
+        scheduledWindowEnd.year,
+        scheduledWindowEnd.month,
+        scheduledWindowEnd.day,
+      );
+    }
+    if (scheduledWindowEnd != null) {
+      _windowEndTime = TimeOfDay.fromDateTime(scheduledWindowEnd);
+    }
+
     _priority = _priorities.contains(widget.workOrder.priority)
         ? widget.workOrder.priority
         : 'Normal';
     _category = _categories.contains(widget.workOrder.category)
         ? widget.workOrder.category
         : 'General';
+    Future.microtask(() {
+      ref.read(propertiesForWoProvider.notifier).load();
+      ref.read(tenantsProvider.notifier).load();
+    });
   }
 
   @override
   void dispose() {
     _titleCtrl.dispose();
     _descCtrl.dispose();
+    _estCostCtrl.dispose();
+    _actualCostCtrl.dispose();
     super.dispose();
   }
 
+  DateTime? _combine(DateTime? date, TimeOfDay? time) {
+    if (date == null || time == null) return null;
+    return DateTime(date.year, date.month, date.day, time.hour, time.minute);
+  }
+
+  static String _fmtEditDate(DateTime d) {
+    return '${_months[d.month]} ${d.day}, ${d.year}';
+  }
+
+  Future<void> _pickScheduledDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _scheduledDate ?? now,
+      firstDate: DateTime(now.year - 1),
+      lastDate: DateTime(now.year + 5),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _scheduledDate = DateTime(picked.year, picked.month, picked.day);
+    });
+  }
+
+  Future<void> _pickTime({required bool isStart}) async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: (isStart ? _startTime : _windowEndTime) ?? TimeOfDay.now(),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      if (isStart) {
+        _startTime = picked;
+      } else {
+        _windowEndTime = picked;
+      }
+    });
+  }
+
+  String _tenantLabel(Tenant tenant) {
+    final fullName = tenant.fullName?.trim();
+    if (fullName != null && fullName.isNotEmpty) return fullName;
+    final name = '${tenant.firstName} ${tenant.lastName}'.trim();
+    return name.isEmpty ? 'Tenant #${tenant.id}' : name;
+  }
+
+  double? _parseOptionalAmount(TextEditingController controller) {
+    final trimmed = controller.text.trim();
+    if (trimmed.isEmpty) return null;
+    return double.tryParse(trimmed);
+  }
+
   Future<void> _submit() async {
-    if (_titleCtrl.text.trim().isEmpty ||
-        _descCtrl.text.trim().isEmpty) {
-      setState(() => _error = 'Title and description are required.');
+    if (!(_formKey.currentState?.validate() ?? false)) return;
+
+    final scheduledFor = _combine(_scheduledDate, _startTime);
+    final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
+    if (scheduledFor != null &&
+        scheduledWindowEnd != null &&
+        !scheduledWindowEnd.isAfter(scheduledFor)) {
+      setState(
+        () => _error = 'Arrival window end must be after the start time.',
+      );
       return;
     }
 
@@ -1131,15 +1240,25 @@ class _EditWorkOrderSheetState
     });
 
     try {
-      await ref.read(workOrdersRepositoryProvider).updateWorkOrder(
-        widget.workOrder.id,
-        {
-          'title': _titleCtrl.text.trim(),
-          'description': _descCtrl.text.trim(),
-          'priority': _priority,
-          'category': _category,
-        },
-      );
+      final estimatedCost = _parseOptionalAmount(_estCostCtrl);
+      final actualCost = _parseOptionalAmount(_actualCostCtrl);
+      await ref
+          .read(workOrdersRepositoryProvider)
+          .updateWorkOrder(widget.workOrder.id, {
+            'title': _titleCtrl.text.trim(),
+            'description': _descCtrl.text.trim(),
+            'priority': _priority,
+            'category': _category,
+            'unitId': ?_selectedUnitId,
+            'tenantId': ?_selectedTenantId,
+            'vendorId': ?_selectedVendorId,
+            if (scheduledFor != null)
+              'scheduledFor': localToWireIso(scheduledFor),
+            if (scheduledWindowEnd != null)
+              'scheduledWindowEnd': localToWireIso(scheduledWindowEnd),
+            'estimatedCost': ?estimatedCost,
+            'actualCost': ?actualCost,
+          });
 
       widget.onSaved();
       if (mounted) Navigator.of(context).pop();
@@ -1152,118 +1271,387 @@ class _EditWorkOrderSheetState
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
+    final colorScheme = Theme.of(context).colorScheme;
+    final propertiesAsync = ref.watch(propertiesForWoProvider);
+    final tenantsAsync = ref.watch(tenantsProvider);
+    final vendorsAsync = ref.watch(vendorsProvider);
+    final unitsAsync = ref.watch(unitsProvider(_selectedPropertyId));
+    const gap = SizedBox(height: 12);
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Header
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Edit Work Order',
-                    style: theme.textTheme.titleLarge
-                        ?.copyWith(fontWeight: FontWeight.w700),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.close),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
+    final propertyField = propertiesAsync.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: LinearProgressIndicator(),
+      ),
+      error: (e, _) => Text(
+        'Could not load properties: ${e is ApiException ? e.message : e}',
+        style: TextStyle(color: colorScheme.error, fontSize: 13),
+      ),
+      data: (properties) {
+        var propertyName =
+            widget.workOrder.propertyName ?? 'Property #$_selectedPropertyId';
+        for (final property in properties) {
+          if (property.id == _selectedPropertyId) {
+            propertyName = property.name;
+            break;
+          }
+        }
+        return TextFormField(
+          key: const Key('work-order-property-field'),
+          initialValue: propertyName,
+          readOnly: true,
+          decoration: const InputDecoration(labelText: 'Property'),
+        );
+      },
+    );
+
+    final unitField = unitsAsync.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: LinearProgressIndicator(),
+      ),
+      error: (e, _) => Text(
+        'Could not load units: ${e is ApiException ? e.message : e}',
+        style: TextStyle(color: colorScheme.error, fontSize: 13),
+      ),
+      data: (units) {
+        final hasSelectedUnit =
+            _selectedUnitId == null ||
+            units.any((unit) => unit.id == _selectedUnitId);
+        return DropdownButtonFormField<int?>(
+          initialValue: _selectedUnitId,
+          decoration: const InputDecoration(labelText: 'Unit (optional)'),
+          items: [
+            const DropdownMenuItem<int?>(
+              value: null,
+              child: Text('No specific unit'),
             ),
-            const SizedBox(height: 16),
-
-            // Title
-            TextFormField(
-              controller: _titleCtrl,
-              textInputAction: TextInputAction.next,
-              decoration: const InputDecoration(labelText: 'Title'),
-            ),
-            const SizedBox(height: 12),
-
-            // Description
-            TextFormField(
-              controller: _descCtrl,
-              maxLines: 3,
-              textInputAction: TextInputAction.newline,
-              decoration: const InputDecoration(labelText: 'Description'),
-            ),
-            const SizedBox(height: 12),
-
-            // Priority + Category row
-            Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _priority,
-                    decoration:
-                        const InputDecoration(labelText: 'Priority'),
-                    items: _priorities
-                        .map((p) => DropdownMenuItem(
-                            value: p, child: Text(p)))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) setState(() => _priority = v);
-                    },
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    initialValue: _category,
-                    decoration:
-                        const InputDecoration(labelText: 'Category'),
-                    items: _categories
-                        .map((c) => DropdownMenuItem(
-                            value: c, child: Text(c)))
-                        .toList(),
-                    onChanged: (v) {
-                      if (v != null) setState(() => _category = v);
-                    },
-                  ),
-                ),
-              ],
-            ),
-
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                  color: colorScheme.errorContainer,
-                  borderRadius: BorderRadius.circular(8),
-                ),
+            if (!hasSelectedUnit)
+              DropdownMenuItem<int?>(
+                value: _selectedUnitId,
                 child: Text(
-                  _error!,
-                  style: TextStyle(
-                      color: colorScheme.onErrorContainer, fontSize: 13),
+                  'Unit ${widget.workOrder.unitNumber ?? _selectedUnitId}',
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
-            ],
-
-            const SizedBox(height: 20),
-
-            FilledButton(
-              onPressed: _saving ? null : _submit,
-              child: _saving
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Save Changes'),
+            ...units.map(
+              (unit) => DropdownMenuItem<int?>(
+                value: unit.id,
+                child: Text(
+                  'Unit ${unit.unitNumber}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
             ),
           ],
-        ),
+          onChanged: (value) => setState(() => _selectedUnitId = value),
+        );
+      },
+    );
+
+    final tenantField = tenantsAsync.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: LinearProgressIndicator(),
+      ),
+      error: (e, _) => Text(
+        'Could not load tenants: ${e is ApiException ? e.message : e}',
+        style: TextStyle(color: colorScheme.error, fontSize: 13),
+      ),
+      data: (tenants) {
+        final hasSelectedTenant =
+            _selectedTenantId == null ||
+            tenants.any((tenant) => tenant.id == _selectedTenantId);
+        return DropdownButtonFormField<int?>(
+          initialValue: _selectedTenantId,
+          decoration: const InputDecoration(labelText: 'Tenant (optional)'),
+          items: [
+            const DropdownMenuItem<int?>(value: null, child: Text('No tenant')),
+            if (!hasSelectedTenant)
+              DropdownMenuItem<int?>(
+                value: _selectedTenantId,
+                child: Text(
+                  widget.workOrder.tenantName ??
+                      'Tenant #${widget.workOrder.tenantId}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ...tenants.map(
+              (tenant) => DropdownMenuItem<int?>(
+                value: tenant.id,
+                child: Text(
+                  _tenantLabel(tenant),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ),
+          ],
+          onChanged: (value) => setState(() => _selectedTenantId = value),
+        );
+      },
+    );
+
+    final vendorField = vendorsAsync.when(
+      loading: () => const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: LinearProgressIndicator(),
+      ),
+      error: (e, _) => Text(
+        'Could not load vendors: ${e is ApiException ? e.message : e}',
+        style: TextStyle(color: colorScheme.error, fontSize: 13),
+      ),
+      data: (vendors) {
+        final hasSelectedVendor =
+            _selectedVendorId == null ||
+            vendors.any((vendor) => vendor.id == _selectedVendorId);
+        return DropdownButtonFormField<int?>(
+          initialValue: _selectedVendorId,
+          decoration: const InputDecoration(labelText: 'Vendor (optional)'),
+          items: [
+            const DropdownMenuItem<int?>(value: null, child: Text('No vendor')),
+            if (!hasSelectedVendor)
+              DropdownMenuItem<int?>(
+                value: _selectedVendorId,
+                child: Text(
+                  widget.workOrder.vendorName ??
+                      'Vendor #${widget.workOrder.vendorId}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ...vendors.map(
+              (vendor) => DropdownMenuItem<int?>(
+                value: vendor.id,
+                child: Text(vendor.name, overflow: TextOverflow.ellipsis),
+              ),
+            ),
+          ],
+          onChanged: (value) => setState(() => _selectedVendorId = value),
+        );
+      },
+    );
+
+    return Form(
+      key: _formKey,
+      child: WorkOrderFormShell(
+        title: 'Edit Work Order',
+        saveLabel: 'Save Changes',
+        saving: _saving,
+        error: _error,
+        onSave: _submit,
+        tabs: [
+          WorkOrderFormTabSpec(
+            label: 'Details',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                propertyField,
+                gap,
+                unitField,
+                gap,
+                TextFormField(
+                  key: const Key('work-order-title-field'),
+                  controller: _titleCtrl,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(labelText: 'Title'),
+                  validator: (value) => (value == null || value.trim().isEmpty)
+                      ? 'Title is required'
+                      : null,
+                ),
+                gap,
+                TextFormField(
+                  key: const Key('work-order-description-field'),
+                  controller: _descCtrl,
+                  maxLines: 3,
+                  textInputAction: TextInputAction.newline,
+                  decoration: const InputDecoration(labelText: 'Description'),
+                  validator: (value) => (value == null || value.trim().isEmpty)
+                      ? 'Description is required'
+                      : null,
+                ),
+              ],
+            ),
+          ),
+          WorkOrderFormTabSpec(
+            label: 'Schedule',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _priority,
+                        decoration: const InputDecoration(
+                          labelText: 'Priority',
+                        ),
+                        items: _priorities
+                            .map(
+                              (priority) => DropdownMenuItem(
+                                value: priority,
+                                child: Text(priority),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _priority = value);
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _category,
+                        decoration: const InputDecoration(
+                          labelText: 'Category',
+                        ),
+                        items: _categories
+                            .map(
+                              (category) => DropdownMenuItem(
+                                value: category,
+                                child: Text(category),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() => _category = value);
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                gap,
+                InkWell(
+                  onTap: _pickScheduledDate,
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'Scheduled date (optional)',
+                      suffixIcon: Icon(Icons.calendar_today_outlined),
+                    ),
+                    child: Text(
+                      _scheduledDate == null
+                          ? 'Not scheduled'
+                          : _fmtEditDate(_scheduledDate!),
+                      style: TextStyle(
+                        color: _scheduledDate == null
+                            ? colorScheme.onSurfaceVariant
+                            : colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+                ),
+                gap,
+                Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        onTap: _scheduledDate == null
+                            ? null
+                            : () => _pickTime(isStart: true),
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Start time',
+                            suffixIcon: Icon(Icons.schedule_outlined),
+                          ),
+                          child: Text(
+                            _startTime == null
+                                ? '--:--'
+                                : _startTime!.format(context),
+                            style: TextStyle(
+                              color: _startTime == null
+                                  ? colorScheme.onSurfaceVariant
+                                  : colorScheme.onSurface,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const Spacer(),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          WorkOrderFormTabSpec(
+            label: 'Costs',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                InkWell(
+                  onTap: _scheduledDate == null
+                      ? null
+                      : () => _pickTime(isStart: false),
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'Arrival window end',
+                      suffixIcon: Icon(Icons.schedule_outlined),
+                    ),
+                    child: Text(
+                      _windowEndTime == null
+                          ? '--:--'
+                          : _windowEndTime!.format(context),
+                      style: TextStyle(
+                        color: _windowEndTime == null
+                            ? colorScheme.onSurfaceVariant
+                            : colorScheme.onSurface,
+                      ),
+                    ),
+                  ),
+                ),
+                gap,
+                TextFormField(
+                  key: const Key('work-order-estimated-cost-field'),
+                  controller: _estCostCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Estimated cost (optional)',
+                    prefixText: '\$ ',
+                  ),
+                  validator: (value) {
+                    final text = value?.trim() ?? '';
+                    if (text.isEmpty) return null;
+                    final parsed = double.tryParse(text);
+                    if (parsed == null) return 'Enter a valid amount';
+                    if (parsed < 0) return 'Cannot be negative';
+                    return null;
+                  },
+                ),
+                gap,
+                TextFormField(
+                  key: const Key('work-order-actual-cost-field'),
+                  controller: _actualCostCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Actual cost (optional)',
+                    prefixText: '\$ ',
+                  ),
+                  validator: (value) {
+                    final text = value?.trim() ?? '';
+                    if (text.isEmpty) return null;
+                    final parsed = double.tryParse(text);
+                    if (parsed == null) return 'Enter a valid amount';
+                    if (parsed < 0) return 'Cannot be negative';
+                    return null;
+                  },
+                ),
+              ],
+            ),
+          ),
+          WorkOrderFormTabSpec(
+            label: 'Assign',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [tenantField, gap, vendorField],
+            ),
+          ),
+        ],
       ),
     );
   }

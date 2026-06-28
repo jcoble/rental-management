@@ -3,18 +3,30 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/tabbed_form_sheet.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
-import 'lease_detail_screen.dart';
+import '../units/unit_command_center_screen.dart';
+import '../units/unit_navigation.dart';
 import 'leases_repository.dart';
 
 const _monthNames = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  '',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
-String _fmtDate(DateTime d) =>
-    '${_monthNames[d.month]} ${d.day}, ${d.year}';
+String _fmtDate(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
 
 String _fmtIso(DateTime d) =>
     '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -59,10 +71,11 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
   Future<void> _refresh() => ref.read(leasesProvider.notifier).refresh();
 
   void _openDetail(BuildContext context, Lease lease) {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => LeaseDetailScreen(lease: lease),
-      ),
+    openUnitCommandCenter(
+      context,
+      unitId: lease.unitId,
+      initialTab: UnitCommandCenterTab.lease,
+      lease: lease,
     );
   }
 
@@ -86,9 +99,7 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Leases'),
-      ),
+      appBar: AppBar(title: const Text('Leases')),
       floatingActionButton: FloatingActionButton(
         heroTag: 'leases-fab',
         onPressed: () => _showAddSheet(context),
@@ -98,8 +109,7 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
       body: RefreshIndicator(
         onRefresh: _refresh,
         child: leasesAsync.when(
-          loading: () =>
-              const Center(child: CircularProgressIndicator()),
+          loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => _ErrorBody(
             message: e is ApiException ? e.message : e.toString(),
             onRetry: _refresh,
@@ -108,16 +118,20 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
             if (list.isEmpty) {
               return _EmptyBody(onAdd: () => _showAddSheet(context));
             }
+            final bottomInset = MediaQuery.paddingOf(context).bottom;
             return ListView.separated(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 160.0 + bottomInset),
               itemCount: list.length,
-              separatorBuilder: (_, idx) => const SizedBox(height: 8),
+              separatorBuilder: (_, idx) =>
+                  _GroupedListDivider(colorScheme: colorScheme),
               itemBuilder: (context, index) {
                 final lease = list[index];
                 return _LeaseCard(
                   lease: lease,
                   colorScheme: colorScheme,
                   theme: theme,
+                  first: index == 0,
+                  last: index == list.length - 1,
                   onTap: () => _openDetail(context, lease),
                 );
               },
@@ -136,22 +150,34 @@ class _LeaseCard extends StatelessWidget {
     required this.lease,
     required this.colorScheme,
     required this.theme,
+    required this.first,
+    required this.last,
     required this.onTap,
   });
 
   final Lease lease;
   final ColorScheme colorScheme;
   final ThemeData theme;
+  final bool first;
+  final bool last;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Card(
+    final borderRadius = BorderRadius.vertical(
+      top: first ? const Radius.circular(20) : Radius.zero,
+      bottom: last ? const Radius.circular(20) : Radius.zero,
+    );
+
+    return Material(
+      color: colorScheme.surfaceContainerHigh,
+      borderRadius: borderRadius,
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: borderRadius,
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -186,19 +212,18 @@ class _LeaseCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  _StatusChip(
-                      status: lease.status, colorScheme: colorScheme),
+                  _StatusChip(status: lease.status, colorScheme: colorScheme),
                 ],
               ),
               const SizedBox(height: 8),
-              Row(
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
                 children: [
                   _MetaChip(
                     icon: Icons.attach_money,
-                    label:
-                        '${_formatCurrency(lease.monthlyRent)}/mo',
+                    label: '${_formatCurrency(lease.monthlyRent)}/mo',
                   ),
-                  const SizedBox(width: 8),
                   _MetaChip(
                     icon: Icons.calendar_today_outlined,
                     label:
@@ -210,6 +235,23 @@ class _LeaseCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _GroupedListDivider extends StatelessWidget {
+  const _GroupedListDivider({required this.colorScheme});
+
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Divider(
+      height: 1,
+      thickness: 1,
+      indent: 16,
+      endIndent: 16,
+      color: colorScheme.outlineVariant.withValues(alpha: 0.48),
     );
   }
 }
@@ -295,8 +337,11 @@ class _EmptyBody extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.description_outlined,
-                size: 48, color: colorScheme.onSurfaceVariant),
+            Icon(
+              Icons.description_outlined,
+              size: 48,
+              color: colorScheme.onSurfaceVariant,
+            ),
             const SizedBox(height: 12),
             Text(
               'No leases yet',
@@ -350,10 +395,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: colorScheme.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
@@ -404,14 +446,14 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
   void initState() {
     super.initState();
     final e = widget.existing;
-    _rentCtrl =
-        TextEditingController(text: e?.monthlyRent.toString() ?? '');
-    _depositCtrl =
-        TextEditingController(text: e?.securityDeposit.toString() ?? '');
-    _lateFeeCtrl =
-        TextEditingController(text: e?.lateFeeAmount.toString() ?? '50');
-    _dueDayCtrl =
-        TextEditingController(text: e?.rentDueDay.toString() ?? '1');
+    _rentCtrl = TextEditingController(text: e?.monthlyRent.toString() ?? '');
+    _depositCtrl = TextEditingController(
+      text: e?.securityDeposit.toString() ?? '',
+    );
+    _lateFeeCtrl = TextEditingController(
+      text: e?.lateFeeAmount.toString() ?? '50',
+    );
+    _dueDayCtrl = TextEditingController(text: e?.rentDueDay.toString() ?? '1');
 
     if (e != null) {
       _selectedPropertyId = e.propertyId;
@@ -440,8 +482,7 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
     super.dispose();
   }
 
-  Future<void> _pickDate(BuildContext context,
-      {required bool isStart}) async {
+  Future<void> _pickDate(BuildContext context, {required bool isStart}) async {
     final initial = isStart
         ? (_startDate ?? DateTime.now())
         : (_endDate ?? DateTime.now().add(const Duration(days: 365)));
@@ -504,10 +545,6 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
-
     final propertiesAsync = ref.watch(propertiesProvider);
     final tenantsAsync = ref.watch(tenantsProvider);
 
@@ -519,253 +556,206 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
         ? ref.watch(unitsProvider(_selectedPropertyId!))
         : const AsyncValue<List<Unit>>.data([]);
     final units = unitsAsync.value ?? <Unit>[];
+    const gap = SizedBox(height: 12);
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
-      child: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Header
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _isEdit ? 'Edit Lease' : 'New Lease',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              // Property dropdown
-              DropdownButtonFormField<int>(
-                initialValue: properties.any((p) => p.id == _selectedPropertyId)
-                    ? _selectedPropertyId
-                    : null,
-                decoration: const InputDecoration(labelText: 'Property'),
-                items: properties
-                    .map((p) => DropdownMenuItem(
-                          value: p.id,
-                          child: Text(p.name,
-                              overflow: TextOverflow.ellipsis),
-                        ))
-                    .toList(),
-                onChanged: (v) {
-                  setState(() {
-                    _selectedPropertyId = v;
-                    _selectedUnitId = null;
-                  });
-                  if (v != null) {
-                    ref.read(unitsProvider(v).notifier).load();
-                  }
-                },
-                validator: (_) =>
-                    _selectedPropertyId == null ? 'Select a property' : null,
-              ),
-              const SizedBox(height: 12),
-
-              // Unit dropdown (depends on property)
-              DropdownButtonFormField<int>(
-                initialValue:
-                    units.any((u) => u.id == _selectedUnitId)
-                        ? _selectedUnitId
-                        : null,
-                decoration: InputDecoration(
-                  labelText: 'Unit',
-                  helperText: _selectedPropertyId == null
-                      ? 'Select a property first'
+    return Form(
+      key: _formKey,
+      child: TabbedFormSheet(
+        title: _isEdit ? 'Edit Lease' : 'New Lease',
+        saveLabel: _isEdit ? 'Save Changes' : 'Create Lease',
+        saving: _saving,
+        error: _error,
+        onSave: _submit,
+        tabs: [
+          TabbedFormStepSpec(
+            label: 'Unit',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                DropdownButtonFormField<int>(
+                  initialValue:
+                      properties.any((p) => p.id == _selectedPropertyId)
+                      ? _selectedPropertyId
                       : null,
+                  decoration: const InputDecoration(labelText: 'Property'),
+                  items: properties
+                      .map(
+                        (p) => DropdownMenuItem(
+                          value: p.id,
+                          child: Text(p.name, overflow: TextOverflow.ellipsis),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) {
+                    setState(() {
+                      _selectedPropertyId = v;
+                      _selectedUnitId = null;
+                    });
+                    if (v != null) {
+                      ref.read(unitsProvider(v).notifier).load();
+                    }
+                  },
+                  validator: (_) =>
+                      _selectedPropertyId == null ? 'Select a property' : null,
                 ),
-                items: units
-                    .map((u) => DropdownMenuItem(
+                gap,
+                DropdownButtonFormField<int>(
+                  initialValue: units.any((u) => u.id == _selectedUnitId)
+                      ? _selectedUnitId
+                      : null,
+                  decoration: InputDecoration(
+                    labelText: 'Unit',
+                    helperText: _selectedPropertyId == null
+                        ? 'Select a property first'
+                        : null,
+                  ),
+                  items: units
+                      .map(
+                        (u) => DropdownMenuItem(
                           value: u.id,
                           child: Text(
                             'Unit ${u.unitNumber}'
                             '${u.bedrooms > 0 ? ' · ${u.bedrooms}bd' : ''}',
                           ),
-                        ))
-                    .toList(),
-                onChanged: _selectedPropertyId == null
-                    ? null
-                    : (v) => setState(() => _selectedUnitId = v),
-                validator: (_) =>
-                    _selectedUnitId == null ? 'Select a unit' : null,
-              ),
-              const SizedBox(height: 12),
-
-              // Tenant dropdown
-              DropdownButtonFormField<int>(
-                initialValue: tenants.any((t) => t.id == _selectedTenantId)
-                    ? _selectedTenantId
-                    : null,
-                decoration: const InputDecoration(labelText: 'Tenant'),
-                items: tenants
-                    .map((t) => DropdownMenuItem(
+                        ),
+                      )
+                      .toList(),
+                  onChanged: _selectedPropertyId == null
+                      ? null
+                      : (v) => setState(() => _selectedUnitId = v),
+                  validator: (_) =>
+                      _selectedUnitId == null ? 'Select a unit' : null,
+                ),
+                gap,
+                DropdownButtonFormField<int>(
+                  initialValue: tenants.any((t) => t.id == _selectedTenantId)
+                      ? _selectedTenantId
+                      : null,
+                  decoration: const InputDecoration(labelText: 'Tenant'),
+                  items: tenants
+                      .map(
+                        (t) => DropdownMenuItem(
                           value: t.id,
                           child: Text(
                             '${t.firstName} ${t.lastName}',
                             overflow: TextOverflow.ellipsis,
                           ),
-                        ))
-                    .toList(),
-                onChanged: (v) => setState(() => _selectedTenantId = v),
-                validator: (_) =>
-                    _selectedTenantId == null ? 'Select a tenant' : null,
-              ),
-              const SizedBox(height: 12),
-
-              // Start date + End date
-              Row(
-                children: [
-                  Expanded(
-                    child: _DateTile(
-                      label: 'Start date',
-                      date: _startDate,
-                      onTap: () => _pickDate(context, isStart: true),
-                      hasError: _startDate == null && _error != null,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _DateTile(
-                      label: 'End date',
-                      date: _endDate,
-                      onTap: () => _pickDate(context, isStart: false),
-                      hasError: _endDate == null && _error != null,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              // Monthly rent + Security deposit
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _rentCtrl,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      textInputAction: TextInputAction.next,
-                      decoration:
-                          const InputDecoration(labelText: 'Monthly rent (\$)'),
-                      validator: (v) =>
-                          (v == null || double.tryParse(v) == null)
-                              ? 'Enter an amount'
-                              : null,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _depositCtrl,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      textInputAction: TextInputAction.next,
-                      decoration:
-                          const InputDecoration(labelText: 'Security deposit (\$)'),
-                      validator: (v) =>
-                          (v == null || double.tryParse(v) == null)
-                              ? 'Enter an amount'
-                              : null,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              // Late fee + Rent due day
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _lateFeeCtrl,
-                      keyboardType:
-                          const TextInputType.numberWithOptions(decimal: true),
-                      textInputAction: TextInputAction.next,
-                      decoration:
-                          const InputDecoration(labelText: 'Late fee (\$)'),
-                      validator: (v) =>
-                          (v == null || double.tryParse(v) == null)
-                              ? 'Enter an amount'
-                              : null,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _dueDayCtrl,
-                      keyboardType: TextInputType.number,
-                      textInputAction: TextInputAction.next,
-                      decoration: const InputDecoration(
-                          labelText: 'Rent due day (1–28)'),
-                      validator: (v) {
-                        final n = int.tryParse(v ?? '');
-                        if (n == null || n < 1 || n > 28) {
-                          return 'Enter 1–28';
-                        }
-                        return null;
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              // Status dropdown
-              DropdownButtonFormField<String>(
-                initialValue: _selectedStatus,
-                decoration: const InputDecoration(labelText: 'Status'),
-                items: _leaseStatuses
-                    .map((s) => DropdownMenuItem(value: s, child: Text(s)))
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) setState(() => _selectedStatus = v);
-                },
-              ),
-
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                        color: colorScheme.onErrorContainer, fontSize: 13),
-                  ),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (v) => setState(() => _selectedTenantId = v),
+                  validator: (_) =>
+                      _selectedTenantId == null ? 'Select a tenant' : null,
+                ),
+                gap,
+                _DateTile(
+                  label: 'Start date',
+                  date: _startDate,
+                  onTap: () => _pickDate(context, isStart: true),
+                  hasError: _startDate == null && _error != null,
                 ),
               ],
-
-              const SizedBox(height: 20),
-
-              FilledButton(
-                onPressed: _saving ? null : _submit,
-                child: _saving
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(_isEdit ? 'Save Changes' : 'Create Lease'),
-              ),
-            ],
+            ),
           ),
-        ),
+          TabbedFormStepSpec(
+            label: 'Terms',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _DateTile(
+                  label: 'End date',
+                  date: _endDate,
+                  onTap: () => _pickDate(context, isStart: false),
+                  hasError: _endDate == null && _error != null,
+                ),
+                gap,
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _rentCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        textInputAction: TextInputAction.next,
+                        decoration: const InputDecoration(
+                          labelText: 'Monthly rent (\$)',
+                        ),
+                        validator: (v) =>
+                            (v == null || double.tryParse(v) == null)
+                            ? 'Enter an amount'
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _depositCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        textInputAction: TextInputAction.next,
+                        decoration: const InputDecoration(
+                          labelText: 'Security deposit (\$)',
+                        ),
+                        validator: (v) =>
+                            (v == null || double.tryParse(v) == null)
+                            ? 'Enter an amount'
+                            : null,
+                      ),
+                    ),
+                  ],
+                ),
+                gap,
+                TextFormField(
+                  controller: _lateFeeCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(labelText: 'Late fee (\$)'),
+                  validator: (v) => (v == null || double.tryParse(v) == null)
+                      ? 'Enter an amount'
+                      : null,
+                ),
+              ],
+            ),
+          ),
+          TabbedFormStepSpec(
+            label: 'Rules',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _dueDayCtrl,
+                  keyboardType: TextInputType.number,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Rent due day (1–28)',
+                  ),
+                  validator: (v) {
+                    final n = int.tryParse(v ?? '');
+                    if (n == null || n < 1 || n > 28) {
+                      return 'Enter 1–28';
+                    }
+                    return null;
+                  },
+                ),
+                gap,
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedStatus,
+                  decoration: const InputDecoration(labelText: 'Status'),
+                  items: _leaseStatuses
+                      .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _selectedStatus = v);
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

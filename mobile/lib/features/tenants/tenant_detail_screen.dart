@@ -3,15 +3,27 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
-import '../leases/lease_detail_screen.dart';
 import '../leases/leases_repository.dart';
 import '../notices/create_tenant_notice.dart';
+import '../units/unit_command_center_screen.dart';
+import '../units/unit_navigation.dart';
 import 'tenants_list_screen.dart';
 import 'tenants_repository.dart';
 
 const _monthNames = [
-  '', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  '',
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
 ];
 
 String _fmt(DateTime d) => '${_monthNames[d.month]} ${d.day}, ${d.year}';
@@ -41,9 +53,8 @@ class TenantDetailLoaderScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(tenantDetailProvider(tenantId));
     return async.when(
-      loading: () => const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      ),
+      loading: () =>
+          const Scaffold(body: Center(child: CircularProgressIndicator())),
       error: (e, _) => Scaffold(
         appBar: AppBar(title: const Text('Tenant')),
         body: Center(
@@ -72,8 +83,7 @@ class TenantDetailScreen extends ConsumerStatefulWidget {
   final Tenant tenant;
 
   @override
-  ConsumerState<TenantDetailScreen> createState() =>
-      _TenantDetailScreenState();
+  ConsumerState<TenantDetailScreen> createState() => _TenantDetailScreenState();
 }
 
 class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
@@ -105,10 +115,7 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-      builder: (_) => TenantFormSheet(
-        existing: _tenant,
-        onSaved: _refresh,
-      ),
+      builder: (_) => TenantFormSheet(existing: _tenant, onSaved: _refresh),
     );
   }
 
@@ -162,17 +169,16 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
             // ── Leases ─────────────────────────────────────────────────────
             Text(
               'Leases',
-              style: theme.textTheme.titleMedium
-                  ?.copyWith(fontWeight: FontWeight.w700),
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 8),
 
             leasesAsync.when(
-              loading: () =>
-                  const Center(child: CircularProgressIndicator()),
+              loading: () => const Center(child: CircularProgressIndicator()),
               error: (e, _) => _InlineError(
-                message:
-                    e is ApiException ? e.message : e.toString(),
+                message: e is ApiException ? e.message : e.toString(),
               ),
               data: (leases) {
                 if (leases.isEmpty) {
@@ -180,13 +186,13 @@ class _TenantDetailScreenState extends ConsumerState<TenantDetailScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     child: Text(
                       'No leases for this tenant.',
-                      style: TextStyle(
-                          color: colorScheme.onSurfaceVariant),
+                      style: TextStyle(color: colorScheme.onSurfaceVariant),
                     ),
                   );
                 }
                 // Active leases first, then the rest.
-                final sorted = [...leases]..sort((a, b) {
+                final sorted = [...leases]
+                  ..sort((a, b) {
                     final aActive = a.status.toLowerCase() == 'active' ? 0 : 1;
                     final bActive = b.status.toLowerCase() == 'active' ? 0 : 1;
                     return aActive.compareTo(bActive);
@@ -250,14 +256,16 @@ class _TenantInfoCard extends StatelessWidget {
                     children: [
                       Text(
                         '${tenant.firstName} ${tenant.lastName}',
-                        style: theme.textTheme.titleLarge
-                            ?.copyWith(fontWeight: FontWeight.w700),
+                        style: theme.textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                       if (tenant.email != null)
                         Text(
                           tenant.email!,
                           style: theme.textTheme.bodyMedium?.copyWith(
-                              color: colorScheme.onSurfaceVariant),
+                            color: colorScheme.onSurfaceVariant,
+                          ),
                         ),
                     ],
                   ),
@@ -278,10 +286,7 @@ class _TenantInfoCard extends StatelessWidget {
                     label: 'Emergency',
                     value: tenant.emergencyContact!,
                   ),
-                _KeyValue(
-                  label: 'Member since',
-                  value: _fmt(tenant.createdAt),
-                ),
+                _KeyValue(label: 'Member since', value: _fmt(tenant.createdAt)),
                 if (tenant.activeLeaseCount != null)
                   _KeyValue(
                     label: 'Active leases',
@@ -315,12 +320,16 @@ class _KeyValue extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label,
-            style:
-                TextStyle(fontSize: 11, color: colorScheme.onSurfaceVariant)),
-        Text(value,
-            style: theme.textTheme.bodyMedium
-                ?.copyWith(fontWeight: FontWeight.w600)),
+        Text(
+          label,
+          style: TextStyle(fontSize: 11, color: colorScheme.onSurfaceVariant),
+        ),
+        Text(
+          value,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
       ],
     );
   }
@@ -333,6 +342,16 @@ class _LeaseSummaryTile extends StatelessWidget {
 
   final Lease lease;
 
+  void _openLease(BuildContext context) {
+    openUnitCommandCenter(
+      context,
+      unitId: lease.unitId,
+      initialTab: UnitCommandCenterTab.lease,
+      lease: lease,
+      tenantId: lease.tenantId,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -343,11 +362,7 @@ class _LeaseSummaryTile extends StatelessWidget {
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       child: InkWell(
-        onTap: () => Navigator.of(context).push<void>(
-          MaterialPageRoute<void>(
-            builder: (_) => LeaseDetailScreen(lease: lease),
-          ),
-        ),
+        onTap: () => _openLease(context),
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.all(12),
@@ -359,8 +374,9 @@ class _LeaseSummaryTile extends StatelessWidget {
                   Expanded(
                     child: Text(
                       lease.propertyName ?? 'Lease #${lease.leaseNumber}',
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                   Text(
@@ -371,8 +387,11 @@ class _LeaseSummaryTile extends StatelessWidget {
                     ),
                   ),
                   const Text('/mo', style: TextStyle(fontSize: 12)),
-                  Icon(Icons.chevron_right,
-                      size: 18, color: colorScheme.onSurfaceVariant),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ],
               ),
               const SizedBox(height: 4),
@@ -383,13 +402,17 @@ class _LeaseSummaryTile extends StatelessWidget {
                       'Unit ${lease.unitNumber ?? lease.unitId}  ·  '
                       '${_fmt(lease.startDate)} – ${_fmt(lease.endDate)}',
                       style: TextStyle(
-                          fontSize: 12, color: colorScheme.onSurfaceVariant),
+                        fontSize: 12,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ),
                   if (!isActive)
                     Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 7, vertical: 2),
+                        horizontal: 7,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: colorScheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(12),

@@ -39,6 +39,10 @@ class Payment {
   final String? notes;
   final String? tenantName;
   final String? leaseNumber;
+  final String? propertyName;
+  final String? unitNumber;
+  final bool hasScan;
+  final bool scanIsImage;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -57,6 +61,10 @@ class Payment {
     this.notes,
     this.tenantName,
     this.leaseNumber,
+    this.propertyName,
+    this.unitNumber,
+    this.hasScan = false,
+    this.scanIsImage = false,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -70,15 +78,22 @@ class Payment {
       status: json['status'] as String? ?? '',
       amount: (json['amount'] as num?)?.toDouble() ?? 0,
       amountPaid: (json['amountPaid'] as num?)?.toDouble(),
-      dueDate: DateTime.tryParse(json['dueDate'] as String? ?? '') ?? DateTime(0),
+      dueDate:
+          DateTime.tryParse(json['dueDate'] as String? ?? '') ?? DateTime(0),
       paidDate: DateTime.tryParse(json['paidDate'] as String? ?? ''),
       method: json['method'] as String?,
       externalReference: json['externalReference'] as String?,
       notes: json['notes'] as String?,
       tenantName: json['tenantName'] as String?,
       leaseNumber: json['leaseNumber'] as String?,
-      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
-      updatedAt: DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
+      propertyName: json['propertyName'] as String?,
+      unitNumber: json['unitNumber'] as String?,
+      hasScan: json['hasScan'] as bool? ?? false,
+      scanIsImage: json['scanIsImage'] as bool? ?? false,
+      createdAt:
+          DateTime.tryParse(json['createdAt'] as String? ?? '') ?? DateTime(0),
+      updatedAt:
+          DateTime.tryParse(json['updatedAt'] as String? ?? '') ?? DateTime(0),
     );
   }
 
@@ -91,7 +106,8 @@ class Payment {
       'amount': amount,
       if (amountPaid != null) 'amountPaid': amountPaid,
       'dueDate': dueDate.toIso8601String().split('T').first,
-      if (paidDate != null) 'paidDate': paidDate!.toIso8601String().split('T').first,
+      if (paidDate != null)
+        'paidDate': paidDate!.toIso8601String().split('T').first,
       if (method != null) 'method': method,
       if (externalReference != null) 'externalReference': externalReference,
       if (notes != null) 'notes': notes,

@@ -6,11 +6,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
-import '../leases/lease_detail_screen.dart';
+import '../home/mobile_domain_navigation.dart';
 import '../leases/leases_repository.dart';
+import '../payments/payment_lease_labels.dart';
 import '../places/address_autocomplete_field.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
+import '../units/unit_command_center_screen.dart';
 import 'scan_models.dart';
 import 'scan_repository.dart';
 
@@ -573,9 +575,28 @@ class _ScanReviewScreenState extends ConsumerState<ScanReviewScreen> {
         final lease = await _loadLease(leaseId);
         if (!mounted) return;
         if (lease != null) {
+          final shellNavigator = mobileShellNavigatorOf(context);
+          if (shellNavigator != null) {
+            shellNavigator.openTab(
+              MobileShellTabId.rentals,
+              destination: MobileDestinationId.units,
+              detailBuilder: (_) => UnitCommandCenterLoaderScreen(
+                unitId: lease.unitId,
+                initialTab: UnitCommandCenterTab.lease,
+                initialLease: lease,
+              ),
+            );
+            revealMobileShellIfDetached(context);
+            return;
+          }
+
           Navigator.of(context).pushReplacement(
             MaterialPageRoute<void>(
-              builder: (_) => LeaseDetailScreen(lease: lease),
+              builder: (_) => UnitCommandCenterLoaderScreen(
+                unitId: lease.unitId,
+                initialTab: UnitCommandCenterTab.lease,
+                initialLease: lease,
+              ),
             ),
           );
           return;
@@ -918,7 +939,8 @@ class _ReviewBody extends ConsumerWidget {
                   // guided lease flow). Confirming creates a RentalApplication.
                   // When extraction fails (no scalar fields) the same applicant
                   // form is shown with empty inputs — NOT the Expense fallback.
-                  if (draft.scalarFields.isNotEmpty || draft.status != 'Pending')
+                  if (draft.scalarFields.isNotEmpty ||
+                      draft.status != 'Pending')
                     _ApplicantSection(
                       draft: draft,
                       editedFields: editedFields,
@@ -1204,23 +1226,8 @@ class _DocumentPreview extends ConsumerWidget {
 // _LeaseSelector
 // ---------------------------------------------------------------------------
 
-/// Builds a human-readable label for a lease dropdown entry (H3): tenant + unit
-/// instead of a bare lease number, e.g. "Unit 4B — Jane Smith". Falls back to
-/// whatever data is available, ending with the lease number when nothing else
-/// is populated.
 String _leaseLabel(Lease lease) {
-  final tenant = lease.tenantName?.trim();
-  final unit = lease.unitNumber?.trim();
-  final number = lease.leaseNumber.trim();
-
-  final hasUnit = unit != null && unit.isNotEmpty;
-  final hasTenant = tenant != null && tenant.isNotEmpty;
-
-  if (hasUnit && hasTenant) return 'Unit $unit — $tenant';
-  if (hasUnit) return 'Unit $unit';
-  if (hasTenant) return tenant;
-  if (number.isNotEmpty) return '#$number';
-  return 'Lease';
+  return formatLeasePickerLabel(lease);
 }
 
 class _LeaseSelector extends ConsumerWidget {
@@ -1666,8 +1673,9 @@ class _CreatePropertyFieldsState extends State<_CreatePropertyFields> {
   @override
   void initState() {
     super.initState();
-    _addressCtrl =
-        TextEditingController(text: widget.editedFields['property_address'] ?? '');
+    _addressCtrl = TextEditingController(
+      text: widget.editedFields['property_address'] ?? '',
+    );
     // Mirror manual typing in the address field back into the edited map.
     _addressCtrl.addListener(_syncAddress);
   }
@@ -1704,8 +1712,12 @@ class _CreatePropertyFieldsState extends State<_CreatePropertyFields> {
             if (a.line1.isNotEmpty) {
               widget.onFieldChanged('property_address', a.line1);
             }
-            if (a.city.isNotEmpty) widget.onFieldChanged('property_city', a.city);
-            if (a.state.isNotEmpty) widget.onFieldChanged('property_state', a.state);
+            if (a.city.isNotEmpty) {
+              widget.onFieldChanged('property_city', a.city);
+            }
+            if (a.state.isNotEmpty) {
+              widget.onFieldChanged('property_state', a.state);
+            }
             if (a.zip.isNotEmpty) {
               widget.onFieldChanged('property_postal_code', a.zip);
             }
