@@ -52,4 +52,5 @@ public class Portfolio
     public List<UserAccount> UserAccounts { get; set; } = [];
     public List<PortalMessage> PortalMessages { get; set; } = [];
     public List<RentalApplication> RentalApplications { get; set; } = [];
+    public List<DocumentTemplate> DocumentTemplates { get; set; } = [];
 }

@@ -21,6 +21,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Unit> Units => Set<Unit>();
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<Lease> Leases => Set<Lease>();
+    public DbSet<DocumentTemplate> DocumentTemplates => Set<DocumentTemplate>();
+    public DbSet<DocumentTemplateField> DocumentTemplateFields => Set<DocumentTemplateField>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<Expense> Expenses => Set<Expense>();
     public DbSet<ExpenseLineItem> ExpenseLineItems => Set<ExpenseLineItem>();
@@ -182,6 +184,69 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => new { e.EntityType, e.EntityId });
             entity.HasQueryFilter(e => e.DeletedAt == null);
+        });
+
+        modelBuilder.Entity<DocumentTemplate>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Kind).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.RenderMode).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.Name).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Description).HasMaxLength(2000);
+            entity.Property(e => e.DraftHtml).HasColumnType("text");
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => new { e.PortfolioId, e.Kind, e.Status });
+            entity.HasIndex(e => new { e.PortfolioId, e.Kind, e.DefaultForPortfolio });
+            entity.HasIndex(e => e.PropertyId);
+            entity.HasQueryFilter(e => e.Portfolio!.DeletedAt == null);
+            entity.ToTable(t =>
+            {
+                t.HasCheckConstraint("CK_DocumentTemplate_Version", "\"Version\" >= 1");
+            });
+            entity.HasOne(e => e.Portfolio)
+                .WithMany(p => p.DocumentTemplates)
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Property)
+                .WithMany()
+                .HasForeignKey(e => e.PropertyId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.OriginalStoredFile)
+                .WithMany()
+                .HasForeignKey(e => e.OriginalStoredFileId)
+                .OnDelete(DeleteBehavior.SetNull);
+            entity.HasOne(e => e.CompiledStoredFile)
+                .WithMany()
+                .HasForeignKey(e => e.CompiledStoredFileId)
+                .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<DocumentTemplateField>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.FieldKey).IsRequired().HasMaxLength(120);
+            entity.Property(e => e.Label).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Kind).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.SignerRole).HasConversion<string>().HasMaxLength(40);
+            entity.Property(e => e.DefaultText).HasMaxLength(500);
+            entity.HasIndex(e => e.DocumentTemplateId);
+            entity.HasIndex(e => new { e.DocumentTemplateId, e.FieldKey });
+            entity.HasQueryFilter(e => e.DocumentTemplate!.Portfolio!.DeletedAt == null);
+            entity.ToTable(t =>
+            {
+                t.HasCheckConstraint("CK_DocumentTemplateField_Page", "\"PageNumber\" >= 1");
+                t.HasCheckConstraint("CK_DocumentTemplateField_XPct", "\"XPct\" >= 0 AND \"XPct\" <= 1");
+                t.HasCheckConstraint("CK_DocumentTemplateField_YPct", "\"YPct\" >= 0 AND \"YPct\" <= 1");
+                t.HasCheckConstraint("CK_DocumentTemplateField_WidthPct", "\"WidthPct\" > 0 AND \"WidthPct\" <= 1");
+                t.HasCheckConstraint("CK_DocumentTemplateField_HeightPct", "\"HeightPct\" > 0 AND \"HeightPct\" <= 1");
+                t.HasCheckConstraint("CK_DocumentTemplateField_XExtent", "\"XPct\" + \"WidthPct\" <= 1");
+                t.HasCheckConstraint("CK_DocumentTemplateField_YExtent", "\"YPct\" + \"HeightPct\" <= 1");
+            });
+            entity.HasOne(e => e.DocumentTemplate)
+                .WithMany(t => t.Fields)
+                .HasForeignKey(e => e.DocumentTemplateId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ScanDraft>(entity =>
@@ -567,12 +632,14 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.DocumentName).IsRequired().HasMaxLength(260);
             entity.Property(e => e.Subject).HasMaxLength(200);
             entity.Property(e => e.ContentSha256).HasMaxLength(64);
+            entity.Property(e => e.TemplateFieldSnapshotJson).HasColumnType("jsonb");
             // Stored as the string enum name to match the app-wide string-enum convention.
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(40);
             // The envelope is resolved by its opaque PublicId (webhook/status path) — unique + indexed.
             entity.HasIndex(e => e.PublicId).IsUnique();
             entity.HasIndex(e => e.PortfolioId);
             entity.HasIndex(e => e.LeaseId);
+            entity.HasIndex(e => e.DocumentTemplateId);
             entity.HasIndex(e => e.Status);
             entity.HasOne(e => e.Portfolio)
                 .WithMany()
@@ -582,6 +649,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.LeaseId)
                 .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.DocumentTemplate)
+                .WithMany()
+                .HasForeignKey(e => e.DocumentTemplateId)
+                .OnDelete(DeleteBehavior.SetNull);
             // The stored files outlive the request row; never cascade a file delete back into it.
             entity.HasOne(e => e.OriginalStoredFile)
                 .WithMany()
@@ -800,6 +871,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.HasIndex(e => e.TenantId);
             entity.HasIndex(e => e.Status);
             entity.HasIndex(e => e.EsignEnvelopeId);
+            entity.HasIndex(e => e.DocumentTemplateId);
             entity.HasQueryFilter(e => e.DeletedAt == null);
             // StartDate must precede EndDate, and RentDueDay must be a valid day of month.
             entity.ToTable(t =>
@@ -823,6 +895,10 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany(t => t.Leases)
                 .HasForeignKey(e => e.TenantId)
                 .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.DocumentTemplate)
+                .WithMany()
+                .HasForeignKey(e => e.DocumentTemplateId)
+                .OnDelete(DeleteBehavior.SetNull);
         });
 
         modelBuilder.Entity<Payment>(entity =>
