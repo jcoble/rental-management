@@ -165,7 +165,7 @@ public class LeaseController : ManagementControllerBase
 
     /// <summary>
     /// Send the lease's generated agreement out for electronic signature. Generates the agreement PDF first
-    /// if none exists, defaults the signer to the lease's tenant, marks the lease
+    /// if none exists, defaults the signers to the lease's tenants, marks the lease
     /// <c>EsignStatus=Sent</c> / <c>LeaseStatus=PendingSignature</c>, and returns the signature snapshot.
     /// Returns 503 when the e-sign provider is not configured (gated) — the lease is left unchanged.
     /// </summary>
