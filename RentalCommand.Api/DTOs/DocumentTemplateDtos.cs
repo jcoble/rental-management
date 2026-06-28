@@ -20,6 +20,7 @@ public sealed class DocumentTemplateResponse
     public bool DefaultForPortfolio { get; init; }
     public int? PropertyId { get; init; }
     public int Version { get; init; }
+    public int FieldCount { get; init; }
     public DateTime CreatedAtUtc { get; init; }
     public DateTime UpdatedAtUtc { get; init; }
     public DateTime? ArchivedAtUtc { get; init; }
@@ -28,30 +29,36 @@ public sealed class DocumentTemplateResponse
 
     public static DocumentTemplateResponse FromEntity(
         DocumentTemplate template,
-        IReadOnlyList<DocumentTemplateField>? fields = null) => new()
+        IReadOnlyList<DocumentTemplateField>? fields = null,
+        int? fieldCount = null)
     {
-        Id = template.Id,
-        PortfolioId = template.PortfolioId,
-        Kind = template.Kind,
-        Status = template.Status,
-        RenderMode = template.RenderMode,
-        Name = template.Name,
-        Description = template.Description,
-        OriginalStoredFileId = template.OriginalStoredFileId,
-        CompiledStoredFileId = template.CompiledStoredFileId,
-        HasDraftHtml = !string.IsNullOrWhiteSpace(template.DraftHtml),
-        DefaultForPortfolio = template.DefaultForPortfolio,
-        PropertyId = template.PropertyId,
-        Version = template.Version,
-        CreatedAtUtc = template.CreatedAtUtc,
-        UpdatedAtUtc = template.UpdatedAtUtc,
-        ArchivedAtUtc = template.ArchivedAtUtc,
-        Fields = (fields ?? template.Fields)
-            .OrderBy(f => f.SortOrder)
-            .ThenBy(f => f.Id)
-            .Select(DocumentTemplateFieldResponse.FromEntity)
-            .ToList(),
-    };
+        var fieldList = fields ?? template.Fields;
+        return new()
+        {
+            Id = template.Id,
+            PortfolioId = template.PortfolioId,
+            Kind = template.Kind,
+            Status = template.Status,
+            RenderMode = template.RenderMode,
+            Name = template.Name,
+            Description = template.Description,
+            OriginalStoredFileId = template.OriginalStoredFileId,
+            CompiledStoredFileId = template.CompiledStoredFileId,
+            HasDraftHtml = !string.IsNullOrWhiteSpace(template.DraftHtml),
+            DefaultForPortfolio = template.DefaultForPortfolio,
+            PropertyId = template.PropertyId,
+            Version = template.Version,
+            FieldCount = fieldCount ?? fieldList.Count,
+            CreatedAtUtc = template.CreatedAtUtc,
+            UpdatedAtUtc = template.UpdatedAtUtc,
+            ArchivedAtUtc = template.ArchivedAtUtc,
+            Fields = fieldList
+                .OrderBy(f => f.SortOrder)
+                .ThenBy(f => f.Id)
+                .Select(DocumentTemplateFieldResponse.FromEntity)
+                .ToList(),
+        };
+    }
 }
 
 public sealed class DocumentTemplateFieldResponse
@@ -215,4 +222,3 @@ public sealed record DocumentTemplateFieldCatalogItemResponse(
     DocumentTemplateSignerRole SignerRole,
     bool RequiredForSignature,
     string Description);
-
