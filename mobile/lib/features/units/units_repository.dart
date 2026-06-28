@@ -85,6 +85,7 @@ class UnitDashboard {
     required this.overview,
     this.currentLease,
     this.currentTenant,
+    this.currentTenants = const [],
   });
 
   final Unit unit;
@@ -94,11 +95,15 @@ class UnitDashboard {
   final UnitDashboardHeader header;
   final UnitLeaseSummary? currentLease;
   final UnitTenantSummary? currentTenant;
+  final List<UnitTenantSummary> currentTenants;
   final UnitDashboardOverview overview;
 
   factory UnitDashboard.fromJson(Map<String, dynamic> json) {
     final leaseJson = _jsonObjectOrNull(json['currentLease']);
     final tenantJson = _jsonObjectOrNull(json['currentTenant']);
+    final tenants = _jsonList(
+      json['currentTenants'],
+    ).map(UnitTenantSummary.fromJson).where((tenant) => tenant.id > 0).toList();
 
     return UnitDashboard(
       unit: Unit.fromJson(_jsonObject(json['unit'])),
@@ -114,6 +119,7 @@ class UnitDashboard {
       currentTenant: tenantJson == null
           ? null
           : UnitTenantSummary.fromJson(tenantJson),
+      currentTenants: tenants,
       overview: UnitDashboardOverview.fromJson(_jsonObject(json['overview'])),
     );
   }

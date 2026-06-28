@@ -244,6 +244,7 @@ export interface UnitDashboard {
 	header: UnitDashboardHeader;
 	currentLease?: UnitLeaseSummary;
 	currentTenant?: UnitTenantSummary;
+	currentTenants?: UnitTenantSummary[];
 	overview: UnitDashboardOverview;
 	recentTimeline: AuditEntry[];
 }
@@ -270,6 +271,7 @@ export interface Lease {
 	propertyId: number;
 	unitId: number;
 	tenantId: number;
+	tenantIds?: number[];
 	leaseNumber: string;
 	status: LeaseStatus;
 	startDate: string;
@@ -283,12 +285,21 @@ export interface Lease {
 	rentTrackingStartDate?: string | null;
 	notes?: string;
 	tenantName?: string;
+	tenants?: LeaseTenantSummary[];
 	propertyName?: string;
 	unitNumber?: string;
 	hasScan?: boolean;
 	scanIsImage?: boolean;
 	createdAt: string;
 	updatedAt: string;
+}
+
+export interface LeaseTenantSummary {
+	id: number;
+	name: string;
+	email?: string;
+	phone?: string;
+	isPrimary: boolean;
 }
 
 export interface Payment {
