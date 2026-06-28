@@ -14,8 +14,9 @@
 	import { ensureSelectedOption } from '$lib/leases/lease-edit-options';
 	import { getLeaseDeleteState } from '$lib/leases/lease-delete-state';
 	import {
-		canSendLeaseForSignature,
+		canShowLeaseSignatureSendAction,
 		hasAgreementAfterSignatureSend,
+		leaseSignatureQueuedMessage,
 		signableStateMessage,
 		visibleLeaseStatus,
 	} from '$lib/leases/lease-esign';
@@ -375,8 +376,10 @@
 				: false,
 	}));
 	const signatureQueueItems = $derived(signatureQueueQuery.data?.items ?? []);
-	const canSendForSignature = $derived(canSendLeaseForSignature(signature?.leaseStatus, signature?.esignStatus));
+	const latestSignatureQueueItem = $derived(signatureQueueItems[0] ?? null);
+	const latestSignatureEmailStatus = $derived(latestSignatureQueueItem?.status ?? null);
 	const visibleStatus = $derived(visibleLeaseStatus(lease?.status, signature));
+	const canSendForSignature = $derived(canShowLeaseSignatureSendAction(lease?.status, signature));
 	const visibleLease = $derived(lease && visibleStatus ? { ...lease, status: visibleStatus } : lease);
 	const leaseDeleteState = $derived(getLeaseDeleteState(visibleLease));
 
@@ -414,7 +417,7 @@
 		onSuccess: (result) => {
 			esignNotConfigured = false;
 			hasDocument = hasAgreementAfterSignatureSend(hasDocument, result);
-			showSuccess(`Sent to ${lease?.tenantName ?? 'the tenant'} for signature.`);
+			showSuccess(leaseSignatureQueuedMessage(lease?.tenantName));
 			invalidateSignatureStatus();
 			invalidateSignatureQueue();
 		},
@@ -600,6 +603,12 @@
 		if (status === 'DeliveryDisabled') return `${base} border-warning/40 bg-warning/10 text-warning`;
 		if (status === 'Retrying') return `${base} border-warning/40 bg-warning/10 text-warning`;
 		return `${base} border-border bg-muted/40 text-muted-foreground`;
+	}
+
+	function queueErrorClass(status: string): string {
+		return status === 'DeliveryDisabled'
+			? 'mt-1 line-clamp-2 text-xs text-warning'
+			: 'mt-1 line-clamp-2 text-xs text-destructive';
 	}
 
 	function queueWhenLabel(item: LeaseSignatureQueueItemResponse): string {
@@ -991,8 +1000,8 @@
 							<p class="text-sm font-medium">E-signature</p>
 							<HelpPopover
 								title="Send for signature"
-								summary="Emails the tenant a secure link to sign this lease online — no printing or scanning."
-								detail="Once they sign, the lease flips to signed and the executed copy is saved here for download."
+								summary="Queues the tenant a secure link to sign this lease online — no printing or scanning."
+								detail="The email queue below shows whether the signing email was delivered, blocked, or failed. Once they sign, the lease flips to signed and the executed copy is saved here for download."
 								learnMoreUrl={undefined}
 							/>
 							<span
@@ -1027,6 +1036,18 @@
 											? 'Resend for signature'
 											: 'Send for signature'}
 								</Button>
+							{:else}
+								<Button
+									data-testid="lease-send-for-signature-disabled"
+									variant="outline"
+									size="sm"
+									class="gap-1.5"
+									disabled
+									title={signableStateMessage(visibleStatus)}
+								>
+									<PenLine class="h-4 w-4" />
+									Send unavailable
+								</Button>
 							{/if}
 							{#if signature?.hasSignedDocument}
 								<Button
@@ -1047,9 +1068,17 @@
 						<p class="mt-2 text-xs text-muted-foreground" data-testid="lease-esign-not-configured">
 							E-signature isn’t set up yet (no e-sign provider configured).
 						</p>
+					{:else if signature?.esignStatus === 'Sent' && latestSignatureEmailStatus === 'DeliveryDisabled'}
+						<p class="mt-2 text-xs text-warning" data-testid="lease-esign-delivery-disabled-note">
+							Signing request created, but email delivery is disabled right now. Configure email delivery, then resend for signature.
+						</p>
+					{:else if signature?.esignStatus === 'Sent' && latestSignatureEmailStatus === 'Failed'}
+						<p class="mt-2 text-xs text-destructive" data-testid="lease-esign-delivery-failed-note">
+							Signing request created, but the latest email delivery failed. Review the queue reason below, then resend for signature.
+						</p>
 					{:else if signature?.esignStatus === 'Sent'}
 						<p class="mt-2 text-xs text-muted-foreground" data-testid="lease-esign-sent-note">
-							Sent {lease?.tenantName ?? 'the tenant'} a secure signing link. Waiting for them to sign — this updates automatically once they do.
+							Signing request is waiting for {lease?.tenantName ?? 'the tenant'} to sign. The email queue below shows delivery status.
 						</p>
 					{:else if signature?.esignStatus === 'Signed'}
 						<p class="mt-2 text-xs text-success" data-testid="lease-esign-signed-note">
@@ -1063,7 +1092,7 @@
 						</p>
 					{:else if !canSendForSignature}
 						<p class="mt-2 text-xs text-muted-foreground" data-testid="lease-esign-not-signable-note">
-							{signableStateMessage(signature?.leaseStatus)}
+							{signableStateMessage(visibleStatus)}
 						</p>
 					{:else}
 						<p class="mt-2 text-xs text-muted-foreground">
@@ -1115,7 +1144,7 @@
 										</div>
 										<p class="mt-1 text-xs text-muted-foreground">{queueWhenLabel(item)}</p>
 										{#if item.error}
-											<p class="mt-1 line-clamp-2 text-xs text-destructive">{item.error}</p>
+											<p class={queueErrorClass(item.status)}>{item.error}</p>
 										{/if}
 									</div>
 								{/each}
