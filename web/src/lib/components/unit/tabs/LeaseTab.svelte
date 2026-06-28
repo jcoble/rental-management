@@ -47,8 +47,9 @@
 	let tenantErrors = $state<Record<string, string>>({});
 
 	const tenantsQuery = createQuery(() => ({
-		queryKey: ['tenants', portfolioId, 'unit-lease-create'],
-		queryFn: () => tenants.list(portfolioId, { take: 200, sort: 'name' }),
+		queryKey: ['tenants', portfolioId, 'unit-lease-create', 'available-for-lease'],
+		queryFn: () =>
+			tenants.listPage(portfolioId, { take: 200, sort: 'name', availableForLease: true }),
 	}));
 
 	const unitLeasesQuery = createQuery(() => ({
@@ -62,6 +63,7 @@
 
 	const unitLabel = $derived(`${dashboard.propertyName} · Unit ${dashboard.unit.unitNumber}`);
 	const unitLeases = $derived(unitLeasesQuery.data?.items ?? []);
+	const availableTenants = $derived(tenantsQuery.data?.items ?? []);
 
 	// Which lease to show: an explicit ?lease=<id> (e.g. a prior lease) wins, otherwise the
 	// unit's current lease. Inner lease tabs live in LeaseDetail's local state, so they never
@@ -434,7 +436,7 @@
 				{#if tenantMode === 'existing'}
 					<TenantMultiSelect
 						label="Tenants"
-						tenants={tenantsQuery.data || []}
+						tenants={availableTenants}
 						bind:selectedIds={form.tenantIds}
 						error={formErrors.tenantId}
 						disabled={tenantsQuery.isLoading}
