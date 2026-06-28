@@ -128,9 +128,14 @@ class LeaseDetailLoaderScreen extends ConsumerWidget {
 ///
 /// Shows full lease information with edit support and status action buttons.
 class LeaseDetailScreen extends ConsumerStatefulWidget {
-  const LeaseDetailScreen({super.key, required this.lease});
+  const LeaseDetailScreen({
+    super.key,
+    required this.lease,
+    this.leadingContent,
+  });
 
   final Lease lease;
+  final Widget? leadingContent;
 
   @override
   ConsumerState<LeaseDetailScreen> createState() => _LeaseDetailScreenState();
@@ -385,6 +390,10 @@ class _LeaseDetailScreenState extends ConsumerState<LeaseDetailScreen> {
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            if (widget.leadingContent != null) ...[
+              widget.leadingContent!,
+              const SizedBox(height: 12),
+            ],
             // ── Header card ────────────────────────────────────────────────
             _LeaseHeaderCard(
               lease: _lease,
