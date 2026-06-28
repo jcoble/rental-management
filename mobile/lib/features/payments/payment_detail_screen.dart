@@ -3,16 +3,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/tabbed_form_sheet.dart';
+import '../home/mobile_domain_navigation.dart';
 import '../leases/lease_detail_screen.dart';
 import '../leases/leases_repository.dart';
 import '../money/money_format.dart';
+import '../money/receipt_attachment_repository.dart';
+import '../money/receipt_upload_sheet.dart';
+import 'payment_lease_labels.dart';
+import 'payment_receipt_viewer_screen.dart';
 import 'payments_repository.dart';
 import 'record_payment_sheet.dart';
 
 /// A single payment, fetched fresh by id so push deep-links and ledger taps can
 /// open it without a preloaded model.
-final paymentDetailProvider =
-    FutureProvider.autoDispose.family<Payment, int>((ref, id) {
+final paymentDetailProvider = FutureProvider.autoDispose.family<Payment, int>((
+  ref,
+  id,
+) {
   return ref.read(paymentsRepositoryProvider).getPayment(id);
 });
 
@@ -52,8 +60,11 @@ class _PaymentBody extends ConsumerWidget {
 
   Future<void> _markPaid(BuildContext context, WidgetRef ref) async {
     final messenger = ScaffoldMessenger.of(context);
-    final updated =
-        await showRecordPaymentSheet(context, ref, payment: payment);
+    final updated = await showRecordPaymentSheet(
+      context,
+      ref,
+      payment: payment,
+    );
     if (updated == null) return;
     ref.invalidate(paymentDetailProvider(payment.id));
     // Keep any lease payments section in sync after an inline record.
@@ -64,7 +75,7 @@ class _PaymentBody extends ConsumerWidget {
   }
 
   Future<void> _edit(BuildContext context, WidgetRef ref) async {
-    final saved = await showModalBottomSheet<bool>(
+    final newLeaseId = await showModalBottomSheet<int?>(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
@@ -72,13 +83,46 @@ class _PaymentBody extends ConsumerWidget {
       ),
       builder: (_) => _EditPaymentSheet(payment: payment),
     );
-    if (saved == true) ref.invalidate(paymentDetailProvider(payment.id));
+    if (newLeaseId == null) return;
+    ref.invalidate(paymentDetailProvider(payment.id));
+    ref.invalidate(leasePaymentsProvider(payment.leaseId));
+    if (newLeaseId != payment.leaseId) {
+      ref.invalidate(leasePaymentsProvider(newLeaseId));
+    }
+  }
+
+  Future<void> _uploadReceipt(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final uploaded = await showReceiptUploadSheet(
+      context: context,
+      entityType: ReceiptEntityType.payment,
+      entityId: payment.id,
+    );
+    if (!uploaded) return;
+    ref.invalidate(paymentDetailProvider(payment.id));
+    ref.invalidate(paymentReceiptProvider(payment.id));
+    ref.invalidate(leasePaymentsProvider(payment.leaseId));
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Receipt uploaded.')));
+  }
+
+  void _viewReceipt(BuildContext context) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => PaymentReceiptViewerScreen(
+          paymentId: payment.id,
+          isImage: payment.scanIsImage,
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
+    final leaseDisplay = formatPaymentLeaseDisplay(payment);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
@@ -94,22 +138,27 @@ class _PaymentBody extends ConsumerWidget {
           spacing: 8,
           runSpacing: 8,
           children: [
-            _chip(cs, payment.status, _statusBg(payment.status, cs),
-                _statusFg(payment.status, cs)),
+            _chip(
+              cs,
+              payment.status,
+              _statusBg(payment.status, cs),
+              _statusFg(payment.status, cs),
+            ),
             if (payment.type.isNotEmpty)
-              _chip(cs, payment.type, cs.secondaryContainer,
-                  cs.onSecondaryContainer),
+              _chip(
+                cs,
+                payment.type,
+                cs.secondaryContainer,
+                cs.onSecondaryContainer,
+              ),
           ],
         ),
         const SizedBox(height: 20),
-        _DetailRow(
-          label: 'Tenant',
-          value: payment.tenantName ?? '—',
-        ),
+        _DetailRow(label: 'Tenant', value: payment.tenantName ?? '—'),
         _DetailRow(
           label: 'Lease',
-          value: payment.leaseNumber != null
-              ? 'Lease ${payment.leaseNumber}'
+          value: leaseDisplay.isNotEmpty
+              ? leaseDisplay
               : 'Lease #${payment.leaseId}',
           onTap: () => _openLease(context, ref),
         ),
@@ -124,6 +173,24 @@ class _PaymentBody extends ConsumerWidget {
         if (payment.notes != null && payment.notes!.isNotEmpty)
           _DetailRow(label: 'Notes', value: payment.notes!),
         const SizedBox(height: 24),
+        if (payment.hasScan) ...[
+          OutlinedButton.icon(
+            onPressed: () => _viewReceipt(context),
+            icon: Icon(
+              payment.scanIsImage
+                  ? Icons.image_outlined
+                  : Icons.picture_as_pdf_outlined,
+            ),
+            label: const Text('View receipt'),
+          ),
+          const SizedBox(height: 12),
+        ],
+        OutlinedButton.icon(
+          onPressed: () => _uploadReceipt(context, ref),
+          icon: const Icon(Icons.upload_file_outlined),
+          label: const Text('Upload receipt'),
+        ),
+        const SizedBox(height: 12),
         Row(
           children: [
             if (!_isPaid)
@@ -180,6 +247,17 @@ class _PaymentBody extends ConsumerWidget {
   /// payment, so push a screen that fetches the full lease via
   /// [leaseDetailProvider] and then shows the standard lease detail.
   void _openLease(BuildContext context, WidgetRef ref) {
+    final shellNavigator = mobileShellNavigatorOf(context);
+    if (shellNavigator != null) {
+      shellNavigator.openTab(
+        MobileShellTabId.rentals,
+        destination: MobileDestinationId.units,
+        detailBuilder: (_) => LeaseDetailLoaderScreen(leaseId: payment.leaseId),
+      );
+      revealMobileShellIfDetached(context);
+      return;
+    }
+
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => LeaseDetailLoaderScreen(leaseId: payment.leaseId),
@@ -278,13 +356,20 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
   late final TextEditingController _referenceCtrl;
   late final TextEditingController _notesCtrl;
   late DateTime _dueDate;
+  late int? _leaseId;
   late String _type;
   late String _status;
   String? _method;
   bool _saving = false;
   String? _error;
 
-  static const _types = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
+  static const _types = [
+    'Rent',
+    'SecurityDeposit',
+    'LateFee',
+    'Utility',
+    'Other',
+  ];
   static const _statuses = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived'];
 
   /// Method dropdown options = the canonical [kPaymentMethods] list (shared with
@@ -310,9 +395,11 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
     _referenceCtrl = TextEditingController(text: p.externalReference ?? '');
     _notesCtrl = TextEditingController(text: p.notes ?? '');
     _dueDate = p.dueDate.year > 1 ? p.dueDate : DateTime.now();
+    _leaseId = p.leaseId;
     _type = _types.contains(p.type) ? p.type : 'Rent';
     _status = _statuses.contains(p.status) ? p.status : 'Scheduled';
     _method = (p.method != null && p.method!.isNotEmpty) ? p.method : null;
+    Future.microtask(() => ref.read(leasesForPaymentProvider.notifier).load());
   }
 
   @override
@@ -343,11 +430,14 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
     // 0 and the full Amount (mirrors web paymentSchema.superRefine /
     // PaymentService.NormalizeAmountPaid). Surface it inline before submit.
     final isPartial = _status == 'Partial';
-    final amountPaid =
-        isPartial ? double.tryParse(_amountPaidCtrl.text.trim()) : null;
+    final amountPaid = isPartial
+        ? double.tryParse(_amountPaidCtrl.text.trim())
+        : null;
     if (isPartial) {
       if (amountPaid == null) {
-        setState(() => _error = 'Amount paid is required for a partial payment');
+        setState(
+          () => _error = 'Amount paid is required for a partial payment',
+        );
         return;
       }
       if (amountPaid <= 0) {
@@ -355,7 +445,9 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
         return;
       }
       if (amountPaid >= amount) {
-        setState(() => _error = 'Amount paid must be less than the full amount');
+        setState(
+          () => _error = 'Amount paid must be less than the full amount',
+        );
         return;
       }
     }
@@ -366,7 +458,7 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
     });
     try {
       final reference = _referenceCtrl.text.trim();
-      await ref.read(paymentsRepositoryProvider).updatePayment(
+      final updated = await ref.read(paymentsRepositoryProvider).updatePayment(
         widget.payment.id,
         {
           'amount': amount,
@@ -374,6 +466,7 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
           // status so the server clears a stale collected-so-far when editing
           // away from Partial (matches the web client + server normalization).
           'amountPaid': isPartial ? amountPaid : null,
+          'leaseId': _leaseId,
           'dueDate': _dueDate.toIso8601String().split('T').first,
           'type': _type,
           'status': _status,
@@ -382,7 +475,7 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
           'notes': _notesCtrl.text.trim(),
         },
       );
-      if (mounted) Navigator.of(context).pop(true);
+      if (mounted) Navigator.of(context).pop(updated.leaseId);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } finally {
@@ -392,154 +485,175 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final bottom = MediaQuery.viewInsetsOf(context).bottom;
+    final cs = Theme.of(context).colorScheme;
+    final leasesAsync = ref.watch(leasesForPaymentProvider);
+    const gap = SizedBox(height: 12);
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottom),
-      child: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Edit payment',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
-                    ),
+    return Form(
+      key: _formKey,
+      child: TabbedFormSheet(
+        title: 'Edit payment',
+        saveLabel: 'Save',
+        saving: _saving,
+        error: _error,
+        onSave: _submit,
+        tabs: [
+          TabbedFormStepSpec(
+            label: 'Details',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                leasesAsync.when(
+                  loading: () => const LinearProgressIndicator(),
+                  error: (e, _) => Text(
+                    'Could not load leases: ${e is ApiException ? e.message : e}',
+                    style: TextStyle(color: cs.error, fontSize: 13),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(false),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _amountCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: 'Amount',
-                  prefixText: '\$',
+                  data: (leases) {
+                    final paymentLeaseLabel = formatPaymentLeaseDisplay(
+                      widget.payment,
+                    );
+                    final items = [
+                      if (_leaseId != null &&
+                          leases.every((lease) => lease.id != _leaseId))
+                        DropdownMenuItem<int>(
+                          value: _leaseId,
+                          child: Text(
+                            paymentLeaseLabel.isNotEmpty
+                                ? paymentLeaseLabel
+                                : 'Lease #$_leaseId',
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      for (final lease in leases)
+                        DropdownMenuItem<int>(
+                          value: lease.id,
+                          child: Text(
+                            formatLeasePickerLabel(lease),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ];
+                    return DropdownButtonFormField<int>(
+                      initialValue: _leaseId,
+                      isExpanded: true,
+                      decoration: const InputDecoration(labelText: 'Lease'),
+                      items: items,
+                      onChanged: (value) => setState(() => _leaseId = value),
+                      validator: (value) =>
+                          value == null ? 'Please select a lease' : null,
+                    );
+                  },
                 ),
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) return 'Amount is required';
-                  if (double.tryParse(v.trim()) == null) {
-                    return 'Enter a valid number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 12),
-              InkWell(
-                onTap: _pickDate,
-                child: InputDecorator(
-                  decoration: const InputDecoration(
-                    labelText: 'Due date',
-                    suffixIcon: Icon(Icons.calendar_today_outlined, size: 18),
-                  ),
-                  child: Text(dateFmt(_dueDate)),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _type,
-                      decoration: const InputDecoration(labelText: 'Type'),
-                      items: _types
-                          .map((t) =>
-                              DropdownMenuItem(value: t, child: Text(t)))
-                          .toList(),
-                      onChanged: (v) {
-                        if (v != null) setState(() => _type = v);
-                      },
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _status,
-                      decoration: const InputDecoration(labelText: 'Status'),
-                      items: _statuses
-                          .map((s) =>
-                              DropdownMenuItem(value: s, child: Text(s)))
-                          .toList(),
-                      onChanged: (v) {
-                        if (v != null) setState(() => _status = v);
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              // Amount paid (so far) — only meaningful for a Partial payment.
-              // The remainder (amount − paid) stays owed. Hidden for every other
-              // status, where it has no meaning. Mirrors the web client.
-              if (_status == 'Partial') ...[
+                gap,
                 TextFormField(
-                  controller: _amountPaidCtrl,
-                  keyboardType:
-                      const TextInputType.numberWithOptions(decimal: true),
+                  controller: _amountCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   decoration: const InputDecoration(
-                    labelText: 'Amount paid (so far)',
+                    labelText: 'Amount',
                     prefixText: '\$',
-                    helperText: 'How much was collected. The rest stays owed.',
+                  ),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) {
+                      return 'Amount is required';
+                    }
+                    if (double.tryParse(v.trim()) == null) {
+                      return 'Enter a valid number';
+                    }
+                    return null;
+                  },
+                ),
+                gap,
+                InkWell(
+                  onTap: _pickDate,
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'Due date',
+                      suffixIcon: Icon(Icons.calendar_today_outlined, size: 18),
+                    ),
+                    child: Text(dateFmt(_dueDate)),
                   ),
                 ),
-                const SizedBox(height: 12),
-              ],
-              DropdownButtonFormField<String>(
-                initialValue: _method,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: 'Method'),
-                items: _methodOptions
-                    .map((m) => DropdownMenuItem(value: m, child: Text(m)))
-                    .toList(),
-                onChanged: (v) => setState(() => _method = v),
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _referenceCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Reference / confirmation #',
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _notesCtrl,
-                maxLines: 2,
-                decoration: const InputDecoration(labelText: 'Notes'),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Text(
-                  _error!,
-                  style: TextStyle(color: cs.error, fontSize: 13),
+                gap,
+                DropdownButtonFormField<String>(
+                  initialValue: _type,
+                  decoration: const InputDecoration(labelText: 'Type'),
+                  items: _types
+                      .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _type = v);
+                  },
                 ),
               ],
-              const SizedBox(height: 20),
-              FilledButton(
-                onPressed: _saving ? null : _submit,
-                child: _saving
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Save'),
-              ),
-            ],
+            ),
           ),
-        ),
+          TabbedFormStepSpec(
+            label: 'Settlement',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: _status,
+                  decoration: const InputDecoration(labelText: 'Status'),
+                  items: _statuses
+                      .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _status = v);
+                  },
+                ),
+                if (_status == 'Partial') ...[
+                  gap,
+                  TextFormField(
+                    controller: _amountPaidCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    decoration: const InputDecoration(
+                      labelText: 'Amount paid (so far)',
+                      prefixText: '\$',
+                      helperText:
+                          'How much was collected. The rest stays owed.',
+                    ),
+                  ),
+                ],
+                gap,
+                DropdownButtonFormField<String>(
+                  initialValue: _method,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Method'),
+                  items: _methodOptions
+                      .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+                      .toList(),
+                  onChanged: (v) => setState(() => _method = v),
+                ),
+                gap,
+                TextFormField(
+                  controller: _referenceCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Reference / confirmation #',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TabbedFormStepSpec(
+            label: 'Notes',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _notesCtrl,
+                  maxLines: 2,
+                  decoration: const InputDecoration(labelText: 'Notes'),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -38,6 +38,18 @@ public class SignatureRequest
     /// <summary>The <see cref="StoredFile"/> id of the final executed PDF (signatures + certificate). Null until completed.</summary>
     public int? SignedStoredFileId { get; set; }
 
+    /// <summary>Document template used for this request, if the lease was rendered from a template.</summary>
+    public int? DocumentTemplateId { get; set; }
+
+    /// <summary>Template version frozen when this request was created.</summary>
+    public int? DocumentTemplateVersion { get; set; }
+
+    /// <summary>
+    /// JSON snapshot of the field anchors/signing tabs used for this request. Freezes placement even
+    /// when the landlord later edits the template.
+    /// </summary>
+    public string? TemplateFieldSnapshotJson { get; set; }
+
     /// <summary>Lower-case hex SHA-256 of the final executed PDF bytes, set when the request completes.</summary>
     public string? ContentSha256 { get; set; }
 
@@ -50,6 +62,7 @@ public class SignatureRequest
 
     public Portfolio? Portfolio { get; set; }
     public Lease? Lease { get; set; }
+    public DocumentTemplate? DocumentTemplate { get; set; }
     public StoredFile? OriginalStoredFile { get; set; }
     public StoredFile? SignedStoredFile { get; set; }
     public List<SignatureSigner> Signers { get; set; } = [];

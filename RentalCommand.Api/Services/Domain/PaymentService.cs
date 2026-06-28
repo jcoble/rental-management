@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
@@ -84,6 +85,63 @@ public class PaymentService : IPaymentService
         // Paid is treated as fully collected (whole Amount) with AmountPaid left null; every other
         // status has nothing collected. Either way the partial split column is cleared.
         return null;
+    }
+
+    private async Task EnsureGeneratedPeriodPaymentKeyAvailableAsync(
+        int portfolioId,
+        int paymentId,
+        int targetLeaseId,
+        PaymentType targetPaymentType,
+        string? periodKey,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(periodKey))
+        {
+            return;
+        }
+
+        var alreadyExists = await _db.Payments
+            .AsNoTracking()
+            .AnyAsync(p =>
+                p.PortfolioId == portfolioId &&
+                p.Id != paymentId &&
+                p.LeaseId == targetLeaseId &&
+                p.PaymentType == targetPaymentType &&
+                p.PeriodKey == periodKey, ct);
+
+        if (!alreadyExists)
+        {
+            return;
+        }
+
+        throw new DomainValidationException(
+            $"The selected lease already has a generated {FormatPaymentType(targetPaymentType)} payment for {FormatPeriodKey(periodKey)}. Open the existing payment instead, or choose a different lease.",
+            statusCode: StatusCodes.Status409Conflict);
+    }
+
+    private static string FormatPaymentType(PaymentType paymentType) =>
+        paymentType switch
+        {
+            PaymentType.Rent => "rent",
+            PaymentType.SecurityDeposit => "security deposit",
+            PaymentType.LateFee => "late fee",
+            PaymentType.Utility => "utility",
+            _ => "ledger",
+        };
+
+    private static string FormatPeriodKey(string periodKey)
+    {
+        if (DateTime.TryParseExact(
+                periodKey,
+                "yyyy-MM",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var period))
+        {
+            return period.ToString("MMMM yyyy", CultureInfo.InvariantCulture);
+        }
+
+        return periodKey;
     }
 
     public async Task<IReadOnlyList<PaymentResponse>> ListAsync(int portfolioId, int? leaseId, ListQuery query, CancellationToken ct = default)
@@ -227,18 +285,31 @@ public class PaymentService : IPaymentService
         var prevLeaseId = entity.LeaseId;
         var prevNotes = entity.Notes;
 
-        if (request.LeaseId.HasValue && request.LeaseId.Value != entity.LeaseId)
+        var targetLeaseId = request.LeaseId ?? entity.LeaseId;
+        var targetPaymentType = request.PaymentType ?? entity.PaymentType;
+
+        if (targetLeaseId != entity.LeaseId)
         {
             // Reassigning a payment to a different lease moves it onto that lease's ledger — the target
             // lease must belong to the caller's portfolio (cross-tenant IDOR guard, mirroring CreateAsync).
-            if (!await _db.EnsureLeaseInPortfolioAsync(portfolioId, request.LeaseId.Value, ct))
+            if (!await _db.EnsureLeaseInPortfolioAsync(portfolioId, targetLeaseId, ct))
             {
                 return null;
             }
-
-            entity.LeaseId = request.LeaseId.Value;
         }
 
+        if (targetLeaseId != entity.LeaseId || targetPaymentType != entity.PaymentType)
+        {
+            await EnsureGeneratedPeriodPaymentKeyAvailableAsync(
+                portfolioId,
+                id,
+                targetLeaseId,
+                targetPaymentType,
+                entity.PeriodKey,
+                ct);
+        }
+
+        if (targetLeaseId != entity.LeaseId) entity.LeaseId = targetLeaseId;
         if (request.PaymentType.HasValue) entity.PaymentType = request.PaymentType.Value;
         if (request.Status.HasValue) entity.Status = request.Status.Value;
         if (request.Amount.HasValue) entity.Amount = request.Amount.Value;

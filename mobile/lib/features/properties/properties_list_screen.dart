@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
+import '../../core/widgets/tabbed_form_sheet.dart';
 import '../places/address_autocomplete_field.dart';
 import 'properties_repository.dart';
 import 'property_detail_screen.dart';
@@ -36,18 +37,14 @@ class PropertiesListScreen extends ConsumerStatefulWidget {
       _PropertiesListScreenState();
 }
 
-class _PropertiesListScreenState
-    extends ConsumerState<PropertiesListScreen> {
+class _PropertiesListScreenState extends ConsumerState<PropertiesListScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(
-      () => ref.read(propertiesProvider.notifier).load(),
-    );
+    Future.microtask(() => ref.read(propertiesProvider.notifier).load());
   }
 
-  Future<void> _refresh() =>
-      ref.read(propertiesProvider.notifier).refresh();
+  Future<void> _refresh() => ref.read(propertiesProvider.notifier).refresh();
 
   void _openDetail(BuildContext context, Property property) {
     Navigator.of(context).push<void>(
@@ -71,9 +68,7 @@ class _PropertiesListScreenState
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Properties'),
-      ),
+      appBar: AppBar(title: const Text('Properties')),
       floatingActionButton: FloatingActionButton(
         heroTag: 'properties-fab',
         onPressed: () => _showAddSheet(context),
@@ -92,16 +87,20 @@ class _PropertiesListScreenState
             if (list.isEmpty) {
               return _EmptyBody(onAdd: () => _showAddSheet(context));
             }
+            final bottomInset = MediaQuery.paddingOf(context).bottom;
             return ListView.separated(
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 160.0 + bottomInset),
               itemCount: list.length,
-              separatorBuilder: (context, index) => const SizedBox(height: 8),
+              separatorBuilder: (context, index) =>
+                  _GroupedListDivider(colorScheme: colorScheme),
               itemBuilder: (context, index) {
                 final property = list[index];
                 return _PropertyCard(
                   property: property,
                   colorScheme: colorScheme,
                   theme: theme,
+                  first: index == 0,
+                  last: index == list.length - 1,
                   onTap: () => _openDetail(context, property),
                 );
               },
@@ -120,25 +119,36 @@ class _PropertyCard extends StatelessWidget {
     required this.property,
     required this.colorScheme,
     required this.theme,
+    required this.first,
+    required this.last,
     required this.onTap,
   });
 
   final Property property;
   final ColorScheme colorScheme;
   final ThemeData theme;
+  final bool first;
+  final bool last;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final unitCount = property.unitCount ?? 0;
     final occupied = property.occupiedUnits ?? 0;
+    final borderRadius = BorderRadius.vertical(
+      top: first ? const Radius.circular(20) : Radius.zero,
+      bottom: last ? const Radius.circular(20) : Radius.zero,
+    );
 
-    return Card(
+    return Material(
+      color: colorScheme.surfaceContainerHigh,
+      borderRadius: borderRadius,
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: borderRadius,
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -155,7 +165,10 @@ class _PropertyCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  _StatusChip(status: property.status, colorScheme: colorScheme),
+                  _StatusChip(
+                    status: property.status,
+                    colorScheme: colorScheme,
+                  ),
                 ],
               ),
               const SizedBox(height: 4),
@@ -168,21 +181,21 @@ class _PropertyCard extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 8),
-              Row(
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
                 children: [
                   _MetaChip(
                     icon: Icons.apartment_outlined,
                     label: '$unitCount ${unitCount == 1 ? 'unit' : 'units'}',
                   ),
-                  const SizedBox(width: 8),
                   _MetaChip(
                     icon: Icons.person_outline,
                     label: '$occupied occupied',
                   ),
-                  const SizedBox(width: 8),
                   _MetaChip(
                     icon: Icons.home_outlined,
-                    label: property.type,
+                    label: _formatPropertyType(property.type),
                   ),
                 ],
               ),
@@ -190,6 +203,23 @@ class _PropertyCard extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _GroupedListDivider extends StatelessWidget {
+  const _GroupedListDivider({required this.colorScheme});
+
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Divider(
+      height: 1,
+      thickness: 1,
+      indent: 16,
+      endIndent: 16,
+      color: colorScheme.outlineVariant.withValues(alpha: 0.48),
     );
   }
 }
@@ -225,6 +255,14 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
+String _formatPropertyType(String type) {
+  return switch (type.trim()) {
+    'MultiFamily' => 'Multi-family',
+    'SingleFamily' => 'Single family',
+    final other => other.replaceAll('_', ' '),
+  };
+}
+
 class _MetaChip extends StatelessWidget {
   const _MetaChip({required this.icon, required this.label});
 
@@ -239,10 +277,7 @@ class _MetaChip extends StatelessWidget {
       children: [
         Icon(icon, size: 14, color: color),
         const SizedBox(width: 3),
-        Text(
-          label,
-          style: TextStyle(fontSize: 12, color: color),
-        ),
+        Text(label, style: TextStyle(fontSize: 12, color: color)),
       ],
     );
   }
@@ -268,8 +303,11 @@ class _EmptyBody extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.apartment_outlined, size: 48,
-                color: colorScheme.onSurfaceVariant),
+            Icon(
+              Icons.apartment_outlined,
+              size: 48,
+              color: colorScheme.onSurfaceVariant,
+            ),
             const SizedBox(height: 12),
             Text(
               'No rentals yet',
@@ -320,14 +358,10 @@ class _ErrorBody extends StatelessWidget {
             Text(
               message,
               textAlign: TextAlign.center,
-              style:
-                  TextStyle(color: colorScheme.error),
+              style: TextStyle(color: colorScheme.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
@@ -413,144 +447,98 @@ class _AddPropertySheetState extends ConsumerState<_AddPropertySheet> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
+    const gap = SizedBox(height: 12);
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
-      child: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'New Property',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              // Name
-              TextFormField(
-                controller: _nameCtrl,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(labelText: 'Property name'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'Name is required' : null,
-              ),
-              const SizedBox(height: 12),
-
-              // Type dropdown
-              DropdownButtonFormField<String>(
-                initialValue: _selectedType,
-                decoration: const InputDecoration(labelText: 'Type'),
-                items: _types
-                    .map((t) => DropdownMenuItem(value: t, child: Text(t)))
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) setState(() => _selectedType = v);
-                },
-              ),
-              const SizedBox(height: 12),
-
-              // Address — Places-backed (existing server-side proxy). Picking a
-              // suggestion fills city/state/zip; manual entry always works.
-              AddressAutocompleteField(
-                controller: _addressCtrl,
-                label: 'Address',
-                onResolved: (a) {
-                  if (a.city.isNotEmpty) _cityCtrl.text = a.city;
-                  if (a.state.isNotEmpty) _stateCtrl.text = a.state;
-                  if (a.zip.isNotEmpty) _zipCtrl.text = a.zip;
-                },
-              ),
-              const SizedBox(height: 12),
-
-              // City
-              TextFormField(
-                controller: _cityCtrl,
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(labelText: 'City'),
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? 'City is required' : null,
-              ),
-              const SizedBox(height: 12),
-
-              // State + ZIP row
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _stateCtrl,
-                      textInputAction: TextInputAction.next,
-                      textCapitalization: TextCapitalization.characters,
-                      decoration: const InputDecoration(labelText: 'State'),
-                      validator: (v) =>
-                          (v == null || v.trim().isEmpty)
-                              ? 'Required'
-                              : null,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _zipCtrl,
-                      textInputAction: TextInputAction.done,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: 'ZIP'),
-                      validator: (v) =>
-                          (v == null || v.trim().isEmpty) ? 'Required' : null,
-                      onFieldSubmitted: (_) => _saving ? null : _submit(),
-                    ),
-                  ),
-                ],
-              ),
-
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                        color: colorScheme.onErrorContainer, fontSize: 13),
-                  ),
+    return Form(
+      key: _formKey,
+      child: TabbedFormSheet(
+        title: 'New Property',
+        saveLabel: 'Save Property',
+        saving: _saving,
+        error: _error,
+        onSave: _submit,
+        tabs: [
+          TabbedFormStepSpec(
+            label: 'Details',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _nameCtrl,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(labelText: 'Property name'),
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? 'Name is required'
+                      : null,
+                ),
+                gap,
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedType,
+                  decoration: const InputDecoration(labelText: 'Type'),
+                  items: _types
+                      .map((t) => DropdownMenuItem(value: t, child: Text(t)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _selectedType = v);
+                  },
+                ),
+                gap,
+                AddressAutocompleteField(
+                  controller: _addressCtrl,
+                  label: 'Address',
+                  onResolved: (a) {
+                    if (a.city.isNotEmpty) _cityCtrl.text = a.city;
+                    if (a.state.isNotEmpty) _stateCtrl.text = a.state;
+                    if (a.zip.isNotEmpty) _zipCtrl.text = a.zip;
+                  },
                 ),
               ],
-
-              const SizedBox(height: 20),
-
-              FilledButton(
-                onPressed: _saving ? null : _submit,
-                child: _saving
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Save Property'),
-              ),
-            ],
+            ),
           ),
-        ),
+          TabbedFormStepSpec(
+            label: 'Location',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _cityCtrl,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(labelText: 'City'),
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? 'City is required'
+                      : null,
+                ),
+                gap,
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _stateCtrl,
+                        textInputAction: TextInputAction.next,
+                        textCapitalization: TextCapitalization.characters,
+                        decoration: const InputDecoration(labelText: 'State'),
+                        validator: (v) =>
+                            (v == null || v.trim().isEmpty) ? 'Required' : null,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _zipCtrl,
+                        textInputAction: TextInputAction.done,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(labelText: 'ZIP'),
+                        validator: (v) =>
+                            (v == null || v.trim().isEmpty) ? 'Required' : null,
+                        onFieldSubmitted: (_) => _saving ? null : _submit(),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

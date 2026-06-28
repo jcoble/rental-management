@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../../core/widgets/tabbed_form_sheet.dart';
 import 'expense_models.dart';
 import 'money_format.dart';
 import 'money_repository.dart';
+import 'receipt_attachment_repository.dart';
+import 'receipt_upload_sheet.dart';
 import 'receipt_viewer_screen.dart';
 
 /// Detail page for one expense — view, inline edit, delete, and receipt viewer.
@@ -132,6 +135,22 @@ class _ExpenseBody extends ConsumerWidget {
     );
   }
 
+  Future<void> _uploadReceipt(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final uploaded = await showReceiptUploadSheet(
+      context: context,
+      entityType: ReceiptEntityType.expense,
+      entityId: expense.id,
+    );
+    if (!uploaded) return;
+    ref.invalidate(expenseDetailProvider(expense.id));
+    ref.invalidate(expenseReceiptProvider(expense.id));
+    ref.invalidate(expensesListProvider);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(content: Text('Receipt uploaded.')));
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
@@ -147,21 +166,24 @@ class _ExpenseBody extends ConsumerWidget {
           ),
         ),
         const SizedBox(height: 4),
-        Text(
-          expense.description,
-          style: theme.textTheme.titleMedium,
-        ),
+        Text(expense.description, style: theme.textTheme.titleMedium),
         const SizedBox(height: 12),
         Wrap(
           spacing: 8,
           runSpacing: 8,
           children: [
             _chip(expense.status.label, _statusBg(cs), _statusFg(cs)),
-            _chip(expense.category.label, cs.secondaryContainer,
-                cs.onSecondaryContainer),
+            _chip(
+              expense.category.label,
+              cs.secondaryContainer,
+              cs.onSecondaryContainer,
+            ),
             if (expense.billableToOwner)
-              _chip('Billable to owner', cs.tertiaryContainer,
-                  cs.onTertiaryContainer),
+              _chip(
+                'Billable to owner',
+                cs.tertiaryContainer,
+                cs.onTertiaryContainer,
+              ),
           ],
         ),
         const SizedBox(height: 20),
@@ -227,6 +249,12 @@ class _ExpenseBody extends ConsumerWidget {
             ),
             label: const Text('View receipt'),
           ),
+        if (expense.hasReceipt) const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () => _uploadReceipt(context, ref),
+          icon: const Icon(Icons.upload_file_outlined),
+          label: const Text('Upload receipt'),
+        ),
         const SizedBox(height: 12),
         FilledButton.icon(
           onPressed: () => _edit(context, ref),
@@ -400,18 +428,15 @@ class _EditExpenseSheetState extends ConsumerState<_EditExpenseSheet> {
       _error = null;
     });
     try {
-      await ref.read(moneyRepositoryProvider).updateExpense(
-        widget.expense.id,
-        {
-          'amount': double.tryParse(_amountCtrl.text.trim()) ?? 0,
-          'description': _descCtrl.text.trim(),
-          'category': _category.wire,
-          'status': _status.wire,
-          'incurredAt': _incurredAt.toIso8601String(),
-          'billableToOwner': _billable,
-          'notes': _notesCtrl.text.trim(),
-        },
-      );
+      await ref.read(moneyRepositoryProvider).updateExpense(widget.expense.id, {
+        'amount': double.tryParse(_amountCtrl.text.trim()) ?? 0,
+        'description': _descCtrl.text.trim(),
+        'category': _category.wire,
+        'status': _status.wire,
+        'incurredAt': _incurredAt.toIso8601String(),
+        'billableToOwner': _billable,
+        'notes': _notesCtrl.text.trim(),
+      });
       if (mounted) Navigator.of(context).pop(true);
     } on ApiException catch (e) {
       setState(() => _error = e.message);
@@ -422,125 +447,110 @@ class _EditExpenseSheetState extends ConsumerState<_EditExpenseSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final bottom = MediaQuery.viewInsetsOf(context).bottom;
+    const gap = SizedBox(height: 12);
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottom),
-      child: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Edit expense',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(false),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _descCtrl,
-                decoration: const InputDecoration(labelText: 'Description'),
-                validator: (v) => (v == null || v.trim().isEmpty)
-                    ? 'Description is required'
-                    : null,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _amountCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: 'Amount',
-                  prefixText: '\$',
+    return Form(
+      key: _formKey,
+      child: TabbedFormSheet(
+        title: 'Edit expense',
+        saveLabel: 'Save',
+        saving: _saving,
+        error: _error,
+        onSave: _submit,
+        tabs: [
+          TabbedFormStepSpec(
+            label: 'Details',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _descCtrl,
+                  decoration: const InputDecoration(labelText: 'Description'),
+                  validator: (v) => (v == null || v.trim().isEmpty)
+                      ? 'Description is required'
+                      : null,
                 ),
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) return 'Amount is required';
-                  if (double.tryParse(v.trim()) == null) {
-                    return 'Enter a valid number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<ScheduleECategory>(
-                initialValue: _category,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: 'Category'),
-                items: ScheduleECategory.values
-                    .map((c) =>
-                        DropdownMenuItem(value: c, child: Text(c.label)))
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) setState(() => _category = v);
-                },
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<ExpenseStatus>(
-                initialValue: _status,
-                decoration: const InputDecoration(labelText: 'Status'),
-                items: ExpenseStatus.values
-                    .map((s) =>
-                        DropdownMenuItem(value: s, child: Text(s.label)))
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) setState(() => _status = v);
-                },
-              ),
-              const SizedBox(height: 12),
-              InkWell(
-                onTap: _pickDate,
-                child: InputDecorator(
+                gap,
+                TextFormField(
+                  controller: _amountCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   decoration: const InputDecoration(
-                    labelText: 'Incurred date',
-                    suffixIcon: Icon(Icons.calendar_today_outlined, size: 18),
+                    labelText: 'Amount',
+                    prefixText: '\$',
                   ),
-                  child: Text(dateFmt(_incurredAt)),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) {
+                      return 'Amount is required';
+                    }
+                    if (double.tryParse(v.trim()) == null) {
+                      return 'Enter a valid number';
+                    }
+                    return null;
+                  },
                 ),
-              ),
-              const SizedBox(height: 4),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Billable to owner'),
-                value: _billable,
-                onChanged: (v) => setState(() => _billable = v),
-              ),
-              TextFormField(
-                controller: _notesCtrl,
-                maxLines: 2,
-                decoration: const InputDecoration(labelText: 'Notes'),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Text(_error!, style: TextStyle(color: cs.error, fontSize: 13)),
-              ],
-              const SizedBox(height: 20),
-              FilledButton(
-                onPressed: _saving ? null : _submit,
-                child: _saving
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                gap,
+                DropdownButtonFormField<ScheduleECategory>(
+                  initialValue: _category,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Category'),
+                  items: ScheduleECategory.values
+                      .map(
+                        (c) => DropdownMenuItem(value: c, child: Text(c.label)),
                       )
-                    : const Text('Save'),
-              ),
-            ],
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _category = v);
+                  },
+                ),
+                gap,
+                DropdownButtonFormField<ExpenseStatus>(
+                  initialValue: _status,
+                  decoration: const InputDecoration(labelText: 'Status'),
+                  items: ExpenseStatus.values
+                      .map(
+                        (s) => DropdownMenuItem(value: s, child: Text(s.label)),
+                      )
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _status = v);
+                  },
+                ),
+              ],
+            ),
           ),
-        ),
+          TabbedFormStepSpec(
+            label: 'Extra',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                InkWell(
+                  onTap: _pickDate,
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'Incurred date',
+                      suffixIcon: Icon(Icons.calendar_today_outlined, size: 18),
+                    ),
+                    child: Text(dateFmt(_incurredAt)),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Billable to owner'),
+                  value: _billable,
+                  onChanged: (v) => setState(() => _billable = v),
+                ),
+                TextFormField(
+                  controller: _notesCtrl,
+                  maxLines: 2,
+                  decoration: const InputDecoration(labelText: 'Notes'),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
