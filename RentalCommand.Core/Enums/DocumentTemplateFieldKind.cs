@@ -10,5 +10,5 @@ public enum DocumentTemplateFieldKind
     Signature = 5,
     Initial = 6,
     DateSigned = 7,
+    Whiteout = 8,
 }
-

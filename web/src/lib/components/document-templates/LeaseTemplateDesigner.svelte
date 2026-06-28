@@ -74,7 +74,10 @@
 	type FieldPoint = { xPct: number; yPct: number };
 	type CatalogTabId = 'autofill' | 'tenant' | 'landlord';
 	type DesignerViewMode = 'design' | 'preview';
-	type DesignerTool = 'place' | 'erase';
+	type DesignerTool = 'place' | 'whiteout';
+
+	const WHITEOUT_FIELD_KEY = 'pdf.whiteout';
+	const WHITEOUT_FIELD_LABEL = 'Erase PDF text';
 
 	let {
 		templateId,
@@ -368,7 +371,13 @@
 			await loadPdfObjectUrl(objectUrl);
 		} catch (err) {
 			if (loadedPdfKey === key) {
-				pdfError = err instanceof Error ? err.message : 'PDF preview failed.';
+				resetPdfDisplay();
+				pdfError =
+					err instanceof Error && err.message.includes('(404)')
+						? 'Template source PDF is unavailable.'
+						: err instanceof Error
+							? err.message
+							: 'PDF preview failed.';
 			}
 		}
 	}
@@ -384,6 +393,7 @@
 			await loadPdfObjectUrl(objectUrl);
 		} catch (err) {
 			if (loadedPdfKey === key) {
+				resetPdfDisplay();
 				pdfError = apiErrorMessage(err, 'Lease-filled preview failed.');
 			}
 		}
@@ -404,9 +414,26 @@
 			await tick();
 			await renderPage(selectedPage);
 		} catch (err) {
+			resetPdfDisplay({ keepObjectUrl: false });
 			pdfError = err instanceof Error ? err.message : 'PDF preview failed.';
 		} finally {
 			pageRendering = false;
+		}
+	}
+
+	function resetPdfDisplay(options: { keepObjectUrl?: boolean } = {}) {
+		if (!options.keepObjectUrl && pdfObjectUrl) {
+			URL.revokeObjectURL(pdfObjectUrl);
+			pdfObjectUrl = null;
+		}
+		void pdfDoc?.destroy?.();
+		pdfDoc = null;
+		pageCount = 1;
+		selectedPage = 1;
+		pageRendering = false;
+		const context = canvasEl?.getContext('2d');
+		if (canvasEl && context) {
+			context.clearRect(0, 0, canvasEl.width, canvasEl.height);
 		}
 	}
 
@@ -459,9 +486,13 @@
 	}
 
 	function placeSelectedField(event: MouseEvent) {
-		if (viewMode !== 'design' || designerTool !== 'place') return;
+		if (viewMode !== 'design') return;
 		const point = pointFromEvent(event);
 		if (!point) return;
+		if (designerTool === 'whiteout') {
+			placeWhiteoutAt(point);
+			return;
+		}
 		placeCatalogFieldAt(selectedCatalogKey, point);
 	}
 
@@ -489,6 +520,34 @@
 			widthPct: rect.widthPct,
 			heightPct: rect.heightPct,
 			required: catalogItem.requiredForSignature,
+			locked: false,
+			sortOrder: fields.length + 1
+		});
+	}
+
+	function placeWhiteoutAt(point: FieldPoint) {
+		if (viewMode !== 'design' || designerTool !== 'whiteout') return;
+		if (addFieldMutation.isPending || pageRendering) return;
+
+		const size = defaultFieldSize('Whiteout');
+		const rect = clampFieldRect({
+			xPct: point.xPct - size.widthPct / 2,
+			yPct: point.yPct - size.heightPct / 2,
+			widthPct: size.widthPct,
+			heightPct: size.heightPct
+		});
+
+		addFieldMutation.mutate({
+			fieldKey: WHITEOUT_FIELD_KEY,
+			label: WHITEOUT_FIELD_LABEL,
+			kind: 'Whiteout',
+			signerRole: 'None',
+			pageNumber: selectedPage,
+			xPct: rect.xPct,
+			yPct: rect.yPct,
+			widthPct: rect.widthPct,
+			heightPct: rect.heightPct,
+			required: false,
 			locked: false,
 			sortOrder: fields.length + 1
 		});
@@ -546,19 +605,7 @@
 
 	function handleFieldPointerDown(event: PointerEvent, field: DocumentTemplateField) {
 		if (viewMode !== 'design') return;
-		if (designerTool === 'erase') {
-			eraseField(event, field);
-			return;
-		}
 		startFieldDrag(event, field);
-	}
-
-	function eraseField(event: PointerEvent, field: DocumentTemplateField) {
-		event.preventDefault();
-		event.stopPropagation();
-		if (deleteFieldMutation.isPending) return;
-		selectedFieldId = field.id;
-		deleteFieldMutation.mutate(field);
 	}
 
 	function startFieldDrag(event: PointerEvent, field: DocumentTemplateField) {
@@ -617,7 +664,7 @@
 	) {
 		event.preventDefault();
 		event.stopPropagation();
-		if (viewMode !== 'design' || designerTool !== 'place') return;
+		if (viewMode !== 'design') return;
 		selectedFieldId = field.id;
 		if (field.locked || moveFieldMutation.isPending) return;
 
@@ -751,6 +798,8 @@
 
 	function defaultFieldSize(kind: DocumentTemplateFieldKind) {
 		switch (kind) {
+			case 'Whiteout':
+				return { widthPct: 0.22, heightPct: 0.045 };
 			case 'Signature':
 				return { widthPct: 0.26, heightPct: 0.055 };
 			case 'Initial':
@@ -803,8 +852,19 @@
 		}
 	}
 
-	function fieldTone(role: DocumentTemplateSignerRole) {
-		switch (role) {
+	function isWhiteoutField(field: DocumentTemplateField) {
+		return field.kind === 'Whiteout' || field.fieldKey === WHITEOUT_FIELD_KEY;
+	}
+
+	function fieldSignerLabel(field: DocumentTemplateField) {
+		return isWhiteoutField(field) ? 'Whiteout' : formatSigner(field.signerRole);
+	}
+
+	function fieldTone(field: DocumentTemplateField) {
+		if (isWhiteoutField(field)) {
+			return 'border-slate-700/80 bg-white/85 text-slate-900 ring-1 ring-slate-400/40';
+		}
+		switch (field.signerRole) {
 			case 'Tenant':
 				return 'border-sky-500/80 bg-sky-500/15 text-sky-700 dark:text-sky-100';
 			case 'Landlord':
@@ -843,7 +903,7 @@
 
 	function canvasCursorClass() {
 		if (viewMode === 'preview') return 'cursor-default';
-		return designerTool === 'erase' ? 'cursor-pointer' : 'cursor-crosshair';
+		return 'cursor-crosshair';
 	}
 
 	function pageNumbers() {
@@ -1001,11 +1061,11 @@
 								{/each}
 							</Tabs.Root>
 
-							{#if designerTool === 'erase'}
-								<div class="mt-3 rounded-md border border-destructive/25 bg-destructive/8 px-3 py-2">
-									<div class="flex items-center gap-2 text-xs font-semibold text-destructive">
+							{#if designerTool === 'whiteout'}
+								<div class="mt-3 rounded-md border border-slate-400/40 bg-slate-100/70 px-3 py-2 text-slate-800 dark:bg-slate-900/40 dark:text-slate-100">
+									<div class="flex items-center gap-2 text-xs font-semibold">
 										<Eraser class="h-3.5 w-3.5" />
-										Erase mode
+										Erase PDF text
 									</div>
 								</div>
 							{:else if selectedCatalogItem}
@@ -1118,8 +1178,8 @@
 										</button>
 										<button
 											type="button"
-											class="inline-flex h-8 items-center gap-1.5 rounded px-3 text-xs font-semibold transition {designerTool === 'erase' ? 'bg-destructive text-destructive-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-											onclick={() => (designerTool = 'erase')}
+											class="inline-flex h-8 items-center gap-1.5 rounded px-3 text-xs font-semibold transition {designerTool === 'whiteout' ? 'bg-secondary text-secondary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+											onclick={() => (designerTool = 'whiteout')}
 											data-testid="lease-template-erase-tool"
 										>
 											<Eraser class="h-3.5 w-3.5" />
@@ -1200,19 +1260,19 @@
 											<button
 												type="button"
 												style={markerStyle(field)}
-												class="absolute z-[1] flex min-h-5 items-center gap-1 rounded border px-1.5 text-left text-[11px] font-semibold leading-tight shadow-sm backdrop-blur-sm transition {fieldTone(field.signerRole)} {selectedFieldId === field.id ? 'ring-2 ring-primary ring-offset-1' : ''} {designerTool === 'erase' ? 'outline outline-2 outline-destructive/40' : ''}"
+												class="absolute z-[1] flex min-h-5 items-center gap-1 rounded border px-1.5 text-left text-[11px] font-semibold leading-tight shadow-sm backdrop-blur-sm transition {fieldTone(field)} {selectedFieldId === field.id ? 'ring-2 ring-primary ring-offset-1' : ''}"
 												data-template-field-marker
 												data-testid={field.testId}
-												title={designerTool === 'erase' ? `Erase ${field.label}` : `${field.label} · ${formatSigner(field.signerRole)}`}
+												title={`${field.label} · ${fieldSignerLabel(field)}`}
 												onpointerdown={(event) => handleFieldPointerDown(event, field)}
 											>
-												{#if designerTool === 'erase'}
+												{#if isWhiteoutField(field)}
 													<Eraser class="h-3 w-3 shrink-0" />
 												{:else}
 													<GripHorizontal class="h-3 w-3 shrink-0" />
 												{/if}
 												<span class="min-w-0 truncate">{field.label}</span>
-												{#if selectedFieldId === field.id && !field.locked && designerTool === 'place'}
+												{#if selectedFieldId === field.id && !field.locked}
 													<span
 														class="absolute -bottom-1 -right-1 h-3.5 w-3.5 cursor-nwse-resize rounded-full border border-background bg-primary shadow-sm ring-1 ring-primary/40"
 														onpointerdown={(event) => startFieldResize(event, field, 'southEast')}
@@ -1293,7 +1353,7 @@
 											<span class="shrink-0 text-xs text-muted-foreground">P{field.pageNumber}</span>
 										</span>
 										<span class="mt-1 flex flex-wrap gap-1">
-											<Badge variant="outline" class="text-[10px]">{formatSigner(field.signerRole)}</Badge>
+											<Badge variant="outline" class="text-[10px]">{fieldSignerLabel(field)}</Badge>
 											{#if field.required}
 												<Badge variant="secondary" class="gap-1 text-[10px]">
 													<CheckCircle2 class="h-3 w-3" />
@@ -1322,7 +1382,7 @@
 									</div>
 									<div class="rounded-md bg-muted/30 px-2 py-2">
 										<p class="text-muted-foreground">Signer</p>
-										<p class="font-medium">{formatSigner(selectedField.signerRole)}</p>
+										<p class="font-medium">{fieldSignerLabel(selectedField)}</p>
 									</div>
 									<div class="rounded-md bg-muted/30 px-2 py-2">
 										<p class="text-muted-foreground">X / Y</p>
