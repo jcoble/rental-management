@@ -7,6 +7,7 @@ class WorkOrderFormTabSpec extends TabbedFormStepSpec {
     required super.label,
     required super.child,
     super.isComplete,
+    super.validate,
   });
 }
 

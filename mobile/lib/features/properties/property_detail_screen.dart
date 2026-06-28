@@ -721,7 +721,6 @@ class _AddUnitSheetState extends ConsumerState<_AddUnitSheet> {
                   validator: (v) => (v == null || double.tryParse(v) == null)
                       ? 'Enter an amount'
                       : null,
-                  onFieldSubmitted: (_) => _saving ? null : _submit(),
                 ),
                 gap,
                 DropdownButtonFormField<String>(
@@ -893,7 +892,6 @@ class _EditUnitSheetState extends ConsumerState<_EditUnitSheet> {
                   validator: (v) => (v == null || double.tryParse(v) == null)
                       ? 'Enter an amount'
                       : null,
-                  onFieldSubmitted: (_) => _saving ? null : _submit(),
                 ),
                 gap,
                 DropdownButtonFormField<String>(

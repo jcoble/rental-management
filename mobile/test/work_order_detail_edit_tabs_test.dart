@@ -76,6 +76,11 @@ void main() {
         find.byKey(const Key('work-order-estimated-cost-field')),
         '185.75',
       );
+      await tester.tap(find.text('Next'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Vendor'), findsOneWidget);
+
       await tester.tap(find.text('Save Changes'));
       await tester.pumpAndSettle();
 

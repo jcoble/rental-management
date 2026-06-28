@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 class TabbedFormStepSpec {
@@ -5,11 +7,13 @@ class TabbedFormStepSpec {
     required this.label,
     required this.child,
     this.isComplete,
+    this.validate,
   });
 
   final String label;
   final Widget child;
   final bool Function()? isComplete;
+  final bool Function()? validate;
 }
 
 class TabbedFormSheet extends StatefulWidget {
@@ -28,7 +32,7 @@ class TabbedFormSheet extends StatefulWidget {
   final List<TabbedFormStepSpec> tabs;
   final String saveLabel;
   final bool saving;
-  final VoidCallback onSave;
+  final FutureOr<void> Function() onSave;
   final String? error;
   final double heightFactor;
 
@@ -37,27 +41,131 @@ class TabbedFormSheet extends StatefulWidget {
 }
 
 class _TabbedFormSheetState extends State<TabbedFormSheet> {
-  final Set<int> _visitedTabs = <int>{};
+  static const _successDuration = Duration(milliseconds: 360);
+
+  late List<GlobalKey<FormState>> _stepFormKeys;
+  final Set<int> _completedSteps = <int>{};
   int _currentIndex = 0;
+  int? _celebratingIndex;
   bool _forward = true;
+  bool _actionInFlight = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _stepFormKeys = _buildStepKeys();
+  }
+
+  @override
+  void didUpdateWidget(covariant TabbedFormSheet oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.tabs.length != widget.tabs.length) {
+      final oldKeys = _stepFormKeys;
+      _stepFormKeys = [
+        for (var i = 0; i < widget.tabs.length; i++)
+          if (i < oldKeys.length) oldKeys[i] else GlobalKey<FormState>(),
+      ];
+      _completedSteps.removeWhere((index) => index >= widget.tabs.length);
+      if (_currentIndex >= widget.tabs.length) {
+        _currentIndex = widget.tabs.isEmpty ? 0 : widget.tabs.length - 1;
+      }
+    }
+  }
+
+  List<GlobalKey<FormState>> _buildStepKeys() => [
+    for (var i = 0; i < widget.tabs.length; i++) GlobalKey<FormState>(),
+  ];
+
+  bool get _isLastStep => _currentIndex == widget.tabs.length - 1;
+
+  bool get _isBusy => widget.saving || _actionInFlight;
 
   void _selectTab(int nextIndex) {
-    if (nextIndex == _currentIndex) return;
+    if (nextIndex == _currentIndex || _isBusy) return;
+    if (nextIndex < _currentIndex) {
+      _moveToStep(nextIndex);
+      return;
+    }
+
+    _completeCurrentStep(
+      nextIndex: _isComplete(nextIndex) || nextIndex == _currentIndex + 1
+          ? nextIndex
+          : (_currentIndex + 1).clamp(0, widget.tabs.length - 1),
+    );
+  }
+
+  void _moveToStep(int nextIndex) {
     setState(() {
-      _visitedTabs.add(_currentIndex);
       _forward = nextIndex > _currentIndex;
       _currentIndex = nextIndex;
     });
   }
 
   bool _isComplete(int index) {
-    return _visitedTabs.contains(index) ||
+    return _completedSteps.contains(index) ||
         (widget.tabs[index].isComplete?.call() ?? false);
   }
 
-  void _save() {
-    setState(() => _visitedTabs.add(_currentIndex));
-    widget.onSave();
+  bool _validateCurrentStep() {
+    final formValid =
+        _stepFormKeys[_currentIndex].currentState?.validate() ?? true;
+    final customValid = widget.tabs[_currentIndex].validate?.call() ?? true;
+    return formValid && customValid;
+  }
+
+  Future<void> _completeCurrentStep({required int nextIndex}) async {
+    if (_isBusy || !_validateCurrentStep()) return;
+
+    setState(() {
+      _completedSteps.add(_currentIndex);
+      _celebratingIndex = _currentIndex;
+      _actionInFlight = true;
+    });
+
+    await Future<void>.delayed(_successDuration);
+    if (!mounted) return;
+
+    setState(() {
+      _celebratingIndex = null;
+      _actionInFlight = false;
+      _forward = nextIndex > _currentIndex;
+      _currentIndex = nextIndex;
+    });
+  }
+
+  Future<void> _save() async {
+    if (_isBusy || !_validateCurrentStep()) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+
+    setState(() {
+      _completedSteps.add(_currentIndex);
+      _celebratingIndex = _currentIndex;
+      _actionInFlight = true;
+    });
+
+    await Future<void>.delayed(_successDuration);
+
+    try {
+      await Future<void>.sync(widget.onSave);
+      if (messenger.mounted) {
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: const Text('Save complete'),
+              backgroundColor: Colors.green.shade700,
+            ),
+          );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _celebratingIndex = null;
+          _actionInFlight = false;
+        });
+      }
+    }
   }
 
   @override
@@ -66,6 +174,7 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
     final colorScheme = theme.colorScheme;
     final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
     final height = MediaQuery.sizeOf(context).height * widget.heightFactor;
+    final isCelebrating = _celebratingIndex == _currentIndex;
 
     return SafeArea(
       top: false,
@@ -94,7 +203,9 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
               ),
               const SizedBox(height: 8),
               DefaultTabController(
+                key: ValueKey(_currentIndex),
                 length: widget.tabs.length,
+                initialIndex: _currentIndex,
                 child: TabBar(
                   isScrollable: true,
                   tabAlignment: TabAlignment.start,
@@ -160,7 +271,10 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
                   child: SingleChildScrollView(
                     key: Key('tabbed-form-current-$_currentIndex'),
                     padding: const EdgeInsets.only(bottom: 12),
-                    child: widget.tabs[_currentIndex].child,
+                    child: Form(
+                      key: _stepFormKeys[_currentIndex],
+                      child: widget.tabs[_currentIndex].child,
+                    ),
                   ),
                 ),
               ),
@@ -185,15 +299,74 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
                 ),
               ],
               const SizedBox(height: 12),
-              FilledButton(
-                onPressed: widget.saving ? null : _save,
-                child: widget.saving
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(widget.saveLabel),
+              Row(
+                children: [
+                  if (_currentIndex > 0) ...[
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _isBusy
+                            ? null
+                            : () => _moveToStep(_currentIndex - 1),
+                        icon: const Icon(Icons.arrow_back),
+                        label: const Text('Back'),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                  ],
+                  Expanded(
+                    flex: 2,
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: isCelebrating
+                            ? Colors.green.shade700
+                            : null,
+                        foregroundColor: isCelebrating ? Colors.white : null,
+                      ),
+                      onPressed: _isBusy
+                          ? null
+                          : _isLastStep
+                          ? _save
+                          : () => _completeCurrentStep(
+                              nextIndex: _currentIndex + 1,
+                            ),
+                      icon: widget.saving
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : AnimatedSwitcher(
+                              duration: const Duration(milliseconds: 180),
+                              transitionBuilder: (child, animation) =>
+                                  ScaleTransition(
+                                    scale: CurvedAnimation(
+                                      parent: animation,
+                                      curve: Curves.easeOutBack,
+                                    ),
+                                    child: FadeTransition(
+                                      opacity: animation,
+                                      child: child,
+                                    ),
+                                  ),
+                              child: Icon(
+                                isCelebrating
+                                    ? Icons.check
+                                    : _isLastStep
+                                    ? Icons.check_circle_outline
+                                    : Icons.arrow_forward,
+                                key: ValueKey(
+                                  isCelebrating
+                                      ? 'complete'
+                                      : _isLastStep
+                                      ? 'save'
+                                      : 'next',
+                                ),
+                              ),
+                            ),
+                      label: Text(_isLastStep ? widget.saveLabel : 'Next'),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
