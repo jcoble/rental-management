@@ -123,6 +123,7 @@
 	let handledNoticeActionKey: string | null = null;
 	// Per-draft channel selection (portal / email / sms), defaulting to all on.
 	let noticeChannels = $state<Record<number, { portal: boolean; email: boolean; sms: boolean }>>({});
+	let noticeEdits = $state<Record<number, { subject: string; body: string }>>({});
 	const noticeEmptyState = $derived(
 		getTenantNoticeEmptyState({
 			forcedNoticeLabel,
@@ -150,6 +151,30 @@
 		const c = channelsFor(id);
 		return [c.portal ? 'Portal' : '', c.email ? 'Email' : '', c.sms ? 'Sms' : ''].filter(Boolean);
 	}
+	function noticeEditFor(draft: NoticeDraft) {
+		return noticeEdits[draft.id] ?? { subject: draft.subject, body: draft.body };
+	}
+	function setNoticeEdit(id: number, field: 'subject' | 'body', value: string) {
+		noticeEdits = {
+			...noticeEdits,
+			[id]: { ...(noticeEdits[id] ?? { subject: '', body: '' }), [field]: value },
+		};
+	}
+	function editedNoticePayload(draft: NoticeDraft) {
+		const edit = noticeEditFor(draft);
+		return {
+			subject: edit.subject.trim(),
+			body: edit.body.trim(),
+		};
+	}
+	function hasEditedNoticeContent(draft: NoticeDraft) {
+		const edit = editedNoticePayload(draft);
+		return edit.subject.length > 0 && edit.body.length > 0;
+	}
+	function removeNoticeEdit(id: number) {
+		const { [id]: _removed, ...next } = noticeEdits;
+		noticeEdits = next;
+	}
 
 	// Notice types a landlord can FORCE for this tenant (generated even outside the usual trigger
 	// window). Mirrors the mobile type-first picker; late-rent is omitted here because it still
@@ -162,6 +187,7 @@
 	function openNoticeDialog(noticeType?: string) {
 		noticeDrafts = [];
 		noticeChannels = {};
+		noticeEdits = {};
 		forcedNoticeLabel = null;
 		showNoticeDialog = true;
 		// Default pass: generate whatever is actually due for this tenant.
@@ -178,8 +204,13 @@
 			forcedNoticeLabel = selectedForcedNoticeLabel;
 			noticeDrafts = result.drafts ?? [];
 			const seeded: Record<number, { portal: boolean; email: boolean; sms: boolean }> = {};
-			for (const d of noticeDrafts) seeded[d.id] = { portal: true, email: true, sms: true };
+			const seededEdits: Record<number, { subject: string; body: string }> = {};
+			for (const d of noticeDrafts) {
+				seeded[d.id] = { portal: true, email: true, sms: true };
+				seededEdits[d.id] = { subject: d.subject, body: d.body };
+			}
 			noticeChannels = seeded;
+			noticeEdits = seededEdits;
 			queryClient.invalidateQueries({ queryKey: ['notice-drafts', portfolioId] });
 			if (noticeDrafts.length === 0) {
 				showSuccess(
@@ -195,11 +226,14 @@
 	}));
 
 	const sendNoticeMutation = createMutation(() => ({
-		mutationFn: (draft: NoticeDraft) =>
-			notices.approve(draft.id, { channels: selectedChannelNames(draft.id) }),
+		mutationFn: async (draft: NoticeDraft) => {
+			await notices.update(draft.id, editedNoticePayload(draft));
+			return notices.approve(draft.id, { channels: selectedChannelNames(draft.id) });
+		},
 		onSuccess: (_r, draft) => {
 			showSuccess('Notice sent.');
 			noticeDrafts = noticeDrafts.filter((d) => d.id !== draft.id);
+			removeNoticeEdit(draft.id);
 			queryClient.invalidateQueries({ queryKey: ['notice-drafts', portfolioId] });
 			if (noticeDrafts.length === 0) showNoticeDialog = false;
 		},
@@ -211,6 +245,7 @@
 		onSuccess: (_r, draft) => {
 			showSuccess('Draft dismissed.');
 			noticeDrafts = noticeDrafts.filter((d) => d.id !== draft.id);
+			removeNoticeEdit(draft.id);
 			queryClient.invalidateQueries({ queryKey: ['notice-drafts', portfolioId] });
 			if (noticeDrafts.length === 0) showNoticeDialog = false;
 		},
@@ -525,6 +560,7 @@
 					{@const channels = channelsFor(draft.id)}
 					{@const busy = sendNoticeMutation.isPending || dismissNoticeMutation.isPending}
 					{@const canSend = channels.portal || channels.email || channels.sms}
+					{@const edit = noticeEditFor(draft)}
 					<div class="rounded-lg border border-border bg-card p-4" data-testid="tenant-notice-draft-{draft.id}">
 						<div class="mb-2 flex items-center justify-between gap-2">
 							<h3 class="text-sm font-semibold" data-testid="tenant-notice-draft-type">
@@ -532,8 +568,26 @@
 							</h3>
 							<StatusBadge status={draft.status} />
 						</div>
-						<p class="text-sm font-medium text-foreground" data-testid="tenant-notice-draft-subject">{draft.subject}</p>
-						<p class="mt-1 whitespace-pre-wrap text-sm text-muted-foreground" data-testid="tenant-notice-draft-body">{draft.body}</p>
+						<div class="space-y-3">
+							<label class="block">
+								<span class="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">Subject</span>
+								<input
+									class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+									value={edit.subject}
+									oninput={(event) => setNoticeEdit(draft.id, 'subject', (event.currentTarget as HTMLInputElement).value)}
+									data-testid="tenant-notice-edit-subject-{draft.id}"
+								/>
+							</label>
+							<label class="block">
+								<span class="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">Message</span>
+								<textarea
+									class="min-h-32 w-full rounded-md border border-input bg-background p-3 text-sm leading-6"
+									value={edit.body}
+									oninput={(event) => setNoticeEdit(draft.id, 'body', (event.currentTarget as HTMLTextAreaElement).value)}
+									data-testid="tenant-notice-edit-body-{draft.id}"
+								></textarea>
+							</label>
+						</div>
 
 						<div class="mt-3 flex flex-wrap items-center gap-4">
 							<span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Send via</span>
@@ -556,7 +610,7 @@
 								<Trash2 class="h-4 w-4" />
 								Dismiss
 							</Button>
-							<Button size="sm" class="gap-2" disabled={busy || !canSend} onclick={() => sendNoticeMutation.mutate(draft)} data-testid="tenant-notice-send-{draft.id}">
+							<Button size="sm" class="gap-2" disabled={busy || !canSend || !hasEditedNoticeContent(draft)} onclick={() => sendNoticeMutation.mutate(draft)} data-testid="tenant-notice-send-{draft.id}">
 								<Send class="h-4 w-4" />
 								Send
 							</Button>
