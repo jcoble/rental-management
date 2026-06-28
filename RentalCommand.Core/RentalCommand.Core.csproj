@@ -1,10 +1,11 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>RentalCommand.Core</RootNamespace>
+    <UserSecretsId>4f48ec32-1aee-4c1b-a14a-6370b541a666</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
