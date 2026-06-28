@@ -98,12 +98,20 @@ public sealed class LeaseEsignService : ILeaseEsignService
             return SendForSignatureResult.NotFound();
         }
 
+        await _db.Entry(lease).ReloadAsync(ct);
+        var templateFieldSnapshot = lease.DocumentTemplateId.HasValue
+            ? await BuildTemplateFieldSnapshotAsync(portfolioId, lease.DocumentTemplateId.Value, ct)
+            : null;
+
         var providerResult = await _provider.SendForSignatureAsync(new EsignRequest
         {
             DocumentName = $"lease-{lease.Id}-agreement.pdf",
             Subject = string.IsNullOrWhiteSpace(lease.LeaseNumber) ? $"Lease #{lease.Id}" : $"Lease {lease.LeaseNumber}",
             DocumentBytes = pdf,
             Signers = new[] { new EsignSigner { Name = signerName, Email = signerEmail } },
+            DocumentTemplateId = lease.DocumentTemplateId,
+            DocumentTemplateVersion = lease.DocumentTemplateVersion,
+            TemplateFieldSnapshotJson = templateFieldSnapshot,
         }, ct);
 
         if (!providerResult.IsConfigured)
@@ -386,6 +394,38 @@ public sealed class LeaseEsignService : ILeaseEsignService
         }
 
         return stored.Id;
+    }
+
+    private async Task<string?> BuildTemplateFieldSnapshotAsync(
+        int portfolioId,
+        int documentTemplateId,
+        CancellationToken ct)
+    {
+        var fields = await _db.DocumentTemplateFields
+            .AsNoTracking()
+            .Where(f => f.DocumentTemplateId == documentTemplateId
+                && f.DocumentTemplate!.PortfolioId == portfolioId)
+            .OrderBy(f => f.SortOrder)
+            .ThenBy(f => f.Id)
+            .Select(f => new
+            {
+                f.Id,
+                f.FieldKey,
+                f.Label,
+                Kind = f.Kind.ToString(),
+                SignerRole = f.SignerRole.ToString(),
+                f.PageNumber,
+                f.XPct,
+                f.YPct,
+                f.WidthPct,
+                f.HeightPct,
+                f.Required,
+                f.Locked,
+                f.SortOrder,
+            })
+            .ToListAsync(ct);
+
+        return fields.Count == 0 ? null : JsonSerializer.Serialize(fields);
     }
 
     private async Task BroadcastLeaseAsync(int portfolioId, int leaseId, CancellationToken ct)

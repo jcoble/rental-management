@@ -34,6 +34,15 @@ public class EsignRequest
 
     /// <summary>Optional human-readable subject/title shown to the signer (e.g. "Lease L-2026-7").</summary>
     public string? Subject { get; set; }
+
+    /// <summary>Document template used to render the submitted PDF, when applicable.</summary>
+    public int? DocumentTemplateId { get; set; }
+
+    /// <summary>Template version frozen when the submitted PDF was rendered.</summary>
+    public int? DocumentTemplateVersion { get; set; }
+
+    /// <summary>JSON snapshot of the template fields used for this signing request.</summary>
+    public string? TemplateFieldSnapshotJson { get; set; }
 }
 
 /// <summary>A single signer on an e-sign request.</summary>
