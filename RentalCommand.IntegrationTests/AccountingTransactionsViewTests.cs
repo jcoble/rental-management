@@ -440,6 +440,53 @@ public sealed class AccountingTransactionsViewTests : IAsyncLifetime
             "the view's INNER JOIN Leases ... AND DeletedAt IS NULL drops payments of a soft-deleted lease");
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────────────────────
+    // UnitId — the view exposes a unit-tied row's UnitId (payment via its lease, expense direct) so the
+    // client can fold the ledger row into the unit's Command Center tab; bank rows carry NULL.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────
+    [SkippableFact]
+    public async Task GetTransactionsAsync_ExposesUnitId_ForPaymentAndExpense_NullForBank()
+    {
+        SkipIfNoDocker();
+        await using var db = NewContext(_ownerConnString);
+        var now = new DateTime(2026, 06, 01, 0, 0, 0, DateTimeKind.Utc);
+
+        var property = SeedPropertyLeaseAndPayment(db, _portfolioId, now);
+        var paymentId = await db.Payments.Where(p => p.PortfolioId == _portfolioId).Select(p => p.Id).SingleAsync();
+        var unitId = await db.Units.Where(u => u.PropertyId == property.Id).Select(u => u.Id).SingleAsync();
+
+        var expense = SeedExpense(
+            db, _portfolioId,
+            description: "Unit-tied repair",
+            amount: 120m,
+            incurredAt: now,
+            category: ScheduleECategory.Repairs,
+            status: ExpenseStatus.Pending,
+            propertyId: property.Id,
+            unitId: unitId);
+
+        SeedBankTransaction(
+            db, _portfolioId,
+            description: "BANK FEE",
+            merchantName: "Sandbox Bank",
+            amount: -5m,
+            postedAt: now,
+            category: "Fee",
+            matchStatus: "Unmatched");
+
+        var page = await NewService(db).GetTransactionsAsync(
+            _portfolioId,
+            new AccountingTransactionsQuery { Take = 50 },
+            CancellationToken.None);
+
+        page.Items.Single(t => t.Kind == "Payment" && t.Id == paymentId).UnitId
+            .Should().Be(unitId, "the view exposes the payment's unit via its lease");
+        page.Items.Single(t => t.Kind == "Expense" && t.Id == expense.Id).UnitId
+            .Should().Be(unitId, "the view exposes the expense's own UnitId");
+        page.Items.Single(t => t.Kind == "Bank").UnitId
+            .Should().BeNull("bank rows have no unit");
+    }
+
     // ───────────────────────────────── helpers ─────────────────────────────────
 
     private void SkipIfNoDocker() =>
@@ -534,12 +581,14 @@ public sealed class AccountingTransactionsViewTests : IAsyncLifetime
         DateTime incurredAt,
         ScheduleECategory category,
         ExpenseStatus status,
-        int? propertyId = null)
+        int? propertyId = null,
+        int? unitId = null)
     {
         var expense = new Expense
         {
             PortfolioId = portfolioId,
             PropertyId = propertyId,
+            UnitId = unitId,
             Category = category,
             Description = description,
             Status = status,

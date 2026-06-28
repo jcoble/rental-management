@@ -150,6 +150,10 @@ public class PastDueLeaseResponse
 {
     public int LeaseId { get; set; }
 
+    /// <summary>Unit id on the behind lease, so the "open oldest payment" link can deep-link into the
+    /// unit's Command Center Rent tab rather than the generic payment detail page.</summary>
+    public int UnitId { get; set; }
+
     /// <summary>Tenant name on the behind lease (e.g. "Maria Tenant"), or null when not set.</summary>
     public string? TenantName { get; set; }
 
@@ -242,6 +246,11 @@ public class AccountingTransactionResponse
     public string Status { get; set; } = string.Empty;
     public decimal Amount { get; set; }
     public int? PropertyId { get; set; }
+
+    /// <summary>Unit id for the row (via Lease for payments, direct for expenses; null for bank rows).
+    /// Lets the client route Payment/Expense ledger rows into their unit's Command Center tab.</summary>
+    public int? UnitId { get; set; }
+
     public string? PropertyName { get; set; }
     public string? Counterparty { get; set; }
     public string? DetailHref { get; set; }

@@ -14,6 +14,7 @@
 	import { accounting } from '$lib/api/endpoints/accounting';
 	import { payments } from '$lib/api/endpoints/payments';
 	import type { PastDueLease } from '$lib/types';
+	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
@@ -164,7 +165,7 @@
 
 	function openOldestPayment(lease: PastDueLease) {
 		if (lease.oldestPaymentId > 0) {
-			goto(`/accounting/payments/${lease.oldestPaymentId}`);
+			goto(recordHref('payment', { id: lease.oldestPaymentId, unitId: lease.unitId }));
 		}
 	}
 </script>

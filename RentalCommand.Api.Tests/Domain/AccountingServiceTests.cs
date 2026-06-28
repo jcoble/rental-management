@@ -366,6 +366,7 @@ public class AccountingServiceTests : IDisposable
         row.LeaseNumber.Should().Be("L-001");
         row.PropertyName.Should().Be("General");
         row.UnitNumber.Should().Be("12");
+        row.UnitId.Should().Be(lease.UnitId, "the row carries the lease's unit so the oldest-payment link folds into the unit's Rent tab");
         row.OldestPaymentId.Should().Be(oldest.Id);
         row.OldestDueDate.Should().Be(oldest.DueDate);
         row.PastDueAmount.Should().Be(1275m);
