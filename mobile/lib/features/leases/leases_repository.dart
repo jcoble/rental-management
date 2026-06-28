@@ -206,7 +206,7 @@ class LeasesRepository {
       }..removeWhere((_, v) => v == null);
       final response = await _dio.post<Map<String, dynamic>>(
         '/leases/$id/send-for-signature',
-        data: body.isNotEmpty ? body : null,
+        data: body,
       );
       final data = response.data;
       if (data == null) {
