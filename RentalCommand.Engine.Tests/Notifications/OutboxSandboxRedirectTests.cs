@@ -8,6 +8,7 @@ using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.Engine.Services;
 using RentalCommand.Engine.Workers;
 
 namespace RentalCommand.Engine.Tests.Notifications;
@@ -145,6 +146,24 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
         subject.Should().Be("Please sign your lease");
     }
 
+    [Fact]
+    public async Task Suppressed_email_is_terminal_and_keeps_reason_for_queue_visibility()
+    {
+        _channel.SuppressEmailWith("Email delivery is not configured for this environment.");
+        await SeedLeaseEsignEmail(portfolioId: 1, to: "real-tenant@example.com", subject: "Please sign: Lease L-2026-7");
+
+        await RunCycle();
+
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        var message = await db.OutboxMessages.AsNoTracking().SingleAsync();
+
+        message.SentAt.Should().NotBeNull();
+        message.FailedAt.Should().BeNull();
+        message.RetryCount.Should().Be(0);
+        message.Error.Should().Be("Email delivery is not configured for this environment.");
+    }
+
     private async Task SeedEmail(int portfolioId, string to, string subject)
     {
         using var scope = _provider.CreateScope();
@@ -219,9 +238,20 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
     {
         public List<(string To, string Subject, string Body, string? HtmlBody)> Emails { get; } = new();
         public List<(string To, string Message)> SmsMessages { get; } = new();
+        private string? _emailSuppressionReason;
+
+        public void SuppressEmailWith(string reason)
+        {
+            _emailSuppressionReason = reason;
+        }
 
         public Task SendEmailAsync(string toEmail, string subject, string body, string? htmlBody = null, CancellationToken ct = default)
         {
+            if (_emailSuppressionReason is not null)
+            {
+                throw new NotificationDeliverySuppressedException(_emailSuppressionReason);
+            }
+
             Emails.Add((toEmail, subject, body, htmlBody));
             return Task.CompletedTask;
         }

@@ -12,8 +12,9 @@ namespace RentalCommand.Engine.Tests.Notifications;
 /// <summary>
 /// Covers the email transport selection in <see cref="RoutingNotificationChannel.SendEmailAsync"/>:
 /// SMTP is used only when Transport == "Smtp" AND the SMTP creds are present; otherwise SendGrid (if
-/// configured); otherwise the send is suppressed (no throw, no transport hit). SMTP network sends
-/// aren't unit-testable, so the SMTP sender is mocked and we assert it is (or isn't) invoked.
+/// configured); otherwise the send is suppressed with a typed exception (no transport hit). SMTP
+/// network sends aren't unit-testable, so the SMTP sender is mocked and we assert it is (or isn't)
+/// invoked.
 /// </summary>
 public class EmailTransportSelectionTests
 {
@@ -121,14 +122,15 @@ public class EmailTransportSelectionTests
     }
 
     [Fact]
-    public async Task SendEmailAsync_Suppresses_WhenNothingConfigured()
+    public async Task SendEmailAsync_ThrowsSuppressed_WhenNothingConfigured()
     {
         var cfg = new NotificationsConfig();   // no SMTP, no SendGrid, default transport
         var (channel, smtp) = BuildChannel(cfg);
 
-        // Must NOT throw and must NOT hit any transport.
-        await channel.SendEmailAsync("to@x.com", "Hi", "Body", htmlBody: null);
+        var ex = await Assert.ThrowsAsync<NotificationDeliverySuppressedException>(
+            () => channel.SendEmailAsync("to@x.com", "Hi", "Body", htmlBody: null));
 
+        ex.Message.Should().Contain("Email delivery is not configured");
         smtp.Verify(s => s.SendAsync(It.IsAny<SmtpOptions>(), It.IsAny<string>(), It.IsAny<string>(),
             It.IsAny<string>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()), Times.Never);
     }

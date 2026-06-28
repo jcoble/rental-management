@@ -586,6 +586,7 @@
 	}
 
 	function queueStatusLabel(status: string): string {
+		if (status === 'DeliveryDisabled') return 'Delivery disabled';
 		if (status === 'Retrying') return 'Retrying';
 		if (status === 'Failed') return 'Failed';
 		if (status === 'Sent') return 'Sent';
@@ -596,6 +597,7 @@
 		const base = 'inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[11px] font-medium';
 		if (status === 'Sent') return `${base} border-success/40 bg-success/10 text-success`;
 		if (status === 'Failed') return `${base} border-destructive/40 bg-destructive/10 text-destructive`;
+		if (status === 'DeliveryDisabled') return `${base} border-warning/40 bg-warning/10 text-warning`;
 		if (status === 'Retrying') return `${base} border-warning/40 bg-warning/10 text-warning`;
 		return `${base} border-border bg-muted/40 text-muted-foreground`;
 	}
@@ -606,9 +608,11 @@
 				? 'Sent'
 				: item.status === 'Failed'
 					? 'Failed'
-					: item.status === 'Retrying'
-						? 'Retrying since'
-						: 'Queued';
+					: item.status === 'DeliveryDisabled'
+						? 'Delivery disabled'
+						: item.status === 'Retrying'
+							? 'Retrying since'
+							: 'Queued';
 		const parts = [`${label} ${formatDateTime(item.statusAt)}`];
 		if (item.retryCount > 0 && item.status !== 'Sent') {
 			parts.push(`${item.retryCount} ${item.retryCount === 1 ? 'attempt' : 'attempts'}`);
