@@ -1771,7 +1771,6 @@
 input::placeholder,
 textarea::placeholder {
   color: color-mix(in srgb, var(--muted-foreground) 55%, transparent);
-  font-style: italic;
 }
 
 /* Invalid fields get a red tint, not just the shadcn aria-invalid border.
