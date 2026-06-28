@@ -66,14 +66,6 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
     final colorScheme = theme.colorScheme;
     final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
     final height = MediaQuery.sizeOf(context).height * widget.heightFactor;
-    final completedCount = {
-      for (var i = 0; i < widget.tabs.length; i++)
-        if (_isComplete(i)) i,
-    }.length;
-    final progress = widget.tabs.isEmpty
-        ? 0.0
-        : (completedCount + 1).clamp(0, widget.tabs.length) /
-              widget.tabs.length;
 
     return SafeArea(
       top: false,
@@ -106,6 +98,7 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
                 child: TabBar(
                   isScrollable: true,
                   tabAlignment: TabAlignment.start,
+                  dividerColor: Colors.transparent,
                   onTap: _selectTab,
                   tabs: [
                     for (var i = 0; i < widget.tabs.length; i++)
@@ -143,20 +136,6 @@ class _TabbedFormSheetState extends State<TabbedFormSheet> {
                         ),
                       ),
                   ],
-                ),
-              ),
-              const SizedBox(height: 10),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(999),
-                child: TweenAnimationBuilder<double>(
-                  tween: Tween<double>(begin: 0, end: progress),
-                  duration: const Duration(milliseconds: 260),
-                  curve: Curves.easeOutCubic,
-                  builder: (context, value, _) => LinearProgressIndicator(
-                    minHeight: 3,
-                    value: value,
-                    backgroundColor: colorScheme.surfaceContainerHighest,
-                  ),
                 ),
               ),
               const SizedBox(height: 12),
