@@ -3,6 +3,8 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using PdfSharp.Pdf.Content;
+using PdfSharp.Pdf.IO;
 using QuestPDF.Fluent;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Entities;
@@ -135,6 +137,60 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         text.Should().Contain("Williams");
         text.Should().Contain("$1,450.00");
         text.Should().NotContain("Residential Lease Agreement");
+    }
+
+    [Fact]
+    public void RenderOverlayPreview_WhiteoutFieldsArePaintedBeforeLeaseValues()
+    {
+        var lease = SeedLeaseWithGraph();
+        var fields = new List<DocumentTemplateField>
+        {
+            new()
+            {
+                Id = 1,
+                FieldKey = "pdf.whiteout",
+                Label = "Erase PDF text",
+                Kind = DocumentTemplateFieldKind.Whiteout,
+                PageNumber = 1,
+                XPct = 0.15,
+                YPct = 0.31,
+                WidthPct = 0.50,
+                HeightPct = 0.06,
+                SortOrder = 1,
+            },
+            new()
+            {
+                Id = 2,
+                FieldKey = "tenant.fullName",
+                Label = "Tenant full name",
+                Kind = DocumentTemplateFieldKind.Text,
+                PageNumber = 1,
+                XPct = 0.18,
+                YPct = 0.34,
+                WidthPct = 0.62,
+                HeightPct = 0.04,
+                SortOrder = 2,
+            },
+        };
+        var data = new LeaseAgreementData
+        {
+            Lease = lease,
+            LandlordName = "Acme Property Management LLC",
+            TenantName = "Marcus Williams",
+            PropertyName = "Maple Court",
+            PropertyAddress = "10 Maple Ct, Columbus, OH 43215",
+            UnitNumber = "2B",
+            State = "OH",
+        };
+
+        var sourcePdf = LeaseTemplateFixturePdf();
+        var sourceContent = FirstPageContent(sourcePdf);
+        var rendered = LeaseAgreementRenderer.RenderOverlayPreview(sourcePdf, fields, data);
+        var content = FirstPageContent(rendered);
+
+        CountOccurrences(content, "1 1 1 rg").Should().BeGreaterThan(
+            CountOccurrences(sourceContent, "1 1 1 rg"),
+            "whiteout fields must draw a white filled rectangle even though they have no lease value");
     }
 
     [Fact]
@@ -512,6 +568,26 @@ public sealed class LeaseAgreementDocumentTests : IDisposable
         });
 
         return document.GeneratePdf();
+    }
+
+    private static string FirstPageContent(byte[] pdfBytes)
+    {
+        using var ms = new MemoryStream(pdfBytes);
+        using var pdf = PdfReader.Open(ms, PdfDocumentOpenMode.Import);
+        return Encoding.ASCII.GetString(ContentReader.ReadContent(pdf.Pages[0]).ToContent());
+    }
+
+    private static int CountOccurrences(string source, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = source.IndexOf(value, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+
+        return count;
     }
 
     private sealed class NoopDataUpdateService : IDataUpdateService

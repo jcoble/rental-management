@@ -166,8 +166,13 @@ public sealed class ExecutedLeasePdfGenerator : IExecutedLeasePdfGenerator
 
             var page = pdf.Pages[pageIndex];
             using var gfx = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
+            var orderedFields = pageGroup
+                .OrderBy(f => f.PageNumber)
+                .ThenBy(f => f.SortOrder)
+                .ThenBy(f => f.Id)
+                .ToList();
 
-            foreach (var field in pageGroup)
+            foreach (var field in orderedFields)
             {
                 if (!TryParseKind(field.Kind, out var kind)
                     || kind is not (DocumentTemplateFieldKind.Signature
@@ -619,6 +624,7 @@ public sealed class ExecutedLeasePdfGenerator : IExecutedLeasePdfGenerator
 
     private sealed class TemplateFieldSnapshot
     {
+        public int Id { get; init; }
         public string? Kind { get; init; }
         public string? SignerRole { get; init; }
         public int PageNumber { get; init; } = 1;
@@ -626,6 +632,7 @@ public sealed class ExecutedLeasePdfGenerator : IExecutedLeasePdfGenerator
         public double YPct { get; init; }
         public double WidthPct { get; init; } = 0.12;
         public double HeightPct { get; init; } = 0.03;
+        public int SortOrder { get; init; }
     }
 
     private sealed class LatoFontResolver : IFontResolver

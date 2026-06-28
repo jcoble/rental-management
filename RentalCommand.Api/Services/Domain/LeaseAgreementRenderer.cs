@@ -117,7 +117,7 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
     {
         var valueMap = BuildValueMap(data);
         var renderableFields = fields
-            .Where(f => IsAutoFillField(f) && ResolveValue(f, valueMap) is { Length: > 0 })
+            .Where(f => IsWhiteoutField(f) || (IsAutoFillField(f) && ResolveValue(f, valueMap) is { Length: > 0 }))
             .OrderBy(f => f.SortOrder)
             .ThenBy(f => f.Id)
             .ToList();
@@ -127,9 +127,13 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
 
     private static bool IsAutoFillField(DocumentTemplateField field) =>
         field.SignerRole == DocumentTemplateSignerRole.None
+            && !IsWhiteoutField(field)
             && field.Kind is not DocumentTemplateFieldKind.Signature
                 and not DocumentTemplateFieldKind.Initial
                 and not DocumentTemplateFieldKind.DateSigned;
+
+    internal static bool IsWhiteoutField(DocumentTemplateField field) =>
+        field.Kind == DocumentTemplateFieldKind.Whiteout;
 
     private static byte[] StampValues(
         byte[] originalBytes,
@@ -152,8 +156,17 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
             var page = pdf.Pages[pageIndex];
             using var gfx = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
             var formatter = new XTextFormatter(gfx);
+            var orderedFields = pageGroup
+                .OrderBy(f => f.SortOrder)
+                .ThenBy(f => f.Id)
+                .ToList();
 
-            foreach (var field in pageGroup)
+            foreach (var field in orderedFields.Where(IsWhiteoutField))
+            {
+                DrawWhiteout(gfx, ToPageRect(field, page.Width.Point, page.Height.Point));
+            }
+
+            foreach (var field in orderedFields.Where(f => !IsWhiteoutField(f)))
             {
                 var value = ResolveValue(field, valueMap);
                 if (string.IsNullOrWhiteSpace(value))
@@ -170,6 +183,11 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
         using var output = new MemoryStream();
         pdf.Save(output, false);
         return output.ToArray();
+    }
+
+    internal static void DrawWhiteout(XGraphics gfx, XRect rect)
+    {
+        gfx.DrawRectangle(XBrushes.White, rect);
     }
 
     private static XRect ToPageRect(DocumentTemplateField field, double pageWidth, double pageHeight)
@@ -244,7 +262,7 @@ public sealed class LeaseAgreementRenderer : ILeaseAgreementRenderer
                 f.Required,
                 f.Locked,
                 f.SortOrder,
-                Value = ResolveValue(f, valueMap),
+                Value = IsWhiteoutField(f) ? null : ResolveValue(f, valueMap),
             })
             .ToList();
 
