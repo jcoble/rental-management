@@ -23,3 +23,15 @@ test('portal security contributes to shell title resolution without becoming a s
 	assert.match(source, /portalUser\s+\?\s+\[\.\.\.portalNavItems, \.\.\.portalUtilityItems\]/);
 	assert.doesNotMatch(portalNavBlock, /href: '\/portal\/security'/);
 });
+
+test('staff money navigation exposes security deposits as a first-class section', () => {
+	const moneyGroupStart = source.indexOf("id: 'money'");
+	const rentalsGroupStart = source.indexOf("id: 'rentals'");
+	const moneyGroup = source.slice(moneyGroupStart, rentalsGroupStart);
+
+	assert.match(moneyGroup, /label: 'Money'/);
+	assert.match(moneyGroup, /\{ href: '\/accounting', label: 'Money', icon: Calculator, roles: \['Admin', 'Manager'\] \}/);
+	assert.match(moneyGroup, /\{ href: '\/deposits', label: 'Security Deposits', icon: PiggyBank, roles: \['Admin', 'Manager'\] \}/);
+	assert.match(moneyGroup, /\{ href: '\/reports', label: 'Reports', icon: BarChart3, roles: \['Admin', 'Manager'\] \}/);
+	assert.match(source, /'\/deposits': 'savings'/);
+});

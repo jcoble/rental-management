@@ -31,6 +31,7 @@
 		BellRing,
 		Briefcase,
 		Wallet,
+		PiggyBank,
 		Contact,
 		BookOpen,
 		HelpCircle,
@@ -112,6 +113,7 @@
 			icon: Wallet,
 			items: [
 				{ href: '/accounting', label: 'Money', icon: Calculator, roles: ['Admin', 'Manager'] },
+				{ href: '/deposits', label: 'Security Deposits', icon: PiggyBank, roles: ['Admin', 'Manager'] },
 				{ href: '/reports', label: 'Reports', icon: BarChart3, roles: ['Admin', 'Manager'] }
 			]
 		},
@@ -183,6 +185,7 @@
 		'/': 'space_dashboard',
 		'/scan': 'document_scanner',
 		'/accounting': 'account_balance_wallet',
+		'/deposits': 'savings',
 		'/reports': 'summarize',
 		'/properties': 'apartment',
 		'/units': 'home',
