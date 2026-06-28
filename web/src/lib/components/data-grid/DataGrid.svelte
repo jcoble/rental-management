@@ -89,6 +89,7 @@
 		onSortChange?: (sort?: string) => void;
 		// ── Slots ─────────────────────────────────────────────────────────────────
 		toolbar?: Snippet;
+		mobileActions?: Snippet<[T]>;
 		class?: string;
 		'data-testid'?: string;
 		/** Optional per-row testid generator. When provided, each row element receives this as `data-testid`. */
@@ -117,6 +118,7 @@
 		initialSort,
 		onSortChange,
 		toolbar,
+		mobileActions,
 		class: className,
 		'data-testid': dataTestId
 	}: Props = $props();
@@ -565,25 +567,37 @@
 					data-testid={getRowTestId ? getRowTestId(item) : 'datagrid-mobile-card'}
 				>
 					<!-- Title + subtitle -->
-					<div class="space-y-1">
-						{#each mobileGroups.title as col}
-							<div class="break-words text-sm font-semibold text-foreground">
-								{#if col.cell}
-									{@render col.cell(item)}
-								{:else}
-									{formatValue(getValue(item, col), col.format)}
-								{/if}
+					<div class="flex items-start justify-between gap-3">
+						<div class="min-w-0 space-y-1">
+							{#each mobileGroups.title as col}
+								<div class="break-words text-sm font-semibold text-foreground">
+									{#if col.cell}
+										{@render col.cell(item)}
+									{:else}
+										{formatValue(getValue(item, col), col.format)}
+									{/if}
+								</div>
+							{/each}
+							{#each mobileGroups.subtitle as col}
+								<div class="truncate text-xs text-muted-foreground">
+									{#if col.cell}
+										{@render col.cell(item)}
+									{:else}
+										{formatValue(getValue(item, col), col.format)}
+									{/if}
+								</div>
+							{/each}
+						</div>
+						{#if mobileActions}
+							<div
+								class="shrink-0"
+								role="group"
+								aria-label="Row actions"
+								data-testid="datagrid-mobile-actions"
+							>
+								{@render mobileActions(item)}
 							</div>
-						{/each}
-						{#each mobileGroups.subtitle as col}
-							<div class="truncate text-xs text-muted-foreground">
-								{#if col.cell}
-									{@render col.cell(item)}
-								{:else}
-									{formatValue(getValue(item, col), col.format)}
-								{/if}
-							</div>
-						{/each}
+						{/if}
 					</div>
 
 					<!-- Badges + metrics row -->
