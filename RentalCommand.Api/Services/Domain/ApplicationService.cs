@@ -244,18 +244,25 @@ public sealed class ApplicationService : IApplicationService
     }
 
     public async Task<IReadOnlyList<ApplicationResponse>> ListAsync(
-        int portfolioId, string? status, ListQuery query, CancellationToken ct = default)
+        int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default)
     {
-        var page = await ListPageAsync(portfolioId, status, query, ct);
+        var page = await ListPageAsync(portfolioId, status, query, unitId, ct);
         return page.Items;
     }
 
     public async Task<ApplicationListResponse> ListPageAsync(
-        int portfolioId, string? status, ListQuery query, CancellationToken ct = default)
+        int portfolioId, string? status, ListQuery query, int? unitId = null, CancellationToken ct = default)
     {
         var q = _db.RentalApplications
             .AsNoTracking()
             .Where(a => a.PortfolioId == portfolioId);
+
+        // Unit Command Center filter: scope to one unit's applications. Applied DB-side (translates to
+        // a WHERE clause), never by materializing the portfolio's apps and filtering in memory.
+        if (unitId is > 0)
+        {
+            q = q.Where(a => a.UnitId == unitId);
+        }
 
         if (!string.IsNullOrWhiteSpace(status) &&
             Enum.TryParse<ApplicationStatus>(status, ignoreCase: true, out var parsed))

@@ -19,6 +19,7 @@
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { formatApplicationsEmptyMessage } from '$lib/applications/application-display';
+	import { recordHref } from '$lib/navigation/record-href';
 	import {
 		buildApplicationLinkUrl,
 		readUnitListingLinkContext,
@@ -204,7 +205,7 @@
 		{columns}
 		loading={applicationsQuery.isLoading || applicationsQuery.isFetching}
 		{emptyMessage}
-		onRowClick={(a) => goto(`/applications/${a.id}`)}
+		onRowClick={(a) => goto(recordHref('application', a))}
 		getRowKey={(a) => a.id}
 		getRowTestId={() => 'application-row'}
 		data-testid="applications-list"
