@@ -1,11 +1,12 @@
 /// Maps a server-emitted `actionUrl` to a safe in-app route.
 ///
-/// The server emits paths that match the mobile go_router routes directly
+/// The server usually emits paths that match mobile go_router routes directly
 /// (`/payments/{id}`, `/work-orders/{id}`, `/expenses/{id}`, `/scan/{id}`,
-/// `/messages/{id}`, plus the section roots `/money`, `/work`, and the
-/// notification inbox `/notifications`). Anything outside this allowlist — or a
-/// missing/empty url — resolves to `/notifications` so a stray or future
-/// action type lands on the inbox rather than a 404 / arbitrary navigation.
+/// `/messages/{id}`, plus section roots), but older notification emitters still
+/// use query ids such as `/messages?conversationId=...`. Those are normalized
+/// here before allowlist checks. Anything outside the allowlist resolves to
+/// `/notifications` so a stray or future action type lands on the inbox rather
+/// than a 404 / arbitrary navigation.
 ///
 /// Centralized here so the push tap handler and the inbox tap handler share one
 /// allowlist.
@@ -19,6 +20,7 @@ const _allowedPrefixes = <String>[
   '/expenses/',
   '/scan/',
   '/messages/',
+  '/units/',
   '/notifications/',
 ];
 
@@ -26,6 +28,9 @@ const _allowedPrefixes = <String>[
 const _allowedExact = <String>{
   '/money',
   '/work',
+  '/rentals',
+  '/units',
+  '/inbox',
   '/notifications',
 };
 
@@ -37,16 +42,42 @@ String resolveNotificationRoute(String? actionUrl) {
     return '/notifications';
   }
 
-  // Strip any query/hash so prefix matching is stable.
-  final path = url.split('?').first.split('#').first;
+  final uri = Uri.tryParse(url);
+  if (uri == null) return '/notifications';
+
+  final normalized = _normalizeQueryRoute(uri);
+  if (normalized != null) return normalized;
+
+  final path = uri.path;
 
   if (_allowedExact.contains(path)) return path;
 
   for (final prefix in _allowedPrefixes) {
     if (path.startsWith(prefix) && path.length > prefix.length) {
-      return path;
+      return uri.hasQuery ? '$path?${uri.query}' : path;
     }
   }
 
   return '/notifications';
+}
+
+String? _normalizeQueryRoute(Uri uri) {
+  switch (uri.path) {
+    case '/messages':
+      return _detailRoute('/messages', uri.queryParameters['conversationId']);
+    case '/work-orders':
+      return _detailRoute('/work-orders', uri.queryParameters['workOrderId']);
+    case '/payments':
+      return _detailRoute('/payments', uri.queryParameters['paymentId']);
+    default:
+      return null;
+  }
+}
+
+String? _detailRoute(String prefix, String? rawId) {
+  final id = rawId?.trim();
+  if (id == null || !RegExp(r'^[1-9]\d*$').hasMatch(id)) {
+    return null;
+  }
+  return '$prefix/$id';
 }

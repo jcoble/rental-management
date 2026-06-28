@@ -3,8 +3,32 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/models.dart';
 import '../../core/api/api_exception.dart';
+import '../../core/widgets/tabbed_form_sheet.dart';
 import 'payment_detail_screen.dart';
+import 'payment_lease_labels.dart';
 import 'payments_repository.dart';
+
+Future<void> showCreatePaymentSheet(
+  BuildContext context,
+  WidgetRef ref, {
+  VoidCallback? onSaved,
+}) async {
+  ref.read(leasesForPaymentProvider.notifier).load();
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+    ),
+    builder: (_) => _CreatePaymentSheet(
+      onSaved: () {
+        ref.read(paymentsProvider.notifier).refresh();
+        ref.read(accountingSummaryProvider.notifier).refresh();
+        onSaved?.call();
+      },
+    ),
+  );
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -91,21 +115,7 @@ class _PaymentsScreenState extends ConsumerState<PaymentsScreen> {
   }
 
   void _showCreateSheet(BuildContext context) {
-    // Pre-load leases for the dropdown.
-    ref.read(leasesForPaymentProvider.notifier).load();
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => _CreatePaymentSheet(
-        onSaved: () {
-          ref.read(paymentsProvider.notifier).refresh();
-          ref.read(accountingSummaryProvider.notifier).refresh();
-        },
-      ),
-    );
+    showCreatePaymentSheet(context, ref);
   }
 
   @override
@@ -348,6 +358,11 @@ class _PaymentCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isPaid = payment.status.toLowerCase() == 'paid';
+    final leaseDisplay = formatPaymentLeaseDisplay(payment);
+    final title = leaseDisplay.isNotEmpty
+        ? leaseDisplay
+        : payment.tenantName ?? 'Payment #${payment.id}';
+    final subtitle = leaseDisplay.isNotEmpty ? payment.tenantName : null;
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -362,21 +377,18 @@ class _PaymentCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Tenant / lease info
+                    // Lease location / tenant info
                     Text(
-                      payment.tenantName ??
-                          (payment.leaseNumber != null
-                              ? 'Lease ${payment.leaseNumber}'
-                              : 'Payment #${payment.id}'),
+                      title,
                       style: theme.textTheme.titleSmall?.copyWith(
                         fontWeight: FontWeight.w600,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    if (payment.leaseNumber != null)
+                    if (subtitle != null && subtitle.isNotEmpty)
                       Text(
-                        'Lease ${payment.leaseNumber}',
+                        subtitle,
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: colorScheme.onSurfaceVariant,
                         ),
@@ -641,18 +653,8 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
     super.dispose();
   }
 
-  /// Human-readable label for a lease so the landlord can tell which lease is
-  /// which (e.g. "Unit 4B — Jane Smith"). Falls back to the lease number when
-  /// the unit/tenant fields aren't populated.
   String _leaseLabel(Lease l) {
-    final unit = l.unitNumber;
-    final tenant = l.tenantName;
-    final parts = <String>[
-      if (unit != null && unit.isNotEmpty) 'Unit $unit',
-      if (tenant != null && tenant.isNotEmpty) tenant,
-    ];
-    if (parts.isEmpty) return l.leaseNumber;
-    return parts.join(' — ');
+    return formatLeasePickerLabel(l);
   }
 
   Future<void> _pickDate(BuildContext context) async {
@@ -678,11 +680,14 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
     // 0 and the full Amount (mirrors web paymentSchema.superRefine /
     // PaymentService.NormalizeAmountPaid). Surface it inline before submit.
     final isPartial = _status == 'Partial';
-    final amountPaid =
-        isPartial ? double.tryParse(_amountPaidCtrl.text.trim()) : null;
+    final amountPaid = isPartial
+        ? double.tryParse(_amountPaidCtrl.text.trim())
+        : null;
     if (isPartial) {
       if (amountPaid == null) {
-        setState(() => _error = 'Amount paid is required for a partial payment');
+        setState(
+          () => _error = 'Amount paid is required for a partial payment',
+        );
         return;
       }
       if (amountPaid <= 0) {
@@ -690,7 +695,9 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
         return;
       }
       if (amountPaid >= amount) {
-        setState(() => _error = 'Amount paid must be less than the full amount');
+        setState(
+          () => _error = 'Amount paid must be less than the full amount',
+        );
         return;
       }
     }
@@ -725,225 +732,163 @@ class _CreatePaymentSheetState extends ConsumerState<_CreatePaymentSheet> {
   @override
   Widget build(BuildContext context) {
     final leasesAsync = ref.watch(leasesForPaymentProvider);
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
+    final colorScheme = Theme.of(context).colorScheme;
+    const gap = SizedBox(height: 12);
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
-      child: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Header
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Record Payment',
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+    return Form(
+      key: _formKey,
+      child: TabbedFormSheet(
+        title: 'Record Payment',
+        saveLabel: 'Save Payment',
+        saving: _saving,
+        error: _error,
+        onSave: _submit,
+        tabs: [
+          TabbedFormStepSpec(
+            label: 'Details',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                leasesAsync.when(
+                  loading: () => const Center(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: CircularProgressIndicator(),
                     ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
+                  error: (e, _) => Text(
+                    'Could not load leases: ${e is ApiException ? e.message : e}',
+                    style: TextStyle(color: colorScheme.error, fontSize: 13),
                   ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              // Lease dropdown
-              leasesAsync.when(
-                loading: () => const Center(
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                    child: CircularProgressIndicator(),
-                  ),
-                ),
-                error: (e, _) => Text(
-                  'Could not load leases: ${e is ApiException ? e.message : e}',
-                  style: TextStyle(color: colorScheme.error, fontSize: 13),
-                ),
-                data: (leases) => DropdownButtonFormField<int>(
-                  initialValue: _selectedLeaseId,
-                  decoration: const InputDecoration(labelText: 'Lease'),
-                  items: leases
-                      .map(
-                        (l) => DropdownMenuItem(
-                          value: l.id,
-                          child: Text(
-                            _leaseLabel(l),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) => setState(() => _selectedLeaseId = v),
-                  validator: (v) => v == null ? 'Please select a lease' : null,
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // Amount
-              TextFormField(
-                controller: _amountCtrl,
-                keyboardType: const TextInputType.numberWithOptions(
-                  decimal: true,
-                ),
-                textInputAction: TextInputAction.next,
-                decoration: const InputDecoration(
-                  labelText: 'Amount',
-                  prefixText: '\$',
-                ),
-                validator: (v) {
-                  if (v == null || v.trim().isEmpty) {
-                    return 'Amount is required';
-                  }
-                  if (double.tryParse(v.trim()) == null) {
-                    return 'Enter a valid number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 12),
-
-              // Due date picker
-              InkWell(
-                onTap: () => _pickDate(context),
-                borderRadius: BorderRadius.circular(4),
-                child: InputDecorator(
-                  decoration: InputDecoration(
-                    labelText: 'Due date',
-                    suffixIcon: const Icon(
-                      Icons.calendar_today_outlined,
-                      size: 18,
-                    ),
-                    errorText:
-                        (_dueDate == null &&
-                            _error != null &&
-                            _error!.contains('due date'))
-                        ? 'Required'
-                        : null,
-                  ),
-                  child: Text(
-                    _dueDate != null ? _fmtDate(_dueDate!) : 'Select date',
-                    style: _dueDate != null
-                        ? null
-                        : TextStyle(color: colorScheme.onSurfaceVariant),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // Type + Status row
-              Row(
-                children: [
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _type,
-                      decoration: const InputDecoration(labelText: 'Type'),
-                      items: _types
-                          .map(
-                            (t) => DropdownMenuItem(
-                              value: t,
-                              child: Text(paymentTypeLabel(t)),
+                  data: (leases) => DropdownButtonFormField<int>(
+                    initialValue: _selectedLeaseId,
+                    decoration: const InputDecoration(labelText: 'Lease'),
+                    items: leases
+                        .map(
+                          (l) => DropdownMenuItem(
+                            value: l.id,
+                            child: Text(
+                              _leaseLabel(l),
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          )
-                          .toList(),
-                      onChanged: (v) {
-                        if (v != null) setState(() => _type = v);
-                      },
-                    ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (v) => setState(() => _selectedLeaseId = v),
+                    validator: (v) =>
+                        v == null ? 'Please select a lease' : null,
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: DropdownButtonFormField<String>(
-                      initialValue: _status,
-                      decoration: const InputDecoration(labelText: 'Status'),
-                      items: _statuses
-                          .map(
-                            (s) => DropdownMenuItem(value: s, child: Text(s)),
-                          )
-                          .toList(),
-                      onChanged: (v) {
-                        if (v != null) setState(() => _status = v);
-                      },
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              // Amount paid (so far) — only meaningful for a Partial payment.
-              // The remainder (amount − paid) stays owed. Hidden for every other
-              // status, where it has no meaning. Mirrors the web client.
-              if (_status == 'Partial') ...[
+                ),
+                gap,
                 TextFormField(
-                  controller: _amountPaidCtrl,
+                  controller: _amountCtrl,
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
                   textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
-                    labelText: 'Amount paid (so far)',
+                    labelText: 'Amount',
                     prefixText: '\$',
-                    helperText: 'How much was collected. The rest stays owed.',
                   ),
+                  validator: (v) {
+                    if (v == null || v.trim().isEmpty) {
+                      return 'Amount is required';
+                    }
+                    if (double.tryParse(v.trim()) == null) {
+                      return 'Enter a valid number';
+                    }
+                    return null;
+                  },
                 ),
-                const SizedBox(height: 12),
-              ],
-
-              // Notes (optional)
-              TextFormField(
-                controller: _notesCtrl,
-                maxLines: 2,
-                textInputAction: TextInputAction.done,
-                decoration: const InputDecoration(
-                  labelText: 'Notes (optional)',
-                ),
-              ),
-
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                      color: colorScheme.onErrorContainer,
-                      fontSize: 13,
+                gap,
+                InkWell(
+                  onTap: () => _pickDate(context),
+                  borderRadius: BorderRadius.circular(4),
+                  child: InputDecorator(
+                    decoration: InputDecoration(
+                      labelText: 'Due date',
+                      suffixIcon: const Icon(
+                        Icons.calendar_today_outlined,
+                        size: 18,
+                      ),
+                      errorText:
+                          (_dueDate == null &&
+                              _error != null &&
+                              _error!.contains('due date'))
+                          ? 'Required'
+                          : null,
+                    ),
+                    child: Text(
+                      _dueDate != null ? _fmtDate(_dueDate!) : 'Select date',
+                      style: _dueDate != null
+                          ? null
+                          : TextStyle(color: colorScheme.onSurfaceVariant),
                     ),
                   ),
                 ),
-              ],
-
-              const SizedBox(height: 20),
-
-              FilledButton(
-                onPressed: _saving ? null : _submit,
-                child: _saving
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                gap,
+                DropdownButtonFormField<String>(
+                  initialValue: _type,
+                  decoration: const InputDecoration(labelText: 'Type'),
+                  items: _types
+                      .map(
+                        (t) => DropdownMenuItem(
+                          value: t,
+                          child: Text(paymentTypeLabel(t)),
+                        ),
                       )
-                    : const Text('Save Payment'),
-              ),
-            ],
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _type = v);
+                  },
+                ),
+              ],
+            ),
           ),
-        ),
+          TabbedFormStepSpec(
+            label: 'Status',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                DropdownButtonFormField<String>(
+                  initialValue: _status,
+                  decoration: const InputDecoration(labelText: 'Status'),
+                  items: _statuses
+                      .map((s) => DropdownMenuItem(value: s, child: Text(s)))
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) setState(() => _status = v);
+                  },
+                ),
+                if (_status == 'Partial') ...[
+                  gap,
+                  TextFormField(
+                    controller: _amountPaidCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    textInputAction: TextInputAction.next,
+                    decoration: const InputDecoration(
+                      labelText: 'Amount paid (so far)',
+                      prefixText: '\$',
+                      helperText:
+                          'How much was collected. The rest stays owed.',
+                    ),
+                  ),
+                ],
+                gap,
+                TextFormField(
+                  controller: _notesCtrl,
+                  maxLines: 2,
+                  textInputAction: TextInputAction.done,
+                  decoration: const InputDecoration(
+                    labelText: 'Notes (optional)',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../../core/widgets/tabbed_form_sheet.dart';
 import 'tenant_detail_screen.dart';
 import 'tenants_repository.dart';
 
@@ -57,13 +58,10 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
     final q = _query.trim().toLowerCase();
     if (q.isEmpty) return all;
     return all.where((t) {
-      final name =
-          '${t.firstName} ${t.lastName}'.toLowerCase();
+      final name = '${t.firstName} ${t.lastName}'.toLowerCase();
       final email = (t.email ?? '').toLowerCase();
       final phone = (t.phone ?? '').toLowerCase();
-      return name.contains(q) ||
-          email.contains(q) ||
-          phone.contains(q);
+      return name.contains(q) || email.contains(q) || phone.contains(q);
     }).toList();
   }
 
@@ -74,9 +72,7 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Tenants'),
-      ),
+      appBar: AppBar(title: const Text('Tenants')),
       floatingActionButton: FloatingActionButton(
         heroTag: 'tenants-fab',
         onPressed: () => _showAddSheet(context),
@@ -117,11 +113,9 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
             child: RefreshIndicator(
               onRefresh: _refresh,
               child: tenantsAsync.when(
-                loading: () =>
-                    const Center(child: CircularProgressIndicator()),
+                loading: () => const Center(child: CircularProgressIndicator()),
                 error: (e, _) => _ErrorBody(
-                  message:
-                      e is ApiException ? e.message : e.toString(),
+                  message: e is ApiException ? e.message : e.toString(),
                   onRetry: _refresh,
                 ),
                 data: (list) {
@@ -135,25 +129,31 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
                         padding: const EdgeInsets.all(24),
                         child: Text(
                           'No tenants match "$_query".',
-                          style: TextStyle(
-                              color: colorScheme.onSurfaceVariant),
+                          style: TextStyle(color: colorScheme.onSurfaceVariant),
                           textAlign: TextAlign.center,
                         ),
                       ),
                     );
                   }
+                  final bottomInset = MediaQuery.paddingOf(context).bottom;
                   return ListView.separated(
-                    padding:
-                        const EdgeInsets.fromLTRB(16, 8, 16, 88),
+                    padding: EdgeInsets.fromLTRB(
+                      16,
+                      8,
+                      16,
+                      160.0 + bottomInset,
+                    ),
                     itemCount: filtered.length,
                     separatorBuilder: (_, idx) =>
-                        const SizedBox(height: 8),
+                        _GroupedListDivider(colorScheme: colorScheme),
                     itemBuilder: (context, index) {
                       final tenant = filtered[index];
                       return _TenantCard(
                         tenant: tenant,
                         colorScheme: colorScheme,
                         theme: theme,
+                        first: index == 0,
+                        last: index == filtered.length - 1,
                         onTap: () => _openDetail(context, tenant),
                       );
                     },
@@ -175,24 +175,35 @@ class _TenantCard extends StatelessWidget {
     required this.tenant,
     required this.colorScheme,
     required this.theme,
+    required this.first,
+    required this.last,
     required this.onTap,
   });
 
   final Tenant tenant;
   final ColorScheme colorScheme;
   final ThemeData theme;
+  final bool first;
+  final bool last;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final hasActiveLease = (tenant.activeLeaseCount ?? 0) > 0;
+    final borderRadius = BorderRadius.vertical(
+      top: first ? const Radius.circular(20) : Radius.zero,
+      bottom: last ? const Radius.circular(20) : Radius.zero,
+    );
 
-    return Card(
+    return Material(
+      color: colorScheme.surfaceContainerHigh,
+      borderRadius: borderRadius,
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: borderRadius,
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Row(
             children: [
               CircleAvatar(
@@ -270,6 +281,23 @@ class _TenantCard extends StatelessWidget {
   }
 }
 
+class _GroupedListDivider extends StatelessWidget {
+  const _GroupedListDivider({required this.colorScheme});
+
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Divider(
+      height: 1,
+      thickness: 1,
+      indent: 72,
+      endIndent: 16,
+      color: colorScheme.outlineVariant.withValues(alpha: 0.48),
+    );
+  }
+}
+
 class _LeaseStatusChip extends StatelessWidget {
   const _LeaseStatusChip({
     required this.active,
@@ -324,8 +352,11 @@ class _EmptyBody extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.people_outline, size: 48,
-                color: colorScheme.onSurfaceVariant),
+            Icon(
+              Icons.people_outline,
+              size: 48,
+              color: colorScheme.onSurfaceVariant,
+            ),
             const SizedBox(height: 12),
             Text(
               'No tenants yet',
@@ -379,10 +410,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: colorScheme.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
@@ -473,125 +501,93 @@ class _TenantFormSheetState extends ConsumerState<TenantFormSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final bottomPadding = MediaQuery.viewInsetsOf(context).bottom;
+    const gap = SizedBox(height: 12);
 
-    return Padding(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + bottomPadding),
-      child: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _isEdit ? 'Edit Tenant' : 'New Tenant',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
+    return Form(
+      key: _formKey,
+      child: TabbedFormSheet(
+        title: _isEdit ? 'Edit Tenant' : 'New Tenant',
+        saveLabel: _isEdit ? 'Save Changes' : 'Add Tenant',
+        saving: _saving,
+        error: _error,
+        onSave: _submit,
+        tabs: [
+          TabbedFormStepSpec(
+            label: 'Contact',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        key: const Key('tenant-first-name-field'),
+                        controller: _firstCtrl,
+                        textInputAction: TextInputAction.next,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: const InputDecoration(
+                          labelText: 'First name',
+                        ),
+                        validator: (v) => (v == null || v.trim().isEmpty)
+                            ? 'First name is required'
+                            : null,
+                      ),
                     ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: _firstCtrl,
-                      textInputAction: TextInputAction.next,
-                      textCapitalization: TextCapitalization.words,
-                      decoration:
-                          const InputDecoration(labelText: 'First name'),
-                      validator: (v) =>
-                          (v == null || v.trim().isEmpty)
-                              ? 'First name is required'
-                              : null,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        key: const Key('tenant-last-name-field'),
+                        controller: _lastCtrl,
+                        textInputAction: TextInputAction.next,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: const InputDecoration(
+                          labelText: 'Last name',
+                        ),
+                        validator: (v) => (v == null || v.trim().isEmpty)
+                            ? 'Last name is required'
+                            : null,
+                      ),
                     ),
+                  ],
+                ),
+                gap,
+                TextFormField(
+                  controller: _emailCtrl,
+                  textInputAction: TextInputAction.next,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: const InputDecoration(
+                    labelText: 'Email (optional)',
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextFormField(
-                      controller: _lastCtrl,
-                      textInputAction: TextInputAction.next,
-                      textCapitalization: TextCapitalization.words,
-                      decoration:
-                          const InputDecoration(labelText: 'Last name'),
-                      validator: (v) =>
-                          (v == null || v.trim().isEmpty)
-                              ? 'Last name is required'
-                              : null,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              TextFormField(
-                controller: _emailCtrl,
-                textInputAction: TextInputAction.next,
-                keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(labelText: 'Email (optional)'),
-              ),
-              const SizedBox(height: 12),
-
-              TextFormField(
-                controller: _phoneCtrl,
-                textInputAction: TextInputAction.next,
-                keyboardType: TextInputType.phone,
-                decoration: const InputDecoration(labelText: 'Phone (optional)'),
-              ),
-              const SizedBox(height: 12),
-
-              TextFormField(
-                controller: _emergencyCtrl,
-                textInputAction: TextInputAction.done,
-                decoration: const InputDecoration(
-                    labelText: 'Emergency contact (optional)'),
-                onFieldSubmitted: (_) => _saving ? null : _submit(),
-              ),
-
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    _error!,
-                    style: TextStyle(
-                        color: colorScheme.onErrorContainer, fontSize: 13),
+                ),
+                gap,
+                TextFormField(
+                  controller: _phoneCtrl,
+                  textInputAction: TextInputAction.next,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                    labelText: 'Phone (optional)',
                   ),
                 ),
               ],
-
-              const SizedBox(height: 20),
-
-              FilledButton(
-                onPressed: _saving ? null : _submit,
-                child: _saving
-                    ? const SizedBox(
-                        height: 20,
-                        width: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(_isEdit ? 'Save Changes' : 'Add Tenant'),
-              ),
-            ],
+            ),
           ),
-        ),
+          TabbedFormStepSpec(
+            label: 'Emergency',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextFormField(
+                  controller: _emergencyCtrl,
+                  textInputAction: TextInputAction.done,
+                  decoration: const InputDecoration(
+                    labelText: 'Emergency contact (optional)',
+                  ),
+                  onFieldSubmitted: (_) => _saving ? null : _submit(),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

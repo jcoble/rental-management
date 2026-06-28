@@ -22,10 +22,12 @@ class NotificationsInboxScreen extends ConsumerStatefulWidget {
 class _NotificationsInboxScreenState
     extends ConsumerState<NotificationsInboxScreen> {
   final _scrollController = ScrollController();
+  late final UnreadCountNotifier _unreadCountNotifier;
 
   @override
   void initState() {
     super.initState();
+    _unreadCountNotifier = ref.read(unreadCountProvider.notifier);
     _scrollController.addListener(_onScroll);
   }
 
@@ -34,7 +36,7 @@ class _NotificationsInboxScreenState
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     // Refresh the badge when leaving the inbox (reads may have happened).
-    ref.read(unreadCountProvider.notifier).refresh();
+    _unreadCountNotifier.refresh();
     super.dispose();
   }
 
@@ -51,7 +53,8 @@ class _NotificationsInboxScreenState
     // A14: PUSH the target detail screen onto the stack (not `go`, which
     // REPLACES it) so the detail screen keeps a working back button and the
     // user lands back here on `pop()` instead of being stranded.
-    context.push(resolveNotificationRoute(n.actionUrl));
+    final route = resolveNotificationRoute(n.actionUrl);
+    context.push(route);
   }
 
   @override
@@ -65,18 +68,18 @@ class _NotificationsInboxScreenState
           IconButton(
             icon: const Icon(Icons.done_all),
             tooltip: 'Mark all read',
-            onPressed: () =>
-                ref.read(inboxProvider.notifier).markAllRead(),
+            onPressed: () => ref.read(inboxProvider.notifier).markAllRead(),
           ),
         ],
       ),
       body: RefreshIndicator(
         onRefresh: () => ref.read(inboxProvider.notifier).refresh(),
         child: inboxAsync.when(
-          loading: () =>
-              const Center(child: CircularProgressIndicator()),
+          loading: () => const Center(child: CircularProgressIndicator()),
           error: (e, _) => _ErrorBody(
-            message: e is ApiException ? e.message : 'Could not load notifications.',
+            message: e is ApiException
+                ? e.message
+                : 'Could not load notifications.',
             onRetry: () => ref.read(inboxProvider.notifier).refresh(),
           ),
           data: (items) {
@@ -149,8 +152,9 @@ class _NotificationTile extends StatelessWidget {
           const SizedBox(height: 2),
           Text(
             _relativeTime(notification.createdAt),
-            style: theme.textTheme.labelSmall
-                ?.copyWith(color: cs.onSurfaceVariant),
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: cs.onSurfaceVariant,
+            ),
           ),
         ],
       ),
