@@ -517,6 +517,11 @@ public sealed class LeaseEsignService : ILeaseEsignService
     {
         if (message.SentAt.HasValue)
         {
+            if (!string.IsNullOrWhiteSpace(message.Error))
+            {
+                return "DeliveryDisabled";
+            }
+
             return "Sent";
         }
 
