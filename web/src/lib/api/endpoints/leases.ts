@@ -54,6 +54,7 @@ export interface LeaseSignatureQueueItemResponse {
 	retryCount: number;
 	error?: string | null;
 	signatureRequestId?: string | null;
+	signingUrl?: string | null;
 }
 
 export interface LeaseListParams extends ListParams {

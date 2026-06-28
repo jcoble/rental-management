@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
@@ -22,6 +23,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
     private readonly IFileStorage _storage;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IAuditTrailService _audit;
+    private readonly string _webBaseUrl;
     private readonly ILogger<LeaseEsignService> _logger;
 
     public LeaseEsignService(
@@ -31,6 +33,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
         IFileStorage storage,
         IDataUpdateService dataUpdate,
         IAuditTrailService audit,
+        IConfiguration configuration,
         ILogger<LeaseEsignService> logger)
     {
         _db = db;
@@ -39,6 +42,7 @@ public sealed class LeaseEsignService : ILeaseEsignService
         _storage = storage;
         _dataUpdate = dataUpdate;
         _audit = audit;
+        _webBaseUrl = NormalizeWebBaseUrl(configuration["App:WebBaseUrl"]);
         _logger = logger;
     }
 
@@ -228,10 +232,11 @@ public sealed class LeaseEsignService : ILeaseEsignService
                 .FirstOrDefaultAsync(ct);
 
         var messages = await QueryLeaseSignatureQueueMessagesAsync(portfolioId, leaseId, currentSignatureRequestId, ct);
+        var signingUrls = await QueryActiveSigningUrlsAsync(portfolioId, messages, ct);
         return new LeaseSignatureQueueResponse
         {
             LeaseId = leaseId,
-            Items = messages.Select(ToQueueItem).ToList(),
+            Items = messages.Select(message => ToQueueItem(message, signingUrls)).ToList(),
         };
     }
 
@@ -590,25 +595,95 @@ public sealed class LeaseEsignService : ILeaseEsignService
             .ToListAsync(ct);
     }
 
-    private static LeaseSignatureQueueItemResponse ToQueueItem(OutboxMessage message)
+    private async Task<IReadOnlyDictionary<string, string>> QueryActiveSigningUrlsAsync(
+        int portfolioId,
+        IReadOnlyList<OutboxMessage> messages,
+        CancellationToken ct)
+    {
+        var signatureRequestIds = messages
+            .Select(TryReadSignatureRequestId)
+            .Where(id => id.HasValue)
+            .Select(id => id!.Value)
+            .Distinct()
+            .ToArray();
+
+        if (signatureRequestIds.Length == 0)
+        {
+            return new Dictionary<string, string>(StringComparer.Ordinal);
+        }
+
+        var now = DateTime.UtcNow;
+        var signers = await _db.SignatureSigners
+            .AsNoTracking()
+            .Where(s => signatureRequestIds.Contains(s.SignatureRequestId)
+                && s.SignatureRequest!.PortfolioId == portfolioId
+                && (s.Status == SignatureSignerStatus.Pending || s.Status == SignatureSignerStatus.Viewed)
+                && s.ExpiresAtUtc > now)
+            .Select(s => new
+            {
+                s.SignatureRequestId,
+                s.Email,
+                s.Token,
+            })
+            .ToListAsync(ct);
+
+        var urls = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var signer in signers)
+        {
+            if (string.IsNullOrWhiteSpace(signer.Email) || string.IsNullOrWhiteSpace(signer.Token))
+            {
+                continue;
+            }
+
+            urls.TryAdd(SigningLookupKey(signer.SignatureRequestId, signer.Email), $"{_webBaseUrl}/sign/{Uri.EscapeDataString(signer.Token)}");
+        }
+
+        return urls;
+    }
+
+    private static LeaseSignatureQueueItemResponse ToQueueItem(
+        OutboxMessage message,
+        IReadOnlyDictionary<string, string> signingUrls)
     {
         var sentAt = message.SentAt;
         var failedAt = message.FailedAt;
+        var status = ResolveQueueStatus(message);
+        var recipientEmail = ReadPayloadValue(message.Payload, "to");
+        var signatureRequestId = ReadPayloadValue(message.Payload, "signatureRequestId");
+        var signingUrl = status == "DeliveryDisabled"
+            && int.TryParse(signatureRequestId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var requestId)
+            && signingUrls.TryGetValue(SigningLookupKey(requestId, recipientEmail), out var url)
+                ? url
+                : null;
+
         return new LeaseSignatureQueueItemResponse
         {
             Id = message.Id,
-            RecipientEmail = ReadPayloadValue(message.Payload, "to"),
+            RecipientEmail = recipientEmail,
             Subject = ReadPayloadValue(message.Payload, "subject"),
-            Status = ResolveQueueStatus(message),
+            Status = status,
             QueuedAt = message.CreatedAt,
             StatusAt = sentAt ?? failedAt ?? message.CreatedAt,
             SentAt = sentAt,
             FailedAt = failedAt,
             RetryCount = message.RetryCount,
             Error = message.Error,
-            SignatureRequestId = ReadPayloadValue(message.Payload, "signatureRequestId"),
+            SignatureRequestId = signatureRequestId,
+            SigningUrl = signingUrl,
         };
     }
+
+    private static int? TryReadSignatureRequestId(OutboxMessage message)
+        => int.TryParse(
+            ReadPayloadValue(message.Payload, "signatureRequestId"),
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out var requestId)
+            ? requestId
+            : null;
+
+    private static string SigningLookupKey(int signatureRequestId, string email)
+        => $"{signatureRequestId}:{email.Trim().ToUpperInvariant()}";
 
     private static string ResolveQueueStatus(OutboxMessage message)
     {
@@ -658,6 +733,14 @@ public sealed class LeaseEsignService : ILeaseEsignService
         {
             return string.Empty;
         }
+    }
+
+    private static string NormalizeWebBaseUrl(string? webBaseUrl)
+    {
+        var trimmed = webBaseUrl?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed)
+            ? "https://localhost:5667"
+            : trimmed.TrimEnd('/');
     }
 
     private async Task BroadcastLeaseAsync(int portfolioId, int leaseId, CancellationToken ct)
