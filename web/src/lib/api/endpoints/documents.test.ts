@@ -7,6 +7,15 @@ const proxySource = readFileSync(
 	new URL('../../../routes/document-file/[id]/+server.ts', import.meta.url),
 	'utf8'
 );
+const authenticatedFileProxySources = [
+	'../../../routes/application-file/[id]/+server.ts',
+	'../../../routes/document-file/[id]/+server.ts',
+	'../../../routes/expense-file/[id]/+server.ts',
+	'../../../routes/lease-file/[id]/+server.ts',
+	'../../../routes/payment-file/[id]/+server.ts',
+	'../../../routes/scan-file/[id]/+server.ts',
+	'../../../routes/workorder-file/[id]/+server.ts'
+].map((path) => [path, readFileSync(new URL(path, import.meta.url), 'utf8')] as const);
 const depositDetailSource = readFileSync(
 	new URL('../../../routes/(protected)/deposits/[id]/+page.svelte', import.meta.url),
 	'utf8'
@@ -30,9 +39,16 @@ describe('document file endpoints', () => {
 	});
 
 	it('forwards thumbnail requests through the stored-file proxy route', () => {
-		assert.match(proxySource, /async \(\{ params, cookies, url \}\)/);
+		assert.match(proxySource, /async \(\{ params, locals, url \}\)/);
 		assert.match(proxySource, /url\.searchParams\.get\('thumb'\)/);
 		assert.match(proxySource, /documents\/\$\{params\.id\}\/file\$\{thumb \? '\?thumb=true' : ''\}/);
+	});
+
+	it('uses the hook-refreshed token for authenticated file proxies', () => {
+		for (const [path, source] of authenticatedFileProxySources) {
+			assert.match(source, /locals\.accessToken/, path);
+			assert.doesNotMatch(source, /getAccessToken\(cookies\)/, path);
+		}
 	});
 
 	it('requests stored-file thumbnails for generic document image previews', () => {
