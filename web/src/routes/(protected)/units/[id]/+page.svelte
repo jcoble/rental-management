@@ -275,8 +275,12 @@
 					<span class="font-medium">{moveInDialogLease.leaseNumber}</span>
 				</div>
 				<div class="flex items-center justify-between gap-3">
-					<span class="text-muted-foreground">Tenant</span>
-					<span class="font-medium">{dashboard?.currentTenant?.name ?? 'Current tenant'}</span>
+					<span class="text-muted-foreground">Tenants</span>
+					<span class="font-medium">
+						{dashboard?.currentTenants?.length
+							? dashboard.currentTenants.map((tenant) => tenant.name).join(', ')
+							: dashboard?.currentTenant?.name ?? 'Current tenants'}
+					</span>
 				</div>
 				<div class="flex items-center justify-between gap-3">
 					<span class="text-muted-foreground">Security deposit</span>

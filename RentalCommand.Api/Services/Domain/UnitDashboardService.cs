@@ -83,6 +83,36 @@ public class UnitDashboardService : IUnitDashboardService
             })
             .FirstOrDefaultAsync(ct);
 
+        var currentTenants = currentLease is null
+            ? new List<UnitTenantSummary>()
+            : await _db.LeaseTenants
+                .AsNoTracking()
+                .Where(lt => lt.PortfolioId == portfolioId && lt.LeaseId == currentLease.Id)
+                .OrderByDescending(lt => lt.IsPrimary)
+                .ThenBy(lt => lt.Id)
+                .Select(lt => new UnitTenantSummary
+                {
+                    Id = lt.TenantId,
+                    Name = (lt.Tenant!.FirstName + " " + lt.Tenant.LastName).Trim(),
+                    Email = lt.Tenant.Email,
+                    Phone = lt.Tenant.Phone,
+                })
+                .ToListAsync(ct);
+
+        if (currentLease is not null && currentTenants.Count == 0)
+        {
+            currentTenants =
+            [
+                new UnitTenantSummary
+                {
+                    Id = currentLease.TenantId,
+                    Name = $"{currentLease.TenantFirst} {currentLease.TenantLast}".Trim(),
+                    Email = currentLease.TenantEmail,
+                    Phone = currentLease.TenantPhone,
+                },
+            ];
+        }
+
         // (3) Rent state — a single grouped conditional SUM over the unit's payments (no materialization).
         // Outstanding = still-owed rows (Scheduled/Partial/Late). Overdue flags whether any owed row is past due.
         decimal outstanding = 0m;
@@ -280,9 +310,9 @@ public class UnitDashboardService : IUnitDashboardService
             ? Math.Max(0, (int)Math.Ceiling((currentLease!.EndDate - now).TotalDays))
             : null;
 
-        var tenantName = currentLease?.TenantFirst is null && currentLease?.TenantLast is null
+        var tenantName = currentTenants.Count == 0
             ? null
-            : $"{currentLease!.TenantFirst} {currentLease.TenantLast}".Trim();
+            : string.Join(", ", currentTenants.Select(t => t.Name).Where(name => !string.IsNullOrWhiteSpace(name)));
 
         return new UnitDashboardResponse
         {
@@ -309,13 +339,8 @@ public class UnitDashboardService : IUnitDashboardService
                 MonthlyRent = currentLease.MonthlyRent,
                 SecurityDeposit = currentLease.SecurityDeposit,
             },
-            CurrentTenant = currentLease?.TenantId is null ? null : new UnitTenantSummary
-            {
-                Id = currentLease.TenantId,
-                Name = tenantName ?? string.Empty,
-                Email = currentLease.TenantEmail,
-                Phone = currentLease.TenantPhone,
-            },
+            CurrentTenant = currentTenants.FirstOrDefault(),
+            CurrentTenants = currentTenants,
             Overview = new UnitDashboardOverview
             {
                 RecentPayments = recentPayments,

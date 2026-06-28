@@ -21,6 +21,7 @@ public class Tenant : IAuditable, IPortfolioScoped
 
     public Portfolio? Portfolio { get; set; }
     public List<Lease> Leases { get; set; } = [];
+    public List<LeaseTenant> LeaseTenants { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];
     public List<Appointment> Appointments { get; set; } = [];
     public List<UserAccount> UserAccounts { get; set; } = [];

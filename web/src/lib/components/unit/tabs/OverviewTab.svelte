@@ -19,6 +19,7 @@
 	const unit = $derived(dashboard.unit);
 	const lease = $derived(dashboard.currentLease);
 	const tenant = $derived(dashboard.currentTenant);
+	const currentTenants = $derived(dashboard.currentTenants?.length ? dashboard.currentTenants : tenant ? [tenant] : []);
 </script>
 
 <div class="grid gap-4 lg:grid-cols-2" data-testid="unit-overview-tab">
@@ -37,13 +38,20 @@
 	<DetailCard title="Tenant & lease" icon={User} accent="success" testid="overview-tenant-lease">
 		{#if lease}
 			<div class="space-y-2 text-sm">
-				{#if tenant}
-					<div class="flex items-center justify-between">
-						<span class="font-medium">{tenant.name}</span>
-						<button type="button" class="text-xs text-primary hover:underline" onclick={() => onOpenTab('lease')}>View lease</button>
+				{#if currentTenants.length}
+					<div class="flex items-center justify-between gap-3">
+						<div class="min-w-0 space-y-1">
+							{#each currentTenants as currentTenant}
+								<div>
+									<p class="truncate font-medium">{currentTenant.name}</p>
+									{#if currentTenant.email || currentTenant.phone}
+										<p class="truncate text-muted-foreground">{currentTenant.email || currentTenant.phone}</p>
+									{/if}
+								</div>
+							{/each}
+						</div>
+						<button type="button" class="shrink-0 text-xs text-primary hover:underline" onclick={() => onOpenTab('lease')}>View lease</button>
 					</div>
-					{#if tenant.email}<p class="text-muted-foreground">{tenant.email}</p>{/if}
-					{#if tenant.phone}<p class="text-muted-foreground">{tenant.phone}</p>{/if}
 				{/if}
 				<dl class="grid grid-cols-2 gap-2 border-t pt-2">
 					<div><dt class="text-muted-foreground">Lease</dt><dd class="font-medium">{lease.leaseNumber}</dd></div>

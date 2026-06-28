@@ -105,6 +105,57 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
     }
 
     [Fact]
+    public async Task CreateAsync_WithMultipleTenants_PersistsLeaseTenantMembershipsAndKeepsPrimaryTenant()
+    {
+        var today = DateTime.UtcNow.Date;
+        var (property, unit, primaryTenant) = SeedPropertyUnitTenant();
+        var coTenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Jordan",
+            LastName = "Smith",
+            Email = "jordan@example.local",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+        _ctx.Db.Tenants.Add(coTenant);
+        await _ctx.Db.SaveChangesAsync();
+
+        var result = await _sut.CreateAsync(PortfolioId, new CreateLeaseRequest
+        {
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            TenantIds = [primaryTenant.Id, coTenant.Id],
+            LeaseNumber = "L-MULTI-001",
+            Status = LeaseStatus.Draft,
+            StartDate = today,
+            EndDate = today.AddMonths(12),
+            MonthlyRent = 1275m,
+            SecurityDeposit = 950m,
+            LateFeeAmount = 75m,
+            RentDueDay = 1,
+        });
+
+        result.Should().NotBeNull();
+        result!.TenantId.Should().Be(primaryTenant.Id);
+        result.TenantIds.Should().Equal(primaryTenant.Id, coTenant.Id);
+        var primaryName = $"{primaryTenant.FirstName} {primaryTenant.LastName}";
+        result.TenantName.Should().Be($"{primaryName}, Jordan Smith");
+        result.Tenants.Select(t => t.Name).Should().Equal(primaryName, "Jordan Smith");
+
+        var memberships = await _ctx.Db.LeaseTenants
+            .AsNoTracking()
+            .Where(lt => lt.LeaseId == result.Id)
+            .OrderByDescending(lt => lt.IsPrimary)
+            .ThenBy(lt => lt.Id)
+            .ToListAsync();
+
+        memberships.Should().HaveCount(2);
+        memberships.Select(m => m.TenantId).Should().Equal(primaryTenant.Id, coTenant.Id);
+        memberships.Single(m => m.TenantId == primaryTenant.Id).IsPrimary.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task CreateAsync_ActiveLeaseWithSecurityDeposit_CreatesDepositHolding()
     {
         var today = DateTime.UtcNow.Date;
@@ -242,6 +293,39 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
     }
 
     [Fact]
+    public async Task UpdateAsync_WithMultipleTenants_ReplacesMembershipsAndPrimaryTenant()
+    {
+        var today = DateTime.UtcNow.Date;
+        var (property, unit, originalTenant) = SeedPropertyUnitTenant();
+        var lease = SeedLease(property, unit, originalTenant, LeaseStatus.Draft, today);
+        var newPrimary = SeedTenant("Maria", "Lee", "maria@example.local");
+        var coTenant = SeedTenant("Jordan", "Smith", "jordan@example.local");
+
+        var result = await _sut.UpdateAsync(PortfolioId, lease.Id, new UpdateLeaseRequest
+        {
+            TenantIds = [newPrimary.Id, coTenant.Id],
+        });
+
+        result.Should().NotBeNull();
+        result!.TenantId.Should().Be(newPrimary.Id);
+        result.TenantIds.Should().Equal(newPrimary.Id, coTenant.Id);
+        result.TenantName.Should().Be("Maria Lee, Jordan Smith");
+        result.Tenants.Select(t => t.Name).Should().Equal("Maria Lee", "Jordan Smith");
+
+        var memberships = await _ctx.Db.LeaseTenants
+            .AsNoTracking()
+            .Where(lt => lt.LeaseId == lease.Id)
+            .OrderByDescending(lt => lt.IsPrimary)
+            .ThenBy(lt => lt.Id)
+            .ToListAsync();
+
+        memberships.Should().HaveCount(2);
+        memberships.Select(m => m.TenantId).Should().Equal(newPrimary.Id, coTenant.Id);
+        memberships.Single(m => m.TenantId == newPrimary.Id).IsPrimary.Should().BeTrue();
+        memberships.Should().NotContain(m => m.TenantId == originalTenant.Id);
+    }
+
+    [Fact]
     public async Task UpdateAsync_ActivatingLeaseWithSecurityDeposit_CreatesDepositHolding()
     {
         var today = DateTime.UtcNow.Date;
@@ -366,6 +450,23 @@ public sealed class LeaseServiceRentChargeTests : IDisposable
         _ctx.Db.SaveChanges();
 
         return (property, unit, tenant);
+    }
+
+    private Tenant SeedTenant(string firstName, string lastName, string email)
+    {
+        var now = DateTime.UtcNow;
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = firstName,
+            LastName = lastName,
+            Email = email,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Tenants.Add(tenant);
+        _ctx.Db.SaveChanges();
+        return tenant;
     }
 
     private Lease SeedLease(Property property, Unit unit, Tenant tenant, LeaseStatus status, DateTime start, int rentDueDay = 1)

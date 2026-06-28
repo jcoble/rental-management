@@ -12,6 +12,7 @@ public class LeaseResponse
     public int PropertyId { get; set; }
     public int UnitId { get; set; }
     public int TenantId { get; set; }
+    public IReadOnlyList<int> TenantIds { get; set; } = [];
     public string LeaseNumber { get; set; } = string.Empty;
     public LeaseStatus Status { get; set; }
     public DateTime StartDate { get; set; }
@@ -29,6 +30,9 @@ public class LeaseResponse
 
     /// <summary>Tenant's full name, projected from the <see cref="Lease.Tenant"/> navigation. Null when not loaded.</summary>
     public string? TenantName { get; set; }
+
+    /// <summary>All tenants tied to this lease. <see cref="TenantId"/> remains the primary/back-compat tenant.</summary>
+    public IReadOnlyList<LeaseTenantResponse> Tenants { get; set; } = [];
 
     /// <summary>Unit number, projected from the <see cref="Lease.Unit"/> navigation. Null when not loaded.</summary>
     public string? UnitNumber { get; set; }
@@ -54,6 +58,7 @@ public class LeaseResponse
             PropertyId = e.PropertyId,
             UnitId = e.UnitId,
             TenantId = e.TenantId,
+            TenantIds = e.TenantId > 0 ? [e.TenantId] : [],
             LeaseNumber = e.LeaseNumber,
             Status = e.Status,
             StartDate = e.StartDate,
@@ -74,14 +79,59 @@ public class LeaseResponse
         {
             // Pickers (scan confirm, payment/deposit create) need human-readable labels,
             // not just the bare lease number. Projected from existing navigations.
-            response.TenantName = e.Tenant == null
-                ? null
-                : $"{e.Tenant.FirstName} {e.Tenant.LastName}".Trim();
+            var tenants = e.LeaseTenants.Count == 0
+                ? new List<LeaseTenantResponse>()
+                : e.LeaseTenants
+                    .OrderByDescending(lt => lt.IsPrimary)
+                    .ThenBy(lt => lt.Id)
+                    .Where(lt => lt.Tenant != null)
+                    .Select(LeaseTenantResponse.FromEntity)
+                    .ToList();
+            if (tenants.Count == 0 && e.Tenant != null)
+            {
+                tenants =
+                [
+                    new LeaseTenantResponse
+                    {
+                        Id = e.Tenant.Id,
+                        Name = $"{e.Tenant.FirstName} {e.Tenant.LastName}".Trim(),
+                        Email = e.Tenant.Email,
+                        Phone = e.Tenant.Phone,
+                        IsPrimary = true,
+                    },
+                ];
+            }
+
+            response.Tenants = tenants;
+            response.TenantIds = tenants.Count == 0 ? response.TenantIds : tenants.Select(t => t.Id).ToList();
+            response.TenantName = tenants.Count == 0 ? null : string.Join(", ", tenants.Select(t => t.Name));
             response.UnitNumber = e.Unit?.UnitNumber;
             response.PropertyName = e.Property?.Name;
         }
 
         return response;
+    }
+}
+
+public class LeaseTenantResponse
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string? Email { get; set; }
+    public string? Phone { get; set; }
+    public bool IsPrimary { get; set; }
+
+    public static LeaseTenantResponse FromEntity(LeaseTenant leaseTenant)
+    {
+        var tenant = leaseTenant.Tenant!;
+        return new LeaseTenantResponse
+        {
+            Id = tenant.Id,
+            Name = $"{tenant.FirstName} {tenant.LastName}".Trim(),
+            Email = tenant.Email,
+            Phone = tenant.Phone,
+            IsPrimary = leaseTenant.IsPrimary,
+        };
     }
 }
 
@@ -267,9 +317,10 @@ public class CreateLeaseRequest
     [Range(1, int.MaxValue)]
     public int UnitId { get; set; }
 
-    [Required]
     [Range(1, int.MaxValue)]
-    public int TenantId { get; set; }
+    public int? TenantId { get; set; }
+
+    public IReadOnlyList<int>? TenantIds { get; set; }
 
     [Required]
     [MaxLength(100)]
@@ -313,6 +364,11 @@ public class CreateLeaseRequest
 
 public class UpdateLeaseRequest
 {
+    [Range(1, int.MaxValue)]
+    public int? TenantId { get; set; }
+
+    public IReadOnlyList<int>? TenantIds { get; set; }
+
     [MaxLength(100)]
     public string? LeaseNumber { get; set; }
 

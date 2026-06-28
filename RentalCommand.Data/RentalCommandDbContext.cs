@@ -21,6 +21,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<Unit> Units => Set<Unit>();
     public DbSet<Tenant> Tenants => Set<Tenant>();
     public DbSet<Lease> Leases => Set<Lease>();
+    public DbSet<LeaseTenant> LeaseTenants => Set<LeaseTenant>();
     public DbSet<DocumentTemplate> DocumentTemplates => Set<DocumentTemplate>();
     public DbSet<DocumentTemplateField> DocumentTemplateFields => Set<DocumentTemplateField>();
     public DbSet<Payment> Payments => Set<Payment>();
@@ -899,6 +900,28 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.DocumentTemplateId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<LeaseTenant>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.PortfolioId);
+            entity.HasIndex(e => e.LeaseId);
+            entity.HasIndex(e => e.TenantId);
+            entity.HasIndex(e => new { e.LeaseId, e.TenantId }).IsUnique();
+            entity.HasQueryFilter(e => e.Lease!.DeletedAt == null);
+            entity.HasOne(e => e.Portfolio)
+                .WithMany(p => p.LeaseTenants)
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Lease)
+                .WithMany(l => l.LeaseTenants)
+                .HasForeignKey(e => e.LeaseId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.Tenant)
+                .WithMany(t => t.LeaseTenants)
+                .HasForeignKey(e => e.TenantId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Payment>(entity =>

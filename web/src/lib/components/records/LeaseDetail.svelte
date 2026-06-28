@@ -39,6 +39,7 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
+	import TenantMultiSelect from '$lib/components/forms/TenantMultiSelect.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
@@ -223,7 +224,7 @@
 	}));
 
 	const empty = {
-		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', startDate: '', endDate: '', moveInDate: '',
+		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', tenantIds: [] as string[], startDate: '', endDate: '', moveInDate: '',
 		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1', status: 'Draft', notes: '',
 	};
 	let editing = $state(false);
@@ -448,11 +449,17 @@
 
 	function startEditing() {
 		if (!lease) return;
+		const tenantIds = (lease.tenantIds?.length
+			? lease.tenantIds
+			: lease.tenants?.length
+				? lease.tenants.map((tenant) => tenant.id)
+				: [lease.tenantId]).map((id) => String(id));
 		form = {
 			leaseNumber: lease.leaseNumber,
 			propertyId: String(lease.propertyId),
 			unitId: String(lease.unitId),
-			tenantId: String(lease.tenantId),
+			tenantId: tenantIds[0] ?? String(lease.tenantId),
+			tenantIds,
 			startDate: lease.startDate?.slice(0, 10) ?? '',
 			endDate: lease.endDate?.slice(0, 10) ?? '',
 			moveInDate: lease.moveInDate?.slice(0, 10) ?? '',
@@ -474,17 +481,24 @@
 	}
 
 	function submit() {
-		// Property/unit/tenant are fixed at lease creation (UpdateLeaseRequest has no PropertyId),
+		// Property is fixed at lease creation (UpdateLeaseRequest has no PropertyId),
 		// so propertyId is excluded from the payload — and must also be omitted from validation, or
 		// the required propertyId in leaseSchema fails on the dropped key and Save silently bails.
+		const selectedTenantIds = form.tenantIds
+			.map((id) => Number(id))
+			.filter((id) => Number.isInteger(id) && id > 0);
+		const tenantId = String(selectedTenantIds[0] ?? '');
+		form.tenantId = tenantId;
 		const { propertyId: _p, ...rest } = form;
-		const result = parseForm(leaseSchema.omit({ propertyId: true }), rest);
-		if (result.errors) {
-			formErrors = result.errors;
+		const result = parseForm(leaseSchema.omit({ propertyId: true }), { ...rest, tenantId });
+		const tenantErrors: Record<string, string> =
+			selectedTenantIds.length === 0 ? { tenantId: 'Select at least one tenant' } : {};
+		if (result.errors || Object.keys(tenantErrors).length > 0) {
+			formErrors = { ...(result.errors ?? {}), ...tenantErrors };
 			return;
 		}
 		formErrors = {};
-		saveMutation.mutate({ portfolioId, ...result.data });
+		saveMutation.mutate({ portfolioId, ...result.data, tenantId: selectedTenantIds[0], tenantIds: selectedTenantIds });
 	}
 
 	// Select options for inline FK/enum fields
@@ -512,20 +526,6 @@
 			lease?.unitNumber ? `Unit ${lease.unitNumber}` : ''
 		)
 	);
-	const tenantOptions = $derived(
-		ensureSelectedOption(
-			[
-				{ value: '', label: 'Select tenant' },
-				...(tenantsQuery.data ?? []).map((t) => ({
-					value: String(t.id),
-					label: t.fullName || `${t.firstName} ${t.lastName}`,
-				})),
-			],
-			form.tenantId,
-			lease?.tenantName ?? ''
-		)
-	);
-
 	// Payments DataGrid columns
 	const paymentColumns: ColumnDef<Payment>[] = [
 		{
@@ -786,7 +786,14 @@
 							</p>
 							<div class="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
 								<StatusBadge status={visibleStatus ?? lease.status} />
-								{#if lease.tenantName}
+								{#if lease.tenants?.length}
+									{#each lease.tenants as tenant, index}
+										<a href="/tenants/{tenant.id}" class="font-medium text-foreground underline-offset-4 hover:underline">{tenant.name}</a>
+										{#if index < (lease.tenants?.length ?? 0) - 1}
+											<span aria-hidden="true">+</span>
+										{/if}
+									{/each}
+								{:else if lease.tenantName}
 									<a href="/tenants/{lease.tenantId}" class="font-medium text-foreground underline-offset-4 hover:underline">{lease.tenantName}</a>
 								{/if}
 								{#if lease.propertyName}
@@ -846,7 +853,24 @@
 					<DetailCard title="Parties" icon={Users} accent="primary" testid="lease-card-parties" contentClass="grid grid-cols-2 gap-x-6 gap-y-4">
 						<InlineField label="Property" bind:value={form.propertyId} display={lease.propertyName} {editing} type="select" options={propertyOptions} testid="lease-detail-property" />
 						<InlineField label="Unit" bind:value={form.unitId} display={lease.unitNumber ? `Unit ${lease.unitNumber}` : ''} {editing} type="select" options={unitOptions} error={formErrors.unitId} testid="lease-detail-unit" />
-						<InlineField label="Tenant" bind:value={form.tenantId} display={lease.tenantName} {editing} type="select" options={tenantOptions} error={formErrors.tenantId} testid="lease-detail-tenant" class="col-span-2" />
+						{#if editing}
+							<div class="col-span-2">
+								<TenantMultiSelect
+									label="Tenants"
+									tenants={tenantsQuery.data ?? []}
+									bind:selectedIds={form.tenantIds}
+									error={formErrors.tenantId}
+									testid="lease-detail-tenants"
+								/>
+							</div>
+						{:else}
+							<div class="col-span-2">
+								<div class="m3-readonly-field flex flex-col justify-center" data-testid="lease-detail-tenants-value">
+									<span class="m3-readonly-field__label">Tenants</span>
+									<span class="m3-readonly-field__value mt-1">{lease.tenantName || '-'}</span>
+								</div>
+							</div>
+						{/if}
 					</DetailCard>
 
 					<DetailCard title="Notes" icon={StickyNote} accent="muted" testid="lease-card-notes">
