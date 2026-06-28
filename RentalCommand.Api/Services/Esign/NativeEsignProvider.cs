@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -113,10 +114,9 @@ public sealed class NativeEsignProvider : IEsignProvider
         _db.SignatureRequests.Add(signatureRequest);
         await _db.SaveChangesAsync(ct);
 
-        // Enqueue the signing-link email per signer. In sandbox the outbox dispatcher redirects the
-        // email to the portfolio owner (tagged [Sandbox]) so nothing reaches a real tenant while the
-        // owner can still exercise the full flow. Best-effort: a mail-queue hiccup must not roll back
-        // the created request.
+        // Enqueue the signing-link email per signer. Lease e-sign emails are marked with a stable
+        // source so the outbox dispatcher keeps the tenant signer as the recipient even in sandbox.
+        // Best-effort: a mail-queue hiccup must not roll back the created request.
         foreach (var signer in signatureRequest.Signers)
         {
             await SafeAsync("enqueue signing email", () => EnqueueSigningEmailAsync(signatureRequest, signer, ct));
@@ -202,7 +202,15 @@ use electronic records and signatures (E-SIGN / UETA).
 – Sent via Rental Command
 """;
 
-        var payload = JsonSerializer.Serialize(new { to = signer.Email, subject, body });
+        var payload = JsonSerializer.Serialize(new
+        {
+            source = OutboxPayloadSources.LeaseEsignSigningLink,
+            signatureRequestId = request.Id,
+            leaseId = request.LeaseId,
+            to = signer.Email,
+            subject,
+            body,
+        });
         _db.OutboxMessages.Add(new OutboxMessage
         {
             PortfolioId = request.PortfolioId,

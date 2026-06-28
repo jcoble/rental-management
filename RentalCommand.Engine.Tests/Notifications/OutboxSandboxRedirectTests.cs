@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -12,10 +13,10 @@ using RentalCommand.Engine.Workers;
 namespace RentalCommand.Engine.Tests.Notifications;
 
 /// <summary>
-/// Sandbox e-sign / notification behaviour (TSK-202): a message scoped to a Sandbox portfolio must
-/// not reach the original (real) recipient, but instead of being silently dropped it is REDIRECTED to
-/// the portfolio owner's own inbox, tagged <c>[Sandbox]</c>, so demo features (e.g. send-for-signature)
-/// can be exercised end-to-end. A Live portfolio sends to the original recipient unchanged.
+/// Sandbox notification behaviour: generic messages scoped to a Sandbox portfolio are redirected to
+/// the portfolio owner's own inbox, tagged <c>[Sandbox]</c>. Lease e-sign signing links are a typed
+/// exception and stay addressed to the lease signer. A Live portfolio sends to the original recipient
+/// unchanged.
 /// </summary>
 public sealed class OutboxSandboxRedirectTests : IDisposable
 {
@@ -120,6 +121,19 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
     }
 
     [Fact]
+    public async Task Sandbox_lease_esign_email_goes_to_the_lease_signer_without_owner_redirect()
+    {
+        await SeedLeaseEsignEmail(portfolioId: 1, to: "real-tenant@example.com", subject: "Please sign: Lease L-2026-7");
+        await RunCycle();
+
+        _channel.Emails.Should().HaveCount(1);
+        var (to, subject, body, _) = _channel.Emails[0];
+        to.Should().Be("real-tenant@example.com");
+        subject.Should().Be("Please sign: Lease L-2026-7");
+        body.Should().NotContain("intended for real-tenant@example.com");
+    }
+
+    [Fact]
     public async Task Live_email_goes_to_the_original_recipient_unchanged()
     {
         await SeedEmail(portfolioId: 2, to: "real-tenant@example.com", subject: "Please sign your lease");
@@ -140,6 +154,27 @@ public sealed class OutboxSandboxRedirectTests : IDisposable
             PortfolioId = portfolioId,
             MessageType = "email",
             Payload = System.Text.Json.JsonSerializer.Serialize(new { to, subject, body = "Click the link to sign." }),
+            CreatedAt = DateTime.UtcNow,
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private async Task SeedLeaseEsignEmail(int portfolioId, string to, string subject)
+    {
+        using var scope = _provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<RentalCommandDbContext>();
+        db.OutboxMessages.Add(new OutboxMessage
+        {
+            PortfolioId = portfolioId,
+            MessageType = "email",
+            Payload = System.Text.Json.JsonSerializer.Serialize(new
+            {
+                source = OutboxPayloadSources.LeaseEsignSigningLink,
+                leaseId = 123,
+                to,
+                subject,
+                body = "Click the link to sign.",
+            }),
             CreatedAt = DateTime.UtcNow,
         });
         await db.SaveChangesAsync();

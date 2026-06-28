@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -7,6 +8,7 @@ using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Esign;
+using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -98,6 +100,11 @@ public sealed class NativeEsignTests : IDisposable
         var outbox = await _db.OutboxMessages.SingleAsync();
         outbox.MessageType.Should().Be("email");
         outbox.Payload.Should().Contain($"https://app.test/sign/{signer.Token}");
+        using var payload = JsonDocument.Parse(outbox.Payload);
+        payload.RootElement.GetProperty("source").GetString().Should().Be(OutboxPayloadSources.LeaseEsignSigningLink);
+        payload.RootElement.GetProperty("to").GetString().Should().Be("tenant@example.com");
+        payload.RootElement.GetProperty("leaseId").GetInt32().Should().Be(lease.Id);
+        payload.RootElement.GetProperty("signatureRequestId").GetInt32().Should().Be(request.Id);
     }
 
     [Fact]

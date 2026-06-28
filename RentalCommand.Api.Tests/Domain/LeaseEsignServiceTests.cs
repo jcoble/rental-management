@@ -96,6 +96,30 @@ public sealed class LeaseEsignServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SendForSignature_UsesLeaseTenantEmailEvenWhenOverrideProvided()
+    {
+        var lease = SeedLeaseWithGraph(LeaseStatus.Draft, tenantEmail: "tenant-on-lease@example.com");
+        var provider = new FakeEsignProvider { Configured = true, EnvelopeId = "sig_tenant_only" };
+        var sut = CreateService(provider);
+
+        var result = await sut.SendForSignatureAsync(
+            PortfolioId,
+            lease.Id,
+            new SendForSignatureRequest
+            {
+                SignerName = "Owner Admin",
+                SignerEmail = "owner-admin@example.com",
+            },
+            changedByUserId: 7,
+            ipAddress: null);
+
+        result.Outcome.Should().Be(SendForSignatureOutcome.Sent);
+        provider.LastSigners.Should().ContainSingle();
+        provider.LastSigners[0].Name.Should().Be("Marcus Williams");
+        provider.LastSigners[0].Email.Should().Be("tenant-on-lease@example.com");
+    }
+
+    [Fact]
     public async Task SendForSignature_ActiveDefaultOverlayTemplate_SendsRenderedTemplateDocument()
     {
         var lease = SeedLeaseWithGraph(LeaseStatus.Draft);
@@ -429,6 +453,7 @@ public sealed class LeaseEsignServiceTests : IDisposable
         public string EnvelopeId { get; init; } = "sig_fake";
         public byte[]? SignedPdf { get; init; }
         public byte[]? LastDocumentBytes { get; private set; }
+        public IReadOnlyList<EsignSigner> LastSigners { get; private set; } = Array.Empty<EsignSigner>();
         public int SendCalls { get; private set; }
 
         public bool IsConfigured => Configured;
@@ -437,6 +462,9 @@ public sealed class LeaseEsignServiceTests : IDisposable
         {
             SendCalls++;
             LastDocumentBytes = request.DocumentBytes;
+            LastSigners = request.Signers
+                .Select(s => new EsignSigner { Name = s.Name, Email = s.Email })
+                .ToArray();
             return Task.FromResult(Configured
                 ? EsignResult.Sent(EnvelopeId, "Sent")
                 : EsignResult.NotConfigured());

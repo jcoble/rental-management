@@ -64,9 +64,9 @@ public sealed class LeaseEsignService : ILeaseEsignService
         }
 
         // Sandbox is intentionally NOT short-circuited here. A demo account must still be able to
-        // exercise the full send → sign → executed-PDF flow; the outbox dispatcher redirects the
-        // signing email to the portfolio owner's own inbox (tagged [Sandbox]) so nothing reaches a
-        // real tenant. Suppressing here would make the feature look broken in Sandbox.
+        // exercise the full send -> sign -> executed-PDF flow. The native e-sign provider marks the
+        // signing-link outbox payload as lease e-sign so the dispatcher sends it to the lease tenant
+        // instead of applying the generic sandbox owner/admin redirect.
 
         // Gate up front: never touch lease state when the provider is not configured.
         if (!_provider.IsConfigured)
@@ -77,13 +77,10 @@ public sealed class LeaseEsignService : ILeaseEsignService
             return SendForSignatureResult.NotConfigured();
         }
 
-        // Resolve the signer: explicit override wins, else the lease's tenant.
-        var signerName = !string.IsNullOrWhiteSpace(request.SignerName)
-            ? request.SignerName!.Trim()
-            : $"{lease.Tenant?.FirstName} {lease.Tenant?.LastName}".Trim();
-        var signerEmail = !string.IsNullOrWhiteSpace(request.SignerEmail)
-            ? request.SignerEmail!.Trim()
-            : lease.Tenant?.Email?.Trim();
+        // Resolve the signer from the lease itself. Landlords recognize the property/unit/tenant, not
+        // an internal envelope recipient override, so send/resend always follows the lease tenant.
+        var signerName = $"{lease.Tenant?.FirstName} {lease.Tenant?.LastName}".Trim();
+        var signerEmail = lease.Tenant?.Email?.Trim();
 
         if (string.IsNullOrWhiteSpace(signerName) || string.IsNullOrWhiteSpace(signerEmail))
         {
