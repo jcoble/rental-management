@@ -5,6 +5,7 @@ import * as dispatch from './work-order-dispatch.ts';
 const {
 	canDispatchToVendor,
 	dispatchVendorBlockReason,
+	workOrderStatusActionTargets,
 } = dispatch;
 
 describe('work order vendor dispatch eligibility', () => {
@@ -30,6 +31,26 @@ describe('work order vendor dispatch eligibility', () => {
 			dispatch.formatStatusTransitionCopy('InProgress', 'WaitingParts'),
 			'Change status from In progress to Waiting on parts.'
 		);
+	});
+
+	it('matches the mobile work-order status action targets', () => {
+		assert.deepEqual(workOrderStatusActionTargets('New'), [
+			'Scheduled',
+			'InProgress',
+			'WaitingParts',
+			'Completed',
+			'Cancelled'
+		]);
+		assert.deepEqual(workOrderStatusActionTargets('Completed'), [
+			'New',
+			'Scheduled',
+			'InProgress',
+			'WaitingParts',
+			'Cancelled'
+		]);
+		const newTargets: readonly string[] = workOrderStatusActionTargets('New');
+		assert.equal(newTargets.includes('OnHold'), false);
+		assert.equal(newTargets.includes('Archived'), false);
 	});
 
 	it('hides active dispatch hint copy once the work order is terminal', () => {
