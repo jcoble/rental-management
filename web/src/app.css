@@ -1764,6 +1764,15 @@
    up 12px on every navigation and every URL-changing tab switch, which read as a flicker/jerk on
    partial loads. Pages now swap instantly. Re-introduce only as a content-scoped transition if ever. */
 
+/* Placeholder text should read clearly as a hint, not as filled-in content.
+   Tailwind's placeholder:text-muted-foreground is close to foreground in dark
+   mode, so we bump the alpha down to make the distinction obvious. Unlayered
+   so it beats Tailwind utilities. */
+input::placeholder,
+textarea::placeholder {
+  color: color-mix(in srgb, var(--muted-foreground) 55%, transparent);
+}
+
 /* Invalid fields get a red tint, not just the shadcn aria-invalid border.
    Unlayered on purpose so it beats layered Tailwind utilities. */
 input[aria-invalid='true'],
