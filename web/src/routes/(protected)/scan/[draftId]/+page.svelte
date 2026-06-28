@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import { toast } from 'svelte-sonner';
 	import { scan, type ScanFieldDto } from '$lib/api/scan';
+	import { recordHref } from '$lib/navigation/record-href';
 	import { leases } from '$lib/api/endpoints/leases';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { tenants } from '$lib/api/endpoints/tenants';
@@ -659,7 +660,11 @@
 				const leaseId = result.leaseId ?? result.entityId ?? null;
 				toast.success('Lease created');
 				if (leaseId) {
-					goto(`/leases/${leaseId}`);
+					// Route to the unit Command Center Lease tab when the unit is known (an existing
+					// unit was selected); a brand-new unit from the address has no id in scope yet,
+					// so recordHref falls back to the generic /leases/{id} page.
+					const unitId = selectedLeaseUnitId ? Number(selectedLeaseUnitId) : null;
+					goto(recordHref('lease', { id: leaseId, unitId }));
 					return;
 				}
 			}
