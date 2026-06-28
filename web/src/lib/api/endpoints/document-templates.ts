@@ -1,4 +1,4 @@
-import { api } from '../client';
+import { api, downloadFile } from '../client';
 import { buildListQuery, type ListParams } from '../list-params';
 
 export type DocumentTemplateKind = 'Lease' | 'RentalApplication' | 'Notice' | 'Other';
@@ -12,7 +12,7 @@ export type DocumentTemplateFieldKind =
 	| 'Initial'
 	| 'Checkbox'
 	| 'DateSigned';
-export type DocumentTemplateSignerRole = 'None' | 'Tenant' | 'Landlord' | 'CoSigner';
+export type DocumentTemplateSignerRole = 'None' | 'Tenant' | 'Landlord' | 'CoTenant';
 
 export interface DocumentTemplateField {
 	id: number;
@@ -148,6 +148,8 @@ export const documentTemplates = {
 	) => api.put<DocumentTemplateField>(`/document-templates/${templateId}/fields/${fieldId}`, request),
 	deleteField: (templateId: number, fieldId: number) =>
 		api.delete<void>(`/document-templates/${templateId}/fields/${fieldId}`),
+	previewLeasePdf: (templateId: number, leaseId: number) =>
+		downloadFile(`/document-templates/${templateId}/preview/leases/${leaseId}`),
 	uploadLeasePdf: (file: File, values: {
 		name?: string;
 		description?: string;

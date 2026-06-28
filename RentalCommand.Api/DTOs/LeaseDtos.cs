@@ -182,8 +182,14 @@ public sealed class SendForSignatureResult
     public static SendForSignatureResult NotConfigured()
         => new() { Outcome = SendForSignatureOutcome.NotConfigured, Error = "E-sign provider is not configured." };
 
-    public static SendForSignatureResult MissingSigner()
-        => new() { Outcome = SendForSignatureOutcome.MissingSigner, Error = "A signer name and email are required (the lease's tenant has none)." };
+    public static SendForSignatureResult MissingSigner(string? error = null)
+        => new()
+        {
+            Outcome = SendForSignatureOutcome.MissingSigner,
+            Error = string.IsNullOrWhiteSpace(error)
+                ? "A signer name and email are required (the lease's tenant has none)."
+                : error,
+        };
 
     public static SendForSignatureResult AlreadyFinalized()
         => new() { Outcome = SendForSignatureOutcome.AlreadyFinalized, Error = "This lease is already signed/active; sending it again would discard the executed agreement." };

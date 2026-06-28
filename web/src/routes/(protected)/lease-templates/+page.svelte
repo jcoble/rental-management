@@ -158,8 +158,8 @@
 				return 'Tenant';
 			case 'Landlord':
 				return 'Landlord';
-			case 'CoSigner':
-				return 'Co-signer';
+			case 'CoTenant':
+				return 'Co-tenant';
 			default:
 				return 'Auto-filled';
 		}
