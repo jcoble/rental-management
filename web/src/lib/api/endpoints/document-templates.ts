@@ -11,7 +11,8 @@ export type DocumentTemplateFieldKind =
 	| 'Signature'
 	| 'Initial'
 	| 'Checkbox'
-	| 'DateSigned';
+	| 'DateSigned'
+	| 'Whiteout';
 export type DocumentTemplateSignerRole = 'None' | 'Tenant' | 'Landlord' | 'CoTenant';
 
 export interface DocumentTemplateField {
