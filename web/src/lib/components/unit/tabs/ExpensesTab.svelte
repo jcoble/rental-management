@@ -72,15 +72,15 @@
 	});
 
 	$effect(() => {
-		const page = expensesQuery.data;
-		if (!page) return;
-		if (page.skip === 0) {
-			expenseItems = page.items;
+		const pageData = expensesQuery.data;
+		if (!pageData) return;
+		if (pageData.skip === 0) {
+			expenseItems = pageData.items;
 			return;
 		}
 		const currentItems = untrack(() => expenseItems);
 		const seen = new Set(currentItems.map((e) => e.id));
-		expenseItems = [...currentItems, ...page.items.filter((e) => !seen.has(e.id))];
+		expenseItems = [...currentItems, ...pageData.items.filter((e) => !seen.has(e.id))];
 	});
 
 	const list = $derived(expenseItems);
