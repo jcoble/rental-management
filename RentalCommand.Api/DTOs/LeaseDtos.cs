@@ -154,8 +154,8 @@ public sealed record LeaseDocumentStatusResponse(
     DateTime? GeneratedAt);
 
 /// <summary>
-/// Body for <c>POST /leases/{id}/send-for-signature</c>. Both fields are optional; when omitted the
-/// lease's tenant name/email is used as the signer.
+/// Body for <c>POST /leases/{id}/send-for-signature</c>. Signer override fields are retained for
+/// request compatibility, but the lease workflow sends to the tenant tied to the lease.
 /// </summary>
 public sealed class SendForSignatureRequest
 {
@@ -226,6 +226,29 @@ public sealed class LeaseSignatureStatusResponse
 
     /// <summary>Stable selector for frontend tests.</summary>
     public string TestId => $"lease-signature-{LeaseId}";
+}
+
+/// <summary>Recent outbox activity for lease e-sign emails.</summary>
+public sealed class LeaseSignatureQueueResponse
+{
+    public int LeaseId { get; init; }
+    public IReadOnlyList<LeaseSignatureQueueItemResponse> Items { get; init; } = [];
+}
+
+/// <summary>One lease e-sign email queue item, scoped to a single lease.</summary>
+public sealed class LeaseSignatureQueueItemResponse
+{
+    public long Id { get; init; }
+    public string RecipientEmail { get; init; } = string.Empty;
+    public string? Subject { get; init; }
+    public string Status { get; init; } = "Queued";
+    public DateTime QueuedAt { get; init; }
+    public DateTime StatusAt { get; init; }
+    public DateTime? SentAt { get; init; }
+    public DateTime? FailedAt { get; init; }
+    public int RetryCount { get; init; }
+    public string? Error { get; init; }
+    public string? SignatureRequestId { get; init; }
 }
 
 public class CreateLeaseRequest

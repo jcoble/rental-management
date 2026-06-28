@@ -17,6 +17,9 @@ public interface ILeaseEsignService
     /// <summary>Current signature status for a lease; null when the lease is not in the portfolio.</summary>
     Task<LeaseSignatureStatusResponse?> GetSignatureStatusAsync(int portfolioId, int leaseId, CancellationToken ct = default);
 
+    /// <summary>Recent lease e-sign email outbox activity; null when the lease is not in the portfolio.</summary>
+    Task<LeaseSignatureQueueResponse?> GetSignatureQueueAsync(int portfolioId, int leaseId, CancellationToken ct = default);
+
     /// <summary>Stream the stored signed agreement PDF; null when the lease is out of scope or has no signed document.</summary>
     Task<(Stream Stream, string FileName, string ContentType)?> GetSignedDocumentAsync(int portfolioId, int leaseId, CancellationToken ct = default);
 

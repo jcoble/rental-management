@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core.Constants;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -12,6 +14,7 @@ namespace RentalCommand.Api.Services.Domain;
 public sealed class LeaseEsignService : ILeaseEsignService
 {
     private const string EntityType = "Lease";
+    private const int SignatureQueueLimit = 5;
 
     private readonly RentalCommandDbContext _db;
     private readonly ILeaseService _leaseService;
@@ -64,9 +67,9 @@ public sealed class LeaseEsignService : ILeaseEsignService
         }
 
         // Sandbox is intentionally NOT short-circuited here. A demo account must still be able to
-        // exercise the full send → sign → executed-PDF flow; the outbox dispatcher redirects the
-        // signing email to the portfolio owner's own inbox (tagged [Sandbox]) so nothing reaches a
-        // real tenant. Suppressing here would make the feature look broken in Sandbox.
+        // exercise the full send -> sign -> executed-PDF flow. The native e-sign provider marks the
+        // signing-link outbox payload as lease e-sign so the dispatcher sends it to the lease tenant
+        // instead of applying the generic sandbox owner/admin redirect.
 
         // Gate up front: never touch lease state when the provider is not configured.
         if (!_provider.IsConfigured)
@@ -77,13 +80,10 @@ public sealed class LeaseEsignService : ILeaseEsignService
             return SendForSignatureResult.NotConfigured();
         }
 
-        // Resolve the signer: explicit override wins, else the lease's tenant.
-        var signerName = !string.IsNullOrWhiteSpace(request.SignerName)
-            ? request.SignerName!.Trim()
-            : $"{lease.Tenant?.FirstName} {lease.Tenant?.LastName}".Trim();
-        var signerEmail = !string.IsNullOrWhiteSpace(request.SignerEmail)
-            ? request.SignerEmail!.Trim()
-            : lease.Tenant?.Email?.Trim();
+        // Resolve the signer from the lease itself. Landlords recognize the property/unit/tenant, not
+        // an internal envelope recipient override, so send/resend always follows the lease tenant.
+        var signerName = $"{lease.Tenant?.FirstName} {lease.Tenant?.LastName}".Trim();
+        var signerEmail = lease.Tenant?.Email?.Trim();
 
         if (string.IsNullOrWhiteSpace(signerName) || string.IsNullOrWhiteSpace(signerEmail))
         {
@@ -191,6 +191,24 @@ public sealed class LeaseEsignService : ILeaseEsignService
         }
 
         return ToStatus(lease);
+    }
+
+    public async Task<LeaseSignatureQueueResponse?> GetSignatureQueueAsync(int portfolioId, int leaseId, CancellationToken ct = default)
+    {
+        var leaseExists = await _db.Leases
+            .AsNoTracking()
+            .AnyAsync(l => l.Id == leaseId && l.PortfolioId == portfolioId, ct);
+        if (!leaseExists)
+        {
+            return null;
+        }
+
+        var messages = await QueryLeaseSignatureQueueMessagesAsync(portfolioId, leaseId, ct);
+        return new LeaseSignatureQueueResponse
+        {
+            LeaseId = leaseId,
+            Items = messages.Select(ToQueueItem).ToList(),
+        };
     }
 
     public async Task<(Stream Stream, string FileName, string ContentType)?> GetSignedDocumentAsync(int portfolioId, int leaseId, CancellationToken ct = default)
@@ -426,6 +444,111 @@ public sealed class LeaseEsignService : ILeaseEsignService
             .ToListAsync(ct);
 
         return fields.Count == 0 ? null : JsonSerializer.Serialize(fields);
+    }
+
+    private async Task<IReadOnlyList<OutboxMessage>> QueryLeaseSignatureQueueMessagesAsync(
+        int portfolioId,
+        int leaseId,
+        CancellationToken ct)
+    {
+        var source = OutboxPayloadSources.LeaseEsignSigningLink;
+        var leaseIdText = leaseId.ToString(CultureInfo.InvariantCulture);
+
+        if (_db.Database.IsNpgsql())
+        {
+            return await _db.OutboxMessages
+                .FromSqlInterpolated($"""
+                    SELECT *
+                    FROM "OutboxMessages"
+                    WHERE "PortfolioId" = {portfolioId}
+                      AND "MessageType" = 'email'
+                      AND "Payload" ->> 'source' = {source}
+                      AND "Payload" ->> 'leaseId' = {leaseIdText}
+                    ORDER BY "CreatedAt" DESC, "Id" DESC
+                    LIMIT {SignatureQueueLimit}
+                    """)
+                .AsNoTracking()
+                .ToListAsync(ct);
+        }
+
+        var sourceNeedle = $"\"source\":\"{source}\"";
+        var leaseNeedleWithComma = $"\"leaseId\":{leaseIdText},";
+        var leaseNeedleAtEnd = $"\"leaseId\":{leaseIdText}}}";
+        return await _db.OutboxMessages
+            .AsNoTracking()
+            .Where(m => m.PortfolioId == portfolioId
+                && m.MessageType == "email"
+                && m.Payload.Contains(sourceNeedle)
+                && (m.Payload.Contains(leaseNeedleWithComma) || m.Payload.Contains(leaseNeedleAtEnd)))
+            .OrderByDescending(m => m.CreatedAt)
+            .ThenByDescending(m => m.Id)
+            .Take(SignatureQueueLimit)
+            .ToListAsync(ct);
+    }
+
+    private static LeaseSignatureQueueItemResponse ToQueueItem(OutboxMessage message)
+    {
+        var sentAt = message.SentAt;
+        var failedAt = message.FailedAt;
+        return new LeaseSignatureQueueItemResponse
+        {
+            Id = message.Id,
+            RecipientEmail = ReadPayloadValue(message.Payload, "to"),
+            Subject = ReadPayloadValue(message.Payload, "subject"),
+            Status = ResolveQueueStatus(message),
+            QueuedAt = message.CreatedAt,
+            StatusAt = sentAt ?? failedAt ?? message.CreatedAt,
+            SentAt = sentAt,
+            FailedAt = failedAt,
+            RetryCount = message.RetryCount,
+            Error = message.Error,
+            SignatureRequestId = ReadPayloadValue(message.Payload, "signatureRequestId"),
+        };
+    }
+
+    private static string ResolveQueueStatus(OutboxMessage message)
+    {
+        if (message.SentAt.HasValue)
+        {
+            return "Sent";
+        }
+
+        if (message.FailedAt.HasValue)
+        {
+            return message.RetryCount >= 5 ? "Failed" : "Retrying";
+        }
+
+        return "Queued";
+    }
+
+    private static string ReadPayloadValue(string payload, string propertyName)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            if (!doc.RootElement.TryGetProperty(propertyName, out var value))
+            {
+                return string.Empty;
+            }
+
+            return value.ValueKind switch
+            {
+                JsonValueKind.String => value.GetString() ?? string.Empty,
+                JsonValueKind.Number => value.GetRawText(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                _ => string.Empty,
+            };
+        }
+        catch (JsonException)
+        {
+            return string.Empty;
+        }
     }
 
     private async Task BroadcastLeaseAsync(int portfolioId, int leaseId, CancellationToken ct)

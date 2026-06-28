@@ -36,6 +36,26 @@ export interface LeaseSignatureStatusResponse {
 	testId?: string | null;
 }
 
+/** Response from GET /api/v1/leases/{id}/signature-queue. */
+export interface LeaseSignatureQueueResponse {
+	leaseId: number;
+	items: LeaseSignatureQueueItemResponse[];
+}
+
+export interface LeaseSignatureQueueItemResponse {
+	id: number;
+	recipientEmail: string;
+	subject?: string | null;
+	status: 'Queued' | 'Retrying' | 'Sent' | 'Failed' | string;
+	queuedAt: string;
+	statusAt: string;
+	sentAt?: string | null;
+	failedAt?: string | null;
+	retryCount: number;
+	error?: string | null;
+	signatureRequestId?: string | null;
+}
+
 export interface LeaseListParams extends ListParams {
 	tenantId?: number;
 	propertyId?: number;
@@ -136,6 +156,10 @@ export const leases = {
 	/** GET /api/v1/leases/{id}/signature-status — current e-sign + lease status for this lease. */
 	signatureStatus: (id: number) =>
 		api.get<LeaseSignatureStatusResponse>(`/leases/${id}/signature-status`),
+
+	/** GET /api/v1/leases/{id}/signature-queue — recent lease e-sign email queue rows. */
+	signatureQueue: (id: number) =>
+		api.get<LeaseSignatureQueueResponse>(`/leases/${id}/signature-queue`),
 
 	/**
 	 * GET /api/v1/leases/{id}/signed-document — streams the signed PDF with the bearer
