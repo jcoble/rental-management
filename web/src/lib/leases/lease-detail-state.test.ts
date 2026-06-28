@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { describe, it } from 'node:test';
 import {
+	canSetLeaseActive,
 	hasNoticeMoveOutDate,
 	LEASE_DETAIL_TABS,
+	leaseStatusOptionsForCurrentStatus,
 	resolveLeaseDetailTab,
 	scannedLeaseDocumentLinkLabel,
 	tabForLeaseEdit,
@@ -48,6 +50,46 @@ describe('hasNoticeMoveOutDate', () => {
 		assert.equal(hasNoticeMoveOutDate('   '), false);
 		assert.equal(hasNoticeMoveOutDate(null), false);
 		assert.equal(hasNoticeMoveOutDate('2026-07-15'), true);
+	});
+});
+
+describe('lease detail lifecycle actions', () => {
+	it('only offers Set Active for statuses that can transition to Active', () => {
+		assert.equal(canSetLeaseActive('Draft'), true);
+		assert.equal(canSetLeaseActive('PendingSignature'), true);
+		assert.equal(canSetLeaseActive('NoticeGiven'), true);
+
+		assert.equal(canSetLeaseActive('Active'), false);
+		assert.equal(canSetLeaseActive('Expired'), false);
+		assert.equal(canSetLeaseActive('Terminated'), false);
+		assert.equal(canSetLeaseActive('Void'), false);
+		assert.equal(canSetLeaseActive(null), false);
+	});
+
+	it('does not let terminal leases be edited back to Active', () => {
+		const editableStatuses = ['Draft', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
+
+		assert.deepEqual(leaseStatusOptionsForCurrentStatus('Expired', editableStatuses), ['Expired']);
+		assert.deepEqual(leaseStatusOptionsForCurrentStatus('Terminated', editableStatuses), ['Terminated']);
+		assert.deepEqual(leaseStatusOptionsForCurrentStatus('Void', editableStatuses), []);
+	});
+
+	it('keeps editable status choices aligned with the backend transition graph', () => {
+		const editableStatuses = ['Draft', 'Active', 'NoticeGiven', 'Expired', 'Terminated'];
+
+		assert.deepEqual(leaseStatusOptionsForCurrentStatus('Draft', editableStatuses), ['Draft', 'Active']);
+		assert.deepEqual(leaseStatusOptionsForCurrentStatus('Active', editableStatuses), [
+			'Active',
+			'NoticeGiven',
+			'Expired',
+			'Terminated',
+		]);
+		assert.deepEqual(leaseStatusOptionsForCurrentStatus('NoticeGiven', editableStatuses), [
+			'Active',
+			'NoticeGiven',
+			'Expired',
+			'Terminated',
+		]);
 	});
 });
 

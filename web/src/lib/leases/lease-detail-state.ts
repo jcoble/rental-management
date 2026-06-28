@@ -17,3 +17,31 @@ export function scannedLeaseDocumentLinkLabel(scanIsImage: boolean | null | unde
 export function hasNoticeMoveOutDate(value: string | null | undefined): boolean {
 	return Boolean(value?.trim());
 }
+
+const LEASE_STATUS_TRANSITIONS_TO_ACTIVE = new Set(['Draft', 'PendingSignature', 'NoticeGiven']);
+
+const LEASE_STATUS_EDIT_TARGETS: Record<string, Set<string>> = {
+	Draft: new Set(['Draft', 'PendingSignature', 'Active', 'Void']),
+	PendingSignature: new Set(['PendingSignature', 'Active', 'Draft', 'Void']),
+	Active: new Set(['Active', 'NoticeGiven', 'Expired', 'Terminated']),
+	NoticeGiven: new Set(['NoticeGiven', 'Active', 'Expired', 'Terminated']),
+	Expired: new Set(['Expired']),
+	Terminated: new Set(['Terminated']),
+	Void: new Set(['Void']),
+};
+
+export function canSetLeaseActive(status: string | null | undefined): boolean {
+	return Boolean(status && LEASE_STATUS_TRANSITIONS_TO_ACTIVE.has(status));
+}
+
+export function leaseStatusOptionsForCurrentStatus(
+	currentStatus: string | null | undefined,
+	editableStatuses: readonly string[]
+): string[] {
+	if (!currentStatus) return [...editableStatuses];
+
+	const allowed = LEASE_STATUS_EDIT_TARGETS[currentStatus];
+	if (!allowed) return [...editableStatuses];
+
+	return editableStatuses.filter((status) => allowed.has(status));
+}
