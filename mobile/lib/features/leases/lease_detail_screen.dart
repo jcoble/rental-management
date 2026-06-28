@@ -47,12 +47,16 @@ String _formatCurrency(double amount) {
 }
 
 void _openTenantDetail(BuildContext context, Lease lease) {
+  _openTenantIdDetail(context, lease, lease.tenantId);
+}
+
+void _openTenantIdDetail(BuildContext context, Lease lease, int tenantId) {
   openUnitCommandCenter(
     context,
     unitId: lease.unitId,
     initialTab: UnitCommandCenterTab.tenants,
     lease: lease,
-    tenantId: lease.tenantId,
+    tenantId: tenantId,
   );
 }
 
@@ -899,6 +903,31 @@ class _LeaseHeaderCard extends StatelessWidget {
                           ],
                         ),
                       ),
+                      if (lease.tenants.length > 1) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final tenant in lease.tenants)
+                              ActionChip(
+                                label: Text(
+                                  tenant.name.isEmpty
+                                      ? 'Tenant #${tenant.id}'
+                                      : tenant.name,
+                                ),
+                                avatar: tenant.isPrimary
+                                    ? const Icon(Icons.star_outline, size: 16)
+                                    : null,
+                                onPressed: () => _openTenantIdDetail(
+                                  context,
+                                  lease,
+                                  tenant.id,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
                       if (lease.propertyName != null) ...[
                         const SizedBox(height: 2),
                         // Property/unit — tappable drill-through to the property.

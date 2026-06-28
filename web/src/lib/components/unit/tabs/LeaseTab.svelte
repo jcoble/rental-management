@@ -8,10 +8,10 @@
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import LeaseDetail from '$lib/components/records/LeaseDetail.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
+	import TenantMultiSelect from '$lib/components/forms/TenantMultiSelect.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import * as Select from '$lib/components/ui/select';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { leaseRentTrackingErrors, leaseSchema, parseForm } from '$lib/schemas';
 	import { LEASE_STATUSES } from '$lib/leases/lease-list-state';
@@ -48,13 +48,6 @@
 		queryKey: ['tenants', portfolioId, 'unit-lease-create'],
 		queryFn: () => tenants.list(portfolioId, { take: 200, sort: 'name' }),
 	}));
-
-	const selectedTenantLabel = $derived(
-		tenantsQuery.data?.find((tenant) => String(tenant.id) === form.tenantId)
-			? (tenantsQuery.data?.find((tenant) => String(tenant.id) === form.tenantId)?.fullName ||
-				`${tenantsQuery.data?.find((tenant) => String(tenant.id) === form.tenantId)?.firstName} ${tenantsQuery.data?.find((tenant) => String(tenant.id) === form.tenantId)?.lastName}`)
-			: ''
-	);
 
 	const unitLabel = $derived(`${dashboard.propertyName} · Unit ${dashboard.unit.unitNumber}`);
 
@@ -95,6 +88,7 @@
 			propertyId: '',
 			unitId: '',
 			tenantId: '',
+			tenantIds: [],
 			startDate: '',
 			endDate: '',
 			monthlyRent: '',
@@ -129,7 +123,7 @@
 		form.unitId = String(dashboard.unit.id);
 	});
 	$effect(() => {
-		if (form.tenantId) clearLeaseError('tenantId');
+		if (form.tenantIds.length > 0 || form.tenantId) clearLeaseError('tenantId');
 	});
 	$effect(() => {
 		if (form.leaseNumber.trim()) clearLeaseError('leaseNumber');
@@ -200,12 +194,14 @@
 			leaseData: Record<string, unknown>;
 			simpleTenant: SimpleTenantForm | null;
 		}) => {
-			let tenantId = Number(leaseData.tenantId);
+			let tenantIds = Array.isArray(leaseData.tenantIds)
+				? (leaseData.tenantIds as number[])
+				: [Number(leaseData.tenantId)].filter((id) => id > 0);
 			if (simpleTenant) {
 				const tenant = await tenants.create(buildSimpleTenantPayload(portfolioId, simpleTenant));
-				tenantId = tenant.id;
+				tenantIds = [tenant.id];
 			}
-			return leases.create({ ...leaseData, tenantId });
+			return leases.create({ ...leaseData, tenantId: tenantIds[0], tenantIds });
 		},
 		onSuccess: (lease, vars) => {
 			showSuccess('Lease created.');
@@ -227,20 +223,28 @@
 	function submitCreateLease() {
 		const tenantValidationErrors =
 			tenantMode === 'new' ? validateSimpleTenantForm(tenantForm) : {};
+		const selectedTenantIds = form.tenantIds
+			.map((id) => Number(id))
+			.filter((id) => Number.isInteger(id) && id > 0);
 		const leaseInput = {
 			...form,
 			propertyId: String(dashboard.unit.propertyId),
 			unitId: String(dashboard.unit.id),
-			tenantId: tenantMode === 'new' ? '1' : form.tenantId,
+			tenantId: tenantMode === 'new' ? '1' : String(selectedTenantIds[0] ?? ''),
 		};
 		const result = parseForm(leaseSchema, leaseInput);
 		const rentTrackingErrors = leaseRentTrackingErrors(leaseInput);
+		const tenantSelectionErrors: Record<string, string> =
+			tenantMode === 'existing' && selectedTenantIds.length === 0
+				? { tenantId: 'Select at least one tenant' }
+				: {};
 		if (
 			result.errors ||
 			Object.keys(rentTrackingErrors).length > 0 ||
+			Object.keys(tenantSelectionErrors).length > 0 ||
 			Object.keys(tenantValidationErrors).length > 0
 		) {
-			const nextFormErrors = { ...(result.errors ?? {}), ...rentTrackingErrors };
+			const nextFormErrors = { ...(result.errors ?? {}), ...rentTrackingErrors, ...tenantSelectionErrors };
 			if (tenantMode === 'new') delete nextFormErrors.tenantId;
 			formErrors = nextFormErrors;
 			tenantErrors = tenantValidationErrors;
@@ -249,7 +253,7 @@
 		formErrors = {};
 		tenantErrors = {};
 		createLeaseMutation.mutate({
-			leaseData: { portfolioId, ...result.data },
+			leaseData: { portfolioId, ...result.data, tenantIds: selectedTenantIds },
 			simpleTenant: tenantMode === 'new' ? { ...tenantForm } : null,
 		});
 	}
@@ -316,9 +320,9 @@
 						variant={tenantMode === 'existing' ? 'default' : 'outline'}
 						class="gap-2"
 						onclick={() => {
-							tenantMode = 'existing';
-							tenantErrors = {};
-						}}
+					tenantMode = 'existing';
+					tenantErrors = {};
+				}}
 						data-testid="unit-lease-existing-tenant-mode"
 					>
 						<Users class="h-4 w-4" /> Existing tenant
@@ -331,6 +335,7 @@
 						onclick={() => {
 							tenantMode = 'new';
 							form.tenantId = '';
+							form.tenantIds = [];
 							clearLeaseError('tenantId');
 						}}
 						data-testid="unit-lease-new-tenant-mode"
@@ -340,37 +345,14 @@
 				</div>
 
 				{#if tenantMode === 'existing'}
-					<div>
-						<span class="mb-1 block text-xs font-medium text-muted-foreground">Tenant</span>
-						<Select.Root type="single" bind:value={form.tenantId}>
-							<Select.Trigger
-								class="w-full"
-								disabled={tenantsQuery.isLoading || (tenantsQuery.data?.length ?? 0) === 0}
-								data-testid="unit-lease-tenant-input"
-							>
-								{#if tenantsQuery.isLoading}
-									Loading tenants...
-								{:else if selectedTenantLabel}
-									{selectedTenantLabel}
-								{:else if (tenantsQuery.data?.length ?? 0) === 0}
-									No tenants yet
-								{:else}
-									Select tenant
-								{/if}
-							</Select.Trigger>
-							<Select.Content>
-								<Select.Item value="" label="Select tenant">Select tenant</Select.Item>
-								{#each tenantsQuery.data || [] as tenant}
-									<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>
-										{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}
-									</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-						{#if formErrors.tenantId}
-							<p class="mt-1 text-xs text-destructive" data-testid="unit-lease-tenant-error">{formErrors.tenantId}</p>
-						{/if}
-					</div>
+					<TenantMultiSelect
+						label="Tenants"
+						tenants={tenantsQuery.data || []}
+						bind:selectedIds={form.tenantIds}
+						error={formErrors.tenantId}
+						disabled={tenantsQuery.isLoading}
+						testid="unit-lease-tenants-input"
+					/>
 				{:else}
 					<div class="grid gap-3 sm:grid-cols-2" data-testid="unit-lease-new-tenant-fields">
 						<div>

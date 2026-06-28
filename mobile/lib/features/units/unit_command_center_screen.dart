@@ -9,6 +9,7 @@ import '../applications/application_detail_screen.dart';
 import '../applications/applications_models.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../leases/lease_detail_screen.dart';
+import '../leases/leases_list_screen.dart';
 import '../leases/leases_repository.dart';
 import '../maintenance/create_work_order_sheet.dart';
 import '../maintenance/work_order_detail_screen.dart';
@@ -272,16 +273,24 @@ class _UnitLeaseTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final lease = selectedLease;
     final summary = dashboard.currentLease;
+    final property = dashboard.propertyName.trim().isEmpty
+        ? 'Property'
+        : dashboard.propertyName.trim();
 
     if (lease != null) {
       return LeaseDetailScreen(lease: lease);
     }
 
     if (summary == null) {
-      return const _EmptyTab(
+      return _EmptyTab(
         icon: Symbols.description_rounded,
         title: 'No lease',
         body: 'This unit has no current lease.',
+        action: FilledButton.icon(
+          icon: const Icon(Icons.add),
+          label: const Text('Add lease'),
+          onPressed: () => _showLeaseSheet(context, ref, property),
+        ),
       );
     }
 
@@ -294,6 +303,26 @@ class _UnitLeaseTab extends ConsumerWidget {
             ref.read(leaseDetailProvider(summary.id).notifier).refresh(),
       ),
       data: (loadedLease) => LeaseDetailScreen(lease: loadedLease),
+    );
+  }
+
+  void _showLeaseSheet(BuildContext context, WidgetRef ref, String property) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => LeaseFormSheet(
+        initialPropertyId: dashboard.unit.propertyId,
+        initialUnitId: dashboard.unit.id,
+        initialPropertyLabel: property,
+        initialUnitLabel: _unitLabel(dashboard.unit.unitNumber),
+        onSaved: () {
+          ref.invalidate(unitDashboardProvider(dashboard.unit.id));
+          ref.read(leasesProvider.notifier).refresh();
+        },
+      ),
     );
   }
 }
@@ -326,8 +355,52 @@ class _UnitTenantsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tenantId = selectedTenantId ?? dashboard.currentTenant?.id;
-    if (tenantId == null || tenantId <= 0) {
+    final currentTenants = dashboard.currentTenants.isNotEmpty
+        ? dashboard.currentTenants
+        : <UnitTenantSummary>[
+            if (dashboard.currentTenant != null) dashboard.currentTenant!,
+          ];
+    final tenantId = selectedTenantId;
+    if (tenantId != null && tenantId > 0) {
+      return TenantDetailLoaderScreen(tenantId: tenantId);
+    }
+
+    if (currentTenants.length > 1) {
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        children: [
+          _Section(
+            title: 'Tenants',
+            empty: 'This unit is currently vacant.',
+            children: [
+              for (final tenant in currentTenants)
+                _CompactRow(
+                  icon: Symbols.person_rounded,
+                  title: tenant.name.isEmpty
+                      ? 'Tenant #${tenant.id}'
+                      : tenant.name,
+                  subtitle: tenant.email?.trim().isNotEmpty == true
+                      ? tenant.email!.trim()
+                      : (tenant.phone?.trim().isNotEmpty == true
+                            ? tenant.phone!.trim()
+                            : 'Tenant'),
+                  onTap: () => Navigator.of(context).push<void>(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          TenantDetailLoaderScreen(tenantId: tenant.id),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ],
+      );
+    }
+
+    final singleTenantId = currentTenants.isNotEmpty
+        ? currentTenants.first.id
+        : null;
+    if (singleTenantId == null || singleTenantId <= 0) {
       return const _EmptyTab(
         icon: Symbols.group_rounded,
         title: 'No tenant',
@@ -335,7 +408,7 @@ class _UnitTenantsTab extends StatelessWidget {
       );
     }
 
-    return TenantDetailLoaderScreen(tenantId: tenantId);
+    return TenantDetailLoaderScreen(tenantId: singleTenantId);
   }
 }
 
@@ -812,11 +885,13 @@ class _EmptyTab extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.body,
+    this.action,
   });
 
   final IconData icon;
   final String title;
   final String body;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -845,6 +920,7 @@ class _EmptyTab extends StatelessWidget {
                 color: colorScheme.onSurfaceVariant,
               ),
             ),
+            if (action != null) ...[const SizedBox(height: 16), action!],
           ],
         ),
       ),
