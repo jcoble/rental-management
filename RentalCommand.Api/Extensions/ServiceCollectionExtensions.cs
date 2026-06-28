@@ -31,6 +31,8 @@ public static class ServiceCollectionExtensions
         // --- controllers-leasing-money sub-unit ---
         services.AddScoped<ITenantService, TenantService>();
         services.AddScoped<ILeaseService, LeaseService>();
+        services.AddSingleton<IDocumentTemplateFieldCatalog, DocumentTemplateFieldCatalog>();
+        services.AddScoped<IDocumentTemplateService, DocumentTemplateService>();
         services.AddScoped<ILeaseQaService, LeaseQaService>();
         // Lease e-sign workflow (send for signature, status, signed-document, webhook completion).
         services.AddScoped<ILeaseEsignService, LeaseEsignService>();
