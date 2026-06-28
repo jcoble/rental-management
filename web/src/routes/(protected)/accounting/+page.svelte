@@ -15,6 +15,7 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
 	import type { Payment, Expense, AccountingReports, AccountingSummary, AccountingTransaction } from '$lib/types';
+	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
 	import { paymentSchema, expenseSchema, parseForm } from '$lib/schemas';
@@ -241,6 +242,14 @@
 		const d = new Date();
 		const p = (n: number) => String(n).padStart(2, '0');
 		return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+	}
+
+	// A ledger row's destination: unit-tied Payment/Expense rows fold into their unit's Command Center
+	// tab (via recordHref); Bank rows (no detail page / no unit) keep the server detailHref fallback.
+	function ledgerHref(t: AccountingTransaction): string {
+		if (t.kind === 'Payment') return recordHref('payment', { id: t.id, unitId: t.unitId });
+		if (t.kind === 'Expense') return recordHref('expense', { id: t.id, unitId: t.unitId });
+		return t.detailHref ?? `/accounting/${t.kind.toLowerCase()}s/${t.id}`;
 	}
 
 	function openMarkPaid(t: AccountingTransaction) {
@@ -795,7 +804,7 @@
 				aria-label="Open transaction"
 				variant="outline"
 				size="icon"
-				onclick={(ev) => { ev.stopPropagation(); goto(t.detailHref ?? `/accounting/${t.kind.toLowerCase()}s/${t.id}`); }}
+				onclick={(ev) => { ev.stopPropagation(); goto(ledgerHref(t)); }}
 			><Pencil class="h-3.5 w-3.5" /></Button>
 			<Button
 				data-testid="transaction-delete"
@@ -1069,7 +1078,7 @@
 			emptyMessage="No transactions found."
 			getRowKey={(t) => `${t.kind}-${t.id}`}
 			getRowTestId={(t) => `transaction-row-${t.kind.toLowerCase()}-${t.id}`}
-			onRowClick={(t) => goto(t.detailHref ?? `/accounting/${t.kind.toLowerCase()}s/${t.id}`)}
+			onRowClick={(t) => goto(ledgerHref(t))}
 			data-testid="transactions-list"
 			pageSize={PAGE_SIZE}
 			page={transactionPage}

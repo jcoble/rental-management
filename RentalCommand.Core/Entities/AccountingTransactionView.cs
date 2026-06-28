@@ -62,6 +62,10 @@ public class AccountingTransactionView
     /// <summary>Property id for the row (via Lease for payments, direct for expenses; null for bank rows).</summary>
     public int? PropertyId { get; set; }
 
+    /// <summary>Unit id for the row (via Lease for payments, direct for expenses; null for bank rows).
+    /// Drives the unit-scoped Command Center deep link on the ledger.</summary>
+    public int? UnitId { get; set; }
+
     public string? PropertyName { get; set; }
 
     /// <summary>Tenant name (payments), vendor name (expenses), or merchant/institution (bank).</summary>
