@@ -43,6 +43,7 @@ public class Portfolio
     public List<Tenant> Tenants { get; set; } = [];
     public List<Vendor> Vendors { get; set; } = [];
     public List<Lease> Leases { get; set; } = [];
+    public List<LeaseTenant> LeaseTenants { get; set; } = [];
     public List<Payment> Payments { get; set; } = [];
     public List<Expense> Expenses { get; set; } = [];
     public List<WorkOrder> WorkOrders { get; set; } = [];

@@ -30,6 +30,9 @@ public class UnitDashboardResponse
     /// <summary>The current lease's tenant, null when there is no current lease.</summary>
     public UnitTenantSummary? CurrentTenant { get; set; }
 
+    /// <summary>All tenants tied to the current lease, primary tenant first.</summary>
+    public IReadOnlyList<UnitTenantSummary> CurrentTenants { get; set; } = [];
+
     /// <summary>Small, capped lists for the Overview tab (each ~5 rows).</summary>
     public UnitDashboardOverview Overview { get; set; } = new();
 

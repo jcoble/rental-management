@@ -93,6 +93,11 @@ public class LeaseService : ILeaseService
         rentTrackingStartDate = l.RentTrackingStartDate,
         notes = l.Notes,
         tenantId = l.TenantId,
+        tenantIds = l.LeaseTenants
+            .OrderByDescending(lt => lt.IsPrimary)
+            .ThenBy(lt => lt.Id)
+            .Select(lt => lt.TenantId)
+            .ToList(),
         propertyId = l.PropertyId,
         unitId = l.UnitId,
     });
@@ -353,6 +358,78 @@ public class LeaseService : ILeaseService
         }
     }
 
+    private static IReadOnlyList<int> NormalizeTenantIds(int? tenantId, IReadOnlyList<int>? tenantIds)
+    {
+        var result = new List<int>();
+        if (tenantIds is { Count: > 0 })
+        {
+            foreach (var id in tenantIds)
+            {
+                if (id > 0 && !result.Contains(id))
+                {
+                    result.Add(id);
+                }
+            }
+        }
+
+        if (result.Count == 0 && tenantId is > 0)
+        {
+            result.Add(tenantId.Value);
+        }
+
+        return result;
+    }
+
+    private async Task<bool> AreTenantsInPortfolioAsync(int portfolioId, IReadOnlyList<int> tenantIds, CancellationToken ct)
+    {
+        if (tenantIds.Count == 0)
+        {
+            throw new DomainValidationException("At least one tenant is required for a lease.");
+        }
+
+        var matched = await _db.Tenants
+            .AsNoTracking()
+            .Where(t => t.PortfolioId == portfolioId && tenantIds.Contains(t.Id))
+            .CountAsync(ct);
+
+        return matched == tenantIds.Count;
+    }
+
+    private static void SetLeaseTenantMemberships(Lease lease, IReadOnlyList<int> tenantIds, DateTime now)
+    {
+        lease.TenantId = tenantIds[0];
+        var selected = tenantIds.ToHashSet();
+        for (var i = lease.LeaseTenants.Count - 1; i >= 0; i--)
+        {
+            if (!selected.Contains(lease.LeaseTenants[i].TenantId))
+            {
+                lease.LeaseTenants.RemoveAt(i);
+            }
+        }
+
+        for (var index = 0; index < tenantIds.Count; index++)
+        {
+            var tenantId = tenantIds[index];
+            var membership = lease.LeaseTenants.FirstOrDefault(lt => lt.TenantId == tenantId);
+            if (membership is null)
+            {
+                lease.LeaseTenants.Add(new LeaseTenant
+                {
+                    PortfolioId = lease.PortfolioId,
+                    LeaseId = lease.Id,
+                    TenantId = tenantId,
+                    IsPrimary = index == 0,
+                    CreatedAt = now,
+                    UpdatedAt = now,
+                });
+                continue;
+            }
+
+            membership.IsPrimary = index == 0;
+            membership.UpdatedAt = now;
+        }
+    }
+
     public async Task<IReadOnlyList<LeaseResponse>> ListAsync(int portfolioId, int? tenantId, int? propertyId, ListQuery query, CancellationToken ct = default)
     {
         var page = await ListPageAsync(portfolioId, ToLeaseListQuery(query, tenantId, propertyId), ct);
@@ -367,7 +444,8 @@ public class LeaseService : ILeaseService
 
         if (query.TenantId.HasValue)
         {
-            q = q.Where(l => l.TenantId == query.TenantId.Value);
+            q = q.Where(l => l.TenantId == query.TenantId.Value
+                || l.LeaseTenants.Any(lt => lt.TenantId == query.TenantId.Value));
         }
 
         if (query.PropertyId.HasValue)
@@ -388,6 +466,10 @@ public class LeaseService : ILeaseService
                 EF.Functions.ILike(l.Tenant!.FirstName, $"%{term}%") ||
                 EF.Functions.ILike(l.Tenant.LastName, $"%{term}%") ||
                 EF.Functions.ILike(l.Tenant.FirstName + " " + l.Tenant.LastName, $"%{term}%") ||
+                l.LeaseTenants.Any(lt =>
+                    EF.Functions.ILike(lt.Tenant!.FirstName, $"%{term}%") ||
+                    EF.Functions.ILike(lt.Tenant.LastName, $"%{term}%") ||
+                    EF.Functions.ILike(lt.Tenant.FirstName + " " + lt.Tenant.LastName, $"%{term}%")) ||
                 EF.Functions.ILike(l.Property!.Name, $"%{term}%") ||
                 EF.Functions.ILike(l.Unit!.UnitNumber, $"%{term}%"));
         }
@@ -454,6 +536,8 @@ public class LeaseService : ILeaseService
         var entity = await _db.Leases
             .AsNoTracking()
             .Include(l => l.Tenant)
+            .Include(l => l.LeaseTenants)
+                .ThenInclude(lt => lt.Tenant)
             .Include(l => l.Unit)
             .Include(l => l.Property)
             .FirstOrDefaultAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
@@ -480,6 +564,8 @@ public class LeaseService : ILeaseService
         var query = _db.Leases
             .AsNoTracking()
             .Include(l => l.Tenant)
+            .Include(l => l.LeaseTenants)
+                .ThenInclude(lt => lt.Tenant)
             .Include(l => l.Property)
             .Where(l => l.Id == id && l.PortfolioId == portfolioId);
 
@@ -488,7 +574,8 @@ public class LeaseService : ILeaseService
         // revealing whether it exists. Landlord/staff callers pass null and see any lease in scope.
         if (restrictToTenantId is > 0)
         {
-            query = query.Where(l => l.TenantId == restrictToTenantId.Value);
+            query = query.Where(l => l.TenantId == restrictToTenantId.Value
+                || l.LeaseTenants.Any(lt => lt.TenantId == restrictToTenantId.Value));
         }
 
         var lease = await query.FirstOrDefaultAsync(ct);
@@ -530,7 +617,13 @@ public class LeaseService : ILeaseService
             .Select(o => new { o.Id, o.Amount, o.AsOfDate })
             .FirstOrDefaultAsync(ct);
 
-        var tenantName = $"{lease.Tenant?.FirstName} {lease.Tenant?.LastName}".Trim();
+        var tenantName = lease.LeaseTenants.Count == 0
+            ? $"{lease.Tenant?.FirstName} {lease.Tenant?.LastName}".Trim()
+            : string.Join(", ", lease.LeaseTenants
+                .OrderByDescending(lt => lt.IsPrimary)
+                .ThenBy(lt => lt.Id)
+                .Where(lt => lt.Tenant != null)
+                .Select(lt => $"{lt.Tenant!.FirstName} {lt.Tenant.LastName}".Trim()));
         if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "Tenant";
 
         var entries = payments
@@ -634,6 +727,8 @@ public class LeaseService : ILeaseService
 
     public async Task<LeaseResponse?> CreateAsync(int portfolioId, CreateLeaseRequest request, CancellationToken ct = default)
     {
+        var tenantIds = NormalizeTenantIds(request.TenantId, request.TenantIds);
+
         // Verify the referenced property, unit, and tenant all live in the caller's portfolio.
         if (!await _db.EnsurePropertyInPortfolioAsync(portfolioId, request.PropertyId, ct))
         {
@@ -645,7 +740,7 @@ public class LeaseService : ILeaseService
             return null;
         }
 
-        if (!await _db.EnsureTenantInPortfolioAsync(portfolioId, request.TenantId, ct))
+        if (!await AreTenantsInPortfolioAsync(portfolioId, tenantIds, ct))
         {
             return null;
         }
@@ -673,7 +768,7 @@ public class LeaseService : ILeaseService
             PortfolioId = portfolioId,
             PropertyId = request.PropertyId,
             UnitId = request.UnitId,
-            TenantId = request.TenantId,
+            TenantId = tenantIds[0],
             LeaseNumber = request.LeaseNumber,
             Status = request.Status,
             StartDate = startUtc,
@@ -690,6 +785,7 @@ public class LeaseService : ILeaseService
             CreatedAt = now,
             UpdatedAt = now,
         };
+        SetLeaseTenantMemberships(entity, tenantIds, now);
 
         _db.Leases.Add(entity);
 
@@ -710,7 +806,7 @@ public class LeaseService : ILeaseService
         await EnsureSecurityDepositHoldingAsync(entity, ct);
         await EnsureRentChargesThroughTodayAsync(entity, ct);
 
-        var response = LeaseResponse.FromEntity(entity);
+        var response = await GetAsync(portfolioId, entity.Id, ct) ?? LeaseResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
@@ -721,6 +817,8 @@ public class LeaseService : ILeaseService
         // (the grid binds these) instead of flashing "-" until the next list refetch.
         var entity = await _db.Leases
             .Include(l => l.Tenant)
+            .Include(l => l.LeaseTenants)
+                .ThenInclude(lt => lt.Tenant)
             .Include(l => l.Property)
             .Include(l => l.Unit)
             .FirstOrDefaultAsync(l => l.Id == id && l.PortfolioId == portfolioId, ct);
@@ -778,6 +876,16 @@ public class LeaseService : ILeaseService
         if (request.SecurityDeposit.HasValue) entity.SecurityDeposit = request.SecurityDeposit.Value;
         if (request.LateFeeAmount.HasValue) entity.LateFeeAmount = request.LateFeeAmount.Value;
         if (request.RentDueDay.HasValue) entity.RentDueDay = request.RentDueDay.Value;
+        if (request.TenantId.HasValue || request.TenantIds is { Count: > 0 })
+        {
+            var tenantIds = NormalizeTenantIds(request.TenantId, request.TenantIds);
+            if (!await AreTenantsInPortfolioAsync(portfolioId, tenantIds, ct))
+            {
+                return null;
+            }
+
+            SetLeaseTenantMemberships(entity, tenantIds, DateTime.UtcNow);
+        }
         if (request.RentTrackingStartMode.HasValue)
         {
             entity.RentTrackingStartDate = newStatus == LeaseStatus.Active
@@ -823,7 +931,7 @@ public class LeaseService : ILeaseService
             await EnsureRentChargesThroughTodayAsync(entity, ct);
         }
 
-        var response = LeaseResponse.FromEntity(entity, includeNavigations: true);
+        var response = await GetAsync(portfolioId, entity.Id, ct) ?? LeaseResponse.FromEntity(entity, includeNavigations: true);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }

@@ -409,10 +409,22 @@ class _ErrorBody extends StatelessWidget {
 
 /// Public so that [LeaseDetailScreen] can reuse it.
 class LeaseFormSheet extends ConsumerStatefulWidget {
-  const LeaseFormSheet({super.key, required this.onSaved, this.existing});
+  const LeaseFormSheet({
+    super.key,
+    required this.onSaved,
+    this.existing,
+    this.initialPropertyId,
+    this.initialUnitId,
+    this.initialPropertyLabel,
+    this.initialUnitLabel,
+  });
 
   final VoidCallback onSaved;
   final Lease? existing;
+  final int? initialPropertyId;
+  final int? initialUnitId;
+  final String? initialPropertyLabel;
+  final String? initialUnitLabel;
 
   @override
   ConsumerState<LeaseFormSheet> createState() => _LeaseFormSheetState();
@@ -424,7 +436,7 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
   // Dropdown selections
   int? _selectedPropertyId;
   int? _selectedUnitId;
-  int? _selectedTenantId;
+  List<int> _selectedTenantIds = <int>[];
   String _selectedStatus = 'Active';
 
   // Date pickers
@@ -441,11 +453,15 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
   String? _error;
 
   bool get _isEdit => widget.existing != null;
+  bool get _isUnitPrefilled =>
+      widget.initialPropertyId != null && widget.initialUnitId != null;
 
   @override
   void initState() {
     super.initState();
     final e = widget.existing;
+    _selectedPropertyId = widget.initialPropertyId;
+    _selectedUnitId = widget.initialUnitId;
     _rentCtrl = TextEditingController(text: e?.monthlyRent.toString() ?? '');
     _depositCtrl = TextEditingController(
       text: e?.securityDeposit.toString() ?? '',
@@ -458,7 +474,9 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
     if (e != null) {
       _selectedPropertyId = e.propertyId;
       _selectedUnitId = e.unitId;
-      _selectedTenantId = e.tenantId;
+      _selectedTenantIds = e.tenantIds.isNotEmpty
+          ? List<int>.of(e.tenantIds)
+          : <int>[if (e.tenantId > 0) e.tenantId];
       _selectedStatus = _leaseStatuses.contains(e.status)
           ? e.status
           : _leaseStatuses.first;
@@ -470,6 +488,10 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
     Future.microtask(() {
       ref.read(propertiesProvider.notifier).load();
       ref.read(tenantsProvider.notifier).load();
+      final propertyId = _selectedPropertyId;
+      if (propertyId != null) {
+        ref.read(unitsProvider(propertyId).notifier).load();
+      }
     });
   }
 
@@ -509,6 +531,18 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
   }
 
   bool _validateUnitStep() {
+    if (_selectedPropertyId == null) {
+      setState(() => _error = 'Select a property.');
+      return false;
+    }
+    if (_selectedUnitId == null) {
+      setState(() => _error = 'Select a unit.');
+      return false;
+    }
+    if (_selectedTenantIds.isEmpty) {
+      setState(() => _error = 'Select at least one tenant.');
+      return false;
+    }
     if (_startDate == null) {
       setState(() => _error = 'Please select a start date.');
       return false;
@@ -543,7 +577,8 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
 
     final body = <String, dynamic>{
       'unitId': _selectedUnitId,
-      'tenantId': _selectedTenantId,
+      'tenantId': _selectedTenantIds.first,
+      'tenantIds': _selectedTenantIds,
       'startDate': _fmtIso(_startDate!),
       'endDate': _fmtIso(_endDate!),
       'monthlyRent': double.tryParse(_rentCtrl.text) ?? 0.0,
@@ -599,80 +634,95 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                DropdownButtonFormField<int>(
-                  initialValue:
-                      properties.any((p) => p.id == _selectedPropertyId)
-                      ? _selectedPropertyId
-                      : null,
-                  decoration: const InputDecoration(labelText: 'Property'),
-                  items: properties
-                      .map(
-                        (p) => DropdownMenuItem(
-                          value: p.id,
-                          child: Text(p.name, overflow: TextOverflow.ellipsis),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) {
-                    setState(() {
-                      _selectedPropertyId = v;
-                      _selectedUnitId = null;
-                    });
-                    if (v != null) {
-                      ref.read(unitsProvider(v).notifier).load();
-                    }
-                  },
-                  validator: (_) =>
-                      _selectedPropertyId == null ? 'Select a property' : null,
-                ),
-                gap,
-                DropdownButtonFormField<int>(
-                  initialValue: units.any((u) => u.id == _selectedUnitId)
-                      ? _selectedUnitId
-                      : null,
-                  decoration: InputDecoration(
-                    labelText: 'Unit',
-                    helperText: _selectedPropertyId == null
-                        ? 'Select a property first'
+                if (_isUnitPrefilled)
+                  _ReadOnlyFormValue(
+                    label: 'Property',
+                    value:
+                        widget.initialPropertyLabel ??
+                        'Property #${widget.initialPropertyId}',
+                  )
+                else
+                  DropdownButtonFormField<int>(
+                    initialValue:
+                        properties.any((p) => p.id == _selectedPropertyId)
+                        ? _selectedPropertyId
+                        : null,
+                    decoration: const InputDecoration(labelText: 'Property'),
+                    items: properties
+                        .map(
+                          (p) => DropdownMenuItem(
+                            value: p.id,
+                            child: Text(
+                              p.name,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (v) {
+                      setState(() {
+                        _selectedPropertyId = v;
+                        _selectedUnitId = null;
+                      });
+                      if (v != null) {
+                        ref.read(unitsProvider(v).notifier).load();
+                      }
+                    },
+                    validator: (_) => _selectedPropertyId == null
+                        ? 'Select a property'
                         : null,
                   ),
-                  items: units
-                      .map(
-                        (u) => DropdownMenuItem(
-                          value: u.id,
-                          child: Text(
-                            'Unit ${u.unitNumber}'
-                            '${u.bedrooms > 0 ? ' · ${u.bedrooms}bd' : ''}',
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: _selectedPropertyId == null
-                      ? null
-                      : (v) => setState(() => _selectedUnitId = v),
-                  validator: (_) =>
-                      _selectedUnitId == null ? 'Select a unit' : null,
-                ),
                 gap,
-                DropdownButtonFormField<int>(
-                  initialValue: tenants.any((t) => t.id == _selectedTenantId)
-                      ? _selectedTenantId
-                      : null,
-                  decoration: const InputDecoration(labelText: 'Tenant'),
-                  items: tenants
-                      .map(
-                        (t) => DropdownMenuItem(
-                          value: t.id,
-                          child: Text(
-                            '${t.firstName} ${t.lastName}',
-                            overflow: TextOverflow.ellipsis,
+                if (_isUnitPrefilled)
+                  _ReadOnlyFormValue(
+                    label: 'Unit',
+                    value:
+                        widget.initialUnitLabel ??
+                        'Unit #${widget.initialUnitId}',
+                  )
+                else
+                  DropdownButtonFormField<int>(
+                    initialValue: units.any((u) => u.id == _selectedUnitId)
+                        ? _selectedUnitId
+                        : null,
+                    decoration: InputDecoration(
+                      labelText: 'Unit',
+                      helperText: _selectedPropertyId == null
+                          ? 'Select a property first'
+                          : null,
+                    ),
+                    items: units
+                        .map(
+                          (u) => DropdownMenuItem(
+                            value: u.id,
+                            child: Text(
+                              'Unit ${u.unitNumber}'
+                              '${u.bedrooms > 0 ? ' · ${u.bedrooms}bd' : ''}',
+                            ),
                           ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) => setState(() => _selectedTenantId = v),
-                  validator: (_) =>
-                      _selectedTenantId == null ? 'Select a tenant' : null,
+                        )
+                        .toList(),
+                    onChanged: _selectedPropertyId == null
+                        ? null
+                        : (v) => setState(() => _selectedUnitId = v),
+                    validator: (_) =>
+                        _selectedUnitId == null ? 'Select a unit' : null,
+                  ),
+                gap,
+                _TenantMultiSelect(
+                  tenants: tenants,
+                  selectedTenantIds: _selectedTenantIds,
+                  errorText: _error == 'Select at least one tenant.'
+                      ? _error
+                      : null,
+                  onChanged: (ids) {
+                    setState(() {
+                      _selectedTenantIds = ids;
+                      if (_error == 'Select at least one tenant.') {
+                        _error = null;
+                      }
+                    });
+                  },
                 ),
                 gap,
                 _DateTile(
@@ -785,6 +835,132 @@ class _LeaseFormSheetState extends ConsumerState<LeaseFormSheet> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _ReadOnlyFormValue extends StatelessWidget {
+  const _ReadOnlyFormValue({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return InputDecorator(
+      decoration: InputDecoration(labelText: label),
+      child: Text(value, maxLines: 2, overflow: TextOverflow.ellipsis),
+    );
+  }
+}
+
+class _TenantMultiSelect extends StatelessWidget {
+  const _TenantMultiSelect({
+    required this.tenants,
+    required this.selectedTenantIds,
+    required this.onChanged,
+    this.errorText,
+  });
+
+  final List<Tenant> tenants;
+  final List<int> selectedTenantIds;
+  final ValueChanged<List<int>> onChanged;
+  final String? errorText;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return InputDecorator(
+      decoration: InputDecoration(labelText: 'Tenants', errorText: errorText),
+      child: tenants.isEmpty
+          ? Text(
+              'No tenants yet.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
+            )
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final tenant in tenants)
+                  _TenantChoiceRow(
+                    tenant: tenant,
+                    selected: selectedTenantIds.contains(tenant.id),
+                    primary:
+                        selectedTenantIds.isNotEmpty &&
+                        selectedTenantIds.first == tenant.id,
+                    onChanged: (selected) {
+                      final next = <int>[...selectedTenantIds];
+                      if (selected) {
+                        if (!next.contains(tenant.id)) next.add(tenant.id);
+                      } else {
+                        next.remove(tenant.id);
+                      }
+                      onChanged(next);
+                    },
+                  ),
+              ],
+            ),
+    );
+  }
+}
+
+class _TenantChoiceRow extends StatelessWidget {
+  const _TenantChoiceRow({
+    required this.tenant,
+    required this.selected,
+    required this.primary,
+    required this.onChanged,
+  });
+
+  final Tenant tenant;
+  final bool selected;
+  final bool primary;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final fullName = '${tenant.firstName} ${tenant.lastName}'.trim();
+    final subtitle = tenant.email?.trim().isNotEmpty == true
+        ? tenant.email!.trim()
+        : tenant.phone?.trim();
+
+    return CheckboxListTile(
+      dense: true,
+      visualDensity: VisualDensity.compact,
+      contentPadding: EdgeInsets.zero,
+      controlAffinity: ListTileControlAffinity.leading,
+      value: selected,
+      onChanged: (value) => onChanged(value ?? false),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              fullName.isEmpty ? 'Tenant #${tenant.id}' : fullName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (primary)
+            Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: Text(
+                'Primary',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: colorScheme.primary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+        ],
+      ),
+      subtitle: subtitle == null || subtitle.isEmpty
+          ? null
+          : Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
     );
   }
 }

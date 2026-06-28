@@ -13,6 +13,7 @@ export type UnitLeaseCreateForm = {
 	propertyId: string;
 	unitId: string;
 	tenantId: string;
+	tenantIds: string[];
 	startDate: string;
 	endDate: string;
 	monthlyRent: string;
@@ -38,6 +39,7 @@ export function createUnitLeaseForm(context: UnitLeaseCreateContext): UnitLeaseC
 		propertyId: String(context.unit.propertyId),
 		unitId: String(context.unit.id),
 		tenantId: '',
+		tenantIds: [],
 		startDate: '',
 		endDate: '',
 		monthlyRent: context.unit.marketRent > 0 ? String(context.unit.marketRent) : '',

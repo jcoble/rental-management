@@ -17,6 +17,7 @@
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
+	import TenantMultiSelect from '$lib/components/forms/TenantMultiSelect.svelte';
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import {
 		LEASE_STATUSES,
@@ -89,7 +90,7 @@
 	}));
 
 	const empty = {
-		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', startDate: '', endDate: '',
+		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', tenantIds: [] as string[], startDate: '', endDate: '',
 		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1',
 		rentTrackingStartMode: 'ForwardOnly', rentTrackingStartDate: '',
 		status: 'Draft', notes: '',
@@ -113,7 +114,7 @@
 		if (form.unitId) clearLeaseError('unitId');
 	});
 	$effect(() => {
-		if (form.tenantId) clearLeaseError('tenantId');
+		if (form.tenantId || form.tenantIds.length > 0) clearLeaseError('tenantId');
 	});
 	$effect(() => {
 		if (form.leaseNumber.trim()) clearLeaseError('leaseNumber');
@@ -200,7 +201,8 @@
 
 	function openCreate(defaults: { tenantId?: string } = {}) {
 		editingId = null;
-		form = { ...empty, tenantId: defaults.tenantId ?? '' };
+		const tenantIds = defaults.tenantId ? [defaults.tenantId] : [];
+		form = { ...empty, tenantId: defaults.tenantId ?? '', tenantIds };
 		formPropertyId = '';
 		formErrors = {};
 		showForm = true;
@@ -208,11 +210,17 @@
 	function openEdit(l: Lease) {
 		editingId = l.id;
 		const rentTrackingStartDate = l.rentTrackingStartDate?.slice(0, 10) ?? '';
+		const tenantIds = (l.tenantIds?.length
+			? l.tenantIds
+			: l.tenants?.length
+				? l.tenants.map((tenant) => tenant.id)
+				: [l.tenantId]).map((id) => String(id));
 		form = {
 			leaseNumber: l.leaseNumber ?? '',
 			propertyId: String(l.propertyId),
 			unitId: String(l.unitId),
-			tenantId: String(l.tenantId),
+			tenantId: tenantIds[0] ?? String(l.tenantId),
+			tenantIds,
 			startDate: l.startDate?.slice(0, 10) ?? '',
 			endDate: l.endDate?.slice(0, 10) ?? '',
 			monthlyRent: String(l.monthlyRent),
@@ -243,14 +251,24 @@
 		// CreateLeaseRequest has [Required][Range(1,..)] PropertyId. The old code destructured
 		// propertyId OUT before parseForm, so validation always failed on the missing field —
 		// Save silently no-op'd (no request, no surfaced error). Keep propertyId in the payload.
-		const result = parseForm(leaseSchema, form);
+		const selectedTenantIds = form.tenantIds
+			.map((id) => Number(id))
+			.filter((id) => Number.isInteger(id) && id > 0);
+		const tenantId = String(selectedTenantIds[0] ?? '');
+		form.tenantId = tenantId;
+		const result = parseForm(leaseSchema, { ...form, tenantId });
 		const rentTrackingErrors = leaseRentTrackingErrors(form);
-		if (result.errors || Object.keys(rentTrackingErrors).length > 0) {
-			formErrors = { ...(result.errors ?? {}), ...rentTrackingErrors };
+		const tenantErrors: Record<string, string> =
+			selectedTenantIds.length === 0 ? { tenantId: 'Select at least one tenant' } : {};
+		if (result.errors || Object.keys(rentTrackingErrors).length > 0 || Object.keys(tenantErrors).length > 0) {
+			formErrors = { ...(result.errors ?? {}), ...rentTrackingErrors, ...tenantErrors };
 			return;
 		}
 		formErrors = {};
-		saveMutation.mutate({ id: editingId, data: { portfolioId, ...result.data } });
+		saveMutation.mutate({
+			id: editingId,
+			data: { portfolioId, ...result.data, tenantId: selectedTenantIds[0], tenantIds: selectedTenantIds },
+		});
 	}
 
 	const list = $derived(leasesQuery.data?.items ?? []);
@@ -270,13 +288,6 @@
 			? `Unit ${unitsForPropertyQuery.data?.find((u) => String(u.id) === form.unitId)?.unitNumber} (${unitsForPropertyQuery.data?.find((u) => String(u.id) === form.unitId)?.status})`
 			: ''
 	);
-	const selectedTenantLabel = $derived(
-		tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)
-			? (tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.fullName ||
-				`${tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.firstName} ${tenantsQuery.data?.find((t) => String(t.id) === form.tenantId)?.lastName}`)
-			: ''
-	);
-
 	// DataGrid column definitions
 	const columns: ColumnDef<Lease>[] = [
 		{
@@ -400,7 +411,7 @@
 		</Dialog.Header>
 		<div class="space-y-3" data-testid="lease-form">
 			<!-- Property / unit / tenant pickers stay in the page; the term fields come from the shared component. -->
-			<div class="grid gap-3 md:grid-cols-3">
+			<div class="grid gap-3 md:grid-cols-2">
 				<div>
 					<Select.Root type="single" bind:value={form.propertyId}>
 						<Select.Trigger class="w-full" data-testid="lease-property-input">
@@ -429,19 +440,14 @@
 					</Select.Root>
 					{#if formErrors.unitId}<p class="mt-1 text-xs text-destructive" data-testid="lease-unit-error">{formErrors.unitId}</p>{/if}
 				</div>
-				<div>
-					<Select.Root type="single" bind:value={form.tenantId}>
-						<Select.Trigger class="w-full" data-testid="lease-tenant-input">
-							{selectedTenantLabel ? selectedTenantLabel : 'Select tenant'}
-						</Select.Trigger>
-						<Select.Content>
-							<Select.Item value="" label="Select tenant">Select tenant</Select.Item>
-							{#each tenantsQuery.data || [] as tenant}
-								<Select.Item value={String(tenant.id)} label={tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}>{tenant.fullName || `${tenant.firstName} ${tenant.lastName}`}</Select.Item>
-							{/each}
-						</Select.Content>
-					</Select.Root>
-					{#if formErrors.tenantId}<p class="mt-1 text-xs text-destructive" data-testid="lease-tenant-error">{formErrors.tenantId}</p>{/if}
+				<div class="md:col-span-2">
+					<TenantMultiSelect
+						label="Tenants"
+						tenants={tenantsQuery.data || []}
+						bind:selectedIds={form.tenantIds}
+						error={formErrors.tenantId}
+						testid="lease-tenants-input"
+					/>
 				</div>
 			</div>
 			<LeaseTermFields bind:form errors={formErrors} statuses={LEASE_STATUSES} />
