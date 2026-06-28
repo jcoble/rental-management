@@ -25,11 +25,7 @@ class NotificationsRepository {
     try {
       final response = await _dio.get<List<dynamic>>(
         '/notifications',
-        queryParameters: {
-          'unreadOnly': unreadOnly,
-          'skip': skip,
-          'take': take,
-        },
+        queryParameters: {'unreadOnly': unreadOnly, 'skip': skip, 'take': take},
       );
       final data = response.data ?? const [];
       return data
@@ -43,8 +39,9 @@ class NotificationsRepository {
 
   Future<int> unreadCount() async {
     try {
-      final response =
-          await _dio.get<Map<String, dynamic>>('/notifications/unread-count');
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/notifications/unread-count',
+      );
       return (response.data?['count'] as num?)?.toInt() ?? 0;
     } on DioException catch (e) {
       throw ApiException.fromDioException(e);
@@ -70,8 +67,9 @@ class NotificationsRepository {
 
 // ── Providers ────────────────────────────────────────────────────────────────
 
-final notificationsRepositoryProvider =
-    Provider<NotificationsRepository>((ref) {
+final notificationsRepositoryProvider = Provider<NotificationsRepository>((
+  ref,
+) {
   return NotificationsRepository(ref.watch(dioProvider));
 });
 
@@ -90,8 +88,10 @@ class UnreadCountNotifier extends Notifier<AsyncValue<int>> {
   Future<void> load() async {
     try {
       final count = await _repo.unreadCount();
+      if (!ref.mounted) return;
       state = AsyncValue.data(count);
     } on ApiException catch (e) {
+      if (!ref.mounted) return;
       state = AsyncValue.error(e, StackTrace.current);
     }
   }
@@ -101,8 +101,8 @@ class UnreadCountNotifier extends Notifier<AsyncValue<int>> {
 
 final unreadCountProvider =
     NotifierProvider<UnreadCountNotifier, AsyncValue<int>>(
-  UnreadCountNotifier.new,
-);
+      UnreadCountNotifier.new,
+    );
 
 /// Paginated inbox list. Loads the first page on creation; [loadMore] appends.
 class InboxNotifier extends Notifier<AsyncValue<List<AppNotification>>> {
@@ -193,5 +193,5 @@ class InboxNotifier extends Notifier<AsyncValue<List<AppNotification>>> {
 
 final inboxProvider =
     NotifierProvider<InboxNotifier, AsyncValue<List<AppNotification>>>(
-  InboxNotifier.new,
-);
+      InboxNotifier.new,
+    );

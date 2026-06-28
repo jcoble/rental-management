@@ -3,7 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
+import '../home/mobile_domain_navigation.dart';
 import '../tenants/tenant_detail_screen.dart';
+import '../units/unit_command_center_screen.dart';
+import '../units/unit_navigation.dart';
 import 'applications_models.dart';
 import 'applications_repository.dart';
 import 'applications_shared.dart';
@@ -42,9 +45,9 @@ class _ApplicationDetailScreenState
 
   void _snack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _approve() async {
@@ -72,13 +75,17 @@ class _ApplicationDetailScreenState
 
     setState(() => _busy = true);
     try {
-      final result = await ref.read(applicationsRepositoryProvider).approve(_id);
+      final result = await ref
+          .read(applicationsRepositoryProvider)
+          .approve(_id);
       if (!mounted) return;
       setState(() => _createdTenantId = result.tenantId);
       await _refresh();
-      _snack(result.tenantId != null
-          ? 'Approved — tenant #${result.tenantId} created.'
-          : 'Application approved.');
+      _snack(
+        result.tenantId != null
+            ? 'Approved — tenant #${result.tenantId} created.'
+            : 'Application approved.',
+      );
     } on ApiException catch (e) {
       _snack(e.message);
     } finally {
@@ -165,24 +172,27 @@ class _ApplicationDetailScreenState
   Future<void> _generateAdverseAction(RentalApplication app) async {
     final result = await showDialog<_AdverseActionInput>(
       context: context,
-      builder: (_) => _AdverseActionDialog(
-        initialReason: app.decisionReason ?? '',
-      ),
+      builder: (_) =>
+          _AdverseActionDialog(initialReason: app.decisionReason ?? ''),
     );
     if (result == null || !mounted) return;
 
     setState(() => _busy = true);
     try {
-      final notice = await ref.read(applicationsRepositoryProvider).adverseAction(
+      final notice = await ref
+          .read(applicationsRepositoryProvider)
+          .adverseAction(
             _id,
             reason: result.reason.isEmpty ? null : result.reason,
             sendToApplicant: result.sendToApplicant,
           );
       if (!mounted) return;
       setState(() => _adverseAction = notice);
-      _snack(notice.sentAtUtc != null
-          ? 'Adverse-action notice generated and sent.'
-          : 'Adverse-action notice generated.');
+      _snack(
+        notice.sentAtUtc != null
+            ? 'Adverse-action notice generated and sent.'
+            : 'Adverse-action notice generated.',
+      );
     } on ApiException catch (e) {
       _snack(e.message);
     } finally {
@@ -306,22 +316,25 @@ class _DetailBody extends StatelessWidget {
               children: [
                 Text(
                   app.fullName,
-                  style: theme.textTheme.titleLarge
-                      ?.copyWith(fontWeight: FontWeight.w700),
+                  style: theme.textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   'Property #${app.propertyId}'
                   '${app.unitId != null ? '  ·  Unit #${app.unitId}' : ''}',
-                  style: theme.textTheme.bodyMedium
-                      ?.copyWith(color: cs.onSurfaceVariant),
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: cs.onSurfaceVariant,
+                  ),
                 ),
                 if (app.submittedAtUtc != null) ...[
                   const SizedBox(height: 4),
                   Text(
                     'Submitted ${formatApplicationDateTime(app.submittedAtUtc!)}',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: cs.onSurfaceVariant),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ],
@@ -341,15 +354,18 @@ class _DetailBody extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.how_to_reg_outlined,
-                          color: cs.onTertiaryContainer),
+                      Icon(
+                        Icons.how_to_reg_outlined,
+                        color: cs.onTertiaryContainer,
+                      ),
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
                           'Approved — tenant #$createdTenantId created. '
                           'Open the tenant to set up a lease.',
-                          style: theme.textTheme.bodyMedium
-                              ?.copyWith(color: cs.onTertiaryContainer),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: cs.onTertiaryContainer,
+                          ),
                         ),
                       ),
                     ],
@@ -358,13 +374,48 @@ class _DetailBody extends StatelessWidget {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: FilledButton.tonalIcon(
-                      onPressed: () => Navigator.of(context).push<void>(
-                        MaterialPageRoute<void>(
-                          builder: (_) => TenantDetailLoaderScreen(
-                            tenantId: createdTenantId!,
-                          ),
-                        ),
-                      ),
+                      onPressed: () {
+                        if (app.unitId != null) {
+                          openUnitCommandCenter(
+                            context,
+                            unitId: app.unitId!,
+                            initialTab: UnitCommandCenterTab.tenants,
+                            application: app,
+                            tenantId: createdTenantId,
+                          );
+                          return;
+                        }
+
+                        Widget detailBuilder(BuildContext _) =>
+                            TenantDetailLoaderScreen(
+                              tenantId: createdTenantId!,
+                            );
+                        final shellNavigator = mobileShellNavigatorOf(context);
+                        if (shellNavigator != null) {
+                          shellNavigator.openTab(
+                            MobileShellTabId.rentals,
+                            destination: MobileDestinationId.tenants,
+                            detailBuilder: detailBuilder,
+                          );
+                          revealMobileShellIfDetached(context);
+                          return;
+                        }
+
+                        final domainNavigator = MobileDomainNavigation.maybeOf(
+                          context,
+                        );
+                        if (domainNavigator != null) {
+                          domainNavigator.openDestination(
+                            MobileDestinationId.tenants,
+                            detailBuilder: detailBuilder,
+                          );
+                          return;
+                        }
+
+                        Navigator.of(context).push<void>(
+                          MaterialPageRoute<void>(builder: detailBuilder),
+                        );
+                      },
                       icon: const Icon(Icons.person_outline, size: 18),
                       label: const Text('View tenant'),
                     ),
@@ -392,15 +443,20 @@ class _DetailBody extends StatelessWidget {
           title: 'Contact',
           child: Column(
             children: [
-              if (app.email != null) _DetailRow(label: 'Email', value: app.email!),
-              if (app.phone != null) _DetailRow(label: 'Phone', value: app.phone!),
+              if (app.email != null)
+                _DetailRow(label: 'Email', value: app.email!),
+              if (app.phone != null)
+                _DetailRow(label: 'Phone', value: app.phone!),
               if (app.dateOfBirth != null)
                 _DetailRow(
                   label: 'Date of birth',
                   value: formatApplicationDate(app.dateOfBirth!.toLocal()),
                 ),
               if (app.currentAddress != null)
-                _DetailRow(label: 'Current address', value: app.currentAddress!),
+                _DetailRow(
+                  label: 'Current address',
+                  value: app.currentAddress!,
+                ),
               if (app.email == null &&
                   app.phone == null &&
                   app.dateOfBirth == null &&
@@ -426,9 +482,14 @@ class _DetailBody extends StatelessWidget {
               if (app.desiredMoveInDate != null)
                 _DetailRow(
                   label: 'Desired move-in',
-                  value: formatApplicationDate(app.desiredMoveInDate!.toLocal()),
+                  value: formatApplicationDate(
+                    app.desiredMoveInDate!.toLocal(),
+                  ),
                 ),
-              _DetailRow(label: 'Status', value: friendlyApplicationStatus(app.status)),
+              _DetailRow(
+                label: 'Status',
+                value: friendlyApplicationStatus(app.status),
+              ),
               if (app.reviewedAtUtc != null)
                 _DetailRow(
                   label: 'Reviewed',
@@ -465,8 +526,8 @@ class _DetailBody extends StatelessWidget {
                 child: Text(
                   app.consentGiven
                       ? (app.consentAtUtc != null
-                          ? 'Consent given ${formatApplicationDateTime(app.consentAtUtc!)}'
-                          : 'Consent given')
+                            ? 'Consent given ${formatApplicationDateTime(app.consentAtUtc!)}'
+                            : 'Consent given')
                       : 'No consent on file',
                   style: theme.textTheme.bodyMedium,
                 ),
@@ -492,8 +553,9 @@ class _DetailBody extends StatelessWidget {
           const SizedBox(height: 20),
           Text(
             'Decision',
-            style: theme.textTheme.titleSmall
-                ?.copyWith(fontWeight: FontWeight.w700),
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
           ),
           const SizedBox(height: 8),
           Row(
@@ -560,7 +622,8 @@ class _DeclineDialogState extends State<_DeclineDialog> {
           Text(
             'Optionally add a reason. This may be shared with the applicant.',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -582,8 +645,7 @@ class _DeclineDialogState extends State<_DeclineDialog> {
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: () =>
-              Navigator.of(context).pop(_controller.text.trim()),
+          onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
           child: const Text('Decline'),
         ),
       ],
@@ -665,7 +727,9 @@ class _ScreeningSection extends StatelessWidget {
             child: OutlinedButton.icon(
               onPressed: (busy || !hasConsent) ? null : onRunScreening,
               icon: const Icon(Icons.fact_check_outlined, size: 18),
-              label: Text(latest == null ? 'Run screening' : 'Re-run screening'),
+              label: Text(
+                latest == null ? 'Run screening' : 'Re-run screening',
+              ),
             ),
           ),
           if (!hasConsent) ...[
@@ -680,16 +744,18 @@ class _ScreeningSection extends StatelessWidget {
             const Divider(height: 28),
             Text(
               'Adverse action',
-              style: theme.textTheme.titleSmall
-                  ?.copyWith(fontWeight: FontWeight.w700),
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 6),
             Text(
               'When you decline based on a screening report, the FCRA requires '
               'giving the applicant an adverse-action notice naming the credit '
               'reporting agency and their right to dispute it.',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: cs.onSurfaceVariant),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 12),
             if (adverseAction != null) ...[
@@ -741,8 +807,9 @@ class _ScreeningResultView extends StatelessWidget {
             Expanded(
               child: Text(
                 friendlyScreeningStatus(r.status),
-                style: theme.textTheme.bodyMedium
-                    ?.copyWith(fontWeight: FontWeight.w700),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
               ),
             ),
             if (r.recommendation != null)
@@ -854,8 +921,9 @@ class _AdverseActionView extends StatelessWidget {
                 Expanded(
                   child: Text(
                     'Adverse-action notice generated',
-                    style: theme.textTheme.bodyMedium
-                        ?.copyWith(fontWeight: FontWeight.w700),
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ],
@@ -864,10 +932,7 @@ class _AdverseActionView extends StatelessWidget {
             if (notice.reason != null && notice.reason!.isNotEmpty)
               _DetailRow(label: 'Reason', value: notice.reason!),
             if (notice.creditReportingAgency != null)
-              _DetailRow(
-                label: 'Agency',
-                value: notice.creditReportingAgency!,
-              ),
+              _DetailRow(label: 'Agency', value: notice.creditReportingAgency!),
             if (notice.generatedAtUtc != null)
               _DetailRow(
                 label: 'Generated',
@@ -889,7 +954,10 @@ class _AdverseActionView extends StatelessWidget {
 // ── Adverse-action dialog ───────────────────────────────────────────────────────
 
 class _AdverseActionInput {
-  const _AdverseActionInput({required this.reason, required this.sendToApplicant});
+  const _AdverseActionInput({
+    required this.reason,
+    required this.sendToApplicant,
+  });
 
   final String reason;
   final bool sendToApplicant;
@@ -905,8 +973,9 @@ class _AdverseActionDialog extends StatefulWidget {
 }
 
 class _AdverseActionDialogState extends State<_AdverseActionDialog> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.initialReason);
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialReason,
+  );
   bool _sendToApplicant = false;
 
   @override
@@ -927,8 +996,9 @@ class _AdverseActionDialogState extends State<_AdverseActionDialog> {
           Text(
             'This generates an FCRA-compliant notice for the declined applicant. '
             'Add or adjust the reason below.',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -991,8 +1061,9 @@ class _SectionCard extends StatelessWidget {
           children: [
             Text(
               title,
-              style: theme.textTheme.titleSmall
-                  ?.copyWith(fontWeight: FontWeight.w700),
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
             ),
             const SizedBox(height: 12),
             child,
@@ -1032,8 +1103,9 @@ class _DetailRow extends StatelessWidget {
           Expanded(
             child: Text(
               value,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(fontWeight: FontWeight.w600),
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
         ],
@@ -1079,14 +1151,13 @@ class _ErrorBody extends StatelessWidget {
           children: [
             Icon(Icons.error_outline, size: 40, color: cs.error),
             const SizedBox(height: 12),
-            Text(message,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: cs.error)),
-            const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: cs.error),
             ),
+            const SizedBox(height: 16),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
