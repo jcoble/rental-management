@@ -513,6 +513,18 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
     return dt != null ? formatAppointmentDateTime(dt) : null;
   }
 
+  bool _validateDetailsStep() {
+    final start = _combineDateAndTime(_startDate, _startTime);
+    if (start == null) {
+      setState(() => _error = 'Please select a start date and time.');
+      return false;
+    }
+    if (_error == 'Please select a start date and time.') {
+      setState(() => _error = null);
+    }
+    return true;
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
@@ -580,6 +592,7 @@ class _AppointmentFormSheetState extends ConsumerState<AppointmentFormSheet> {
         tabs: [
           TabbedFormStepSpec(
             label: 'Details',
+            validate: _validateDetailsStep,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [

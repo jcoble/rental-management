@@ -422,6 +422,22 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
     if (picked != null) setState(() => _dueDate = picked);
   }
 
+  String? _partialAmountError() {
+    if (_status != 'Partial') return null;
+    final amount = double.tryParse(_amountCtrl.text.trim());
+    final amountPaid = double.tryParse(_amountPaidCtrl.text.trim());
+    if (amountPaid == null) {
+      return 'Amount paid is required for a partial payment';
+    }
+    if (amountPaid <= 0) {
+      return 'Amount paid must be greater than zero';
+    }
+    if (amount != null && amountPaid >= amount) {
+      return 'Amount paid must be less than the full amount';
+    }
+    return null;
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
@@ -618,6 +634,7 @@ class _EditPaymentSheetState extends ConsumerState<_EditPaymentSheet> {
                       helperText:
                           'How much was collected. The rest stays owed.',
                     ),
+                    validator: (_) => _partialAmountError(),
                   ),
                 ],
                 gap,

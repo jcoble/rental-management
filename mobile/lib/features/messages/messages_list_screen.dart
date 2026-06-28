@@ -450,6 +450,17 @@ class _ComposeConversationSheetState
     return [if (_portal) 'Portal', if (_email) 'Email', if (_sms) 'Sms'];
   }
 
+  bool _validateChannelsStep() {
+    if (_selectedChannels().isEmpty) {
+      setState(() => _error = 'Choose at least one channel.');
+      return false;
+    }
+    if (_error == 'Choose at least one channel.') {
+      setState(() => _error = null);
+    }
+    return true;
+  }
+
   Future<void> _submit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_selectedTenantId == null) {
@@ -563,6 +574,7 @@ class _ComposeConversationSheetState
           ),
           TabbedFormStepSpec(
             label: 'Channels',
+            validate: _validateChannelsStep,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
