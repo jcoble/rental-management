@@ -165,6 +165,35 @@ public class NoticeDraftServiceTests : IDisposable
         result.Drafts.Should().NotContain(d => d.LeaseId == staleLease.Id);
     }
 
+    [Fact]
+    public async Task GenerateAsync_RendersActiveLandlordTemplate_WhenOneExists()
+    {
+        var (nearLease, _) = SeedActiveLeases();
+        _ctx.Db.NoticeTemplates.Add(new RentalCommand.Core.Entities.NoticeTemplate
+        {
+            PortfolioId = 1,
+            NoticeType = "RenewalOffer",
+            Subject = "Renewal for {{tenant_name}}",
+            Body = "Hi {{tenant_name}}, renew {{property_address}}?",
+            IsActive = true,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        var sut = CreateService();
+        var result = await sut.GenerateAsync(
+            1,
+            new GenerateNoticeDraftsRequest
+            {
+                TenantId = nearLease.TenantId,
+                NoticeType = "RenewalOffer",
+            });
+
+        var draft = Assert.Single(result.Drafts);
+        Assert.Equal("Renewal for Avery Brooks", draft.Subject);
+        Assert.StartsWith("Hi Avery Brooks, renew", draft.Body);
+    }
+
     private NoticeDraftService CreateService(ILlmProvider? llm = null) => new(
         _ctx.Db,
         new NoopConversationService(),
