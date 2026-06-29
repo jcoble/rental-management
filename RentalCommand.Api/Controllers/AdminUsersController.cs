@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -27,17 +28,20 @@ public class AdminUsersController : ManagementControllerBase
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly RentalCommandDbContext _db;
     private readonly IAuditTrailService _audit;
+    private readonly IAuthEmailSender _authEmailSender;
     private readonly ILogger<AdminUsersController> _logger;
 
     public AdminUsersController(
         UserManager<ApplicationUser> userManager,
         RentalCommandDbContext db,
         IAuditTrailService audit,
+        IAuthEmailSender authEmailSender,
         ILogger<AdminUsersController> logger)
     {
         _userManager = userManager;
         _db = db;
         _audit = audit;
+        _authEmailSender = authEmailSender;
         _logger = logger;
     }
 
@@ -230,6 +234,12 @@ public class AdminUsersController : ManagementControllerBase
         _logger.LogInformation(
             "Admin {AdminId} created team member {Email} (UserAccount {AccountId}, Identity {IdentityId}) with role {Role} in portfolio {PortfolioId}.",
             GetUserId(), request.Email, account.Id, identityUser.Id, roleName, portfolioId);
+
+        // Best-effort: email the new member their sign-in details (the invite the modal promises).
+        // The sender swallows its own failures, so a transient email hiccup never fails creation.
+        await _authEmailSender.SendTeamInviteAsync(identityUser, passwordToUse, roleName, ct);
+        _logger.LogInformation(
+            "Enqueued team-invite email for {Email} (UserAccount {AccountId}).", request.Email, account.Id);
 
         var dto = ToDto(account);
         var response = new CreateTeamMemberResponse
