@@ -81,6 +81,19 @@ public class CreateTenantRequest
     public string? Notes { get; set; }
 }
 
+/// <summary>Result of the staff "grant portal access" action for a tenant.</summary>
+public class GrantPortalAccessResponse
+{
+    /// <summary><c>Created</c> when a new login was provisioned, <c>AlreadyExisted</c> when one was already present.</summary>
+    public string Status { get; set; } = string.Empty;
+
+    /// <summary>True when the tenant already had a portal login (the call was a no-op).</summary>
+    public bool AlreadyExisted { get; set; }
+
+    /// <summary>The email the tenant signs in with.</summary>
+    public string? Email { get; set; }
+}
+
 public class UpdateTenantRequest
 {
     [MaxLength(100)]
