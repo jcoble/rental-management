@@ -387,6 +387,46 @@ public class NoticeDraftServiceTests : IDisposable
         result.Drafts.Should().NotContain(d => d.NoticeType == "RentReminder");
     }
 
+    [Fact]
+    public async Task GenerateAsync_ExplicitRentReminder_WithUpcomingPayment_ProducesExactlyOneReminder()
+    {
+        // Regression test for task 354: explicit per-tenant RentReminder request should NOT
+        // trigger the period-based path when an upcoming payment exists within the lead window.
+        // Previously, both paths fired → two drafts.
+        var lease = SeedSingleActiveLease(firstName: "Chris", lastName: "Jordan", monthlyRent: 1600m);
+        var now = DateTime.UtcNow;
+        var paymentDueDate = now.Date.AddDays(3);  // Within the 7-day lead window
+        _ctx.Db.Payments.Add(new Payment
+        {
+            PortfolioId = 1,
+            LeaseId = lease.Id,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1600m,
+            DueDate = paymentDueDate,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var sut = CreateService();
+
+        // Explicit per-tenant RentReminder request
+        var result = await sut.GenerateAsync(
+            1,
+            new GenerateNoticeDraftsRequest
+            {
+                TenantId = lease.TenantId,
+                NoticeType = "RentReminder"
+            });
+
+        // Should produce exactly ONE RentReminder, not two
+        var reminders = result.Drafts.Where(d => d.NoticeType == "RentReminder").ToList();
+        reminders.Should().ContainSingle();
+        reminders[0].LeaseId.Should().Be(lease.Id);
+        reminders[0].TenantId.Should().Be(lease.TenantId);
+    }
+
     /// <summary>Seeds one active lease with a far-future end date (always outside the default trigger window).</summary>
     private Lease SeedSingleActiveLease(string firstName = "Sam", string lastName = "Rivera", decimal monthlyRent = 1500m)
     {
