@@ -532,9 +532,16 @@ public class ScanController : ManagementControllerBase
     [HttpGet("{id:int}/file")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> DownloadFile(int id, [FromQuery] bool full, CancellationToken ct)
+    public async Task<IActionResult> DownloadFile(int id, [FromQuery] string? full, CancellationToken ct)
     {
         var portfolioId = GetPortfolioId();
+
+        // Accept both ?full=1 and ?full=true (case-insensitive). A plain bool param would
+        // 400 on "1"/"0", so parse the flag ourselves; anything else (null, empty, "0",
+        // "false", junk) means "serve the thumbnail" rather than erroring.
+        var wantsFull = full is not null
+            && (full.Equals("1", StringComparison.OrdinalIgnoreCase)
+                || full.Equals("true", StringComparison.OrdinalIgnoreCase));
 
         var draft = await _db.ScanDrafts
             .FirstOrDefaultAsync(d => d.Id == id && d.PortfolioId == portfolioId, ct);
@@ -543,9 +550,9 @@ public class ScanController : ManagementControllerBase
             return NotFound(new { error = "Scan draft not found" });
 
         // Serve the small JPEG preview by default so clients (esp. phones) don't pull the
-        // full-resolution original. The original is available on ?full=1. Fall back to the
-        // original if the thumbnail is missing/unreadable (older scans, PDFs, etc.).
-        if (!full && !string.IsNullOrEmpty(draft.ThumbnailPath))
+        // full-resolution original. The original is available on ?full=1 or ?full=true. Fall
+        // back to the original if the thumbnail is missing/unreadable (older scans, PDFs, etc.).
+        if (!wantsFull && !string.IsNullOrEmpty(draft.ThumbnailPath))
         {
             try
             {
