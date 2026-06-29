@@ -550,7 +550,7 @@
 				class="lg:col-span-2"
 				contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3"
 				help="Summary counts rolled up from the property's units. 'Occupied' counts units whose status is Occupied."
-				helpDetail="Unit count and occupancy are read-only — they update automatically as you add, remove, or change the status of individual units."
+				helpDetail="Unit count and occupancy are read-only — unit count updates as you add or remove units, and occupancy updates automatically as leases move tenants in and out."
 				helpLearnMoreUrl="/docs/property-details"
 				helpTestid="detailcard-help-details"
 			>
