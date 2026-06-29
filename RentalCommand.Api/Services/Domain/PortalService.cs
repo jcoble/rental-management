@@ -58,9 +58,11 @@ public class PortalService : IPortalService
         // All four figures are conditional SUM/COUNT aggregates computed SQL-side in a single grouped
         // round-trip — no payment rows are pulled into memory. Partial-aware: a Paid payment contributes
         // its full Amount to Collected; a Partial contributes its collected AmountPaid to Collected and
-        // only its unpaid remainder (Amount − AmountPaid) to Outstanding/Overdue; Scheduled/Late owe in
-        // full. Due-today payments are outstanding, not overdue; overdue starts at the next UTC calendar
-        // day boundary. Waived/Failed/Refunded are not money currently owed.
+        // only its unpaid remainder (Amount − AmountPaid) to Outstanding/Overdue; Scheduled/Late/Failed
+        // owe in full — a Failed charge collected nothing, so the whole Amount is still owed (matching the
+        // payments UI, which marks Failed as "still owed" and keeps it payable). Due-today payments are
+        // outstanding, not overdue; overdue starts at the next UTC calendar day boundary. Waived/Refunded
+        // are not money currently owed.
         var rollup = await _db.Payments
             .AsNoTracking()
             .Where(p => p.PortfolioId == portfolioId &&
@@ -73,16 +75,16 @@ public class PortalService : IPortalService
                     : p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m)
                     : 0m),
                 Outstanding = g.Sum(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late) ? p.Amount
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Failed) ? p.Amount
                     : p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m)
                     : 0m),
                 Overdue = g.Sum(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Failed)
                     && (p.Status == PaymentStatus.Late || p.DueDate < overdueCutoffUtc)
                         ? (p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m) : p.Amount)
                         : 0m),
                 OverdueCount = g.Count(p =>
-                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
+                    (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late || p.Status == PaymentStatus.Failed)
                     && (p.Status == PaymentStatus.Late || p.DueDate < overdueCutoffUtc)),
             })
             .FirstOrDefaultAsync(ct);
