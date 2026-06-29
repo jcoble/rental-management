@@ -102,6 +102,7 @@ public static class ServiceCollectionExtensions
         // the Engine outbox path; the API uses it for the synchronous "send test SMS" verify endpoint.
         services.AddSmsProviders();
         services.AddScoped<INoticeDraftService, NoticeDraftService>();
+        services.AddScoped<INoticeTemplateService, NoticeTemplateService>();
         services.AddScoped<ISmsInboundRentConfirmationService, SmsInboundRentConfirmationService>();
         services.AddScoped<ISmsInboundVendorDoneService, SmsInboundVendorDoneService>();
         services.AddScoped<ISmsInboundRouter, SmsInboundRouter>();
