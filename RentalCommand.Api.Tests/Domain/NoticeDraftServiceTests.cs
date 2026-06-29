@@ -194,6 +194,73 @@ public class NoticeDraftServiceTests : IDisposable
         Assert.StartsWith("Hi Avery Brooks, renew", draft.Body);
     }
 
+    [Fact]
+    public async Task GenerateAsync_EmptyBodyTemplate_FallsBackToDeterministicCopy()
+    {
+        // Bypass the service guard by inserting the template directly into the DB.
+        // The template has an empty Body, so ComposeAsync must fall through to the deterministic copy.
+        var (nearLease, _) = SeedActiveLeases();
+        _ctx.Db.NoticeTemplates.Add(new RentalCommand.Core.Entities.NoticeTemplate
+        {
+            PortfolioId = 1,
+            NoticeType = "RenewalOffer",
+            Subject = "Not empty subject",
+            Body = "",   // empty — should trigger fallback
+            IsActive = true,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        var sut = CreateService();
+        var result = await sut.GenerateAsync(
+            1,
+            new GenerateNoticeDraftsRequest
+            {
+                TenantId = nearLease.TenantId,
+                NoticeType = "RenewalOffer",
+            });
+
+        var draft = Assert.Single(result.Drafts);
+        // Must NOT be blank — deterministic subject contains the property name.
+        Assert.Equal("Lease renewal for Maple Grove Duplex Unit A", draft.Subject);
+        Assert.False(string.IsNullOrWhiteSpace(draft.Body));
+    }
+
+    [Fact]
+    public async Task GenerateAsync_PopulatesPortfolioNameToken()
+    {
+        // Update the seeded portfolio (Id=1) name so we can assert the token fills.
+        var portfolio = _ctx.Db.Portfolios.Find(1)!;
+        portfolio.Name = "Sunrise Rentals";
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        var lease = SeedSingleActiveLease(firstName: "Dana", lastName: "West", monthlyRent: 1200m);
+        _ctx.Db.NoticeTemplates.Add(new RentalCommand.Core.Entities.NoticeTemplate
+        {
+            PortfolioId = 1,
+            NoticeType = "RenewalOffer",
+            Subject = "Renewal from {{portfolio_name}}",
+            Body = "From {{portfolio_name}}",
+            IsActive = true,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        var sut = CreateService();
+        var result = await sut.GenerateAsync(
+            1,
+            new GenerateNoticeDraftsRequest
+            {
+                TenantId = lease.TenantId,
+                NoticeType = "RenewalOffer",
+            });
+
+        var draft = Assert.Single(result.Drafts);
+        Assert.Contains("Sunrise Rentals", draft.Body);
+        Assert.Contains("Sunrise Rentals", draft.Subject);
+    }
+
     private NoticeDraftService CreateService(ILlmProvider? llm = null) => new(
         _ctx.Db,
         new NoopConversationService(),

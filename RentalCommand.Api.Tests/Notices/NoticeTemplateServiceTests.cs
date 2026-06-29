@@ -1,7 +1,6 @@
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.TestCommon;
-using Xunit;
 
 namespace RentalCommand.Api.Tests.Notices;
 
@@ -51,5 +50,25 @@ public class NoticeTemplateServiceTests : IDisposable
         await Assert.ThrowsAsync<ArgumentException>(() =>
             service.UpsertAsync(1, "BogusType",
                 new UpsertNoticeTemplateRequest { Subject = "x", Body = "y" }, default));
+    }
+
+    [Fact]
+    public async Task Upsert_rejects_empty_body()
+    {
+        var service = new NoticeTemplateService(_ctx.Db);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpsertAsync(1, "RenewalOffer",
+                new UpsertNoticeTemplateRequest { Subject = "Valid Subject", Body = "" }, default));
+    }
+
+    [Fact]
+    public async Task Upsert_rejects_empty_subject()
+    {
+        var service = new NoticeTemplateService(_ctx.Db);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpsertAsync(1, "RenewalOffer",
+                new UpsertNoticeTemplateRequest { Subject = "   ", Body = "Valid body" }, default));
     }
 }

@@ -1,6 +1,5 @@
 // RentalCommand.Api.Tests/Notices/NoticeTemplateRendererTests.cs
 using RentalCommand.Api.Services.Domain;
-using Xunit;
 
 namespace RentalCommand.Api.Tests.Notices;
 
