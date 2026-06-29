@@ -248,7 +248,10 @@
 
 	const sendNoticeMutation = createMutation(() => ({
 		mutationFn: async (draft: NoticeDraft) => {
-			await notices.update(draft.id, editedNoticePayload(draft));
+			const payload = editedNoticePayload(draft);
+			const changed =
+				payload.subject !== draft.subject.trim() || payload.body !== draft.body.trim();
+			if (changed) await notices.update(draft.id, payload);
 			return notices.approve(draft.id, { channels: selectedChannelNames(draft.id) });
 		},
 		onSuccess: (_r, draft) => {
