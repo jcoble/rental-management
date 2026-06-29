@@ -828,6 +828,12 @@
 	</div>
 
 	<!-- Compact KPI strip — always visible across tabs so the headline numbers are one glance away. -->
+	<!-- These KPIs come from /accounting/summary (no date range), so they're all-time, while the
+	     ledger below honors the From/To filter. Label them so the two aren't read as one period. -->
+	<div class="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5" data-testid="accounting-kpi-period-label">
+		<span class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">All-time</span>
+		<span class="text-xs text-muted-foreground">These four totals cover all dates — the date filter on the ledger below doesn't change them.</span>
+	</div>
 	<div class="mb-5 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
 		<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0" data-testid="accounting-collected">
 			<Card.Content class="p-4">
