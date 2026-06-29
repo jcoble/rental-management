@@ -1,3 +1,5 @@
+using RentalCommand.Core.Enums;
+
 namespace RentalCommand.Core.Entities;
 
 public class NotificationSettings
@@ -49,10 +51,10 @@ public class NotificationSettings
     // Per-notice-type tenant-facing send mode. false (default) = "ask me first" (draft for approval);
     // true = auto-send once an active NoticeTemplate exists for the type (consumed by Plan 3's worker).
     public bool AutoSendRentReminder { get; set; }
-    public bool AutoSendRenewal { get; set; }
-    public bool AutoSendMonthToMonth { get; set; }
-    public bool AutoSendMoveOut { get; set; }
     public bool AutoSendLateRent { get; set; }
+    // Lease-end notices (renewal / month-to-month / non-renewal) are mutually exclusive per lease,
+    // so a single action replaces the three former per-type bools. Default Draft = auto-send nothing.
+    public LeaseEndAutoAction LeaseEndAutoAction { get; set; } = LeaseEndAutoAction.Draft;
     public int DailyBriefingSendHourLocal { get; set; } = 8;
     public bool DailyBriefingIncludeEmpty { get; set; }
     public string? DailyBriefingSmsRecipientsCipherText { get; set; }

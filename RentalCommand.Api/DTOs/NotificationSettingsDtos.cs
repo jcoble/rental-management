@@ -34,10 +34,10 @@ public sealed class NotificationSettingsResponse
     public string[] DailyBriefingEmailRecipients { get; set; } = [];
 
     public bool AutoSendRentReminder { get; set; }
-    public bool AutoSendRenewal { get; set; }
-    public bool AutoSendMonthToMonth { get; set; }
-    public bool AutoSendMoveOut { get; set; }
     public bool AutoSendLateRent { get; set; }
+
+    /// <summary>Single mutually-exclusive lease-end auto-send action (string enum name on the wire).</summary>
+    public LeaseEndAutoAction LeaseEndAutoAction { get; set; }
 
     /// <summary>
     /// The portfolio's chosen SMS provider as its <c>SmsProviderKey</c> string name
@@ -104,10 +104,10 @@ public sealed class UpdateNotificationSettingsRequest
     public string[] DailyBriefingEmailRecipients { get; set; } = [];
 
     public bool AutoSendRentReminder { get; set; }
-    public bool AutoSendRenewal { get; set; }
-    public bool AutoSendMonthToMonth { get; set; }
-    public bool AutoSendMoveOut { get; set; }
     public bool AutoSendLateRent { get; set; }
+
+    /// <summary>Single mutually-exclusive lease-end auto-send action (string enum name on the wire).</summary>
+    public LeaseEndAutoAction LeaseEndAutoAction { get; set; }
 
     /// <summary>Chosen SMS provider (<c>SmsProviderKey</c> string name). Unknown/blank → "None".</summary>
     public string SmsProvider { get; set; } = "None";

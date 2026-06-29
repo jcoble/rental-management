@@ -341,6 +341,8 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.RentChargeLeadDays).HasDefaultValue(5);
             entity.Property(e => e.LateFeeGraceDays).HasDefaultValue(5);
             entity.Property(e => e.LeaseExpiryReminderDays).HasDefaultValue(60);
+            // Lease-end auto-send action, stored as the string enum name (app-wide string-enum convention).
+            entity.Property(e => e.LeaseEndAutoAction).HasConversion<string>().HasMaxLength(40);
             // Per-portfolio now (was a single global row). One settings row per portfolio.
             entity.HasIndex(e => e.PortfolioId).IsUnique();
         });
