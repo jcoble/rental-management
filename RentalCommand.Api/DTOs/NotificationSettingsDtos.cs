@@ -33,6 +33,12 @@ public sealed class NotificationSettingsResponse
     public string[] DailyBriefingSmsRecipients { get; set; } = [];
     public string[] DailyBriefingEmailRecipients { get; set; } = [];
 
+    public bool AutoSendRentReminder { get; set; }
+    public bool AutoSendRenewal { get; set; }
+    public bool AutoSendMonthToMonth { get; set; }
+    public bool AutoSendMoveOut { get; set; }
+    public bool AutoSendLateRent { get; set; }
+
     /// <summary>
     /// The portfolio's chosen SMS provider as its <c>SmsProviderKey</c> string name
     /// ("None" / "SignalWire" / "Twilio" / "Telnyx" / "Vonage"). "None" = fall back to platform env creds.
@@ -96,6 +102,12 @@ public sealed class UpdateNotificationSettingsRequest
     public bool DailyBriefingIncludeEmpty { get; set; }
     public string[] DailyBriefingSmsRecipients { get; set; } = [];
     public string[] DailyBriefingEmailRecipients { get; set; } = [];
+
+    public bool AutoSendRentReminder { get; set; }
+    public bool AutoSendRenewal { get; set; }
+    public bool AutoSendMonthToMonth { get; set; }
+    public bool AutoSendMoveOut { get; set; }
+    public bool AutoSendLateRent { get; set; }
 
     /// <summary>Chosen SMS provider (<c>SmsProviderKey</c> string name). Unknown/blank → "None".</summary>
     public string SmsProvider { get; set; } = "None";
