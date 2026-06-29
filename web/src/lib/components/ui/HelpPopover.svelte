@@ -17,7 +17,7 @@
 		title,
 		summary,
 		detail,
-		learnMoreUrl = "/docs",
+		learnMoreUrl,
 		learnMoreLabel = "Learn more",
 		side = "bottom",
 		iconClass = "h-3.5 w-3.5 text-muted-foreground",

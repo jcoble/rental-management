@@ -1146,6 +1146,24 @@ public class ScanServiceTests : IDisposable
         _loans.LastRequest.Should().BeNull();
     }
 
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LoanDraft_WhenCreateThrows_ReturnsLoanCreationFailed()
+    {
+        const string extractedJson =
+            """{"lender":{"value":"Some Bank","confidence":0.9},"original_amount":{"value":"100000","confidence":0.9},"property_id":{"value":"10","confidence":0.9}}""";
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _loans.ThrowOnCreate(new InvalidOperationException("database rejected the loan"));
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Be("Loan creation failed");
+        _loans.LastRequest.Should().NotBeNull();
+    }
+
     // -------------------------------------------------------------------------
     // Reject: happy path
     // -------------------------------------------------------------------------
