@@ -51,9 +51,8 @@ public static class LoanExtractionSchema
 
     public static IReadOnlyList<ExtractionFieldSpec> Fields { get; } = new[]
     {
-        new ExtractionFieldSpec("target_entity_type", "enum",
-            "Always set to Loan for this schema.",
-            EnumValues: new[] { "Loan" }),
+        // No target_entity_type field: the draft's TargetEntityType is fixed from the upload-time
+        // choice and re-derived in routing — it's a meta/routing hint, not a user-facing data field.
         new ExtractionFieldSpec("lender", "string",
             "Name of the lender / servicer / bank that holds the mortgage, as written on the document.",
             Required: true),

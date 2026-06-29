@@ -135,6 +135,13 @@ public class WorkOrderDetailResponse : WorkOrderResponse
     /// <summary>True when the attached scan is an image (vs a PDF) — lets the UI show a thumbnail.</summary>
     public bool ScanIsImage { get; set; }
 
+    /// <summary>
+    /// True when this work order has an OPEN vendor dispatch (the vendor was texted the job and hasn't
+    /// replied DONE yet). Drives the detail page's "vendor has the job … closes on DONE" banner so it
+    /// reflects a real dispatch, not a mere vendor assignment. Computed DB-side; see the GET handler.
+    /// </summary>
+    public bool HasActiveDispatch { get; set; }
+
     public static WorkOrderDetailResponse FromEntity(WorkOrder e, IEnumerable<WorkOrderStatusEvent> events)
     {
         var detail = new WorkOrderDetailResponse

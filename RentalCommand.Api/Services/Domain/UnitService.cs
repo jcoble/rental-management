@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -271,6 +272,17 @@ public class UnitService : IUnitService
             return null;
         }
 
+        // Reject a duplicate unit number up front with a clear, field-specific message instead of letting
+        // it hit the (PropertyId, UnitNumber) unique index and surface as the generic "conflicts with
+        // existing data" 409. Only LIVE units collide (the global query filter excludes soft-deleted
+        // rows); evaluated SQL-side as an EXISTS.
+        if (await _db.Units.AnyAsync(u => u.PropertyId == request.PropertyId && u.UnitNumber == request.UnitNumber, ct))
+        {
+            throw new DomainValidationException(
+                $"Unit number \"{request.UnitNumber}\" already exists on this property.",
+                StatusCodes.Status409Conflict);
+        }
+
         var now = DateTime.UtcNow;
         var entity = new Unit
         {
@@ -311,6 +323,22 @@ public class UnitService : IUnitService
         if (entity == null)
         {
             return null;
+        }
+
+        // Same duplicate-number guard as create, scoped to a rename: only check when the number is
+        // actually changing, and exclude this unit's own row. Keeps the clear 409 message instead of the
+        // opaque unique-index conflict. Only LIVE units collide (the global query filter excludes
+        // soft-deleted rows).
+        if (request.UnitNumber is not null
+            && !string.Equals(request.UnitNumber, entity.UnitNumber, StringComparison.Ordinal)
+            && await _db.Units.AnyAsync(u =>
+                u.PropertyId == entity.PropertyId
+                && u.UnitNumber == request.UnitNumber
+                && u.Id != entity.Id, ct))
+        {
+            throw new DomainValidationException(
+                $"Unit number \"{request.UnitNumber}\" already exists on this property.",
+                StatusCodes.Status409Conflict);
         }
 
         var oldValues = new Dictionary<string, object?>();

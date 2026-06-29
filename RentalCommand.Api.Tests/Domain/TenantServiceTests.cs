@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -117,6 +118,97 @@ public class TenantServiceTests : IDisposable
             sql.Contains("Leases", StringComparison.OrdinalIgnoreCase));
         _commands.Should().Contain(sql =>
             sql.Contains("LeaseTenants", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(LeaseStatus.Active)]
+    [InlineData(LeaseStatus.NoticeGiven)]
+    public async Task DeleteAsync_ThrowsWhenTenantStillOccupiesAUnit(LeaseStatus status)
+    {
+        var tenant = SeedTenantWithLease(status);
+
+        var act = async () => await _sut.DeleteAsync(PortfolioId, tenant.Id);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("lease");
+        (await _sut.GetAsync(PortfolioId, tenant.Id))
+            .Should().NotBeNull("a tenant who still occupies a unit must not be deleted");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_SoftDeletesWhenTenantHasNoOccupyingLease()
+    {
+        var tenant = SeedTenantWithLease(LeaseStatus.Expired);
+
+        var deleted = await _sut.DeleteAsync(PortfolioId, tenant.Id);
+
+        deleted.Should().BeTrue();
+        (await _sut.GetAsync(PortfolioId, tenant.Id))
+            .Should().BeNull("a tenant with only an ended lease is soft-deleted");
+    }
+
+    [Fact]
+    public async Task GetAsync_CountsNoticeGivenLeaseAsOccupying()
+    {
+        var tenant = SeedTenantWithLease(LeaseStatus.NoticeGiven);
+
+        var response = await _sut.GetAsync(PortfolioId, tenant.Id);
+
+        // ActiveLeaseCount now means "occupying" (Active + NoticeGiven); the web delete-state helper
+        // disables delete while it is > 0, so a notice-given-only tenant is also blocked in the UI.
+        response!.ActiveLeaseCount.Should().Be(1);
+    }
+
+    private Tenant SeedTenantWithLease(LeaseStatus status)
+    {
+        var now = DateTime.UtcNow;
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Occupying",
+            LastName = status.ToString(),
+            Email = "occupying@example.local",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Tenants.Add(tenant);
+        _ctx.Db.SaveChanges();
+
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Lease Property",
+            AddressLine1 = "1 Main Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "1A",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Leases.Add(new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            TenantId = tenant.Id,
+            LeaseNumber = $"L-{status}",
+            Status = status,
+            StartDate = now.Date,
+            EndDate = now.Date.AddYears(1),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
+        return tenant;
     }
 
     private Tenant SeedTenant(string firstName, string lastName, int activeLeaseCount)

@@ -45,7 +45,10 @@
 	}
 
 	const PAYMENT_TYPES = ['Rent', 'SecurityDeposit', 'LateFee', 'Utility', 'Other'];
-	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Partial', 'Late', 'Waived', 'Failed', 'Refunded'];
+	// 'Partial' is intentionally omitted here: this quick form has no "Amount paid" field, so a Partial
+	// can never satisfy the payment schema's 0 < amountPaid < amount rule and would fail silently. Record
+	// partial payments from the Money page's New Payment dialog, which has the "Amount paid" input.
+	const PAYMENT_STATUSES = ['Scheduled', 'Paid', 'Late', 'Waived', 'Failed', 'Refunded'];
 	const PAYMENT_PAGE_SIZE = 20;
 	const today = () => new Date().toISOString().slice(0, 10);
 

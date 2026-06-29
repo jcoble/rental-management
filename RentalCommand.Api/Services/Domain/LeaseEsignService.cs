@@ -555,18 +555,35 @@ public sealed class LeaseEsignService : ILeaseEsignService
 
         if (_db.Database.IsNpgsql())
         {
-            return await _db.OutboxMessages
-                .FromSqlInterpolated($"""
+            // When there is no current signature request (lease never sent for e-signature),
+            // omit the signatureRequestId clause entirely. Interpolating a C# null here would bind
+            // a typeless NULL parameter and Postgres throws "could not determine data type of
+            // parameter" — a 500 on every un-sent lease. Omitting it returns all of the lease's
+            // signing emails, exactly the original `({param} IS NULL OR …)` intent when null.
+            var npgsqlQuery = signatureRequestIdText is null
+                ? _db.OutboxMessages.FromSqlInterpolated($"""
                     SELECT *
                     FROM "OutboxMessages"
                     WHERE "PortfolioId" = {portfolioId}
                       AND "MessageType" = 'email'
                       AND "Payload" ->> 'source' = {source}
                       AND "Payload" ->> 'leaseId' = {leaseIdText}
-                      AND ({signatureRequestIdText} IS NULL OR "Payload" ->> 'signatureRequestId' = {signatureRequestIdText})
                     ORDER BY "CreatedAt" DESC, "Id" DESC
                     LIMIT {SignatureQueueLimit}
                     """)
+                : _db.OutboxMessages.FromSqlInterpolated($"""
+                    SELECT *
+                    FROM "OutboxMessages"
+                    WHERE "PortfolioId" = {portfolioId}
+                      AND "MessageType" = 'email'
+                      AND "Payload" ->> 'source' = {source}
+                      AND "Payload" ->> 'leaseId' = {leaseIdText}
+                      AND "Payload" ->> 'signatureRequestId' = {signatureRequestIdText}
+                    ORDER BY "CreatedAt" DESC, "Id" DESC
+                    LIMIT {SignatureQueueLimit}
+                    """);
+
+            return await npgsqlQuery
                 .AsNoTracking()
                 .ToListAsync(ct);
         }

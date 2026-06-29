@@ -25,6 +25,19 @@ const optionalEmail = z
 	.nullable()
 	.refine((v) => v === null || z.string().email().safeParse(v).success, 'Enter a valid email')
 	.optional();
+/**
+ * Optional free text with an upper length bound mirroring a server MaxLength.
+ * Behaves like {@link optionalText} ('' → null, missing key tolerated) but rejects
+ * input longer than `max` so the client surfaces it before the server 400s.
+ */
+const optionalTextMax = (label: string, max: number) =>
+	z
+		.string()
+		.trim()
+		.max(max, `${label} must be ${max} characters or fewer`)
+		.transform((v) => (v.length ? v : null))
+		.nullable()
+		.optional();
 /** Required email field — non-empty and valid format. */
 const requiredEmail = (label: string) =>
 	z
@@ -132,27 +145,31 @@ const optionalNonNegative = (label: string) =>
 			.optional()
 	);
 
+// Lengths mirror the server data annotations on Create/UpdatePropertyRequest (PropertyDtos.cs):
+// Name 200, AddressLine1/2 250, City/State 100, PostalCode 20 — so an over-long value is caught
+// inline instead of bouncing off a raw 400.
 export const propertySchema = z.object({
-	name: required('Name'),
+	name: required('Name').max(200, 'Name must be 200 characters or fewer'),
 	type: z.string(),
 	status: z.string(),
-	addressLine1: required('Address'),
-	addressLine2: optionalText,
-	city: required('City'),
-	state: required('State'),
-	postalCode: required('ZIP'),
+	addressLine1: required('Address').max(250, 'Address must be 250 characters or fewer'),
+	addressLine2: optionalTextMax('Apt / Suite / Unit #', 250),
+	city: required('City').max(100, 'City must be 100 characters or fewer'),
+	state: required('State').max(100, 'State must be 100 characters or fewer'),
+	postalCode: required('ZIP').max(20, 'ZIP must be 20 characters or fewer'),
 	// The property's owner is an OwnerEntity (the API validates ownerEntityId against OwnerEntities;
 	// ownerId is the legacy Owners table). owners.list() returns OwnerEntities, so this is their id.
 	ownerEntityId: idString,
 });
 
 export const unitSchema = z.object({
-	unitNumber: required('Unit number'),
-	// bedrooms/bathrooms: server [Range(0, 99)] — non-negative
-	bedrooms: nonNegativeNumeric('Bedrooms'),
-	bathrooms: nonNegativeNumeric('Bathrooms'),
+	// unitNumber: server [MaxLength(50)]
+	unitNumber: required('Unit number').max(50, 'Unit number must be 50 characters or fewer'),
+	// bedrooms/bathrooms: server [Range(0, 99)] — non-negative, max 99
+	bedrooms: nonNegativeNumeric('Bedrooms').refine((v) => v <= 99, 'Bedrooms cannot exceed 99'),
+	bathrooms: nonNegativeNumeric('Bathrooms').refine((v) => v <= 99, 'Bathrooms cannot exceed 99'),
 	// marketRent: server [Range(0, 99999999)] — can be 0 for a vacant/unlisted unit
-	marketRent: nonNegativeNumeric('Market rent'),
+	marketRent: nonNegativeNumeric('Market rent').refine((v) => v <= 99999999, 'Market rent cannot exceed 99,999,999'),
 });
 
 export const tenantSchema = z.object({

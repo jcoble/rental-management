@@ -311,7 +311,8 @@
 		<Dialog.Header>
 			<Dialog.Title>Invite team member</Dialog.Title>
 			<Dialog.Description>
-				Add a new person to your team. They can sign in with the email and password you provide.
+				Add a new person to your team. We'll email them an invite with their sign-in details
+				(the email and password you provide).
 			</Dialog.Description>
 		</Dialog.Header>
 

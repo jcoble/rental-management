@@ -4,6 +4,7 @@
 	import { properties } from '$lib/api/endpoints/properties';
 	import { owners } from '$lib/api/endpoints/owners';
 	import type { Property } from '$lib/types';
+	import { getPropertyDeleteState } from '$lib/properties/property-delete-state';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { propertySchema, parseForm } from '$lib/schemas';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -119,6 +120,7 @@
 	let form = $state(createEmptyPropertyDraft());
 	let formErrors = $state<Record<string, string>>({});
 	let deleteTarget = $state<Property | null>(null);
+	const deleteState = $derived(deleteTarget ? getPropertyDeleteState(deleteTarget) : null);
 
 	function clearPropertyError(field: string) {
 		const next = clearFieldError(formErrors, field);
@@ -420,9 +422,13 @@
 <ConfirmDialog
 	open={deleteTarget !== null}
 	title="Delete property"
-	message={deleteTarget ? `Delete "${deleteTarget.name}"? This also removes its units.` : ''}
+	message={deleteState?.message ?? ''}
 	busy={deletePropertyMutation.isPending}
+	confirmDisabled={deleteState?.confirmDisabled ?? false}
 	testid="property-delete"
-	onconfirm={() => deleteTarget && deletePropertyMutation.mutate(deleteTarget.id)}
+	onconfirm={() => {
+		if (!deleteTarget || deleteState?.confirmDisabled) return;
+		deletePropertyMutation.mutate(deleteTarget.id);
+	}}
 	oncancel={() => (deleteTarget = null)}
 />

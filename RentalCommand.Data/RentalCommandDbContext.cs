@@ -825,8 +825,9 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
             entity.Property(e => e.Status).HasConversion<int>();
             entity.HasIndex(e => e.PropertyId);
             entity.HasIndex(e => e.Status);
-            // Unique unit number within a property.
-            entity.HasIndex(e => new { e.PropertyId, e.UnitNumber }).IsUnique();
+            // Unique unit number within a property — filtered to live rows so a soft-deleted unit
+            // (DeletedAt set) frees its number for reuse instead of permanently occupying the slot.
+            entity.HasIndex(e => new { e.PropertyId, e.UnitNumber }).IsUnique().HasFilter("\"DeletedAt\" IS NULL");
             entity.HasQueryFilter(e => e.DeletedAt == null);
             entity.HasOne(e => e.Property)
                 .WithMany(p => p.Units)
