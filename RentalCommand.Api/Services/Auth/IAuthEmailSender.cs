@@ -16,4 +16,11 @@ public interface IAuthEmailSender
     /// temporary password an admin set for them, the role they were added as, and a login link.
     /// </summary>
     Task SendTeamInviteAsync(ApplicationUser user, string temporaryPassword, string roleName, CancellationToken ct = default);
+
+    /// <summary>
+    /// Emails a tenant their resident-portal invite: a friendly greeting, their sign-in email, the
+    /// shared temporary password, and a login link. Sent on demand by staff (not when the tenant is
+    /// created). Best-effort — failures are logged and swallowed.
+    /// </summary>
+    Task SendTenantPortalInviteAsync(ApplicationUser user, string temporaryPassword, CancellationToken ct = default);
 }
