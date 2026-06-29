@@ -9,7 +9,7 @@
 	import { notificationStore } from '$lib/stores/notifications.svelte';
 	import { portalActionUrl } from '$lib/utils/portalLinks';
 	import { paymentTypeLabel } from '$lib/utils/payment-labels';
-	import { formatDateOnly, daysFromTodayUtc, isPastDueUtc } from '$lib/utils/date';
+	import { formatDateOnly, daysFromTodayUtc } from '$lib/utils/date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import { Button } from '$lib/components/ui/button';
@@ -93,12 +93,9 @@
 	const openWorkOrders = $derived(
 		workOrders.filter((w) => !['Completed', 'Cancelled', 'Archived'].includes(String(w.status)))
 	);
-	const overduePayments = $derived(
-		payments.filter(
-			(p) =>
-				!['Paid', 'Waived', 'Refunded'].includes(String(p.status)) && isPastDueUtc(p.dueDate)
-		)
-	);
+	// Overdue count comes straight from the server balance so the dollar amount and the item count are
+	// always the same source of truth (the server includes Failed payments — money still owed).
+	const overdueCount = $derived(Number(balance.overdueCount ?? 0));
 	const upcomingPayments = $derived(
 		payments
 			.filter((p) => !['Paid', 'Waived', 'Refunded'].includes(String(p.status)))
@@ -277,7 +274,7 @@
 			<div class="rounded-lg border border-border bg-card p-4">
 				<div class="mb-3 flex items-center gap-2 text-[var(--warning)]"><AlertTriangle class="h-4 w-4" /><span class="text-sm font-medium">Overdue</span></div>
 				<p class="text-3xl font-semibold">{money(balance.overdue ?? 0)}</p>
-				<p class="mt-1 text-sm text-muted-foreground">{overduePayments.length} overdue item{overduePayments.length === 1 ? '' : 's'}</p>
+				<p class="mt-1 text-sm text-muted-foreground">{overdueCount} overdue item{overdueCount === 1 ? '' : 's'}</p>
 			</div>
 			<div class="rounded-lg border border-border bg-card p-4">
 				<div class="mb-3 flex items-center gap-2 text-[var(--success)]"><CreditCard class="h-4 w-4" /><span class="text-sm font-medium">Next Rent</span></div>

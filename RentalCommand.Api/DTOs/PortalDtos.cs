@@ -5,8 +5,8 @@ using RentalCommand.Core.Enums;
 
 /// <summary>
 /// Tenant-facing balance summary derived from the signed-in tenant's payment records. Outstanding is
-/// everything still owed (scheduled/partial/late, not yet paid or waived); overdue is the subset whose
-/// due date has passed.
+/// everything still owed (scheduled/partial/late/failed, not yet paid or waived — a failed charge
+/// collected nothing, so its full amount is still owed); overdue is the subset whose due date has passed.
 /// </summary>
 public class PortalBalanceResponse
 {
