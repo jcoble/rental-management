@@ -829,6 +829,20 @@ export interface UpdateNoticeDraftRequest {
 	body?: string;
 }
 
+export interface NoticeTemplateResponse {
+	noticeType: string;
+	subject: string;
+	body: string;
+	hasTemplate: boolean;
+	availableFields: string[];
+	updatedAt?: string | null;
+}
+
+export interface UpsertNoticeTemplateRequest {
+	subject: string;
+	body: string;
+}
+
 export interface LeaseQuestionResponse {
 	answer: string;
 	llmEnhanced: boolean;
