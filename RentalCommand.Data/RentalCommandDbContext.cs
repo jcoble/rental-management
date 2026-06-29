@@ -48,6 +48,7 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
     public DbSet<BankConnection> BankConnections => Set<BankConnection>();
     public DbSet<BankTransaction> BankTransactions => Set<BankTransaction>();
     public DbSet<NoticeDraft> NoticeDrafts => Set<NoticeDraft>();
+    public DbSet<NoticeTemplate> NoticeTemplates => Set<NoticeTemplate>();
     public DbSet<RentalApplication> RentalApplications => Set<RentalApplication>();
     public DbSet<ScreeningResult> ScreeningResults => Set<ScreeningResult>();
     public DbSet<AdverseActionNotice> AdverseActionNotices => Set<AdverseActionNotice>();
@@ -542,6 +543,23 @@ public class RentalCommandDbContext : IdentityDbContext<ApplicationUser, Identit
                 .WithMany()
                 .HasForeignKey(e => e.ConversationId)
                 .OnDelete(DeleteBehavior.SetNull);
+        });
+
+        modelBuilder.Entity<NoticeTemplate>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.NoticeType).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.Subject).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.Body).IsRequired().HasMaxLength(4000);
+            entity.HasIndex(e => e.PortfolioId);
+            // One active template per (portfolio, type) — enforced by a filtered unique index.
+            entity.HasIndex(e => new { e.PortfolioId, e.NoticeType })
+                .HasFilter("\"IsActive\" = true")
+                .IsUnique();
+            entity.HasOne(e => e.Portfolio)
+                .WithMany()
+                .HasForeignKey(e => e.PortfolioId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<RentalApplication>(entity =>

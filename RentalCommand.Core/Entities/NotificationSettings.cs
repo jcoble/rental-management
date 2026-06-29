@@ -46,6 +46,13 @@ public class NotificationSettings
     public int LateFeeGraceDays { get; set; } = 5;
     public int LeaseExpiryReminderDays { get; set; } = 60;
     public bool EnableDailyBriefingMessages { get; set; }
+    // Per-notice-type tenant-facing send mode. false (default) = "ask me first" (draft for approval);
+    // true = auto-send once an active NoticeTemplate exists for the type (consumed by Plan 3's worker).
+    public bool AutoSendRentReminder { get; set; }
+    public bool AutoSendRenewal { get; set; }
+    public bool AutoSendMonthToMonth { get; set; }
+    public bool AutoSendMoveOut { get; set; }
+    public bool AutoSendLateRent { get; set; }
     public int DailyBriefingSendHourLocal { get; set; } = 8;
     public bool DailyBriefingIncludeEmpty { get; set; }
     public string? DailyBriefingSmsRecipientsCipherText { get; set; }
