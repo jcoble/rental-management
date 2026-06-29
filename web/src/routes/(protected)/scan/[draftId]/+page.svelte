@@ -603,8 +603,11 @@
 	}
 
 	// Preview goes through a same-origin, cookie-authed SvelteKit route (the API's
-	// /file endpoint needs a JWT bearer an <img>/<iframe> can't send).
+	// /file endpoint needs a JWT bearer an <img>/<iframe> can't send). The inline preview
+	// uses the default (downsized) thumbnail for speed; "Open in new tab" requests the
+	// full-resolution original the landlord captured (?full=true).
 	const fileUrl = $derived(data ? `/scan-file/${data.id}` : '');
+	const fileUrlFull = $derived(data ? `/scan-file/${data.id}?full=true` : '');
 
 	// Success state — what was just created, so the landlord keeps context
 	// instead of being dumped onto /accounting. (Lease drafts navigate straight to
@@ -1052,7 +1055,7 @@
 								class="h-[60vh] w-full rounded border-0"
 							></iframe>
 							<div class="mt-2 text-center">
-								<Button variant="link" href={fileUrl} target="_blank" rel="noopener noreferrer" class="h-auto p-0 text-xs">
+								<Button variant="link" href={fileUrlFull} target="_blank" rel="noopener noreferrer" class="h-auto p-0 text-xs" data-testid="scan-open-original">
 									Open in new tab
 								</Button>
 							</div>
