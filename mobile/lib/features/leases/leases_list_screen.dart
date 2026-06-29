@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../home/mobile_domain_chrome.dart';
 import '../properties/properties_repository.dart';
 import '../tenants/tenants_repository.dart';
 import '../units/unit_command_center_screen.dart';
@@ -101,7 +102,7 @@ class _LeasesListScreenState extends ConsumerState<LeasesListScreen> {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Leases')),
+      appBar: mobileDomainRootAppBar(context, title: const Text('Leases')),
       floatingActionButton: FloatingActionButton(
         heroTag: 'leases-fab',
         onPressed: () => _showAddSheet(context),

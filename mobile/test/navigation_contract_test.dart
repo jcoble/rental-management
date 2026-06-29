@@ -54,7 +54,10 @@ void main() {
       );
       expect(
         source,
-        contains('appBar: AppBar'),
+        anyOf(
+          contains('appBar: AppBar'),
+          contains('appBar: mobileDomainRootAppBar'),
+        ),
         reason: '$path should expose the Material back affordance when pushed.',
       );
     }

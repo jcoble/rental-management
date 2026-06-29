@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:rental_command/features/home/mobile_destination.dart';
+import 'package:rental_command/features/home/mobile_domain_chrome.dart';
 import 'package:rental_command/features/home/mobile_domain_hub.dart';
 import 'package:rental_command/features/home/mobile_domain_navigation.dart';
 
@@ -86,7 +87,7 @@ void main() {
     expect(find.text('Open lease'), findsNothing);
   });
 
-  testWidgets('detail header replaces the root domain title above top tabs', (
+  testWidgets('detail header replaces the destination header above top tabs', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -127,12 +128,12 @@ void main() {
       ),
     );
 
-    expect(find.text('Rentals'), findsOneWidget);
+    expect(find.text('Command centers'), findsOneWidget);
 
     await tester.tap(find.text('Open unit'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Rentals'), findsNothing);
+    expect(find.text('Command centers'), findsNothing);
     expect(find.text('Unit 2'), findsOneWidget);
     expect(find.text('123 Main St'), findsOneWidget);
     expect(find.byTooltip('Back'), findsOneWidget);
@@ -140,8 +141,52 @@ void main() {
     await tester.tap(find.byTooltip('Back'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Rentals'), findsOneWidget);
+    expect(find.text('Command centers'), findsOneWidget);
     expect(find.text('Open unit'), findsOneWidget);
+  });
+
+  testWidgets('embedded root app bars are hidden and hub header collapses', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MaterialApp(
+          home: MobileDomainHubScreen(
+            title: 'Money',
+            subtitle: 'Test',
+            destinations: [
+              MobileDestination(
+                id: MobileDestinationId.moneyLedger,
+                icon: Symbols.receipt_long_rounded,
+                label: 'Ledger',
+                subtitle: 'Transactions feed',
+                builder: (context) => Scaffold(
+                  appBar: mobileDomainRootAppBar(
+                    context,
+                    title: const Text('Nested Ledger'),
+                  ),
+                  body: ListView.builder(
+                    itemCount: 40,
+                    itemBuilder: (_, index) =>
+                        ListTile(title: Text('Transaction $index')),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Nested Ledger'), findsNothing);
+    expect(find.text('Transactions feed'), findsOneWidget);
+    expect(find.text('Ledger'), findsWidgets);
+
+    await tester.drag(find.byType(ListView), const Offset(0, -420));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Transactions feed'), findsNothing);
+    expect(find.text('Ledger'), findsOneWidget);
   });
 
   testWidgets('browse destinations prefer registered shell tabs', (

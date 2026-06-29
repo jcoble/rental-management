@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../home/mobile_domain_chrome.dart';
 import 'notices_models.dart';
 import 'notices_repository.dart';
 
@@ -13,37 +14,48 @@ class NoticesScreen extends ConsumerWidget {
     final draftsAsync = ref.watch(noticeDraftsProvider);
 
     Future<void> refresh() async => ref.invalidate(noticeDraftsProvider);
+    Future<void> generateDrafts() async {
+      await ref.read(noticesRepositoryProvider).generate();
+      ref.invalidate(noticeDraftsProvider);
+    }
+
+    final generateButton = IconButton(
+      tooltip: 'Generate drafts',
+      icon: const Icon(Icons.refresh),
+      onPressed: generateDrafts,
+    );
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: mobileDomainRootAppBar(
+        context,
         title: const Text('Notices'),
-        actions: [
-          IconButton(
-            tooltip: 'Generate drafts',
-            icon: const Icon(Icons.refresh),
-            onPressed: () async {
-              await ref.read(noticesRepositoryProvider).generate();
-              ref.invalidate(noticeDraftsProvider);
-            },
+        actions: [generateButton],
+      ),
+      body: Column(
+        children: [
+          MobileDomainEmbeddedToolbar(children: [generateButton]),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: refresh,
+              child: draftsAsync.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _ErrorBody(
+                  message: e is ApiException ? e.message : e.toString(),
+                ),
+                data: (drafts) {
+                  if (drafts.isEmpty) return const _EmptyBody();
+                  return ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                    itemCount: drafts.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (_, i) => _NoticeCard(draft: drafts[i]),
+                  );
+                },
+              ),
+            ),
           ),
         ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: refresh,
-        child: draftsAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => _ErrorBody(message: e is ApiException ? e.message : e.toString()),
-          data: (drafts) {
-            if (drafts.isEmpty) return const _EmptyBody();
-            return ListView.separated(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-              itemCount: drafts.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 8),
-              itemBuilder: (_, i) => _NoticeCard(draft: drafts[i]),
-            );
-          },
-        ),
       ),
     );
   }
@@ -68,10 +80,10 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
   NoticeDraft get draft => widget.draft;
 
   List<String> get _selectedChannels => [
-        if (_portal) 'Portal',
-        if (_email) 'Email',
-        if (_sms) 'Sms',
-      ];
+    if (_portal) 'Portal',
+    if (_email) 'Email',
+    if (_sms) 'Sms',
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -90,7 +102,9 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
                 Expanded(
                   child: Text(
                     '${_label(draft.noticeType)} - ${draft.tenantName}',
-                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
                 _StatusChip(status: draft.status),
@@ -103,20 +117,32 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
                 if (draft.unitNumber != null) 'Unit ${draft.unitNumber}',
                 draft.reason,
               ].join(' / '),
-              style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 10),
-            Text(draft.subject, style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+            Text(
+              draft.subject,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
             const SizedBox(height: 4),
             Text(
               draft.body,
-              style: theme.textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant, height: 1.4),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: cs.onSurfaceVariant,
+                height: 1.4,
+              ),
             ),
             if (draft.status == 'Draft') ...[
               const SizedBox(height: 10),
               Text(
                 'Send via',
-                style: theme.textTheme.labelSmall?.copyWith(color: cs.onSurfaceVariant),
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: cs.onSurfaceVariant,
+                ),
               ),
               Wrap(
                 spacing: 4,
@@ -124,12 +150,16 @@ class _NoticeCardState extends ConsumerState<_NoticeCard> {
                   FilterChip(
                     label: const Text('Portal'),
                     selected: _portal,
-                    onSelected: _busy ? null : (v) => setState(() => _portal = v),
+                    onSelected: _busy
+                        ? null
+                        : (v) => setState(() => _portal = v),
                   ),
                   FilterChip(
                     label: const Text('Email'),
                     selected: _email,
-                    onSelected: _busy ? null : (v) => setState(() => _email = v),
+                    onSelected: _busy
+                        ? null
+                        : (v) => setState(() => _email = v),
                   ),
                   FilterChip(
                     label: const Text('SMS'),
@@ -232,7 +262,12 @@ class _ErrorBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(child: Text(message, style: TextStyle(color: Theme.of(context).colorScheme.error)));
+    return Center(
+      child: Text(
+        message,
+        style: TextStyle(color: Theme.of(context).colorScheme.error),
+      ),
+    );
   }
 }
 
@@ -244,7 +279,9 @@ class _EmptyBody extends StatelessWidget {
     return const Center(
       child: Padding(
         padding: EdgeInsets.all(24),
-        child: Text('No draft notices. Tap refresh to generate lease lifecycle drafts.'),
+        child: Text(
+          'No draft notices. Tap refresh to generate lease lifecycle drafts.',
+        ),
       ),
     );
   }

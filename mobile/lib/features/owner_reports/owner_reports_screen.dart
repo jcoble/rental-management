@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
 import '../accounting/accounting_repository.dart';
+import '../home/mobile_domain_chrome.dart';
 import 'owner_reports_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -32,8 +33,7 @@ class OwnerReportsScreen extends ConsumerStatefulWidget {
   const OwnerReportsScreen({super.key});
 
   @override
-  ConsumerState<OwnerReportsScreen> createState() =>
-      _OwnerReportsScreenState();
+  ConsumerState<OwnerReportsScreen> createState() => _OwnerReportsScreenState();
 }
 
 class _OwnerReportsScreenState extends ConsumerState<OwnerReportsScreen> {
@@ -46,9 +46,9 @@ class _OwnerReportsScreenState extends ConsumerState<OwnerReportsScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(() => ref
-        .read(ownerSummariesProvider.notifier)
-        .load(year: _selectedYear));
+    Future.microtask(
+      () => ref.read(ownerSummariesProvider.notifier).load(year: _selectedYear),
+    );
   }
 
   Future<void> _refresh() =>
@@ -65,9 +65,7 @@ class _OwnerReportsScreenState extends ConsumerState<OwnerReportsScreen> {
     final messenger = ScaffoldMessenger.of(context);
     messenger
       ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(content: Text('Preparing your $year packet…')),
-      );
+      ..showSnackBar(SnackBar(content: Text('Preparing your $year packet…')));
     try {
       final bytes = await ref
           .read(accountingRepositoryProvider)
@@ -102,68 +100,74 @@ class _OwnerReportsScreenState extends ConsumerState<OwnerReportsScreen> {
   Widget build(BuildContext context) {
     final asyncState = ref.watch(ownerSummariesProvider);
     final now = DateTime.now().year;
+    final yearSelector = _YearSelector(
+      selected: _selectedYear,
+      years: List.generate(5, (i) => now - i),
+      onChanged: _changeYear,
+    );
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: mobileDomainRootAppBar(
+        context,
         title: const Text('Owner Reports'),
-        actions: [
-          _YearSelector(
-            selected: _selectedYear,
-            years: List.generate(5, (i) => now - i),
-            onChanged: _changeYear,
-          ),
-          const SizedBox(width: 8),
-        ],
+        actions: [yearSelector, const SizedBox(width: 8)],
       ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: asyncState.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => _ErrorBody(
-            message: e is ApiException ? e.message : e.toString(),
-            onRetry: () => ref
-                .read(ownerSummariesProvider.notifier)
-                .refresh(),
-          ),
-          data: (list) {
-            final packetCard = _YearEndPacketCard(
-              year: _packetYear,
-              years: List.generate(5, (i) => now - 1 - i),
-              onYearChanged: (y) => setState(() => _packetYear = y),
-              onOpen: () => _openYearEndPacket(_packetYear),
-            );
-            if (list.isEmpty) {
-              return ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-                children: [
-                  packetCard,
-                  const SizedBox(height: 24),
-                  _EmptyBody(year: _selectedYear),
-                ],
-              );
-            }
-            return ListView.separated(
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-              itemCount: list.length + 1,
-              separatorBuilder: (context, index) => const SizedBox(height: 8),
-              itemBuilder: (_, i) {
-                if (i == 0) {
-                  return Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: packetCard,
+      body: Column(
+        children: [
+          MobileDomainEmbeddedToolbar(children: [yearSelector]),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _refresh,
+              child: asyncState.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _ErrorBody(
+                  message: e is ApiException ? e.message : e.toString(),
+                  onRetry: () =>
+                      ref.read(ownerSummariesProvider.notifier).refresh(),
+                ),
+                data: (list) {
+                  final packetCard = _YearEndPacketCard(
+                    year: _packetYear,
+                    years: List.generate(5, (i) => now - 1 - i),
+                    onYearChanged: (y) => setState(() => _packetYear = y),
+                    onOpen: () => _openYearEndPacket(_packetYear),
                   );
-                }
-                final owner = list[i - 1];
-                return _OwnerSummaryCard(
-                  owner: owner,
-                  onTap: () => _showStatement(owner),
-                );
-              },
-            );
-          },
-        ),
+                  if (list.isEmpty) {
+                    return ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                      children: [
+                        packetCard,
+                        const SizedBox(height: 24),
+                        _EmptyBody(year: _selectedYear),
+                      ],
+                    );
+                  }
+                  return ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                    itemCount: list.length + 1,
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: 8),
+                    itemBuilder: (_, i) {
+                      if (i == 0) {
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: packetCard,
+                        );
+                      }
+                      final owner = list[i - 1];
+                      return _OwnerSummaryCard(
+                        owner: owner,
+                        onTap: () => _showStatement(owner),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -189,9 +193,9 @@ class _YearSelector extends StatelessWidget {
       value: selected,
       underline: const SizedBox.shrink(),
       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-            color: cs.onSurface,
-            fontWeight: FontWeight.w600,
-          ),
+        color: cs.onSurface,
+        fontWeight: FontWeight.w600,
+      ),
       items: years
           .map((y) => DropdownMenuItem(value: y, child: Text('$y')))
           .toList(),
@@ -232,8 +236,11 @@ class _YearEndPacketCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(Icons.picture_as_pdf_outlined,
-                    color: cs.onSecondaryContainer, size: 22),
+                Icon(
+                  Icons.picture_as_pdf_outlined,
+                  color: cs.onSecondaryContainer,
+                  size: 22,
+                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -273,10 +280,7 @@ class _YearEndPacketCard extends StatelessWidget {
                   ),
                   dropdownColor: cs.surface,
                   items: years
-                      .map((y) => DropdownMenuItem(
-                            value: y,
-                            child: Text('$y'),
-                          ))
+                      .map((y) => DropdownMenuItem(value: y, child: Text('$y')))
                       .toList(),
                   onChanged: (v) {
                     if (v != null) onYearChanged(v);
@@ -302,10 +306,7 @@ class _YearEndPacketCard extends StatelessWidget {
 // ── Owner Summary Card ────────────────────────────────────────────────────────
 
 class _OwnerSummaryCard extends StatelessWidget {
-  const _OwnerSummaryCard({
-    required this.owner,
-    required this.onTap,
-  });
+  const _OwnerSummaryCard({required this.owner, required this.onTap});
 
   final OwnerSummary owner;
   final VoidCallback onTap;
@@ -330,8 +331,11 @@ class _OwnerSummaryCard extends StatelessWidget {
                   color: cs.primaryContainer,
                   shape: BoxShape.circle,
                 ),
-                child: Icon(Icons.person_outline,
-                    color: cs.onPrimaryContainer, size: 20),
+                child: Icon(
+                  Icons.person_outline,
+                  color: cs.onPrimaryContainer,
+                  size: 20,
+                ),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -340,14 +344,16 @@ class _OwnerSummaryCard extends StatelessWidget {
                   children: [
                     Text(
                       owner.ownerName,
-                      style: theme.textTheme.titleSmall
-                          ?.copyWith(fontWeight: FontWeight.w600),
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       'Net to owner',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: cs.onSurfaceVariant),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -362,8 +368,11 @@ class _OwnerSummaryCard extends StatelessWidget {
                       color: isPositive ? null : cs.error,
                     ),
                   ),
-                  Icon(Icons.chevron_right,
-                      color: cs.onSurfaceVariant, size: 18),
+                  Icon(
+                    Icons.chevron_right,
+                    color: cs.onSurfaceVariant,
+                    size: 18,
+                  ),
                 ],
               ),
             ],
@@ -402,8 +411,9 @@ class _OwnerStatementSheet extends ConsumerWidget {
                 Expanded(
                   child: Text(
                     ownerName,
-                    style: theme.textTheme.titleLarge
-                        ?.copyWith(fontWeight: FontWeight.w700),
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
                 IconButton(
@@ -464,8 +474,9 @@ class _StatementBody extends StatelessWidget {
         // Year badge
         Text(
           '${statement.year} Annual Statement',
-          style: theme.textTheme.bodySmall
-              ?.copyWith(color: cs.onSurfaceVariant),
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: cs.onSurfaceVariant,
+          ),
         ),
         const SizedBox(height: 12),
 
@@ -513,8 +524,9 @@ class _StatementBody extends StatelessWidget {
         if (statement.properties.isNotEmpty) ...[
           Text(
             'By Property',
-            style: theme.textTheme.titleSmall
-                ?.copyWith(fontWeight: FontWeight.w700),
+            style: theme.textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
           ),
           const SizedBox(height: 8),
           Card(
@@ -536,21 +548,26 @@ class _StatementBody extends StatelessWidget {
                       _TableHeader(text: 'Net', align: TextAlign.right),
                     ],
                   ),
-                  ...statement.properties.map((p) => TableRow(
-                        children: [
-                          _TableCell(text: p.propertyName),
-                          _TableCell(
-                              text: _fmtCurrency(p.rentalIncome),
-                              align: TextAlign.right),
-                          _TableCell(
-                              text: _fmtCurrency(p.expenses),
-                              align: TextAlign.right),
-                          _TableCell(
-                              text: _fmtCurrency(p.netToOwner),
-                              align: TextAlign.right,
-                              bold: true),
-                        ],
-                      )),
+                  ...statement.properties.map(
+                    (p) => TableRow(
+                      children: [
+                        _TableCell(text: p.propertyName),
+                        _TableCell(
+                          text: _fmtCurrency(p.rentalIncome),
+                          align: TextAlign.right,
+                        ),
+                        _TableCell(
+                          text: _fmtCurrency(p.expenses),
+                          align: TextAlign.right,
+                        ),
+                        _TableCell(
+                          text: _fmtCurrency(p.netToOwner),
+                          align: TextAlign.right,
+                          bold: true,
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -618,8 +635,8 @@ class _TableHeader extends StatelessWidget {
         text,
         textAlign: align,
         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
       ),
     );
   }
@@ -644,8 +661,8 @@ class _TableCell extends StatelessWidget {
         text,
         textAlign: align,
         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              fontWeight: bold ? FontWeight.w700 : null,
-            ),
+          fontWeight: bold ? FontWeight.w700 : null,
+        ),
         overflow: TextOverflow.ellipsis,
       ),
     );
@@ -670,9 +687,9 @@ class _EmptyBody extends StatelessWidget {
           const SizedBox(height: 12),
           Text(
             'No owner data for $year',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
           const SizedBox(height: 4),
           Text(
@@ -708,10 +725,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: cs.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
