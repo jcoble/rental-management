@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
+import '../notices/notice_templates_screen.dart';
 import 'change_password_screen.dart';
 import 'notification_settings_repository.dart';
 
@@ -79,6 +80,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               ),
               const SizedBox(height: 12),
               _ChannelMatrixCard(settings: settings),
+              const SizedBox(height: 12),
+              const _NoticeTemplatesCard(),
               const SizedBox(height: 24),
               _SectionHeader(
                 title: 'Automation',
@@ -528,6 +531,38 @@ class _ProviderStatusCard extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Notice templates entry ──────────────────────────────────────────────────
+
+class _NoticeTemplatesCard extends StatelessWidget {
+  const _NoticeTemplatesCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Card(
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+        leading: Icon(Icons.description_outlined, color: theme.colorScheme.primary),
+        title: Text(
+          'Notice templates & auto-send',
+          style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          'Edit each notice message and choose auto-send or ask-first.',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => const NoticeTemplatesScreen(),
+          ),
         ),
       ),
     );
