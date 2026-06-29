@@ -14,9 +14,19 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		throw redirect(303, `/login?redirectTo=${encodeURIComponent(redirectTo)}`);
 	}
 
-	// Only tenants (a non-null tenantId) belong in the portal. Send everyone else (staff/owners) to
-	// the staff home rather than render an empty, 403-spamming tenant dashboard.
-	if (locals.user.tenantId == null) {
+	// Only tenants belong in the portal; send everyone else (staff/owners) to the staff home rather
+	// than render an empty, 403-spamming tenant dashboard.
+	//
+	// IMPORTANT: this MUST mirror the (protected) guard's criterion EXACTLY (which sends
+	// `Tenant && !staff` users to /portal). Keying this off `tenantId` while (protected) keyed off
+	// role caused a /portal <-> / redirect loop (ERR_TOO_MANY_REDIRECTS) for any Tenant-role user
+	// whose `tenantId` was momentarily null (e.g. the auth-resilience token decode, whose token
+	// carries no tenantId claim). Using the same role test makes the two guards perfect complements,
+	// so no user can ever loop.
+	const isPortalUser =
+		locals.user.roles?.includes('Tenant') &&
+		!locals.user.roles.some((r) => ['Admin', 'Manager', 'Agent'].includes(r));
+	if (!isPortalUser) {
 		throw redirect(303, '/');
 	}
 
