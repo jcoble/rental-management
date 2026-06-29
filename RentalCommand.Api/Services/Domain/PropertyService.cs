@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
@@ -255,6 +256,36 @@ public class PropertyService : IPropertyService
         if (entity == null)
         {
             return false;
+        }
+
+        // Block the soft-delete while the property still has live units or an occupying lease.
+        // DeleteAsync only sets the property's own DeletedAt; a child unit keeps DeletedAt == null but
+        // every unit read INNER-JOINs through the property, so it would persist live yet vanish from
+        // every UI surface (and still hold its slot in the (PropertyId, UnitNumber) unique index).
+        // Mirror the tenant active-lease / vendor open-work-order delete guards: require the landlord to
+        // clear the children first. Both checks run SQL-side (COUNT / EXISTS); the global query filters
+        // already exclude soft-deleted units and leases. Unit has no PortfolioId of its own — the parent
+        // property was already confirmed in-portfolio above, so PropertyId == id is correctly scoped.
+        var liveUnitCount = await _db.Units
+            .CountAsync(u => u.PropertyId == id, ct);
+        if (liveUnitCount > 0)
+        {
+            var unitNoun = liveUnitCount == 1 ? "unit" : "units";
+            throw new DomainValidationException(
+                $"This property still has {liveUnitCount} {unitNoun}. Remove the {unitNoun} before deleting this property.");
+        }
+
+        // Safety net for the orphan edge case: an occupying lease whose unit was already soft-deleted
+        // slips past the unit check above. NoticeGiven still occupies its unit (it is treated as the
+        // current lease elsewhere), so block on it too — matching the tenant delete guard.
+        var hasOccupyingLease = await _db.Leases
+            .AnyAsync(l => l.PropertyId == id
+                && l.PortfolioId == portfolioId
+                && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven), ct);
+        if (hasOccupyingLease)
+        {
+            throw new DomainValidationException(
+                "This property has an active lease; end or reassign it first.");
         }
 
         entity.DeletedAt = DateTime.UtcNow;
