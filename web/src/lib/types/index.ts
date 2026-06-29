@@ -942,6 +942,8 @@ export interface WorkOrderTimelineEntry {
 /** A single work order plus its status timeline (returned by GET /work-orders/{id} and the portal detail). */
 export interface WorkOrderDetail extends WorkOrder {
 	timeline?: WorkOrderTimelineEntry[];
+	/** True when an open vendor dispatch exists (texted, awaiting DONE) — drives the dispatched banner. */
+	hasActiveDispatch?: boolean;
 }
 
 export interface Appointment {

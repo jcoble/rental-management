@@ -200,6 +200,17 @@ public class WorkOrderService : IWorkOrderService
             .ToListAsync(ct);
 
         var response = WorkOrderDetailResponse.FromEntity(entity, events);
+
+        // Whether an OPEN vendor dispatch (texted, still awaiting the vendor's DONE) exists for this work
+        // order — a single EXISTS computed DB-side, never loaded-then-counted. Drives the detail page's
+        // "vendor has the job … will close on DONE" banner so it reflects a real dispatch rather than a
+        // mere vendor assignment. "Open" = Dispatched/Acknowledged, matching VendorDispatchService.
+        response.HasActiveDispatch = await _db.VendorDispatches
+            .AnyAsync(d => d.WorkOrderId == id
+                && d.PortfolioId == portfolioId
+                && (d.Status == VendorDispatchStatus.Dispatched
+                    || d.Status == VendorDispatchStatus.Acknowledged), ct);
+
         var scan = await _db.FindLatestAvailableEntityFileAsync(_files, portfolioId, EntityType, id, ct);
         if (scan is not null)
         {
