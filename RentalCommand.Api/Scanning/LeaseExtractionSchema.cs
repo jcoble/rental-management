@@ -45,9 +45,8 @@ public static class LeaseExtractionSchema
 
     public static IReadOnlyList<ExtractionFieldSpec> Fields { get; } = new[]
     {
-        new ExtractionFieldSpec("target_entity_type", "enum",
-            "Always set to Lease for this schema.",
-            EnumValues: new[] { "Lease" }),
+        // No target_entity_type field: the draft's TargetEntityType is fixed from the upload-time
+        // choice and re-derived in routing — it's a meta/routing hint, not a user-facing data field.
         new ExtractionFieldSpec("tenant_name", "string",
             "Full name of the primary tenant / lessee as written on the lease. Free text, not an id.",
             Required: true),

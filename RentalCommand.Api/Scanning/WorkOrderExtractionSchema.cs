@@ -18,9 +18,9 @@ public static class WorkOrderExtractionSchema
 
     public static IReadOnlyList<ExtractionFieldSpec> Fields { get; } = new[]
     {
-        new ExtractionFieldSpec("target_entity_type", "enum",
-            "Always set to WorkOrder for this schema.",
-            EnumValues: new[] { "WorkOrder" }),
+        // No target_entity_type field: the draft's TargetEntityType is fixed from the upload-time
+        // choice (and re-derived by ScanProcessingWorker), never from extraction. Emitting it only
+        // added a stray conf-1.0 meta field to the review set, so it is intentionally omitted here.
         new ExtractionFieldSpec("property_id", "integer",
             "Exact id of the matching property, copied from the grounding list's properties[].id, only when strongly matched. Empty otherwise."),
         new ExtractionFieldSpec("unit_id", "integer",
