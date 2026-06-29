@@ -771,10 +771,29 @@
 					<h1 class="text-2xl font-bold" data-testid="lease-detail-number">{lease.leaseNumber}</h1>
 					<StatusBadge status={visibleStatus ?? lease.status} />
 				</div>
-				<p class="mt-1 text-sm text-muted-foreground">
-					{#if lease.propertyName}{lease.propertyName}{/if}
-					{#if lease.unitNumber} · Unit {lease.unitNumber}{/if}
-					{#if lease.tenantName} · {lease.tenantName}{/if}
+				<p class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground" data-testid="lease-detail-context-links">
+					{#if lease.propertyName}
+						<a href="/properties/{lease.propertyId}" class="font-medium text-foreground underline-offset-4 hover:underline" data-testid="lease-detail-header-property-link">{lease.propertyName}</a>
+					{/if}
+					{#if lease.unitNumber}
+						{#if lease.propertyName}<span aria-hidden="true">·</span>{/if}
+						<a href="/units/{lease.unitId}?tab=lease" class="font-medium text-foreground underline-offset-4 hover:underline" data-testid="lease-detail-header-unit-link">Unit {lease.unitNumber}</a>
+					{/if}
+					{#if lease.tenants?.length || lease.tenantName}
+						{#if lease.propertyName || lease.unitNumber}<span aria-hidden="true">·</span>{/if}
+						{#if lease.tenants?.length}
+							<span class="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
+								{#each lease.tenants as tenant, index}
+									<a href="/tenants/{tenant.id}" class="font-medium text-foreground underline-offset-4 hover:underline" data-testid="lease-detail-header-tenant-link">{tenant.name}</a>
+									{#if index < (lease.tenants?.length ?? 0) - 1}
+										<span aria-hidden="true">+</span>
+									{/if}
+								{/each}
+							</span>
+						{:else}
+							<a href="/tenants/{lease.tenantId}" class="font-medium text-foreground underline-offset-4 hover:underline" data-testid="lease-detail-header-tenant-link">{lease.tenantName}</a>
+						{/if}
+					{/if}
 				</p>
 			</div>
 			<div class="flex flex-wrap items-center gap-2">
