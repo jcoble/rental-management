@@ -75,7 +75,7 @@ public class TenantService : ITenantService
             "lastname" => query.SortDescending ? q.OrderByDescending(t => t.LastName) : q.OrderBy(t => t.LastName),
             "email" => query.SortDescending ? q.OrderByDescending(t => t.Email) : q.OrderBy(t => t.Email),
             "phone" => query.SortDescending ? q.OrderByDescending(t => t.Phone) : q.OrderBy(t => t.Phone),
-            "activeleasecount" => query.SortDescending ? q.OrderByDescending(t => t.Leases.Count(l => l.Status == LeaseStatus.Active)).ThenBy(t => t.LastName).ThenBy(t => t.FirstName) : q.OrderBy(t => t.Leases.Count(l => l.Status == LeaseStatus.Active)).ThenBy(t => t.LastName).ThenBy(t => t.FirstName),
+            "activeleasecount" => query.SortDescending ? q.OrderByDescending(t => t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)).ThenBy(t => t.LastName).ThenBy(t => t.FirstName) : q.OrderBy(t => t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven)).ThenBy(t => t.LastName).ThenBy(t => t.FirstName),
             "createdat" => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
             "updatedat" => query.SortDescending ? q.OrderByDescending(t => t.UpdatedAt) : q.OrderBy(t => t.UpdatedAt),
             _ => query.SortDescending ? q.OrderByDescending(t => t.CreatedAt) : q.OrderBy(t => t.CreatedAt),
@@ -83,15 +83,18 @@ public class TenantService : ITenantService
 
         var totalCount = await q.CountAsync(ct);
 
-        // Project the active-lease count as a correlated subquery in the SAME page query (EF-translated),
-        // so the count comes back per-row from Postgres — never load-then-count in C#.
+        // Project the occupying-lease count (Active + NoticeGiven — a lease in notice is still in force
+        // and occupies its unit, treated as the current lease elsewhere) as a correlated subquery in the
+        // SAME page query (EF-translated), so the count comes back per-row from Postgres — never
+        // load-then-count in C#. This is the same occupancy signal the delete guard uses, so the UI can
+        // disable delete for a tenant who still occupies a unit (including a notice-given-only tenant).
         var rows = await q
             .Skip(query.NormalizedSkip)
             .Take(query.NormalizedTake)
             .Select(t => new
             {
                 Entity = t,
-                ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active),
+                ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven),
             })
             .ToListAsync(ct);
 
@@ -172,7 +175,7 @@ public class TenantService : ITenantService
             .Select(t => new
             {
                 Entity = t,
-                ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active),
+                ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -245,16 +248,18 @@ public class TenantService : ITenantService
             return false;
         }
 
-        // Block the soft-delete while the tenant still holds an Active lease. Otherwise the lease keeps
-        // occupying its unit but 404s in the UI — Include(Tenant) inner-joins through the tenant's
-        // soft-delete query filter, so the orphaned lease becomes invisible yet stays Active. Same
-        // ActiveLeaseCount predicate the read model uses; evaluated SQL-side as an EXISTS (the global
-        // query filter already excludes soft-deleted leases).
-        var hasActiveLease = await _db.Leases
+        // Block the soft-delete while the tenant still occupies a unit. A lease in Active OR NoticeGiven
+        // is still in force and occupying — a notice-given lease is treated as the current lease
+        // everywhere else (unit health badge, "Move-Out" stage). Otherwise the lease keeps occupying its
+        // unit but 404s in the UI — Include(Tenant) inner-joins through the tenant's soft-delete query
+        // filter, so the orphaned lease becomes invisible yet stays in force. Same occupancy predicate
+        // the read model's ActiveLeaseCount uses; evaluated SQL-side as an EXISTS (the global query
+        // filter already excludes soft-deleted leases).
+        var hasOccupyingLease = await _db.Leases
             .AnyAsync(l => l.TenantId == id
                 && l.PortfolioId == portfolioId
-                && l.Status == LeaseStatus.Active, ct);
-        if (hasActiveLease)
+                && (l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven), ct);
+        if (hasOccupyingLease)
         {
             throw new DomainValidationException(
                 "This tenant has an active lease; end or reassign it first.");

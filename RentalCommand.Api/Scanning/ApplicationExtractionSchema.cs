@@ -44,9 +44,9 @@ public static class ApplicationExtractionSchema
 
     public static IReadOnlyList<ExtractionFieldSpec> Fields { get; } = new[]
     {
-        new ExtractionFieldSpec("target_entity_type", "enum",
-            "Always set to Application for this schema.",
-            EnumValues: new[] { "Application" }),
+        // No target_entity_type field: the draft's TargetEntityType is fixed from the upload-time
+        // choice (and re-derived by ScanProcessingWorker), never from extraction. Emitting it only
+        // added a stray conf-1.0 meta field to the review set, so it is intentionally omitted here.
         new ExtractionFieldSpec("first_name", "string",
             "The primary applicant's first (given) name as written on the application.",
             Required: true),

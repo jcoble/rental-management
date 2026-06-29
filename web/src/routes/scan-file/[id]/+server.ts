@@ -22,13 +22,21 @@ const INLINE_SAFE = new Set([
  * current token on `locals`; this route forwards that token with the global fetch so the
  * file streams back on our own origin.
  */
-export const GET: RequestHandler = async ({ params, locals }) => {
+export const GET: RequestHandler = async ({ params, locals, url }) => {
 	const token = locals.accessToken;
 	if (!token) {
 		throw error(401, 'Unauthorized');
 	}
 
-	const upstream = await fetch(`${SERVER_API_BASE_URL}/scans/${params.id}/file`, {
+	// Forward an optional `full` flag so callers can request the full-resolution original
+	// instead of the default ~1000px thumbnail the API serves for image uploads. The API
+	// accepts ?full=1 / ?full=true; anything else falls back to the thumbnail.
+	const full = url.searchParams.get('full');
+	const upstreamUrl = full
+		? `${SERVER_API_BASE_URL}/scans/${params.id}/file?full=${encodeURIComponent(full)}`
+		: `${SERVER_API_BASE_URL}/scans/${params.id}/file`;
+
+	const upstream = await fetch(upstreamUrl, {
 		headers: { Authorization: `Bearer ${token}` }
 	});
 

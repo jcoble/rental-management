@@ -28,7 +28,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock, BellRing, Send } from '@lucide/svelte';
+	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock, BellRing, Send, KeyRound } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 
@@ -109,6 +109,22 @@
 			showSuccess('Tenant deleted.');
 			queryClient.invalidateQueries({ queryKey: ['tenants', portfolioId] });
 			goto('/tenants');
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	// ── Grant portal access ──────────────────────────────────────────────────────
+	// Provision (or confirm) a tenant portal login on demand. The tenant signs in with their email +
+	// the shared tenant password; only available once the tenant has an email on file.
+	const grantPortalAccessMutation = createMutation(() => ({
+		mutationFn: (tid: number) => tenants.grantPortalAccess(tid),
+		onSuccess: (result) => {
+			const who = fullName || 'This tenant';
+			showSuccess(
+				result.alreadyExisted
+					? `Portal access already active — ${who} can sign in with their email.`
+					: `Portal access granted — ${who} can sign in with their email.`
+			);
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
@@ -394,6 +410,19 @@
 					<Button variant="outline" class="gap-2" onclick={() => openNoticeDialog()} data-testid="tenant-detail-create-notice">
 						<BellRing class="h-4 w-4" />
 						Create / Send notice
+					</Button>
+					<Button
+						variant="outline"
+						class="gap-2"
+						onclick={() => grantPortalAccessMutation.mutate(tenant.id)}
+						disabled={!tenant.email || grantPortalAccessMutation.isPending}
+						title={tenant.email
+							? 'Create a portal login for this tenant.'
+							: 'Add an email to this tenant before granting portal access.'}
+						data-testid="tenant-detail-grant-portal-access"
+					>
+						<KeyRound class="h-4 w-4" />
+						{grantPortalAccessMutation.isPending ? 'Granting…' : 'Grant portal access'}
 					</Button>
 					<Button variant="outline" class="gap-2" onclick={startEditing} data-testid="tenant-detail-edit">
 						<Pencil class="h-4 w-4" />
