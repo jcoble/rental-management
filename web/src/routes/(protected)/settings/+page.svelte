@@ -20,6 +20,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import TimeZoneSelect from '$lib/components/shared/TimeZoneSelect.svelte';
+	import NoticeTemplatesSection from '$lib/components/settings/NoticeTemplatesSection.svelte';
 	import SandboxBanner from '$lib/components/SandboxBanner.svelte';
 	import WalkMeThrough from '$lib/components/onboarding/WalkMeThrough.svelte';
 	import {
@@ -156,6 +157,11 @@
 		smsCredentialASet: false,
 		smsCredentialBSet: false,
 		smsCredentialCSet: false,
+		autoSendRentReminder: false,
+		autoSendRenewal: false,
+		autoSendMonthToMonth: false,
+		autoSendMoveOut: false,
+		autoSendLateRent: false,
 	});
 
 	// Provider catalogue: drives the <Select> and the labels of the three generic credential slots.
@@ -468,6 +474,11 @@
 				smsCredentialASet: data.smsCredentialASet,
 				smsCredentialBSet: data.smsCredentialBSet,
 				smsCredentialCSet: data.smsCredentialCSet,
+				autoSendRentReminder: data.autoSendRentReminder,
+				autoSendRenewal: data.autoSendRenewal,
+				autoSendMonthToMonth: data.autoSendMonthToMonth,
+				autoSendMoveOut: data.autoSendMoveOut,
+				autoSendLateRent: data.autoSendLateRent,
 			};
 			applyChannelPreferences(data.channelPreferences ?? []);
 			smsCredentialAInput = '';
@@ -516,6 +527,11 @@
 				smsCredentialA: smsCredentialAInput.length > 0 ? smsCredentialAInput : undefined,
 				smsCredentialB: smsCredentialBInput.length > 0 ? smsCredentialBInput : undefined,
 				smsCredentialC: smsCredentialCInput.length > 0 ? smsCredentialCInput : undefined,
+				autoSendRentReminder: notificationSettingsForm.autoSendRentReminder,
+				autoSendRenewal: notificationSettingsForm.autoSendRenewal,
+				autoSendMonthToMonth: notificationSettingsForm.autoSendMonthToMonth,
+				autoSendMoveOut: notificationSettingsForm.autoSendMoveOut,
+				autoSendLateRent: notificationSettingsForm.autoSendLateRent,
 				channelPreferences: channelPreferencesPayload(),
 			}),
 		onSuccess: (result) => {
@@ -537,6 +553,11 @@
 				smsCredentialASet: result.smsCredentialASet,
 				smsCredentialBSet: result.smsCredentialBSet,
 				smsCredentialCSet: result.smsCredentialCSet,
+				autoSendRentReminder: result.autoSendRentReminder,
+				autoSendRenewal: result.autoSendRenewal,
+				autoSendMonthToMonth: result.autoSendMonthToMonth,
+				autoSendMoveOut: result.autoSendMoveOut,
+				autoSendLateRent: result.autoSendLateRent,
 			};
 			applyChannelPreferences(result.channelPreferences ?? []);
 			smsCredentialAInput = '';
@@ -1023,6 +1044,15 @@
 						</p>
 					</Card.Content>
 				</Card.Root>
+
+				<!-- Notice message templates + per-type auto-send / ask-first toggles. The toggles bind to
+				     notificationSettingsForm.autoSend* and persist via the same delivery-settings save. -->
+				<NoticeTemplatesSection
+					settings={notificationSettingsForm}
+					onSaveSettings={() => saveNotificationSettingsMutation.mutate()}
+					savingSettings={saveNotificationSettingsMutation.isPending}
+					settingsDisabled={notificationSettingsQuery.isLoading}
+				/>
 
 				{#if canBroadcast}
 					<!-- Broadcast: a one-off announcement, not a stored setting. Lives under Notifications. -->

@@ -62,6 +62,12 @@ export interface NotificationSettingsResponse {
 	smsCredentialASet: boolean;
 	smsCredentialBSet: boolean;
 	smsCredentialCSet: boolean;
+	// Per notice type: true = auto-send the approved draft, false = ask the landlord first.
+	autoSendRentReminder: boolean;
+	autoSendRenewal: boolean;
+	autoSendMonthToMonth: boolean;
+	autoSendMoveOut: boolean;
+	autoSendLateRent: boolean;
 	channelPreferences: NotificationChannelPreference[];
 }
 
@@ -84,6 +90,12 @@ export interface UpdateNotificationSettingsRequest {
 	smsCredentialA?: string | null;
 	smsCredentialB?: string | null;
 	smsCredentialC?: string | null;
+	// Per notice type: true = auto-send the approved draft, false = ask the landlord first.
+	autoSendRentReminder: boolean;
+	autoSendRenewal: boolean;
+	autoSendMonthToMonth: boolean;
+	autoSendMoveOut: boolean;
+	autoSendLateRent: boolean;
 	channelPreferences: NotificationChannelPreference[];
 }
 
