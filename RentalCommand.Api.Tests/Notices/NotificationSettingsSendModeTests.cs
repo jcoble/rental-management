@@ -2,6 +2,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
@@ -26,14 +27,13 @@ public class NotificationSettingsSendModeTests : IDisposable
         {
             AutoSendRentReminder = true,
             AutoSendLateRent = true,
+            LeaseEndAutoAction = LeaseEndAutoAction.Renewal,
         }, default);
 
         var resp = await sut.GetAdminAsync(portfolioId);
 
         resp.AutoSendRentReminder.Should().BeTrue();
         resp.AutoSendLateRent.Should().BeTrue();
-        resp.AutoSendRenewal.Should().BeFalse();
-        resp.AutoSendMonthToMonth.Should().BeFalse();
-        resp.AutoSendMoveOut.Should().BeFalse();
+        resp.LeaseEndAutoAction.Should().Be(LeaseEndAutoAction.Renewal);
     }
 }
