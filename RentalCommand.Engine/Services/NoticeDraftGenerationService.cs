@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Enums;
 using RentalCommand.Data;
 
 namespace RentalCommand.Engine.Services;
@@ -120,10 +121,10 @@ public sealed class NoticeDraftGenerationService : INoticeDraftGenerationService
     private static bool AutoSendEnabled(Core.Entities.NotificationSettings? s, string noticeType) => s != null && noticeType switch
     {
         "RentReminder" => s.AutoSendRentReminder,
-        "RenewalOffer" => s.AutoSendRenewal,
-        "MonthToMonthConversion" => s.AutoSendMonthToMonth,
-        "MoveOutReminder" => s.AutoSendMoveOut,
         "LateRentNotice" => s.AutoSendLateRent,
+        "RenewalOffer" => s.LeaseEndAutoAction == LeaseEndAutoAction.Renewal,
+        "MonthToMonthConversion" => s.LeaseEndAutoAction == LeaseEndAutoAction.MonthToMonth,
+        "MoveOutReminder" => s.LeaseEndAutoAction == LeaseEndAutoAction.NonRenewal,
         _ => false,
     };
 
