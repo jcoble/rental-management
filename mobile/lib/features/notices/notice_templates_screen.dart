@@ -31,6 +31,28 @@ class _NoticeTemplatesScreenState extends ConsumerState<NoticeTemplatesScreen> {
     'LateRentNotice': 'Late rent notices',
   };
 
+  /// Recurring notices each carry their own auto-send toggle.
+  static const Set<String> _recurringTypes = {
+    'RentReminder',
+    'LateRentNotice',
+  };
+
+  /// Lease-end notices are driven by the single [leaseEndAutoAction] selector:
+  /// a notice type auto-sends when the selected action maps to it.
+  static const Map<String, String> _leaseEndActionForType = {
+    'RenewalOffer': 'Renewal',
+    'MonthToMonthConversion': 'MonthToMonth',
+    'MoveOutReminder': 'NonRenewal',
+  };
+
+  /// The single lease-end selector's options, in canonical order.
+  static const List<(String value, String label)> _leaseEndOptions = [
+    ('Draft', 'Just draft it'),
+    ('Renewal', 'Offer renewal'),
+    ('MonthToMonth', 'Offer month-to-month'),
+    ('NonRenewal', 'Send non-renewal'),
+  ];
+
   late Future<List<NoticeTemplate>> _future;
   final _subjectControllers = <String, TextEditingController>{};
   final _bodyControllers = <String, TextEditingController>{};
@@ -78,20 +100,17 @@ class _NoticeTemplatesScreenState extends ConsumerState<NoticeTemplatesScreen> {
         () => TextEditingController(text: t.body),
       );
 
+  /// Whether [type] is currently set to auto-send. Recurring notices read their
+  /// own toggle; lease-end notices auto-send when the selected action maps here.
   static bool _autoSendOf(NotificationSettings s, String type) {
     switch (type) {
       case 'RentReminder':
         return s.autoSendRentReminder;
-      case 'RenewalOffer':
-        return s.autoSendRenewal;
-      case 'MonthToMonthConversion':
-        return s.autoSendMonthToMonth;
-      case 'MoveOutReminder':
-        return s.autoSendMoveOut;
       case 'LateRentNotice':
         return s.autoSendLateRent;
       default:
-        return false;
+        final action = _leaseEndActionForType[type];
+        return action != null && s.leaseEndAutoAction == action;
     }
   }
 
@@ -103,12 +122,6 @@ class _NoticeTemplatesScreenState extends ConsumerState<NoticeTemplatesScreen> {
     switch (type) {
       case 'RentReminder':
         return s.copyWith(autoSendRentReminder: value);
-      case 'RenewalOffer':
-        return s.copyWith(autoSendRenewal: value);
-      case 'MonthToMonthConversion':
-        return s.copyWith(autoSendMonthToMonth: value);
-      case 'MoveOutReminder':
-        return s.copyWith(autoSendMoveOut: value);
       case 'LateRentNotice':
         return s.copyWith(autoSendLateRent: value);
       default:
@@ -124,6 +137,22 @@ class _NoticeTemplatesScreenState extends ConsumerState<NoticeTemplatesScreen> {
     } on ApiException catch (e) {
       if (!mounted) return;
       // Re-sync to the server's truth so the toggle reflects reality.
+      await notifier.refresh();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    }
+  }
+
+  /// Persists the single lease-end auto-send action via the settings flow.
+  Future<void> _setLeaseEndAction(String value) async {
+    final notifier = ref.read(notificationSettingsProvider.notifier);
+    notifier.patch((s) => s.copyWith(leaseEndAutoAction: value));
+    try {
+      await notifier.save();
+    } on ApiException catch (e) {
+      if (!mounted) return;
       await notifier.refresh();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -207,6 +236,15 @@ class _NoticeTemplatesScreenState extends ConsumerState<NoticeTemplatesScreen> {
                     ),
               ),
               const SizedBox(height: 12),
+              _LeaseEndActionCard(
+                value: settingsAsync.maybeWhen(
+                  data: (s) => s.leaseEndAutoAction,
+                  orElse: () => 'Draft',
+                ),
+                enabled: settingsAsync is AsyncData,
+                options: _leaseEndOptions,
+                onChanged: _setLeaseEndAction,
+              ),
               for (final template in templates)
                 _TemplateTile(
                   title: _labels[template.noticeType] ?? template.noticeType,
@@ -216,6 +254,10 @@ class _NoticeTemplatesScreenState extends ConsumerState<NoticeTemplatesScreen> {
                     orElse: () => false,
                   ),
                   autoSendReady: settingsAsync is AsyncData,
+                  // Recurring notices keep an inline switch; lease-end notices
+                  // are driven by the selector above.
+                  showAutoSendSwitch:
+                      _recurringTypes.contains(template.noticeType),
                   saving: _savingTemplate.contains(template.noticeType),
                   subjectController: _subjectControllerFor(template),
                   bodyController: _bodyControllerFor(template),
@@ -238,6 +280,7 @@ class _TemplateTile extends StatelessWidget {
     required this.template,
     required this.autoSend,
     required this.autoSendReady,
+    required this.showAutoSendSwitch,
     required this.saving,
     required this.subjectController,
     required this.bodyController,
@@ -250,6 +293,7 @@ class _TemplateTile extends StatelessWidget {
   final NoticeTemplate template;
   final bool autoSend;
   final bool autoSendReady;
+  final bool showAutoSendSwitch;
   final bool saving;
   final TextEditingController subjectController;
   final TextEditingController bodyController;
@@ -279,19 +323,20 @@ class _TemplateTile extends StatelessWidget {
         ),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         children: [
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Send automatically'),
-            subtitle: Text(
-              autoSend
-                  ? 'Notices are sent without review.'
-                  : 'We create a draft for you to review and send.',
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: cs.onSurfaceVariant),
+          if (showAutoSendSwitch)
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Send automatically'),
+              subtitle: Text(
+                autoSend
+                    ? 'Notices are sent without review.'
+                    : 'We create a draft for you to review and send.',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: cs.onSurfaceVariant),
+              ),
+              value: autoSend,
+              onChanged: autoSendReady ? onAutoSendChanged : null,
             ),
-            value: autoSend,
-            onChanged: autoSendReady ? onAutoSendChanged : null,
-          ),
           if (needsTemplate)
             Container(
               width: double.infinity,
@@ -367,6 +412,65 @@ class _TemplateTile extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The single "what happens when a lease is ending" selector, saved through the
+/// shared notification-settings flow (same as the recurring auto-send switches).
+class _LeaseEndActionCard extends StatelessWidget {
+  const _LeaseEndActionCard({
+    required this.value,
+    required this.enabled,
+    required this.options,
+    required this.onChanged,
+  });
+
+  final String value;
+  final bool enabled;
+  final List<(String value, String label)> options;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'When a lease is ending, automatically',
+              style: theme.textTheme.bodyLarge
+                  ?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Choose what we do as a lease approaches its end date.',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: cs.onSurfaceVariant),
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              initialValue: value,
+              isExpanded: true,
+              decoration: const InputDecoration(border: OutlineInputBorder()),
+              items: [
+                for (final o in options)
+                  DropdownMenuItem(value: o.$1, child: Text(o.$2)),
+              ],
+              onChanged: enabled
+                  ? (v) {
+                      if (v != null) onChanged(v);
+                    }
+                  : null,
+            ),
+          ],
+        ),
       ),
     );
   }
