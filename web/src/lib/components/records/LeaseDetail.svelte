@@ -58,8 +58,21 @@
 	import HelpTooltip from '$lib/components/ui/HelpTooltip.svelte';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
-	let { leaseId, onDeleted, initialTab }: { leaseId: number; onDeleted: () => void; initialTab?: string } = $props();
+	let {
+		leaseId,
+		onDeleted,
+		initialTab,
+		expectedUnitId,
+		onUnitMismatch,
+	}: {
+		leaseId: number;
+		onDeleted: () => void;
+		initialTab?: string;
+		expectedUnitId?: number;
+		onUnitMismatch?: () => void;
+	} = $props();
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -83,6 +96,11 @@
 	}));
 
 	const lease = $derived(leaseQuery.data);
+
+	$effect(() => {
+		if (isMismatchedUnitSelection(lease, expectedUnitId)) onUnitMismatch?.();
+	});
+
 	const leaseTemplateCount = $derived(leaseTemplatesQuery.data?.totalCount ?? 0);
 	const leaseTemplatePreview = $derived(leaseTemplatesQuery.data?.items ?? []);
 

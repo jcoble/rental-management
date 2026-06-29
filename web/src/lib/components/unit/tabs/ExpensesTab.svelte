@@ -163,7 +163,12 @@
 	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="expense-back-to-list">
 		<ArrowLeft class="h-4 w-4" /> Back to expenses
 	</Button>
-	<ExpenseDetail expenseId={selectedExpense} onDeleted={clearSelection} />
+	<ExpenseDetail
+		expenseId={selectedExpense}
+		onDeleted={clearSelection}
+		expectedUnitId={unitId}
+		onUnitMismatch={clearSelection}
+	/>
 {:else}
 	<div class="flex flex-wrap justify-end gap-2">
 		<Button class="gap-2" onclick={() => (showCreate ? closeCreate() : openCreate())} data-testid="expenses-create">
