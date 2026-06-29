@@ -2004,6 +2004,52 @@ namespace RentalCommand.Data.Migrations
                     b.ToTable("NoticeDrafts");
                 });
 
+            modelBuilder.Entity("RentalCommand.Core.Entities.NoticeTemplate", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NoticeType")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<int>("PortfolioId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PortfolioId");
+
+                    b.HasIndex("PortfolioId", "NoticeType")
+                        .IsUnique()
+                        .HasFilter("\"IsActive\" = true");
+
+                    b.ToTable("NoticeTemplates");
+                });
+
             modelBuilder.Entity("RentalCommand.Core.Entities.Notification", b =>
                 {
                     b.Property<int>("Id")
@@ -2120,6 +2166,21 @@ namespace RentalCommand.Data.Migrations
                         .HasColumnType("integer");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<bool>("AutoSendLateRent")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("AutoSendMonthToMonth")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("AutoSendMoveOut")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("AutoSendRenewal")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("AutoSendRentReminder")
+                        .HasColumnType("boolean");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -4899,6 +4960,17 @@ namespace RentalCommand.Data.Migrations
                     b.Navigation("Property");
 
                     b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("RentalCommand.Core.Entities.NoticeTemplate", b =>
+                {
+                    b.HasOne("RentalCommand.Core.Entities.Portfolio", "Portfolio")
+                        .WithMany()
+                        .HasForeignKey("PortfolioId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Portfolio");
                 });
 
             modelBuilder.Entity("RentalCommand.Core.Entities.Notification", b =>
