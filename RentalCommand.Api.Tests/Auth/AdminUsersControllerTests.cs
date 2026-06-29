@@ -5,11 +5,13 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.Controllers;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Data;
@@ -209,6 +211,41 @@ public class AdminUsersControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task Create_TeamMember_EnqueuesTeamInviteEmailWithSignInDetails()
+    {
+        var userManager = CreateUserManagerMock();
+        userManager
+            .Setup(m => m.FindByEmailAsync("invited@example.local"))
+            .ReturnsAsync((ApplicationUser?)null);
+        userManager
+            .Setup(m => m.CreateAsync(It.IsAny<ApplicationUser>(), It.IsAny<string>()))
+            .Callback<ApplicationUser, string>((u, _) => u.Id = 555)
+            .ReturnsAsync(IdentityResult.Success);
+        userManager
+            .Setup(m => m.AddToRoleAsync(It.IsAny<ApplicationUser>(), nameof(UserRole.Manager)))
+            .ReturnsAsync(IdentityResult.Success);
+
+        var controller = CreateController(userManager.Object);
+
+        await controller.Create(new CreateTeamMemberRequest
+        {
+            Email = "invited@example.local",
+            DisplayName = "Invited Manager",
+            Role = UserRole.Manager,
+            TemporaryPassword = "Invite85!Welcome",
+        }, CancellationToken.None);
+
+        // The Engine routes every outbox email under MessageType "email"; the invite is identified
+        // by its payload (recipient, the temporary password, the login link, and the role).
+        var outbox = _ctx.Db.OutboxMessages.Should().ContainSingle().Subject;
+        outbox.MessageType.Should().Be("email");
+        outbox.Payload.Should().Contain("invited@example.local");
+        outbox.Payload.Should().Contain("Invite85!Welcome");
+        outbox.Payload.Should().Contain("/login");
+        outbox.Payload.Should().Contain("Manager");
+    }
+
+    [Fact]
     public async Task ChangeRole_WritesAuditLogWithOldAndNewRole()
     {
         SeedMember("role-change@example.local", PortfolioId);
@@ -266,6 +303,8 @@ public class AdminUsersControllerTests : IDisposable
         userManager ?? CreateUserManagerMock().Object,
         _ctx.Db,
         new AuditTrailService(_ctx.Db, new AuditScope()),
+        // Real outbox sender over the test Db so we can assert the invite email is enqueued.
+        new OutboxAuthEmailSender(_ctx.Db, new ConfigurationBuilder().Build(), NullLogger<OutboxAuthEmailSender>.Instance),
         NullLogger<AdminUsersController>.Instance)
     {
         ControllerContext = new ControllerContext
