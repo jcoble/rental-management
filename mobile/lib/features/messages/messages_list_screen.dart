@@ -5,6 +5,7 @@ import '../../core/api/api_exception.dart';
 import '../../core/auth/auth_controller.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../home/mobile_domain_chrome.dart';
 import '../tenants/tenants_repository.dart';
 import 'message_models.dart';
 import 'message_detail_screen.dart';
@@ -125,7 +126,7 @@ class _MessagesListScreenState extends ConsumerState<MessagesListScreen> {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Messages')),
+      appBar: mobileDomainRootAppBar(context, title: const Text('Messages')),
       floatingActionButton: tenantMode
           ? null
           : FloatingActionButton(

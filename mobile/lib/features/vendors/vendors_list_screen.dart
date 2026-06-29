@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../home/mobile_domain_chrome.dart';
 import 'dispatch_vendor_sheet.dart' show VendorRatingSummary;
 import 'vendor_detail_screen.dart';
 import 'vendors_models.dart';
@@ -73,7 +74,7 @@ class VendorsListScreen extends ConsumerWidget {
     final vendorsAsync = ref.watch(vendorsProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Vendors')),
+      appBar: mobileDomainRootAppBar(context, title: const Text('Vendors')),
       floatingActionButton: FloatingActionButton(
         heroTag: 'vendors-fab',
         onPressed: () => _showVendorForm(context, ref),
@@ -107,16 +108,11 @@ class VendorsListScreen extends ConsumerWidget {
               separatorBuilder: (_, _) => const SizedBox(height: 8),
               itemBuilder: (_, i) => _VendorCard(
                 vendor: sorted[i],
-                onEdit: () => _showVendorForm(
-                  context,
-                  ref,
-                  vendor: sorted[i],
-                ),
+                onEdit: () => _showVendorForm(context, ref, vendor: sorted[i]),
                 onDelete: () => _confirmDelete(context, ref, sorted[i]),
                 onTap: () => Navigator.of(context).push<void>(
                   MaterialPageRoute<void>(
-                    builder: (_) =>
-                        VendorDetailScreen(vendor: sorted[i]),
+                    builder: (_) => VendorDetailScreen(vendor: sorted[i]),
                   ),
                 ),
               ),
@@ -160,8 +156,11 @@ class _VendorCard extends StatelessWidget {
                   color: cs.tertiary.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(Icons.handyman_outlined,
-                    color: cs.tertiary, size: 22),
+                child: Icon(
+                  Icons.handyman_outlined,
+                  color: cs.tertiary,
+                  size: 22,
+                ),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -173,22 +172,27 @@ class _VendorCard extends StatelessWidget {
                         Flexible(
                           child: Text(
                             vendor.name,
-                            style: theme.textTheme.titleSmall
-                                ?.copyWith(fontWeight: FontWeight.w700),
+                            style: theme.textTheme.titleSmall?.copyWith(
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ),
                         if (vendor.preferred) ...[
                           const SizedBox(width: 6),
-                          Icon(Icons.star_rounded,
-                              size: 16, color: Colors.amber.shade600),
+                          Icon(
+                            Icons.star_rounded,
+                            size: 16,
+                            color: Colors.amber.shade600,
+                          ),
                         ],
                       ],
                     ),
                     const SizedBox(height: 2),
                     Text(
                       vendor.serviceType,
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: cs.onSurfaceVariant),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
                     const SizedBox(height: 6),
                     Row(
@@ -198,8 +202,9 @@ class _VendorCard extends StatelessWidget {
                         Text(
                           '${vendor.jobsCompleted} '
                           'job${vendor.jobsCompleted == 1 ? '' : 's'}',
-                          style: theme.textTheme.bodySmall
-                              ?.copyWith(color: cs.onSurfaceVariant),
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: cs.onSurfaceVariant,
+                          ),
                         ),
                       ],
                     ),
@@ -245,8 +250,11 @@ class _EmptyBody extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(24, 80, 24, 24),
           child: Column(
             children: [
-              Icon(Icons.handyman_outlined,
-                  size: 40, color: cs.onSurfaceVariant),
+              Icon(
+                Icons.handyman_outlined,
+                size: 40,
+                color: cs.onSurfaceVariant,
+              ),
               const SizedBox(height: 12),
               Text(
                 'No vendors yet.',
@@ -258,10 +266,9 @@ class _EmptyBody extends StatelessWidget {
                 'Add service providers here, then assign or text them from '
                 'work orders.',
                 textAlign: TextAlign.center,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: cs.onSurfaceVariant),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
               ),
               const SizedBox(height: 18),
               FilledButton.icon(
@@ -440,8 +447,9 @@ class _VendorFormSheetState extends ConsumerState<VendorFormSheet> {
                   controller: _emailCtrl,
                   textInputAction: TextInputAction.next,
                   keyboardType: TextInputType.emailAddress,
-                  decoration:
-                      const InputDecoration(labelText: 'Email (optional)'),
+                  decoration: const InputDecoration(
+                    labelText: 'Email (optional)',
+                  ),
                   validator: (v) {
                     final value = v?.trim() ?? '';
                     if (value.isEmpty || value.contains('@')) return null;
@@ -454,8 +462,9 @@ class _VendorFormSheetState extends ConsumerState<VendorFormSheet> {
                   controller: _phoneCtrl,
                   textInputAction: TextInputAction.next,
                   keyboardType: TextInputType.phone,
-                  decoration:
-                      const InputDecoration(labelText: 'Phone (optional)'),
+                  decoration: const InputDecoration(
+                    labelText: 'Phone (optional)',
+                  ),
                 ),
               ],
             ),
@@ -470,8 +479,9 @@ class _VendorFormSheetState extends ConsumerState<VendorFormSheet> {
                   controller: _addressCtrl,
                   textInputAction: TextInputAction.next,
                   textCapitalization: TextCapitalization.words,
-                  decoration:
-                      const InputDecoration(labelText: 'Address (optional)'),
+                  decoration: const InputDecoration(
+                    labelText: 'Address (optional)',
+                  ),
                 ),
                 gap,
                 TextFormField(
@@ -517,16 +527,16 @@ class _VendorFormSheetState extends ConsumerState<VendorFormSheet> {
                   key: const Key('vendor-tax-id-field'),
                   controller: _taxIdCtrl,
                   textInputAction: TextInputAction.next,
-                  decoration:
-                      const InputDecoration(labelText: 'Tax ID (optional)'),
+                  decoration: const InputDecoration(
+                    labelText: 'Tax ID (optional)',
+                  ),
                 ),
                 gap,
                 SwitchListTile.adaptive(
                   contentPadding: EdgeInsets.zero,
                   title: const Text('1099 eligible'),
                   value: _is1099Eligible,
-                  onChanged: (value) =>
-                      setState(() => _is1099Eligible = value),
+                  onChanged: (value) => setState(() => _is1099Eligible = value),
                 ),
                 SwitchListTile.adaptive(
                   contentPadding: EdgeInsets.zero,
@@ -546,8 +556,9 @@ class _VendorFormSheetState extends ConsumerState<VendorFormSheet> {
                   controller: _notesCtrl,
                   maxLines: 3,
                   textInputAction: TextInputAction.newline,
-                  decoration:
-                      const InputDecoration(labelText: 'Notes (optional)'),
+                  decoration: const InputDecoration(
+                    labelText: 'Notes (optional)',
+                  ),
                 ),
               ],
             ),
@@ -577,9 +588,11 @@ class _ErrorBody extends StatelessWidget {
             children: [
               Icon(Icons.error_outline, size: 40, color: cs.error),
               const SizedBox(height: 12),
-              Text(message,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: cs.error)),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: cs.error),
+              ),
               const SizedBox(height: 16),
               FilledButton.tonal(
                 onPressed: onRetry,
