@@ -126,9 +126,14 @@ public class UnitDashboardService : IUnitDashboardService
                 .GroupBy(_ => 1)
                 .Select(g => new
                 {
+                    // Owed = Scheduled/Partial/Late. A Partial only owes its unpaid remainder
+                    // (Amount − AmountPaid); Scheduled/Late owe in full. Mirrors AccountingService so the
+                    // Unit Rent tab reconciles with the Accounting Outstanding KPI and the lease ledger
+                    // Balance instead of over-counting an already-collected partial at its full amount.
                     Outstanding = g.Sum(p =>
-                        (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
-                            ? p.Amount : 0m),
+                        (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Late) ? p.Amount
+                        : p.Status == PaymentStatus.Partial ? p.Amount - (p.AmountPaid ?? 0m)
+                        : 0m),
                     OverdueCount = g.Count(p =>
                         (p.Status == PaymentStatus.Scheduled || p.Status == PaymentStatus.Partial || p.Status == PaymentStatus.Late)
                         && (p.Status == PaymentStatus.Late || p.DueDate < now)),
