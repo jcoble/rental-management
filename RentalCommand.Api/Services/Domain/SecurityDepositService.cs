@@ -208,11 +208,15 @@ public class SecurityDepositService : ISecurityDepositService
 
         entity.ReturnedAmount = net;
         entity.ReturnedAt = DateTime.UtcNow;
-        // Terminal status keys off whether any deductions were taken, not off the net refunded.
-        // No deductions -> the full deposit went back -> Returned. Any deductions -> the landlord
-        // kept part (or all) of the deposit -> PartiallyReturned. (A fully-withheld deposit, net==0,
-        // reads PartiallyReturned for now; a distinct "Withheld" state is a deferred product decision.)
-        entity.Status = totalDeductions <= 0m ? SecurityDepositStatus.Returned : SecurityDepositStatus.PartiallyReturned;
+        // Terminal status keys off the deductions taken and what (if anything) actually went back:
+        //   no deductions                 -> the full deposit was returned      -> Returned
+        //   deductions, net refund > 0    -> the landlord kept part of it       -> PartiallyReturned
+        //   deductions consume it all (net == 0) -> nothing was returned        -> Withheld
+        entity.Status = totalDeductions <= 0m
+            ? SecurityDepositStatus.Returned
+            : net > 0m
+                ? SecurityDepositStatus.PartiallyReturned
+                : SecurityDepositStatus.Withheld;
         if (request.Notes != null)
             entity.Notes = request.Notes;
         entity.UpdatedAt = DateTime.UtcNow;

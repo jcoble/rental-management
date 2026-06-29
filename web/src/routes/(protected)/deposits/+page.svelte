@@ -209,6 +209,8 @@
 		Held: { class: 'm3-tone-chip border m3-tone--info' },
 		PartiallyReturned: { label: 'Partially Returned', class: 'm3-tone-chip border m3-tone--warning' },
 		Returned: { class: 'm3-tone-chip border m3-tone--success' },
+		// Whole deposit consumed by deductions — nothing returned. Red, distinct from the amber partial.
+		Withheld: { class: 'm3-tone-chip border m3-tone--error' },
 	};
 
 	const depositsList = $derived(depositsQuery.data?.items ?? []);
