@@ -1,6 +1,7 @@
 using System.Text;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.Services.Domain;
 using RentalCommand.Api.Services.Import;
@@ -24,7 +25,7 @@ public class CsvImportServiceTests : IDisposable
         var noop = new NoopDataUpdateService();
         _sut = new CsvImportService(
             _ctx.Db,
-            new TenantService(_ctx.Db, noop),
+            new TenantService(_ctx.Db, noop, new NoopTenantPortalProvisioningService(), NullLogger<TenantService>.Instance),
             new PropertyService(_ctx.Db, noop),
             new UnitService(_ctx.Db, noop, Mock.Of<IAuditTrailService>()));
     }
