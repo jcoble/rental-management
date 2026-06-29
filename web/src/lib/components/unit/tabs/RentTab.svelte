@@ -173,7 +173,12 @@
 	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="payment-back-to-list">
 		<ArrowLeft class="h-4 w-4" /> Back to payments
 	</Button>
-	<PaymentDetail paymentId={selectedPayment} onDeleted={clearSelection} />
+	<PaymentDetail
+		paymentId={selectedPayment}
+		onDeleted={clearSelection}
+		expectedUnitId={dashboard.unit.id}
+		onUnitMismatch={clearSelection}
+	/>
 {:else}
 	<div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
 		<div>

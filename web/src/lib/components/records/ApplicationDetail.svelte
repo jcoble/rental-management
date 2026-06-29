@@ -40,10 +40,21 @@
 		Download,
 		User,
 	} from '@lucide/svelte';
+	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
 	// `applicationId` selects the record; `onDeleted` is the exit/close callback (the page has no
 	// delete) — the host uses it to clear the selection / navigate back to the list.
-	let { applicationId, onDeleted }: { applicationId: number; onDeleted: () => void } = $props();
+	let {
+		applicationId,
+		onDeleted,
+		expectedUnitId,
+		onUnitMismatch,
+	}: {
+		applicationId: number;
+		onDeleted: () => void;
+		expectedUnitId?: number;
+		onUnitMismatch?: () => void;
+	} = $props();
 
 	const queryClient = useQueryClient();
 	const id = $derived(applicationId);
@@ -55,6 +66,11 @@
 	}));
 
 	const application = $derived<ApplicationResponse | undefined>(applicationQuery.data);
+
+	$effect(() => {
+		if (isMismatchedUnitSelection(application, expectedUnitId)) onUnitMismatch?.();
+	});
+
 	const fullName = $derived(application ? `${application.firstName} ${application.lastName}` : '');
 	const isOpen = $derived(
 		application?.status === 'Submitted' || application?.status === 'UnderReview'

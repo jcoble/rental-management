@@ -29,8 +29,19 @@
 		shouldShowActiveDispatchHint,
 		workOrderStatusActionTargets,
 	} from '$lib/maintenance/work-order-dispatch';
+	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
-	let { workOrderId, onDeleted }: { workOrderId: number; onDeleted: () => void } = $props();
+	let {
+		workOrderId,
+		onDeleted,
+		expectedUnitId,
+		onUnitMismatch,
+	}: {
+		workOrderId: number;
+		onDeleted: () => void;
+		expectedUnitId?: number;
+		onUnitMismatch?: () => void;
+	} = $props();
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -49,6 +60,10 @@
 	}));
 
 	const wo = $derived(workOrderQuery.data);
+
+	$effect(() => {
+		if (isMismatchedUnitSelection(wo, expectedUnitId)) onUnitMismatch?.();
+	});
 
 	const priorityOptions = $derived(WO_PRIORITIES.map((value) => ({ value, label: value })));
 	const propertyOptions = $derived(
