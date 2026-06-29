@@ -21,7 +21,7 @@ public class NoticeAutoSendTests : IDisposable
     public async Task AutoSend_type_with_template_is_approved_not_left_draft()
     {
         SeedLeaseEndingSoon();
-        SeedSettings(autoSendRenewal: true);
+        SeedSettings(LeaseEndAutoAction.Renewal);
         _ctx.Db.NoticeTemplates.Add(new NoticeTemplate
         {
             PortfolioId = 1,
@@ -42,10 +42,39 @@ public class NoticeAutoSendTests : IDisposable
     }
 
     [Fact]
+    public async Task AutoSend_NonRenewal_approves_moveout_and_leaves_renewal_draft()
+    {
+        // Lease within the move-out window (≤30 days) so both MoveOut and Renewal drafts generate.
+        SeedLeaseEndingSoon(daysToEnd: 20);
+        SeedSettings(LeaseEndAutoAction.NonRenewal);
+        _ctx.Db.NoticeTemplates.Add(new NoticeTemplate
+        {
+            PortfolioId = 1,
+            NoticeType  = "MoveOutReminder",
+            Subject     = "S",
+            Body        = "Hi {{tenant_name}}",
+            IsActive    = true,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+
+        var svc = BuildService();
+        await svc.GenerateAllAsync(default);
+
+        var moveOut = _ctx.Db.NoticeDrafts.Single(d => d.PortfolioId == 1 && d.NoticeType == "MoveOutReminder");
+        Assert.Equal("Approved", moveOut.Status);
+        Assert.NotNull(moveOut.ApprovedAt);
+
+        // The non-matching lease-end draft stays in the queue for manual review.
+        var renewal = _ctx.Db.NoticeDrafts.Single(d => d.PortfolioId == 1 && d.NoticeType == "RenewalOffer");
+        Assert.Equal("Draft", renewal.Status);
+    }
+
+    [Fact]
     public async Task AutoSend_without_template_stays_draft()
     {
         SeedLeaseEndingSoon();
-        SeedSettings(autoSendRenewal: true);
+        SeedSettings(LeaseEndAutoAction.Renewal);
         // No template authored.
         await _ctx.Db.SaveChangesAsync();
         _ctx.Db.ChangeTracker.Clear();
@@ -83,22 +112,22 @@ public class NoticeAutoSendTests : IDisposable
             NullLogger<NoticeDraftGenerationService>.Instance);
     }
 
-    private void SeedSettings(bool autoSendRenewal)
+    private void SeedSettings(LeaseEndAutoAction action)
     {
         var now = DateTime.UtcNow;
         _ctx.Db.Set<NotificationSettings>().Add(new NotificationSettings
         {
-            PortfolioId      = 1,
-            NotifyTenants    = true,
-            AutoSendRenewal  = autoSendRenewal,
-            CreatedAt        = now,
-            UpdatedAt        = now,
+            PortfolioId        = 1,
+            NotifyTenants      = true,
+            LeaseEndAutoAction = action,
+            CreatedAt          = now,
+            UpdatedAt          = now,
         });
         _ctx.Db.SaveChanges();
     }
 
-    /// <summary>Seeds one active lease ending inside the default renewal trigger window.</summary>
-    private Lease SeedLeaseEndingSoon()
+    /// <summary>Seeds one active lease ending inside the lease-end trigger window.</summary>
+    private Lease SeedLeaseEndingSoon(int daysToEnd = 45)
     {
         var now   = DateTime.UtcNow;
         var today = now.Date;
@@ -142,7 +171,7 @@ public class NoticeAutoSendTests : IDisposable
             LeaseNumber     = "NEAR-001",
             Status          = LeaseStatus.Active,
             StartDate       = today.AddMonths(-10),
-            EndDate         = today.AddDays(45),
+            EndDate         = today.AddDays(daysToEnd),
             MonthlyRent     = 1400,
             SecurityDeposit = 1400,
             LateFeeAmount   = 50,

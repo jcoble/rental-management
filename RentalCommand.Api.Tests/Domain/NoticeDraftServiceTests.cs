@@ -24,11 +24,17 @@ public class NoticeDraftServiceTests : IDisposable
 
         var result = await sut.GenerateAsync(1);
 
-        result.CreatedCount.Should().Be(1);
-        result.Drafts.Should().ContainSingle(d =>
+        // The near lease (60 days out) is inside the 75-day renewal/month-to-month window, so a
+        // portfolio-wide run produces BOTH a renewal and a month-to-month draft for it.
+        result.CreatedCount.Should().Be(2);
+        result.Drafts.Should().Contain(d =>
             d.LeaseId == nearLease.Id &&
             d.NoticeType == "RenewalOffer");
+        result.Drafts.Should().Contain(d =>
+            d.LeaseId == nearLease.Id &&
+            d.NoticeType == "MonthToMonthConversion");
         result.Drafts.Should().NotContain(d => d.LeaseId == farLease.Id);
+        result.Drafts.Should().NotContain(d => d.NoticeType == "RentReminder");
     }
 
     [Fact]
@@ -297,14 +303,30 @@ public class NoticeDraftServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task GenerateAsync_PortfolioWide_does_not_create_RentReminder_or_MonthToMonth()
+    public async Task GenerateAsync_PortfolioWide_does_not_create_RentReminder()
     {
+        // Lease ends 300 days out — outside the lease-end window — so no lease-end drafts at all.
         SeedSingleActiveLease();
         var sut = CreateService();
 
         var result = await sut.GenerateAsync(1, null);
 
-        Assert.DoesNotContain(result.Drafts, d => d.NoticeType is "RentReminder" or "MonthToMonthConversion");
+        Assert.DoesNotContain(result.Drafts, d => d.NoticeType == "RentReminder");
+    }
+
+    [Fact]
+    public async Task GenerateAsync_PortfolioWide_CreatesMonthToMonthAlongsideRenewal_ForNearEndLease()
+    {
+        var (nearLease, _) = SeedActiveLeases();
+        var sut = CreateService();
+
+        var result = await sut.GenerateAsync(1, null);
+
+        result.Drafts.Should().Contain(d =>
+            d.LeaseId == nearLease.Id && d.NoticeType == "RenewalOffer");
+        result.Drafts.Should().Contain(d =>
+            d.LeaseId == nearLease.Id && d.NoticeType == "MonthToMonthConversion");
+        result.Drafts.Should().NotContain(d => d.NoticeType == "RentReminder");
     }
 
     /// <summary>Seeds one active lease with a far-future end date (always outside the default trigger window).</summary>

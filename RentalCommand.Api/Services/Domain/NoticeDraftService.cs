@@ -72,9 +72,12 @@ public class NoticeDraftService : INoticeDraftService
         bool WantsType(string type) => requestedType == null || string.Equals(requestedType, type, StringComparison.OrdinalIgnoreCase);
         var wantsRenewal = WantsType("RenewalOffer");
         var wantsMoveOut = WantsType("MoveOutReminder");
-        // These two types are ONLY generated on an explicit request — never in portfolio-wide all-types runs.
+        // RentReminder is ONLY generated on an explicit request — never in portfolio-wide all-types runs
+        // (Plan 3b Task 4 handles its periodic generation).
         var wantsRentReminder = string.Equals(requestedType, "RentReminder", StringComparison.OrdinalIgnoreCase);
-        var wantsMonthToMonth = string.Equals(requestedType, "MonthToMonthConversion", StringComparison.OrdinalIgnoreCase);
+        // MonthToMonth is generated portfolio-wide too (within the lease-end window) so the autopilot can
+        // auto-send it; it mirrors renewal's lead time.
+        var wantsMonthToMonth = requestedType == null || string.Equals(requestedType, "MonthToMonthConversion", StringComparison.OrdinalIgnoreCase);
 
         // Pre-load the existing open ("Draft") notices for this portfolio ONCE as a
         // (leaseId, noticeType) set, so the per-lease / per-payment idempotency check below is an
@@ -124,7 +127,7 @@ public class NoticeDraftService : INoticeDraftService
 
             if (!forced)
             {
-                var maxDays = wantsRenewal ? 75 : 30;
+                var maxDays = (wantsRenewal || wantsMonthToMonth) ? 75 : 30;
                 var windowEndExclusive = today.AddDays(maxDays + 1);
                 leaseQuery = leaseQuery.Where(l => l.EndDate >= today && l.EndDate < windowEndExclusive);
             }
@@ -157,6 +160,7 @@ public class NoticeDraftService : INoticeDraftService
                 }
 
                 if (wantsMonthToMonth
+                    && (forced || (daysToEnd >= 0 && daysToEnd <= 75))
                     && !DraftExists(existingDrafts, lease.Id, "MonthToMonthConversion", created))
                 {
                     created.Add(await BuildMonthToMonthDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("MonthToMonthConversion"), portfolioName, ct));
