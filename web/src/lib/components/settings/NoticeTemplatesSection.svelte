@@ -6,19 +6,20 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Card from '$lib/components/ui/card';
+	import * as Select from '$lib/components/ui/select';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
 	import type { NoticeTemplateResponse } from '$lib/types';
+	import type { LeaseEndAutoAction } from '$lib/api/types/notification';
 	import { insertFieldToken } from './insert-field-token';
 
-	// The five autoSend* booleans live on the page's notificationSettingsForm. We mutate them in place
-	// (shared reactive proxy) so the page's EXISTING "Save notification settings" flow persists them in
-	// its PUT payload — this section does not own a separate settings save path.
+	// The recurring autoSend booleans + the single lease-end auto action live on the page's
+	// notificationSettingsForm. We mutate them in place (shared reactive proxy) so the page's EXISTING
+	// "Save notification settings" flow persists them in its PUT payload — this section does not own a
+	// separate settings save path.
 	type SendModeFields = {
 		autoSendRentReminder: boolean;
-		autoSendRenewal: boolean;
-		autoSendMonthToMonth: boolean;
-		autoSendMoveOut: boolean;
 		autoSendLateRent: boolean;
+		leaseEndAutoAction: LeaseEndAutoAction;
 	};
 
 	let {
@@ -33,19 +34,39 @@
 		settingsDisabled?: boolean;
 	} = $props();
 
-	// Notice types in canonical backend order, with the landlord-friendly label and the matching
-	// autoSend* field on the settings form.
-	const typeConfigs: { type: string; label: string; field: keyof SendModeFields }[] = [
-		{ type: 'RentReminder', label: 'Rent reminder (coming due)', field: 'autoSendRentReminder' },
-		{ type: 'RenewalOffer', label: 'Lease renewal offer', field: 'autoSendRenewal' },
-		{
-			type: 'MonthToMonthConversion',
-			label: 'Convert to month-to-month',
-			field: 'autoSendMonthToMonth'
-		},
-		{ type: 'MoveOutReminder', label: 'Lease expiration · move-out', field: 'autoSendMoveOut' },
-		{ type: 'LateRentNotice', label: 'Late rent · late fee', field: 'autoSendLateRent' }
+	// Notice types in canonical backend order, with the landlord-friendly label. Recurring notices each
+	// carry their own auto-send toggle (field); lease-end notices are driven by the single
+	// leaseEndAutoAction selector (auto-send when the action maps to that notice type).
+	type TypeConfig =
+		| { type: string; label: string; kind: 'recurring'; field: 'autoSendRentReminder' | 'autoSendLateRent' }
+		| { type: string; label: string; kind: 'lease-end'; action: Exclude<LeaseEndAutoAction, 'Draft'> };
+
+	const typeConfigs: TypeConfig[] = [
+		{ type: 'RentReminder', label: 'Rent reminder (coming due)', kind: 'recurring', field: 'autoSendRentReminder' },
+		{ type: 'RenewalOffer', label: 'Lease renewal offer', kind: 'lease-end', action: 'Renewal' },
+		{ type: 'MonthToMonthConversion', label: 'Convert to month-to-month', kind: 'lease-end', action: 'MonthToMonth' },
+		{ type: 'MoveOutReminder', label: 'Lease expiration · move-out', kind: 'lease-end', action: 'NonRenewal' },
+		{ type: 'LateRentNotice', label: 'Late rent · late fee', kind: 'recurring', field: 'autoSendLateRent' }
 	];
+
+	// The single lease-end selector's options and their plain-language labels.
+	const leaseEndOptions: { value: LeaseEndAutoAction; label: string }[] = [
+		{ value: 'Draft', label: 'Just draft it' },
+		{ value: 'Renewal', label: 'Offer renewal' },
+		{ value: 'MonthToMonth', label: 'Offer month-to-month' },
+		{ value: 'NonRenewal', label: 'Send non-renewal' }
+	];
+
+	const leaseEndLabel = $derived(
+		leaseEndOptions.find((o) => o.value === settings.leaseEndAutoAction)?.label ?? 'Just draft it'
+	);
+
+	// Whether a given notice type is currently set to auto-send (drives the "needs template" hint).
+	function autoSendFor(cfg: TypeConfig): boolean {
+		return cfg.kind === 'recurring'
+			? settings[cfg.field]
+			: settings.leaseEndAutoAction === cfg.action;
+	}
 
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const queryClient = useQueryClient();
@@ -136,10 +157,37 @@
 		{:else if templatesQuery.isError}
 			<p class="text-sm text-destructive">Couldn't load notice templates.</p>
 		{:else}
+			<div
+				class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-4"
+				data-testid="settings-notice-lease-end-action"
+			>
+				<label for="settings-notice-lease-end-action-select" class="text-sm font-medium">
+					When a lease is ending, automatically:
+				</label>
+				<Select.Root
+					type="single"
+					value={settings.leaseEndAutoAction}
+					onValueChange={(v) => v && (settings.leaseEndAutoAction = v as LeaseEndAutoAction)}
+				>
+					<Select.Trigger
+						class="w-56"
+						id="settings-notice-lease-end-action-select"
+						data-testid="settings-notice-lease-end-action-trigger"
+					>
+						{leaseEndLabel}
+					</Select.Trigger>
+					<Select.Content>
+						{#each leaseEndOptions as opt (opt.value)}
+							<Select.Item value={opt.value} label={opt.label}>{opt.label}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+			</div>
+
 			<div class="space-y-3">
 				{#each typeConfigs as cfg (cfg.type)}
 					{@const tpl = templateFor(cfg.type)}
-					{@const autoSend = settings[cfg.field]}
+					{@const autoSend = autoSendFor(cfg)}
 					{@const draft = drafts[cfg.type]}
 					<div
 						class="rounded-lg border border-border"
@@ -159,27 +207,29 @@
 							</div>
 
 							<div class="flex items-center gap-3">
-								<div
-									class="inline-flex overflow-hidden rounded-md border border-border"
-									data-testid={`settings-notice-sendmode-${cfg.type}`}
-								>
-									<button
-										type="button"
-										class={`px-3 py-1.5 text-xs font-medium ${autoSend ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
-										onclick={() => (settings[cfg.field] = true)}
-										data-testid={`settings-notice-sendmode-${cfg.type}-auto`}
+								{#if cfg.kind === 'recurring'}
+									<div
+										class="inline-flex overflow-hidden rounded-md border border-border"
+										data-testid={`settings-notice-sendmode-${cfg.type}`}
 									>
-										Auto-send
-									</button>
-									<button
-										type="button"
-										class={`px-3 py-1.5 text-xs font-medium ${autoSend ? 'bg-background text-muted-foreground' : 'bg-primary text-primary-foreground'}`}
-										onclick={() => (settings[cfg.field] = false)}
-										data-testid={`settings-notice-sendmode-${cfg.type}-ask`}
-									>
-										Ask first
-									</button>
-								</div>
+										<button
+											type="button"
+											class={`px-3 py-1.5 text-xs font-medium ${autoSend ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground'}`}
+											onclick={() => (settings[cfg.field] = true)}
+											data-testid={`settings-notice-sendmode-${cfg.type}-auto`}
+										>
+											Auto-send
+										</button>
+										<button
+											type="button"
+											class={`px-3 py-1.5 text-xs font-medium ${autoSend ? 'bg-background text-muted-foreground' : 'bg-primary text-primary-foreground'}`}
+											onclick={() => (settings[cfg.field] = false)}
+											data-testid={`settings-notice-sendmode-${cfg.type}-ask`}
+										>
+											Ask first
+										</button>
+									</div>
+								{/if}
 								<Button
 									variant="outline"
 									size="sm"
