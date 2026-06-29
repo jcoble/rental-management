@@ -605,6 +605,7 @@ public class LeaseService : ILeaseService
                 p.PaymentType,
                 p.Status,
                 p.Amount,
+                p.AmountPaid,
                 p.DueDate,
                 p.PaidDate,
                 p.Method,
@@ -632,7 +633,7 @@ public class LeaseService : ILeaseService
         if (string.IsNullOrWhiteSpace(tenantName)) tenantName = "Tenant";
 
         var entries = payments
-            .Select(p =>
+            .SelectMany(p =>
             {
                 // A collected payment credits the tenant's balance (money in, shown positive). An
                 // outstanding charge debits it (money owed, shown negative) so the running total reads
@@ -640,22 +641,54 @@ public class LeaseService : ILeaseService
                 var isCollected = p.Status == PaymentStatus.Paid;
                 var signedAmount = isCollected ? p.Amount : -p.Amount;
 
-                return new LedgerTransactionResponse
+                var rows = new List<LedgerTransactionResponse>
                 {
-                    Date = p.LedgerDate,
-                    Type = isCollected ? "Payment" : "Charge",
-                    Id = p.Id,
-                    Description = p.PaymentType.ToString(),
-                    Amount = signedAmount,
-                    PropertyId = lease.PropertyId,
-                    PropertyName = lease.Property?.Name,
-                    Counterparty = tenantName,
-                    Category = p.PaymentType.ToString(),
-                    Status = p.Status.ToString(),
-                    SourceHref = $"/accounting/payments/{p.Id}",
-                    Explanation = LedgerExplanation.ForPayment(
-                        p.PaymentType, p.Status, p.Amount, p.DueDate, p.PaidDate, p.Method),
+                    new()
+                    {
+                        Date = p.LedgerDate,
+                        Type = isCollected ? "Payment" : "Charge",
+                        Id = p.Id,
+                        Description = p.PaymentType.ToString(),
+                        Amount = signedAmount,
+                        PropertyId = lease.PropertyId,
+                        PropertyName = lease.Property?.Name,
+                        Counterparty = tenantName,
+                        Category = p.PaymentType.ToString(),
+                        Status = p.Status.ToString(),
+                        SourceHref = $"/accounting/payments/{p.Id}",
+                        Explanation = LedgerExplanation.ForPayment(
+                            p.PaymentType, p.Status, p.Amount, p.DueDate, p.PaidDate, p.Method),
+                    },
                 };
+
+                // A Partial is billed at its full Amount (the charge above) but has already collected
+                // AmountPaid in cash. Surface that collection as a companion payment line so the money is
+                // visible on the ledger instead of only in the headline "Paid" total — the charge
+                // (−Amount) and this companion (+AmountPaid) net to the still-owed remainder. The headline
+                // Charged/Paid/Balance are a separate DB aggregate (statusTotals below), so emitting this
+                // line does not double-count.
+                var collectedSoFar = p.Status == PaymentStatus.Partial ? (p.AmountPaid ?? 0m) : 0m;
+                if (collectedSoFar > 0m)
+                {
+                    rows.Add(new LedgerTransactionResponse
+                    {
+                        Date = p.LedgerDate,
+                        Type = "Payment",
+                        Id = p.Id,
+                        Description = p.PaymentType.ToString(),
+                        Amount = collectedSoFar,
+                        PropertyId = lease.PropertyId,
+                        PropertyName = lease.Property?.Name,
+                        Counterparty = tenantName,
+                        Category = p.PaymentType.ToString(),
+                        Status = p.Status.ToString(),
+                        SourceHref = $"/accounting/payments/{p.Id}",
+                        Explanation = LedgerExplanation.ForPartialCollected(
+                            p.PaymentType, collectedSoFar, p.Amount, p.PaidDate, p.DueDate, p.Method),
+                    });
+                }
+
+                return rows;
             })
             .ToList();
 
