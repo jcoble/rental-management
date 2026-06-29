@@ -7,6 +7,7 @@
 	import { leases } from '$lib/api/endpoints/leases';
 	import type { Lease, Property, Unit } from '$lib/types';
 	import { recordHref } from '$lib/navigation/record-href';
+	import { getPropertyDeleteState } from '$lib/properties/property-delete-state';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { propertySchema, propertyBasisSchema, unitSchema, parseForm } from '$lib/schemas';
 	import PropertyLoansSection from '$lib/components/property/PropertyLoansSection.svelte';
@@ -66,6 +67,7 @@
 	}));
 
 	const property = $derived(propertyQuery.data);
+	const propertyDeleteState = $derived(property ? getPropertyDeleteState(property) : null);
 	const unitsList = $derived(unitsQuery.data ?? []);
 	const leasesList = $derived(leasesQuery.data ?? []);
 
@@ -683,10 +685,14 @@
 <ConfirmDialog
 	open={showDeletePropertyConfirm}
 	title="Delete property"
-	message={property ? `Delete "${property.name}"? This also removes its units.` : ''}
+	message={propertyDeleteState?.message ?? ''}
 	busy={deletePropertyMutation.isPending}
+	confirmDisabled={propertyDeleteState?.confirmDisabled ?? false}
 	testid="property-detail-delete-confirm"
-	onconfirm={() => property && deletePropertyMutation.mutate(property.id)}
+	onconfirm={() => {
+		if (!property || propertyDeleteState?.confirmDisabled) return;
+		deletePropertyMutation.mutate(property.id);
+	}}
 	oncancel={() => (showDeletePropertyConfirm = false)}
 />
 

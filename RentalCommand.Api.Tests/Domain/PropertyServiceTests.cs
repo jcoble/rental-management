@@ -4,7 +4,9 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
+using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.TestCommon;
 
@@ -52,6 +54,108 @@ public class PropertyServiceTests : IDisposable
             sql.Contains("\"Name\"", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("LIMIT", StringComparison.OrdinalIgnoreCase) &&
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ThrowsWhenPropertyStillHasLiveUnits()
+    {
+        var property = SeedPropertyWithUnit(out _);
+
+        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("Remove the unit");
+        (await _sut.GetAsync(PortfolioId, property.Id))
+            .Should().NotBeNull("a property with live units must not be deleted");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ThrowsWhenPropertyHasOccupyingLeaseButNoLiveUnit()
+    {
+        var property = SeedPropertyWithUnit(out var unit);
+        SeedOccupyingLease(property, unit, LeaseStatus.NoticeGiven);
+        // Soft-delete the unit so the unit guard passes and only the lease safety-net guard can fire —
+        // the exact orphan scenario (occupying lease whose unit is already gone).
+        unit.DeletedAt = DateTime.UtcNow;
+        _ctx.Db.SaveChanges();
+
+        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("active lease");
+        (await _sut.GetAsync(PortfolioId, property.Id))
+            .Should().NotBeNull("a property with an occupying lease must not be deleted");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_SoftDeletesWhenNoUnitsOrOccupyingLeases()
+    {
+        SeedProperties("Standalone");
+        var property = _ctx.Db.Properties.Single(p => p.Name == "Standalone");
+
+        var deleted = await _sut.DeleteAsync(PortfolioId, property.Id);
+
+        deleted.Should().BeTrue();
+        (await _sut.GetAsync(PortfolioId, property.Id))
+            .Should().BeNull("a property with no children is soft-deleted");
+    }
+
+    private Property SeedPropertyWithUnit(out Unit unit)
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Occupied Property",
+            AddressLine1 = "1 Main Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "101",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Units.Add(unit);
+        _ctx.Db.SaveChanges();
+        return property;
+    }
+
+    private void SeedOccupyingLease(Property property, Unit unit, LeaseStatus status)
+    {
+        var now = DateTime.UtcNow;
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Occupant",
+            LastName = "Tenant",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Tenants.Add(tenant);
+        _ctx.Db.SaveChanges();
+
+        _ctx.Db.Leases.Add(new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            TenantId = tenant.Id,
+            LeaseNumber = "L-1",
+            Status = status,
+            StartDate = now.Date,
+            EndDate = now.Date.AddYears(1),
+            MonthlyRent = 1200m,
+            SecurityDeposit = 1200m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        _ctx.Db.SaveChanges();
     }
 
     private void SeedProperties(params string[] names)
