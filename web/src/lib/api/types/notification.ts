@@ -44,6 +44,10 @@ export interface NotificationChannelPreference {
 	enablePush: boolean;
 }
 
+// Single auto action taken when a lease is ending:
+// Draft = just draft it for review; Renewal/MonthToMonth/NonRenewal = auto-send that offer/notice.
+export type LeaseEndAutoAction = 'Draft' | 'Renewal' | 'MonthToMonth' | 'NonRenewal';
+
 export interface NotificationSettingsResponse {
 	enableRentCharges: boolean;
 	enableLateFees: boolean;
@@ -62,12 +66,11 @@ export interface NotificationSettingsResponse {
 	smsCredentialASet: boolean;
 	smsCredentialBSet: boolean;
 	smsCredentialCSet: boolean;
-	// Per notice type: true = auto-send the approved draft, false = ask the landlord first.
+	// Recurring notices: true = auto-send the approved draft, false = ask the landlord first.
 	autoSendRentReminder: boolean;
-	autoSendRenewal: boolean;
-	autoSendMonthToMonth: boolean;
-	autoSendMoveOut: boolean;
 	autoSendLateRent: boolean;
+	// What to do automatically when a lease is ending (single action; default 'Draft').
+	leaseEndAutoAction: LeaseEndAutoAction;
 	channelPreferences: NotificationChannelPreference[];
 }
 
@@ -90,12 +93,11 @@ export interface UpdateNotificationSettingsRequest {
 	smsCredentialA?: string | null;
 	smsCredentialB?: string | null;
 	smsCredentialC?: string | null;
-	// Per notice type: true = auto-send the approved draft, false = ask the landlord first.
+	// Recurring notices: true = auto-send the approved draft, false = ask the landlord first.
 	autoSendRentReminder: boolean;
-	autoSendRenewal: boolean;
-	autoSendMonthToMonth: boolean;
-	autoSendMoveOut: boolean;
 	autoSendLateRent: boolean;
+	// What to do automatically when a lease is ending (single action; default 'Draft').
+	leaseEndAutoAction: LeaseEndAutoAction;
 	channelPreferences: NotificationChannelPreference[];
 }
 

@@ -735,10 +735,8 @@
 				smsCredentialB: textingToken.length > 0 ? textingToken : undefined,
 				smsCredentialC: textingForm.spaceUrl.trim() || undefined,
 				autoSendRentReminder: d.autoSendRentReminder,
-				autoSendRenewal: d.autoSendRenewal,
-				autoSendMonthToMonth: d.autoSendMonthToMonth,
-				autoSendMoveOut: d.autoSendMoveOut,
 				autoSendLateRent: d.autoSendLateRent,
+				leaseEndAutoAction: d.leaseEndAutoAction,
 				channelPreferences: d.channelPreferences ?? [],
 			});
 		},

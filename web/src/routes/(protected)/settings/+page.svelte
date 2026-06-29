@@ -7,6 +7,7 @@
 		NotificationChannelType,
 		NotificationSeverity,
 		SmsProviderMeta,
+		LeaseEndAutoAction,
 	} from '$lib/api/types/notification';
 	import { getAuthState, currentUserIsAdmin, hasAnyRole } from '$lib/stores/auth.svelte';
 	import { notificationStore } from '$lib/stores/notifications.svelte';
@@ -158,10 +159,8 @@
 		smsCredentialBSet: false,
 		smsCredentialCSet: false,
 		autoSendRentReminder: false,
-		autoSendRenewal: false,
-		autoSendMonthToMonth: false,
-		autoSendMoveOut: false,
 		autoSendLateRent: false,
+		leaseEndAutoAction: 'Draft' as LeaseEndAutoAction,
 	});
 
 	// Provider catalogue: drives the <Select> and the labels of the three generic credential slots.
@@ -475,10 +474,8 @@
 				smsCredentialBSet: data.smsCredentialBSet,
 				smsCredentialCSet: data.smsCredentialCSet,
 				autoSendRentReminder: data.autoSendRentReminder,
-				autoSendRenewal: data.autoSendRenewal,
-				autoSendMonthToMonth: data.autoSendMonthToMonth,
-				autoSendMoveOut: data.autoSendMoveOut,
 				autoSendLateRent: data.autoSendLateRent,
+				leaseEndAutoAction: data.leaseEndAutoAction,
 			};
 			applyChannelPreferences(data.channelPreferences ?? []);
 			smsCredentialAInput = '';
@@ -528,10 +525,8 @@
 				smsCredentialB: smsCredentialBInput.length > 0 ? smsCredentialBInput : undefined,
 				smsCredentialC: smsCredentialCInput.length > 0 ? smsCredentialCInput : undefined,
 				autoSendRentReminder: notificationSettingsForm.autoSendRentReminder,
-				autoSendRenewal: notificationSettingsForm.autoSendRenewal,
-				autoSendMonthToMonth: notificationSettingsForm.autoSendMonthToMonth,
-				autoSendMoveOut: notificationSettingsForm.autoSendMoveOut,
 				autoSendLateRent: notificationSettingsForm.autoSendLateRent,
+				leaseEndAutoAction: notificationSettingsForm.leaseEndAutoAction,
 				channelPreferences: channelPreferencesPayload(),
 			}),
 		onSuccess: (result) => {
@@ -554,10 +549,8 @@
 				smsCredentialBSet: result.smsCredentialBSet,
 				smsCredentialCSet: result.smsCredentialCSet,
 				autoSendRentReminder: result.autoSendRentReminder,
-				autoSendRenewal: result.autoSendRenewal,
-				autoSendMonthToMonth: result.autoSendMonthToMonth,
-				autoSendMoveOut: result.autoSendMoveOut,
 				autoSendLateRent: result.autoSendLateRent,
+				leaseEndAutoAction: result.leaseEndAutoAction,
 			};
 			applyChannelPreferences(result.channelPreferences ?? []);
 			smsCredentialAInput = '';
@@ -1045,8 +1038,8 @@
 					</Card.Content>
 				</Card.Root>
 
-				<!-- Notice message templates + per-type auto-send / ask-first toggles. The toggles bind to
-				     notificationSettingsForm.autoSend* and persist via the same delivery-settings save. -->
+				<!-- Notice message templates + recurring auto-send toggles + the single lease-end auto action.
+				     These bind to notificationSettingsForm and persist via the same delivery-settings save. -->
 				<NoticeTemplatesSection
 					settings={notificationSettingsForm}
 					onSaveSettings={() => saveNotificationSettingsMutation.mutate()}
