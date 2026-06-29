@@ -53,6 +53,11 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         row.EnableDailyBriefingMessages = request.EnableDailyBriefingMessages;
         row.DailyBriefingSendHourLocal = Math.Clamp(request.DailyBriefingSendHourLocal, 0, 23);
         row.DailyBriefingIncludeEmpty = request.DailyBriefingIncludeEmpty;
+        row.AutoSendRentReminder = request.AutoSendRentReminder;
+        row.AutoSendRenewal = request.AutoSendRenewal;
+        row.AutoSendMonthToMonth = request.AutoSendMonthToMonth;
+        row.AutoSendMoveOut = request.AutoSendMoveOut;
+        row.AutoSendLateRent = request.AutoSendLateRent;
 
         // SMS provider (pluggable, BYO creds). Provider is a plain string-enum name; credential slots
         // are write-only secrets — null/omitted keeps the saved value, empty string clears it. The
@@ -361,6 +366,11 @@ public sealed class NotificationSettingsService : INotificationSettingsService
         DailyBriefingIncludeEmpty = row.DailyBriefingIncludeEmpty,
         DailyBriefingSmsRecipients = UnprotectArray(row.DailyBriefingSmsRecipientsCipherText),
         DailyBriefingEmailRecipients = UnprotectArray(row.DailyBriefingEmailRecipientsCipherText),
+        AutoSendRentReminder = row.AutoSendRentReminder,
+        AutoSendRenewal = row.AutoSendRenewal,
+        AutoSendMonthToMonth = row.AutoSendMonthToMonth,
+        AutoSendMoveOut = row.AutoSendMoveOut,
+        AutoSendLateRent = row.AutoSendLateRent,
         SmsProvider = EffectiveProvider(row).ToString(),
         SmsFromNumber = EffectiveFromNumber(row),
         // Secrets: report only whether each slot is set, never the value. Legacy SignalWire rows map
