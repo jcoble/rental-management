@@ -5,8 +5,9 @@
 		downloadScheduleECsv,
 		downloadYearEndPacket
 	} from '$lib/api/endpoints/accounting';
+	import { reports as reportsApi } from '$lib/api/endpoints/reports';
 	import { vendors } from '$lib/api/endpoints/vendors';
-	import type { AccountingReports, ScheduleEReport } from '$lib/types';
+	import type { ScheduleEReport } from '$lib/types';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { showError, showSuccess, apiErrorMessage } from '$lib/utils/toast';
 	import * as Card from '$lib/components/ui/card';
@@ -30,15 +31,18 @@
 
 	const report = $derived(scheduleEQuery.data as ScheduleEReport | undefined);
 
-	// 1099 checklist: 1099-eligible vendors + whether each has a W-9 on file.
-	const reportsQuery = createQuery(() => ({
-		queryKey: ['accounting-reports', portfolioId],
-		queryFn: () => accounting.reports(),
+	// 1099 checklist: 1099-eligible vendors + whether each has a W-9 on file, scoped to the selected
+	// tax year. 1099 reporting is strictly per calendar year ($600/payee/year), so this reads the
+	// year-scoped /reports/vendor-1099 endpoint (Paid filtered to the year) and keys the query on
+	// selectedYear — switching the year re-fetches so the Paid totals and the $600 flag reflect that
+	// year alone (not an all-time sum).
+	const vendor1099Query = createQuery(() => ({
+		queryKey: ['vendor-1099', portfolioId, selectedYear],
+		queryFn: () => reportsApi.vendor1099({ year: Number(selectedYear) }),
 		enabled: !!portfolioId
 	}));
 
-	const reports = $derived(reportsQuery.data as AccountingReports | undefined);
-	const vendors1099 = $derived(reports?.vendors1099 ?? []);
+	const vendors1099 = $derived(vendor1099Query.data?.rows ?? []);
 	const vendorsNeedingW9 = $derived(vendors1099.filter((v) => v.needsW9).length);
 
 	const requestW9Mutation = createMutation(() => ({
@@ -158,11 +162,11 @@
 			</p>
 		</Card.Header>
 		<Card.Content class="p-4">
-			{#if reportsQuery.isLoading}
+			{#if vendor1099Query.isLoading}
 				<p class="py-6 text-center text-sm text-muted-foreground" data-testid="vendors-1099-loading">
 					Loading vendors…
 				</p>
-			{:else if reportsQuery.isError}
+			{:else if vendor1099Query.isError}
 				<p class="py-6 text-center text-sm text-destructive" data-testid="vendors-1099-error">
 					Could not load the 1099 checklist.
 				</p>
