@@ -12,4 +12,10 @@ public sealed class NoopTenantPortalProvisioningService : ITenantPortalProvision
     public Task<PortalAccountResult> EnsurePortalAccountForTenantAsync(
         int tenantId, int portfolioId, CancellationToken ct = default)
         => Task.FromResult(new PortalAccountResult(PortalAccountStatus.AlreadyExisted));
+
+    public Task<SetPortalAccessResult> SetPortalAccessAsync(
+        int tenantId, int portfolioId, bool enabled, CancellationToken ct = default)
+        => Task.FromResult(new SetPortalAccessResult(
+            SetPortalAccessOutcome.Updated,
+            enabled ? TenantPortalAccess.Active : TenantPortalAccess.Disabled));
 }

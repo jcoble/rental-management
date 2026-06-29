@@ -261,6 +261,8 @@ export interface Tenant {
 	dateOfBirth?: string;
 	notes?: string;
 	activeLeaseCount?: number;
+	/** Portal-login state: 'none' (no login), 'active' (can sign in), 'disabled' (login turned off). Only set on the single-tenant GET. */
+	portalAccess?: 'none' | 'active' | 'disabled';
 	createdAt: string;
 	updatedAt: string;
 }
