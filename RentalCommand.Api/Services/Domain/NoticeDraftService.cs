@@ -90,6 +90,16 @@ public class NoticeDraftService : INoticeDraftService
             .Select(d => (d.LeaseId, d.NoticeType))
             .ToHashSet();
 
+        // Preload this portfolio's active notice templates once (DB-side), keyed by type, so each
+        // builder can render the landlord's template without a per-lease query.
+        var activeTemplates = await _db.NoticeTemplates
+            .AsNoTracking()
+            .Where(t => t.PortfolioId == portfolioId && t.IsActive)
+            .ToDictionaryAsync(t => t.NoticeType, ct);
+
+        NoticeTemplate? TemplateFor(string type) =>
+            activeTemplates.TryGetValue(type, out var t) ? t : null;
+
         if (wantsRenewal || wantsMoveOut)
         {
             var leaseQuery = _db.Leases
@@ -120,14 +130,14 @@ public class NoticeDraftService : INoticeDraftService
                     && (forced || (daysToEnd >= 0 && daysToEnd <= 75))
                     && !DraftExists(existingDrafts, lease.Id, "RenewalOffer", created))
                 {
-                    created.Add(await BuildRenewalDraftAsync(portfolioId, lease, daysToEnd, now, ct));
+                    created.Add(await BuildRenewalDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("RenewalOffer"), ct));
                 }
 
                 if (wantsMoveOut
                     && (forced || (daysToEnd >= 0 && daysToEnd <= 30))
                     && !DraftExists(existingDrafts, lease.Id, "MoveOutReminder", created))
                 {
-                    created.Add(await BuildMoveOutDraftAsync(portfolioId, lease, daysToEnd, now, ct));
+                    created.Add(await BuildMoveOutDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("MoveOutReminder"), ct));
                 }
             }
         }
@@ -160,7 +170,7 @@ public class NoticeDraftService : INoticeDraftService
                 var daysLate = (today - payment.DueDate.Date).Days;
                 if (!DraftExists(existingDrafts, payment.LeaseId, "LateRentNotice", created))
                 {
-                    created.Add(await BuildLateDraftAsync(portfolioId, payment, daysLate, now, ct));
+                    created.Add(await BuildLateDraftAsync(portfolioId, payment, daysLate, now, TemplateFor("LateRentNotice"), ct));
                 }
             }
         }
@@ -309,7 +319,7 @@ public class NoticeDraftService : INoticeDraftService
     // ===========================================================================================
 
     private async Task<NoticeDraft> BuildRenewalDraftAsync(
-        int portfolioId, Lease lease, int daysToEnd, DateTime now, CancellationToken ct)
+        int portfolioId, Lease lease, int daysToEnd, DateTime now, NoticeTemplate? template, CancellationToken ct)
     {
         var tenant = lease.Tenant!;
         var propertyName = lease.Property?.Name ?? "your home";
@@ -336,6 +346,9 @@ public class NoticeDraftService : INoticeDraftService
             + $"(currently {lease.MonthlyRent:C0}), running through {newEndDate:MMMM d, yyyy}. "
             + "Please reply here to accept, decline, or ask any questions.";
 
+        var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
+            [(NoticeMergeFields.LandlordName, ""), (NoticeMergeFields.PortfolioName, "")]);
+
         var draft = await ComposeAsync(
             portfolioId, lease, "RenewalOffer",
             intent: "a friendly lease-renewal offer",
@@ -345,13 +358,15 @@ public class NoticeDraftService : INoticeDraftService
             reason: $"Lease ends in {daysToEnd} days. Proposed {proposedRent:C0}/mo ({RenewalEscalationPercent:0.#}% increase) through {newEndDate:MMM d, yyyy}.",
             triggerDate: lease.EndDate.Date,
             now: now,
+            template: template,
+            tokens: tokens,
             ct: ct);
 
         return draft;
     }
 
     private async Task<NoticeDraft> BuildMoveOutDraftAsync(
-        int portfolioId, Lease lease, int daysToEnd, DateTime now, CancellationToken ct)
+        int portfolioId, Lease lease, int daysToEnd, DateTime now, NoticeTemplate? template, CancellationToken ct)
     {
         var tenant = lease.Tenant!;
         var propertyName = lease.Property?.Name ?? "your home";
@@ -370,6 +385,9 @@ public class NoticeDraftService : INoticeDraftService
             $"Hi {tenantName}, this is a reminder that your lease for {propertyName}{unit} ends on {lease.EndDate:MMMM d, yyyy}. "
             + "Please reply to coordinate keys, inspection timing, and forwarding-address details so we can return your deposit promptly.";
 
+        var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
+            [(NoticeMergeFields.LandlordName, ""), (NoticeMergeFields.PortfolioName, "")]);
+
         return await ComposeAsync(
             portfolioId, lease, "MoveOutReminder",
             intent: "a courteous move-out coordination reminder",
@@ -379,11 +397,13 @@ public class NoticeDraftService : INoticeDraftService
             reason: $"Lease ends in {daysToEnd} days.",
             triggerDate: lease.EndDate.Date,
             now: now,
+            template: template,
+            tokens: tokens,
             ct: ct);
     }
 
     private async Task<NoticeDraft> BuildLateDraftAsync(
-        int portfolioId, Payment payment, int daysLate, DateTime now, CancellationToken ct)
+        int portfolioId, Payment payment, int daysLate, DateTime now, NoticeTemplate? template, CancellationToken ct)
     {
         var lease = payment.Lease!;
         var tenant = lease.Tenant!;
@@ -421,6 +441,11 @@ public class NoticeDraftService : INoticeDraftService
                  + "immediately or contact us today to avoid further action under your lease."
         };
 
+        var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
+            [(NoticeMergeFields.OverdueAmount, payment.Amount.ToString("C0")),
+             (NoticeMergeFields.RentDueDate, payment.DueDate.ToString("MMMM d, yyyy")),
+             (NoticeMergeFields.LateFeeAmount, "")]);
+
         return await ComposeAsync(
             portfolioId, lease, "LateRentNotice",
             intent: $"a {levelLabel} past-due rent reminder ({tone})",
@@ -430,6 +455,8 @@ public class NoticeDraftService : INoticeDraftService
             reason: $"Payment is {daysLate} days past due ({levelLabel} notice).",
             triggerDate: payment.DueDate.Date,
             now: now,
+            template: template,
+            tokens: tokens,
             ct: ct);
     }
 
@@ -448,9 +475,9 @@ public class NoticeDraftService : INoticeDraftService
 
     /// <summary>
     /// Builds the LLM prompt from grounded facts, asks for a subject+body JSON, and falls back to the
-    /// deterministic template whenever the LLM is a no-op (empty/blank) or unparseable. The prompt is
-    /// always stored on the draft; when the fallback is used, <see cref="NoticeDraft.GenerationPrompt"/>
-    /// is left null to mark the copy as template-generated.
+    /// deterministic template whenever the LLM is a no-op (empty/blank) or unparseable. When a landlord
+    /// <paramref name="template"/> is present it takes full precedence — the LLM is skipped and
+    /// <see cref="NoticeDraft.GenerationPrompt"/> is left null to mark non-LLM provenance.
     /// </summary>
     private async Task<NoticeDraft> ComposeAsync(
         int portfolioId,
@@ -463,33 +490,45 @@ public class NoticeDraftService : INoticeDraftService
         string reason,
         DateTime triggerDate,
         DateTime now,
+        NoticeTemplate? template,
+        IReadOnlyDictionary<string, string> tokens,
         CancellationToken ct)
     {
-        var prompt = BuildPrompt(intent, facts);
-
         var subject = deterministicSubject;
         var body = deterministicBody;
         string? usedPrompt = null;
 
-        try
+        if (template != null)
         {
-            var raw = await GenerateCopyAsync(prompt, noticeType, lease.Id, ct);
-            if (TryParseCopy(raw, out var llmSubject, out var llmBody))
+            // Landlord template takes precedence over LLM/deterministic copy. Deterministic fill,
+            // no LLM call. GenerationPrompt stays null to mark non-LLM provenance.
+            var rendered = NoticeTemplateRenderer.Render(template.Subject, template.Body, tokens);
+            subject = Truncate(rendered.Subject, 200);
+            body = Truncate(rendered.Body, 4000);
+        }
+        else
+        {
+            var prompt = BuildPrompt(intent, facts);
+            try
             {
-                subject = Truncate(llmSubject, 200);
-                body = Truncate(llmBody, 4000);
-                usedPrompt = Truncate(prompt, 8000);
+                var raw = await GenerateCopyAsync(prompt, noticeType, lease.Id, ct);
+                if (TryParseCopy(raw, out var llmSubject, out var llmBody))
+                {
+                    subject = Truncate(llmSubject, 200);
+                    body = Truncate(llmBody, 4000);
+                    usedPrompt = Truncate(prompt, 8000);
+                }
+                // else: empty (no-op / no key) or malformed → keep deterministic template.
             }
-            // else: empty (no-op / no key) or malformed → keep deterministic template.
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            // Never let a copy-generation failure block the proactive draft — fall back to the template.
-            _logger.LogWarning(ex, "LLM copy generation failed for {NoticeType} (lease {LeaseId}); using template.", noticeType, lease.Id);
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // Never let a copy-generation failure block the proactive draft — fall back to the template.
+                _logger.LogWarning(ex, "LLM copy generation failed for {NoticeType} (lease {LeaseId}); using template.", noticeType, lease.Id);
+            }
         }
 
         return new NoticeDraft
@@ -507,6 +546,30 @@ public class NoticeDraftService : INoticeDraftService
             CreatedAt = now,
             UpdatedAt = now
         };
+    }
+
+    /// <summary>
+    /// Builds the merge-token values for a draft from grounded facts. Only includes tokens that have a
+    /// real value; the renderer blanks anything missing. Currency/dates are pre-formatted strings.
+    /// </summary>
+    private static Dictionary<string, string> BuildTokens(
+        Lease lease,
+        string tenantName,
+        string propertyName,
+        string? unitNumber,
+        (string Key, string Value)[] extra)
+    {
+        var tokens = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [NoticeMergeFields.TenantName] = tenantName,
+            [NoticeMergeFields.PropertyAddress] = propertyName,
+            [NoticeMergeFields.UnitNumber] = unitNumber ?? "",
+            [NoticeMergeFields.LeaseStartDate] = lease.StartDate.ToString("MMMM d, yyyy"),
+            [NoticeMergeFields.LeaseEndDate] = lease.EndDate.ToString("MMMM d, yyyy"),
+            [NoticeMergeFields.RentAmount] = lease.MonthlyRent.ToString("C0"),
+        };
+        foreach (var (key, value) in extra) tokens[key] = value;
+        return tokens;
     }
 
     private async Task<string?> GenerateCopyAsync(
