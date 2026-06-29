@@ -77,9 +77,9 @@ public class NoticeDraftService : INoticeDraftService
         var wantsMoveOut = WantsType("MoveOutReminder");
         // An EXPLICIT RentReminder request still force-generates one reminder per active lease (the
         // Plan-1 manual flow — no upcoming-payment requirement). The periodic, payment-grounded path
-        // below additionally runs portfolio-wide (autopilot) OR when RentReminder is explicitly asked for.
+        // below runs portfolio-wide (autopilot) only, NOT when RentReminder is explicitly requested.
         var wantsRentReminder = string.Equals(requestedType, "RentReminder", StringComparison.OrdinalIgnoreCase);
-        var wantsUpcomingRentReminder = requestedType == null || wantsRentReminder;
+        var wantsUpcomingRentReminder = requestedType == null;
         // MonthToMonth is generated portfolio-wide too (within the lease-end window) so the autopilot can
         // auto-send it; it mirrors renewal's lead time.
         var wantsMonthToMonth = requestedType == null || string.Equals(requestedType, "MonthToMonthConversion", StringComparison.OrdinalIgnoreCase);
