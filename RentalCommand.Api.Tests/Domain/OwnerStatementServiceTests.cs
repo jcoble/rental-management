@@ -11,10 +11,11 @@ using RentalCommand.Data;
 namespace RentalCommand.Api.Tests.Domain;
 
 /// <summary>
-/// Pins the round-3 DB-side rewrite of OwnerStatementService (L-10): the per-property rental-income
-/// and expense totals are grouped + summed in SQL, not by materializing payment/expense rows and
-/// grouping in memory. Runs against the real (SQLite) query engine so a GroupBy that fails to
-/// translate — or that drifts from the in-memory values — is caught.
+/// Pins OwnerStatementService's DB-side aggregation (L-10): the per-property rental-income and expense
+/// totals are summed in SQL, not by materializing payment/expense rows and grouping in memory. Runs
+/// against the real (SQLite) query engine so a query that fails to translate — or that drifts from the
+/// expected values — is caught. The per-owner report totals are the sum of the rounded per-line values
+/// (so the statement foots to the cent); the heavy payment/expense aggregation still runs in SQL.
 /// </summary>
 public class OwnerStatementServiceTests : IDisposable
 {
@@ -114,11 +115,45 @@ public class OwnerStatementServiceTests : IDisposable
 
         propertyLineSql.Should().NotBeNull("owner-statement property lines must be filtered, ordered, and aggregated in SQL");
 
-        _commands.Should().Contain(sql =>
-                sql.Contains("FROM \"Properties\"", StringComparison.OrdinalIgnoreCase) &&
-                sql.Contains("GROUP BY", StringComparison.OrdinalIgnoreCase) &&
-                sql.Contains("SUM", StringComparison.OrdinalIgnoreCase),
-            "owner-statement report totals must be grouped and summed in SQL, not by summing the property DTOs");
+        // The per-property payment/expense aggregation runs in SQL (asserted above). The report TOTALS
+        // are the sum of the rounded per-line values, so the statement foots exactly to the cent — see
+        // GetForOwnerAsync_TotalsReconcileWithRoundedPerLineFees for the sub-cent-drift guard.
+        report.TotalIncome.Should().Be(report.Properties.Sum(p => p.RentalIncome));
+        report.TotalExpenses.Should().Be(report.Properties.Sum(p => p.Expenses));
+        report.TotalManagementFee.Should().Be(report.Properties.Sum(p => p.ManagementFee));
+        report.TotalNetToOwner.Should().Be(report.Properties.Sum(p => p.NetToOwner));
+    }
+
+    [Fact]
+    public async Task GetForOwnerAsync_TotalsReconcileWithRoundedPerLineFees()
+    {
+        // Two properties whose per-line management fee carries a sub-cent fraction that rounds DOWN:
+        //   round(333.33 * 1%) = round(3.3333) = 3.33   and   round(333.34 * 1%) = round(3.3334) = 3.33
+        // Sum of the rounded per-line fees = 6.66. Summing the UNROUNDED fees and rounding once would
+        // give round(3.3333 + 3.3334) = round(6.6667) = 6.67 — a cent of drift. The report totals must
+        // equal the sum of the displayed (rounded) per-line values, i.e. 6.66, not 6.67.
+        var owner = SeedOwner("Penny Holdings");
+
+        var propA = SeedProperty(owner.Id, "Cent A", managementFeePercent: 1m);
+        SeedRent(SeedLease(propA, "L-A"), 333.33m, paidInYear: true);
+
+        var propB = SeedProperty(owner.Id, "Cent B", managementFeePercent: 1m);
+        SeedRent(SeedLease(propB, "L-B"), 333.34m, paidInYear: true);
+
+        var report = await _sut.GetForOwnerAsync(PortfolioId, owner.Id, Year, CancellationToken.None);
+
+        report.Should().NotBeNull();
+        var lineA = report!.Properties.Single(p => p.PropertyName == "Cent A");
+        var lineB = report.Properties.Single(p => p.PropertyName == "Cent B");
+        lineA.ManagementFee.Should().Be(3.33m);
+        lineB.ManagementFee.Should().Be(3.33m);
+
+        // Totals reconcile exactly with the sum of the rounded per-line values (no cent drift).
+        report.TotalManagementFee.Should().Be(6.66m);
+        report.TotalManagementFee.Should().Be(lineA.ManagementFee + lineB.ManagementFee);
+        report.TotalIncome.Should().Be(666.67m);
+        report.TotalNetToOwner.Should().Be(660.01m);
+        report.TotalNetToOwner.Should().Be(lineA.NetToOwner + lineB.NetToOwner);
     }
 
     [Fact]

@@ -99,9 +99,9 @@ public class SecurityDepositServiceListTests : IDisposable
         fromDb.ReturnedAmount.Should().Be(1_175m);
     }
 
-    // ── Return status keys off deductions taken, not off the net refunded (regression: BUG-1, the
-    //    inverted terminal status). No deductions -> Returned; any deductions -> PartiallyReturned
-    //    (including a full withhold where $0 goes back).
+    // ── Return status keys off the deductions taken AND what actually went back (regression: BUG-1, the
+    //    inverted terminal status). No deductions -> Returned; deductions with a positive net refund ->
+    //    PartiallyReturned; deductions that consume the whole deposit (net $0) -> Withheld.
 
     [Fact]
     public async Task ReturnAsync_NoDeductions_MarksReturned()
@@ -142,7 +142,7 @@ public class SecurityDepositServiceListTests : IDisposable
     }
 
     [Fact]
-    public async Task ReturnAsync_FullWithhold_NetZero_MarksPartiallyReturned()
+    public async Task ReturnAsync_FullWithhold_NetZero_MarksWithheld()
     {
         var deposit = SeedDeposit("RET-WITHHELD", 600m);
         await _sut.AddDeductionAsync(PortfolioId, deposit.Id, new AddDeductionRequest
@@ -154,15 +154,37 @@ public class SecurityDepositServiceListTests : IDisposable
         var returned = await _sut.ReturnAsync(PortfolioId, deposit.Id, new ReturnDepositRequest());
 
         returned.Should().NotBeNull();
-        // Nothing went back ($0 net), but deductions were taken — it must not read "Returned".
-        // A distinct "Withheld" state is a deferred product decision; PartiallyReturned at least
-        // signals an incomplete return.
-        returned!.Status.Should().Be(SecurityDepositStatus.PartiallyReturned.ToString());
+        // Deductions consumed the whole deposit — nothing went back ($0 net). This is a distinct
+        // terminal state from PartiallyReturned (where the tenant still gets something).
+        returned!.Status.Should().Be(SecurityDepositStatus.Withheld.ToString());
         returned.ReturnedAmount.Should().Be(0m);
         returned.TotalDeductions.Should().Be(600m);
 
         var fromDb = await _ctx.Db.SecurityDepositHoldings.AsNoTracking().SingleAsync(h => h.Id == deposit.Id);
-        fromDb.Status.Should().Be(SecurityDepositStatus.PartiallyReturned);
+        fromDb.Status.Should().Be(SecurityDepositStatus.Withheld);
+    }
+
+    [Fact]
+    public async Task ReturnAsync_DeductionsExceedDeposit_NetClampedZero_MarksWithheld()
+    {
+        // Over-deduction: deductions ($750) exceed the held amount ($600). Net refund clamps to $0
+        // (never negative) and the terminal state is Withheld, not PartiallyReturned.
+        var deposit = SeedDeposit("RET-OVER", 600m);
+        await _sut.AddDeductionAsync(PortfolioId, deposit.Id, new AddDeductionRequest
+        {
+            Reason = "Damage far exceeds deposit",
+            Amount = 750m,
+        });
+
+        var returned = await _sut.ReturnAsync(PortfolioId, deposit.Id, new ReturnDepositRequest());
+
+        returned.Should().NotBeNull();
+        returned!.Status.Should().Be(SecurityDepositStatus.Withheld.ToString());
+        returned.ReturnedAmount.Should().Be(0m);
+        returned.TotalDeductions.Should().Be(750m);
+
+        var fromDb = await _ctx.Db.SecurityDepositHoldings.AsNoTracking().SingleAsync(h => h.Id == deposit.Id);
+        fromDb.Status.Should().Be(SecurityDepositStatus.Withheld);
     }
 
     [Fact]
