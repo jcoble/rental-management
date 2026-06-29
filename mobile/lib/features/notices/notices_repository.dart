@@ -61,6 +61,26 @@ class NoticesRepository {
     }
   }
 
+  /// Edits a draft's subject/body before sending. PATCH /notices/{id}.
+  Future<NoticeDraft> update(int id, {String? subject, String? body}) async {
+    try {
+      final response = await _dio.patch<Map<String, dynamic>>(
+        '/notices/$id',
+        data: {
+          if (subject != null) 'subject': subject,
+          if (body != null) 'body': body,
+        },
+      );
+      final data = response.data;
+      if (data == null) {
+        throw const ApiException(statusCode: 0, message: 'Empty response from server.');
+      }
+      return NoticeDraft.fromJson(data);
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   Future<void> approve(int id, List<String> channels) async {
     try {
       await _dio.post<Map<String, dynamic>>(
