@@ -23,6 +23,7 @@ public class IdentitySeeder
     private readonly RoleManager<IdentityRole<int>> _roleManager;
     private readonly RentalCommandDbContext _dbContext;
     private readonly SeedSettings _settings;
+    private readonly ITenantPortalProvisioningService _portalProvisioning;
     private readonly ILogger<IdentitySeeder> _logger;
 
     public IdentitySeeder(
@@ -30,12 +31,14 @@ public class IdentitySeeder
         RoleManager<IdentityRole<int>> roleManager,
         RentalCommandDbContext dbContext,
         IOptions<SeedSettings> settings,
+        ITenantPortalProvisioningService portalProvisioning,
         ILogger<IdentitySeeder> logger)
     {
         _userManager = userManager;
         _roleManager = roleManager;
         _dbContext = dbContext;
         _settings = settings.Value;
+        _portalProvisioning = portalProvisioning;
         _logger = logger;
     }
 
@@ -215,185 +218,46 @@ public class IdentitySeeder
 
     private async Task EnsureTenantPortalAccountsAsync(int portfolioId, CancellationToken ct)
     {
-        var tenants = await _dbContext.Tenants
+        // Load the candidate tenant ids in ONE query (the "has an email" filter runs DB-side), then
+        // provision each through the shared service. Account creation is inherently per-tenant — Identity's
+        // UserManager has no batch API — so this loop is per-user round-trips, not in-memory aggregation;
+        // it's startup-only and idempotent. The on-demand staff endpoint reuses the same per-tenant method.
+        var tenantIds = await _dbContext.Tenants
             .AsNoTracking()
             .Where(t => t.PortfolioId == portfolioId && t.Email != null && t.Email != "")
             .OrderBy(t => t.Id)
-            .Select(t => new
-            {
-                t.Id,
-                t.Email,
-                t.FirstName,
-                t.LastName,
-            })
+            .Select(t => t.Id)
             .ToListAsync(ct);
 
-        if (tenants.Count == 0)
+        if (tenantIds.Count == 0)
         {
             return;
         }
 
-        var now = DateTime.UtcNow;
         var created = 0;
-        var linked = 0;
+        var existed = 0;
 
-        foreach (var tenant in tenants)
+        foreach (var tenantId in tenantIds)
         {
-            var email = tenant.Email?.Trim();
-            if (string.IsNullOrWhiteSpace(email))
+            var result = await _portalProvisioning.EnsurePortalAccountForTenantAsync(tenantId, portfolioId, ct);
+            switch (result.Status)
             {
-                continue;
-            }
-
-            var displayName = $"{tenant.FirstName} {tenant.LastName}".Trim();
-            if (string.IsNullOrWhiteSpace(displayName))
-            {
-                displayName = email;
-            }
-
-            var identityUser = await _userManager.FindByEmailAsync(email);
-            if (identityUser == null)
-            {
-                identityUser = new ApplicationUser
-                {
-                    UserName = email,
-                    Email = email,
-                    EmailConfirmed = true,
-                    DisplayName = displayName,
-                    PortfolioId = portfolioId,
-                    TenantId = tenant.Id,
-                    CreatedAt = now,
-                };
-
-                var createResult = await _userManager.CreateAsync(identityUser, _settings.TenantPassword);
-                if (!createResult.Succeeded)
-                {
-                    _logger.LogWarning(
-                        "Failed to seed tenant portal user for tenant {TenantId} ({Email}): {Errors}",
-                        tenant.Id,
-                        email,
-                        string.Join("; ", createResult.Errors.Select(e => e.Description)));
-                    continue;
-                }
-
-                created++;
-            }
-            else
-            {
-                if (identityUser.PortfolioId.HasValue && identityUser.PortfolioId.Value != portfolioId)
-                {
-                    _logger.LogWarning(
-                        "Skipping tenant portal link for {Email}: Identity user belongs to portfolio {ExistingPortfolioId}, not {PortfolioId}.",
-                        email,
-                        identityUser.PortfolioId.Value,
-                        portfolioId);
-                    continue;
-                }
-
-                if (identityUser.TenantId.HasValue && identityUser.TenantId.Value != tenant.Id)
-                {
-                    _logger.LogWarning(
-                        "Skipping tenant portal link for {Email}: Identity user already belongs to tenant {ExistingTenantId}, not {TenantId}.",
-                        email,
-                        identityUser.TenantId.Value,
-                        tenant.Id);
-                    continue;
-                }
-
-                var changed = false;
-                if (identityUser.PortfolioId != portfolioId)
-                {
-                    identityUser.PortfolioId = portfolioId;
-                    changed = true;
-                }
-
-                if (identityUser.TenantId != tenant.Id)
-                {
-                    identityUser.TenantId = tenant.Id;
-                    changed = true;
-                }
-
-                if (!identityUser.EmailConfirmed)
-                {
-                    identityUser.EmailConfirmed = true;
-                    changed = true;
-                }
-
-                if (string.IsNullOrWhiteSpace(identityUser.DisplayName))
-                {
-                    identityUser.DisplayName = displayName;
-                    changed = true;
-                }
-
-                if (changed)
-                {
-                    await _userManager.UpdateAsync(identityUser);
-                    linked++;
-                }
-            }
-
-            var roles = await _userManager.GetRolesAsync(identityUser);
-            if (!roles.Contains(nameof(UserRole.Tenant)))
-            {
-                var roleResult = await _userManager.AddToRoleAsync(identityUser, nameof(UserRole.Tenant));
-                if (!roleResult.Succeeded)
-                {
-                    _logger.LogWarning(
-                        "Failed to assign Tenant role to portal user {Email}: {Errors}",
-                        email,
-                        string.Join("; ", roleResult.Errors.Select(e => e.Description)));
-                }
-            }
-
-            var account = await _dbContext.UserAccounts
-                .FirstOrDefaultAsync(u => u.PortfolioId == portfolioId && u.Email == email, ct);
-
-            if (account == null)
-            {
-                _dbContext.UserAccounts.Add(new UserAccount
-                {
-                    PortfolioId = portfolioId,
-                    TenantId = tenant.Id,
-                    Email = email,
-                    DisplayName = displayName,
-                    PasswordHash = string.Empty,
-                    Role = UserRole.Tenant,
-                    IsActive = true,
-                    CreatedAt = now,
-                    UpdatedAt = now,
-                });
-            }
-            else
-            {
-                var changed = false;
-                if (account.TenantId != tenant.Id)
-                {
-                    account.TenantId = tenant.Id;
-                    changed = true;
-                }
-
-                if (account.Role != UserRole.Tenant)
-                {
-                    account.Role = UserRole.Tenant;
-                    changed = true;
-                }
-
-                if (changed)
-                {
-                    account.UpdatedAt = now;
-                }
+                case PortalAccountStatus.Created:
+                    created++;
+                    break;
+                case PortalAccountStatus.AlreadyExisted:
+                    existed++;
+                    break;
             }
         }
 
-        await _dbContext.SaveChangesAsync(ct);
-
-        if (created > 0 || linked > 0)
+        if (created > 0 || existed > 0)
         {
             _logger.LogInformation(
-                "Ensured tenant portal accounts for portfolio {PortfolioId}: {Created} created, {Linked} linked.",
+                "Ensured tenant portal accounts for portfolio {PortfolioId}: {Created} created, {Existed} already existed.",
                 portfolioId,
                 created,
-                linked);
+                existed);
         }
     }
 }

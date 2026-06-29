@@ -228,6 +228,9 @@ builder.Services.AddScoped<IUserMigrationService, UserMigrationService>();
 builder.Services.AddScoped<IAuthEmailSender, OutboxAuthEmailSender>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IGoogleAuthService, GoogleAuthService>();
+// On-demand tenant portal provisioning: shared by the startup seeder and the staff "grant portal
+// access" endpoint (TenantController) so a tenant added after boot can be given a login without a restart.
+builder.Services.AddScoped<ITenantPortalProvisioningService, TenantPortalProvisioningService>();
 builder.Services.AddScoped<IdentitySeeder>();
 builder.Services.AddScoped<DemoDataSeeder>();
 

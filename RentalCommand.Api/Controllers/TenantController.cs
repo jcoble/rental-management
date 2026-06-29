@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
 
 namespace RentalCommand.Api.Controllers;
@@ -14,10 +15,12 @@ namespace RentalCommand.Api.Controllers;
 public class TenantController : ManagementControllerBase
 {
     private readonly ITenantService _service;
+    private readonly ITenantPortalProvisioningService _portalProvisioning;
 
-    public TenantController(ITenantService service)
+    public TenantController(ITenantService service, ITenantPortalProvisioningService portalProvisioning)
     {
         _service = service;
+        _portalProvisioning = portalProvisioning;
     }
 
     [HttpGet]
@@ -69,5 +72,38 @@ public class TenantController : ManagementControllerBase
     {
         var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
         return deleted ? NoContent() : NotFound(new { error = "Tenant not found" });
+    }
+
+    /// <summary>
+    /// Grants the tenant a portal login on demand (creates an Identity account scoped to this portfolio,
+    /// or reports that one already exists). The tenant signs in with their email and the shared tenant
+    /// password. Requires the tenant to have an email. Portfolio-scoped via the JWT claim (IDOR guard).
+    /// </summary>
+    [HttpPost("{id:int}/portal-access")]
+    [ProducesResponseType(typeof(GrantPortalAccessResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<GrantPortalAccessResponse>> GrantPortalAccess(int id, CancellationToken ct)
+    {
+        var result = await _portalProvisioning.EnsurePortalAccountForTenantAsync(id, GetPortfolioId(), ct);
+
+        return result.Status switch
+        {
+            PortalAccountStatus.TenantNotFound => NotFound(new { error = "Tenant not found" }),
+            PortalAccountStatus.NoEmail => BadRequest(new
+            {
+                error = "This tenant has no email address. Add an email before granting portal access."
+            }),
+            PortalAccountStatus.Failed => BadRequest(new
+            {
+                error = result.Error ?? "Could not grant portal access."
+            }),
+            _ => Ok(new GrantPortalAccessResponse
+            {
+                Status = result.Status.ToString(),
+                AlreadyExisted = result.Status == PortalAccountStatus.AlreadyExisted,
+                Email = result.Email,
+            }),
+        };
     }
 }
