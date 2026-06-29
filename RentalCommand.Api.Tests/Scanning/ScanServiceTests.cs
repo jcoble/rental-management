@@ -1063,6 +1063,61 @@ public class ScanServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ConfirmAndCreateAsync_LoanDraft_WithLikelyMisreadInterestRate_ReturnsReviewError()
+    {
+        const string extractedJson =
+            """
+            {"target_entity_type":{"value":"Loan","confidence":0.95},
+             "lender":{"value":"Rocket Mortgage","confidence":0.95},
+             "original_amount":{"value":"250000","confidence":0.9},
+             "annual_interest_rate_pct":{"value":"65","confidence":0.9},
+             "property_id":{"value":"10","confidence":0.7}}
+            """;
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _loans.SetupResponse(new LoanResponse { Id = 770, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeFalse();
+        result.Error.Should().Contain("Annual interest rate");
+        _loans.LastRequest.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ConfirmAndCreateAsync_LoanDraft_WithOverPrecisionFinancialFields_RoundsToStorageScale()
+    {
+        const string extractedJson =
+            """
+            {"target_entity_type":{"value":"Loan","confidence":0.95},
+             "lender":{"value":"Rocket Mortgage","confidence":0.95},
+             "original_amount":{"value":"250000.129","confidence":0.9},
+             "current_balance":{"value":"238450.555","confidence":0.9},
+             "annual_interest_rate_pct":{"value":"6.12345","confidence":0.9},
+             "monthly_principal_interest":{"value":"1580.175","confidence":0.9},
+             "monthly_escrow":{"value":"420.335","confidence":0.85},
+             "property_id":{"value":"10","confidence":0.7}}
+            """;
+
+        var draft = SeedDraft("Reviewing", extractedJson, targetEntityType: "Loan");
+        SeedStoredFile(draft.FilePath);
+        SeedPropertyAndUnit();
+        _loans.SetupResponse(new LoanResponse { Id = 770, PortfolioId = PortfolioId });
+
+        var result = await _sut.ConfirmAndCreateAsync(PortfolioId, draft.Id, userId: 7, overridesJson: "{}");
+
+        result.Success.Should().BeTrue("Unexpected: " + result.Error);
+        _loans.LastRequest.Should().NotBeNull();
+        _loans.LastRequest!.OriginalAmount.Should().Be(250000.13m);
+        _loans.LastRequest.CurrentBalance.Should().Be(238450.56m);
+        _loans.LastRequest.AnnualInterestRatePct.Should().Be(6.1235m);
+        _loans.LastRequest.MonthlyPrincipalInterest.Should().Be(1580.18m);
+        _loans.LastRequest.MonthlyEscrow.Should().Be(420.34m);
+    }
+
+    [Fact]
     public async Task ConfirmAndCreateAsync_LoanDraft_WithOverridePropertyId_UsesScanContextPropertyAndDefaultsBalance()
     {
         // No property_id on the document — the property comes from the scan-context deep-link the
