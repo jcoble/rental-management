@@ -35,6 +35,13 @@ describe('tenant notice deep-link action', () => {
 		);
 	});
 
+	test('reads a LateRentNotice action from URL params', () => {
+		assert.deepEqual(
+			readTenantNoticeAction(new URLSearchParams('action=create-notice&noticeType=LateRentNotice')),
+			{ noticeType: 'LateRentNotice' }
+		);
+	});
+
 	test('recognizes the two new forceable notice types', () => {
 		assert.deepEqual(
 			readTenantNoticeAction(new URLSearchParams('action=create-notice&noticeType=RentReminder')),
