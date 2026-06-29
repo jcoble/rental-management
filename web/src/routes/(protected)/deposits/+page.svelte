@@ -15,7 +15,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import { Info, Plus } from '@lucide/svelte';
+	import { AlertTriangle, Info, Plus } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 
@@ -124,6 +124,15 @@
 	let deductionAmount = $state('');
 	let deductionNotes = $state('');
 	let deductionErrors = $state<Record<string, string>>({});
+
+	// Live preview while typing: how much this new deduction would push cumulative deductions past
+	// the held amount on the target holding (0 when it still fits within the deposit). The server
+	// has no cumulative cap — it only clamps the net refund at $0 — so the overage is owed by the tenant.
+	const deductionProjectedOver = $derived(
+		deductionTarget && deductionAmount.trim() !== '' && Number.isFinite(Number(deductionAmount)) && Number(deductionAmount) > 0
+			? Math.max(0, deductionTarget.totalDeductions + Number(deductionAmount) - deductionTarget.amount)
+			: 0
+	);
 
 	function openDeduction(deposit: SecurityDepositHolding) {
 		if (deposit.status !== 'Held') return;
@@ -438,6 +447,18 @@
 					placeholder="0.00"
 				/>
 				{#if deductionErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="deduction-amount-error">{deductionErrors.amount}</p>{/if}
+				{#if deductionProjectedOver > 0}
+					<div
+						class="m3-warning-surface mt-2 flex items-start gap-2 rounded-md px-2.5 py-1.5 text-xs"
+						data-testid="deduction-exceeds-warning"
+					>
+						<AlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+						<span>
+							Deductions exceed the deposit held — the tenant will owe the difference
+							({money(deductionProjectedOver)} over).
+						</span>
+					</div>
+				{/if}
 			</div>
 			<div>
 				<span class="mb-1 block text-xs text-muted-foreground">Notes (optional)</span>
