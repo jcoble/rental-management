@@ -115,6 +115,10 @@ public class UnitDashboardService : IUnitDashboardService
 
         // (3) Rent state — a single grouped conditional SUM over the unit's payments (no materialization).
         // Outstanding = still-owed rows (Scheduled/Partial/Late). Overdue flags whether any owed row is past due.
+        // Scoped to the unit's CURRENT lease (Active in-term / NoticeGiven) via ForCurrentLeaseAttention,
+        // mirroring AccountingService's receivables query — so leftover Scheduled/Late charges on a prior,
+        // ended lease don't over-count the unit's Outstanding (or flip its rent state to Overdue), keeping
+        // the Unit header reconciled with the Accounting Outstanding/Overdue KPIs.
         decimal outstanding = 0m;
         bool hasOverdue = false;
         bool hasDueSoon = false;
@@ -122,6 +126,7 @@ public class UnitDashboardService : IUnitDashboardService
         {
             var rent = await _db.Payments
                 .AsNoTracking()
+                .ForCurrentLeaseAttention(now)
                 .Where(p => p.PortfolioId == portfolioId && leaseIds.Contains(p.LeaseId))
                 .GroupBy(_ => 1)
                 .Select(g => new
