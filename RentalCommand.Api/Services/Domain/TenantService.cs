@@ -185,6 +185,13 @@ public class TenantService : ITenantService
             {
                 Entity = t,
                 ActiveLeaseCount = t.Leases.Count(l => l.Status == LeaseStatus.Active || l.Status == LeaseStatus.NoticeGiven),
+                // Portal-login state: existence + lockout of the Identity user linked to this tenant,
+                // fetched DB-side as correlated subqueries in the SAME query (no follow-up round trip).
+                HasPortalUser = _db.Users.Any(u => u.TenantId == t.Id && u.PortfolioId == portfolioId),
+                PortalLockoutEnd = _db.Users
+                    .Where(u => u.TenantId == t.Id && u.PortfolioId == portfolioId)
+                    .Select(u => u.LockoutEnd)
+                    .FirstOrDefault(),
             })
             .FirstOrDefaultAsync(ct);
 
@@ -195,6 +202,10 @@ public class TenantService : ITenantService
 
         var response = TenantResponse.FromEntity(row.Entity);
         response.ActiveLeaseCount = row.ActiveLeaseCount;
+        // Classify the single fetched row (no cross-row work): no user → none; locked-off → disabled.
+        response.PortalAccess = !row.HasPortalUser
+            ? "none"
+            : TenantPortalProvisioningService.IsPortalDisabled(row.PortalLockoutEnd) ? "disabled" : "active";
         return response;
     }
 

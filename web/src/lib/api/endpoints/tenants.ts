@@ -13,10 +13,13 @@ export interface TenantListParams extends ListParams {
 	availableForLease?: boolean;
 }
 
-export interface GrantPortalAccessResponse {
-	/** 'Created' when a new login was provisioned, 'AlreadyExisted' when one was already present. */
-	status: string;
-	alreadyExisted: boolean;
+/** Portal-login state for a tenant. */
+export type PortalAccessState = 'none' | 'active' | 'disabled';
+
+export interface PortalAccessResponse {
+	/** The resulting portal-login state after the toggle. */
+	portalAccess: PortalAccessState;
+	/** The email the tenant signs in with, when known. */
 	email?: string;
 }
 
@@ -41,8 +44,8 @@ export const tenants = {
 	create: (data: Record<string, unknown>) => api.post<Tenant>('/tenants', data),
 	update: (id: number, data: Record<string, unknown>) => api.patch<Tenant>(`/tenants/${id}`, data),
 	delete: (id: number) => api.delete(`/tenants/${id}`),
-	grantPortalAccess: (id: number) =>
-		api.post<GrantPortalAccessResponse>(`/tenants/${id}/portal-access`),
+	setPortalAccess: (id: number, enabled: boolean) =>
+		api.post<PortalAccessResponse>(`/tenants/${id}/portal-access`, { enabled }),
 	sendPortalInvite: (id: number) =>
 		api.post<PortalInviteResponse>(`/tenants/${id}/portal-invite`),
 };

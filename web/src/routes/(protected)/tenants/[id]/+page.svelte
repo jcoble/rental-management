@@ -28,7 +28,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock, BellRing, Send } from '@lucide/svelte';
+	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock, BellRing, Send, ToggleLeft, ToggleRight } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 
@@ -124,6 +124,21 @@
 			showSuccess(
 				result.alreadyExisted ? `Portal invite resent to ${to}.` : `Portal invite sent to ${to}.`
 			);
+		},
+		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+
+	// ── Portal access toggle ─────────────────────────────────────────────────────
+	// On by default (provisioned at tenant creation); turn OFF to block the tenant's sign-in (e.g. when
+	// their lease ends), back ON to restore it. Reflects tenant.portalAccess and re-fetches after.
+	const setPortalAccessMutation = createMutation(() => ({
+		mutationFn: ({ tid, enabled }: { tid: number; enabled: boolean }) =>
+			tenants.setPortalAccess(tid, enabled),
+		onSuccess: (result) => {
+			showSuccess(
+				result.portalAccess === 'active' ? 'Portal access turned on.' : 'Portal access turned off.'
+			);
+			queryClient.invalidateQueries({ queryKey: ['tenant', id] });
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
@@ -418,6 +433,32 @@
 						<BellRing class="h-4 w-4" />
 						Create / Send notice
 					</Button>
+					{#if tenant.portalAccess === 'active' || tenant.portalAccess === 'disabled'}
+						<div class="flex items-center gap-2" data-testid="tenant-portal-access">
+							<span class="text-xs font-medium text-muted-foreground">Portal access</span>
+							<Button
+								variant={tenant.portalAccess === 'active' ? 'outline' : 'secondary'}
+								size="sm"
+								class="h-9 gap-2"
+								disabled={setPortalAccessMutation.isPending}
+								onclick={() =>
+									setPortalAccessMutation.mutate({
+										tid: tenant.id,
+										enabled: tenant.portalAccess !== 'active',
+									})}
+								title={tenant.portalAccess === 'active'
+									? 'Turn off this tenant’s portal sign-in.'
+									: 'Turn this tenant’s portal sign-in back on.'}
+								data-testid="tenant-portal-access-toggle"
+							>
+								{#if tenant.portalAccess === 'active'}
+									<ToggleRight class="h-4 w-4" /> On
+								{:else}
+									<ToggleLeft class="h-4 w-4" /> Off
+								{/if}
+							</Button>
+						</div>
+					{/if}
 					<Button
 						variant="outline"
 						class="gap-2"
@@ -429,7 +470,11 @@
 						data-testid="tenant-detail-send-portal-invite"
 					>
 						<Send class="h-4 w-4" />
-						{sendPortalInviteMutation.isPending ? 'Sending…' : 'Send portal invite'}
+						{sendPortalInviteMutation.isPending
+							? 'Sending…'
+							: tenant.portalAccess === 'active'
+								? 'Resend invite'
+								: 'Send portal invite'}
 					</Button>
 					<Button variant="outline" class="gap-2" onclick={startEditing} data-testid="tenant-detail-edit">
 						<Pencil class="h-4 w-4" />

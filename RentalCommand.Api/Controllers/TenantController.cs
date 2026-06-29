@@ -90,33 +90,34 @@ public class TenantController : ManagementControllerBase
     }
 
     /// <summary>
-    /// Grants the tenant a portal login on demand (creates an Identity account scoped to this portfolio,
-    /// or reports that one already exists). The tenant signs in with their email and the shared tenant
-    /// password. Requires the tenant to have an email. Portfolio-scoped via the JWT claim (IDOR guard).
+    /// Turns the tenant's portal access on or off (the staff toggle). Enabling ensures a login exists
+    /// (provisioning one scoped to this portfolio if needed) and clears any lock; disabling locks the
+    /// login so the tenant can't sign in. Portfolio-scoped via the JWT claim (IDOR guard). Returns the
+    /// resulting <c>portalAccess</c> state.
     /// </summary>
     [HttpPost("{id:int}/portal-access")]
-    [ProducesResponseType(typeof(GrantPortalAccessResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(PortalAccessResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<GrantPortalAccessResponse>> GrantPortalAccess(int id, CancellationToken ct)
+    public async Task<ActionResult<PortalAccessResponse>> SetPortalAccess(
+        int id, [FromBody] SetPortalAccessRequest request, CancellationToken ct)
     {
-        var result = await _portalProvisioning.EnsurePortalAccountForTenantAsync(id, GetPortfolioId(), ct);
+        var result = await _portalProvisioning.SetPortalAccessAsync(id, GetPortfolioId(), request.Enabled, ct);
 
-        return result.Status switch
+        return result.Outcome switch
         {
-            PortalAccountStatus.TenantNotFound => NotFound(new { error = "Tenant not found" }),
-            PortalAccountStatus.NoEmail => BadRequest(new
+            SetPortalAccessOutcome.TenantNotFound => NotFound(new { error = "Tenant not found" }),
+            SetPortalAccessOutcome.NoEmail => BadRequest(new
             {
-                error = "This tenant has no email address. Add an email before granting portal access."
+                error = "This tenant has no email address. Add an email before enabling portal access."
             }),
-            PortalAccountStatus.Failed => BadRequest(new
+            SetPortalAccessOutcome.Failed => BadRequest(new
             {
-                error = result.Error ?? "Could not grant portal access."
+                error = result.Error ?? "Could not update portal access."
             }),
-            _ => Ok(new GrantPortalAccessResponse
+            _ => Ok(new PortalAccessResponse
             {
-                Status = result.Status.ToString(),
-                AlreadyExisted = result.Status == PortalAccountStatus.AlreadyExisted,
+                PortalAccess = result.Access.ToString().ToLowerInvariant(),
                 Email = result.Email,
             }),
         };

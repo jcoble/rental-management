@@ -26,6 +26,7 @@ public class TenantServiceTests : IDisposable
     private readonly List<string> _commands = [];
     private readonly SqliteTestContext _ctx;
     private readonly UserManager<ApplicationUser> _userManager;
+    private readonly TenantPortalProvisioningService _provisioning;
     private readonly TenantService _sut;
 
     public TenantServiceTests()
@@ -34,13 +35,13 @@ public class TenantServiceTests : IDisposable
         _userManager = CreateUserManager(_ctx.Db);
         // Real provisioning over the same in-memory DB so CreateAsync's auto-provision actually mints
         // an Identity login we can assert on (Tenant role + TenantId link).
-        var provisioning = new TenantPortalProvisioningService(
+        _provisioning = new TenantPortalProvisioningService(
             _userManager,
             _ctx.Db,
             Options.Create(new SeedSettings()),
             NullLogger<TenantPortalProvisioningService>.Instance);
         _sut = new TenantService(
-            _ctx.Db, Mock.Of<IDataUpdateService>(), provisioning, NullLogger<TenantService>.Instance);
+            _ctx.Db, Mock.Of<IDataUpdateService>(), _provisioning, NullLogger<TenantService>.Instance);
     }
 
     public void Dispose()
@@ -89,6 +90,37 @@ public class TenantServiceTests : IDisposable
         response.Id.Should().BeGreaterThan(0, "tenant creation still succeeds without an email");
         _ctx.Db.Users.Should().BeEmpty("a tenant with no email gets no Identity login");
         _ctx.Db.UserAccounts.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task GetAsync_ReportsPortalAccessState()
+    {
+        SeedTenantRole();
+
+        // A tenant with an email is auto-provisioned on create → active.
+        var active = await _sut.CreateAsync(PortfolioId, new CreateTenantRequest
+        {
+            FirstName = "Active",
+            LastName = "Portal",
+            Email = "active.portal@example.local",
+        });
+        (await _sut.GetAsync(PortfolioId, active.Id))!.PortalAccess.Should().Be("active");
+
+        // A tenant with no email has no login → none.
+        var none = await _sut.CreateAsync(PortfolioId, new CreateTenantRequest
+        {
+            FirstName = "NoLogin",
+            LastName = "Portal",
+            Email = null,
+        });
+        (await _sut.GetAsync(PortfolioId, none.Id))!.PortalAccess.Should().Be("none");
+
+        // Turning the active tenant's access off → disabled; back on → active.
+        await _provisioning.SetPortalAccessAsync(active.Id, PortfolioId, enabled: false);
+        (await _sut.GetAsync(PortfolioId, active.Id))!.PortalAccess.Should().Be("disabled");
+
+        await _provisioning.SetPortalAccessAsync(active.Id, PortfolioId, enabled: true);
+        (await _sut.GetAsync(PortfolioId, active.Id))!.PortalAccess.Should().Be("active");
     }
 
     private void SeedTenantRole()
