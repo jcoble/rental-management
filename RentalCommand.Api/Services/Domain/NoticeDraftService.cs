@@ -15,6 +15,9 @@ public class NoticeDraftService : INoticeDraftService
     // Renewal terms: propose a modest escalation on the current rent for the new term.
     private const decimal RenewalEscalationPercent = 3.0m;
     private const int RenewalTermMonths = 12;
+    // How many days before a scheduled rent payment's due date the autopilot generates a reminder.
+    // Per-portfolio RentChargeLeadDays wiring is out of scope for Plan 3b Task 4 (see report).
+    private const int RentReminderLeadDays = 7;
     private static readonly TimeSpan CopyGenerationTimeout = TimeSpan.FromMilliseconds(1500);
 
     private readonly RentalCommandDbContext _db;
@@ -72,9 +75,11 @@ public class NoticeDraftService : INoticeDraftService
         bool WantsType(string type) => requestedType == null || string.Equals(requestedType, type, StringComparison.OrdinalIgnoreCase);
         var wantsRenewal = WantsType("RenewalOffer");
         var wantsMoveOut = WantsType("MoveOutReminder");
-        // RentReminder is ONLY generated on an explicit request — never in portfolio-wide all-types runs
-        // (Plan 3b Task 4 handles its periodic generation).
+        // An EXPLICIT RentReminder request still force-generates one reminder per active lease (the
+        // Plan-1 manual flow — no upcoming-payment requirement). The periodic, payment-grounded path
+        // below additionally runs portfolio-wide (autopilot) OR when RentReminder is explicitly asked for.
         var wantsRentReminder = string.Equals(requestedType, "RentReminder", StringComparison.OrdinalIgnoreCase);
+        var wantsUpcomingRentReminder = requestedType == null || wantsRentReminder;
         // MonthToMonth is generated portfolio-wide too (within the lease-end window) so the autopilot can
         // auto-send it; it mirrors renewal's lead time.
         var wantsMonthToMonth = requestedType == null || string.Equals(requestedType, "MonthToMonthConversion", StringComparison.OrdinalIgnoreCase);
@@ -95,6 +100,27 @@ public class NoticeDraftService : INoticeDraftService
                 .ToListAsync(ct))
             .Select(d => (d.LeaseId, d.NoticeType))
             .ToHashSet();
+
+        // Per-RENT-PERIOD idempotency for rent reminders (they recur monthly, so the generic
+        // per-(lease,type) check above is wrong). Preload every existing RentReminder's
+        // (LeaseId, TriggerDate) for the portfolio in ONE query — ANY status (Draft/Approved/Dismissed)
+        // so a sent reminder is never recreated — then check in-memory below. Scoped to the tenant when filtered.
+        var existingReminderPeriods = new HashSet<(int LeaseId, DateTime DueDate)>();
+        if (wantsUpcomingRentReminder)
+        {
+            var reminderPeriodQuery = _db.NoticeDrafts
+                .AsNoTracking()
+                .Where(d => d.PortfolioId == portfolioId && d.NoticeType == "RentReminder");
+            if (tenantId.HasValue)
+            {
+                reminderPeriodQuery = reminderPeriodQuery.Where(d => d.TenantId == tenantId.Value);
+            }
+            existingReminderPeriods = (await reminderPeriodQuery
+                    .Select(d => new { d.LeaseId, d.TriggerDate })
+                    .ToListAsync(ct))
+                .Select(d => (d.LeaseId, d.TriggerDate.Date))
+                .ToHashSet();
+        }
 
         // Preload this portfolio's active notice templates once (DB-side), keyed by type, so each
         // builder can render the landlord's template without a per-lease query.
@@ -198,6 +224,45 @@ public class NoticeDraftService : INoticeDraftService
                 {
                     created.Add(await BuildLateDraftAsync(portfolioId, payment, daysLate, now, TemplateFor("LateRentNotice"), portfolioName, ct));
                 }
+            }
+        }
+
+        // Periodic, payment-grounded rent reminders: one per active in-portfolio lease with a scheduled
+        // rent payment due within the lead window. Per-period idempotent (keyed on the payment's due date)
+        // so monthly reminders recur but a given period's reminder is never duplicated/recreated.
+        if (wantsUpcomingRentReminder)
+        {
+            var leadWindowEndExclusive = today.AddDays(RentReminderLeadDays + 1);
+            var upcomingQuery = _db.Payments
+                .Include(p => p.Lease).ThenInclude(l => l!.Tenant)
+                .Include(p => p.Lease).ThenInclude(l => l!.Property)
+                .Include(p => p.Lease).ThenInclude(l => l!.Unit)
+                .Where(p =>
+                    p.PortfolioId == portfolioId &&
+                    p.PaymentType == PaymentType.Rent &&
+                    p.Status == PaymentStatus.Scheduled &&
+                    p.DueDate.Date >= today &&
+                    p.DueDate.Date < leadWindowEndExclusive &&
+                    p.Lease != null &&
+                    p.Lease.Status == LeaseStatus.Active);
+            if (tenantId.HasValue)
+            {
+                upcomingQuery = upcomingQuery.Where(p => p.Lease != null && p.Lease.TenantId == tenantId.Value);
+            }
+            var upcomingPayments = await upcomingQuery
+                .OrderBy(p => p.DueDate)
+                .ThenBy(p => p.LeaseId)
+                .ToListAsync(ct);
+
+            foreach (var payment in upcomingPayments)
+            {
+                if (payment.Lease?.Tenant == null) continue;
+                var dueDate = payment.DueDate.Date;
+                // Per-period skip: a reminder for this lease+period already exists (any status) or was
+                // queued earlier this run (e.g. a duplicate scheduled payment on the same due date).
+                if (!existingReminderPeriods.Add((payment.LeaseId, dueDate))) continue;
+                created.Add(await BuildRentReminderDraftAsync(
+                    portfolioId, payment.Lease, now, TemplateFor("RentReminder"), portfolioName, ct, dueDate));
             }
         }
 
@@ -487,28 +552,39 @@ public class NoticeDraftService : INoticeDraftService
             ct: ct);
     }
 
+    /// <summary>
+    /// Builds an upcoming-rent reminder. When <paramref name="dueDate"/> is supplied (the periodic,
+    /// payment-grounded path) the draft's <see cref="NoticeDraft.TriggerDate"/> and the
+    /// <c>rent_due_date</c> token are set to that date; on the explicit/forced path with no upcoming
+    /// payment, <paramref name="dueDate"/> is null → TriggerDate falls back to today and the token blanks.
+    /// </summary>
     private async Task<NoticeDraft> BuildRentReminderDraftAsync(
-        int portfolioId, Lease lease, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct)
+        int portfolioId, Lease lease, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct,
+        DateTime? dueDate = null)
     {
         var tenant = lease.Tenant!;
         var propertyName = lease.Property?.Name ?? "your home";
         var unit = UnitSuffix(lease.Unit?.UnitNumber);
         var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
 
+        var dueOn = dueDate?.Date;
+        var dueClause = dueOn.HasValue ? $" on {dueOn:MMMM d, yyyy}" : "";
+
         var facts =
             $"- Tenant: {tenantName}\n" +
             $"- Property/unit: {propertyName}{unit}\n" +
             $"- Monthly rent: {lease.MonthlyRent:C0}\n" +
+            (dueOn.HasValue ? $"- Rent due date: {dueOn:MMMM d, yyyy}\n" : "") +
             "- This is a friendly heads-up that rent is coming due.\n" +
             "- Ask the tenant to reply with any questions.";
 
         var deterministicSubject = $"Rent reminder for {propertyName}{unit}";
         var deterministicBody =
             $"Hi {tenantName}, this is a friendly reminder that your rent of {lease.MonthlyRent:C0} "
-            + $"for {propertyName}{unit} is coming due. Please reach out with any questions. Thank you!";
+            + $"for {propertyName}{unit} is coming due{dueClause}. Please reach out with any questions. Thank you!";
 
         var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
-            [(NoticeMergeFields.RentDueDate, ""), // Lease has no next-due-date field so rent_due_date renders blank
+            [(NoticeMergeFields.RentDueDate, dueOn.HasValue ? dueOn.Value.ToString("MMMM d, yyyy") : ""),
              (NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
@@ -517,8 +593,8 @@ public class NoticeDraftService : INoticeDraftService
             facts: facts,
             deterministicSubject: deterministicSubject,
             deterministicBody: deterministicBody,
-            reason: "Manual rent reminder.",
-            triggerDate: now.Date,
+            reason: dueOn.HasValue ? $"Rent due {dueOn:MMM d, yyyy}." : "Manual rent reminder.",
+            triggerDate: dueOn ?? now.Date,
             now: now,
             template: template,
             tokens: tokens,

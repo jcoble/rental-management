@@ -315,6 +315,64 @@ public class NoticeDraftServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GenerateAsync_PortfolioWide_CreatesRentReminder_ForUpcomingPayment_AndIsIdempotent()
+    {
+        var lease = SeedSingleActiveLease(firstName: "Sam", lastName: "Rivera", monthlyRent: 1500m);
+        var now = DateTime.UtcNow;
+        var dueDate = now.Date.AddDays(3);
+        _ctx.Db.Payments.Add(new Payment
+        {
+            PortfolioId = 1,
+            LeaseId = lease.Id,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1500m,
+            DueDate = dueDate,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var sut = CreateService();
+
+        var first = await sut.GenerateAsync(1, null);
+
+        var reminders = first.Drafts.Where(d => d.NoticeType == "RentReminder").ToList();
+        reminders.Should().ContainSingle();
+        reminders[0].LeaseId.Should().Be(lease.Id);
+        reminders[0].TriggerDate.Date.Should().Be(dueDate);
+
+        _ctx.Db.ChangeTracker.Clear();
+        var second = await sut.GenerateAsync(1, null);
+        second.Drafts.Should().NotContain(d => d.NoticeType == "RentReminder");
+    }
+
+    [Fact]
+    public async Task GenerateAsync_PortfolioWide_DoesNotCreateRentReminder_ForPaymentBeyondLeadWindow()
+    {
+        var lease = SeedSingleActiveLease(firstName: "Sam", lastName: "Rivera", monthlyRent: 1500m);
+        var now = DateTime.UtcNow;
+        _ctx.Db.Payments.Add(new Payment
+        {
+            PortfolioId = 1,
+            LeaseId = lease.Id,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Scheduled,
+            Amount = 1500m,
+            DueDate = now.Date.AddDays(30),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+        await _ctx.Db.SaveChangesAsync();
+        _ctx.Db.ChangeTracker.Clear();
+        var sut = CreateService();
+
+        var result = await sut.GenerateAsync(1, null);
+
+        result.Drafts.Should().NotContain(d => d.NoticeType == "RentReminder");
+    }
+
+    [Fact]
     public async Task GenerateAsync_PortfolioWide_CreatesMonthToMonthAlongsideRenewal_ForNearEndLease()
     {
         var (nearLease, _) = SeedActiveLeases();
