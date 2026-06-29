@@ -410,8 +410,10 @@
 			</div>
 		</div>
 
-		<!-- Dispatched hint: the vendor was texted and will reply DONE to close it -->
-		{#if shouldShowActiveDispatchHint(wo.status, Boolean(wo.vendorName), dispatched)}
+		<!-- Dispatched hint: the vendor was texted and will reply DONE to close it. Gated on a REAL open
+		     dispatch (server-computed hasActiveDispatch) or one just sent this session — never on a mere
+		     vendor assignment, which would falsely claim the job was sent. -->
+		{#if shouldShowActiveDispatchHint(wo.status, Boolean(wo.hasActiveDispatch), dispatched)}
 			<div
 				class="mb-6 flex items-start gap-3 rounded-md border bg-[var(--m3c-info-container)] text-[var(--m3c-on-info-container)] border-[color-mix(in_srgb,var(--info)_45%,transparent)] p-4 text-sm"
 				data-testid="work-order-dispatched-hint"

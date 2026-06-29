@@ -259,6 +259,54 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
     }
 
     [Fact]
+    public async Task GetAsync_HasActiveDispatch_TrueOnlyWithAnOpenDispatch_NotMereVendorAssignment()
+    {
+        // The detail page's "vendor has the job … closes on DONE" banner is driven by HasActiveDispatch,
+        // which must reflect a REAL open VendorDispatch — not a mere vendor assignment. Regression for BUG-2.
+        var property = SeedProperty("Magnolia Bend");
+        var vendor = SeedVendor("Rapid HVAC");
+
+        // (a) Vendor assigned but NO dispatch ever sent → false (the BUG-2 case).
+        var assignedOnly = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        {
+            PropertyId = property.Id,
+            VendorId = vendor.Id,
+            Title = "AC not cooling",
+            Description = "Upstairs warm",
+            Status = WorkOrderStatus.New,
+        });
+
+        // (b) Vendor assigned AND an OPEN (Dispatched) dispatch exists → true.
+        var dispatched = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        {
+            PropertyId = property.Id,
+            VendorId = vendor.Id,
+            Title = "Furnace dead",
+            Description = "No heat",
+            Status = WorkOrderStatus.New,
+        });
+        SeedDispatch(dispatched!.Id, vendor.Id, VendorDispatchStatus.Dispatched);
+
+        // (c) A CLOSED (Completed) dispatch is not "open" → false.
+        var closed = await _workOrders.CreateAsync(PortfolioId, new CreateWorkOrderRequest
+        {
+            PropertyId = property.Id,
+            VendorId = vendor.Id,
+            Title = "Old job",
+            Description = "Already done",
+            Status = WorkOrderStatus.InProgress,
+        });
+        SeedDispatch(closed!.Id, vendor.Id, VendorDispatchStatus.Completed);
+
+        (await _workOrders.GetAsync(PortfolioId, assignedOnly!.Id))!.HasActiveDispatch
+            .Should().BeFalse("assigning a vendor without dispatching must not claim the job was sent");
+        (await _workOrders.GetAsync(PortfolioId, dispatched.Id))!.HasActiveDispatch
+            .Should().BeTrue("an open dispatch means the job really is out with the vendor");
+        (await _workOrders.GetAsync(PortfolioId, closed.Id))!.HasActiveDispatch
+            .Should().BeFalse("a completed dispatch is no longer awaiting a DONE reply");
+    }
+
+    [Fact]
     public async Task ListAsync_ProjectsPropertyName()
     {
         var property = SeedProperty("Pine Hollow");
@@ -345,6 +393,21 @@ public class WorkOrderCostsTimingAndProjectionTests : IDisposable
         _db.Vendors.Add(vendor);
         _db.SaveChanges();
         return vendor;
+    }
+
+    private VendorDispatch SeedDispatch(int workOrderId, int vendorId, VendorDispatchStatus status)
+    {
+        var dispatch = new VendorDispatch
+        {
+            PortfolioId = PortfolioId,
+            WorkOrderId = workOrderId,
+            VendorId = vendorId,
+            Status = status,
+            DispatchedAtUtc = DateTime.UtcNow,
+        };
+        _db.VendorDispatches.Add(dispatch);
+        _db.SaveChanges();
+        return dispatch;
     }
 
     private Tenant SeedTenant(string first, string last)
