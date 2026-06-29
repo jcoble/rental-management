@@ -39,7 +39,7 @@ public class GenerateNoticeDraftsRequest
 {
     public int? TenantId { get; set; }
 
-    /// <summary>One of <c>RenewalOffer</c>, <c>MoveOutReminder</c>, <c>LateRentNotice</c>; null = all applicable.</summary>
+    /// <summary>One of <c>RentReminder</c>, <c>RenewalOffer</c>, <c>MonthToMonthConversion</c>, <c>MoveOutReminder</c>, <c>LateRentNotice</c>; null = all applicable.</summary>
     public string? NoticeType { get; set; }
 }
 

@@ -72,6 +72,9 @@ public class NoticeDraftService : INoticeDraftService
         bool WantsType(string type) => requestedType == null || string.Equals(requestedType, type, StringComparison.OrdinalIgnoreCase);
         var wantsRenewal = WantsType("RenewalOffer");
         var wantsMoveOut = WantsType("MoveOutReminder");
+        // These two types are ONLY generated on an explicit request — never in portfolio-wide all-types runs.
+        var wantsRentReminder = string.Equals(requestedType, "RentReminder", StringComparison.OrdinalIgnoreCase);
+        var wantsMonthToMonth = string.Equals(requestedType, "MonthToMonthConversion", StringComparison.OrdinalIgnoreCase);
 
         // Pre-load the existing open ("Draft") notices for this portfolio ONCE as a
         // (leaseId, noticeType) set, so the per-lease / per-payment idempotency check below is an
@@ -100,7 +103,7 @@ public class NoticeDraftService : INoticeDraftService
         NoticeTemplate? TemplateFor(string type) =>
             activeTemplates.TryGetValue(type, out var t) ? t : null;
 
-        if (wantsRenewal || wantsMoveOut)
+        if (wantsRenewal || wantsMoveOut || wantsRentReminder || wantsMonthToMonth)
         {
             var leaseQuery = _db.Leases
                 .Include(l => l.Tenant)
@@ -138,6 +141,18 @@ public class NoticeDraftService : INoticeDraftService
                     && !DraftExists(existingDrafts, lease.Id, "MoveOutReminder", created))
                 {
                     created.Add(await BuildMoveOutDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("MoveOutReminder"), ct));
+                }
+
+                if (wantsRentReminder
+                    && !DraftExists(existingDrafts, lease.Id, "RentReminder", created))
+                {
+                    created.Add(await BuildRentReminderDraftAsync(portfolioId, lease, now, TemplateFor("RentReminder"), ct));
+                }
+
+                if (wantsMonthToMonth
+                    && !DraftExists(existingDrafts, lease.Id, "MonthToMonthConversion", created))
+                {
+                    created.Add(await BuildMonthToMonthDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("MonthToMonthConversion"), ct));
                 }
             }
         }
@@ -454,6 +469,81 @@ public class NoticeDraftService : INoticeDraftService
             deterministicBody: deterministicBody,
             reason: $"Payment is {daysLate} days past due ({levelLabel} notice).",
             triggerDate: payment.DueDate.Date,
+            now: now,
+            template: template,
+            tokens: tokens,
+            ct: ct);
+    }
+
+    private async Task<NoticeDraft> BuildRentReminderDraftAsync(
+        int portfolioId, Lease lease, DateTime now, NoticeTemplate? template, CancellationToken ct)
+    {
+        var tenant = lease.Tenant!;
+        var propertyName = lease.Property?.Name ?? "your home";
+        var unit = UnitSuffix(lease.Unit?.UnitNumber);
+        var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
+
+        var facts =
+            $"- Tenant: {tenantName}\n" +
+            $"- Property/unit: {propertyName}{unit}\n" +
+            $"- Monthly rent: {lease.MonthlyRent:C0}\n" +
+            "- This is a friendly heads-up that rent is coming due.\n" +
+            "- Ask the tenant to reply with any questions.";
+
+        var deterministicSubject = $"Rent reminder for {propertyName}{unit}";
+        var deterministicBody =
+            $"Hi {tenantName}, this is a friendly reminder that your rent of {lease.MonthlyRent:C0} "
+            + $"for {propertyName}{unit} is coming due. Please reach out with any questions. Thank you!";
+
+        var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
+            [(NoticeMergeFields.RentDueDate, "")]);
+
+        return await ComposeAsync(
+            portfolioId, lease, "RentReminder",
+            intent: "a friendly upcoming-rent reminder",
+            facts: facts,
+            deterministicSubject: deterministicSubject,
+            deterministicBody: deterministicBody,
+            reason: "Manual rent reminder.",
+            triggerDate: now.Date,
+            now: now,
+            template: template,
+            tokens: tokens,
+            ct: ct);
+    }
+
+    private async Task<NoticeDraft> BuildMonthToMonthDraftAsync(
+        int portfolioId, Lease lease, int daysToEnd, DateTime now, NoticeTemplate? template, CancellationToken ct)
+    {
+        var tenant = lease.Tenant!;
+        var propertyName = lease.Property?.Name ?? "your home";
+        var unit = UnitSuffix(lease.Unit?.UnitNumber);
+        var tenantName = $"{tenant.FirstName} {tenant.LastName}".Trim();
+
+        var facts =
+            $"- Tenant: {tenantName}\n" +
+            $"- Property/unit: {propertyName}{unit}\n" +
+            $"- Current lease ends: {lease.EndDate:MMMM d, yyyy}\n" +
+            $"- Current rent: {lease.MonthlyRent:C0}/month\n" +
+            "- Offer to continue on a month-to-month basis at the current rent after the lease ends.\n" +
+            "- Ask the tenant to reply to accept or ask questions.";
+
+        var deterministicSubject = $"Month-to-month option for {propertyName}{unit}";
+        var deterministicBody =
+            $"Hi {tenantName}, your lease for {propertyName}{unit} ends on {lease.EndDate:MMMM d, yyyy}. "
+            + $"We're happy to continue on a month-to-month basis at {lease.MonthlyRent:C0} per month. "
+            + "Please reply to accept or with any questions.";
+
+        var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber, []);
+
+        return await ComposeAsync(
+            portfolioId, lease, "MonthToMonthConversion",
+            intent: "a friendly month-to-month continuation offer",
+            facts: facts,
+            deterministicSubject: deterministicSubject,
+            deterministicBody: deterministicBody,
+            reason: "Manual month-to-month conversion offer.",
+            triggerDate: lease.EndDate.Date,
             now: now,
             template: template,
             tokens: tokens,
