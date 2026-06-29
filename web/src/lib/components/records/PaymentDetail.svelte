@@ -17,8 +17,19 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
-	let { paymentId, onDeleted }: { paymentId: number; onDeleted: () => void } = $props();
+	let {
+		paymentId,
+		onDeleted,
+		expectedUnitId,
+		onUnitMismatch,
+	}: {
+		paymentId: number;
+		onDeleted: () => void;
+		expectedUnitId?: number;
+		onUnitMismatch?: () => void;
+	} = $props();
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -45,6 +56,10 @@
 	const leasesQuery = createQuery(() => ({ queryKey: ['leases', portfolioId], queryFn: () => leases.list(portfolioId, { take: 200 }) }));
 
 	const payment = $derived(paymentQuery.data);
+
+	$effect(() => {
+		if (isMismatchedUnitSelection(payment, expectedUnitId)) onUnitMismatch?.();
+	});
 
 	const heroAmount = $derived(payment ? formatPaymentMoney(payment.amount) : '');
 	// Context tone keyed by collection status: green = money in, warning = owed,

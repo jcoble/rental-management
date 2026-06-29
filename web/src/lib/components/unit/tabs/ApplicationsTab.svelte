@@ -95,7 +95,12 @@
 	<Button variant="outline" size="sm" class="gap-1" onclick={clearSelection} data-testid="application-back-to-list">
 		<ArrowLeft class="h-4 w-4" /> Back to applications
 	</Button>
-	<ApplicationDetail applicationId={selectedApp} onDeleted={clearSelection} />
+	<ApplicationDetail
+		applicationId={selectedApp}
+		onDeleted={clearSelection}
+		expectedUnitId={unitId}
+		onUnitMismatch={clearSelection}
+	/>
 {:else if applicationsQuery.isLoading}
 	<p class="rounded-xl border bg-card p-6 text-center text-sm text-muted-foreground">Loading applications…</p>
 {:else if appList.length === 0}

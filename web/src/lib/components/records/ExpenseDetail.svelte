@@ -28,8 +28,19 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import * as Table from '$lib/components/ui/table';
+	import { isMismatchedUnitSelection } from '$lib/unit/unit-membership-guard';
 
-	let { expenseId, onDeleted }: { expenseId: number; onDeleted: () => void } = $props();
+	let {
+		expenseId,
+		onDeleted,
+		expectedUnitId,
+		onUnitMismatch,
+	}: {
+		expenseId: number;
+		onDeleted: () => void;
+		expectedUnitId?: number;
+		onUnitMismatch?: () => void;
+	} = $props();
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -101,6 +112,10 @@
 	const vendorsQuery = createQuery(() => ({ queryKey: ['vendors', portfolioId], queryFn: () => vendors.list(portfolioId, { take: 200 }) }));
 
 	const expense = $derived(expenseQuery.data);
+
+	$effect(() => {
+		if (isMismatchedUnitSelection(expense, expectedUnitId)) onUnitMismatch?.();
+	});
 
 	// --- Scan extraction (saved in Expense.ReceiptData as a JSON string) ---
 	// The scan→draft→confirm flow stashes the full extraction (line items, card,
