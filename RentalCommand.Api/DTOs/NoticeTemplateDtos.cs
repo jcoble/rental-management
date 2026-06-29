@@ -1,3 +1,5 @@
+using System.ComponentModel.DataAnnotations;
+
 namespace RentalCommand.Api.DTOs;
 
 public class NoticeTemplateResponse
@@ -12,6 +14,9 @@ public class NoticeTemplateResponse
 
 public class UpsertNoticeTemplateRequest
 {
+    [Required, MinLength(1)]
     public string Subject { get; set; } = string.Empty;
+
+    [Required, MinLength(1)]
     public string Body { get; set; } = string.Empty;
 }

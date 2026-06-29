@@ -19,7 +19,7 @@ public static class NoticeMergeFields
     public const string PortfolioName = "portfolio_name";
 
     private static readonly string[] Common =
-        [TenantName, PropertyAddress, UnitNumber, LandlordName, PortfolioName];
+        [TenantName, PropertyAddress, UnitNumber, PortfolioName]; // LandlordName removed — cannot be reliably populated yet
 
     public static IReadOnlyList<string> ForType(string noticeType) => noticeType switch
     {

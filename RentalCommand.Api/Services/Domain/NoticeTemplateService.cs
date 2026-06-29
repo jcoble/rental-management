@@ -38,6 +38,14 @@ public class NoticeTemplateService : INoticeTemplateService
     public async Task<NoticeTemplateResponse> UpsertAsync(int portfolioId, string noticeType, UpsertNoticeTemplateRequest request, CancellationToken ct = default)
     {
         EnsureSupported(noticeType);
+
+        var subject = (request.Subject ?? "").Trim();
+        var body = (request.Body ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(subject))
+            throw new ArgumentException("Subject must not be empty.", nameof(request));
+        if (string.IsNullOrWhiteSpace(body))
+            throw new ArgumentException("Body must not be empty.", nameof(request));
+
         var existing = await _db.NoticeTemplates
             .FirstOrDefaultAsync(x => x.PortfolioId == portfolioId && x.NoticeType == noticeType && x.IsActive, ct);
 
@@ -48,8 +56,8 @@ public class NoticeTemplateService : INoticeTemplateService
             {
                 PortfolioId = portfolioId,
                 NoticeType = noticeType,
-                Subject = (request.Subject ?? "").Trim(),
-                Body = (request.Body ?? "").Trim(),
+                Subject = subject,
+                Body = body,
                 IsActive = true,
                 CreatedAt = now,
                 UpdatedAt = now,
@@ -58,8 +66,8 @@ public class NoticeTemplateService : INoticeTemplateService
         }
         else
         {
-            existing.Subject = (request.Subject ?? "").Trim();
-            existing.Body = (request.Body ?? "").Trim();
+            existing.Subject = subject;
+            existing.Body = body;
             existing.UpdatedAt = now;
         }
         await _db.SaveChangesAsync(ct);
@@ -68,7 +76,7 @@ public class NoticeTemplateService : INoticeTemplateService
 
     private static void EnsureSupported(string noticeType)
     {
-        if (!SupportedTypes.Contains(noticeType))
+        if (!SupportedTypes.Any(s => string.Equals(s, noticeType, StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException($"Unknown notice type '{noticeType}'.", nameof(noticeType));
     }
 

@@ -103,6 +103,13 @@ public class NoticeDraftService : INoticeDraftService
         NoticeTemplate? TemplateFor(string type) =>
             activeTemplates.TryGetValue(type, out var t) ? t : null;
 
+        // Load the portfolio name once so {{portfolio_name}} fills correctly in all templates.
+        var portfolioName = await _db.Portfolios
+            .AsNoTracking()
+            .Where(p => p.Id == portfolioId)
+            .Select(p => p.Name)
+            .FirstOrDefaultAsync(ct) ?? "";
+
         if (wantsRenewal || wantsMoveOut || wantsRentReminder || wantsMonthToMonth)
         {
             var leaseQuery = _db.Leases
@@ -133,26 +140,26 @@ public class NoticeDraftService : INoticeDraftService
                     && (forced || (daysToEnd >= 0 && daysToEnd <= 75))
                     && !DraftExists(existingDrafts, lease.Id, "RenewalOffer", created))
                 {
-                    created.Add(await BuildRenewalDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("RenewalOffer"), ct));
+                    created.Add(await BuildRenewalDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("RenewalOffer"), portfolioName, ct));
                 }
 
                 if (wantsMoveOut
                     && (forced || (daysToEnd >= 0 && daysToEnd <= 30))
                     && !DraftExists(existingDrafts, lease.Id, "MoveOutReminder", created))
                 {
-                    created.Add(await BuildMoveOutDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("MoveOutReminder"), ct));
+                    created.Add(await BuildMoveOutDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("MoveOutReminder"), portfolioName, ct));
                 }
 
                 if (wantsRentReminder
                     && !DraftExists(existingDrafts, lease.Id, "RentReminder", created))
                 {
-                    created.Add(await BuildRentReminderDraftAsync(portfolioId, lease, now, TemplateFor("RentReminder"), ct));
+                    created.Add(await BuildRentReminderDraftAsync(portfolioId, lease, now, TemplateFor("RentReminder"), portfolioName, ct));
                 }
 
                 if (wantsMonthToMonth
                     && !DraftExists(existingDrafts, lease.Id, "MonthToMonthConversion", created))
                 {
-                    created.Add(await BuildMonthToMonthDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("MonthToMonthConversion"), ct));
+                    created.Add(await BuildMonthToMonthDraftAsync(portfolioId, lease, daysToEnd, now, TemplateFor("MonthToMonthConversion"), portfolioName, ct));
                 }
             }
         }
@@ -185,7 +192,7 @@ public class NoticeDraftService : INoticeDraftService
                 var daysLate = (today - payment.DueDate.Date).Days;
                 if (!DraftExists(existingDrafts, payment.LeaseId, "LateRentNotice", created))
                 {
-                    created.Add(await BuildLateDraftAsync(portfolioId, payment, daysLate, now, TemplateFor("LateRentNotice"), ct));
+                    created.Add(await BuildLateDraftAsync(portfolioId, payment, daysLate, now, TemplateFor("LateRentNotice"), portfolioName, ct));
                 }
             }
         }
@@ -334,7 +341,7 @@ public class NoticeDraftService : INoticeDraftService
     // ===========================================================================================
 
     private async Task<NoticeDraft> BuildRenewalDraftAsync(
-        int portfolioId, Lease lease, int daysToEnd, DateTime now, NoticeTemplate? template, CancellationToken ct)
+        int portfolioId, Lease lease, int daysToEnd, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct)
     {
         var tenant = lease.Tenant!;
         var propertyName = lease.Property?.Name ?? "your home";
@@ -362,7 +369,7 @@ public class NoticeDraftService : INoticeDraftService
             + "Please reply here to accept, decline, or ask any questions.";
 
         var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
-            [(NoticeMergeFields.LandlordName, ""), (NoticeMergeFields.PortfolioName, "")]);
+            [(NoticeMergeFields.PortfolioName, portfolioName)]);
 
         var draft = await ComposeAsync(
             portfolioId, lease, "RenewalOffer",
@@ -381,7 +388,7 @@ public class NoticeDraftService : INoticeDraftService
     }
 
     private async Task<NoticeDraft> BuildMoveOutDraftAsync(
-        int portfolioId, Lease lease, int daysToEnd, DateTime now, NoticeTemplate? template, CancellationToken ct)
+        int portfolioId, Lease lease, int daysToEnd, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct)
     {
         var tenant = lease.Tenant!;
         var propertyName = lease.Property?.Name ?? "your home";
@@ -401,7 +408,7 @@ public class NoticeDraftService : INoticeDraftService
             + "Please reply to coordinate keys, inspection timing, and forwarding-address details so we can return your deposit promptly.";
 
         var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
-            [(NoticeMergeFields.LandlordName, ""), (NoticeMergeFields.PortfolioName, "")]);
+            [(NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
             portfolioId, lease, "MoveOutReminder",
@@ -418,7 +425,7 @@ public class NoticeDraftService : INoticeDraftService
     }
 
     private async Task<NoticeDraft> BuildLateDraftAsync(
-        int portfolioId, Payment payment, int daysLate, DateTime now, NoticeTemplate? template, CancellationToken ct)
+        int portfolioId, Payment payment, int daysLate, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct)
     {
         var lease = payment.Lease!;
         var tenant = lease.Tenant!;
@@ -459,7 +466,8 @@ public class NoticeDraftService : INoticeDraftService
         var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
             [(NoticeMergeFields.OverdueAmount, payment.Amount.ToString("C0")),
              (NoticeMergeFields.RentDueDate, payment.DueDate.ToString("MMMM d, yyyy")),
-             (NoticeMergeFields.LateFeeAmount, "")]);
+             (NoticeMergeFields.LateFeeAmount, ""),
+             (NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
             portfolioId, lease, "LateRentNotice",
@@ -476,7 +484,7 @@ public class NoticeDraftService : INoticeDraftService
     }
 
     private async Task<NoticeDraft> BuildRentReminderDraftAsync(
-        int portfolioId, Lease lease, DateTime now, NoticeTemplate? template, CancellationToken ct)
+        int portfolioId, Lease lease, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct)
     {
         var tenant = lease.Tenant!;
         var propertyName = lease.Property?.Name ?? "your home";
@@ -496,7 +504,8 @@ public class NoticeDraftService : INoticeDraftService
             + $"for {propertyName}{unit} is coming due. Please reach out with any questions. Thank you!";
 
         var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
-            [(NoticeMergeFields.RentDueDate, "")]);
+            [(NoticeMergeFields.RentDueDate, ""), // Lease has no next-due-date field so rent_due_date renders blank
+             (NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
             portfolioId, lease, "RentReminder",
@@ -513,7 +522,7 @@ public class NoticeDraftService : INoticeDraftService
     }
 
     private async Task<NoticeDraft> BuildMonthToMonthDraftAsync(
-        int portfolioId, Lease lease, int daysToEnd, DateTime now, NoticeTemplate? template, CancellationToken ct)
+        int portfolioId, Lease lease, int daysToEnd, DateTime now, NoticeTemplate? template, string portfolioName, CancellationToken ct)
     {
         var tenant = lease.Tenant!;
         var propertyName = lease.Property?.Name ?? "your home";
@@ -534,7 +543,8 @@ public class NoticeDraftService : INoticeDraftService
             + $"We're happy to continue on a month-to-month basis at {lease.MonthlyRent:C0} per month. "
             + "Please reply to accept or with any questions.";
 
-        var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber, []);
+        var tokens = BuildTokens(lease, tenantName, propertyName, lease.Unit?.UnitNumber,
+            [(NoticeMergeFields.PortfolioName, portfolioName)]);
 
         return await ComposeAsync(
             portfolioId, lease, "MonthToMonthConversion",
@@ -588,15 +598,24 @@ public class NoticeDraftService : INoticeDraftService
         var body = deterministicBody;
         string? usedPrompt = null;
 
+        // Try the landlord template first; fall through to LLM/deterministic copy if the rendered
+        // result is blank (e.g. an empty template that bypassed the service guard).
+        var templateTaken = false;
         if (template != null)
         {
-            // Landlord template takes precedence over LLM/deterministic copy. Deterministic fill,
-            // no LLM call. GenerationPrompt stays null to mark non-LLM provenance.
             var rendered = NoticeTemplateRenderer.Render(template.Subject, template.Body, tokens);
-            subject = Truncate(rendered.Subject, 200);
-            body = Truncate(rendered.Body, 4000);
+            var renderedSubject = Truncate(rendered.Subject, 200);
+            var renderedBody = Truncate(rendered.Body, 4000);
+            if (!string.IsNullOrWhiteSpace(renderedSubject) && !string.IsNullOrWhiteSpace(renderedBody))
+            {
+                // Landlord template takes precedence. No LLM call; GenerationPrompt stays null to mark non-LLM provenance.
+                subject = renderedSubject;
+                body = renderedBody;
+                templateTaken = true;
+            }
         }
-        else
+
+        if (!templateTaken)
         {
             var prompt = BuildPrompt(intent, facts);
             try
