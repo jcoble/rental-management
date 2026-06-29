@@ -1156,7 +1156,7 @@ export interface AuthUser {
 	lastLoginAt?: string;
 }
 
-export type SecurityDepositStatus = 'Held' | 'PartiallyReturned' | 'Returned';
+export type SecurityDepositStatus = 'Held' | 'PartiallyReturned' | 'Returned' | 'Withheld';
 
 export interface DepositDeduction {
 	reason: string;
