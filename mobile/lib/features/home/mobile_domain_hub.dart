@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'mobile_destination.dart';
+import 'mobile_domain_chrome.dart';
 import 'mobile_domain_navigation.dart';
 import 'mobile_shell_actions.dart';
 
@@ -112,6 +113,7 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
   late final MobileDomainHeaderController _headerController;
   late final MobileDomainNavigator _domainNavigator;
   int _selectedIndex = 0;
+  bool _headerCollapsed = false;
 
   @override
   void initState() {
@@ -166,6 +168,7 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
 
     setState(() {
       _selectedIndex = index;
+      _headerCollapsed = false;
       if (detailBuilder == null) {
         _headerController.clearActiveDetail();
       }
@@ -233,27 +236,22 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
   Widget _appBarTitle(BuildContext context) {
     final detail = _headerController.detail;
     if (detail == null) {
-      return Text(widget.title);
+      final selected = widget.destinations[_selectedIndex];
+      return _HubHeaderTitle(
+        title: selected.label,
+        subtitle: selected.subtitle,
+      );
     }
 
-    final theme = Theme.of(context);
-    final subtitle = detail.subtitle;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(detail.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-        if (subtitle != null)
-          Text(
-            subtitle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-            ),
-          ),
-      ],
-    );
+    return _HubHeaderTitle(title: detail.title, subtitle: detail.subtitle);
+  }
+
+  void _handleContentScroll(ScrollNotification notification) {
+    if (!mounted || notification.metrics.axis != Axis.vertical) return;
+
+    final shouldCollapse = notification.metrics.pixels > 12;
+    if (shouldCollapse == _headerCollapsed) return;
+    setState(() => _headerCollapsed = shouldCollapse);
   }
 
   @override
@@ -264,6 +262,7 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: false,
+        toolbarHeight: _headerCollapsed ? 0 : kToolbarHeight,
         leading: showingDetailHeader
             ? IconButton(
                 tooltip: 'Back',
@@ -271,8 +270,10 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
                 onPressed: () => unawaited(_popContentDetail()),
               )
             : null,
-        title: _appBarTitle(context),
-        actions: const [MobileNotificationBell(), MobileAccountMenu()],
+        title: _headerCollapsed ? null : _appBarTitle(context),
+        actions: _headerCollapsed
+            ? null
+            : const [MobileNotificationBell(), MobileAccountMenu()],
       ),
       body: SafeArea(
         top: false,
@@ -294,9 +295,17 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
                     onPopInvokedWithResult: (didPop, _) {
                       unawaited(_handleSystemBack(didPop));
                     },
-                    child: Navigator(
-                      key: _contentNavigatorKey,
-                      onGenerateRoute: (_) => _rootRoute(selected),
+                    child: ScrollNotificationObserver(
+                      child: _DomainScrollCollapseObserver(
+                        onNotification: _handleContentScroll,
+                        child: MobileDomainChromeScope(
+                          embedded: true,
+                          child: Navigator(
+                            key: _contentNavigatorKey,
+                            onGenerateRoute: (_) => _rootRoute(selected),
+                          ),
+                        ),
+                      ),
                     ),
                   ),
                 ),
@@ -307,6 +316,80 @@ class _MobileDomainHubScreenState extends State<MobileDomainHubScreen> {
       ),
     );
   }
+}
+
+class _HubHeaderTitle extends StatelessWidget {
+  const _HubHeaderTitle({required this.title, this.subtitle});
+
+  final String title;
+  final String? subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+        if (subtitle != null)
+          Text(
+            subtitle!,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _DomainScrollCollapseObserver extends StatefulWidget {
+  const _DomainScrollCollapseObserver({
+    required this.onNotification,
+    required this.child,
+  });
+
+  final ValueChanged<ScrollNotification> onNotification;
+  final Widget child;
+
+  @override
+  State<_DomainScrollCollapseObserver> createState() =>
+      _DomainScrollCollapseObserverState();
+}
+
+class _DomainScrollCollapseObserverState
+    extends State<_DomainScrollCollapseObserver> {
+  ScrollNotificationObserverState? _observer;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextObserver = ScrollNotificationObserver.maybeOf(context);
+    if (identical(_observer, nextObserver)) return;
+    _observer?.removeListener(widget.onNotification);
+    _observer = nextObserver;
+    _observer?.addListener(widget.onNotification);
+  }
+
+  @override
+  void didUpdateWidget(covariant _DomainScrollCollapseObserver oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.onNotification == widget.onNotification) return;
+    _observer?.removeListener(oldWidget.onNotification);
+    _observer?.addListener(widget.onNotification);
+  }
+
+  @override
+  void dispose() {
+    _observer?.removeListener(widget.onNotification);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 class _HubSegmentBar extends StatefulWidget {

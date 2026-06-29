@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
 import '../../core/widgets/tabbed_form_sheet.dart';
+import '../home/mobile_domain_chrome.dart';
 import 'tenant_detail_screen.dart';
 import 'tenants_repository.dart';
 
@@ -72,7 +73,7 @@ class _TenantsListScreenState extends ConsumerState<TenantsListScreen> {
     final colorScheme = theme.colorScheme;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Tenants')),
+      appBar: mobileDomainRootAppBar(context, title: const Text('Tenants')),
       floatingActionButton: FloatingActionButton(
         heroTag: 'tenants-fab',
         onPressed: () => _showAddSheet(context),

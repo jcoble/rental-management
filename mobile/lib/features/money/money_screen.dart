@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../accounting/accounting_repository.dart';
+import '../home/mobile_domain_chrome.dart';
 import '../home/mobile_domain_navigation.dart';
 import '../payments/payment_detail_screen.dart';
 import '../payments/payments_screen.dart';
@@ -93,7 +94,7 @@ class _MoneyScreenState extends ConsumerState<MoneyScreen> {
     final expanded = ref.watch(moneySnapshotExpandedProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Money')),
+      appBar: mobileDomainRootAppBar(context, title: const Text('Money')),
       body: Column(
         children: [
           // ── Collapsible snapshot headline ──────────────────────────────

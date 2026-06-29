@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/push/notification_routing.dart';
+import '../home/mobile_domain_chrome.dart';
 import 'notification_models.dart';
 import 'notifications_repository.dart';
 
@@ -60,52 +61,59 @@ class _NotificationsInboxScreenState
   @override
   Widget build(BuildContext context) {
     final inboxAsync = ref.watch(inboxProvider);
+    final markAllReadButton = IconButton(
+      icon: const Icon(Icons.done_all),
+      tooltip: 'Mark all read',
+      onPressed: () => ref.read(inboxProvider.notifier).markAllRead(),
+    );
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: mobileDomainRootAppBar(
+        context,
         title: const Text('Notifications'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.done_all),
-            tooltip: 'Mark all read',
-            onPressed: () => ref.read(inboxProvider.notifier).markAllRead(),
+        actions: [markAllReadButton],
+      ),
+      body: Column(
+        children: [
+          MobileDomainEmbeddedToolbar(children: [markAllReadButton]),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: () => ref.read(inboxProvider.notifier).refresh(),
+              child: inboxAsync.when(
+                loading: () => const Center(child: CircularProgressIndicator()),
+                error: (e, _) => _ErrorBody(
+                  message: e is ApiException
+                      ? e.message
+                      : 'Could not load notifications.',
+                  onRetry: () => ref.read(inboxProvider.notifier).refresh(),
+                ),
+                data: (items) {
+                  if (items.isEmpty) return const _EmptyBody();
+                  final hasMore = ref.read(inboxProvider.notifier).hasMore;
+                  return ListView.separated(
+                    controller: _scrollController,
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    itemCount: items.length + (hasMore ? 1 : 0),
+                    separatorBuilder: (_, _) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      if (index >= items.length) {
+                        return const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Center(child: CircularProgressIndicator()),
+                        );
+                      }
+                      return _NotificationTile(
+                        notification: items[index],
+                        onTap: () => _open(items[index]),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
           ),
         ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: () => ref.read(inboxProvider.notifier).refresh(),
-        child: inboxAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => _ErrorBody(
-            message: e is ApiException
-                ? e.message
-                : 'Could not load notifications.',
-            onRetry: () => ref.read(inboxProvider.notifier).refresh(),
-          ),
-          data: (items) {
-            if (items.isEmpty) return const _EmptyBody();
-            final hasMore = ref.read(inboxProvider.notifier).hasMore;
-            return ListView.separated(
-              controller: _scrollController,
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              itemCount: items.length + (hasMore ? 1 : 0),
-              separatorBuilder: (_, _) => const Divider(height: 1),
-              itemBuilder: (context, index) {
-                if (index >= items.length) {
-                  return const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Center(child: CircularProgressIndicator()),
-                  );
-                }
-                return _NotificationTile(
-                  notification: items[index],
-                  onTap: () => _open(items[index]),
-                );
-              },
-            );
-          },
-        ),
       ),
     );
   }

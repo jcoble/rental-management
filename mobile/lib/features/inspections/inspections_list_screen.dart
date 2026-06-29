@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/models.dart';
+import '../home/mobile_domain_chrome.dart';
 import 'inspection_run_screen.dart';
 import 'inspections_models.dart';
 import 'inspections_repository.dart';
@@ -64,7 +65,7 @@ class InspectionsListScreen extends ConsumerWidget {
     final inspectionsAsync = ref.watch(inspectionsProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Inspections')),
+      appBar: mobileDomainRootAppBar(context, title: const Text('Inspections')),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _newInspection(context, ref),
         icon: const Icon(Icons.add),
@@ -139,8 +140,9 @@ class _InspectionCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       where.toString(),
-                      style: theme.textTheme.titleSmall
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -150,22 +152,30 @@ class _InspectionCard extends StatelessWidget {
               const SizedBox(height: 6),
               Row(
                 children: [
-                  Icon(Icons.fact_check_outlined,
-                      size: 14, color: cs.onSurfaceVariant),
+                  Icon(
+                    Icons.fact_check_outlined,
+                    size: 14,
+                    color: cs.onSurfaceVariant,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     friendlyInspectionType(i.type),
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: cs.onSurfaceVariant),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
                   ),
                   const SizedBox(width: 12),
-                  Icon(Icons.schedule_outlined,
-                      size: 14, color: cs.onSurfaceVariant),
+                  Icon(
+                    Icons.schedule_outlined,
+                    size: 14,
+                    color: cs.onSurfaceVariant,
+                  ),
                   const SizedBox(width: 4),
                   Text(
                     fmtInspectionDate(i.scheduledFor.toLocal()),
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: cs.onSurfaceVariant),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: cs.onSurfaceVariant,
+                    ),
                   ),
                 ],
               ),
@@ -231,8 +241,11 @@ class _EmptyBody extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(24, 80, 24, 24),
           child: Column(
             children: [
-              Icon(Icons.fact_check_outlined,
-                  size: 40, color: cs.onSurfaceVariant),
+              Icon(
+                Icons.fact_check_outlined,
+                size: 40,
+                color: cs.onSurfaceVariant,
+              ),
               const SizedBox(height: 12),
               Text(
                 'No inspections yet.',
@@ -243,10 +256,9 @@ class _EmptyBody extends StatelessWidget {
               Text(
                 'Tap "New inspection" to walk a unit with a checklist.',
                 textAlign: TextAlign.center,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: cs.onSurfaceVariant),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: cs.onSurfaceVariant),
               ),
             ],
           ),
@@ -275,11 +287,16 @@ class _ErrorBody extends StatelessWidget {
             children: [
               Icon(Icons.error_outline, size: 40, color: cs.error),
               const SizedBox(height: 12),
-              Text(message,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: cs.error)),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: cs.error),
+              ),
               const SizedBox(height: 16),
-              FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
+              FilledButton.tonal(
+                onPressed: onRetry,
+                child: const Text('Retry'),
+              ),
             ],
           ),
         ),

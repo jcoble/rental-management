@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/api/api_exception.dart';
 import '../../core/files/document_opener.dart';
 import '../../core/models/models.dart';
+import '../home/mobile_domain_chrome.dart';
 import 'deposits_repository.dart';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -59,8 +60,7 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
   @override
   void initState() {
     super.initState();
-    Future.microtask(
-        () => ref.read(depositsProvider.notifier).load());
+    Future.microtask(() => ref.read(depositsProvider.notifier).load());
   }
 
   Future<void> _refresh() => ref.read(depositsProvider.notifier).refresh();
@@ -95,7 +95,10 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
     final asyncState = ref.watch(depositsProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Security Deposits')),
+      appBar: mobileDomainRootAppBar(
+        context,
+        title: const Text('Security Deposits'),
+      ),
       floatingActionButton: FloatingActionButton(
         heroTag: 'deposits-fab',
         onPressed: _showCreateSheet,
@@ -114,17 +117,12 @@ class _DepositsScreenState extends ConsumerState<DepositsScreen> {
             if (list.isEmpty) {
               return CustomScrollView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                slivers: [
-                  const SliverFillRemaining(
-                    child: _EmptyBody(),
-                  ),
-                ],
+                slivers: [const SliverFillRemaining(child: _EmptyBody())],
               );
             }
             return ListView.separated(
               physics: const AlwaysScrollableScrollPhysics(),
-              padding:
-                  const EdgeInsets.fromLTRB(16, 16, 16, 88),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
               itemCount: list.length,
               separatorBuilder: (context, index) => const SizedBox(height: 8),
               itemBuilder: (_, i) => _DepositCard(
@@ -171,8 +169,9 @@ class _DepositCard extends StatelessWidget {
                           deposit.leaseNumber != null
                               ? 'Lease ${deposit.leaseNumber}'
                               : 'Deposit #${deposit.id}',
-                          style: theme.textTheme.titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w600),
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                         const SizedBox(width: 8),
                         _StatusChip(status: deposit.status),
@@ -183,15 +182,17 @@ class _DepositCard extends StatelessWidget {
                       children: [
                         Text(
                           _fmtCurrency(deposit.amount),
-                          style: theme.textTheme.bodyMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                         if (deposit.totalDeductions > 0) ...[
                           const SizedBox(width: 6),
                           Text(
                             '− ${_fmtCurrency(deposit.totalDeductions)} deductions',
-                            style: theme.textTheme.bodySmall
-                                ?.copyWith(color: cs.error),
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: cs.error,
+                            ),
                           ),
                         ],
                       ],
@@ -201,8 +202,9 @@ class _DepositCard extends StatelessWidget {
                       isReturned
                           ? 'Returned ${deposit.returnedAt != null ? _fmtDate(deposit.returnedAt!) : ''}'
                           : 'Held since ${_fmtDate(deposit.heldAt)}',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(color: cs.onSurfaceVariant),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -242,12 +244,13 @@ class _StatusChip extends StatelessWidget {
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration:
-          BoxDecoration(color: bg, borderRadius: BorderRadius.circular(20)),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+      ),
       child: Text(
         status,
-        style: TextStyle(
-            fontSize: 11, fontWeight: FontWeight.w600, color: fg),
+        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: fg),
       ),
     );
   }
@@ -265,8 +268,7 @@ class _DepositDetailSheet extends ConsumerStatefulWidget {
       _DepositDetailSheetState();
 }
 
-class _DepositDetailSheetState
-    extends ConsumerState<_DepositDetailSheet> {
+class _DepositDetailSheetState extends ConsumerState<_DepositDetailSheet> {
   late SecurityDeposit _deposit;
 
   @override
@@ -336,9 +338,7 @@ class _DepositDetailSheetState
         content: TextField(
           controller: notesCtrl,
           maxLines: 3,
-          decoration: const InputDecoration(
-            labelText: 'Notes (optional)',
-          ),
+          decoration: const InputDecoration(labelText: 'Notes (optional)'),
         ),
         actions: [
           TextButton(
@@ -348,15 +348,18 @@ class _DepositDetailSheetState
           FilledButton(
             onPressed: () async {
               Navigator.of(ctx).pop();
-              await ref.read(depositsProvider.notifier).processReturn(
+              await ref
+                  .read(depositsProvider.notifier)
+                  .processReturn(
                     _deposit.id,
                     notes: notesCtrl.text.trim().isEmpty
                         ? null
                         : notesCtrl.text.trim(),
                   );
               ref.read(depositsProvider).whenData((list) {
-                final updated =
-                    list.where((d) => d.id == _deposit.id).firstOrNull;
+                final updated = list
+                    .where((d) => d.id == _deposit.id)
+                    .firstOrNull;
                 if (updated != null && mounted) {
                   setState(() => _deposit = updated);
                 }
@@ -390,8 +393,9 @@ class _DepositDetailSheetState
                     _deposit.leaseNumber != null
                         ? 'Lease ${_deposit.leaseNumber}'
                         : 'Deposit #${_deposit.id}',
-                    style: theme.textTheme.titleLarge
-                        ?.copyWith(fontWeight: FontWeight.w700),
+                    style: theme.textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
                 _StatusChip(status: _deposit.status),
@@ -428,10 +432,7 @@ class _DepositDetailSheetState
             const Divider(height: 24),
 
             // Dates
-            _DetailRow(
-              label: 'Held since',
-              value: _fmtDate(_deposit.heldAt),
-            ),
+            _DetailRow(label: 'Held since', value: _fmtDate(_deposit.heldAt)),
             if (_deposit.returnedAt != null)
               _DetailRow(
                 label: 'Returned on',
@@ -445,39 +446,42 @@ class _DepositDetailSheetState
               const Divider(height: 24),
               Text(
                 'Deductions',
-                style: theme.textTheme.titleSmall
-                    ?.copyWith(fontWeight: FontWeight.w700),
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
               ),
               const SizedBox(height: 8),
-              ...(_deposit.deductions.map((d) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(d.reason,
-                                  style: theme.textTheme.bodyMedium),
-                              if (d.notes != null && d.notes!.isNotEmpty)
-                                Text(
-                                  d.notes!,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                      color: cs.onSurfaceVariant),
+              ...(_deposit.deductions.map(
+                (d) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(d.reason, style: theme.textTheme.bodyMedium),
+                            if (d.notes != null && d.notes!.isNotEmpty)
+                              Text(
+                                d.notes!,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: cs.onSurfaceVariant,
                                 ),
-                            ],
-                          ),
+                              ),
+                          ],
                         ),
-                        Text(
-                          _fmtCurrency(d.amount),
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: cs.error,
-                            fontWeight: FontWeight.w600,
-                          ),
+                      ),
+                      Text(
+                        _fmtCurrency(d.amount),
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: cs.error,
+                          fontWeight: FontWeight.w600,
                         ),
-                      ],
-                    ),
-                  ))),
+                      ),
+                    ],
+                  ),
+                ),
+              )),
             ],
 
             const SizedBox(height: 20),
@@ -535,8 +539,9 @@ class _DetailRow extends StatelessWidget {
           Expanded(
             child: Text(
               label,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: cs.onSurfaceVariant),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: cs.onSurfaceVariant,
+              ),
             ),
           ),
           Text(
@@ -558,7 +563,7 @@ class _AddDeductionDialog extends StatefulWidget {
   const _AddDeductionDialog({required this.onSave});
 
   final Future<void> Function(String reason, double amount, String? notes)
-      onSave;
+  onSave;
 
   @override
   State<_AddDeductionDialog> createState() => _AddDeductionDialogState();
@@ -622,11 +627,14 @@ class _AddDeductionDialogState extends State<_AddDeductionDialog> {
             const SizedBox(height: 10),
             TextFormField(
               controller: _amountCtrl,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
               textInputAction: TextInputAction.next,
               decoration: const InputDecoration(
-                  labelText: 'Amount', prefixText: '\$'),
+                labelText: 'Amount',
+                prefixText: '\$',
+              ),
               validator: (v) {
                 if (v == null || v.trim().isEmpty) return 'Required';
                 if (double.tryParse(v.trim()) == null) {
@@ -643,8 +651,7 @@ class _AddDeductionDialogState extends State<_AddDeductionDialog> {
             ),
             if (_error != null) ...[
               const SizedBox(height: 8),
-              Text(_error!,
-                  style: TextStyle(color: cs.error, fontSize: 13)),
+              Text(_error!, style: TextStyle(color: cs.error, fontSize: 13)),
             ],
           ],
         ),
@@ -681,8 +688,7 @@ class _CreateDepositSheet extends ConsumerStatefulWidget {
       _CreateDepositSheetState();
 }
 
-class _CreateDepositSheetState
-    extends ConsumerState<_CreateDepositSheet> {
+class _CreateDepositSheetState extends ConsumerState<_CreateDepositSheet> {
   final _formKey = GlobalKey<FormState>();
   final _amountCtrl = TextEditingController();
   final _notesCtrl = TextEditingController();
@@ -722,8 +728,7 @@ class _CreateDepositSheetState
         'leaseId': _selectedLeaseId,
         if (_amountCtrl.text.trim().isNotEmpty)
           'amount': double.tryParse(_amountCtrl.text.trim()),
-        if (_notesCtrl.text.trim().isNotEmpty)
-          'notes': _notesCtrl.text.trim(),
+        if (_notesCtrl.text.trim().isNotEmpty) 'notes': _notesCtrl.text.trim(),
       };
       await ref.read(depositsRepositoryProvider).createDeposit(data);
       widget.onSaved();
@@ -756,8 +761,9 @@ class _CreateDepositSheetState
                   Expanded(
                     child: Text(
                       'Record Security Deposit',
-                      style: theme.textTheme.titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
                   ),
                   IconButton(
@@ -784,25 +790,27 @@ class _CreateDepositSheetState
                   initialValue: _selectedLeaseId,
                   decoration: const InputDecoration(labelText: 'Lease'),
                   items: leases
-                      .map((l) => DropdownMenuItem(
-                            value: l.id,
-                            child: Text(
-                              _leaseLabel(l),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ))
+                      .map(
+                        (l) => DropdownMenuItem(
+                          value: l.id,
+                          child: Text(
+                            _leaseLabel(l),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      )
                       .toList(),
                   onChanged: (v) => setState(() => _selectedLeaseId = v),
-                  validator: (v) =>
-                      v == null ? 'Please select a lease' : null,
+                  validator: (v) => v == null ? 'Please select a lease' : null,
                 ),
               ),
               const SizedBox(height: 12),
 
               TextFormField(
                 controller: _amountCtrl,
-                keyboardType:
-                    const TextInputType.numberWithOptions(decimal: true),
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
                 decoration: const InputDecoration(
                   labelText: 'Amount (optional)',
                   prefixText: '\$',
@@ -813,23 +821,25 @@ class _CreateDepositSheetState
               TextFormField(
                 controller: _notesCtrl,
                 maxLines: 2,
-                decoration:
-                    const InputDecoration(labelText: 'Notes (optional)'),
+                decoration: const InputDecoration(
+                  labelText: 'Notes (optional)',
+                ),
               ),
 
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 10),
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
                   decoration: BoxDecoration(
                     color: cs.errorContainer,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
                     _error!,
-                    style: TextStyle(
-                        color: cs.onErrorContainer, fontSize: 13),
+                    style: TextStyle(color: cs.onErrorContainer, fontSize: 13),
                   ),
                 ),
               ],
@@ -869,9 +879,9 @@ class _EmptyBody extends StatelessWidget {
           const SizedBox(height: 12),
           Text(
             'No deposits yet',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: cs.onSurfaceVariant,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
           const SizedBox(height: 4),
           Text(
@@ -907,10 +917,7 @@ class _ErrorBody extends StatelessWidget {
               style: TextStyle(color: cs.error),
             ),
             const SizedBox(height: 16),
-            FilledButton.tonal(
-              onPressed: onRetry,
-              child: const Text('Retry'),
-            ),
+            FilledButton.tonal(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
