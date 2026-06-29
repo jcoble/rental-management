@@ -90,53 +90,15 @@ public class AdminUsersControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Create_TenantMember_RequiresTenantLinkBeforeCreatingIdentityUser()
+    public async Task Create_TenantRole_IsRejectedAndCreatesNoIdentityUser()
     {
-        var userManager = CreateUserManagerMock();
-        userManager
-            .Setup(m => m.FindByEmailAsync("new-tenant@example.local"))
-            .ReturnsAsync((ApplicationUser?)null);
-
-        var controller = CreateController(userManager.Object);
-
-        var result = await controller.Create(new CreateTeamMemberRequest
-        {
-            Email = "new-tenant@example.local",
-            DisplayName = "New Tenant",
-            Role = UserRole.Tenant,
-            TemporaryPassword = "Pass85Tenant!23",
-        }, CancellationToken.None);
-
-        result.Result.Should().BeOfType<BadRequestObjectResult>();
-        userManager.Verify(m => m.CreateAsync(It.IsAny<ApplicationUser>(), It.IsAny<string>()), Times.Never);
-        _ctx.Db.UserAccounts.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task Create_TenantMember_PersistsTenantLinkToIdentityUserAndUserAccount()
-    {
+        // Tenants are provisioned from the Tenants section, never minted as a staff/team role here —
+        // even with a valid tenant link. This guard closes the "broken tenant login from the team UI" bug.
         var tenant = SeedTenant(id: 42);
         var userManager = CreateUserManagerMock();
-        ApplicationUser? identityUser = null;
-        string? identityPassword = null;
-        string? identityRole = null;
-
         userManager
             .Setup(m => m.FindByEmailAsync("portal@example.local"))
             .ReturnsAsync((ApplicationUser?)null);
-        userManager
-            .Setup(m => m.CreateAsync(It.IsAny<ApplicationUser>(), It.IsAny<string>()))
-            .Callback<ApplicationUser, string>((u, password) =>
-            {
-                u.Id = 123;
-                identityUser = u;
-                identityPassword = password;
-            })
-            .ReturnsAsync(IdentityResult.Success);
-        userManager
-            .Setup(m => m.AddToRoleAsync(It.IsAny<ApplicationUser>(), nameof(UserRole.Tenant)))
-            .Callback<ApplicationUser, string>((_, role) => identityRole = role)
-            .ReturnsAsync(IdentityResult.Success);
 
         var controller = CreateController(userManager.Object);
 
@@ -149,27 +111,24 @@ public class AdminUsersControllerTests : IDisposable
             TemporaryPassword = "Pass85Tenant!23",
         }, CancellationToken.None);
 
-        var created = result.Result.Should().BeOfType<CreatedAtActionResult>().Subject;
-        var response = created.Value.Should().BeOfType<CreateTeamMemberResponse>().Subject;
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+        userManager.Verify(m => m.CreateAsync(It.IsAny<ApplicationUser>(), It.IsAny<string>()), Times.Never);
+        _ctx.Db.UserAccounts.Should().BeEmpty();
+    }
 
-        identityUser.Should().NotBeNull();
-        identityUser!.Email.Should().Be("portal@example.local");
-        identityUser.PortfolioId.Should().Be(PortfolioId);
-        identityUser.TenantId.Should().Be(tenant.Id);
-        identityUser.EmailConfirmed.Should().BeTrue();
-        identityPassword.Should().Be("Pass85Tenant!23");
-        identityRole.Should().Be(nameof(UserRole.Tenant));
+    [Fact]
+    public async Task ChangeRole_ToTenantRole_IsRejected()
+    {
+        SeedMember("promote-me@example.local", PortfolioId);
+        await _ctx.Db.SaveChangesAsync();
+        var account = _ctx.Db.UserAccounts.Single(u => u.Email == "promote-me@example.local");
+        var controller = CreateController();
 
-        var account = _ctx.Db.UserAccounts.Single(u => u.Email == "portal@example.local");
-        account.PortfolioId.Should().Be(PortfolioId);
-        account.TenantId.Should().Be(tenant.Id);
-        account.Role.Should().Be(UserRole.Tenant);
-        account.IsActive.Should().BeTrue();
+        var result = await controller.ChangeRole(
+            account.Id, new ChangeRoleRequest { Role = UserRole.Tenant }, CancellationToken.None);
 
-        response.Member.Email.Should().Be("portal@example.local");
-        response.Member.TenantId.Should().Be(tenant.Id);
-        response.Member.Role.Should().Be(nameof(UserRole.Tenant));
-        response.GeneratedPassword.Should().BeNull();
+        result.Result.Should().BeOfType<BadRequestObjectResult>();
+        _ctx.Db.UserAccounts.Single(u => u.Id == account.Id).Role.Should().Be(UserRole.Manager);
     }
 
     [Fact]
