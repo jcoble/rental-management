@@ -312,6 +312,91 @@ public class UnitDashboardServiceTests : IDisposable
         dashboard.NextBestAction.Label.Should().Be("Rent on track");
     }
 
+    [Fact]
+    public async Task GetDashboardAsync_PartialPaymentContributesOnlyItsRemainderToOutstanding()
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = "Birch Lane",
+            AddressLine1 = "300 Birch",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43219",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var unit = new Unit
+        {
+            Property = property,
+            UnitNumber = "101",
+            Status = UnitStatus.Occupied,
+            MarketRent = 1000m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var tenant = new Tenant
+        {
+            PortfolioId = PortfolioId,
+            FirstName = "Quincy",
+            LastName = "Tenant",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var lease = new Lease
+        {
+            PortfolioId = PortfolioId,
+            Property = property,
+            Unit = unit,
+            Tenant = tenant,
+            LeaseNumber = "L-101",
+            Status = LeaseStatus.Active,
+            StartDate = now.AddMonths(-1),
+            EndDate = now.AddYears(1),
+            MonthlyRent = 1000m,
+            SecurityDeposit = 1000m,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        // One rent paid in full, one rent partially paid ($700 collected of $1,000 → $300 still owed).
+        var paid = new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Paid,
+            Amount = 1000m,
+            DueDate = now.AddDays(-30),
+            PaidDate = now.AddDays(-30),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var partial = new Payment
+        {
+            PortfolioId = PortfolioId,
+            Lease = lease,
+            PaymentType = PaymentType.Rent,
+            Status = PaymentStatus.Partial,
+            Amount = 1000m,
+            AmountPaid = 700m,
+            DueDate = now.AddDays(-1),
+            PaidDate = now.AddDays(-1),
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _db.AddRange(property, unit, tenant, lease, paid, partial);
+        _db.SaveChanges();
+
+        var dashboard = await _sut.GetDashboardAsync(PortfolioId, unit.Id, CancellationToken.None);
+
+        dashboard.Should().NotBeNull();
+        // The Paid rent contributes $0 and the Partial contributes only its $300 remainder (not its full
+        // $1,000) — so the Unit Rent tab reconciles with the lease ledger Balance and the Accounting
+        // Outstanding KPI instead of over-counting the already-collected $700.
+        dashboard!.Header.OutstandingRentBalance.Should().Be(300m);
+    }
+
     private static bool IsChildIdPreload(string command)
         => IsBareIdSelect(command, "Leases")
             || IsBareIdSelect(command, "Payments")
