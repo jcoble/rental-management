@@ -150,9 +150,11 @@
 
 	function noticeTypeLabel(type: string) {
 		switch (type) {
+			case 'RentReminder': return 'Rent reminder';
 			case 'RenewalOffer': return 'Renewal offer';
-			case 'LateRentNotice': return 'Late rent';
+			case 'MonthToMonthConversion': return 'Month-to-month conversion';
 			case 'MoveOutReminder': return 'Move-out reminder';
+			case 'LateRentNotice': return 'Late rent / late fee';
 			default: return type;
 		}
 	}
@@ -193,11 +195,14 @@
 	}
 
 	// Notice types a landlord can FORCE for this tenant (generated even outside the usual trigger
-	// window). Mirrors the mobile type-first picker; late-rent is omitted here because it still
-	// requires a real overdue payment, so the default "what's due" pass already surfaces it.
+	// window). Mirrors the mobile type-first picker; all five notice types are selectable so the
+	// landlord can send any notice on demand (the API forces the type regardless of trigger windows).
 	const FORCEABLE_NOTICE_TYPES: { type: string; label: string }[] = [
+		{ type: 'RentReminder', label: 'Rent reminder (coming due)' },
 		{ type: 'RenewalOffer', label: 'Lease renewal offer' },
-		{ type: 'MoveOutReminder', label: 'Move-out reminder' }
+		{ type: 'MonthToMonthConversion', label: 'Convert to month-to-month' },
+		{ type: 'MoveOutReminder', label: 'Lease expiration / move-out' },
+		{ type: 'LateRentNotice', label: 'Late rent / late fee' },
 	];
 
 	function openNoticeDialog(noticeType?: string) {

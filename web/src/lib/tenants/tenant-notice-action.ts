@@ -2,7 +2,13 @@ export interface TenantNoticeAction {
 	noticeType?: string;
 }
 
-const FORCEABLE_NOTICE_TYPES = new Set(['RenewalOffer', 'MoveOutReminder']);
+const FORCEABLE_NOTICE_TYPES = new Set([
+	'RentReminder',
+	'RenewalOffer',
+	'MonthToMonthConversion',
+	'MoveOutReminder',
+	'LateRentNotice'
+]);
 
 export function readTenantNoticeAction(params: URLSearchParams): TenantNoticeAction | null {
 	if (params.get('action') !== 'create-notice') return null;
