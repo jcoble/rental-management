@@ -311,6 +311,8 @@
 		{/if}
 		<LeaseDetail
 			leaseId={selectedLeaseId}
+			expectedUnitId={dashboard.unit.id}
+			onUnitMismatch={clearSelection}
 			onDeleted={() => {
 				queryClient.invalidateQueries({ queryKey: ['unit-dashboard', dashboard.unit.id] });
 				queryClient.invalidateQueries({ queryKey: ['unit-leases', portfolioId, dashboard.unit.id] });
