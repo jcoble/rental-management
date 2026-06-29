@@ -1138,19 +1138,6 @@
     backdrop-filter: blur(18px) saturate(1.04);
   }
 
-  .m3-tabs-list--sticky {
-    width: 100%;
-    min-width: max-content;
-    padding: 0.35rem;
-    background: var(--m3c-surface-container);
-    backdrop-filter: blur(18px) saturate(1.04);
-  }
-
-  .m3-tabs-list--sticky .m3-tabs-trigger {
-    min-height: 46px;
-    padding-inline: clamp(0.9rem, 2vw, 2rem);
-  }
-
   .m3-order-tab-panel[hidden] {
     display: none !important;
   }
