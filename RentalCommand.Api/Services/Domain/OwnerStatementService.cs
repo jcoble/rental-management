@@ -95,31 +95,24 @@ public class OwnerStatementService : IOwnerStatementService
                 NetToOwner:    net));
         }
 
-        var totals = await OwnerPropertyNetRows(portfolioId, year)
-            .Where(p => p.OwnerId == ownerId)
-            .GroupBy(_ => 1)
-            .Select(g => new
-            {
-                TotalIncome = g.Sum(p => p.RentalIncome),
-                TotalExpenses = g.Sum(p => p.Expenses),
-                TotalManagementFee = g.Sum(p => p.RentalIncome * p.ManagementFeePercent / 100m),
-                TotalNetToOwner = g.Sum(p =>
-                    p.RentalIncome -
-                    p.Expenses -
-                    (p.RentalIncome * p.ManagementFeePercent / 100m)),
-            })
-            .SingleAsync(ct);
-
+        // Totals are the sum of the ROUNDED per-line values above, so the statement foots exactly: a
+        // landlord adding up the property column gets the printed total, with no sub-cent drift. Summing
+        // the *unrounded* fees in SQL and rounding once at the end can differ from the sum of the rounded
+        // per-line fees by a cent — and the per-property fee can't be rounded inside a translated SQL
+        // aggregate (EF can't translate Math.Round there). The heavy aggregation still runs DB-side: the
+        // single query above sums the payment/expense rows per property in SQL. `lines` is just that
+        // small per-property result set — already materialized to render the breakdown and bounded by the
+        // owner's property count — so this roll-up is over a handful of rows, not a row scan.
         return new OwnerStatementReport
         {
             OwnerId            = owner.Id,
             OwnerName          = owner.Name,
             Year               = year,
             Properties         = lines,
-            TotalIncome        = Math.Round(totals.TotalIncome, 2),
-            TotalExpenses      = Math.Round(totals.TotalExpenses, 2),
-            TotalManagementFee = Math.Round(totals.TotalManagementFee, 2),
-            TotalNetToOwner    = Math.Round(totals.TotalNetToOwner, 2),
+            TotalIncome        = lines.Sum(l => l.RentalIncome),
+            TotalExpenses      = lines.Sum(l => l.Expenses),
+            TotalManagementFee = lines.Sum(l => l.ManagementFee),
+            TotalNetToOwner    = lines.Sum(l => l.NetToOwner),
         };
     }
 

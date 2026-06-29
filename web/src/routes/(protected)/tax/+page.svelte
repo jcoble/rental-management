@@ -99,6 +99,13 @@
 				Estimated rental income and deductible expenses by property — for reference only,
 				not tax advice. Share with your accountant.
 			</p>
+			<p class="mt-1 max-w-xl text-xs text-muted-foreground" data-testid="tax-basis-note">
+				Accrual basis: expenses count when <span class="font-medium">incurred</span> (any status),
+				by the date incurred. The
+				<a href="/owners-report" class="underline underline-offset-2">Owner Reports</a> statement
+				uses cash basis (paid expenses only), so the same property can show a different expense
+				total there.
+			</p>
 		</div>
 		<div class="flex items-center gap-2">
 			<Select.Root type="single" bind:value={selectedYear}>
