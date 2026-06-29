@@ -831,7 +831,7 @@
 	<div class="mb-5 grid gap-3 sm:grid-cols-2 md:grid-cols-4">
 		<Card.Root class="m3-tonal-card m3-tonal-card--mint gap-0 py-0" data-testid="accounting-collected">
 			<Card.Content class="p-4">
-				<p class="text-xs font-medium text-muted-foreground" title="All payments received — rent, deposits, and fees">Total Collected</p>
+				<p class="text-xs font-medium text-muted-foreground" title="Rent and fees received (security deposits are tracked separately under Deposits).">Total Collected</p>
 				{#if accountingSummaryQuery.isLoading}
 					<div class="mt-1 h-8 w-24 animate-pulse rounded bg-muted"></div>
 				{:else}
