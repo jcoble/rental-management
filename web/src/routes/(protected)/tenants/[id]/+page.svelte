@@ -28,7 +28,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock, BellRing, Send, KeyRound } from '@lucide/svelte';
+	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock, BellRing, Send } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 
@@ -113,17 +113,16 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	// ── Grant portal access ──────────────────────────────────────────────────────
-	// Provision (or confirm) a tenant portal login on demand. The tenant signs in with their email +
-	// the shared tenant password; only available once the tenant has an email on file.
-	const grantPortalAccessMutation = createMutation(() => ({
-		mutationFn: (tid: number) => tenants.grantPortalAccess(tid),
+	// ── Send / resend portal invite ──────────────────────────────────────────────
+	// Email the tenant their resident-portal sign-in details on demand. Ensures the login exists, then
+	// sends the invite. Only available once the tenant has an email on file. This is the only place an
+	// invite email goes out (the login itself is provisioned silently when the tenant is created).
+	const sendPortalInviteMutation = createMutation(() => ({
+		mutationFn: (tid: number) => tenants.sendPortalInvite(tid),
 		onSuccess: (result) => {
-			const who = fullName || 'This tenant';
+			const to = result.email || fullName || 'the tenant';
 			showSuccess(
-				result.alreadyExisted
-					? `Portal access already active — ${who} can sign in with their email.`
-					: `Portal access granted — ${who} can sign in with their email.`
+				result.alreadyExisted ? `Portal invite resent to ${to}.` : `Portal invite sent to ${to}.`
 			);
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
@@ -422,15 +421,15 @@
 					<Button
 						variant="outline"
 						class="gap-2"
-						onclick={() => grantPortalAccessMutation.mutate(tenant.id)}
-						disabled={!tenant.email || grantPortalAccessMutation.isPending}
+						onclick={() => sendPortalInviteMutation.mutate(tenant.id)}
+						disabled={!tenant.email || sendPortalInviteMutation.isPending}
 						title={tenant.email
-							? 'Create a portal login for this tenant.'
-							: 'Add an email to this tenant before granting portal access.'}
-						data-testid="tenant-detail-grant-portal-access"
+							? 'Email this tenant their portal sign-in details.'
+							: 'Add an email to this tenant before sending a portal invite.'}
+						data-testid="tenant-detail-send-portal-invite"
 					>
-						<KeyRound class="h-4 w-4" />
-						{grantPortalAccessMutation.isPending ? 'Granting…' : 'Grant portal access'}
+						<Send class="h-4 w-4" />
+						{sendPortalInviteMutation.isPending ? 'Sending…' : 'Send portal invite'}
 					</Button>
 					<Button variant="outline" class="gap-2" onclick={startEditing} data-testid="tenant-detail-edit">
 						<Pencil class="h-4 w-4" />

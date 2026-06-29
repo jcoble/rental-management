@@ -20,6 +20,13 @@ export interface GrantPortalAccessResponse {
 	email?: string;
 }
 
+export interface PortalInviteResponse {
+	/** The email the invite was sent to. */
+	email?: string;
+	/** True when the tenant already had a portal login (this was a resend). */
+	alreadyExisted: boolean;
+}
+
 export const tenants = {
 	list: (portfolioId: number, params?: ListParams) =>
 		api.get<Tenant[]>(`/tenants${buildListQuery(params, { portfolioId })}`),
@@ -36,4 +43,6 @@ export const tenants = {
 	delete: (id: number) => api.delete(`/tenants/${id}`),
 	grantPortalAccess: (id: number) =>
 		api.post<GrantPortalAccessResponse>(`/tenants/${id}/portal-access`),
+	sendPortalInvite: (id: number) =>
+		api.post<PortalInviteResponse>(`/tenants/${id}/portal-invite`),
 };

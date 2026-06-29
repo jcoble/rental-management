@@ -1,7 +1,11 @@
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Auth;
 using RentalCommand.Api.Services.Domain;
+using RentalCommand.Core.Configuration;
+using RentalCommand.Core.Entities;
 
 namespace RentalCommand.Api.Controllers;
 
@@ -16,11 +20,22 @@ public class TenantController : ManagementControllerBase
 {
     private readonly ITenantService _service;
     private readonly ITenantPortalProvisioningService _portalProvisioning;
+    private readonly IAuthEmailSender _authEmailSender;
+    private readonly UserManager<ApplicationUser> _userManager;
+    private readonly SeedSettings _seedSettings;
 
-    public TenantController(ITenantService service, ITenantPortalProvisioningService portalProvisioning)
+    public TenantController(
+        ITenantService service,
+        ITenantPortalProvisioningService portalProvisioning,
+        IAuthEmailSender authEmailSender,
+        UserManager<ApplicationUser> userManager,
+        IOptions<SeedSettings> seedSettings)
     {
         _service = service;
         _portalProvisioning = portalProvisioning;
+        _authEmailSender = authEmailSender;
+        _userManager = userManager;
+        _seedSettings = seedSettings.Value;
     }
 
     [HttpGet]
@@ -105,5 +120,48 @@ public class TenantController : ManagementControllerBase
                 Email = result.Email,
             }),
         };
+    }
+
+    /// <summary>
+    /// Sends (or resends) the tenant their resident-portal invite email. Ensures their portal login
+    /// exists, then emails their sign-in email + the shared temporary password and a login link. This
+    /// is the ONLY place an invite email goes out (tenant creation provisions silently). Staff-only,
+    /// portfolio-scoped via the JWT claim (IDOR guard). Requires the tenant to have an email.
+    /// </summary>
+    [HttpPost("{id:int}/portal-invite")]
+    [ProducesResponseType(typeof(PortalInviteResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<PortalInviteResponse>> SendPortalInvite(int id, CancellationToken ct)
+    {
+        var result = await _portalProvisioning.EnsurePortalAccountForTenantAsync(id, GetPortfolioId(), ct);
+
+        switch (result.Status)
+        {
+            case PortalAccountStatus.TenantNotFound:
+                return NotFound(new { error = "Tenant not found" });
+            case PortalAccountStatus.NoEmail:
+                return BadRequest(new
+                {
+                    error = "This tenant has no email address. Add an email before sending a portal invite."
+                });
+            case PortalAccountStatus.Failed:
+                return BadRequest(new { error = result.Error ?? "Could not send the portal invite." });
+        }
+
+        // Account exists (Created or AlreadyExisted) — load the Identity user so we can email them.
+        var user = result.Email is null ? null : await _userManager.FindByEmailAsync(result.Email);
+        if (user == null)
+        {
+            return BadRequest(new { error = "Could not send the portal invite." });
+        }
+
+        await _authEmailSender.SendTenantPortalInviteAsync(user, _seedSettings.TenantPassword, ct);
+
+        return Ok(new PortalInviteResponse
+        {
+            Email = result.Email,
+            AlreadyExisted = result.Status == PortalAccountStatus.AlreadyExisted,
+        });
     }
 }

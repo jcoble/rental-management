@@ -94,6 +94,16 @@ public class GrantPortalAccessResponse
     public string? Email { get; set; }
 }
 
+/// <summary>Result of the staff "send / resend portal invite" action for a tenant.</summary>
+public class PortalInviteResponse
+{
+    /// <summary>The email the invite was sent to (the tenant's sign-in email).</summary>
+    public string? Email { get; set; }
+
+    /// <summary>True when the tenant already had a portal login (this was a resend).</summary>
+    public bool AlreadyExisted { get; set; }
+}
+
 public class UpdateTenantRequest
 {
     [MaxLength(100)]

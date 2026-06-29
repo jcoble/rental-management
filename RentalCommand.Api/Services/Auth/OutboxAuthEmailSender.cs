@@ -160,6 +160,62 @@ For your security, we recommend changing your password after you sign in for the
         }
     }
 
+    public async Task SendTenantPortalInviteAsync(ApplicationUser user, string temporaryPassword, CancellationToken ct = default)
+    {
+        try
+        {
+            var webBase = _configuration["App:WebBaseUrl"] ?? "https://localhost:5667";
+            var loginLink = $"{webBase}/login";
+
+            var email = user.Email ?? string.Empty;
+            var greeting = !string.IsNullOrWhiteSpace(user.DisplayName) ? user.DisplayName : email;
+            if (string.IsNullOrWhiteSpace(greeting)) greeting = "there";
+            var subject = "Your resident portal access";
+
+            // Plaintext fallback carries the full credentials and the raw login URL so a text-only
+            // client still has everything needed to sign in.
+            var body = $"""
+Hi {greeting},
+
+Your landlord has given you access to your resident portal, where you can view your lease, make payments, submit maintenance requests, and message your landlord.
+
+Here's how to sign in:
+
+Email: {email}
+Temporary password: {temporaryPassword}
+
+Sign in here: {loginLink}
+
+For your security, we recommend changing your password after you sign in for the first time.
+
+– The Rental Command Team
+""";
+
+            // HTML body reuses the shared auth-email shell. The credentials are interpolated into the
+            // intro, so HTML-encode them first — BuildAuthEmailHtml inserts the intro raw.
+            var safeEmail = WebUtility.HtmlEncode(email);
+            var safePassword = WebUtility.HtmlEncode(temporaryPassword);
+            var introHtml =
+                "Your landlord has given you access to your <strong>resident portal</strong>, where you can " +
+                "view your lease, make payments, submit maintenance requests, and message your landlord. " +
+                $"Sign in with your email <strong>{safeEmail}</strong> and temporary password " +
+                $"<strong>{safePassword}</strong>. To sign in, click";
+            var htmlBody = BuildAuthEmailHtml(
+                greeting,
+                introHtml: introHtml,
+                link: loginLink,
+                footerHtml: "For your security, we recommend changing your password after you sign in for the first time.");
+
+            await EnqueueAsync(email, subject, body, htmlBody, "tenant-portal-invite", ct);
+            _logger.LogInformation("Enqueued tenant-portal-invite email for {Email}.", email);
+        }
+        catch (Exception ex)
+        {
+            // Email is best-effort — never block the staff invite action on an email hiccup.
+            _logger.LogError(ex, "Failed to enqueue tenant-portal-invite email for user {UserId}.", user.Id);
+        }
+    }
+
     private async Task EnqueueAsync(string to, string subject, string body, string htmlBody, string kind, CancellationToken ct)
     {
         // The outbox carries both a plaintext body (the source of truth / fallback) and an
