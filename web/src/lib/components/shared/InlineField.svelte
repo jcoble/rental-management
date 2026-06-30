@@ -28,6 +28,7 @@
 		inputmode,
 		autocomplete,
 		maxlength,
+		morphName,
 	}: {
 		label: string;
 		value?: string;
@@ -43,6 +44,13 @@
 		inputmode?: InputMode;
 		autocomplete?: HTMLInputAttributes['autocomplete'];
 		maxlength?: number;
+		/**
+		 * When set, stamps a unique `view-transition-name` on the field root so that a
+		 * `document.startViewTransition()` around the edit toggle morphs THIS field's
+		 * read-only box into its input in place (the M3 "container transform" at field
+		 * scale), instead of the whole card flipping. Must be unique per visible field.
+		 */
+		morphName?: string;
 		/**
 		 * How a display-mode value lets the user start editing.
 		 *  - 'none'    (default, SAFE): the value is a calm, non-interactive row. The
@@ -125,7 +133,11 @@
 	);
 </script>
 
-<div class={className} data-testid={`${testid}-field`}>
+<div
+	class={className}
+	data-testid={`${testid}-field`}
+	style:view-transition-name={morphName || null}
+>
 	{#if editing}
 		<label class="mb-1 block text-xs font-medium text-muted-foreground" for={fieldId}>{label}</label>
 		{#if type === 'select'}
