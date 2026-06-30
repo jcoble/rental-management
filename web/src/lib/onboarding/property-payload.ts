@@ -43,6 +43,24 @@ export function buildOnboardingPropertyPayload({
 	};
 }
 
+export function onboardingPropertyRecordOptions({
+	createdProperty,
+	existingProperties
+}: {
+	createdProperty: PropertyLike | null | undefined;
+	existingProperties: readonly PropertyLike[] | null | undefined;
+}): PropertyLike[] {
+	const options = [...(existingProperties ?? [])];
+	if (
+		createdProperty &&
+		createdProperty.id != null &&
+		!options.some((property) => String(property.id) === String(createdProperty.id))
+	) {
+		options.push(createdProperty);
+	}
+	return options;
+}
+
 export function onboardingPropertyFormFromProperty(property: PropertyLike): OnboardingPropertyForm {
 	return {
 		name: property.name ?? '',
