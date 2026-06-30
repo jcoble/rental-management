@@ -7,5 +7,5 @@ const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 test('dashboard hero keeps setup and import reachable after the checklist card is gone', () => {
 	assert.match(source, /data-testid="dashboard-hero-guided-setup"/);
 	assert.match(source, /href="\/onboarding\?from=dashboard"/);
-	assert.match(source, />\s*Setup & Import\s*</);
+	assert.match(source, />\s*Guided Setup\s*</);
 });
