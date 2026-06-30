@@ -112,6 +112,22 @@ public sealed class AssistantActionServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task DraftAsync_WhenPropertyHintIncludesUnitSuffix_ResolvesPropertyAndCleansDescription()
+    {
+        var result = await _sut.DraftAsync(
+            PortfolioId,
+            new AssistantActionDraftRequest
+            {
+                Command = "Create a 42 dollar plumbing expense for Eastland 8-Plex Unit 2 paid today.",
+                WriteModeEnabled = true,
+            });
+
+        result.Status.Should().Be(AssistantActionStatus.DraftReady);
+        result.Draft!.Expense!.PropertyName.Should().Be("Eastland 8-Plex");
+        result.Draft.Expense.Description.Should().Be("plumbing");
+    }
+
+    [Fact]
     public async Task ExecuteAsync_RequiresWriteModeAndExplicitConfirmation()
     {
         var draft = (await _sut.DraftAsync(

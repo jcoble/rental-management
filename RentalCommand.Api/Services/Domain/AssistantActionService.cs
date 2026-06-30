@@ -190,7 +190,7 @@ public sealed partial class AssistantActionService : IAssistantActionService
 
     private async Task<PropertyMatch?> ResolvePropertyAsync(int portfolioId, string hint, CancellationToken ct)
     {
-        var normalized = hint.Trim().ToLowerInvariant();
+        var normalized = StripUnitSuffix(hint).Trim().ToLowerInvariant();
         if (normalized.Length == 0) return null;
 
         var exact = await _db.Properties
@@ -281,16 +281,18 @@ public sealed partial class AssistantActionService : IAssistantActionService
         var description = command;
         description = ActionVerbRegex().Replace(description, string.Empty);
         description = ExpenseWordsRegex().Replace(description, " ");
+        if (!string.IsNullOrWhiteSpace(propertyHint))
+            description = description.Replace(propertyHint, " ", StringComparison.OrdinalIgnoreCase);
         if (amount is not null)
             description = description.Replace(amount.Value.ToString(CultureInfo.InvariantCulture), " ");
         description = AmountRegex().Replace(description, " ");
-        if (!string.IsNullOrWhiteSpace(propertyHint))
-            description = description.Replace(propertyHint, " ", StringComparison.OrdinalIgnoreCase);
         description = FillerWordsRegex().Replace(description, " ");
-        description = WhitespaceRegex().Replace(description, " ").Trim();
+        description = WhitespaceRegex().Replace(description, " ").Trim().Trim('.', ',', ';', ':').Trim();
 
         return description.Length == 0 ? "Assistant-created expense" : description;
     }
+
+    private static string StripUnitSuffix(string hint) => UnitSuffixRegex().Replace(hint, string.Empty);
 
     private static string BuildDraftMessage(
         AssistantActionDraft draft,
@@ -345,9 +347,12 @@ public sealed partial class AssistantActionService : IAssistantActionService
     [GeneratedRegex(@"\b(expense|receipt|bill|invoice)\b", RegexOptions.IgnoreCase)]
     private static partial Regex ExpenseWordsRegex();
 
-    [GeneratedRegex(@"\b(a|an|the|for|at|on|of|to|paid|unpaid|today|yesterday)\b", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"\b(a|an|the|for|at|on|of|to|paid|unpaid|today|yesterday|usd|dollar|dollars)\b", RegexOptions.IgnoreCase)]
     private static partial Regex FillerWordsRegex();
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhitespaceRegex();
+
+    [GeneratedRegex(@"\s+(?:unit|apt|apartment|suite|#)\s+[A-Za-z0-9-]+$", RegexOptions.IgnoreCase)]
+    private static partial Regex UnitSuffixRegex();
 }

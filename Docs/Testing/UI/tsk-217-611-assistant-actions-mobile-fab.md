@@ -31,6 +31,7 @@ Verified on 2026-06-30 against the local stack:
 - Sent `Create a 42 dollar plumbing expense for Eastland 8-Plex Unit 2 paid today.`
 - Confirmed the rendered draft with `Confirm & create expense`.
 - Browser result: `Created expense #1047 for $42.00.`
+- Backend regression coverage now asserts the same unit-suffix prompt resolves `Eastland 8-Plex` and stores the clean description `plumbing`.
 
 ## Web Assistant Read-Only Path
 

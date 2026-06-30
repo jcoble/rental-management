@@ -210,6 +210,11 @@ class ScanListScreen extends ConsumerWidget {
       ),
       floatingActionButton: MobileQuickActionFab(
         heroTag: 'scan-list-quick-action-fab',
+        primaryAction: MobileQuickAction(
+          label: 'New scan',
+          icon: Icons.document_scanner_outlined,
+          onPressed: () => _startCapture(context, ref),
+        ),
         onChat: () => openMobileAssistant(context),
         onRecord: () => openMobileRecord(context),
         onScan: () => _startCapture(context, ref),
