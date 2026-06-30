@@ -269,7 +269,11 @@
 		formErrors = {};
 		savePropertyMutation.mutate({
 			id: editingId,
-			data: { portfolioId, ...result.data },
+			data: {
+				portfolioId,
+				...result.data,
+				clearOwnerEntity: result.data.ownerEntityId == null,
+			},
 		});
 	}
 
