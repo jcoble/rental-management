@@ -15,6 +15,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const portfolioId = $derived(getCurrentPortfolioId());
 	const PAGE_SIZE = 20;
@@ -107,12 +108,16 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="units-page">
-	<div class="mb-4 flex items-center justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold">Units</h1>
-			<p class="text-sm text-muted-foreground">Every unit at a glance — open a unit for its full story.</p>
-		</div>
-	</div>
+	<PageHeader
+		class="mb-4"
+		band
+		art={6}
+		tone="sky"
+		eyebrow="Rentals"
+		title="Units"
+		description="Every unit at a glance. Open a unit for its full story."
+		data-testid="units-header"
+	/>
 
 	<DataGrid
 		data={list}

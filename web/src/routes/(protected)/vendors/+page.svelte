@@ -21,6 +21,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { page } from '$app/state';
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -262,10 +263,16 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="vendors-page">
-	<div class="mb-4">
-		<h1 class="text-2xl font-bold">Vendors</h1>
-		<p class="text-sm text-muted-foreground">The people who fix things — service providers, ratings, and 1099/W-9 compliance.</p>
-	</div>
+	<PageHeader
+		class="mb-4"
+		band
+		art={10}
+		tone="coral"
+		eyebrow="Work"
+		title="Vendors"
+		description="Service providers, ratings, and 1099/W-9 compliance."
+		data-testid="vendors-header"
+	/>
 
 	<DataGrid
 		data={vendorsList}

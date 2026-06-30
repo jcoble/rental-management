@@ -19,6 +19,7 @@
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { getTenantsEmptyStateCopy } from '$lib/tenants/tenant-list-state';
 	import { getTenantDeleteState } from '$lib/tenants/tenant-delete-state';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 	import { Plus, Pencil, Trash2, Users } from '@lucide/svelte';
 
 	const queryClient = useQueryClient();
@@ -233,12 +234,16 @@
 </svelte:head>
 
 <div class="box-border h-full overflow-y-auto p-6 pb-20" data-testid="tenants-page">
-	<div class="mb-4 flex items-center justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold">Tenants</h1>
-			<p class="text-sm text-muted-foreground">Resident contacts and lease participation.</p>
-		</div>
-	</div>
+	<PageHeader
+		class="mb-4"
+		band
+		art={4}
+		tone="mint"
+		eyebrow="Rentals"
+		title="Tenants"
+		description="Resident contacts and lease participation."
+		data-testid="tenants-header"
+	/>
 
 	<DataGrid
 		data={list}

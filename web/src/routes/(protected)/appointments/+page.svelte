@@ -30,6 +30,7 @@
 		utcIsoToLocalWallClock,
 		localWallClockToUtcIso
 	} from './calendar-utils';
+	import PageHeader from '$lib/components/m3/PageHeader.svelte';
 
 	const queryClient = useQueryClient();
 	const portfolioId = $derived(getCurrentPortfolioId());
@@ -240,53 +241,60 @@
 	<StatusBadge status={appt.status} />
 {/snippet}
 
+{#snippet headerActions()}
+	<div class="flex flex-wrap items-center gap-2">
+		<div
+			class="inline-flex items-center gap-1 rounded-lg border border-border bg-muted p-1"
+			role="tablist"
+			aria-label="Appointment view"
+			data-testid="appointments-view-toggle"
+		>
+			<button
+				type="button"
+				role="tab"
+				aria-selected={view === 'calendar'}
+				class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors {view === 'calendar' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+				data-testid="appointments-view-calendar"
+				onclick={() => (view = 'calendar')}
+			>
+				<CalendarDays class="h-4 w-4" />
+				Calendar
+			</button>
+			<button
+				type="button"
+				role="tab"
+				aria-selected={view === 'list'}
+				class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors {view === 'list' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
+				data-testid="appointments-view-list"
+				onclick={() => (view = 'list')}
+			>
+				<ListIcon class="h-4 w-4" />
+				List
+			</button>
+		</div>
+		<Button data-testid="appointment-create-button" class="gap-2" onclick={openCreate}>
+			<Plus class="h-4 w-4" />
+			New Appointment
+		</Button>
+	</div>
+{/snippet}
+
 <svelte:head>
 	<title>Appointments - Rental Command</title>
 </svelte:head>
 
 <div class="box-border flex h-full flex-col overflow-hidden p-6" data-testid="appointments-page">
-	<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold">Appointments</h1>
-			<p class="text-sm text-muted-foreground">Showings, move-ins, inspections, and service visits.</p>
-		</div>
-		<div class="flex items-center gap-2">
-			<!-- Segmented Calendar / List toggle (Calendar is the default). -->
-			<div
-				class="inline-flex items-center gap-1 rounded-lg border border-border bg-muted p-1"
-				role="tablist"
-				aria-label="Appointment view"
-				data-testid="appointments-view-toggle"
-			>
-				<button
-					type="button"
-					role="tab"
-					aria-selected={view === 'calendar'}
-					class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors {view === 'calendar' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-					data-testid="appointments-view-calendar"
-					onclick={() => (view = 'calendar')}
-				>
-					<CalendarDays class="h-4 w-4" />
-					Calendar
-				</button>
-				<button
-					type="button"
-					role="tab"
-					aria-selected={view === 'list'}
-					class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors {view === 'list' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}"
-					data-testid="appointments-view-list"
-					onclick={() => (view = 'list')}
-				>
-					<ListIcon class="h-4 w-4" />
-					List
-				</button>
-			</div>
-			<Button data-testid="appointment-create-button" class="gap-2" onclick={openCreate}>
-				<Plus class="h-4 w-4" />
-				New Appointment
-			</Button>
-		</div>
-	</div>
+	<PageHeader
+		class="mb-4"
+		band
+		art={3}
+		tone="sky"
+		eyebrow="Work"
+		title="Appointments"
+		description="Showings, move-ins, inspections, and service visits."
+		actions={headerActions}
+		data-testid="appointments-header"
+	/>
 
 	<!--
 		Keep-alive views: both the Calendar and the List stay mounted and laid out;

@@ -4,6 +4,7 @@ import type {
 	InspectionDetail,
 	InspectionItem,
 	InspectionTemplate,
+	InspectionTemplateInput,
 } from '$lib/types';
 import { api, refreshToken } from '../client';
 import { CLIENT_API_BASE_URL } from '$lib/config';
@@ -20,6 +21,11 @@ export const inspections = {
 
 	// Smart-checklist templates. Built-in templates have NEGATIVE ids — pass back to create as-is.
 	templates: () => api.get<InspectionTemplate[]>('/inspections/templates'),
+	getTemplate: (id: number) => api.get<InspectionTemplate>(`/inspections/templates/${id}`),
+	createTemplate: (data: InspectionTemplateInput) => api.post<InspectionTemplate>('/inspections/templates', data),
+	updateTemplate: (id: number, data: InspectionTemplateInput) =>
+		api.patch<InspectionTemplate>(`/inspections/templates/${id}`, data),
+	deleteTemplate: (id: number) => api.delete<void>(`/inspections/templates/${id}`),
 
 	// Update a checklist item's result and/or note.
 	updateItem: (inspectionId: number, itemId: number, data: { result?: string; note?: string }) =>

@@ -138,6 +138,37 @@ public class InspectionTemplateItemResponse
     };
 }
 
+/// <summary>One editable checklist row in a custom inspection template request.</summary>
+public class UpsertInspectionTemplateItemRequest
+{
+    [Required]
+    [MaxLength(120)]
+    public string Area { get; set; } = string.Empty;
+
+    [Required]
+    [MaxLength(300)]
+    public string Label { get; set; } = string.Empty;
+}
+
+/// <summary>Creates a portfolio-owned custom inspection checklist template.</summary>
+public class CreateInspectionTemplateRequest
+{
+    [Required]
+    [MaxLength(200)]
+    public string Name { get; set; } = string.Empty;
+
+    [EnumDataType(typeof(InspectionType))]
+    public InspectionType InspectionType { get; set; } = InspectionType.Routine;
+
+    [Required]
+    public IReadOnlyList<UpsertInspectionTemplateItemRequest> Items { get; set; } = [];
+}
+
+/// <summary>Replaces the editable fields and question rows for a custom inspection checklist template.</summary>
+public class UpdateInspectionTemplateRequest : CreateInspectionTemplateRequest
+{
+}
+
 /// <summary>An available inspection template (built-in or custom) with its items.</summary>
 public class InspectionTemplateResponse
 {
@@ -156,8 +187,6 @@ public class InspectionTemplateResponse
         InspectionType = e.InspectionType,
         IsBuiltIn = e.IsBuiltIn,
         Items = e.Items
-            .OrderBy(i => i.SortOrder)
-            .ThenBy(i => i.Id)
             .Select(InspectionTemplateItemResponse.FromEntity)
             .ToList(),
     };
