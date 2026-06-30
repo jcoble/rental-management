@@ -1,3 +1,5 @@
+import { defaultLeaseNumber } from '$lib/leases/lease-number';
+
 export type UnitLeaseCreateContext = {
 	unit: {
 		id: number;
@@ -35,7 +37,7 @@ export type SimpleTenantForm = {
 
 export function createUnitLeaseForm(context: UnitLeaseCreateContext): UnitLeaseCreateForm {
 	return {
-		leaseNumber: '',
+		leaseNumber: defaultLeaseNumber(),
 		propertyId: String(context.unit.propertyId),
 		unitId: String(context.unit.id),
 		tenantId: '',

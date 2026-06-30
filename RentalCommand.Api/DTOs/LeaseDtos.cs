@@ -329,9 +329,8 @@ public class CreateLeaseRequest
 
     public IReadOnlyList<int>? TenantIds { get; set; }
 
-    [Required]
     [MaxLength(100)]
-    public string LeaseNumber { get; set; } = string.Empty;
+    public string? LeaseNumber { get; set; }
 
     [EnumDataType(typeof(LeaseStatus))]
     public LeaseStatus Status { get; set; } = LeaseStatus.Draft;

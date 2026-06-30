@@ -4,14 +4,12 @@
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { tenants } from '$lib/api/endpoints/tenants';
 	import { leases } from '$lib/api/endpoints/leases';
-	import { notices } from '$lib/api/endpoints/notices';
-	import type { Lease, NoticeDraft, Tenant } from '$lib/types';
+	import type { Lease, Tenant } from '$lib/types';
 	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { tenantSchema, parseForm } from '$lib/schemas';
 	import { formatDateOnly } from '$lib/utils/date';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
-	import { getTenantNoticeEmptyCopy, getTenantNoticeEmptyState } from '$lib/tenants/tenant-notice-state';
 	import { getTenantDeleteState } from '$lib/tenants/tenant-delete-state';
 	import {
 		clearTenantNoticeActionUrl,
@@ -25,10 +23,9 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
+	import TenantNoticeDialog from '$lib/components/notices/TenantNoticeDialog.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock, BellRing, Send, KeyRound } from '@lucide/svelte';
+	import { Mail, Phone, AlertCircle, Pencil, Save, Trash2, User, X, Contact, FileClock, BellRing, KeyRound } from '@lucide/svelte';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
 
@@ -129,152 +126,14 @@
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	// ── Per-tenant notice: Create / Send ─────────────────────────────────────────
-	// Generate the notice draft(s) due for THIS tenant (POST /notices/generate { tenantId }, owned by a
-	// sibling lane), review them in a dialog, then send each on the chosen channels (reusing the notice
-	// approve endpoint) or dismiss it. Mirrors the portfolio-wide flow on /notices, scoped to one tenant.
 	let showNoticeDialog = $state(false);
-	let noticeDrafts = $state<NoticeDraft[]>([]);
-	let forcedNoticeLabel = $state<string | null>(null);
+	let noticeDialogType = $state<string | undefined>(undefined);
 	let handledNoticeActionKey: string | null = null;
-	// Per-draft channel selection (portal / email / sms), defaulting to all on.
-	let noticeChannels = $state<Record<number, { portal: boolean; email: boolean; sms: boolean }>>({});
-	let noticeEdits = $state<Record<number, { subject: string; body: string }>>({});
-	const noticeEmptyState = $derived(
-		getTenantNoticeEmptyState({
-			forcedNoticeLabel,
-			activeLeaseCount: activeTenantLeaseCount,
-			tenantId: id,
-		})
-	);
-
-	function noticeTypeLabel(type: string) {
-		switch (type) {
-			case 'RentReminder': return 'Rent reminder';
-			case 'RenewalOffer': return 'Renewal offer';
-			case 'MonthToMonthConversion': return 'Month-to-month conversion';
-			case 'MoveOutReminder': return 'Move-out reminder';
-			case 'LateRentNotice': return 'Late rent / late fee';
-			default: return type;
-		}
-	}
-
-	function channelsFor(id: number) {
-		return noticeChannels[id] ?? { portal: true, email: true, sms: true };
-	}
-	function setNoticeChannel(id: number, key: 'portal' | 'email' | 'sms', checked: boolean) {
-		noticeChannels = { ...noticeChannels, [id]: { ...channelsFor(id), [key]: checked } };
-	}
-	function selectedChannelNames(id: number): string[] {
-		const c = channelsFor(id);
-		return [c.portal ? 'Portal' : '', c.email ? 'Email' : '', c.sms ? 'Sms' : ''].filter(Boolean);
-	}
-	function noticeEditFor(draft: NoticeDraft) {
-		return noticeEdits[draft.id] ?? { subject: draft.subject, body: draft.body };
-	}
-	function setNoticeEdit(id: number, field: 'subject' | 'body', value: string) {
-		noticeEdits = {
-			...noticeEdits,
-			[id]: { ...(noticeEdits[id] ?? { subject: '', body: '' }), [field]: value },
-		};
-	}
-	function editedNoticePayload(draft: NoticeDraft) {
-		const edit = noticeEditFor(draft);
-		return {
-			subject: edit.subject.trim(),
-			body: edit.body.trim(),
-		};
-	}
-	function hasEditedNoticeContent(draft: NoticeDraft) {
-		const edit = editedNoticePayload(draft);
-		return edit.subject.length > 0 && edit.body.length > 0;
-	}
-	function removeNoticeEdit(id: number) {
-		const { [id]: _removed, ...next } = noticeEdits;
-		noticeEdits = next;
-	}
-
-	// Notice types a landlord can FORCE for this tenant (generated even outside the usual trigger
-	// window). Mirrors the mobile type-first picker; all five notice types are selectable so the
-	// landlord can send any notice on demand (the API forces the type regardless of trigger windows).
-	const FORCEABLE_NOTICE_TYPES: { type: string; label: string }[] = [
-		{ type: 'RentReminder', label: 'Rent reminder (coming due)' },
-		{ type: 'RenewalOffer', label: 'Lease renewal offer' },
-		{ type: 'MonthToMonthConversion', label: 'Convert to month-to-month' },
-		{ type: 'MoveOutReminder', label: 'Lease expiration / move-out' },
-		{ type: 'LateRentNotice', label: 'Late rent / late fee' },
-	];
 
 	function openNoticeDialog(noticeType?: string) {
-		noticeDrafts = [];
-		noticeChannels = {};
-		noticeEdits = {};
-		forcedNoticeLabel = null;
+		noticeDialogType = noticeType;
 		showNoticeDialog = true;
-		// Default pass: generate whatever is actually due for this tenant.
-		generateNoticeMutation.mutate(noticeType);
 	}
-
-	const generateNoticeMutation = createMutation(() => ({
-		// noticeType omitted → generate all due; supplied → force that one type (early renewal / move-out).
-		mutationFn: (noticeType?: string) => notices.generate(id, noticeType),
-		onSuccess: (result, noticeType) => {
-			const selectedForcedNoticeLabel = noticeType
-				? FORCEABLE_NOTICE_TYPES.find((nt) => nt.type === noticeType)?.label ?? noticeTypeLabel(noticeType)
-				: null;
-			forcedNoticeLabel = selectedForcedNoticeLabel;
-			noticeDrafts = result.drafts ?? [];
-			const seeded: Record<number, { portal: boolean; email: boolean; sms: boolean }> = {};
-			const seededEdits: Record<number, { subject: string; body: string }> = {};
-			for (const d of noticeDrafts) {
-				seeded[d.id] = { portal: true, email: true, sms: true };
-				seededEdits[d.id] = { subject: d.subject, body: d.body };
-			}
-			noticeChannels = seeded;
-			noticeEdits = seededEdits;
-			queryClient.invalidateQueries({ queryKey: ['notice-drafts', portfolioId] });
-			if (noticeDrafts.length === 0) {
-				showSuccess(
-					getTenantNoticeEmptyState({
-						forcedNoticeLabel: selectedForcedNoticeLabel,
-						activeLeaseCount: activeTenantLeaseCount,
-						tenantId: id,
-					}).message
-				);
-			}
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	const sendNoticeMutation = createMutation(() => ({
-		mutationFn: async (draft: NoticeDraft) => {
-			const payload = editedNoticePayload(draft);
-			const changed =
-				payload.subject !== draft.subject.trim() || payload.body !== draft.body.trim();
-			if (changed) await notices.update(draft.id, payload);
-			return notices.approve(draft.id, { channels: selectedChannelNames(draft.id) });
-		},
-		onSuccess: (_r, draft) => {
-			showSuccess('Notice sent.');
-			noticeDrafts = noticeDrafts.filter((d) => d.id !== draft.id);
-			removeNoticeEdit(draft.id);
-			queryClient.invalidateQueries({ queryKey: ['notice-drafts', portfolioId] });
-			if (noticeDrafts.length === 0) showNoticeDialog = false;
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
-
-	const dismissNoticeMutation = createMutation(() => ({
-		mutationFn: (draft: NoticeDraft) => notices.dismiss(draft.id),
-		onSuccess: (_r, draft) => {
-			showSuccess('Draft dismissed.');
-			noticeDrafts = noticeDrafts.filter((d) => d.id !== draft.id);
-			removeNoticeEdit(draft.id);
-			queryClient.invalidateQueries({ queryKey: ['notice-drafts', portfolioId] });
-			if (noticeDrafts.length === 0) showNoticeDialog = false;
-		},
-		onError: (err) => showError(apiErrorMessage(err)),
-	}));
 
 	$effect(() => {
 		const action = readTenantNoticeAction(page.url.searchParams);
@@ -532,135 +391,10 @@
 	oncancel={() => (showDeleteConfirm = false)}
 />
 
-<!-- Per-tenant notice: generate the due draft(s) for this tenant, review, then send or dismiss each. -->
-<Dialog.Root open={showNoticeDialog} onOpenChange={(v) => { if (!v) showNoticeDialog = false; }}>
-	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto" data-testid="tenant-notice-dialog">
-		<Dialog.Header>
-			<Dialog.Title>Create / Send notice</Dialog.Title>
-			<Dialog.Description>
-				Notices due for {fullName || 'this tenant'} — review, choose how to deliver each, then send.
-				Nothing goes out until you press Send.
-			</Dialog.Description>
-		</Dialog.Header>
-
-		{#if generateNoticeMutation.isPending}
-			<div class="flex items-center justify-center gap-2 py-10 text-muted-foreground" data-testid="tenant-notice-loading">
-				<div class="h-5 w-5 animate-spin rounded-full border-2 border-current border-t-transparent"></div>
-				<span class="text-sm">Generating notice drafts…</span>
-			</div>
-		{:else if generateNoticeMutation.isError}
-			<div class="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-center" data-testid="tenant-notice-error">
-				<AlertCircle class="mx-auto mb-2 h-6 w-6 text-destructive" />
-				<p class="text-sm text-destructive">{apiErrorMessage(generateNoticeMutation.error)}</p>
-				<Button variant="outline" class="mt-3" onclick={() => generateNoticeMutation.mutate(undefined)} data-testid="tenant-notice-retry">
-					Try again
-				</Button>
-			</div>
-		{:else if noticeDrafts.length === 0}
-			<div class="rounded-lg border border-border p-6 text-center" data-testid="tenant-notice-empty">
-				<BellRing class="mx-auto mb-2 h-6 w-6 text-muted-foreground" />
-				<p class="text-sm font-medium">{noticeEmptyState.message}</p>
-				<p class="mt-1 text-xs text-muted-foreground">
-					{noticeEmptyState.description}
-				</p>
-				<!-- Force a specific notice even outside the trigger window (e.g. an early renewal offer). -->
-				{#if noticeEmptyState.showForceControls}
-					<p class="mt-4 text-xs font-medium uppercase tracking-wide text-muted-foreground">Create one anyway</p>
-					<div class="mt-2 flex flex-wrap items-center justify-center gap-2">
-						{#each FORCEABLE_NOTICE_TYPES as nt (nt.type)}
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={generateNoticeMutation.isPending}
-								onclick={() => generateNoticeMutation.mutate(nt.type)}
-								data-testid="tenant-notice-force-{nt.type}"
-							>
-								{nt.label}
-							</Button>
-						{/each}
-					</div>
-				{:else if noticeEmptyState.leaseActionHref}
-					<Button
-						variant="outline"
-						size="sm"
-						class="mt-4"
-						href={noticeEmptyState.leaseActionHref}
-						data-testid="tenant-notice-create-lease"
-					>
-						{noticeEmptyState.leaseActionLabel}
-					</Button>
-				{/if}
-			</div>
-		{:else}
-			<div class="space-y-4" data-testid="tenant-notice-drafts">
-				{#each noticeDrafts as draft (draft.id)}
-					{@const channels = channelsFor(draft.id)}
-					{@const busy = sendNoticeMutation.isPending || dismissNoticeMutation.isPending}
-					{@const canSend = channels.portal || channels.email || channels.sms}
-					{@const edit = noticeEditFor(draft)}
-					<div class="rounded-lg border border-border bg-card p-4" data-testid="tenant-notice-draft-{draft.id}">
-						<div class="mb-2 flex items-center justify-between gap-2">
-							<h3 class="text-sm font-semibold" data-testid="tenant-notice-draft-type">
-								{noticeTypeLabel(draft.noticeType)}
-							</h3>
-							<StatusBadge status={draft.status} />
-						</div>
-						<div class="space-y-3">
-							<label class="block">
-								<span class="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">Subject</span>
-								<input
-									class="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-									value={edit.subject}
-									oninput={(event) => setNoticeEdit(draft.id, 'subject', (event.currentTarget as HTMLInputElement).value)}
-									data-testid="tenant-notice-edit-subject-{draft.id}"
-								/>
-							</label>
-							<label class="block">
-								<span class="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">Message</span>
-								<textarea
-									class="min-h-32 w-full rounded-md border border-input bg-background p-3 text-sm leading-6"
-									value={edit.body}
-									oninput={(event) => setNoticeEdit(draft.id, 'body', (event.currentTarget as HTMLTextAreaElement).value)}
-									data-testid="tenant-notice-edit-body-{draft.id}"
-								></textarea>
-							</label>
-						</div>
-
-						<div class="mt-3 flex flex-wrap items-center gap-4">
-							<span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Send via</span>
-							<label class="flex items-center gap-2 text-sm" data-testid="tenant-notice-channel-portal-{draft.id}">
-								<Checkbox checked={channels.portal} onCheckedChange={(v) => setNoticeChannel(draft.id, 'portal', v === true)} />
-								Portal
-							</label>
-							<label class="flex items-center gap-2 text-sm" data-testid="tenant-notice-channel-email-{draft.id}">
-								<Checkbox checked={channels.email} onCheckedChange={(v) => setNoticeChannel(draft.id, 'email', v === true)} />
-								Email
-							</label>
-							<label class="flex items-center gap-2 text-sm" data-testid="tenant-notice-channel-sms-{draft.id}">
-								<Checkbox checked={channels.sms} onCheckedChange={(v) => setNoticeChannel(draft.id, 'sms', v === true)} />
-								SMS
-							</label>
-						</div>
-
-						<div class="mt-4 flex items-center justify-end gap-2">
-							<Button variant="ghost" size="sm" disabled={busy} onclick={() => dismissNoticeMutation.mutate(draft)} data-testid="tenant-notice-dismiss-{draft.id}">
-								<Trash2 class="h-4 w-4" />
-								Dismiss
-							</Button>
-							<Button size="sm" class="gap-2" disabled={busy || !canSend || !hasEditedNoticeContent(draft)} onclick={() => sendNoticeMutation.mutate(draft)} data-testid="tenant-notice-send-{draft.id}">
-								<Send class="h-4 w-4" />
-								Send
-							</Button>
-						</div>
-					</div>
-				{/each}
-			</div>
-		{/if}
-
-		<Dialog.Footer>
-			<Button variant="outline" onclick={() => (showNoticeDialog = false)} data-testid="tenant-notice-close">
-				Close
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
+<TenantNoticeDialog
+	bind:open={showNoticeDialog}
+	tenantId={id}
+	tenantName={fullName}
+	activeLeaseCount={activeTenantLeaseCount}
+	initialNoticeType={noticeDialogType}
+/>

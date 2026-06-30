@@ -338,6 +338,7 @@
 	// (falls back to defaults) so a landlord is never locked out by a bad legacy value.
 	function loadSettingsModel(settingsJson: string | null | undefined) {
 		let parsed: Record<string, unknown> = {};
+		let rowId = 0;
 		try {
 			const candidate = JSON.parse(settingsJson || '{}');
 			if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
@@ -368,12 +369,13 @@
 			// Surface scalar extras as editable advanced rows; keep nested/complex values
 			// untouched in `preserved` so the structured editor never lossily flattens them.
 			if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) {
-				customRows.push({ id: nextRowId++, key, value: value === null ? '' : String(value) });
+				customRows.push({ id: rowId++, key, value: value === null ? '' : String(value) });
 			} else {
 				preserved[key] = value;
 			}
 		}
-		if (customRows.length > 0) showAdvanced = true;
+		nextRowId = rowId;
+		showAdvanced = customRows.length > 0;
 
 		settingsModel = { rentCollectionDay, messaging, customRows, preserved };
 	}

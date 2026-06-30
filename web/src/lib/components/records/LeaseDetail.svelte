@@ -7,7 +7,6 @@
 	import { documentTemplates } from '$lib/api/endpoints/document-templates';
 	import {
 		canSetLeaseActive,
-		hasNoticeMoveOutDate,
 		leaseStatusOptionsForCurrentStatus,
 		resolveLeaseDetailTab,
 		scannedLeaseDocumentLinkLabel,
@@ -45,13 +44,14 @@
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
 	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
+	import TenantNoticeDialog from '$lib/components/notices/TenantNoticeDialog.svelte';
 	import * as Card from '$lib/components/ui/card';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, DollarSign, Users, StickyNote, CalendarRange, Library, ExternalLink, Mail, RefreshCw, Copy } from '@lucide/svelte';
+	import { Pencil, Save, Trash2, X, FileText, Download, PenLine, DollarSign, Users, StickyNote, CalendarRange, Library, ExternalLink, Mail, RefreshCw, Copy, BellRing } from '@lucide/svelte';
 	import { ApiError } from '$lib/api/client';
 	import DocumentsPanel from '$lib/components/shared/DocumentsPanel.svelte';
 	import RecordHistory from '$lib/components/shared/RecordHistory.svelte';
@@ -280,32 +280,20 @@
 			queryClient.setQueryData(['lease', leaseId], updatedLease);
 			showSuccess('Lease status updated.');
 			showSetActiveConfirm = false;
-			showGiveNotice = false;
 			invalidateSignatureStatus();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
-	// --- Lifecycle confirms (F11) — Give Notice / Set Active are no longer one-click writes. ---
+	// --- Lifecycle confirms (F11) — Set Active is no longer a one-click write. ---
 	let showSetActiveConfirm = $state(false);
-	let showGiveNotice = $state(false);
-	let moveOutDate = $state('');
-	const canConfirmGiveNotice = $derived(hasNoticeMoveOutDate(moveOutDate));
+	let showNoticeDialog = $state(false);
 
-	function openGiveNotice() {
-		// Pre-fill with the lease's existing move-out date if one is already recorded.
-		moveOutDate = lease?.moveOutDate ? lease.moveOutDate.slice(0, 10) : '';
-		showGiveNotice = true;
+	function openNoticeDialog() {
+		showNoticeDialog = true;
 	}
 	function confirmSetActive() {
 		statusMutation.mutate({ status: 'Active' });
-	}
-	function confirmGiveNotice() {
-		// The full move-out chain (inspection → deposit → make-ready) is Wave 3; here we just
-		// confirm and capture the move-out date on the entity (the field already exists).
-		const payload: Record<string, unknown> = { status: 'NoticeGiven' };
-		if (moveOutDate) payload.moveOutDate = moveOutDate;
-		statusMutation.mutate(payload);
 	}
 
 	const deleteMutation = createMutation(() => ({
@@ -812,8 +800,9 @@
 							Set Active
 						</Button>
 					{:else if visibleStatus === 'Active'}
-						<Button data-testid="lease-give-notice" variant="outline" size="sm" onclick={openGiveNotice} disabled={statusMutation.isPending}>
-							Give Notice
+						<Button data-testid="lease-give-notice" variant="outline" size="sm" class="gap-1.5" onclick={openNoticeDialog}>
+							<BellRing class="h-4 w-4" />
+							Create / Send notice
 						</Button>
 					{/if}
 					<Button data-testid="lease-edit" variant="outline" size="sm" class="gap-1.5" onclick={startEditing}>
@@ -1437,31 +1426,14 @@
 	oncancel={() => (showSetActiveConfirm = false)}
 />
 
-<!-- Give Notice — confirm + capture a move-out date (F11). Full move-out chain is Wave 3. -->
-<Dialog.Root open={showGiveNotice} onOpenChange={(v) => { if (!v) showGiveNotice = false; }}>
-	<Dialog.Content data-testid="lease-give-notice-dialog" class="max-w-md">
-		<Dialog.Header>
-			<Dialog.Title>Give notice on this lease?</Dialog.Title>
-			<Dialog.Description>
-				This marks the lease as <strong class="font-semibold text-foreground">Notice given</strong>.
-				Set the expected move-out date so it shows on the lease and feeds the move-out steps later.
-			</Dialog.Description>
-		</Dialog.Header>
-		<div class="space-y-2">
-			<label for="lease-move-out-date" class="block text-xs text-muted-foreground">Move-out date</label>
-			<DatePicker id="lease-move-out-date" bind:value={moveOutDate} testid="lease-move-out-date" />
-			<p class="text-xs text-muted-foreground">Required to start move-out steps and show this lease on the move-out workflow.</p>
-		</div>
-		<Dialog.Footer>
-			<Button variant="outline" onclick={() => (showGiveNotice = false)} disabled={statusMutation.isPending} data-testid="lease-give-notice-cancel">
-				Cancel
-			</Button>
-			<Button onclick={confirmGiveNotice} disabled={statusMutation.isPending || !canConfirmGiveNotice} data-testid="lease-give-notice-confirm">
-				{statusMutation.isPending ? 'Working…' : 'Give notice'}
-			</Button>
-		</Dialog.Footer>
-	</Dialog.Content>
-</Dialog.Root>
+{#if lease}
+	<TenantNoticeDialog
+		bind:open={showNoticeDialog}
+		tenantId={lease.tenantId}
+		tenantName={lease.tenantName}
+		activeLeaseCount={visibleStatus === 'Active' ? 1 : 0}
+	/>
+{/if}
 
 <!-- Opening balance dialog (set / edit) -->
 <Dialog.Root open={showOpeningDialog} onOpenChange={(v) => { if (!v) closeOpeningDialog(); }}>

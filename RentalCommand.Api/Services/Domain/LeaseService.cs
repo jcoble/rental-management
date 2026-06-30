@@ -48,6 +48,37 @@ public class LeaseService : ILeaseService
     private static bool OccupiesUnit(LeaseStatus status)
         => status == LeaseStatus.Active || status == LeaseStatus.NoticeGiven;
 
+    private async Task<string> ResolveLeaseNumberAsync(
+        int portfolioId,
+        string? requestedLeaseNumber,
+        DateTime startUtc,
+        CancellationToken ct)
+    {
+        var trimmed = requestedLeaseNumber?.Trim();
+        if (!string.IsNullOrWhiteSpace(trimmed))
+        {
+            return trimmed;
+        }
+
+        var prefix = $"L-{startUtc.Year}-";
+        var existingForYear = await _db.Leases
+            .AsNoTracking()
+            .Where(l => l.PortfolioId == portfolioId && EF.Functions.Like(l.LeaseNumber, prefix + "%"))
+            .CountAsync(ct);
+
+        for (var next = existingForYear + 1; ; next++)
+        {
+            var candidate = $"{prefix}{next:000}";
+            var exists = await _db.Leases
+                .AsNoTracking()
+                .AnyAsync(l => l.PortfolioId == portfolioId && l.LeaseNumber == candidate, ct);
+            if (!exists)
+            {
+                return candidate;
+            }
+        }
+    }
+
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
     private readonly IFileStorage _storage;
@@ -785,6 +816,7 @@ public class LeaseService : ILeaseService
 
         var startUtc = request.StartDate.ToUtc();
         var endUtc = request.EndDate.ToUtc();
+        var leaseNumber = await ResolveLeaseNumberAsync(portfolioId, request.LeaseNumber, startUtc, ct);
 
         // Clean 400 for an inverted range before the DB CHECK constraint turns it into a raw 500.
         EnsureValidDateRange(startUtc, endUtc);
@@ -807,7 +839,7 @@ public class LeaseService : ILeaseService
             PropertyId = request.PropertyId,
             UnitId = request.UnitId,
             TenantId = tenantIds[0],
-            LeaseNumber = request.LeaseNumber,
+            LeaseNumber = leaseNumber,
             Status = request.Status,
             StartDate = startUtc,
             EndDate = endUtc,

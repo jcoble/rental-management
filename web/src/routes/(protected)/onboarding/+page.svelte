@@ -56,6 +56,7 @@
 	} from '$lib/onboarding/lease-scan-confirm';
 	import { ownerEntityIdForOnboarding } from '$lib/onboarding/owner-selection';
 	import { buildOnboardingPropertyPayload } from '$lib/onboarding/property-payload';
+	import { defaultLeaseNumber } from '$lib/leases/lease-number';
 	import { formatPropertyType, propertyTypeOptions } from '$lib/properties/property-labels';
 	import {
 		Check,
@@ -528,7 +529,7 @@
 		monthlyRent: '',
 		securityDeposit: '',
 		lateFeeAmount: '0',
-		leaseNumber: '',
+		leaseNumber: defaultLeaseNumber(today),
 		rentDueDay: '1',
 		rentTrackingStartMode: 'ForwardOnly',
 		rentTrackingStartDate: '',
@@ -635,9 +636,8 @@
 	}));
 
 	function submitLease() {
-		const unit = (leaseUnitsQuery.data ?? []).find((u) => String(u.id) === leaseForm.unitId);
-		const stamp = leaseForm.startDate.replace(/-/g, '');
-		const leaseNumber = leaseForm.leaseNumber.trim() || `L-${unit?.unitNumber ?? leaseForm.unitId}-${stamp}`;
+		const leaseNumber =
+			leaseForm.leaseNumber.trim() || defaultLeaseNumber(new Date(leaseForm.startDate || Date.now()));
 		const result = parseForm(leaseSchema, {
 			leaseNumber,
 			propertyId: leaseForm.propertyId,
