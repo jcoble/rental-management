@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
+	import { tick } from 'svelte';
 	import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { owners } from '$lib/api/endpoints/owners';
@@ -21,7 +22,6 @@
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import InlineField from '$lib/components/shared/InlineField.svelte';
 	import DetailCard from '$lib/components/shared/DetailCard.svelte';
-	import FlipCard from '$lib/components/shared/FlipCard.svelte';
 	import HeroCard, { type HeroTone } from '$lib/components/shared/HeroCard.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
@@ -102,6 +102,29 @@
 		...(ownersQuery.data ?? []).map((o) => ({ value: String(o.id), label: o.name })),
 	]);
 
+	// TSK-599 — field-level container transform. Wrap a view⇄edit state change in a View
+	// Transition and tag <html> so each InlineField's read-only box morphs into its input
+	// in place (see .rc-vt-fieldmorph in app.css), instead of the whole card flipping.
+	// Falls back to an instant toggle where View Transitions are unsupported or the user
+	// prefers reduced motion.
+	function morphEdit(apply: () => void) {
+		const startVT = (
+			document as unknown as {
+				startViewTransition?: (cb: () => Promise<void> | void) => { finished: Promise<unknown> };
+			}
+		).startViewTransition?.bind(document);
+		const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+		if (!startVT || reduce) {
+			apply();
+			return;
+		}
+		document.documentElement.classList.add('rc-vt-fieldmorph');
+		startVT(async () => {
+			apply();
+			await tick();
+		}).finished.finally(() => document.documentElement.classList.remove('rc-vt-fieldmorph'));
+	}
+
 	function startEditingProperty() {
 		if (!property) return;
 		propertyForm = {
@@ -120,12 +143,16 @@
 			manualAnnualDepreciation: property.manualAnnualDepreciation != null ? String(property.manualAnnualDepreciation) : '',
 		};
 		propertyFormErrors = {};
-		editingProperty = true;
+		morphEdit(() => {
+			editingProperty = true;
+		});
 	}
 
 	function cancelEditingProperty() {
-		editingProperty = false;
-		propertyFormErrors = {};
+		morphEdit(() => {
+			editingProperty = false;
+			propertyFormErrors = {};
+		});
 	}
 
 	function submitProperty() {
@@ -152,7 +179,9 @@
 			properties.update(pid, data),
 		onSuccess: () => {
 			showSuccess('Property updated.');
-			editingProperty = false;
+			morphEdit(() => {
+				editingProperty = false;
+			});
 			propertyFormErrors = {};
 			queryClient.invalidateQueries({ queryKey: ['property', id] });
 			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
@@ -397,9 +426,10 @@
 	display: string,
 	error: string | undefined,
 	control: import('svelte').Snippet,
-	editing: boolean
+	editing: boolean,
+	morphName: string
 )}
-	<div data-testid={`${testid}-field`}>
+	<div data-testid={`${testid}-field`} style:view-transition-name={morphName || null}>
 		<label class="mb-1 block text-xs font-medium text-muted-foreground" for={`${testid}-input`}>{label}</label>
 		{#if editing}
 			{@render control()}
@@ -535,32 +565,25 @@
 
 		<!-- Grouped detail cards -->
 		<div class="mb-6 grid gap-6 lg:grid-cols-2">
-			<!-- TSK-599: the whole card flips 3D from read-only to the edit form when Edit is
-			     toggled. One face(editing) snippet renders both sides (front = view, back = edit). -->
-			<FlipCard flipped={editingProperty}>
-				{#snippet face(editing)}
-					<DetailCard title="Identity" icon={Building2} accent="primary" testid="property-detail-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-						<InlineField label="Name" bind:value={propertyForm.name} display={property.name} {editing} error={propertyFormErrors.name} testid="property-detail-name-field" />
-						<InlineField label="Type" bind:value={propertyForm.type} display={formatPropertyType(property.type)} {editing} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" />
-						<InlineField label="Status" bind:value={propertyForm.status} display={formatPropertyStatus(property.status)} {editing} type="select" options={propertyStatusOptions} error={propertyFormErrors.status} testid="property-detail-status" />
-						<InlineField label="Owner" bind:value={propertyForm.ownerEntityId} display={property.ownerName ?? 'No owner assigned'} {editing} type="select" options={ownerOptions} error={propertyFormErrors.ownerEntityId} testid="property-detail-owner" class="sm:col-span-2" />
-					</DetailCard>
-				{/snippet}
-			</FlipCard>
+			<!-- TSK-599: field-level container transform. Each InlineField carries a morphName,
+			     so toggling Edit (via morphEdit → startViewTransition) morphs each read-only box
+			     into its input in place; the card itself stays put. -->
+			<DetailCard title="Identity" icon={Building2} accent="primary" testid="property-detail-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<InlineField label="Name" bind:value={propertyForm.name} display={property.name} editing={editingProperty} error={propertyFormErrors.name} testid="property-detail-name-field" morphName="vt-prop-name" />
+				<InlineField label="Type" bind:value={propertyForm.type} display={formatPropertyType(property.type)} editing={editingProperty} type="select" options={propertyTypeOptions} error={propertyFormErrors.type} testid="property-detail-type" morphName="vt-prop-type" />
+				<InlineField label="Status" bind:value={propertyForm.status} display={formatPropertyStatus(property.status)} editing={editingProperty} type="select" options={propertyStatusOptions} error={propertyFormErrors.status} testid="property-detail-status" morphName="vt-prop-status" />
+				<InlineField label="Owner" bind:value={propertyForm.ownerEntityId} display={property.ownerName ?? 'No owner assigned'} editing={editingProperty} type="select" options={ownerOptions} error={propertyFormErrors.ownerEntityId} testid="property-detail-owner" class="sm:col-span-2" morphName="vt-prop-owner" />
+			</DetailCard>
 
-			<FlipCard flipped={editingProperty}>
-				{#snippet face(editing)}
-					<DetailCard title="Address" icon={MapPin} accent="muted" testid="property-detail-address-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-						<div class="sm:col-span-2">
-							{@render inlineFieldWrap('property-detail-address', 'Address', `${property.addressLine1}${property.addressLine2 ? `, ${property.addressLine2}` : ''}`, propertyFormErrors.addressLine1, addressControl, editing)}
-						</div>
-						<InlineField label="Apt / Suite / Unit #" bind:value={propertyForm.addressLine2} display={property.addressLine2 ?? '—'} {editing} error={propertyFormErrors.addressLine2} testid="property-detail-address2" />
-						<InlineField label="City" bind:value={propertyForm.city} display={property.city} {editing} error={propertyFormErrors.city} testid="property-detail-city" />
-						{@render inlineFieldWrap('property-detail-state', 'State', property.state ?? '', propertyFormErrors.state, stateControl, editing)}
-						<InlineField label="ZIP" bind:value={propertyForm.postalCode} display={property.postalCode} {editing} error={propertyFormErrors.postalCode} testid="property-detail-zip" />
-					</DetailCard>
-				{/snippet}
-			</FlipCard>
+			<DetailCard title="Address" icon={MapPin} accent="muted" testid="property-detail-address-card" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+				<div class="sm:col-span-2">
+					{@render inlineFieldWrap('property-detail-address', 'Address', `${property.addressLine1}${property.addressLine2 ? `, ${property.addressLine2}` : ''}`, propertyFormErrors.addressLine1, addressControl, editingProperty, 'vt-prop-address')}
+				</div>
+				<InlineField label="Apt / Suite / Unit #" bind:value={propertyForm.addressLine2} display={property.addressLine2 ?? '—'} editing={editingProperty} error={propertyFormErrors.addressLine2} testid="property-detail-address2" morphName="vt-prop-address2" />
+				<InlineField label="City" bind:value={propertyForm.city} display={property.city} editing={editingProperty} error={propertyFormErrors.city} testid="property-detail-city" morphName="vt-prop-city" />
+				{@render inlineFieldWrap('property-detail-state', 'State', property.state ?? '', propertyFormErrors.state, stateControl, editingProperty, 'vt-prop-state')}
+				<InlineField label="ZIP" bind:value={propertyForm.postalCode} display={property.postalCode} editing={editingProperty} error={propertyFormErrors.postalCode} testid="property-detail-zip" morphName="vt-prop-zip" />
+			</DetailCard>
 
 			<DetailCard
 				title="Details"
@@ -600,33 +623,30 @@
 				{/if}
 			</DetailCard>
 
-			<!-- Cost basis (depreciation): flips to the edit form like the others (TSK-599). -->
-			<FlipCard flipped={editingProperty} class="lg:col-span-2">
-				{#snippet face(editing)}
-					<DetailCard
-						title="Cost basis (depreciation)"
-						icon={Info}
-						accent="muted"
-						testid="property-detail-basis-card"
-						contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4"
-						help="These fields capture what you paid and when the property was put into service — the inputs your accountant needs for annual depreciation."
-						helpDetail="Purchase price minus land value gives the depreciable basis (land is NOT depreciable). In-service date starts the depreciation clock. Leave Manual annual depreciation blank to use the automatic straight-line calculation; fill it in to override with a custom amount."
-						helpLearnMoreUrl="/docs/cost-basis-depreciation"
-						helpTestid="detailcard-help-cost-basis"
-					>
-						<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? fmtMoney(property.purchasePrice) : '—'} {editing} type="number" error={propertyFormErrors.purchasePrice} testid="property-basis-purchase-price" />
-						<InlineField label="Land value" bind:value={propertyForm.landValue} display={property.landValue != null ? fmtMoney(property.landValue) : '—'} {editing} type="number" error={propertyFormErrors.landValue} testid="property-basis-land-value" />
-						<InlineField label="In-service date" bind:value={propertyForm.inServiceDate} display={property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—'} {editing} type="date" error={propertyFormErrors.inServiceDate} testid="property-basis-in-service" />
-						<InlineField label="Manual annual depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={property.manualAnnualDepreciation != null ? fmtMoney(property.manualAnnualDepreciation) : 'Auto (straight-line)'} {editing} type="number" error={propertyFormErrors.manualAnnualDepreciation} testid="property-basis-manual-depr" />
-						{#if !editing && (property.accumulatedDepreciation ?? 0) > 0}
-							<div class="sm:col-span-2 lg:col-span-4">
-								<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Accumulated depreciation to date</dt>
-								<dd class="mt-1 text-sm tabular-nums text-foreground">{fmtMoney(property.accumulatedDepreciation ?? 0)}</dd>
-							</div>
-						{/if}
-					</DetailCard>
-				{/snippet}
-			</FlipCard>
+			<!-- Cost basis (depreciation): same field-level morph as the others (TSK-599). -->
+			<DetailCard
+				title="Cost basis (depreciation)"
+				icon={Info}
+				accent="muted"
+				testid="property-detail-basis-card"
+				class="lg:col-span-2"
+				contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4"
+				help="These fields capture what you paid and when the property was put into service — the inputs your accountant needs for annual depreciation."
+				helpDetail="Purchase price minus land value gives the depreciable basis (land is NOT depreciable). In-service date starts the depreciation clock. Leave Manual annual depreciation blank to use the automatic straight-line calculation; fill it in to override with a custom amount."
+				helpLearnMoreUrl="/docs/cost-basis-depreciation"
+				helpTestid="detailcard-help-cost-basis"
+			>
+				<InlineField label="Purchase price" bind:value={propertyForm.purchasePrice} display={property.purchasePrice != null ? fmtMoney(property.purchasePrice) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.purchasePrice} testid="property-basis-purchase-price" morphName="vt-prop-purchase" />
+				<InlineField label="Land value" bind:value={propertyForm.landValue} display={property.landValue != null ? fmtMoney(property.landValue) : '—'} editing={editingProperty} type="number" error={propertyFormErrors.landValue} testid="property-basis-land-value" morphName="vt-prop-land" />
+				<InlineField label="In-service date" bind:value={propertyForm.inServiceDate} display={property.inServiceDate ? fmtDateOnly(property.inServiceDate) : '—'} editing={editingProperty} type="date" error={propertyFormErrors.inServiceDate} testid="property-basis-in-service" morphName="vt-prop-inservice" />
+				<InlineField label="Manual annual depreciation" bind:value={propertyForm.manualAnnualDepreciation} display={property.manualAnnualDepreciation != null ? fmtMoney(property.manualAnnualDepreciation) : 'Auto (straight-line)'} editing={editingProperty} type="number" error={propertyFormErrors.manualAnnualDepreciation} testid="property-basis-manual-depr" morphName="vt-prop-manualdepr" />
+				{#if !editingProperty && (property.accumulatedDepreciation ?? 0) > 0}
+					<div class="sm:col-span-2 lg:col-span-4">
+						<dt class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Accumulated depreciation to date</dt>
+						<dd class="mt-1 text-sm tabular-nums text-foreground">{fmtMoney(property.accumulatedDepreciation ?? 0)}</dd>
+					</div>
+				{/if}
+			</DetailCard>
 		</div>
 
 		<!-- Units section -->

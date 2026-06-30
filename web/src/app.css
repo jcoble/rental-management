@@ -1928,6 +1928,31 @@
   }
 }
 
+/* ── Field-level container transform (TSK-599) ────────────────────────────────
+   The property-detail Edit / Save / Cancel toggle wraps its state change in
+   document.startViewTransition() and tags <html class="rc-vt-fieldmorph">. Each
+   InlineField carries its own view-transition-name, so the browser morphs every
+   read-only field box into its input IN PLACE (an M3 container transform at field
+   scale) instead of the page bloom. While that runs we PIN the content + chrome
+   (no bloom, no drift) so re-editing a form repeatedly never feels noisy — only the
+   fields move. */
+:root.rc-vt-fieldmorph::view-transition-group(rc-shell-content),
+:root.rc-vt-fieldmorph::view-transition-old(rc-shell-content),
+:root.rc-vt-fieldmorph::view-transition-new(rc-shell-content),
+:root.rc-vt-fieldmorph::view-transition-group(rc-shell-sidebar),
+:root.rc-vt-fieldmorph::view-transition-group(rc-shell-topbar) {
+  animation: none !important;
+}
+/* Each field box: a quick, emphasized morph — the group tween interpolates its
+   size/position while the old/new pair cross-fades the value text into the input.
+   The universal arg targets every per-field group at once; the explicit !important
+   pins above keep the shell out of it. Browsers without `(*)` fall back to the UA
+   default group timing, which still morphs. */
+:root.rc-vt-fieldmorph::view-transition-group(*) {
+  animation-duration: 300ms;
+  animation-timing-function: var(--m3-motion-easing-emphasized, cubic-bezier(0.2, 0, 0, 1));
+}
+
 /* Custom scrollbar for dark theme */
 @layer base {
   ::-webkit-scrollbar {
