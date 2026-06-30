@@ -14,7 +14,7 @@
 	import { vendors } from '$lib/api/endpoints/vendors';
 	import { properties } from '$lib/api/endpoints/properties';
 	import { workOrders } from '$lib/api/endpoints/workOrders';
-	import type { Payment, Expense, AccountingReports, AccountingSummary, AccountingTransaction } from '$lib/types';
+	import type { Payment, Expense, AccountingReports, AccountingSummary, AccountingTransaction, Vendor, WorkOrder } from '$lib/types';
 	import { recordHref } from '$lib/navigation/record-href';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { PAYMENT_METHODS } from '$lib/constants/payments';
@@ -352,8 +352,8 @@
 		{ id: 'receipt', label: 'Receipt', description: 'Optional details' }
 	];
 	const expenseStepFields = [
-		['description', 'amount', 'subtotal', 'taxAmount', 'incurredAt', 'dueDate', 'paidAt'],
-		['category', 'status', 'propertyId', 'vendorId', 'workOrderId', 'billableToOwner', 'notes'],
+		['workOrderId', 'description', 'amount', 'subtotal', 'taxAmount', 'incurredAt', 'dueDate', 'paidAt'],
+		['category', 'status', 'propertyId', 'vendorId', 'billableToOwner', 'notes'],
 		[
 			'vendorAddress', 'vendorPhone', 'vendorWebsite', 'vendorTaxId', 'receiptNumber',
 			'paymentMethod', 'cardLast4', 'taxRate', 'tip', 'discount', 'shipping'
@@ -467,6 +467,43 @@
 		expenseStep = 0;
 		completedExpenseSteps = [];
 		showExpenseForm = true;
+	}
+	function vendorAddress(vendor: Vendor) {
+		const region = [vendor.state, vendor.postalCode].filter(Boolean).join(' ');
+		const cityLine = [vendor.city, region].filter(Boolean).join(', ');
+		return [vendor.addressLine1, cityLine].filter(Boolean).join(', ');
+	}
+	function fillExpenseTextField(field: keyof typeof emptyExpense, value: string | number | null | undefined) {
+		if (value == null || value === '') return;
+		if (typeof expenseForm[field] === 'boolean') return;
+		if (String(expenseForm[field] ?? '').trim()) return;
+		(expenseForm as Record<string, string | boolean>)[field] = String(value);
+	}
+	function autofillExpenseFromVendor(vendor: Vendor | undefined) {
+		if (!vendor) return;
+		fillExpenseTextField('vendorAddress', vendorAddress(vendor));
+		fillExpenseTextField('vendorPhone', vendor.phone);
+		fillExpenseTextField('vendorTaxId', vendor.taxId);
+	}
+	function autofillExpenseFromVendorId(vendorId: string) {
+		if (!vendorId) return;
+		const vendor = (vendorsQuery.data || []).find((v) => String(v.id) === vendorId);
+		autofillExpenseFromVendor(vendor);
+	}
+	function autofillExpenseFromWorkOrder(workOrder: WorkOrder | undefined) {
+		if (!workOrder) return;
+		fillExpenseTextField('propertyId', workOrder.propertyId);
+		fillExpenseTextField('description', workOrder.title);
+		fillExpenseTextField('amount', workOrder.actualCost ?? workOrder.estimatedCost);
+		if (workOrder.vendorId && !expenseForm.vendorId) {
+			expenseForm.vendorId = String(workOrder.vendorId);
+			autofillExpenseFromVendorId(expenseForm.vendorId);
+		}
+	}
+	function autofillExpenseFromWorkOrderId(workOrderId: string) {
+		if (!workOrderId) return;
+		const workOrder = (workOrdersQuery.data || []).find((wo) => String(wo.id) === workOrderId);
+		autofillExpenseFromWorkOrder(workOrder);
 	}
 	function closeExpenseForm() {
 		showExpenseForm = false;
@@ -1409,6 +1446,27 @@
 			<div class="space-y-4" data-testid="expense-form">
 				{#if expenseStep === 0}
 					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Work order</span>
+						<Select.Root
+							type="single"
+							value={expenseForm.workOrderId}
+							onValueChange={(value) => {
+								expenseForm.workOrderId = value;
+								autofillExpenseFromWorkOrderId(value);
+							}}
+						>
+							<Select.Trigger class="w-full" data-testid="expense-workorder-input">
+								{selectedWorkOrderLabel ?? 'No work order'}
+							</Select.Trigger>
+							<Select.Content>
+								<Select.Item value="" label="No work order">No work order</Select.Item>
+								{#each workOrdersQuery.data || [] as wo}
+									<Select.Item value={String(wo.id)} label={wo.title}>{wo.title}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+					<div>
 						<span class="mb-1 block text-xs text-muted-foreground">Description</span>
 						<Input data-testid="expense-description-input" bind:value={expenseForm.description} placeholder="Description" />
 						{#if expenseErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expense-description-error">{expenseErrors.description}</p>{/if}
@@ -1474,7 +1532,7 @@
 							</Select.Root>
 						</div>
 					</div>
-					<div class="grid gap-2 sm:grid-cols-3">
+					<div class="grid gap-2 sm:grid-cols-2">
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Property</span>
 							<Select.Root type="single" bind:value={expenseForm.propertyId}>
@@ -1491,7 +1549,14 @@
 						</div>
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Vendor</span>
-							<Select.Root type="single" bind:value={expenseForm.vendorId}>
+							<Select.Root
+								type="single"
+								value={expenseForm.vendorId}
+								onValueChange={(value) => {
+									expenseForm.vendorId = value;
+									autofillExpenseFromVendorId(value);
+								}}
+							>
 								<Select.Trigger class="w-full" data-testid="expense-vendor-input">
 									{selectedVendorLabel ?? 'No vendor'}
 								</Select.Trigger>
@@ -1499,20 +1564,6 @@
 									<Select.Item value="" label="No vendor">No vendor</Select.Item>
 									{#each vendorsQuery.data || [] as vendor}
 										<Select.Item value={String(vendor.id)} label={vendor.name}>{vendor.name}</Select.Item>
-									{/each}
-								</Select.Content>
-							</Select.Root>
-						</div>
-						<div>
-							<span class="mb-1 block text-xs text-muted-foreground">Work order</span>
-							<Select.Root type="single" bind:value={expenseForm.workOrderId}>
-								<Select.Trigger class="w-full" data-testid="expense-workorder-input">
-									{selectedWorkOrderLabel ?? 'No work order'}
-								</Select.Trigger>
-								<Select.Content>
-									<Select.Item value="" label="No work order">No work order</Select.Item>
-									{#each workOrdersQuery.data || [] as wo}
-										<Select.Item value={String(wo.id)} label={wo.title}>{wo.title}</Select.Item>
 									{/each}
 								</Select.Content>
 							</Select.Root>

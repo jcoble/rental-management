@@ -21,15 +21,25 @@ class WorkOrdersRepository {
 
   final Dio _dio;
 
-  Future<List<WorkOrder>> listWorkOrders({int? propertyId}) async {
+  Future<List<WorkOrder>> listWorkOrders({
+    int? propertyId,
+    int? unitId,
+    int? vendorId,
+    bool openOnly = false,
+    int take = 50,
+    String sort = '-updatedAt',
+  }) async {
     try {
-      final params = <String, dynamic>{};
+      final params = <String, dynamic>{'take': take, 'sort': sort};
       if (propertyId != null) params['propertyId'] = propertyId;
-      final response = await _dio.get<List<dynamic>>(
-        '/work-orders',
-        queryParameters: params.isEmpty ? null : params,
+      if (unitId != null) params['unitId'] = unitId;
+      if (vendorId != null) params['vendorId'] = vendorId;
+      if (openOnly) params['openOnly'] = true;
+      final response = await _dio.get<Map<String, dynamic>>(
+        '/work-orders/page',
+        queryParameters: params,
       );
-      final data = response.data ?? [];
+      final data = response.data?['items'] as List<dynamic>? ?? [];
       return data
           .whereType<Map<String, dynamic>>()
           .map(WorkOrder.fromJson)
@@ -228,16 +238,13 @@ class WorkOrdersNotifier extends Notifier<AsyncValue<List<WorkOrder>>> {
 
   WorkOrdersRepository get _repo => ref.read(workOrdersRepositoryProvider);
 
-  static const _closedStatuses = {'Completed', 'Cancelled'};
-
   Future<void> load() async {
     state = const AsyncValue.loading();
     try {
-      final all = await _repo.listWorkOrders();
-      final filtered = _filter == WorkOrderFilter.open
-          ? all.where((w) => !_closedStatuses.contains(w.status)).toList()
-          : all;
-      state = AsyncValue.data(filtered);
+      final workOrders = await _repo.listWorkOrders(
+        openOnly: _filter == WorkOrderFilter.open,
+      );
+      state = AsyncValue.data(workOrders);
     } on ApiException catch (e) {
       state = AsyncValue.error(e, StackTrace.current);
     }
@@ -255,16 +262,16 @@ class WorkOrdersNotifier extends Notifier<AsyncValue<List<WorkOrder>>> {
   Future<void> updateStatus(int id, String status) async {
     try {
       final updated = await _repo.updateStatus(id, status);
+      if (_filter == WorkOrderFilter.open) {
+        await load();
+        return;
+      }
       state.whenData((list) {
         final newList = [
           for (final w in list)
             if (w.id == id) updated else w,
         ];
-        // Re-apply filter so closed items disappear from the open view.
-        final filtered = _filter == WorkOrderFilter.open
-            ? newList.where((w) => !_closedStatuses.contains(w.status)).toList()
-            : newList;
-        state = AsyncValue.data(filtered);
+        state = AsyncValue.data(newList);
       });
     } on ApiException catch (e) {
       state = AsyncValue.error(e, StackTrace.current);
@@ -348,12 +355,11 @@ final workOrderDocumentsProvider = FutureProvider.autoDispose
     });
 
 /// Raw bytes for a single document, used to render authenticated thumbnails.
-final documentBytesProvider = FutureProvider.autoDispose
-    .family<Uint8List, int>((ref, documentId) {
-      return ref.watch(workOrdersRepositoryProvider).downloadDocument(
-        documentId,
-      );
-    });
+final documentBytesProvider = FutureProvider.autoDispose.family<Uint8List, int>(
+  (ref, documentId) {
+    return ref.watch(workOrdersRepositoryProvider).downloadDocument(documentId);
+  },
+);
 
 // ── Properties for dropdown ───────────────────────────────────────────────────
 
