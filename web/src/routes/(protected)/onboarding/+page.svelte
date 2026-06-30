@@ -2048,7 +2048,7 @@
 	open={propertyDeleteTarget !== null}
 	title="Delete property"
 	message={propertyDeleteTarget
-		? `Delete "${propertyOptionLabel(propertyDeleteTarget)}"? Only draft properties with no units or history can be deleted. Properties with units, leases, applications, work orders, expenses, loans, inspections, appointments, or documents stay preserved.`
+		? `Delete "${propertyOptionLabel(propertyDeleteTarget)}"? Only draft properties with no real units or history can be deleted. Empty single-family properties delete their generated unit too. Properties with leases, applications, work orders, expenses, loans, inspections, appointments, or documents stay preserved.`
 		: ''}
 	confirmLabel="Delete property"
 	busy={deletePropertyMutation.isPending}
