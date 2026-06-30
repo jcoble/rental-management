@@ -15,6 +15,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import { leaseRentTrackingErrors, leaseSchema, parseForm } from '$lib/schemas';
+	import { defaultLeaseNumber } from '$lib/leases/lease-number';
 	import { LEASE_STATUSES } from '$lib/leases/lease-list-state';
 	import { clearFieldError } from '$lib/forms/form-errors';
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
@@ -120,7 +121,7 @@
 
 	function createBlankLeaseForm(): UnitLeaseCreateForm {
 		return {
-			leaseNumber: '',
+			leaseNumber: defaultLeaseNumber(),
 			propertyId: '',
 			unitId: '',
 			tenantId: '',

@@ -69,12 +69,20 @@ export async function downloadDocument(id: number, fileName: string): Promise<vo
  * URL.revokeObjectURL when done.
  */
 export async function fileObjectUrl(id: number, options?: { thumb?: boolean }): Promise<string> {
+	const blob = await fileBlob(id, options);
+	return URL.createObjectURL(blob);
+}
+
+/**
+ * Fetch the document blob through the cookie-authenticated proxy. Used by inline renderers that
+ * need the raw bytes rather than a browser object URL.
+ */
+export async function fileBlob(id: number, options?: { thumb?: boolean }): Promise<Blob> {
 	const response = await fetch(documentFileHref(id, options), { credentials: 'include' });
 
 	if (!response.ok) {
 		throw new Error(`Document fetch failed (${response.status})`);
 	}
 
-	const blob = await response.blob();
-	return URL.createObjectURL(blob);
+	return response.blob();
 }

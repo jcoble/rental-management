@@ -22,6 +22,7 @@
 	import { beginNewRentalDraftNavigation, createNewRentalPropertyForm, findNewRentalExistingUnitId, formatNewRentalStepLabel, formatNewRentalStepPosition, parseNewRentalDraftId, seedNewRentalLateFeeAmount, type NewRentalPhase } from '$lib/scan/new-rental-state';
 	import { prepareNewRentalPhotoUpload } from '$lib/scan/new-rental-upload';
 	import { showError, apiErrorMessage } from '$lib/utils/toast';
+	import { defaultLeaseNumber } from '$lib/leases/lease-number';
 
 	const portfolioId = getCurrentPortfolioId();
 
@@ -41,7 +42,7 @@
 	let unitForm = $state({ unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' });
 	let tenantForm = $state({ firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' });
 	let leaseForm = $state({
-		leaseNumber: '',
+		leaseNumber: defaultLeaseNumber(),
 		startDate: '',
 		endDate: '',
 		monthlyRent: '',
@@ -91,7 +92,7 @@
 		unitForm = { unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' };
 		tenantForm = { firstName: '', lastName: '', email: '', phone: '', emergencyContact: '' };
 		leaseForm = {
-			leaseNumber: '',
+			leaseNumber: defaultLeaseNumber(),
 			startDate: '',
 			endDate: '',
 			monthlyRent: '',
@@ -194,7 +195,7 @@
 		tenantForm.phone = values.tenantPhone;
 		tenantForm.emergencyContact = values.tenantEmergencyContact;
 		// seed lease terms
-		leaseForm.leaseNumber = values.leaseNumber;
+		leaseForm.leaseNumber = values.leaseNumber || defaultLeaseNumber(new Date(values.startDate || Date.now()));
 		leaseForm.startDate = values.startDate;
 		leaseForm.endDate = values.endDate;
 		leaseForm.monthlyRent = values.monthlyRent;
@@ -331,7 +332,8 @@
 		if (tenantForm.phone.trim()) o.tenantPhone = tenantForm.phone.trim();
 		if (tenantForm.emergencyContact.trim()) o.tenantEmergencyContact = tenantForm.emergencyContact.trim();
 		// lease terms
-		o.leaseNumber = leaseForm.leaseNumber.trim();
+		o.leaseNumber =
+			leaseForm.leaseNumber.trim() || defaultLeaseNumber(new Date(leaseForm.startDate || Date.now()));
 		o.startDate = leaseForm.startDate;
 		o.endDate = leaseForm.endDate;
 		if (leaseForm.monthlyRent.trim()) o.monthlyRent = Number(leaseForm.monthlyRent);
