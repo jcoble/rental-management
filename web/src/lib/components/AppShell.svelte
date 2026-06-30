@@ -101,6 +101,7 @@
 	// "Scan / Edit" action, one tap away and outside any group.
 	const pinnedNavItems: NavItem[] = [
 		{ href: '/', label: 'Dashboard', icon: LayoutDashboard },
+		{ href: '/onboarding', label: 'Guided Setup', icon: ClipboardList, roles: ['Admin', 'Manager', 'Agent'] },
 		{ href: '/scan', label: 'Scan / Edit', icon: ScanLine, roles: ['Admin', 'Manager', 'Agent'] }
 	];
 
@@ -184,6 +185,7 @@
 	// glyph here MUST be in the self-hosted subset (src/lib/styles/material-symbols.css).
 	const navGlyphByHref: Record<string, string> = {
 		'/': 'space_dashboard',
+		'/onboarding': 'rocket_launch',
 		'/scan': 'document_scanner',
 		'/accounting': 'account_balance_wallet',
 		'/deposits': 'savings',
