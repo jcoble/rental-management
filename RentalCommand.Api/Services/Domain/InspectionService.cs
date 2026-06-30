@@ -337,13 +337,18 @@ public class InspectionService : IInspectionService
 
     public async Task<InspectionItemResponse?> UpdateItemAsync(int portfolioId, int inspectionId, int itemId, UpdateInspectionItemRequest request, CancellationToken ct = default)
     {
-        var item = await _db.InspectionItems
-            .FirstOrDefaultAsync(it => it.Id == itemId && it.InspectionId == inspectionId && it.PortfolioId == portfolioId, ct);
-        if (item == null)
+        var target = await _db.InspectionItems
+            .Where(it => it.Id == itemId && it.InspectionId == inspectionId && it.PortfolioId == portfolioId)
+            .Select(it => new { Item = it, InspectionStatus = it.Inspection!.Status })
+            .FirstOrDefaultAsync(ct);
+        if (target == null)
         {
             return null;
         }
 
+        EnsureChecklistItemEditable(target.InspectionStatus);
+
+        var item = target.Item;
         if (request.Result.HasValue) item.Result = request.Result.Value;
         if (request.Note != null) item.Note = request.Note;
 
@@ -355,9 +360,11 @@ public class InspectionService : IInspectionService
 
     public async Task<InspectionItemResponse?> AttachItemPhotoAsync(int portfolioId, int inspectionId, int itemId, int storedFileId, CancellationToken ct = default)
     {
-        var item = await _db.InspectionItems
-            .FirstOrDefaultAsync(it => it.Id == itemId && it.InspectionId == inspectionId && it.PortfolioId == portfolioId, ct);
-        if (item == null)
+        var target = await _db.InspectionItems
+            .Where(it => it.Id == itemId && it.InspectionId == inspectionId && it.PortfolioId == portfolioId)
+            .Select(it => new { Item = it, InspectionStatus = it.Inspection!.Status })
+            .FirstOrDefaultAsync(ct);
+        if (target == null)
         {
             return null;
         }
@@ -370,6 +377,9 @@ public class InspectionService : IInspectionService
             return null;
         }
 
+        EnsureChecklistItemEditable(target.InspectionStatus);
+
+        var item = target.Item;
         item.PhotoStoredFileId = storedFileId;
         await TouchInspectionAsync(inspectionId, portfolioId, ct);
         await _db.SaveChangesAsync(ct);
@@ -740,6 +750,16 @@ public class InspectionService : IInspectionService
             .ThenBy(i => i.Id)
             .Select(i => new ValueTuple<string, string, int>(i.Area, i.Label, i.SortOrder))
             .ToListAsync(ct);
+    }
+
+    private static void EnsureChecklistItemEditable(InspectionStatus inspectionStatus)
+    {
+        if (inspectionStatus == InspectionStatus.Completed)
+        {
+            throw new DomainValidationException(
+                "This completed inspection is read-only. Reopen or schedule a new inspection before changing checklist items.",
+                statusCode: 409);
+        }
     }
 
     private async Task TouchInspectionAsync(int inspectionId, int portfolioId, CancellationToken ct)

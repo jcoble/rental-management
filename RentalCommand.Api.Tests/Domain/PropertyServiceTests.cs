@@ -1,5 +1,6 @@
 using System.Data.Common;
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Moq;
 using RentalCommand.Api.DTOs;
@@ -200,6 +201,20 @@ public class PropertyServiceTests : IDisposable
         ex.Which.Message.Should().Contain("active lease");
         (await _sut.GetAsync(PortfolioId, property.Id))
             .Should().NotBeNull("a property with an occupying lease must not be deleted");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_SoftDeletesEmptyCanonicalUnitForPropertyUnitTypes()
+    {
+        var created = await _sut.CreateAsync(PortfolioId, NewProperty("Empty House", PropertyType.SingleFamily));
+        created.Should().NotBeNull();
+        var unit = _ctx.Db.Units.Single(u => u.PropertyId == created!.Id);
+
+        var deleted = await _sut.DeleteAsync(PortfolioId, created!.Id);
+
+        deleted.Should().BeTrue();
+        (await _sut.GetAsync(PortfolioId, created.Id)).Should().BeNull();
+        _ctx.Db.Units.IgnoreQueryFilters().Single(u => u.Id == unit.Id).DeletedAt.Should().NotBeNull();
     }
 
     [Fact]

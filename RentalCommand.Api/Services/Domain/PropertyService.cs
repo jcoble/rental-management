@@ -309,12 +309,27 @@ public class PropertyService : IPropertyService
         // property was already confirmed in-portfolio above, so PropertyId == id is correctly scoped.
         var liveUnitCount = await _db.Units
             .CountAsync(u => u.PropertyId == id, ct);
+        Unit? canonicalUnitToDelete = null;
         if (liveUnitCount > 0)
         {
-            var unitNoun = liveUnitCount == 1 ? "unit" : "units";
-            throw new DomainValidationException(
-                $"This property still has {liveUnitCount} {unitNoun}. Remove the {unitNoun} before deleting this property.",
-                statusCode: 409);
+            if (liveUnitCount == 1 && IsPropertyUnitType(entity.PropertyType))
+            {
+                var unit = await _db.Units
+                    .FirstAsync(u => u.PropertyId == id, ct);
+                if (string.Equals(unit.UnitNumber, CanonicalUnitNumber(entity.Name), StringComparison.Ordinal))
+                {
+                    await EnsureUnitHasNoHistoryAsync(portfolioId, unit.Id, ct);
+                    canonicalUnitToDelete = unit;
+                }
+            }
+
+            if (canonicalUnitToDelete == null)
+            {
+                var unitNoun = liveUnitCount == 1 ? "unit" : "units";
+                throw new DomainValidationException(
+                    $"This property still has {liveUnitCount} {unitNoun}. Remove the {unitNoun} before deleting this property.",
+                    statusCode: 409);
+            }
         }
 
         // Safety net for the orphan edge case: an occupying lease whose unit was already soft-deleted
@@ -333,9 +348,20 @@ public class PropertyService : IPropertyService
 
         await EnsurePropertyHasNoHistoryAsync(portfolioId, id, ct);
 
-        entity.DeletedAt = DateTime.UtcNow;
+        var now = DateTime.UtcNow;
+        if (canonicalUnitToDelete != null)
+        {
+            canonicalUnitToDelete.DeletedAt = now;
+            canonicalUnitToDelete.UpdatedAt = now;
+        }
+        entity.DeletedAt = now;
+        entity.UpdatedAt = now;
         await _db.SaveChangesAsync(ct);
 
+        if (canonicalUnitToDelete != null)
+        {
+            await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, UnitEntityType, canonicalUnitToDelete.Id, ct);
+        }
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
     }
@@ -501,6 +527,91 @@ public class PropertyService : IPropertyService
         {
             throw new DomainValidationException(
                 "This property has document history. Archive the documents instead of deleting the property.",
+                statusCode: 409);
+        }
+    }
+
+    private async Task EnsureUnitHasNoHistoryAsync(int portfolioId, int unitId, CancellationToken ct)
+    {
+        if (await _db.Leases
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(l => l.PortfolioId == portfolioId && l.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has lease history. Archive or end the lease history instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.WorkOrders
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(w => w.PortfolioId == portfolioId && w.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has work order history. Archive the work order history instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.Appointments
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(a => a.PortfolioId == portfolioId && a.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has appointment history. Archive the appointment history instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.Inspections
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(i => i.PortfolioId == portfolioId && i.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has inspection history. Archive the inspection history instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.Expenses
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(e => e.PortfolioId == portfolioId && e.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has expense history. Archive the expense history instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.RentalApplications
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(a => a.PortfolioId == portfolioId && a.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has application history. Archive the applications instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.RecurringExpenses
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(e => e.PortfolioId == portfolioId && e.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has recurring expense history. Archive the recurring expense history instead of deleting the unit.",
+                statusCode: 409);
+        }
+
+        if (await _db.StoredFiles
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(f => f.PortfolioId == portfolioId
+                && f.EntityType == UnitEntityType
+                && f.EntityId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has document history. Archive the documents instead of deleting the unit.",
                 statusCode: 409);
         }
     }
