@@ -4,6 +4,7 @@
 	import { toast } from 'svelte-sonner';
 	import { scan } from '$lib/api/scan';
 	import { properties } from '$lib/api/endpoints/properties';
+	import { tenants } from '$lib/api/endpoints/tenants';
 	import { Button } from '$lib/components/ui/button';
 	import * as Select from '$lib/components/ui/select';
 	import { Loader2 } from '@lucide/svelte';
@@ -81,7 +82,9 @@
 	const CREATE = '__create__';
 	let propertyChoice = $state<string>(CREATE); // a real id string => link; CREATE => create-new
 	let unitChoice = $state<string>(CREATE);      // existing unit id, or CREATE
+	let tenantChoice = $state<string>(CREATE);    // existing tenant id, or CREATE
 	const isCreatingProperty = $derived(propertyChoice === CREATE);
+	const isCreatingTenant = $derived(tenantChoice === CREATE);
 
 	const propertiesQuery = createQuery(() => ({
 		queryKey: ['properties', portfolioId],
@@ -92,6 +95,11 @@
 		queryKey: ['units-for-new-rental', propertyChoice],
 		queryFn: () => properties.listUnits(Number(propertyChoice)),
 		enabled: phase === 'steps' && propertyChoice !== CREATE && !!propertyChoice
+	}));
+	const tenantsQuery = createQuery(() => ({
+		queryKey: ['tenants', portfolioId],
+		queryFn: () => tenants.list(portfolioId, { take: 200 }),
+		enabled: phase === 'steps'
 	}));
 
 	function resetReviewStateForDraft() {
@@ -123,6 +131,7 @@
 		autoFilled = new Set();
 		propertyChoice = CREATE;
 		unitChoice = CREATE;
+		tenantChoice = CREATE;
 		seeded = false;
 		unitChoiceSeeded = false;
 	}
@@ -235,6 +244,7 @@
 		if (prop?.action === 'link' && prop.existingId != null) propertyChoice = String(prop.existingId);
 		else propertyChoice = CREATE;
 		unitChoice = CREATE;
+		tenantChoice = CREATE;
 		unitChoiceSeeded = false;
 		seeded = true;
 		phase = 'steps';
@@ -283,6 +293,7 @@
 			return !r.errors;
 		}
 		if (i === 2) {
+			if (tenantChoice !== CREATE) { tenantErrors = {}; return !!tenantChoice; }
 			const r = parseForm(tenantSchema, tenantForm);
 			tenantErrors = r.errors ?? {};
 			return !r.errors;
@@ -315,6 +326,11 @@
 		const u = unitsQuery.data?.find((u) => String(u.id) === unitChoice);
 		return u ? `Unit ${u.unitNumber}` : 'Select a unit';
 	});
+	const selectedExistingTenantLabel = $derived.by(() => {
+		if (tenantChoice === CREATE) return 'Create new from the lease';
+		const t = tenantsQuery.data?.find((t) => String(t.id) === tenantChoice);
+		return t ? t.fullName || `${t.firstName} ${t.lastName}`.trim() : 'Select a tenant';
+	});
 
 	// ----- confirm: emit Contract-3 override JSON, ONE ConfirmAsLeaseAsync -----
 	function buildOverrides(): string {
@@ -338,12 +354,16 @@
 			if (unitForm.bedrooms.trim()) o.unitBedrooms = Number(unitForm.bedrooms);
 			if (unitForm.bathrooms.trim()) o.unitBathrooms = Number(unitForm.bathrooms);
 		}
-		// tenant: always create/match by name from the tenant step (no tenant linking in this flow yet)
-		const fullName = `${tenantForm.firstName} ${tenantForm.lastName}`.trim();
-		if (fullName) o.tenantName = fullName;
-		if (tenantForm.email.trim()) o.tenantEmail = tenantForm.email.trim();
-		if (tenantForm.phone.trim()) o.tenantPhone = tenantForm.phone.trim();
-		if (tenantForm.emergencyContact.trim()) o.tenantEmergencyContact = tenantForm.emergencyContact.trim();
+		// tenant: link an existing tenant (trusted id), or create/match by name from the tenant step
+		if (tenantChoice !== CREATE) {
+			o.tenantId = Number(tenantChoice);
+		} else {
+			const fullName = `${tenantForm.firstName} ${tenantForm.lastName}`.trim();
+			if (fullName) o.tenantName = fullName;
+			if (tenantForm.email.trim()) o.tenantEmail = tenantForm.email.trim();
+			if (tenantForm.phone.trim()) o.tenantPhone = tenantForm.phone.trim();
+			if (tenantForm.emergencyContact.trim()) o.tenantEmergencyContact = tenantForm.emergencyContact.trim();
+		}
 		// lease terms
 		o.leaseNumber =
 			leaseForm.leaseNumber.trim() || defaultLeaseNumber(new Date(leaseForm.startDate || Date.now()));
@@ -473,7 +493,24 @@
 	{:else if step === 2}
 		<div class="space-y-3" data-testid="new-rental-step-tenant">
 			<h2 class="text-base font-semibold text-foreground">Tenant</h2>
-			<TenantFields bind:form={tenantForm} errors={tenantErrors} {autoFilled} testidPrefix="new-rental-tenant" />
+			<div>
+				<p class="mb-1 text-xs font-medium text-muted-foreground">Is this one of your existing tenants?</p>
+				<Select.Root type="single" bind:value={tenantChoice}>
+					<Select.Trigger class="w-full" data-testid="new-rental-tenant-choice">{selectedExistingTenantLabel}</Select.Trigger>
+					<Select.Content>
+						<Select.Item value={CREATE} label="Create new from the lease">Create new from the lease</Select.Item>
+						{#each tenantsQuery.data ?? [] as t (t.id)}
+							<Select.Item value={String(t.id)} label={t.fullName || `${t.firstName} ${t.lastName}`}>{t.fullName || `${t.firstName} ${t.lastName}`}</Select.Item>
+						{/each}
+					</Select.Content>
+				</Select.Root>
+				{#if tenantsQuery.data && tenantsQuery.data.length > 0 && isCreatingTenant}
+					<p class="mt-1 text-xs text-[var(--warning)]" data-testid="new-rental-tenant-dupe-hint">If this lease is for someone you already have, pick them above to avoid a duplicate.</p>
+				{/if}
+			</div>
+			{#if isCreatingTenant}
+				<TenantFields bind:form={tenantForm} errors={tenantErrors} {autoFilled} testidPrefix="new-rental-tenant" />
+			{/if}
 		</div>
 	{:else if step === 3}
 		<div class="space-y-3" data-testid="new-rental-step-lease">
@@ -493,7 +530,10 @@
 					{#if !isCreatingProperty && unitChoice !== CREATE}{selectedExistingUnitLabel} <span class="text-xs text-muted-foreground">(existing)</span>
 					{:else}Unit {unitForm.unitNumber} <span class="text-xs text-[var(--success)]">(new)</span>{/if}
 				</li>
-				<li data-testid="review-tenant"><span class="font-medium">Tenant:</span> {`${tenantForm.firstName} ${tenantForm.lastName}`.trim() || '—'}</li>
+				<li data-testid="review-tenant"><span class="font-medium">Tenant:</span>
+					{#if tenantChoice !== CREATE}{selectedExistingTenantLabel} <span class="text-xs text-muted-foreground">(existing)</span>
+					{:else}{`${tenantForm.firstName} ${tenantForm.lastName}`.trim() || '—'} <span class="text-xs text-[var(--success)]">(new)</span>{/if}
+				</li>
 				<li data-testid="review-lease"><span class="font-medium">Lease:</span> ${leaseForm.monthlyRent}/mo, {leaseForm.startDate} – {leaseForm.endDate}</li>
 			</ul>
 			<p class="text-xs text-muted-foreground">Nothing is saved until you tap Confirm. We'll create everything in one step.</p>
