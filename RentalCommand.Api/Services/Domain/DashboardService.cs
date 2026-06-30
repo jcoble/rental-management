@@ -225,10 +225,19 @@ public class DashboardService : IDashboardService
             .ToListAsync(ct);
 
         var byStatus = byStatusRaw.ToDictionary(g => g.Status.ToString(), g => g.Count);
-        var totalLeases = byStatusRaw.Sum(g => g.Count);
-        var activeLeases = byStatusRaw
-            .Where(g => g.Status == LeaseStatus.Active)
-            .Sum(g => g.Count);
+        var leaseCounts = await _db.Leases
+            .AsNoTracking()
+            .Where(l => l.PortfolioId == portfolioId)
+            .GroupBy(_ => 1)
+            .Select(g => new
+            {
+                Total = g.Count(),
+                Active = g.Count(l => l.Status == LeaseStatus.Active),
+            })
+            .SingleOrDefaultAsync(ct);
+
+        var totalLeases = leaseCounts?.Total ?? 0;
+        var activeLeases = leaseCounts?.Active ?? 0;
 
         // Active leases ending within 60 days, with tenant/property/unit labels joined in.
         var expiring = await _db.Leases
