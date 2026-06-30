@@ -19,6 +19,7 @@
 export type WizardStepKey =
 	| 'portfolio'
 	| 'owner'
+	| 'import'
 	| 'property'
 	| 'tenants'
 	| 'lease'
@@ -80,6 +81,18 @@ export const WIZARD_STEPS: WizardStepMeta[] = [
 		whereToFind:
 			'The owner name and tax ID are on your property deed, your LLC paperwork, or a past tax return (Schedule E / 1099). The tax ID is an SSN for a person or an EIN for an LLC/trust.',
 		docsSlug: 'getting-started',
+		core: true,
+	},
+	{
+		key: 'import',
+		label: 'Import a lease',
+		title: "Scan a lease — we'll build the rest",
+		icon: 'FileText',
+		explanation:
+			"Have a signed lease? Snap a photo or upload it and the computer reads it — then creates the property, the unit, and the tenant, and ties the lease to them, all at once. You just confirm what it found. No lease handy? Skip this and add things by hand.",
+		whereToFind:
+			'Any signed lease agreement works — a phone photo or a PDF. We pull the address, the tenant, the rent, the dates, and the deposit straight off the page.',
+		docsSlug: 'leases',
 		core: true,
 	},
 	{
