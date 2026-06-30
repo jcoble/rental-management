@@ -86,7 +86,7 @@
 			<span class="text-xs font-medium text-muted-foreground">Monthly rent</span>
 			<AutoFilledBadge show={filled('monthlyRent')} confidence={conf('monthlyRent')} />
 		</div>
-		<Input data-testid={`${testidPrefix}-rent-input`} bind:value={form.monthlyRent} placeholder="Monthly rent" />
+		<Input data-testid={`${testidPrefix}-rent-input`} bind:value={form.monthlyRent} placeholder="Monthly rent" inputmode="decimal" mask="currency" />
 		{#if errors.monthlyRent}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-rent-error`}>{errors.monthlyRent}</p>{/if}
 	</div>
 	<div>
@@ -94,7 +94,7 @@
 			<span class="text-xs font-medium text-muted-foreground">Security deposit</span>
 			<AutoFilledBadge show={filled('securityDeposit')} confidence={conf('securityDeposit')} />
 		</div>
-		<Input data-testid={`${testidPrefix}-deposit-input`} bind:value={form.securityDeposit} placeholder="Security deposit" />
+		<Input data-testid={`${testidPrefix}-deposit-input`} bind:value={form.securityDeposit} placeholder="Security deposit" inputmode="decimal" mask="currency" />
 		{#if errors.securityDeposit}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-deposit-error`}>{errors.securityDeposit}</p>{/if}
 	</div>
 	<div class="grid grid-cols-2 gap-2">
@@ -103,7 +103,7 @@
 				<span class="text-xs font-medium text-muted-foreground">Late fee</span>
 				<AutoFilledBadge show={filled('lateFeeAmount')} confidence={conf('lateFeeAmount')} />
 			</div>
-			<Input data-testid={`${testidPrefix}-late-fee-input`} bind:value={form.lateFeeAmount} placeholder="Late fee" />
+			<Input data-testid={`${testidPrefix}-late-fee-input`} bind:value={form.lateFeeAmount} placeholder="Late fee" inputmode="decimal" mask="currency" />
 			{#if errors.lateFeeAmount}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-late-fee-error`}>{errors.lateFeeAmount}</p>{/if}
 		</div>
 		<div>
@@ -111,7 +111,7 @@
 				<span class="text-xs font-medium text-muted-foreground">Due day</span>
 				<AutoFilledBadge show={filled('rentDueDay')} confidence={conf('rentDueDay')} />
 			</div>
-			<Input data-testid={`${testidPrefix}-due-day-input`} bind:value={form.rentDueDay} placeholder="Due day" />
+			<Input data-testid={`${testidPrefix}-due-day-input`} bind:value={form.rentDueDay} placeholder="Due day" inputmode="numeric" maxlength={2} mask="integer" />
 			{#if errors.rentDueDay}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-due-day-error`}>{errors.rentDueDay}</p>{/if}
 		</div>
 	</div>

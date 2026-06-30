@@ -516,6 +516,7 @@
 													<Input
 														type="text"
 														inputmode="decimal"
+														mask="decimal"
 														bind:value={item.quantity}
 														data-testid="expense-detail-line-item-quantity-{i}"
 														class="h-8 text-right font-mono text-sm tabular-nums"
@@ -525,6 +526,7 @@
 													<Input
 														type="text"
 														inputmode="decimal"
+														mask="currency"
 														bind:value={item.unitPrice}
 														data-testid="expense-detail-line-item-unit-price-{i}"
 														class="h-8 text-right font-mono text-sm tabular-nums"
@@ -534,6 +536,7 @@
 													<Input
 														type="text"
 														inputmode="decimal"
+														mask="currency"
 														bind:value={item.amount}
 														data-testid="expense-detail-line-item-amount-{i}"
 														class="h-8 text-right font-mono text-sm tabular-nums"

@@ -1217,7 +1217,7 @@
 			</div>
 			<div class="grid grid-cols-2 gap-2">
 				<div>
-					<Input data-testid="payment-amount-input" bind:value={paymentForm.amount} placeholder="Amount" />
+					<Input data-testid="payment-amount-input" bind:value={paymentForm.amount} placeholder="Amount" type="text" inputmode="decimal" mask="currency" />
 					{#if paymentErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-error">{paymentErrors.amount}</p>{/if}
 				</div>
 				<div>
@@ -1253,7 +1253,7 @@
 			{#if paymentForm.status === 'Partial'}
 				<div>
 					<label for="payment-amount-paid-input" class="mb-1 block text-xs font-medium text-muted-foreground">Amount paid (so far)</label>
-					<Input id="payment-amount-paid-input" data-testid="payment-amount-paid-input" bind:value={paymentForm.amountPaid} placeholder="Amount paid" />
+					<Input id="payment-amount-paid-input" data-testid="payment-amount-paid-input" bind:value={paymentForm.amountPaid} placeholder="Amount paid" type="text" inputmode="decimal" mask="currency" />
 					{#if paymentErrors.amountPaid}
 						<p class="mt-1 text-xs text-destructive" data-testid="payment-amount-paid-error">{paymentErrors.amountPaid}</p>
 					{:else}
@@ -1349,17 +1349,17 @@
 			<div class="grid grid-cols-3 gap-2">
 				<div>
 					<span class="mb-1 block text-xs text-muted-foreground">Amount</span>
-					<Input data-testid="expense-amount-input" bind:value={expenseForm.amount} placeholder="0.00" />
+					<Input data-testid="expense-amount-input" bind:value={expenseForm.amount} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
 					{#if expenseErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expense-amount-error">{expenseErrors.amount}</p>{/if}
 				</div>
 				<div>
 					<span class="mb-1 block text-xs text-muted-foreground">Subtotal</span>
-					<Input data-testid="expense-subtotal-input" bind:value={expenseForm.subtotal} placeholder="0.00" />
+					<Input data-testid="expense-subtotal-input" bind:value={expenseForm.subtotal} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
 					{#if expenseErrors.subtotal}<p class="mt-1 text-xs text-destructive">{expenseErrors.subtotal}</p>{/if}
 				</div>
 				<div>
 					<span class="mb-1 block text-xs text-muted-foreground">Tax</span>
-					<Input data-testid="expense-tax-input" bind:value={expenseForm.taxAmount} placeholder="0.00" />
+					<Input data-testid="expense-tax-input" bind:value={expenseForm.taxAmount} placeholder="0.00" type="text" inputmode="decimal" mask="currency" />
 					{#if expenseErrors.taxAmount}<p class="mt-1 text-xs text-destructive">{expenseErrors.taxAmount}</p>{/if}
 				</div>
 			</div>
@@ -1468,11 +1468,11 @@
 					<div class="grid grid-cols-3 gap-2">
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Vendor phone</span>
-							<Input data-testid="expense-vendor-phone-input" bind:value={expenseForm.vendorPhone} />
+							<Input data-testid="expense-vendor-phone-input" bind:value={expenseForm.vendorPhone} type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
 						</div>
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Vendor website</span>
-							<Input data-testid="expense-vendor-website-input" bind:value={expenseForm.vendorWebsite} />
+							<Input data-testid="expense-vendor-website-input" bind:value={expenseForm.vendorWebsite} type="url" autocomplete="url" />
 						</div>
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Vendor tax ID</span>
@@ -1490,26 +1490,26 @@
 						</div>
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Card last 4</span>
-							<Input data-testid="expense-card-last4-input" bind:value={expenseForm.cardLast4} />
+							<Input data-testid="expense-card-last4-input" bind:value={expenseForm.cardLast4} inputmode="numeric" maxlength={4} mask="cardLast4" />
 						</div>
 					</div>
 					<div class="grid grid-cols-4 gap-2">
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Tax rate</span>
-							<Input data-testid="expense-tax-rate-input" bind:value={expenseForm.taxRate} />
+							<Input data-testid="expense-tax-rate-input" bind:value={expenseForm.taxRate} inputmode="decimal" mask="percentage" />
 							{#if expenseErrors.taxRate}<p class="mt-1 text-xs text-destructive">{expenseErrors.taxRate}</p>{/if}
 						</div>
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Tip</span>
-							<Input data-testid="expense-tip-input" bind:value={expenseForm.tip} />
+							<Input data-testid="expense-tip-input" bind:value={expenseForm.tip} inputmode="decimal" mask="currency" />
 						</div>
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Discount</span>
-							<Input data-testid="expense-discount-input" bind:value={expenseForm.discount} />
+							<Input data-testid="expense-discount-input" bind:value={expenseForm.discount} inputmode="decimal" mask="currency" />
 						</div>
 						<div>
 							<span class="mb-1 block text-xs text-muted-foreground">Shipping</span>
-							<Input data-testid="expense-shipping-input" bind:value={expenseForm.shipping} />
+							<Input data-testid="expense-shipping-input" bind:value={expenseForm.shipping} inputmode="decimal" mask="currency" />
 						</div>
 					</div>
 				</div>

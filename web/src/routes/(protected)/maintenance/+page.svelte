@@ -570,7 +570,7 @@
 			<!-- Estimated cost (optional) -->
 			<div>
 				<label for="work-order-est-cost" class="mb-1 block text-xs font-medium text-muted-foreground">Estimated cost (optional)</label>
-				<Input id="work-order-est-cost" data-testid="work-order-estimated-cost-input" type="number" min="0" step="0.01" bind:value={woForm.estimatedCost} placeholder="0.00" />
+				<Input id="work-order-est-cost" data-testid="work-order-estimated-cost-input" type="text" inputmode="decimal" mask="currency" bind:value={woForm.estimatedCost} placeholder="0.00" />
 				{#if woErrors.estimatedCost}<p class="mt-1 text-xs text-destructive" data-testid="work-order-estimated-cost-error">{woErrors.estimatedCost}</p>{/if}
 			</div>
 		</div>

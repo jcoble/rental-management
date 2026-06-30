@@ -191,7 +191,7 @@
 				</div>
 				<div>
 					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-amount">Amount</label>
-					<Input id="exp-amount" data-testid="expenses-amount-input" type="number" step="0.01" bind:value={createForm.amount} oninput={() => clearCreateError('amount')} placeholder="0.00" />
+					<Input id="exp-amount" data-testid="expenses-amount-input" type="text" inputmode="decimal" mask="currency" bind:value={createForm.amount} oninput={() => clearCreateError('amount')} placeholder="0.00" />
 					{#if createErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expenses-amount-error">{createErrors.amount}</p>{/if}
 				</div>
 				<div>
