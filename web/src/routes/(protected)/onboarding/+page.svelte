@@ -38,6 +38,7 @@
 	import WizardStepScaffold from '$lib/components/onboarding/WizardStepScaffold.svelte';
 	import LeasePhotoPrefill from '$lib/components/onboarding/LeasePhotoPrefill.svelte';
 	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
+	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import {
 		WIZARD_STEPS,
 		CORE_WIZARD_STEPS,
@@ -305,6 +306,7 @@
 	let ownerForm = $state({ name: '', ownerEntityType: 'Person' as OwnerEntityType, email: '', taxId: '' });
 	let ownerErrors = $state<Record<string, string>>({});
 	let selectedOwnerId = $state(NEW_ONBOARDING_OWNER_VALUE);
+	let ownerDeleteTarget = $state<Owner | null>(null);
 	let ownerSelectionPrefilled = false;
 	const ownerRecordOptions = $derived(onboardingOwnerRecordOptions({
 		createdOwner,
@@ -344,6 +346,9 @@
 		}
 		return ownerById(selectedOwnerId)?.name ?? 'Choose owner';
 	});
+	const selectedOwnerRecord = $derived.by(() =>
+		selectedOwnerId === NEW_ONBOARDING_OWNER_VALUE ? null : ownerById(selectedOwnerId)
+	);
 
 	$effect(() => {
 		if (ownerSelectionPrefilled) return;
@@ -389,6 +394,21 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
+	const deleteOwnerMutation = createMutation(() => ({
+		mutationFn: (id: number) => owners.delete(id),
+		onSuccess: (_result, id) => {
+			showSuccess('Owner deleted.');
+			ownerDeleteTarget = null;
+			if (createdOwner?.id === id) createdOwner = null;
+			if (selectedOwnerId === String(id)) selectOwnerRecord(NEW_ONBOARDING_OWNER_VALUE);
+			queryClient.invalidateQueries({ queryKey: ['owners', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
+		},
+		onError: (err) => {
+			ownerDeleteTarget = null;
+			showError(apiErrorMessage(err, 'Owner could not be deleted.'));
+		},
+	}));
 
 	function submitOwner() {
 		const result = parseForm(ownerSchema, {
@@ -428,6 +448,7 @@
 	});
 	let propertyErrors = $state<Record<string, string>>({});
 	let selectedPropertyId = $state(NEW_ONBOARDING_PROPERTY_VALUE);
+	let propertyDeleteTarget = $state<Property | null>(null);
 	let propertySelectionPrefilled = false;
 	const propertyRecordOptions = $derived(onboardingPropertyRecordOptions({
 		createdProperty,
@@ -481,6 +502,9 @@
 		}
 		return propertyById(selectedPropertyId)?.name ?? 'Choose property';
 	});
+	const selectedPropertyRecord = $derived.by(() =>
+		selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE ? null : propertyById(selectedPropertyId)
+	);
 
 	$effect(() => {
 		if (propertySelectionPrefilled) return;
@@ -543,6 +567,25 @@
 			next();
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
+	}));
+	const deletePropertyMutation = createMutation(() => ({
+		mutationFn: (id: number) => properties.delete(id),
+		onSuccess: (_result, id) => {
+			showSuccess('Property deleted.');
+			propertyDeleteTarget = null;
+			if (createdProperty?.id === id) {
+				createdProperty = null;
+				createdUnits = [];
+			}
+			if (selectedPropertyId === String(id)) selectPropertyRecord(NEW_ONBOARDING_PROPERTY_VALUE);
+			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
+			queryClient.invalidateQueries({ queryKey: ['units'] });
+			queryClient.invalidateQueries({ queryKey: ['dashboard', portfolioId] });
+		},
+		onError: (err) => {
+			propertyDeleteTarget = null;
+			showError(apiErrorMessage(err, 'Property could not be deleted.'));
+		},
 	}));
 
 	// Validate just the address fields before advancing the property sub-step.
@@ -974,7 +1017,9 @@
 	const anyPending = $derived(
 		savePortfolioMutation.isPending ||
 			saveOwnerMutation.isPending ||
+			deleteOwnerMutation.isPending ||
 			savePropertyMutation.isPending ||
+			deletePropertyMutation.isPending ||
 			saveTenantsMutation.isPending ||
 			saveLeaseMutation.isPending ||
 			saveNotificationEmailMutation.isPending ||
@@ -1360,19 +1405,37 @@
 							{#if ownerRecordOptions.length > 0}
 								<div class="mb-4 rounded-md border border-border bg-muted/30 p-3" data-testid="onboarding-owner-selector-panel">
 									<label for="ob-owner-selector" class="mb-1 block text-xs font-medium text-muted-foreground">Owner record</label>
-									<Select.Root type="single" bind:value={selectedOwnerId} onValueChange={selectOwnerRecord}>
-										<Select.Trigger id="ob-owner-selector" class="w-full" data-testid="onboarding-owner-record-select">
-											{ownerSelectionLabel}
-										</Select.Trigger>
-										<Select.Content>
-											{#each ownerRecordOptions as owner (owner.id)}
-												<Select.Item value={String(owner.id)} label={ownerOptionLabel(owner)}>{ownerOptionLabel(owner)}</Select.Item>
-											{/each}
-											<Select.Item value={NEW_ONBOARDING_OWNER_VALUE} label="Add a new owner">
-												<span class="inline-flex items-center gap-2"><Plus class="h-3.5 w-3.5" /> Add a new owner</span>
-											</Select.Item>
-										</Select.Content>
-									</Select.Root>
+									<div class="flex items-center gap-2">
+										<div class="min-w-0 flex-1">
+											<Select.Root type="single" bind:value={selectedOwnerId} onValueChange={selectOwnerRecord}>
+												<Select.Trigger id="ob-owner-selector" class="w-full" data-testid="onboarding-owner-record-select">
+													{ownerSelectionLabel}
+												</Select.Trigger>
+												<Select.Content>
+													{#each ownerRecordOptions as owner (owner.id)}
+														<Select.Item value={String(owner.id)} label={ownerOptionLabel(owner)}>{ownerOptionLabel(owner)}</Select.Item>
+													{/each}
+													<Select.Item value={NEW_ONBOARDING_OWNER_VALUE} label="Add a new owner">
+														<span class="inline-flex items-center gap-2"><Plus class="h-3.5 w-3.5" /> Add a new owner</span>
+													</Select.Item>
+												</Select.Content>
+											</Select.Root>
+										</div>
+										{#if selectedOwnerRecord}
+											<Button
+												variant="outline"
+												size="icon"
+												class="text-muted-foreground hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive"
+												aria-label={`Delete owner ${ownerOptionLabel(selectedOwnerRecord)}`}
+												title="Delete owner"
+												data-testid="onboarding-owner-delete"
+												disabled={deleteOwnerMutation.isPending}
+												onclick={() => (ownerDeleteTarget = selectedOwnerRecord)}
+											>
+												<Trash2 class="h-4 w-4" />
+											</Button>
+										{/if}
+									</div>
 									<p class="mt-1 text-xs text-muted-foreground">Pick an owner to edit these fields, or start a fresh owner record.</p>
 								</div>
 							{/if}
@@ -1416,19 +1479,37 @@
 							{#if propertyRecordOptions.length > 0}
 								<div class="mb-4 rounded-md border border-border bg-muted/30 p-3" data-testid="onboarding-property-selector-panel">
 									<label for="ob-property-selector" class="mb-1 block text-xs font-medium text-muted-foreground">Property record</label>
-									<Select.Root type="single" bind:value={selectedPropertyId} onValueChange={selectPropertyRecord}>
-										<Select.Trigger id="ob-property-selector" class="w-full" data-testid="onboarding-property-record-select">
-											{propertySelectionLabel}
-										</Select.Trigger>
-										<Select.Content>
-											{#each propertyRecordOptions as property (property.id)}
-												<Select.Item value={String(property.id)} label={propertyOptionLabel(property)}>{propertyOptionLabel(property)}</Select.Item>
-											{/each}
-											<Select.Item value={NEW_ONBOARDING_PROPERTY_VALUE} label="Add a new property">
-												<span class="inline-flex items-center gap-2"><Plus class="h-3.5 w-3.5" /> Add a new property</span>
-											</Select.Item>
-										</Select.Content>
-									</Select.Root>
+									<div class="flex items-center gap-2">
+										<div class="min-w-0 flex-1">
+											<Select.Root type="single" bind:value={selectedPropertyId} onValueChange={selectPropertyRecord}>
+												<Select.Trigger id="ob-property-selector" class="w-full" data-testid="onboarding-property-record-select">
+													{propertySelectionLabel}
+												</Select.Trigger>
+												<Select.Content>
+													{#each propertyRecordOptions as property (property.id)}
+														<Select.Item value={String(property.id)} label={propertyOptionLabel(property)}>{propertyOptionLabel(property)}</Select.Item>
+													{/each}
+													<Select.Item value={NEW_ONBOARDING_PROPERTY_VALUE} label="Add a new property">
+														<span class="inline-flex items-center gap-2"><Plus class="h-3.5 w-3.5" /> Add a new property</span>
+													</Select.Item>
+												</Select.Content>
+											</Select.Root>
+										</div>
+										{#if selectedPropertyRecord}
+											<Button
+												variant="outline"
+												size="icon"
+												class="text-muted-foreground hover:border-destructive/60 hover:bg-destructive/10 hover:text-destructive"
+												aria-label={`Delete property ${propertyOptionLabel(selectedPropertyRecord)}`}
+												title="Delete property"
+												data-testid="onboarding-property-delete"
+												disabled={deletePropertyMutation.isPending}
+												onclick={() => (propertyDeleteTarget = selectedPropertyRecord)}
+											>
+												<Trash2 class="h-4 w-4" />
+											</Button>
+										{/if}
+									</div>
 									<p class="mt-1 text-xs text-muted-foreground">Pick a property to edit these fields, or start a fresh property record.</p>
 								</div>
 							{/if}
@@ -1811,6 +1892,32 @@
 		{/if}
 	</div>
 </div>
+
+<ConfirmDialog
+	open={ownerDeleteTarget !== null}
+	title="Delete owner"
+	message={ownerDeleteTarget
+		? `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? If this owner is assigned to properties, Rental Command will ask you to reassign or clear those properties first.`
+		: ''}
+	confirmLabel="Delete owner"
+	busy={deleteOwnerMutation.isPending}
+	testid="onboarding-owner-delete-confirm"
+	onconfirm={() => ownerDeleteTarget && deleteOwnerMutation.mutate(ownerDeleteTarget.id)}
+	oncancel={() => (ownerDeleteTarget = null)}
+/>
+
+<ConfirmDialog
+	open={propertyDeleteTarget !== null}
+	title="Delete property"
+	message={propertyDeleteTarget
+		? `Delete "${propertyOptionLabel(propertyDeleteTarget)}"? Properties with units, leases, work orders, expenses, loans, inspections, appointments, or documents must be archived or cleared first.`
+		: ''}
+	confirmLabel="Delete property"
+	busy={deletePropertyMutation.isPending}
+	testid="onboarding-property-delete-confirm"
+	onconfirm={() => propertyDeleteTarget && deletePropertyMutation.mutate(propertyDeleteTarget.id)}
+	oncancel={() => (propertyDeleteTarget = null)}
+/>
 
 <style>
 	@keyframes phase-complete-pop {

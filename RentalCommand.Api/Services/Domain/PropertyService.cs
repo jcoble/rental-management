@@ -272,7 +272,8 @@ public class PropertyService : IPropertyService
         {
             var unitNoun = liveUnitCount == 1 ? "unit" : "units";
             throw new DomainValidationException(
-                $"This property still has {liveUnitCount} {unitNoun}. Remove the {unitNoun} before deleting this property.");
+                $"This property still has {liveUnitCount} {unitNoun}. Remove the {unitNoun} before deleting this property.",
+                statusCode: 409);
         }
 
         // Safety net for the orphan edge case: an occupying lease whose unit was already soft-deleted
@@ -285,13 +286,101 @@ public class PropertyService : IPropertyService
         if (hasOccupyingLease)
         {
             throw new DomainValidationException(
-                "This property has an active lease; end or reassign it first.");
+                "This property has an active lease; end or reassign it first.",
+                statusCode: 409);
         }
+
+        await EnsurePropertyHasNoHistoryAsync(portfolioId, id, ct);
 
         entity.DeletedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
+    }
+
+    private async Task EnsurePropertyHasNoHistoryAsync(int portfolioId, int propertyId, CancellationToken ct)
+    {
+        if (await _db.Leases
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(l => l.PortfolioId == portfolioId && l.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has lease history. Archive or end the lease history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.WorkOrders
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(w => w.PortfolioId == portfolioId && w.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has work order history. Archive the work order history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.Appointments
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(a => a.PortfolioId == portfolioId && a.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has appointment history. Archive the appointment history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.Inspections
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(i => i.PortfolioId == portfolioId && i.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has inspection history. Archive the inspection history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.Expenses
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(e => e.PortfolioId == portfolioId && e.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has expense history. Archive the expense history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.RecurringExpenses
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(e => e.PortfolioId == portfolioId && e.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has recurring expense history. Archive the recurring expense history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.Loans
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(l => l.PortfolioId == portfolioId && l.PropertyId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has loan history. Archive the loan history instead of deleting the property.",
+                statusCode: 409);
+        }
+
+        if (await _db.StoredFiles
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(f => f.PortfolioId == portfolioId
+                && f.EntityType == EntityType
+                && f.EntityId == propertyId, ct))
+        {
+            throw new DomainValidationException(
+                "This property has document history. Archive the documents instead of deleting the property.",
+                statusCode: 409);
+        }
     }
 }

@@ -88,6 +88,55 @@ public class PropertyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteAsync_ThrowsWhenPropertyHasWorkOrderHistory()
+    {
+        var property = SeedPropertyWithUnit(out var unit);
+        _ctx.Db.WorkOrders.Add(new WorkOrder
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            Title = "Patch drywall",
+            Description = "Repair hallway drywall",
+            RequestedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        unit.DeletedAt = DateTime.UtcNow;
+        _ctx.Db.SaveChanges();
+
+        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("work order");
+        ex.Which.Message.Should().Contain("history");
+    }
+
+    [Fact]
+    public async Task DeleteAsync_ThrowsWhenPropertyHasExpenseHistory()
+    {
+        var property = SeedPropertyWithUnit(out var unit);
+        _ctx.Db.Expenses.Add(new Expense
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = property.Id,
+            UnitId = unit.Id,
+            Description = "Paint",
+            Amount = 125m,
+            IncurredAt = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        unit.DeletedAt = DateTime.UtcNow;
+        _ctx.Db.SaveChanges();
+
+        var act = async () => await _sut.DeleteAsync(PortfolioId, property.Id);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("expense");
+        ex.Which.Message.Should().Contain("history");
+    }
+
+    [Fact]
     public async Task DeleteAsync_SoftDeletesWhenNoUnitsOrOccupyingLeases()
     {
         SeedProperties("Standalone");
