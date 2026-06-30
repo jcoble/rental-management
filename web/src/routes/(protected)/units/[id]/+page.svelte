@@ -207,11 +207,10 @@
 			<UnitHeader {dashboard} onEdit={openEditUnit} onScan={() => goScan()} />
 			<LifecycleRail stage={dashboard.lifecycleStage} nextBestAction={dashboard.nextBestAction} onStageClick={setTab} />
 
-			<div class="grid gap-4 lg:grid-cols-[1fr_320px]">
-				<!-- Work tabs -->
-				<div class="min-w-0">
-					<Tabs.Root value={activeTab} onValueChange={setTab}>
-						<Tabs.List class="flex w-full flex-wrap" data-testid="unit-tabs">
+			<div class="min-w-0">
+				<Tabs.Root value={activeTab} onValueChange={setTab}>
+					<div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+						<Tabs.List class="flex w-full flex-wrap sm:flex-1" data-testid="unit-tabs">
 							<Tabs.Trigger value="overview" data-testid="tab-overview">Overview</Tabs.Trigger>
 							<Tabs.Trigger value="lease" data-testid="tab-lease">Lease</Tabs.Trigger>
 							<Tabs.Trigger value="applications" data-testid="tab-applications">Applications</Tabs.Trigger>
@@ -221,43 +220,39 @@
 							<Tabs.Trigger value="expenses" data-testid="tab-expenses">Expenses</Tabs.Trigger>
 							<Tabs.Trigger value="timeline" data-testid="tab-timeline">Timeline</Tabs.Trigger>
 						</Tabs.List>
+						<UnitTimelineRail activities={dashboard.recentTimeline} onViewAll={() => setTab('timeline')} />
+					</div>
 
-						<Tabs.Content value="overview" class="mt-4">
-							<OverviewTab {dashboard} onOpenTab={setTab} />
-						</Tabs.Content>
-						<Tabs.Content value="lease" class="mt-4">
-							<LeaseTab {dashboard} onScan={() => goScan({ type: 'Lease', returnTo: `/units/${dashboard.unit.id}?tab=lease` })} />
-						</Tabs.Content>
-						<Tabs.Content value="applications" class="mt-4">
-							<ApplicationsTab {dashboard} />
-						</Tabs.Content>
-						<Tabs.Content value="rent" class="mt-4">
-							<RentTab {dashboard} onScan={() => goScan({ type: 'Payment', leaseId: dashboard.currentLease?.id, returnTo: `/units/${dashboard.unit.id}?tab=rent` })} />
-						</Tabs.Content>
-						<Tabs.Content value="maintenance" class="mt-4">
-							<MaintenanceTab {dashboard} onScan={goScan} />
-						</Tabs.Content>
-						<Tabs.Content value="documents" class="mt-4">
-							<DocumentsTab
-								unitId={dashboard.unit.id}
-								docs={dashboard.overview.pendingDocs}
-								onScan={() => goScan({ returnTo: `/units/${dashboard.unit.id}?tab=documents` })}
-								onDocumentsChanged={refreshUnitDashboard}
-							/>
-						</Tabs.Content>
-						<Tabs.Content value="expenses" class="mt-4">
-							<ExpensesTab {dashboard} onScan={goScan} />
-						</Tabs.Content>
-						<Tabs.Content value="timeline" class="mt-4">
-							<TimelineTab unitId={id} />
-						</Tabs.Content>
-					</Tabs.Root>
-				</div>
-
-				<!-- Persistent timeline rail (visible across tabs). -->
-				<div class="lg:sticky lg:top-4 lg:self-start">
-					<UnitTimelineRail activities={dashboard.recentTimeline} onViewAll={() => setTab('timeline')} />
-				</div>
+					<Tabs.Content value="overview" class="mt-4">
+						<OverviewTab {dashboard} onOpenTab={setTab} />
+					</Tabs.Content>
+					<Tabs.Content value="lease" class="mt-4">
+						<LeaseTab {dashboard} onScan={() => goScan({ type: 'Lease', returnTo: `/units/${dashboard.unit.id}?tab=lease` })} />
+					</Tabs.Content>
+					<Tabs.Content value="applications" class="mt-4">
+						<ApplicationsTab {dashboard} />
+					</Tabs.Content>
+					<Tabs.Content value="rent" class="mt-4">
+						<RentTab {dashboard} onScan={() => goScan({ type: 'Payment', leaseId: dashboard.currentLease?.id, returnTo: `/units/${dashboard.unit.id}?tab=rent` })} />
+					</Tabs.Content>
+					<Tabs.Content value="maintenance" class="mt-4">
+						<MaintenanceTab {dashboard} onScan={goScan} />
+					</Tabs.Content>
+					<Tabs.Content value="documents" class="mt-4">
+						<DocumentsTab
+							unitId={dashboard.unit.id}
+							docs={dashboard.overview.pendingDocs}
+							onScan={() => goScan({ returnTo: `/units/${dashboard.unit.id}?tab=documents` })}
+							onDocumentsChanged={refreshUnitDashboard}
+						/>
+					</Tabs.Content>
+					<Tabs.Content value="expenses" class="mt-4">
+						<ExpensesTab {dashboard} onScan={goScan} />
+					</Tabs.Content>
+					<Tabs.Content value="timeline" class="mt-4">
+						<TimelineTab unitId={id} />
+					</Tabs.Content>
+				</Tabs.Root>
 			</div>
 		</div>
 	{/if}
