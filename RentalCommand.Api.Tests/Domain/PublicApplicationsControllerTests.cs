@@ -13,6 +13,7 @@ using RentalCommand.Core.Configuration;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -58,7 +59,9 @@ public class PublicApplicationsControllerTests : IDisposable
             _db,
             Mock.Of<IFileStorage>(),
             Mock.Of<IDataUpdateService>(),
-            Mock.Of<IAuditTrailService>());
+            Mock.Of<IAuditTrailService>(),
+            new NoopTenantPortalProvisioningService(),
+            NullLogger<ApplicationService>.Instance);
         var uploadSettings = Options.Create(new UploadSettings
         {
             MaxFileSizeBytes = 10_000_000,

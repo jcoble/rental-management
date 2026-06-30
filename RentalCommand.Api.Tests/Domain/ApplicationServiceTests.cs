@@ -3,6 +3,7 @@ using FluentAssertions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using RentalCommand.Api.DTOs;
 using RentalCommand.Api.Services.Domain;
@@ -11,6 +12,7 @@ using RentalCommand.Core.Entities;
 using RentalCommand.Core.Enums;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
+using RentalCommand.TestCommon;
 
 namespace RentalCommand.Api.Tests.Domain;
 
@@ -68,7 +70,9 @@ public class ApplicationServiceTests : IDisposable
         });
         _db.SaveChanges();
 
-        _sut = new ApplicationService(_db, _files.Object, Mock.Of<IDataUpdateService>(), _audit);
+        _sut = new ApplicationService(
+            _db, _files.Object, Mock.Of<IDataUpdateService>(), _audit,
+            new NoopTenantPortalProvisioningService(), NullLogger<ApplicationService>.Instance);
     }
 
     public void Dispose()

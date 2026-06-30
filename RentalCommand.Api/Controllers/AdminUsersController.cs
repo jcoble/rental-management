@@ -133,15 +133,18 @@ public class AdminUsersController : ManagementControllerBase
     {
         var portfolioId = GetPortfolioId();
 
+        // Tenants are first-class portal users, provisioned automatically from the Tenants section —
+        // never minted as a team/staff role here. Reject it so the admin team UI can't create a
+        // half-wired Tenant login (the bug this guard closes).
+        if (request.Role == UserRole.Tenant)
+        {
+            return BadRequest(new { error = "Tenants are managed in the Tenants section, not the team." });
+        }
+
         // Reject duplicate email across all Identity users (not just this portfolio).
         if (await _userManager.FindByEmailAsync(request.Email) != null)
         {
             return BadRequest(new { error = "A user with that email address already exists." });
-        }
-
-        if (request.Role == UserRole.Tenant && request.TenantId == null)
-        {
-            return BadRequest(new { error = "Tenant users must be linked to a tenant." });
         }
 
         if (request.TenantId.HasValue)
@@ -270,6 +273,13 @@ public class AdminUsersController : ManagementControllerBase
         CancellationToken ct)
     {
         var portfolioId = GetPortfolioId();
+
+        // Tenant is not a team/staff role; it's provisioned from the Tenants section. Block promoting
+        // a team member into it via the inline role dropdown.
+        if (request.Role == UserRole.Tenant)
+        {
+            return BadRequest(new { error = "Tenants are managed in the Tenants section, not the team." });
+        }
 
         var account = await _db.UserAccounts
             .FirstOrDefaultAsync(u => u.Id == id && u.PortfolioId == portfolioId, ct);
