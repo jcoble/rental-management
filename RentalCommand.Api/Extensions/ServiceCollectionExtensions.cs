@@ -119,6 +119,7 @@ public static class ServiceCollectionExtensions
 
         // Unit Command Center aggregate (per-unit dashboard + timeline union).
         services.AddScoped<IUnitDashboardService, UnitDashboardService>();
+        services.AddScoped<IUnitListingService, UnitListingService>();
 
         // Portfolio analytics overview (occupancy, rent collection, trend, work orders, lease expiry).
         services.AddScoped<IAnalyticsService, AnalyticsService>();

@@ -1,4 +1,11 @@
-enum UnitCommandCenterTab { overview, lease, applications, tenants, work }
+enum UnitCommandCenterTab {
+  overview,
+  listing,
+  lease,
+  applications,
+  tenants,
+  work,
+}
 
 class UnitCommandCenterRouteTarget {
   const UnitCommandCenterRouteTarget({
@@ -28,6 +35,10 @@ UnitCommandCenterRouteTarget? parseUnitCommandCenterRoute(String route) {
 
 UnitCommandCenterTab unitCommandCenterTabFromName(String? raw) {
   switch (raw?.trim().toLowerCase()) {
+    case 'listing':
+    case 'listings':
+    case 'zillow':
+      return UnitCommandCenterTab.listing;
     case 'lease':
     case 'leases':
       return UnitCommandCenterTab.lease;
