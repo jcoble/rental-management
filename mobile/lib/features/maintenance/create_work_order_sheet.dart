@@ -222,12 +222,16 @@ class _CreateWorkOrderSheetState extends ConsumerState<_CreateWorkOrderSheet> {
   }
 
   Future<void> _submit() async {
-    if (!(_formKey.currentState?.validate() ?? false)) return;
+    if (!(_formKey.currentState?.validate() ?? false)) {
+      throw StateError('Work order form validation failed.');
+    }
 
     final scheduledFor = _combine(_scheduledDate, _startTime);
     final scheduledWindowEnd = _combine(_scheduledDate, _windowEndTime);
 
-    if (!_validateArrivalWindow()) return;
+    if (!_validateArrivalWindow()) {
+      throw StateError('Work order arrival window validation failed.');
+    }
 
     setState(() {
       _saving = true;
