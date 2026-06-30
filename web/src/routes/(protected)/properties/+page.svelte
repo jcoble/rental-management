@@ -15,6 +15,7 @@
 	import * as Select from '$lib/components/ui/select';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import PropertyFields from '$lib/components/forms/PropertyFields.svelte';
@@ -126,11 +127,13 @@
 	const deleteState = $derived(deleteTarget ? getPropertyDeleteState(deleteTarget) : null);
 
 	const propertySteps: FormStepperStep[] = [
-		{ id: 'address', label: 'Address', description: 'Name and location' },
+		{ id: 'identity', label: 'Identity', description: 'Name and type' },
+		{ id: 'address', label: 'Address', description: 'Street and ZIP' },
 		{ id: 'setup', label: 'Setup', description: 'Status and owner' },
 	];
 	const propertyStepFields = [
-		['name', 'addressLine1', 'city', 'state', 'postalCode', 'type'],
+		['name', 'type'],
+		['addressLine1', 'city', 'state', 'postalCode'],
 		['status', 'addressLine2', 'ownerEntityId'],
 	] as const;
 
@@ -242,10 +245,14 @@
 
 	function nextPropertyStep() {
 		if (!validatePropertyStep(propertyStep)) return;
-		if (!completedPropertySteps.includes(propertyStep)) {
-			completedPropertySteps = [...completedPropertySteps, propertyStep];
+		if (completedPropertySteps.includes(propertyStep)) {
+			propertyStep = Math.min(propertyStep + 1, propertySteps.length - 1);
+			return;
 		}
-		propertyStep = Math.min(propertyStep + 1, propertySteps.length - 1);
+		completedPropertySteps = [...completedPropertySteps, propertyStep];
+		window.setTimeout(() => {
+			propertyStep = Math.min(propertyStep + 1, propertySteps.length - 1);
+		}, 260);
 	}
 
 	function submitProperty() {
@@ -442,7 +449,9 @@
 		>
 			<div class="space-y-3" data-testid="property-form">
 				{#if propertyStep === 0}
-					<PropertyFields bind:form errors={formErrors} />
+					<PropertyFields bind:form errors={formErrors} section="identity" />
+				{:else if propertyStep === 1}
+					<PropertyFields bind:form errors={formErrors} section="address" />
 				{:else}
 					<div>
 						<span class="mb-1 block text-xs font-medium text-muted-foreground">Status</span>
@@ -482,7 +491,11 @@
 				<Button data-testid="property-step-back" variant="outline" onclick={() => (propertyStep = Math.max(propertyStep - 1, 0))}>Back</Button>
 			{/if}
 			{#if propertyStep < propertySteps.length - 1}
-				<Button data-testid="property-step-next" onclick={nextPropertyStep}>Next</Button>
+				<StepperNextButton
+					testid="property-step-next"
+					complete={completedPropertySteps.includes(propertyStep)}
+					onclick={nextPropertyStep}
+				/>
 			{:else}
 				<Button data-testid="property-form-save" onclick={submitProperty} disabled={savePropertyMutation.isPending}>
 					{savePropertyMutation.isPending ? 'Saving…' : 'Save property'}

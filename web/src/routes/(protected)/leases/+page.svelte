@@ -15,6 +15,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
@@ -325,8 +326,14 @@
 
 	function nextLeaseStep() {
 		if (!validateLeaseStep(leaseStep)) return;
-		if (!completedLeaseSteps.includes(leaseStep)) completedLeaseSteps = [...completedLeaseSteps, leaseStep];
-		leaseStep = Math.min(leaseStep + 1, leaseSteps.length - 1);
+		if (completedLeaseSteps.includes(leaseStep)) {
+			leaseStep = Math.min(leaseStep + 1, leaseSteps.length - 1);
+			return;
+		}
+		completedLeaseSteps = [...completedLeaseSteps, leaseStep];
+		window.setTimeout(() => {
+			leaseStep = Math.min(leaseStep + 1, leaseSteps.length - 1);
+		}, 260);
 	}
 
 	function submit() {
@@ -555,10 +562,14 @@
 			<Button data-testid="lease-form-cancel" variant="outline" onclick={closeForm}>Cancel</Button>
 			{#if leaseStep > 0}
 				<Button data-testid="lease-step-back" variant="outline" onclick={() => (leaseStep = Math.max(leaseStep - 1, 0))}>Back</Button>
-			{/if}
-			{#if leaseStep < leaseSteps.length - 1}
-				<Button data-testid="lease-step-next" onclick={nextLeaseStep}>Next</Button>
-			{:else}
+				{/if}
+				{#if leaseStep < leaseSteps.length - 1}
+					<StepperNextButton
+						testid="lease-step-next"
+						onclick={nextLeaseStep}
+						complete={completedLeaseSteps.includes(leaseStep)}
+					/>
+				{:else}
 				<Button data-testid="lease-form-save" onclick={submit} disabled={saveMutation.isPending}>
 					{saveMutation.isPending ? 'Saving…' : 'Save lease'}
 				</Button>

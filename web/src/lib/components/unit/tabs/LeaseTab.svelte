@@ -9,6 +9,7 @@
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import LeaseDetail from '$lib/components/records/LeaseDetail.svelte';
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
 	import LeaseTermFields from '$lib/components/forms/LeaseTermFields.svelte';
 	import TenantMultiSelect from '$lib/components/forms/TenantMultiSelect.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -364,10 +365,14 @@
 
 	function nextCreateLeaseStep() {
 		if (!validateCreateLeaseStep(createLeaseStep)) return;
-		if (!completedCreateLeaseSteps.includes(createLeaseStep)) {
-			completedCreateLeaseSteps = [...completedCreateLeaseSteps, createLeaseStep];
+		if (completedCreateLeaseSteps.includes(createLeaseStep)) {
+			createLeaseStep = Math.min(createLeaseStep + 1, createLeaseSteps.length - 1);
+			return;
 		}
-		createLeaseStep = Math.min(createLeaseStep + 1, createLeaseSteps.length - 1);
+		completedCreateLeaseSteps = [...completedCreateLeaseSteps, createLeaseStep];
+		window.setTimeout(() => {
+			createLeaseStep = Math.min(createLeaseStep + 1, createLeaseSteps.length - 1);
+		}, 260);
 	}
 
 	function submitCreateLease() {
@@ -621,7 +626,11 @@
 				</Button>
 			{/if}
 			{#if createLeaseStep < createLeaseSteps.length - 1}
-				<Button onclick={nextCreateLeaseStep} data-testid="unit-lease-create-next">Next</Button>
+				<StepperNextButton
+					testid="unit-lease-create-next"
+					onclick={nextCreateLeaseStep}
+					complete={completedCreateLeaseSteps.includes(createLeaseStep)}
+				/>
 			{:else}
 				<Button
 					onclick={submitCreateLease}
