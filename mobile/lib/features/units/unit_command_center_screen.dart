@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
 import '../../core/models/lease.dart';
@@ -108,6 +110,7 @@ class UnitCommandCenterScreen extends StatelessWidget {
       tabAlignment: TabAlignment.start,
       tabs: [
         Tab(text: 'Overview'),
+        Tab(text: 'Listing'),
         Tab(text: 'Lease'),
         Tab(text: 'Apps'),
         Tab(text: 'Tenants'),
@@ -117,6 +120,7 @@ class UnitCommandCenterScreen extends StatelessWidget {
     final tabView = TabBarView(
       children: [
         _UnitOverviewTab(dashboard: dashboard),
+        _UnitListingTab(dashboard: dashboard),
         _UnitLeaseTab(dashboard: dashboard, selectedLease: initialLease),
         _UnitApplicationsTab(application: initialApplication),
         _UnitTenantsTab(
@@ -260,6 +264,548 @@ class _UnitOverviewTab extends StatelessWidget {
         const SizedBox(height: 14),
         _AppointmentsSection(items: dashboard.overview.upcomingAppointments),
       ],
+    );
+  }
+}
+
+class _UnitListingTab extends ConsumerStatefulWidget {
+  const _UnitListingTab({required this.dashboard});
+
+  final UnitDashboard dashboard;
+
+  @override
+  ConsumerState<_UnitListingTab> createState() => _UnitListingTabState();
+}
+
+class _UnitListingTabState extends ConsumerState<_UnitListingTab> {
+  static const _zillowRentalManagerUrl =
+      'https://www.zillow.com/rental-manager/properties';
+  static const _statusOptions = [
+    'Draft',
+    'ReadyToPost',
+    'Posted',
+    'Paused',
+    'Filled',
+    'Archived',
+  ];
+
+  final _headlineController = TextEditingController();
+  final _descriptionController = TextEditingController();
+  final _rentController = TextEditingController();
+  final _depositController = TextEditingController();
+  final _leaseTermsController = TextEditingController();
+  final _petPolicyController = TextEditingController();
+  final _utilitiesController = TextEditingController();
+  final _parkingController = TextEditingController();
+  final _amenitiesController = TextEditingController();
+  final _photoNotesController = TextEditingController();
+  final _zillowListingUrlController = TextEditingController();
+  final _zillowApplicationUrlController = TextEditingController();
+
+  int? _loadedListingId;
+  String _status = 'Draft';
+  bool _isGenerating = false;
+  bool _isSaving = false;
+  bool _isSyncingForm = false;
+
+  @override
+  void initState() {
+    super.initState();
+    for (final controller in _formControllers) {
+      controller.addListener(_onFormChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    for (final controller in _formControllers) {
+      controller.removeListener(_onFormChanged);
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  List<TextEditingController> get _formControllers => [
+    _headlineController,
+    _descriptionController,
+    _rentController,
+    _depositController,
+    _leaseTermsController,
+    _petPolicyController,
+    _utilitiesController,
+    _parkingController,
+    _amenitiesController,
+    _photoNotesController,
+    _zillowListingUrlController,
+    _zillowApplicationUrlController,
+  ];
+
+  void _onFormChanged() {
+    if (!_isSyncingForm && mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final unitId = widget.dashboard.unit.id;
+    final listingAsync = ref.watch(unitListingProvider(unitId));
+
+    return listingAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => _UnitErrorBody(
+        message: e is ApiException ? e.message : e.toString(),
+        onRetry: () => ref.invalidate(unitListingProvider(unitId)),
+      ),
+      data: (listing) {
+        _syncFromListing(listing);
+        if (listing == null) {
+          return _EmptyTab(
+            icon: Symbols.real_estate_agent_rounded,
+            title: 'No listing packet',
+            body:
+                'Generate a Zillow-ready packet, then copy it into Zillow Rental Manager.',
+            action: FilledButton.icon(
+              icon: _isGenerating
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Symbols.auto_awesome_rounded),
+              label: Text(_isGenerating ? 'Generating...' : 'Generate packet'),
+              onPressed: _isGenerating ? null : _generateListing,
+            ),
+          );
+        }
+
+        return ListView(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+          children: [
+            _ListingHeader(
+              status: _status,
+              updatedAt: listing.updatedAt,
+              onGenerate: _isGenerating ? null : _generateListing,
+              onSave: _canSave ? _saveListing : null,
+              isGenerating: _isGenerating,
+              isSaving: _isSaving,
+            ),
+            const SizedBox(height: 14),
+            _Section(
+              title: 'Zillow packet',
+              empty: 'No packet fields',
+              children: [
+                _ListingField(
+                  label: 'Headline',
+                  controller: _headlineController,
+                  actionIcon: Symbols.content_copy_rounded,
+                  onAction: () =>
+                      _copyText('Headline', _headlineController.text),
+                ),
+                _ListingField(
+                  label: 'Description',
+                  controller: _descriptionController,
+                  maxLines: 5,
+                  actionIcon: Symbols.content_copy_rounded,
+                  onAction: () =>
+                      _copyText('Description', _descriptionController.text),
+                ),
+                _ListingField(
+                  label: 'Rent',
+                  controller: _rentController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                ),
+                _ListingField(
+                  label: 'Deposit',
+                  controller: _depositController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                ),
+                _ListingField(
+                  label: 'Lease terms',
+                  controller: _leaseTermsController,
+                ),
+                _ListingField(
+                  label: 'Pet policy',
+                  controller: _petPolicyController,
+                ),
+                _ListingField(
+                  label: 'Utilities',
+                  controller: _utilitiesController,
+                ),
+                _ListingField(label: 'Parking', controller: _parkingController),
+                _ListingField(
+                  label: 'Amenities',
+                  controller: _amenitiesController,
+                  maxLines: 3,
+                ),
+                _ListingField(
+                  label: 'Photo notes',
+                  controller: _photoNotesController,
+                  maxLines: 3,
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            _Section(
+              title: 'Manual handoff',
+              empty: 'No handoff fields',
+              children: [
+                _ListingStatusRow(
+                  value: _status,
+                  options: _statusOptions,
+                  onChanged: (value) => setState(() => _status = value),
+                ),
+                _CompactRow(
+                  icon: Symbols.open_in_new_rounded,
+                  title: 'Open Zillow Rental Manager',
+                  subtitle: 'Post the copied packet manually',
+                  onTap: () => _openExternalUrl(_zillowRentalManagerUrl),
+                ),
+                _ListingField(
+                  label: 'Zillow listing URL',
+                  controller: _zillowListingUrlController,
+                  keyboardType: TextInputType.url,
+                  actionIcon: Symbols.open_in_new_rounded,
+                  onAction: () =>
+                      _openExternalUrl(_zillowListingUrlController.text),
+                ),
+                _ListingField(
+                  label: 'Zillow application URL',
+                  controller: _zillowApplicationUrlController,
+                  keyboardType: TextInputType.url,
+                  actionIcon: Symbols.open_in_new_rounded,
+                  onAction: () =>
+                      _openExternalUrl(_zillowApplicationUrlController.text),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  bool get _canSave =>
+      !_isSaving &&
+      _headlineController.text.trim().isNotEmpty &&
+      _descriptionController.text.trim().isNotEmpty &&
+      _isOptionalNumber(_rentController.text) &&
+      _isOptionalNumber(_depositController.text);
+
+  void _syncFromListing(UnitListing? listing) {
+    if (listing == null) {
+      if (_loadedListingId != null) {
+        _loadedListingId = null;
+        _setFormToBlank();
+      }
+      return;
+    }
+    if (_loadedListingId == listing.id) return;
+    _loadedListingId = listing.id;
+    _isSyncingForm = true;
+    _status = _statusOptions.contains(listing.status)
+        ? listing.status
+        : 'Draft';
+    _headlineController.text = listing.headline;
+    _descriptionController.text = listing.description;
+    _rentController.text = _numberToText(listing.rent);
+    _depositController.text = _numberToText(listing.securityDeposit);
+    _leaseTermsController.text = listing.leaseTerms ?? '';
+    _petPolicyController.text = listing.petPolicy ?? '';
+    _utilitiesController.text = listing.utilities ?? '';
+    _parkingController.text = listing.parking ?? '';
+    _amenitiesController.text = listing.amenities ?? '';
+    _photoNotesController.text = listing.photoNotes ?? '';
+    _zillowListingUrlController.text = listing.zillowListingUrl ?? '';
+    _zillowApplicationUrlController.text = listing.zillowApplicationUrl ?? '';
+    _isSyncingForm = false;
+  }
+
+  void _setFormToBlank() {
+    _isSyncingForm = true;
+    _status = 'Draft';
+    for (final controller in _formControllers) {
+      controller.clear();
+    }
+    _isSyncingForm = false;
+  }
+
+  Future<void> _generateListing() async {
+    setState(() => _isGenerating = true);
+    try {
+      final listing = await ref
+          .read(unitsRepositoryProvider)
+          .generateListing(widget.dashboard.unit.id);
+      _loadedListingId = null;
+      _syncFromListing(listing);
+      ref.invalidate(unitListingProvider(widget.dashboard.unit.id));
+      _showSnack('Listing packet generated.');
+    } catch (e) {
+      _showSnack(e is ApiException ? e.message : e.toString());
+    } finally {
+      if (mounted) setState(() => _isGenerating = false);
+    }
+  }
+
+  Future<void> _saveListing() async {
+    if (!_canSave) {
+      _showSnack('Headline, description, rent, and deposit must be valid.');
+      return;
+    }
+    setState(() => _isSaving = true);
+    try {
+      final listing = await ref
+          .read(unitsRepositoryProvider)
+          .saveListing(widget.dashboard.unit.id, _buildSaveRequest());
+      _loadedListingId = null;
+      _syncFromListing(listing);
+      ref.invalidate(unitListingProvider(widget.dashboard.unit.id));
+      ref.invalidate(unitDashboardProvider(widget.dashboard.unit.id));
+      _showSnack('Listing packet saved.');
+    } catch (e) {
+      _showSnack(e is ApiException ? e.message : e.toString());
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  SaveUnitListingRequest _buildSaveRequest() {
+    return SaveUnitListingRequest(
+      status: _status,
+      headline: _headlineController.text.trim(),
+      description: _descriptionController.text.trim(),
+      rent: _parseOptionalNumber(_rentController.text),
+      securityDeposit: _parseOptionalNumber(_depositController.text),
+      leaseTerms: _leaseTermsController.text.trim(),
+      petPolicy: _petPolicyController.text.trim(),
+      utilities: _utilitiesController.text.trim(),
+      parking: _parkingController.text.trim(),
+      amenities: _amenitiesController.text.trim(),
+      photoNotes: _photoNotesController.text.trim(),
+      zillowListingUrl: _zillowListingUrlController.text.trim(),
+      zillowApplicationUrl: _zillowApplicationUrlController.text.trim(),
+    );
+  }
+
+  Future<void> _copyText(String label, String text) async {
+    final value = text.trim();
+    if (value.isEmpty) {
+      _showSnack('$label is empty.');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: value));
+    _showSnack('$label copied.');
+  }
+
+  Future<void> _openExternalUrl(String rawUrl) async {
+    final url = rawUrl.trim();
+    if (url.isEmpty) {
+      _showSnack('URL is empty.');
+      return;
+    }
+    final uri = Uri.tryParse(url);
+    if (uri == null || !uri.hasScheme) {
+      _showSnack('Enter a full URL first.');
+      return;
+    }
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok) _showSnack('Could not open URL.');
+  }
+
+  void _showSnack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  static bool _isOptionalNumber(String value) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty || double.tryParse(trimmed) != null;
+  }
+
+  static double? _parseOptionalNumber(String value) {
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : double.tryParse(trimmed);
+  }
+
+  static String _numberToText(num? value) {
+    if (value == null) return '';
+    if (value % 1 == 0) return value.toInt().toString();
+    return value.toString();
+  }
+}
+
+class _ListingHeader extends StatelessWidget {
+  const _ListingHeader({
+    required this.status,
+    required this.updatedAt,
+    required this.onGenerate,
+    required this.onSave,
+    required this.isGenerating,
+    required this.isSaving,
+  });
+
+  final String status;
+  final DateTime updatedAt;
+  final VoidCallback? onGenerate;
+  final VoidCallback? onSave;
+  final bool isGenerating;
+  final bool isSaving;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return Material(
+      color: colorScheme.primaryContainer,
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Symbols.real_estate_agent_rounded,
+                  color: colorScheme.onPrimaryContainer,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Zillow listing assistant',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      color: colorScheme.onPrimaryContainer,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                _InfoChip(icon: Symbols.sell_rounded, label: status),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Prepare listing copy here, then post it manually in Zillow Rental Manager.',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onPrimaryContainer,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Updated ${_formatDate(updatedAt)}',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: colorScheme.onPrimaryContainer.withValues(alpha: 0.78),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                OutlinedButton.icon(
+                  icon: isGenerating
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Symbols.auto_awesome_rounded),
+                  label: Text(isGenerating ? 'Generating...' : 'Regenerate'),
+                  onPressed: onGenerate,
+                ),
+                FilledButton.icon(
+                  icon: isSaving
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Symbols.save_rounded),
+                  label: Text(isSaving ? 'Saving...' : 'Save packet'),
+                  onPressed: onSave,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ListingField extends StatelessWidget {
+  const _ListingField({
+    required this.label,
+    required this.controller,
+    this.keyboardType,
+    this.maxLines = 1,
+    this.actionIcon,
+    this.onAction,
+  });
+
+  final String label;
+  final TextEditingController controller;
+  final TextInputType? keyboardType;
+  final int maxLines;
+  final IconData? actionIcon;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          Expanded(
+            child: TextField(
+              controller: controller,
+              keyboardType: keyboardType,
+              maxLines: maxLines,
+              decoration: InputDecoration(labelText: label),
+            ),
+          ),
+          if (actionIcon != null && onAction != null) ...[
+            const SizedBox(width: 8),
+            IconButton.filledTonal(
+              tooltip: label,
+              icon: Icon(actionIcon),
+              onPressed: onAction,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _ListingStatusRow extends StatelessWidget {
+  const _ListingStatusRow({
+    required this.value,
+    required this.options,
+    required this.onChanged,
+  });
+
+  final String value;
+  final List<String> options;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      child: DropdownButtonFormField<String>(
+        initialValue: options.contains(value) ? value : options.first,
+        decoration: const InputDecoration(labelText: 'Status'),
+        items: [
+          for (final option in options)
+            DropdownMenuItem<String>(value: option, child: Text(option)),
+        ],
+        onChanged: (value) {
+          if (value != null) onChanged(value);
+        },
+      ),
     );
   }
 }

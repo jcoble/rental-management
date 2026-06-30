@@ -3,6 +3,8 @@ import type {
 	InspectionCompleteResult,
 	InspectionDetail,
 	InspectionItem,
+	InspectionItemInput,
+	InspectionItemUpdate,
 	InspectionTemplate,
 	InspectionTemplateInput,
 } from '$lib/types';
@@ -27,9 +29,15 @@ export const inspections = {
 		api.patch<InspectionTemplate>(`/inspections/templates/${id}`, data),
 	deleteTemplate: (id: number) => api.delete<void>(`/inspections/templates/${id}`),
 
-	// Update a checklist item's result and/or note.
-	updateItem: (inspectionId: number, itemId: number, data: { result?: string; note?: string }) =>
+	// Add/edit/delete/reorder checklist questions on an editable scheduled inspection.
+	createItem: (inspectionId: number, data: InspectionItemInput) =>
+		api.post<InspectionItem>(`/inspections/${inspectionId}/items`, data),
+	updateItem: (inspectionId: number, itemId: number, data: InspectionItemUpdate) =>
 		api.patch<InspectionItem>(`/inspections/${inspectionId}/items/${itemId}`, data),
+	deleteItem: (inspectionId: number, itemId: number) =>
+		api.delete<void>(`/inspections/${inspectionId}/items/${itemId}`),
+	reorderItems: (inspectionId: number, itemIds: number[]) =>
+		api.patch<InspectionItem[]>(`/inspections/${inspectionId}/items/reorder`, { itemIds }),
 
 	// Attach a previously-uploaded document (storedFileId) as the item's photo.
 	setItemPhoto: (inspectionId: number, itemId: number, storedFileId: number) =>

@@ -106,7 +106,20 @@ public class InspectionController : ManagementControllerBase
         return updated == null ? NotFound(new { error = "Inspection not found" }) : Ok(updated);
     }
 
-    /// <summary>Set a checklist item's result and/or note.</summary>
+    /// <summary>Add a checklist question to an editable scheduled inspection.</summary>
+    [HttpPost("{id:int}/items")]
+    [ProducesResponseType(typeof(InspectionItemResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<InspectionItemResponse>> CreateItem(
+        int id, [FromBody] CreateInspectionItemRequest request, CancellationToken ct)
+    {
+        var created = await _service.CreateItemAsync(GetPortfolioId(), id, request, ct);
+        return created == null
+            ? NotFound(new { error = "Inspection not found" })
+            : CreatedAtAction(nameof(Get), new { id }, created);
+    }
+
+    /// <summary>Set a checklist item's question text, result, and/or note.</summary>
     [HttpPatch("{id:int}/items/{itemId:int}")]
     [ProducesResponseType(typeof(InspectionItemResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -115,6 +128,27 @@ public class InspectionController : ManagementControllerBase
     {
         var updated = await _service.UpdateItemAsync(GetPortfolioId(), id, itemId, request, ct);
         return updated == null ? NotFound(new { error = "Inspection item not found" }) : Ok(updated);
+    }
+
+    /// <summary>Delete a checklist question from an editable scheduled inspection.</summary>
+    [HttpDelete("{id:int}/items/{itemId:int}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteItem(int id, int itemId, CancellationToken ct)
+    {
+        var deleted = await _service.DeleteItemAsync(GetPortfolioId(), id, itemId, ct);
+        return deleted ? NoContent() : NotFound(new { error = "Inspection item not found" });
+    }
+
+    /// <summary>Replace the checklist question order for an editable scheduled inspection.</summary>
+    [HttpPatch("{id:int}/items/reorder")]
+    [ProducesResponseType(typeof(IReadOnlyList<InspectionItemResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<IReadOnlyList<InspectionItemResponse>>> ReorderItems(
+        int id, [FromBody] ReorderInspectionItemsRequest request, CancellationToken ct)
+    {
+        var items = await _service.ReorderItemsAsync(GetPortfolioId(), id, request, ct);
+        return items == null ? NotFound(new { error = "Inspection not found" }) : Ok(items);
     }
 
     /// <summary>

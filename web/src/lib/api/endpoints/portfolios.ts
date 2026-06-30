@@ -1,4 +1,4 @@
-import type { Portfolio, Dashboard, SandboxState } from '$lib/types';
+import type { Portfolio, Dashboard, SandboxState, GettingStartedSignalsResponse } from '$lib/types';
 import { api } from '../client';
 
 export const portfolios = {
@@ -8,6 +8,7 @@ export const portfolios = {
 	update: (id: number, data: Partial<Portfolio>) => api.patch<Portfolio>(`/portfolios/${id}`, data),
 	delete: (id: number) => api.delete(`/portfolios/${id}`),
 	dashboard: (id: number) => api.get<Dashboard>(`/portfolios/${id}/dashboard`),
+	gettingStarted: () => api.get<GettingStartedSignalsResponse>('/portfolios/getting-started'),
 
 	/** Current Sandbox/Live state of the caller's account. Scoped server-side to the JWT portfolio. */
 	sandboxState: () => api.get<SandboxState>('/portfolio/sandbox-state'),

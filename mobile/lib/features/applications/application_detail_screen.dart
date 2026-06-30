@@ -149,6 +149,25 @@ class _ApplicationDetailScreenState
     }
   }
 
+  Future<void> _edit(RentalApplication app) async {
+    final input = await showDialog<UpdateApplicationInput>(
+      context: context,
+      builder: (_) => _EditApplicationDialog(application: app),
+    );
+    if (input == null || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      await ref.read(applicationsRepositoryProvider).update(_id, input);
+      await _refresh();
+      _snack('Application updated.');
+    } on ApiException catch (e) {
+      _snack(e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   // ── Screening ─────────────────────────────────────────────────────────────
 
   Future<void> _runScreening() async {
@@ -232,10 +251,18 @@ class _ApplicationDetailScreenState
       appBar: AppBar(
         title: const Text('Application'),
         actions: [
-          detailAsync.whenOrNull(
-                data: (app) => ApplicationStatusChip(status: app.status),
+          ...detailAsync.whenOrNull(
+                data: (app) => [
+                  if (isApplicationOpen(app.status))
+                    IconButton(
+                      tooltip: 'Edit application',
+                      onPressed: _busy ? null : () => _edit(app),
+                      icon: const Icon(Icons.edit_outlined),
+                    ),
+                  ApplicationStatusChip(status: app.status),
+                ],
               ) ??
-              const SizedBox.shrink(),
+              [const SizedBox.shrink()],
           const SizedBox(width: 12),
         ],
       ),
@@ -591,6 +618,269 @@ class _DetailBody extends StatelessWidget {
       ],
     );
   }
+}
+
+// ── Edit application dialog ───────────────────────────────────────────────────
+
+class _EditApplicationDialog extends StatefulWidget {
+  const _EditApplicationDialog({required this.application});
+
+  final RentalApplication application;
+
+  @override
+  State<_EditApplicationDialog> createState() => _EditApplicationDialogState();
+}
+
+class _EditApplicationDialogState extends State<_EditApplicationDialog> {
+  late final TextEditingController _firstName;
+  late final TextEditingController _lastName;
+  late final TextEditingController _email;
+  late final TextEditingController _phone;
+  late final TextEditingController _dateOfBirth;
+  late final TextEditingController _currentAddress;
+  late final TextEditingController _employer;
+  late final TextEditingController _monthlyIncome;
+  late final TextEditingController _desiredMoveInDate;
+  late final TextEditingController _notes;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final app = widget.application;
+    _firstName = TextEditingController(text: app.firstName);
+    _lastName = TextEditingController(text: app.lastName);
+    _email = TextEditingController(text: app.email ?? '');
+    _phone = TextEditingController(text: app.phone ?? '');
+    _dateOfBirth = TextEditingController(
+      text: _dateInputValue(app.dateOfBirth),
+    );
+    _currentAddress = TextEditingController(text: app.currentAddress ?? '');
+    _employer = TextEditingController(text: app.employer ?? '');
+    _monthlyIncome = TextEditingController(
+      text: app.monthlyIncome == null
+          ? ''
+          : _numberInputValue(app.monthlyIncome!),
+    );
+    _desiredMoveInDate = TextEditingController(
+      text: _dateInputValue(app.desiredMoveInDate),
+    );
+    _notes = TextEditingController(text: app.notes ?? '');
+  }
+
+  @override
+  void dispose() {
+    _firstName.dispose();
+    _lastName.dispose();
+    _email.dispose();
+    _phone.dispose();
+    _dateOfBirth.dispose();
+    _currentAddress.dispose();
+    _employer.dispose();
+    _monthlyIncome.dispose();
+    _desiredMoveInDate.dispose();
+    _notes.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final firstName = _firstName.text.trim();
+    final lastName = _lastName.text.trim();
+    if (firstName.isEmpty || lastName.isEmpty) {
+      setState(() => _error = 'First and last name are required.');
+      return;
+    }
+
+    final incomeText = _monthlyIncome.text.trim();
+    final income = incomeText.isEmpty ? null : double.tryParse(incomeText);
+    if (incomeText.isNotEmpty && (income == null || income < 0)) {
+      setState(() => _error = 'Enter a valid monthly income.');
+      return;
+    }
+
+    Navigator.of(context).pop(
+      UpdateApplicationInput(
+        firstName: firstName,
+        lastName: lastName,
+        email: _email.text.trim(),
+        phone: _phone.text.trim(),
+        dateOfBirth: _dateOfBirth.text.trim().isEmpty
+            ? null
+            : _dateOfBirth.text.trim(),
+        clearDateOfBirth: _dateOfBirth.text.trim().isEmpty,
+        currentAddress: _currentAddress.text.trim(),
+        employer: _employer.text.trim(),
+        monthlyIncome: income,
+        clearMonthlyIncome: income == null,
+        desiredMoveInDate: _desiredMoveInDate.text.trim().isEmpty
+            ? null
+            : _desiredMoveInDate.text.trim(),
+        clearDesiredMoveInDate: _desiredMoveInDate.text.trim().isEmpty,
+        notes: _notes.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('Edit application'),
+      content: SizedBox(
+        width: 520,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_error != null) ...[
+                Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
+                const SizedBox(height: 12),
+              ],
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _firstName,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(
+                        labelText: 'First name',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: _lastName,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(
+                        labelText: 'Last name',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _email,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(
+                  labelText: 'Email',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _phone,
+                keyboardType: TextInputType.phone,
+                decoration: const InputDecoration(
+                  labelText: 'Phone',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _dateOfBirth,
+                      keyboardType: TextInputType.datetime,
+                      decoration: const InputDecoration(
+                        labelText: 'Date of birth',
+                        hintText: 'YYYY-MM-DD',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: _desiredMoveInDate,
+                      keyboardType: TextInputType.datetime,
+                      decoration: const InputDecoration(
+                        labelText: 'Desired move-in',
+                        hintText: 'YYYY-MM-DD',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _currentAddress,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Current address',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _employer,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(
+                        labelText: 'Employer',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: _monthlyIncome,
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration: const InputDecoration(
+                        labelText: 'Monthly income',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _notes,
+                minLines: 2,
+                maxLines: 4,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(
+                  labelText: 'Notes',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: const Text('Save')),
+      ],
+    );
+  }
+}
+
+String _dateInputValue(DateTime? value) {
+  if (value == null) return '';
+  final local = value.toLocal();
+  return '${local.year.toString().padLeft(4, '0')}-'
+      '${local.month.toString().padLeft(2, '0')}-'
+      '${local.day.toString().padLeft(2, '0')}';
+}
+
+String _numberInputValue(double value) {
+  if (value == value.truncateToDouble()) return value.toInt().toString();
+  return value.toString();
 }
 
 // ── Decline-with-reason dialog ──────────────────────────────────────────────────

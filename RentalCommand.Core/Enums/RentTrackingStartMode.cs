@@ -4,5 +4,6 @@ public enum RentTrackingStartMode
 {
     BackfillFromLeaseStart,
     ForwardOnly,
-    CustomCutoffDate
+    CustomCutoffDate,
+    OpeningBalanceOnly
 }

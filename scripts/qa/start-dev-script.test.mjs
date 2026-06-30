@@ -67,6 +67,7 @@ describe('start-dev launcher', () => {
 
 		assert.ok(buildSection > -1, 'expected an explicit serial .NET build section');
 		assert.match(script, /unset_if_blank\(\)/);
+		assert.doesNotMatch(script, /ALLOW_.*EXTERNAL_NOTIFICATIONS/);
 
 		for (const key of secretBackedEnvKeys) {
 			assert.doesNotMatch(script, new RegExp(`export ${key}=""`), `${key} must not be blanked by start-dev.sh`);

@@ -101,6 +101,7 @@
 		leaseNumber: defaultLeaseNumber(), propertyId: '', unitId: '', tenantId: '', tenantIds: [] as string[], startDate: '', endDate: '',
 		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1',
 		rentTrackingStartMode: 'ForwardOnly', rentTrackingStartDate: '',
+		openingBalanceAmount: '', openingBalanceAsOfDate: '', openingBalanceNote: '',
 		status: 'Draft', notes: '',
 	};
 	let showForm = $state(false);
@@ -126,7 +127,7 @@
 		['leaseNumber'],
 		['startDate', 'endDate'],
 		['monthlyRent', 'securityDeposit', 'lateFeeAmount', 'rentDueDay'],
-		['status', 'rentTrackingStartMode', 'rentTrackingStartDate', 'notes'],
+		['status', 'rentTrackingStartMode', 'rentTrackingStartDate', 'openingBalanceAmount', 'openingBalanceAsOfDate', 'openingBalanceNote', 'notes'],
 	] as const;
 
 	function clearLeaseError(field: string) {
@@ -168,8 +169,24 @@
 		if (form.rentTrackingStartDate) clearLeaseError('rentTrackingStartDate');
 	});
 	$effect(() => {
+		if (form.openingBalanceAmount) clearLeaseError('openingBalanceAmount');
+	});
+	$effect(() => {
+		if (form.openingBalanceAsOfDate) clearLeaseError('openingBalanceAsOfDate');
+	});
+	$effect(() => {
+		if (form.openingBalanceNote) clearLeaseError('openingBalanceNote');
+	});
+	$effect(() => {
 		if (form.rentTrackingStartMode !== 'CustomCutoffDate' && form.rentTrackingStartDate) {
 			form.rentTrackingStartDate = '';
+		}
+	});
+	$effect(() => {
+		if (form.rentTrackingStartMode !== 'OpeningBalanceOnly') {
+			if (form.openingBalanceAmount) form.openingBalanceAmount = '';
+			if (form.openingBalanceAsOfDate) form.openingBalanceAsOfDate = '';
+			if (form.openingBalanceNote) form.openingBalanceNote = '';
 		}
 	});
 
@@ -262,6 +279,9 @@
 					? 'BackfillFromLeaseStart'
 					: 'ForwardOnly',
 			rentTrackingStartDate,
+			openingBalanceAmount: '',
+			openingBalanceAsOfDate: '',
+			openingBalanceNote: '',
 			status: l.status,
 			notes: l.notes ?? '',
 		};

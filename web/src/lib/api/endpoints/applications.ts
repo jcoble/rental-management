@@ -68,6 +68,26 @@ export interface ApplicationListResponse {
 	take: number;
 }
 
+export interface UpdateApplicationRequest {
+	firstName?: string;
+	lastName?: string;
+	email?: string;
+	phone?: string;
+	dateOfBirth?: string;
+	clearDateOfBirth?: boolean;
+	currentAddress?: string;
+	employer?: string;
+	monthlyIncome?: number;
+	clearMonthlyIncome?: boolean;
+	desiredMoveInDate?: string;
+	clearDesiredMoveInDate?: boolean;
+	notes?: string;
+	propertyId?: number;
+	clearProperty?: boolean;
+	unitId?: number;
+	clearUnit?: boolean;
+}
+
 /** Outcome of a screening request. */
 export type ScreeningStatus = 'Requested' | 'Completed' | 'Failed';
 
@@ -116,6 +136,8 @@ export const applications = {
 	listPage: (params?: ApplicationListParams) =>
 		api.get<ApplicationListResponse>(`/applications/page${buildQuery(params)}`),
 	get: (id: number) => api.get<ApplicationResponse>(`/applications/${id}`),
+	update: (id: number, data: UpdateApplicationRequest) =>
+		api.patch<ApplicationResponse>(`/applications/${id}`, data),
 	approve: (id: number) => api.post<ApproveApplicationResult>(`/applications/${id}/approve`),
 	decline: (id: number, reason?: string) =>
 		api.post<ApplicationResponse>(`/applications/${id}/decline`, { reason: reason ?? null }),

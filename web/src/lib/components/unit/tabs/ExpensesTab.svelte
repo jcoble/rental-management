@@ -14,7 +14,10 @@
 		EXPENSE_CATEGORY_OPTIONS,
 		formatExpenseCategory
 	} from '$lib/accounting/expense-categories';
+	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
+	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import ExpenseDetail from '$lib/components/records/ExpenseDetail.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -103,9 +106,15 @@
 
 	// ── Inline "add expense" form (reuses expenseSchema + the app's form conventions; sets UnitId) ──
 	const emptyCreate = () => ({ description: '', amount: '', incurredAt: today(), category: 'Repairs', status: 'Pending' });
+	const createSteps: FormStepperStep[] = [
+		{ id: 'details', label: 'Details', description: 'Amount and date' },
+		{ id: 'context', label: 'Context', description: 'Category and status' },
+	];
 	let showCreate = $state(false);
 	let createForm = $state(emptyCreate());
 	let createErrors = $state<Record<string, string>>({});
+	let createStep = $state(0);
+	let completedCreateSteps = $state<number[]>([]);
 
 	function clearCreateError(field: string) {
 		if (!createErrors[field]) return;
@@ -117,11 +126,15 @@
 	function openCreate() {
 		createForm = emptyCreate();
 		createErrors = {};
+		createStep = 0;
+		completedCreateSteps = [];
 		showCreate = true;
 	}
 	function closeCreate() {
 		showCreate = false;
 		createErrors = {};
+		createStep = 0;
+		completedCreateSteps = [];
 	}
 
 	const createMut = createMutation(() => ({
@@ -155,6 +168,40 @@
 		createErrors = {};
 		createMut.mutate({ portfolioId, unitId, propertyId, ...result.data });
 	}
+
+	function validateCreateStep() {
+		const result = parseForm(expenseSchema, {
+			...createForm,
+			propertyId: String(propertyId),
+			vendorId: '',
+			workOrderId: '',
+			dueDate: '',
+			paidAt: '',
+			subtotal: '',
+			taxAmount: '',
+			billableToOwner: false,
+			notes: '',
+		});
+		const fields = createStep === 0 ? ['description', 'amount', 'incurredAt'] : ['category', 'status'];
+		const nextErrors: Record<string, string> = {};
+		if (result.errors) {
+			for (const field of fields) {
+				if (result.errors[field]) nextErrors[field] = result.errors[field];
+			}
+		}
+		const retainedErrors = { ...createErrors };
+		for (const field of fields) delete retainedErrors[field];
+		createErrors = { ...retainedErrors, ...nextErrors };
+		return Object.keys(nextErrors).length === 0;
+	}
+
+	function nextCreateStep() {
+		if (!validateCreateStep()) return;
+		if (!completedCreateSteps.includes(createStep)) {
+			completedCreateSteps = [...completedCreateSteps, createStep];
+		}
+		createStep = Math.min(createStep + 1, createSteps.length - 1);
+	}
 </script>
 
 <div class="space-y-4" data-testid="unit-expenses-tab">
@@ -183,46 +230,67 @@
 	{#if showCreate}
 		<div class="rounded-xl border border-border bg-muted/20 p-4" data-testid="expenses-create-form">
 			<h3 class="mb-3 text-sm font-semibold">Add expense</h3>
-			<div class="grid gap-3 sm:grid-cols-2">
-				<div class="sm:col-span-2">
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-desc">Description</label>
-					<Input id="exp-desc" data-testid="expenses-description-input" bind:value={createForm.description} oninput={() => clearCreateError('description')} placeholder="e.g. Dishwasher repair" />
-					{#if createErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expenses-description-error">{createErrors.description}</p>{/if}
+			<FormStepper steps={createSteps} bind:currentStep={createStep} completedSteps={completedCreateSteps} testid="expenses-create-stepper">
+				<div class="grid gap-3 sm:grid-cols-2">
+					{#if createStep === 0}
+						<div class="sm:col-span-2">
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-desc">Description</label>
+							<Input id="exp-desc" data-testid="expenses-description-input" bind:value={createForm.description} oninput={() => clearCreateError('description')} placeholder="e.g. Dishwasher repair" />
+							{#if createErrors.description}<p class="mt-1 text-xs text-destructive" data-testid="expenses-description-error">{createErrors.description}</p>{/if}
+						</div>
+						<div>
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-amount">Amount</label>
+							<Input id="exp-amount" data-testid="expenses-amount-input" type="text" inputmode="decimal" mask="currency" bind:value={createForm.amount} oninput={() => clearCreateError('amount')} placeholder="0.00" />
+							{#if createErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expenses-amount-error">{createErrors.amount}</p>{/if}
+						</div>
+						<div>
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-date">Incurred</label>
+							<DatePicker
+								id="exp-date"
+								testid="expenses-date-input"
+								bind:value={createForm.incurredAt}
+								onchange={() => clearCreateError('incurredAt')}
+							/>
+							{#if createErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expenses-date-error">{createErrors.incurredAt}</p>{/if}
+						</div>
+					{:else}
+						<div>
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-cat">Category</label>
+							<Select.Root type="single" bind:value={createForm.category}>
+								<Select.Trigger id="exp-cat" class="w-full" data-testid="expenses-category-input">{formatExpenseCategory(createForm.category)}</Select.Trigger>
+								<Select.Content>
+									{#each EXPENSE_CATEGORY_OPTIONS as option}<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>{/each}
+								</Select.Content>
+							</Select.Root>
+						</div>
+						<div>
+							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-status">Status</label>
+							<Select.Root type="single" bind:value={createForm.status}>
+								<Select.Trigger id="exp-status" class="w-full" data-testid="expenses-status-input">{createForm.status}</Select.Trigger>
+								<Select.Content>
+									{#each EXPENSE_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
+								</Select.Content>
+							</Select.Root>
+						</div>
+					{/if}
 				</div>
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-amount">Amount</label>
-					<Input id="exp-amount" data-testid="expenses-amount-input" type="text" inputmode="decimal" mask="currency" bind:value={createForm.amount} oninput={() => clearCreateError('amount')} placeholder="0.00" />
-					{#if createErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="expenses-amount-error">{createErrors.amount}</p>{/if}
-				</div>
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-date">Incurred</label>
-					<Input id="exp-date" data-testid="expenses-date-input" type="date" bind:value={createForm.incurredAt} oninput={() => clearCreateError('incurredAt')} />
-					{#if createErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expenses-date-error">{createErrors.incurredAt}</p>{/if}
-				</div>
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-cat">Category</label>
-					<Select.Root type="single" bind:value={createForm.category}>
-						<Select.Trigger id="exp-cat" class="w-full" data-testid="expenses-category-input">{formatExpenseCategory(createForm.category)}</Select.Trigger>
-						<Select.Content>
-							{#each EXPENSE_CATEGORY_OPTIONS as option}<Select.Item value={option.value} label={option.label}>{option.label}</Select.Item>{/each}
-						</Select.Content>
-					</Select.Root>
-				</div>
-				<div>
-					<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-status">Status</label>
-					<Select.Root type="single" bind:value={createForm.status}>
-						<Select.Trigger id="exp-status" class="w-full" data-testid="expenses-status-input">{createForm.status}</Select.Trigger>
-						<Select.Content>
-							{#each EXPENSE_STATUSES as s}<Select.Item value={s} label={s}>{s}</Select.Item>{/each}
-						</Select.Content>
-					</Select.Root>
-				</div>
-			</div>
+			</FormStepper>
 			<div class="mt-3 flex justify-end gap-2">
 				<Button variant="outline" size="sm" onclick={closeCreate}>Cancel</Button>
-				<Button size="sm" disabled={createMut.isPending} onclick={submitCreate} data-testid="expenses-create-submit">
-					{createMut.isPending ? 'Adding…' : 'Add expense'}
-				</Button>
+				{#if createStep > 0}
+					<Button variant="outline" size="sm" onclick={() => (createStep = Math.max(createStep - 1, 0))}>Back</Button>
+				{/if}
+				{#if createStep < createSteps.length - 1}
+					<StepperNextButton
+						testid="expenses-create-next"
+						onclick={nextCreateStep}
+						complete={completedCreateSteps.includes(createStep)}
+					/>
+				{:else}
+					<Button size="sm" disabled={createMut.isPending} onclick={submitCreate} data-testid="expenses-create-submit">
+						{createMut.isPending ? 'Adding…' : 'Add expense'}
+					</Button>
+				{/if}
 			</div>
 		</div>
 	{/if}

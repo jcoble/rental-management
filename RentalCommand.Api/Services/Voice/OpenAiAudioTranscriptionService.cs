@@ -38,7 +38,8 @@ public sealed class OpenAiAudioTranscriptionService : IAudioTranscriptionService
                 _logger.LogWarning("Audio transcription requested but Assistant:ApiKey is not configured.");
                 _warnedNoKey = true;
             }
-            return string.Empty;
+            throw new VoiceTranscriptionUnavailableException(
+                "Voice transcription is not configured. Set Assistant:ApiKey, then restart the API.");
         }
 
         using var content = new MultipartFormDataContent();

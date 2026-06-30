@@ -12,12 +12,14 @@
 	import * as Select from '$lib/components/ui/select';
 	import AutoFilledBadge from './AutoFilledBadge.svelte';
 	import { STEP_FIELD_TO_EXTRACTION } from '$lib/scan/lease-prefill';
+	import { addCalendarYear } from '$lib/utils/parse-date';
 	import { formatStatusLabel } from '$lib/utils/status-labels';
 
 	const rentTrackingStartOptions = [
 		{ value: 'ForwardOnly', label: 'Start from today' },
 		{ value: 'BackfillFromLeaseStart', label: 'Backfill from lease start' },
-		{ value: 'CustomCutoffDate', label: 'Use cutoff date' }
+		{ value: 'CustomCutoffDate', label: 'Use cutoff date' },
+		{ value: 'OpeningBalanceOnly', label: 'Use opening balance' }
 	] as const;
 
 	function rentTrackingStartLabel(value: string | undefined) {
@@ -43,6 +45,9 @@
 			rentDueDay: string;
 			rentTrackingStartMode?: string;
 			rentTrackingStartDate?: string;
+			openingBalanceAmount?: string;
+			openingBalanceAsOfDate?: string;
+			openingBalanceNote?: string;
 			status: string;
 			notes: string;
 		};
@@ -58,6 +63,23 @@
 	const conf = (key: string) => confidence?.[STEP_FIELD_TO_EXTRACTION[key] ?? ''];
 	const show = (target: 'identity' | 'dates' | 'money' | 'status') =>
 		section === 'all' || section === target;
+	let autoDefaultedEndDate = $state('');
+
+	function handleStartDateChange(iso: string) {
+		form.startDate = iso;
+		if (!iso) return;
+		const defaultEndDate = addCalendarYear(iso);
+		if (!defaultEndDate) return;
+		if (!form.endDate || form.endDate === autoDefaultedEndDate) {
+			form.endDate = defaultEndDate;
+			autoDefaultedEndDate = defaultEndDate;
+		}
+	}
+
+	function handleEndDateChange(iso: string) {
+		form.endDate = iso;
+		if (iso !== autoDefaultedEndDate) autoDefaultedEndDate = '';
+	}
 </script>
 
 <div class="grid gap-3 md:grid-cols-2" data-testid={`${testidPrefix}-term-fields`}>
@@ -77,7 +99,13 @@
 			<span class="text-xs font-medium text-muted-foreground">Start date</span>
 			<AutoFilledBadge show={filled('startDate')} confidence={conf('startDate')} />
 		</div>
-		<DatePicker testid={`${testidPrefix}-start-input`} bind:value={form.startDate} placeholder="Start date" max={form.endDate || undefined} />
+		<DatePicker
+			testid={`${testidPrefix}-start-input`}
+			bind:value={form.startDate}
+			onchange={handleStartDateChange}
+			placeholder="Start date"
+			max={form.endDate || undefined}
+		/>
 		{#if errors.startDate}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-start-error`}>{errors.startDate}</p>{/if}
 	</div>
 	<div>
@@ -85,7 +113,13 @@
 			<span class="text-xs font-medium text-muted-foreground">End date</span>
 			<AutoFilledBadge show={filled('endDate')} confidence={conf('endDate')} />
 		</div>
-		<DatePicker testid={`${testidPrefix}-end-input`} bind:value={form.endDate} placeholder="End date" min={form.startDate || undefined} />
+		<DatePicker
+			testid={`${testidPrefix}-end-input`}
+			bind:value={form.endDate}
+			onchange={handleEndDateChange}
+			placeholder="End date"
+			min={form.startDate || undefined}
+		/>
 		{#if errors.endDate}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-end-error`}>{errors.endDate}</p>{/if}
 	</div>
 	{/if}
@@ -157,6 +191,30 @@
 					<span class="mb-1 block text-xs font-medium text-muted-foreground">Cutoff date</span>
 					<DatePicker testid={`${testidPrefix}-rent-tracking-date`} bind:value={form.rentTrackingStartDate} placeholder="Cutoff date" min={form.startDate || undefined} />
 					{#if errors.rentTrackingStartDate}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-rent-tracking-date-error`}>{errors.rentTrackingStartDate}</p>{/if}
+				</div>
+			{/if}
+			{#if form.rentTrackingStartMode === 'OpeningBalanceOnly'}
+				<div class="md:col-span-2 grid gap-3 md:grid-cols-2" data-testid={`${testidPrefix}-opening-balance-fields`}>
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Opening balance</span>
+						<Input data-testid={`${testidPrefix}-opening-balance-amount`} bind:value={form.openingBalanceAmount} placeholder="Optional amount" inputmode="decimal" mask="currency" />
+						{#if errors.openingBalanceAmount}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-opening-balance-amount-error`}>{errors.openingBalanceAmount}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">As of date</span>
+						<DatePicker testid={`${testidPrefix}-opening-balance-date`} bind:value={form.openingBalanceAsOfDate} placeholder="As of date" max={form.startDate || undefined} />
+						{#if errors.openingBalanceAsOfDate}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-opening-balance-date-error`}>{errors.openingBalanceAsOfDate}</p>{/if}
+					</div>
+					<div class="md:col-span-2">
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Opening note</span>
+						<textarea
+							data-testid={`${testidPrefix}-opening-balance-note`}
+							bind:value={form.openingBalanceNote}
+							rows="2"
+							class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+						></textarea>
+						{#if errors.openingBalanceNote}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-opening-balance-note-error`}>{errors.openingBalanceNote}</p>{/if}
+					</div>
 				</div>
 			{/if}
 		</div>

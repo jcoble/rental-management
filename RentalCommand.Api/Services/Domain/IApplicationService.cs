@@ -45,6 +45,17 @@ public interface IApplicationService
     Task<ApplicationResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default);
 
     /// <summary>
+    /// Corrects landlord-editable applicant details while the application is still Submitted or
+    /// UnderReview. Returns <c>null</c> when the application is not found in the portfolio.
+    /// </summary>
+    Task<ApplicationResponse?> UpdateAsync(
+        int portfolioId,
+        int id,
+        UpdateApplicationRequest request,
+        int userId,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Approves an application and creates a Tenant from its data. Returns <c>null</c> when the
     /// application is not found in the portfolio; throws <see cref="InvalidOperationException"/> when
     /// it is not in an approvable state.

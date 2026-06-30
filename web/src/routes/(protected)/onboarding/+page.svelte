@@ -60,6 +60,7 @@
 		buildOnboardingLeaseScanOverrides,
 		type OnboardingLeaseConfirmInput,
 	} from '$lib/onboarding/lease-scan-confirm';
+	import { addCalendarYear } from '$lib/utils/parse-date';
 	import {
 		NEW_ONBOARDING_OWNER_VALUE,
 		onboardingOwnerFormFromOwner,
@@ -358,6 +359,12 @@
 	const selectedOwnerRecord = $derived.by(() =>
 		selectedOwnerId === NEW_ONBOARDING_OWNER_VALUE ? null : ownerById(selectedOwnerId)
 	);
+	function ownerAssignedPropertyCount(owner: Owner | null): number {
+		return owner?.assignedPropertyCount ?? 0;
+	}
+	const ownerDeleteAssignedCount = $derived.by(() =>
+		ownerAssignedPropertyCount(ownerDeleteTarget)
+	);
 
 	$effect(() => {
 		if (ownerSelectionPrefilled) return;
@@ -406,13 +413,24 @@
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
-	const deleteOwnerMutation = createMutation(() => ({
-		mutationFn: (id: number) => owners.delete(id),
-		onSuccess: (_result, id) => {
-			showSuccess('Owner deleted.');
+	type DeleteOwnerVariables = {
+		id: number;
+		clearPropertyAssignments: boolean;
+	};
+	const deleteOwnerMutation = createMutation<void, Error, DeleteOwnerVariables>(() => ({
+		mutationFn: ({ id, clearPropertyAssignments }) =>
+			owners.delete(id, { clearPropertyAssignments }),
+		onSuccess: (_result, vars) => {
+			const { id, clearPropertyAssignments } = vars;
+			showSuccess(
+				clearPropertyAssignments
+					? 'Owner deleted. Assigned properties are now unassigned.'
+					: 'Owner deleted.'
+			);
 			ownerDeleteTarget = null;
 			if (createdOwner?.id === id) createdOwner = null;
 			if (selectedOwnerId === String(id)) selectOwnerRecord(NEW_ONBOARDING_OWNER_VALUE);
+			if (propertyForm.ownerEntityId === String(id)) propertyForm.ownerEntityId = '';
 			queryClient.invalidateQueries({ queryKey: ['owners', portfolioId] });
 			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
 		},
@@ -779,7 +797,8 @@
 	const rentTrackingStartOptions = [
 		{ value: 'ForwardOnly', label: 'Start from today' },
 		{ value: 'BackfillFromLeaseStart', label: 'Backfill from lease start' },
-		{ value: 'CustomCutoffDate', label: 'Use cutoff date' }
+		{ value: 'CustomCutoffDate', label: 'Use cutoff date' },
+		{ value: 'OpeningBalanceOnly', label: 'Use opening balance' }
 	] as const;
 	const rentTrackingStartLabel = (value: string) =>
 		rentTrackingStartOptions.find((option) => option.value === value)?.label ?? 'Select start';
@@ -797,7 +816,11 @@
 		rentDueDay: '1',
 		rentTrackingStartMode: 'ForwardOnly',
 		rentTrackingStartDate: '',
+		openingBalanceAmount: '',
+		openingBalanceAsOfDate: '',
+		openingBalanceNote: '',
 	});
+	let leaseEndDateAutoDefault = $state(leaseForm.endDate);
 	// Pre-fill security deposit with monthly rent (common default) once — stays
 	// editable; if the user clears it we do not re-fill.
 	let securityDepositDefaulted = $state(false);
@@ -846,6 +869,29 @@
 			leaseForm.rentTrackingStartDate = '';
 		}
 	});
+	$effect(() => {
+		if (leaseForm.rentTrackingStartMode !== 'OpeningBalanceOnly') {
+			if (leaseForm.openingBalanceAmount) leaseForm.openingBalanceAmount = '';
+			if (leaseForm.openingBalanceAsOfDate) leaseForm.openingBalanceAsOfDate = '';
+			if (leaseForm.openingBalanceNote) leaseForm.openingBalanceNote = '';
+		}
+	});
+
+	function handleLeaseStartDateChange(iso: string) {
+		leaseForm.startDate = iso;
+		if (!iso) return;
+		const defaultEndDate = addCalendarYear(iso);
+		if (!defaultEndDate) return;
+		if (!leaseForm.endDate || leaseForm.endDate === leaseEndDateAutoDefault) {
+			leaseForm.endDate = defaultEndDate;
+			leaseEndDateAutoDefault = defaultEndDate;
+		}
+	}
+
+	function handleLeaseEndDateChange(iso: string) {
+		leaseForm.endDate = iso;
+		if (iso !== leaseEndDateAutoDefault) leaseEndDateAutoDefault = '';
+	}
 
 	// Apply photo-extracted (and user-confirmed) lease terms onto the form. Never overwrites a value
 	// the user already typed — the confirmed extraction fills blanks, the user stays in control.
@@ -861,8 +907,11 @@
 	}) {
 		leasePrefillDraftId = values.draftId;
 		if (values.leaseNumber) leaseForm.leaseNumber = values.leaseNumber;
-		if (values.startDate) leaseForm.startDate = values.startDate;
-		if (values.endDate) leaseForm.endDate = values.endDate;
+		if (values.startDate) handleLeaseStartDateChange(values.startDate);
+		if (values.endDate) {
+			leaseForm.endDate = values.endDate;
+			leaseEndDateAutoDefault = '';
+		}
 		if (values.monthlyRent) leaseForm.monthlyRent = values.monthlyRent;
 		if (values.securityDeposit) leaseForm.securityDeposit = values.securityDeposit;
 		if (values.lateFee) leaseForm.lateFeeAmount = values.lateFee;
@@ -915,6 +964,9 @@
 			rentDueDay: leaseForm.rentDueDay,
 			rentTrackingStartMode: leaseForm.rentTrackingStartMode,
 			rentTrackingStartDate: leaseForm.rentTrackingStartDate,
+			openingBalanceAmount: leaseForm.openingBalanceAmount,
+			openingBalanceAsOfDate: leaseForm.openingBalanceAsOfDate,
+			openingBalanceNote: leaseForm.openingBalanceNote,
 			status: 'Active',
 			notes: '',
 		});
@@ -1891,12 +1943,24 @@
 									</div>
 									<div>
 										<label for="ob-lease-start" class="mb-1 block text-xs font-medium text-muted-foreground">Start date</label>
-										<DatePicker id="ob-lease-start" testid="onboarding-lease-start" bind:value={leaseForm.startDate} placeholder="Start date" />
+										<DatePicker
+											id="ob-lease-start"
+											testid="onboarding-lease-start"
+											bind:value={leaseForm.startDate}
+											onchange={handleLeaseStartDateChange}
+											placeholder="Start date"
+										/>
 										{#if leaseErrors.startDate}<p class="mt-1 text-xs text-destructive">{leaseErrors.startDate}</p>{/if}
 									</div>
 									<div>
 										<label for="ob-lease-end" class="mb-1 block text-xs font-medium text-muted-foreground">End date</label>
-										<DatePicker id="ob-lease-end" testid="onboarding-lease-end" bind:value={leaseForm.endDate} placeholder="End date" />
+										<DatePicker
+											id="ob-lease-end"
+											testid="onboarding-lease-end"
+											bind:value={leaseForm.endDate}
+											onchange={handleLeaseEndDateChange}
+											placeholder="End date"
+										/>
 										{#if leaseErrors.endDate}<p class="mt-1 text-xs text-destructive">{leaseErrors.endDate}</p>{/if}
 									</div>
 									<div>
@@ -1910,7 +1974,7 @@
 										{#if leaseErrors.rentDueDay}<p class="mt-1 text-xs text-destructive">{leaseErrors.rentDueDay}</p>{/if}
 									</div>
 									<div class={leaseForm.rentTrackingStartMode === 'CustomCutoffDate' ? '' : 'sm:col-span-2'}>
-										<span class="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">Rent tracking start<HelpPopover title="Rent tracking start" summary="Controls when the system starts generating rent records for this lease." detail="Start from today: only future months are tracked (good for new leases). Backfill from lease start: creates past records back to the lease start date (use when catching up). Use cutoff date: you choose a specific date to start from, useful if you've already been tracking rent elsewhere and want to pick up mid-lease." testid="help-rent-tracking-start" /></span>
+										<span class="mb-1 flex items-center gap-1 text-xs font-medium text-muted-foreground">Rent tracking start<HelpPopover title="Rent tracking start" summary="Controls when the system starts generating rent records for this lease." detail="Start from today: only future months are tracked. Backfill from lease start: creates past records back to the lease start date. Use cutoff date: choose a specific date to start from. Use opening balance: start generating from today and carry the current balance into the ledger." testid="help-rent-tracking-start" /></span>
 										<Select.Root type="single" bind:value={leaseForm.rentTrackingStartMode}>
 											<Select.Trigger class="w-full" data-testid="onboarding-lease-rent-tracking-mode">{rentTrackingStartLabel(leaseForm.rentTrackingStartMode)}</Select.Trigger>
 											<Select.Content>
@@ -1925,6 +1989,29 @@
 											<label for="ob-lease-rent-tracking-date" class="mb-1 block text-xs font-medium text-muted-foreground">Cutoff date</label>
 											<DatePicker id="ob-lease-rent-tracking-date" testid="onboarding-lease-rent-tracking-date" bind:value={leaseForm.rentTrackingStartDate} placeholder="Cutoff date" min={leaseForm.startDate || undefined} />
 											{#if leaseErrors.rentTrackingStartDate}<p class="mt-1 text-xs text-destructive">{leaseErrors.rentTrackingStartDate}</p>{/if}
+										</div>
+									{/if}
+									{#if leaseForm.rentTrackingStartMode === 'OpeningBalanceOnly'}
+										<div>
+											<label for="ob-lease-opening-balance" class="mb-1 block text-xs font-medium text-muted-foreground">Opening balance</label>
+											<Input id="ob-lease-opening-balance" type="text" inputmode="decimal" mask="currency" data-testid="onboarding-lease-opening-balance-amount" bind:value={leaseForm.openingBalanceAmount} placeholder="Optional amount" />
+											{#if leaseErrors.openingBalanceAmount}<p class="mt-1 text-xs text-destructive">{leaseErrors.openingBalanceAmount}</p>{/if}
+										</div>
+										<div>
+											<label for="ob-lease-opening-balance-date" class="mb-1 block text-xs font-medium text-muted-foreground">As of date</label>
+											<DatePicker id="ob-lease-opening-balance-date" testid="onboarding-lease-opening-balance-date" bind:value={leaseForm.openingBalanceAsOfDate} placeholder="As of date" max={leaseForm.startDate || undefined} />
+											{#if leaseErrors.openingBalanceAsOfDate}<p class="mt-1 text-xs text-destructive">{leaseErrors.openingBalanceAsOfDate}</p>{/if}
+										</div>
+										<div class="sm:col-span-2">
+											<label for="ob-lease-opening-balance-note" class="mb-1 block text-xs font-medium text-muted-foreground">Opening note</label>
+											<textarea
+												id="ob-lease-opening-balance-note"
+												data-testid="onboarding-lease-opening-balance-note"
+												bind:value={leaseForm.openingBalanceNote}
+												rows="2"
+												class="w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+											></textarea>
+											{#if leaseErrors.openingBalanceNote}<p class="mt-1 text-xs text-destructive">{leaseErrors.openingBalanceNote}</p>{/if}
 										</div>
 									{/if}
 								</div>
@@ -2056,12 +2143,17 @@
 	open={ownerDeleteTarget !== null}
 	title="Delete owner"
 	message={ownerDeleteTarget
-		? `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? Owners assigned to active properties cannot be deleted. Reassign the properties or set them to No owner assigned first.`
+		? ownerDeleteAssignedCount > 0
+			? `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? This will set ${ownerDeleteAssignedCount} propert${ownerDeleteAssignedCount === 1 ? 'y' : 'ies'} to No owner assigned. You can assign another owner later, but owner reports and statements need an owner before they are final.`
+			: `Delete "${ownerOptionLabel(ownerDeleteTarget)}"? This owner is not assigned to any properties.`
 		: ''}
-	confirmLabel="Delete owner"
+	confirmLabel={ownerDeleteAssignedCount > 0 ? 'Clear owner & delete' : 'Delete owner'}
 	busy={deleteOwnerMutation.isPending}
 	testid="onboarding-owner-delete-confirm"
-	onconfirm={() => ownerDeleteTarget && deleteOwnerMutation.mutate(ownerDeleteTarget.id)}
+	onconfirm={() => ownerDeleteTarget && deleteOwnerMutation.mutate({
+		id: ownerDeleteTarget.id,
+		clearPropertyAssignments: ownerDeleteAssignedCount > 0
+	})}
 	oncancel={() => (ownerDeleteTarget = null)}
 />
 

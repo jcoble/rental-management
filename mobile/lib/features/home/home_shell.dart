@@ -103,6 +103,17 @@ final _fieldQueueProvider = FutureProvider.autoDispose<List<WorkOrder>>((
   return open.take(5).toList();
 });
 
+Future<void> _openGoLiveSheetAndRefreshHome(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  final wentLive = await showGoLiveSheet(context);
+  if (wentLive != true) return;
+  ref.invalidate(_briefingProvider);
+  ref.invalidate(_latestMessagesProvider);
+  ref.invalidate(_fieldQueueProvider);
+}
+
 // ---------------------------------------------------------------------------
 // HomeShell
 // ---------------------------------------------------------------------------
@@ -593,7 +604,7 @@ class _SandboxIndicator extends ConsumerWidget {
     return Material(
       color: scheme.tertiaryContainer,
       child: InkWell(
-        onTap: () => showGoLiveSheet(context),
+        onTap: () => _openGoLiveSheetAndRefreshHome(context, ref),
         child: Container(
           key: const Key('sandbox-indicator'),
           width: double.infinity,
@@ -2355,7 +2366,8 @@ class _GettingStartedCard extends ConsumerWidget {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: FilledButton.tonalIcon(
-                      onPressed: () => showGoLiveSheet(context),
+                      onPressed: () =>
+                          _openGoLiveSheetAndRefreshHome(context, ref),
                       icon: const Icon(Symbols.rocket_launch_rounded, fill: 1),
                       label: const Text('Set up my rentals'),
                     ),

@@ -64,6 +64,21 @@ export interface SandboxState {
 	onboardingChoicePending?: boolean;
 }
 
+/** Server-shaped checklist facts for the getting-started card. */
+export interface GettingStartedSignalsResponse {
+	portfolioId: number;
+	portfolioNamed: boolean;
+	ownerCount: number;
+	propertyCount: number;
+	unitCount: number;
+	tenantCount: number;
+	leaseCount: number;
+	hasNotificationEmail: boolean;
+	hasTexting: boolean;
+	hasAutomations: boolean;
+	isSandbox: boolean;
+}
+
 export type OwnerEntityType = 'Person' | 'LLC' | 'Trust';
 
 export interface Owner {
@@ -81,6 +96,7 @@ export interface Owner {
 	address?: string;
 	phone?: string;
 	email?: string;
+	assignedPropertyCount?: number;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -130,6 +146,58 @@ export interface Unit {
 	notes?: string;
 	createdAt: string;
 	updatedAt: string;
+}
+
+export type UnitListingStatus = 'Draft' | 'ReadyToPost' | 'Posted' | 'Paused' | 'Filled' | 'Archived';
+
+export interface UnitListing {
+	id: number;
+	portfolioId: number;
+	propertyId: number;
+	unitId: number;
+	channel: 'ZillowManual';
+	status: UnitListingStatus;
+	headline: string;
+	description: string;
+	rent: number;
+	securityDeposit?: number | null;
+	bedrooms: number;
+	bathrooms: number;
+	squareFeet?: number | null;
+	availableOn?: string | null;
+	leaseTerms?: string | null;
+	petPolicy?: string | null;
+	utilities?: string | null;
+	parking?: string | null;
+	amenities?: string | null;
+	photoNotes?: string | null;
+	zillowListingUrl?: string | null;
+	zillowApplicationUrl?: string | null;
+	postedAtUtc?: string | null;
+	isPosted: boolean;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface SaveUnitListingRequest {
+	status?: UnitListingStatus;
+	headline?: string;
+	description?: string;
+	rent?: number | null;
+	securityDeposit?: number | null;
+	bedrooms?: number | null;
+	bathrooms?: number | null;
+	squareFeet?: number | null;
+	availableOn?: string | null;
+	leaseTerms?: string | null;
+	petPolicy?: string | null;
+	utilities?: string | null;
+	parking?: string | null;
+	amenities?: string | null;
+	photoNotes?: string | null;
+	zillowListingUrl?: string | null;
+	zillowApplicationUrl?: string | null;
+	postedAtUtc?: string | null;
 }
 
 /** A units-list row with health badges (GET /units/list-with-health). */
@@ -1017,6 +1085,18 @@ export interface InspectionItem {
 	photoStoredFileId?: number;
 	spawnedWorkOrderId?: number;
 	sortOrder: number;
+}
+
+export interface InspectionItemInput {
+	area: string;
+	label: string;
+}
+
+export interface InspectionItemUpdate {
+	area?: string;
+	label?: string;
+	result?: InspectionItemResult;
+	note?: string;
 }
 
 /** Inspection detail/create response: the inspection fields plus checklist items. */

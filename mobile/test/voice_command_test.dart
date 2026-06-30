@@ -1,10 +1,47 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:rental_command/core/voice/voice_command.dart';
+import 'package:rental_command/core/voice/voice_command_controller.dart';
 
 /// Tests for the voice/App-Actions deep-link parser — the heart of the bridge
 /// between Google Assistant and the app. These assert that the URIs our
 /// `shortcuts.xml` capabilities emit map to the right typed command + params.
 void main() {
+  group('auth email links', () {
+    test('recognizes reset-password and verify-email https paths', () {
+      expect(
+        authEmailLinkPath(
+          Uri.parse(
+            'https://rc.coblesolutions.com/reset-password?userId=u&token=t',
+          ),
+        ),
+        'reset-password',
+      );
+      expect(
+        authEmailLinkPath(
+          Uri.parse(
+            'https://rc.coblesolutions.com/verify-email?userId=u&token=t',
+          ),
+        ),
+        'verify-email',
+      );
+    });
+
+    test('recognizes custom-scheme auth hosts and rejects other links', () {
+      expect(
+        authEmailLinkPath(Uri.parse('rentalcommand://reset-password?token=t')),
+        'reset-password',
+      );
+      expect(
+        authEmailLinkPath(Uri.parse('rentalcommand://verify-email?token=t')),
+        'verify-email',
+      );
+      expect(
+        authEmailLinkPath(Uri.parse('https://rc.coblesolutions.com/settings')),
+        isNull,
+      );
+    });
+  });
+
   group('parseVoiceCommand — custom scheme', () {
     test('scan a document', () {
       final cmd = parseVoiceCommand(Uri.parse('rentalcommand://voice/scan'));

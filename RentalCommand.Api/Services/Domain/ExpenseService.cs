@@ -159,24 +159,56 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseResponse?> GetAsync(int portfolioId, int id, CancellationToken ct = default)
     {
-        var entity = await _db.Expenses
+        var response = await _db.Expenses
             .AsNoTracking()
-            .Include(e => e.LineItems)
-            .Include(e => e.Property)
-            .Include(e => e.Unit)
-            .Include(e => e.Vendor)
-            .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
+            .Where(e => e.Id == id && e.PortfolioId == portfolioId)
+            .Select(e => new ExpenseResponse
+            {
+                Id = e.Id,
+                PortfolioId = e.PortfolioId,
+                PropertyId = e.PropertyId,
+                UnitId = e.UnitId,
+                VendorId = e.VendorId,
+                WorkOrderId = e.WorkOrderId,
+                Category = e.Category,
+                Description = e.Description,
+                Status = e.Status,
+                Amount = e.Amount,
+                IncurredAt = e.IncurredAt,
+                DueDate = e.DueDate,
+                PaidAt = e.PaidAt,
+                BillableToOwner = e.BillableToOwner,
+                Notes = e.Notes,
+                CreatedAt = e.CreatedAt,
+                UpdatedAt = e.UpdatedAt,
+                Subtotal = e.Subtotal,
+                TaxAmount = e.TaxAmount,
+                ReceiptData = e.ReceiptData,
+                PaymentMethod = e.PaymentMethod,
+                CardLast4 = e.CardLast4,
+                DocumentKind = e.DocumentKind,
+                PropertyName = e.Property == null ? null : e.Property.Name,
+                UnitNumber = e.Unit == null ? null : e.Unit.UnitNumber,
+                VendorName = e.Vendor == null ? null : e.Vendor.Name,
+                LineItems = e.LineItems
+                    .OrderBy(li => li.LineNumber)
+                    .ThenBy(li => li.Id)
+                    .Select(li => new ExpenseLineItemResponse
+                    {
+                        Description = li.Description,
+                        Quantity = li.Quantity,
+                        UnitPrice = li.UnitPrice,
+                        Amount = li.Amount,
+                        LineNumber = li.LineNumber,
+                    })
+                    .ToList(),
+            })
+            .FirstOrDefaultAsync(ct);
 
-        if (entity == null)
+        if (response == null)
             return null;
 
-        var response = ExpenseResponse.FromEntity(entity);
-        response.LineItems = entity.LineItems
-            .OrderBy(li => li.LineNumber)
-            .Select(ExpenseLineItemResponse.FromEntity)
-            .ToList();
-
-        var storedFile = await _db.FindLatestAvailableEntityFileAsync(_files, portfolioId, EntityType, entity.Id, ct);
+        var storedFile = await _db.FindLatestAvailableEntityFileAsync(_files, portfolioId, EntityType, response.Id, ct);
 
         if (storedFile != null)
         {
@@ -264,9 +296,13 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseResponse?> UpdateAsync(int portfolioId, int id, UpdateExpenseRequest request, CancellationToken ct = default)
     {
-        var entity = await _db.Expenses
-            .Include(e => e.LineItems)
-            .FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
+        IQueryable<Expense> expenseQuery = _db.Expenses;
+        if (request.LineItems is not null)
+        {
+            expenseQuery = expenseQuery.Include(e => e.LineItems);
+        }
+
+        var entity = await expenseQuery.FirstOrDefaultAsync(e => e.Id == id && e.PortfolioId == portfolioId, ct);
         if (entity == null)
         {
             return null;
@@ -340,11 +376,7 @@ public class ExpenseService : IExpenseService
 
         await _db.SaveChangesAsync(ct);
 
-        var response = ExpenseResponse.FromEntity(entity);
-        response.LineItems = entity.LineItems
-            .OrderBy(li => li.LineNumber)
-            .Select(ExpenseLineItemResponse.FromEntity)
-            .ToList();
+        var response = await GetAsync(portfolioId, id, ct) ?? ExpenseResponse.FromEntity(entity);
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }

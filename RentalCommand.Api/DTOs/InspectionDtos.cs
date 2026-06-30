@@ -192,13 +192,38 @@ public class InspectionTemplateResponse
     };
 }
 
-/// <summary>Body for PATCH /inspections/{id}/items/{itemId} — set the result and/or note.</summary>
+/// <summary>Body for POST /inspections/{id}/items — add a question to a scheduled inspection.</summary>
+public class CreateInspectionItemRequest
+{
+    [Required]
+    [MaxLength(120)]
+    public string Area { get; set; } = string.Empty;
+
+    [Required]
+    [MaxLength(300)]
+    public string Label { get; set; } = string.Empty;
+}
+
+/// <summary>Body for PATCH /inspections/{id}/items/{itemId} — set the question text, result, and/or note.</summary>
 public class UpdateInspectionItemRequest
 {
+    [MaxLength(120)]
+    public string? Area { get; set; }
+
+    [MaxLength(300)]
+    public string? Label { get; set; }
+
     public InspectionItemResult? Result { get; set; }
 
     [MaxLength(2000)]
     public string? Note { get; set; }
+}
+
+/// <summary>Body for PATCH /inspections/{id}/items/reorder — replace the checklist item order.</summary>
+public class ReorderInspectionItemsRequest
+{
+    [Required]
+    public IReadOnlyList<int> ItemIds { get; set; } = [];
 }
 
 /// <summary>Body for POST /inspections/{id}/items/{itemId}/photo — link an uploaded StoredFile.</summary>
