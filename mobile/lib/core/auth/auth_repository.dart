@@ -172,6 +172,22 @@ class AuthRepository {
     }
   }
 
+  /// Confirms an email address via `POST /auth/confirm-email` using the `userId`
+  /// + `token` from the emailed verification link.
+  Future<void> confirmEmail({
+    required String userId,
+    required String token,
+  }) async {
+    try {
+      await _dio.post<Map<String, dynamic>>(
+        '/auth/confirm-email',
+        data: {'userId': userId, 'token': token},
+      );
+    } on DioException catch (e) {
+      throw ApiException.fromDioException(e);
+    }
+  }
+
   /// Completes a password reset via `POST /auth/reset-password` using the
   /// `userId` + `token` from the emailed link. Throws [ApiException] on an
   /// invalid/expired token or a password-policy failure (message folded in).

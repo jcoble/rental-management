@@ -1,7 +1,8 @@
 import 'dart:async';
 
 import 'package:app_links/app_links.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart'
+    show debugPrint, kDebugMode, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../router/app_router.dart';
@@ -78,18 +79,18 @@ class VoiceLinkService {
   }
 
   void _handle(Uri uri) {
-    // Password-reset deep link from the emailed link (custom scheme
-    // `rentalcommand://reset-password?userId=&token=`, or any link whose last
-    // path segment is `reset-password`). Route it straight to the in-app screen
-    // so the reset can be completed on device instead of bouncing to the web.
-    if (_isResetPasswordLink(uri)) {
-      final userId = uri.queryParameters['userId'] ?? '';
-      final token = uri.queryParameters['token'] ?? '';
+    // Auth-email links should complete in-app when the user has the app
+    // installed; otherwise the same https URL still falls back to the web page.
+    final authPath = authEmailLinkPath(uri);
+    if (authPath != null) {
       final query = Uri(
-        queryParameters: {'userId': userId, 'token': token},
+        queryParameters: {
+          'userId': uri.queryParameters['userId'] ?? '',
+          'token': uri.queryParameters['token'] ?? '',
+        },
       ).query;
-      if (kDebugMode) debugPrint('[deeplink] reset-password received');
-      _ref.read(appRouterProvider).go('/reset-password?$query');
+      if (kDebugMode) debugPrint('[deeplink] $authPath received');
+      _ref.read(appRouterProvider).go('/$authPath?$query');
       return;
     }
 
@@ -102,13 +103,20 @@ class VoiceLinkService {
     _ref.read(pendingVoiceCommandProvider.notifier).set(command);
   }
 
-  /// True for a password-reset link in either the custom-scheme form
-  /// (`rentalcommand://reset-password?...`) or a path form (`.../reset-password?...`).
-  static bool _isResetPasswordLink(Uri uri) =>
-      uri.host == 'reset-password' ||
-      uri.pathSegments.contains('reset-password');
-
   void dispose() => _subscription?.cancel();
+}
+
+/// Returns the supported auth route for either a custom-scheme form
+/// (`rentalcommand://reset-password?...`) or an https path form
+/// (`https://rc.coblesolutions.com/reset-password?...`).
+@visibleForTesting
+String? authEmailLinkPath(Uri uri) {
+  const supported = {'reset-password', 'verify-email'};
+  if (supported.contains(uri.host)) return uri.host;
+  for (final segment in uri.pathSegments) {
+    if (supported.contains(segment)) return segment;
+  }
+  return null;
 }
 
 final voiceLinkServiceProvider = Provider<VoiceLinkService>((ref) {
