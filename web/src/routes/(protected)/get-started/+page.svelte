@@ -189,7 +189,7 @@
 						<h2 class="text-lg font-semibold">Explore with sample data</h2>
 						<p class="flex-1 text-sm text-muted-foreground">
 							Jump into an account already filled with sample properties, tenants, and leases.
-							Nothing sends real emails or texts, or charges any cards — poke around freely.
+							These are sample records. Configured email and text providers still work, so test with intentional recipients.
 						</p>
 						<Button variant="outline" class="gap-1.5" data-testid="get-started-explore-sandbox" onclick={exploreSandbox}>
 							Start exploring

@@ -231,13 +231,13 @@
 						<Button href="/accounting" class="gap-2" data-testid="dashboard-hero-primary-action">
 							Open money
 							<ArrowRight class="h-4 w-4" />
-						</Button>
-						<Button href="/properties" variant="secondary" data-testid="dashboard-hero-secondary-action">View properties</Button>
-						<Button href="/onboarding?from=dashboard" variant="outline" class="gap-2" data-testid="dashboard-hero-guided-setup">
-							Guided Setup
-							<ArrowRight class="h-4 w-4" />
-						</Button>
-					</div>
+							</Button>
+							<Button href="/properties" variant="secondary" data-testid="dashboard-hero-secondary-action">View properties</Button>
+							<Button href="/onboarding?from=dashboard" variant="outline" class="gap-2" data-testid="dashboard-hero-guided-setup">
+								Setup & Import
+								<ArrowRight class="h-4 w-4" />
+							</Button>
+						</div>
 				</div>
 				<div class="m3-dashboard-hero-status p-5" data-testid="dashboard-hero-status">
 					<div class="flex items-start justify-between gap-4">

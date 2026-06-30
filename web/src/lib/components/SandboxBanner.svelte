@@ -76,13 +76,13 @@
 			class="flex w-full items-center gap-2 border-b border-[color-mix(in_oklab,var(--warning)_40%,transparent)] bg-[color-mix(in_oklab,var(--warning)_14%,var(--background))] px-3 py-1.5 text-xs text-foreground sm:px-4"
 		>
 			<FlaskConical class="h-4 w-4 shrink-0 text-warning" />
-			<p class="min-w-0 flex-1 leading-tight">
-				<span class="font-semibold">Example data</span>
-				<span class="hidden text-muted-foreground sm:inline">
-					— you're exploring with example data. Nothing here sends real emails/texts or charges cards.
-				</span>
-				<span class="text-muted-foreground sm:hidden">— nothing here is real.</span>
-			</p>
+				<p class="min-w-0 flex-1 leading-tight">
+					<span class="font-semibold">Example data</span>
+					<span class="hidden text-muted-foreground sm:inline">
+						— you're exploring with sample records. Configured email and text providers still work for testing.
+					</span>
+					<span class="text-muted-foreground sm:hidden">— sample records.</span>
+				</p>
 			<Button
 				size="sm"
 				class="h-7 shrink-0 gap-1 bg-warning px-2.5 text-xs font-semibold text-warning-foreground hover:bg-[color-mix(in_oklab,var(--warning)_88%,black)]"
@@ -117,14 +117,14 @@
 			<div class="min-w-0 flex-1">
 				{#if stateQuery.isLoading}
 					<p class="text-sm text-muted-foreground">Checking account mode…</p>
-				{:else if isSandbox}
-					<p class="text-sm font-semibold">Example data</p>
-					<p class="mt-1 text-xs text-muted-foreground">
-						This account is loaded with example data so you can explore safely. Nothing you do here
-						sends real emails or texts, or charges any cards. When you're ready to run your real
-						rentals, switch over — this permanently clears the example data and starts you clean.
-						<span class="font-medium text-foreground">This can't be undone.</span>
-					</p>
+					{:else if isSandbox}
+						<p class="text-sm font-semibold">Example data</p>
+						<p class="mt-1 text-xs text-muted-foreground">
+							This account is loaded with example records so you can explore the app. Configured email
+							and text providers still run for testing, so use reachable test recipients intentionally.
+							When you're ready to run your real rentals, switch over — this permanently clears the example data and starts you clean.
+							<span class="font-medium text-foreground">This can't be undone.</span>
+						</p>
 					<div class="mt-3">
 						<Button
 							class="gap-1.5 bg-warning text-warning-foreground hover:bg-[color-mix(in_oklab,var(--warning)_88%,black)]"
