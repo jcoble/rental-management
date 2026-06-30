@@ -1,8 +1,10 @@
 <script lang="ts">
-	import { Building, UserCircle2, Home, Users, FileText, Bell, MessageSquare, HelpCircle, ExternalLink, ChevronDown } from '@lucide/svelte';
+	import { Building, UserCircle2, Home, Users, FileText, Bell, MessageSquare, HelpCircle, ExternalLink, ChevronDown, MousePointerClick } from '@lucide/svelte';
 	import type { Snippet } from 'svelte';
 	import type { WizardStepMeta } from '$lib/onboarding/wizard-steps';
 	import { wizardDocsHref } from '$lib/onboarding/wizard-steps';
+	import { startCoach } from '$lib/onboarding/coach.svelte';
+	import { coachCaption } from '$lib/onboarding/coach-captions';
 
 	type Props = {
 		step: WizardStepMeta;
@@ -19,6 +21,11 @@
 
 	// "Where do I find this?" starts collapsed so the step stays calm; one tap reveals the hint.
 	let showWhere = $state(false);
+
+	// On-demand coachmark (TSK-602): each step has a `data-coach="onboarding-<key>"` anchor on its
+	// primary field. "Show me on the form" is the ONLY way it fires — never automatic — so it never
+	// gets in the way of someone who's already filling the form out.
+	const coachKey = $derived(`onboarding-${step.key}`);
 </script>
 
 <div data-testid={`onboarding-step-${step.key}`}>
@@ -27,6 +34,15 @@
 			<Icon class="h-5 w-5" />
 		</span>
 		<h2 class="min-w-0 flex-1 text-lg font-semibold leading-tight">{step.title}</h2>
+		<button
+			type="button"
+			class="m3-state-layer inline-flex shrink-0 items-center gap-1.5 rounded-full border border-primary/30 px-3 py-1.5 text-xs font-semibold text-primary"
+			data-testid={`onboarding-show-me-${step.key}`}
+			onclick={() => startCoach(coachKey, coachCaption(coachKey))}
+		>
+			<MousePointerClick class="h-3.5 w-3.5" />
+			Show me
+		</button>
 	</div>
 
 	<!-- Plain-English: WHAT this is and WHY it's needed. -->

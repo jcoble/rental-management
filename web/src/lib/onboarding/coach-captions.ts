@@ -15,6 +15,17 @@ const EXTRA_CAPTIONS: Record<string, string> = {
 	'open-property-for-units':
 		'Open a property (click its row), then use “Add Unit” on its page to add a rentable unit.',
 	'add-unit': 'Click here to add a unit — a single rentable space inside this property.',
+
+	// Guided Setup (TSK-602): one "Show me on the form" anchor per wizard step, spotlighting that
+	// step's primary field. On-demand only — the user has to tap "Show me", it never auto-fires.
+	'onboarding-portfolio': 'Type your rental business name here — your own name, a family name, or your LLC.',
+	'onboarding-owner': 'Type the legal owner’s name here — yourself, your LLC, or your trust.',
+	'onboarding-import': 'Drop a photo or PDF of a signed lease here — we’ll read it and build the rest.',
+	'onboarding-property': 'Type the property name here, then its address below.',
+	'onboarding-tenants': 'Type your tenant’s name here. Use “Add another tenant” for each additional one.',
+	'onboarding-lease': 'Start by picking which tenant this lease is for.',
+	'onboarding-notifications': 'Type the email where YOU want alerts sent — or leave it blank to use your login email.',
+	'onboarding-texting': 'Paste your SignalWire Project ID here to turn on text messages.',
 };
 
 /** Resolve the callout caption for a coach key. */
