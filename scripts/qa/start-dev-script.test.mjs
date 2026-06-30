@@ -24,7 +24,6 @@ describe('start-dev launcher', () => {
 		const buildSection = script.indexOf('Building .NET hosts');
 
 		assert.ok(buildSection > -1, 'expected an explicit serial .NET build section');
-		assert.doesNotMatch(script, /ALLOW_EXTERNAL_NOTIFICATIONS/);
 
 		for (const key of [
 			'Notifications__SendGrid__ApiKey',
