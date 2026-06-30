@@ -80,18 +80,22 @@
 	// Editable draft (subject/body) per type, seeded from the server templates. Kept separate from the
 	// query data so typing doesn't fight refetches.
 	let drafts = $state<Record<string, { subject: string; body: string }>>({});
-	let seededFor = $state<NoticeTemplateResponse[] | null>(null);
+	let seededDraftsKey: string | null = null;
 	let expandedType = $state<string | null>(null);
 
 	$effect(() => {
 		const data = templatesQuery.data;
-		if (!data || data === seededFor) return;
+		if (!data) return;
+		const key = data
+			.map((t) => `${t.noticeType}:${t.updatedAt ?? ''}:${t.hasTemplate}:${t.subject}:${t.body}`)
+			.join('|');
+		if (key === seededDraftsKey) return;
 		const next: Record<string, { subject: string; body: string }> = {};
 		for (const t of data) {
 			next[t.noticeType] = { subject: t.subject ?? '', body: t.body ?? '' };
 		}
 		drafts = next;
-		seededFor = data;
+		seededDraftsKey = key;
 	});
 
 	function templateFor(type: string): NoticeTemplateResponse | undefined {

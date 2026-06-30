@@ -13,7 +13,7 @@
 		type UpdateDocumentTemplateFieldRequest
 	} from '$lib/api/endpoints/document-templates';
 	import { leases } from '$lib/api/endpoints/leases';
-	import { documentFileHref, fileObjectUrl } from '$lib/api/endpoints/documents';
+	import { documentFileHref, fileBlob } from '$lib/api/endpoints/documents';
 	import { getCurrentPortfolioId } from '$lib/stores/portfolio.svelte';
 	import type { Lease } from '$lib/types';
 	import { apiErrorMessage, showError, showSuccess } from '$lib/utils/toast';
@@ -93,7 +93,6 @@
 
 	let pdfjs: PdfJsModule | null = null;
 	let pdfDoc = $state<PdfDocument | null>(null);
-	let pdfObjectUrl = $state<string | null>(null);
 	let loadedPdfKey = $state<string | null>(null);
 	let pageCount = $state(1);
 	let selectedPage = $state(1);
@@ -363,12 +362,11 @@
 
 	async function loadSourcePdf(fileId: number, key: string) {
 		try {
-			const objectUrl = await fileObjectUrl(fileId);
+			const blob = await fileBlob(fileId);
 			if (loadedPdfKey !== key) {
-				URL.revokeObjectURL(objectUrl);
 				return;
 			}
-			await loadPdfObjectUrl(objectUrl);
+			await loadPdfBlob(blob);
 		} catch (err) {
 			if (loadedPdfKey === key) {
 				resetPdfDisplay();
@@ -385,12 +383,10 @@
 	async function loadPreviewPdf(leaseId: number, key: string) {
 		try {
 			const blob = await documentTemplates.previewLeasePdf(templateId, leaseId);
-			const objectUrl = URL.createObjectURL(blob);
 			if (loadedPdfKey !== key) {
-				URL.revokeObjectURL(objectUrl);
 				return;
 			}
-			await loadPdfObjectUrl(objectUrl);
+			await loadPdfBlob(blob);
 		} catch (err) {
 			if (loadedPdfKey === key) {
 				resetPdfDisplay();
@@ -399,33 +395,28 @@
 		}
 	}
 
-	async function loadPdfObjectUrl(objectUrl: string) {
+	async function loadPdfBlob(blob: Blob) {
 		pageRendering = true;
 		pdfError = null;
 		try {
 			const pdf = await getPdfJs();
-			if (pdfObjectUrl) URL.revokeObjectURL(pdfObjectUrl);
-			pdfObjectUrl = objectUrl;
 			await pdfDoc?.destroy?.();
-			const loadingTask = pdf.getDocument({ url: objectUrl });
+			const data = new Uint8Array(await blob.arrayBuffer());
+			const loadingTask = pdf.getDocument({ data });
 			pdfDoc = (await loadingTask.promise) as unknown as PdfDocument;
 			pageCount = Math.max(1, pdfDoc.numPages);
 			selectedPage = Math.min(Math.max(1, selectedPage), pageCount);
 			await tick();
 			await renderPage(selectedPage);
 		} catch (err) {
-			resetPdfDisplay({ keepObjectUrl: false });
+			resetPdfDisplay();
 			pdfError = err instanceof Error ? err.message : 'PDF preview failed.';
 		} finally {
 			pageRendering = false;
 		}
 	}
 
-	function resetPdfDisplay(options: { keepObjectUrl?: boolean } = {}) {
-		if (!options.keepObjectUrl && pdfObjectUrl) {
-			URL.revokeObjectURL(pdfObjectUrl);
-			pdfObjectUrl = null;
-		}
+	function resetPdfDisplay() {
 		void pdfDoc?.destroy?.();
 		pdfDoc = null;
 		pageCount = 1;
@@ -912,7 +903,6 @@
 
 	onDestroy(() => {
 		cleanupActiveDrag?.();
-		if (pdfObjectUrl) URL.revokeObjectURL(pdfObjectUrl);
 		void pdfDoc?.destroy?.();
 	});
 </script>

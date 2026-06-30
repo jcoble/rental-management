@@ -24,6 +24,7 @@
 		getLeaseStatusOptions,
 		getLeasesEmptyStateCopy,
 	} from '$lib/leases/lease-list-state';
+	import { defaultLeaseNumber } from '$lib/leases/lease-number';
 	import { readLeaseCreatePrefill } from '$lib/leases/lease-create-prefill';
 	import { Plus, FileText } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -90,7 +91,7 @@
 	}));
 
 	const empty = {
-		leaseNumber: '', propertyId: '', unitId: '', tenantId: '', tenantIds: [] as string[], startDate: '', endDate: '',
+		leaseNumber: defaultLeaseNumber(), propertyId: '', unitId: '', tenantId: '', tenantIds: [] as string[], startDate: '', endDate: '',
 		monthlyRent: '', securityDeposit: '', lateFeeAmount: '75', rentDueDay: '1',
 		rentTrackingStartMode: 'ForwardOnly', rentTrackingStartDate: '',
 		status: 'Draft', notes: '',
