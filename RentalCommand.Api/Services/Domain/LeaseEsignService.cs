@@ -233,10 +233,11 @@ public sealed class LeaseEsignService : ILeaseEsignService
 
         var messages = await QueryLeaseSignatureQueueMessagesAsync(portfolioId, leaseId, currentSignatureRequestId, ct);
         var signingUrls = await QueryActiveSigningUrlsAsync(portfolioId, messages, ct);
+        var tenantLinks = await QueryLeaseTenantLinksAsync(portfolioId, leaseId, messages, ct);
         return new LeaseSignatureQueueResponse
         {
             LeaseId = leaseId,
-            Items = messages.Select(message => ToQueueItem(message, signingUrls)).ToList(),
+            Items = messages.Select(message => ToQueueItem(message, signingUrls, tenantLinks)).ToList(),
         };
     }
 
@@ -660,7 +661,8 @@ public sealed class LeaseEsignService : ILeaseEsignService
 
     private static LeaseSignatureQueueItemResponse ToQueueItem(
         OutboxMessage message,
-        IReadOnlyDictionary<string, string> signingUrls)
+        IReadOnlyDictionary<string, string> signingUrls,
+        IReadOnlyDictionary<string, int> tenantLinks)
     {
         var sentAt = message.SentAt;
         var failedAt = message.FailedAt;
@@ -677,6 +679,9 @@ public sealed class LeaseEsignService : ILeaseEsignService
         {
             Id = message.Id,
             RecipientEmail = recipientEmail,
+            TenantId = tenantLinks.TryGetValue(NormalizeEmailKey(recipientEmail) ?? string.Empty, out var tenantId)
+                ? tenantId
+                : null,
             Subject = ReadPayloadValue(message.Payload, "subject"),
             Status = status,
             QueuedAt = message.CreatedAt,
@@ -701,6 +706,70 @@ public sealed class LeaseEsignService : ILeaseEsignService
 
     private static string SigningLookupKey(int signatureRequestId, string email)
         => $"{signatureRequestId}:{email.Trim().ToUpperInvariant()}";
+
+    private async Task<IReadOnlyDictionary<string, int>> QueryLeaseTenantLinksAsync(
+        int portfolioId,
+        int leaseId,
+        IReadOnlyList<OutboxMessage> messages,
+        CancellationToken ct)
+    {
+        var recipientEmails = messages
+            .Select(message => NormalizeEmailKey(ReadPayloadValue(message.Payload, "to")))
+            .Where(email => email is not null)
+            .Select(email => email!)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (recipientEmails.Length == 0)
+        {
+            return new Dictionary<string, int>(StringComparer.Ordinal);
+        }
+
+        var tenantMatches = await _db.LeaseTenants
+            .AsNoTracking()
+            .Where(lt => lt.PortfolioId == portfolioId && lt.LeaseId == leaseId)
+            .Select(lt => new
+            {
+                TenantId = (int?)lt.TenantId,
+                Email = lt.Tenant!.Email,
+                Rank = lt.IsPrimary ? 0 : 1,
+                SortId = lt.Id,
+            })
+            .Concat(_db.Leases
+                .AsNoTracking()
+                .Where(l => l.PortfolioId == portfolioId && l.Id == leaseId)
+                .Select(l => new
+                {
+                    TenantId = (int?)l.TenantId,
+                    Email = l.Tenant!.Email,
+                    Rank = 2,
+                    SortId = l.Id,
+                }))
+            .Where(match => match.Email != null && recipientEmails.Contains(match.Email.Trim().ToUpper()))
+            .OrderBy(match => match.Rank)
+            .ThenBy(match => match.SortId)
+            .ToListAsync(ct);
+
+        var links = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var match in tenantMatches)
+        {
+            var emailKey = NormalizeEmailKey(match.Email);
+            if (emailKey is null || match.TenantId is null)
+            {
+                continue;
+            }
+
+            links.TryAdd(emailKey, match.TenantId.Value);
+        }
+
+        return links;
+    }
+
+    private static string? NormalizeEmailKey(string? email)
+    {
+        var trimmed = email?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed.ToUpperInvariant();
+    }
 
     private static string ResolveQueueStatus(OutboxMessage message)
     {

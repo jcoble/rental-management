@@ -45,6 +45,7 @@ export interface LeaseSignatureQueueResponse {
 export interface LeaseSignatureQueueItemResponse {
 	id: number;
 	recipientEmail: string;
+	tenantId?: number | null;
 	subject?: string | null;
 	status: 'Queued' | 'Retrying' | 'Sent' | 'Failed' | 'DeliveryDisabled' | string;
 	queuedAt: string;
