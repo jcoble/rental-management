@@ -65,6 +65,10 @@ public class DailyBriefingServiceTests : IDisposable
         briefing.Bullets.Should().Contain(b => b.Category == "Appointment");
         briefing.Bullets.Should().Contain(b => b.Category == "Inspection");
         briefing.Bullets.Should().Contain(b => b.Category == "LeaseExpiring");
+        briefing.Bullets
+            .Where(b => b.EntityType is "WorkOrder" or "Payment" or "Lease")
+            .Should().OnlyContain(b => b.UnitId > 0,
+                "unit-tied dashboard action items should deep-link into the unit Command Center");
 
         _executedSql.Should().Contain(command =>
             command.Contains("UNION", StringComparison.OrdinalIgnoreCase)

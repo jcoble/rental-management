@@ -85,6 +85,11 @@ public class DashboardActivity
     public string Type { get; set; } = string.Empty;
     /// <summary>Primary key of the entity this row touched, so the web can deep-link to its detail page.</summary>
     public int EntityId { get; set; }
+    /// <summary>
+    /// Unit that owns this activity when the touched entity belongs to a unit. Lets secondary dashboard
+    /// links land inside the unit Command Center tab instead of a generic detail page.
+    /// </summary>
+    public int? UnitId { get; set; }
     public string? Action { get; set; }
     public string? Description { get; set; }
     /// <summary>
