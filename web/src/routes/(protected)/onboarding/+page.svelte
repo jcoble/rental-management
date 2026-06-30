@@ -26,6 +26,7 @@
 	import { showSuccess, showError, apiErrorMessage } from '$lib/utils/toast';
 	import HelpPopover from '$lib/components/ui/HelpPopover.svelte';
 	import * as Card from '$lib/components/ui/card';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Select from '$lib/components/ui/select';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -37,6 +38,7 @@
 	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import WizardStepScaffold from '$lib/components/onboarding/WizardStepScaffold.svelte';
 	import LeasePhotoPrefill from '$lib/components/onboarding/LeasePhotoPrefill.svelte';
+	import LeaseFirstImport from '$lib/components/scan/LeaseFirstImport.svelte';
 	import ScanLauncher from '$lib/components/scan/ScanLauncher.svelte';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
 	import {
@@ -121,10 +123,12 @@
 	let createdUnits = $state<Unit[]>([]);
 	let createdTenants = $state<Tenant[]>([]);
 	let createdLease = $state(false);
+	let leaseImportCreatedSpine = $state(false);
 	let portfolioSaved = $state(false);
 	let notificationsSaved = $state(false);
 	let textingSaved = $state(false);
 	let returnToFinishAfterOptional = $state(false);
+	let activeLeaseImportOpen = $state(false);
 
 	// ---------------------------------------------------------------------------
 	// Resumable progress — persisted per portfolio so a reload resumes in place.
@@ -205,9 +209,10 @@
 	const stepDone = $derived<Record<WizardStepKey, boolean>>({
 		portfolio: portfolioSaved || !!portfolioQuery.data?.name,
 		owner: !!createdOwner || hasExistingOwners,
-		property: !!createdProperty || hasExistingProperties,
-		tenants: createdTenants.length > 0 || hasExistingTenants,
-		lease: createdLease || hasExistingLeases,
+		import: leaseImportCreatedSpine || createdLease || hasExistingLeases,
+		property: leaseImportCreatedSpine || !!createdProperty || hasExistingProperties,
+		tenants: leaseImportCreatedSpine || createdTenants.length > 0 || hasExistingTenants,
+		lease: leaseImportCreatedSpine || createdLease || hasExistingLeases,
 		notifications: notificationsSaved || hasNotificationEmail,
 		texting: textingSaved || hasTexting,
 	});
@@ -221,8 +226,35 @@
 	// user actually created records on a core step — never on a plain step advance or Skip,
 	// and at most once per step. (Previously next() fired confetti on every forward click,
 	// which is why it felt constant and disconnected from "I finished a phase".)
-	const MILESTONE_STEPS: WizardStepKey[] = ['owner', 'property', 'tenants', 'lease'];
+	const MILESTONE_STEPS: WizardStepKey[] = ['owner', 'import', 'property', 'tenants', 'lease'];
 	const celebratedSteps = new Set<WizardStepKey>();
+
+	// Lease-first import: the embedded LeaseFirstImport scanned a lease and created the whole
+	// chain (property + unit + tenant + lease) in one transaction. Mark the lease done, refresh
+	// the lists so later visits show the saved records, then move to the finished setup state.
+	type LeaseImportCompleteResult = {
+		leaseId?: number | null;
+		propertyId?: number | null;
+		unitId?: number | null;
+		tenantId?: number | null;
+	};
+
+	function handleLeaseImportComplete(result: LeaseImportCompleteResult) {
+		if (!result.leaseId) {
+			showError('The scan finished, but no lease was created. Please review the draft or try again.');
+			return;
+		}
+		activeLeaseImportOpen = false;
+		leaseImportCreatedSpine = true;
+		createdLease = true;
+		showSuccess('Imported! We created the property, unit, tenant, and lease from your document.');
+		queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['tenants', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['leases', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['owners', portfolioId] });
+		bigFinale();
+		finishFlow();
+	}
 
 	// ---------------------------------------------------------------------------
 	// Initial positioning. Priority:
@@ -1205,6 +1237,11 @@
 	);
 	const activeImportTarget = $derived(wizardTargetForImportPhase(activeImportPhase.key));
 	const activeImportHref = $derived(manualHrefForImportPhase(activeImportPhase.key));
+	const activeImportUsesLeaseFirst = $derived(
+		activeImportPhaseKey === 'properties' ||
+			activeImportPhaseKey === 'people' ||
+			activeImportPhaseKey === 'leases'
+	);
 
 	function wizardTargetForImportPhase(key: OnboardingImportPhaseKey): WizardStepKey | null {
 		switch (key) {
@@ -1449,13 +1486,26 @@
 								</Button>
 							{/if}
 							{#if activeImportPhase.scanAction !== 'Skip scans for this phase'}
-								<ScanLauncher
-									context={activeImportScanContext}
-									triggerLabel={activeImportPhase.scanAction}
-									triggerVariant="outline"
-									triggerClass="justify-start gap-2"
-									testid="onboarding-active-scan"
-								/>
+								{#if activeImportUsesLeaseFirst}
+									<Button
+										type="button"
+										variant="outline"
+										class="justify-start gap-2"
+										data-testid="onboarding-active-lease-first-scan"
+										onclick={() => (activeLeaseImportOpen = true)}
+									>
+										<FileText class="h-4 w-4" />
+										{activeImportPhase.scanAction}
+									</Button>
+								{:else}
+									<ScanLauncher
+										context={activeImportScanContext}
+										triggerLabel={activeImportPhase.scanAction}
+										triggerVariant="outline"
+										triggerClass="justify-start gap-2"
+										testid="onboarding-active-scan"
+									/>
+								{/if}
 							{/if}
 							<Button variant="outline" class="justify-start gap-2" href="/import" data-testid="onboarding-active-spreadsheet">
 								<FileSpreadsheet class="h-4 w-4" />
@@ -1878,6 +1928,12 @@
 							</Button>
 						</WizardStepScaffold>
 
+					<!-- ============ Import a lease (lease-first: scan → builds the whole chain) ============ -->
+					{:else if currentStep.key === 'import'}
+						<WizardStepScaffold step={currentStep}>
+							<LeaseFirstImport {portfolioId} oncomplete={handleLeaseImportComplete} />
+						</WizardStepScaffold>
+
 					<!-- ============ Lease ============ -->
 					{:else if currentStep.key === 'lease'}
 						<WizardStepScaffold step={currentStep}>
@@ -2138,6 +2194,21 @@
 		{/if}
 	</div>
 </div>
+
+<Dialog.Root open={activeLeaseImportOpen} onOpenChange={(open) => { activeLeaseImportOpen = open; }}>
+	<Dialog.Content class="max-h-[88vh] max-w-3xl overflow-y-auto" data-testid="onboarding-lease-first-dialog">
+		<Dialog.Header>
+			<Dialog.Title class="flex items-center gap-2">
+				<FileText class="h-5 w-5 text-accent" />
+				Scan a lease into setup
+			</Dialog.Title>
+			<Dialog.Description>
+				Read a signed lease here and use it to create the property, unit, tenant, and lease without leaving onboarding.
+			</Dialog.Description>
+		</Dialog.Header>
+		<LeaseFirstImport {portfolioId} oncomplete={handleLeaseImportComplete} oncancel={() => (activeLeaseImportOpen = false)} />
+	</Dialog.Content>
+</Dialog.Root>
 
 <ConfirmDialog
 	open={ownerDeleteTarget !== null}
