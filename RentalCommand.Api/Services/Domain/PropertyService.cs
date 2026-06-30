@@ -12,6 +12,8 @@ namespace RentalCommand.Api.Services.Domain;
 public class PropertyService : IPropertyService
 {
     private const string EntityType = "Property";
+    private const string UnitEntityType = "Unit";
+    private const int UnitNumberMaxLength = 50;
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -179,12 +181,27 @@ public class PropertyService : IPropertyService
             UpdatedAt = now,
         };
 
+        Unit? canonicalUnit = null;
+        if (IsPropertyUnitType(entity.PropertyType))
+        {
+            canonicalUnit = NewCanonicalUnit(entity, now);
+            _db.Units.Add(canonicalUnit);
+        }
+
         _db.Properties.Add(entity);
         await _db.SaveChangesAsync(ct);
 
-        // A freshly-created property has no units yet, so the aggregates are 0 — no query needed.
-        var response = PropertyResponse.FromEntity(entity);
+        var response = PropertyResponse.FromEntity(entity, canonicalUnit == null ? 0 : 1, 0);
         response.OwnerName = entity.OwnerEntity?.Name ?? entity.Owner?.Name;
+        if (canonicalUnit != null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                portfolioId,
+                UnitEntityType,
+                canonicalUnit.Id,
+                UnitResponse.FromEntity(canonicalUnit),
+                ct);
+        }
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
@@ -213,6 +230,9 @@ public class PropertyService : IPropertyService
             return null;
         }
 
+        var previousCanonicalUnitNumber = CanonicalUnitNumber(entity.Name);
+        var now = DateTime.UtcNow;
+
         if (request.OwnerId.HasValue) entity.OwnerId = request.OwnerId;
         if (request.OwnerEntityId.HasValue) entity.OwnerEntityId = request.OwnerEntityId;
         if (request.Name != null) entity.Name = request.Name;
@@ -230,8 +250,13 @@ public class PropertyService : IPropertyService
         if (request.LandValue.HasValue) entity.LandValue = request.LandValue;
         if (request.InServiceDate.HasValue) entity.InServiceDate = request.InServiceDate.ToUtc();
         if (request.ManualAnnualDepreciation.HasValue) entity.ManualAnnualDepreciation = request.ManualAnnualDepreciation;
-        entity.UpdatedAt = DateTime.UtcNow;
+        entity.UpdatedAt = now;
 
+        var touchedCanonicalUnit = await EnsureCanonicalUnitAsync(
+            entity,
+            previousCanonicalUnitNumber,
+            now,
+            ct);
         await _db.SaveChangesAsync(ct);
 
         // Re-read the unit aggregates in SQL (single scalar query) so the broadcast row carries the
@@ -245,6 +270,15 @@ public class PropertyService : IPropertyService
 
         var response = PropertyResponse.FromEntity(entity, counts?.UnitCount ?? 0, counts?.Occupied ?? 0);
         response.OwnerName = entity.OwnerEntity?.Name ?? entity.Owner?.Name;
+        if (touchedCanonicalUnit != null)
+        {
+            await _dataUpdate.BroadcastEntityUpdateAsync(
+                portfolioId,
+                UnitEntityType,
+                touchedCanonicalUnit.Id,
+                UnitResponse.FromEntity(touchedCanonicalUnit),
+                ct);
+        }
         await _dataUpdate.BroadcastEntityUpdateAsync(portfolioId, EntityType, entity.Id, response, ct);
         return response;
     }
@@ -293,5 +327,75 @@ public class PropertyService : IPropertyService
 
         await _dataUpdate.BroadcastEntityDeleteAsync(portfolioId, EntityType, id, ct);
         return true;
+    }
+
+    private async Task<Unit?> EnsureCanonicalUnitAsync(
+        Property property,
+        string previousCanonicalUnitNumber,
+        DateTime now,
+        CancellationToken ct)
+    {
+        if (!IsPropertyUnitType(property.PropertyType))
+        {
+            return null;
+        }
+
+        var liveUnits = await _db.Units
+            .Where(u => u.PropertyId == property.Id)
+            .OrderBy(u => u.Id)
+            .Take(2)
+            .ToListAsync(ct);
+
+        if (liveUnits.Count == 0)
+        {
+            var created = NewCanonicalUnit(property, now);
+            _db.Units.Add(created);
+            return created;
+        }
+
+        if (liveUnits.Count != 1)
+        {
+            return null;
+        }
+
+        var unit = liveUnits[0];
+        if (!string.Equals(unit.UnitNumber, previousCanonicalUnitNumber, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var nextUnitNumber = CanonicalUnitNumber(property.Name);
+        if (string.Equals(unit.UnitNumber, nextUnitNumber, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        unit.UnitNumber = nextUnitNumber;
+        unit.UpdatedAt = now;
+        return unit;
+    }
+
+    private static Unit NewCanonicalUnit(Property property, DateTime now) => new()
+    {
+        Property = property,
+        PropertyId = property.Id,
+        UnitNumber = CanonicalUnitNumber(property.Name),
+        Status = UnitStatus.Vacant,
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+
+    private static bool IsPropertyUnitType(PropertyType type) =>
+        type is PropertyType.SingleFamily or PropertyType.Condo or PropertyType.Townhome;
+
+    private static string CanonicalUnitNumber(string propertyName)
+    {
+        var value = propertyName.Trim();
+        if (value.Length == 0)
+        {
+            return "Property";
+        }
+
+        return value.Length <= UnitNumberMaxLength ? value : value[..UnitNumberMaxLength];
     }
 }
