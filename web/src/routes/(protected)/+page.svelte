@@ -234,7 +234,7 @@
 							</Button>
 							<Button href="/properties" variant="secondary" data-testid="dashboard-hero-secondary-action">View properties</Button>
 							<Button href="/onboarding?from=dashboard" variant="outline" class="gap-2" data-testid="dashboard-hero-guided-setup">
-								Setup & Import
+								Guided Setup
 								<ArrowRight class="h-4 w-4" />
 							</Button>
 						</div>
