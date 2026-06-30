@@ -31,7 +31,15 @@ public class AuditQueryService : IAuditQueryService
     {
         var rows = await FilteredPage(portfolioId, operation, entityType, entityId, query).ToListAsync(ct);
         var userNames = await ResolveActorNamesAsync(portfolioId, rows, ct);
-        return rows.Select(r => AuditEntryResponse.FromEntity(r, _describer, _diff, userNames)).ToList();
+        var unitIds = await ResolveUnitIdsAsync(portfolioId, rows, ct);
+        return rows
+            .Select(r => AuditEntryResponse.FromEntity(
+                r,
+                _describer,
+                _diff,
+                userNames,
+                unitIds.GetValueOrDefault((r.EntityType, r.EntityId))))
+            .ToList();
     }
 
     public async Task<IReadOnlyList<AdminAuditEntryResponse>> ListForensicAsync(
@@ -84,6 +92,84 @@ public class AuditQueryService : IAuditQueryService
 
     private static readonly IReadOnlyDictionary<int, string> EmptyUserNames =
         new Dictionary<int, string>();
+
+    private async Task<IReadOnlyDictionary<(string EntityType, int EntityId), int?>> ResolveUnitIdsAsync(
+        int portfolioId, IReadOnlyList<Core.Entities.AuditLog> rows, CancellationToken ct)
+    {
+        var unitIds = new Dictionary<(string, int), int?>();
+        if (rows.Count == 0)
+        {
+            return unitIds;
+        }
+
+        List<int> Ids(string type)
+        {
+            var ids = new List<int>();
+            foreach (var row in rows)
+            {
+                if (row.EntityType == type && !ids.Contains(row.EntityId))
+                {
+                    ids.Add(row.EntityId);
+                }
+            }
+
+            return ids;
+        }
+
+        async Task AddAsync(string type, IQueryable<UnitRefRow> projected)
+        {
+            foreach (var row in await projected.ToListAsync(ct))
+            {
+                unitIds[(type, row.Id)] = row.UnitId;
+            }
+        }
+
+        var leaseIds = Ids("Lease");
+        if (leaseIds.Count > 0)
+        {
+            await AddAsync("Lease", _db.Leases.AsNoTracking()
+                .Where(l => leaseIds.Contains(l.Id) && l.PortfolioId == portfolioId)
+                .Select(l => new UnitRefRow { Id = l.Id, UnitId = l.UnitId }));
+        }
+
+        var paymentIds = Ids("Payment");
+        if (paymentIds.Count > 0)
+        {
+            await AddAsync("Payment", _db.Payments.AsNoTracking()
+                .Where(p => paymentIds.Contains(p.Id) && p.PortfolioId == portfolioId)
+                .Select(p => new UnitRefRow { Id = p.Id, UnitId = p.Lease != null ? p.Lease.UnitId : null }));
+        }
+
+        var workOrderIds = Ids("WorkOrder");
+        if (workOrderIds.Count > 0)
+        {
+            await AddAsync("WorkOrder", _db.WorkOrders.AsNoTracking()
+                .Where(w => workOrderIds.Contains(w.Id) && w.PortfolioId == portfolioId)
+                .Select(w => new UnitRefRow { Id = w.Id, UnitId = w.UnitId }));
+        }
+
+        var expenseIds = Ids("Expense");
+        if (expenseIds.Count > 0)
+        {
+            await AddAsync("Expense", _db.Expenses.AsNoTracking()
+                .Where(e => expenseIds.Contains(e.Id) && e.PortfolioId == portfolioId)
+                .Select(e => new UnitRefRow
+                {
+                    Id = e.Id,
+                    UnitId = e.UnitId ?? (e.WorkOrder != null ? e.WorkOrder.UnitId : null),
+                }));
+        }
+
+        var applicationIds = Ids("RentalApplication");
+        if (applicationIds.Count > 0)
+        {
+            await AddAsync("RentalApplication", _db.RentalApplications.AsNoTracking()
+                .Where(a => applicationIds.Contains(a.Id) && a.PortfolioId == portfolioId)
+                .Select(a => new UnitRefRow { Id = a.Id, UnitId = a.UnitId }));
+        }
+
+        return unitIds;
+    }
 
     public async IAsyncEnumerable<AdminAuditEntryResponse> StreamForensicAsync(
         int portfolioId,
@@ -286,5 +372,11 @@ public class AuditQueryService : IAuditQueryService
         }
 
         return matched;
+    }
+
+    private sealed class UnitRefRow
+    {
+        public int Id { get; set; }
+        public int? UnitId { get; set; }
     }
 }

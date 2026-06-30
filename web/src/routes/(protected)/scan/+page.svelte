@@ -13,6 +13,7 @@
 	import { readGridParam, syncGridUrl } from '$lib/utils/grid-url-state.svelte';
 	import { parseScanContext } from '$lib/scan/scan-context';
 	import { SCAN_HISTORY_FILTERS, formatScanHistoryEmptyMessage, resolveScanHistoryFilter, type ScanHistoryFilter } from '$lib/scans/scan-history-filters';
+	import { createdRecordHref } from '$lib/scans/scan-review-state';
 
 	const PAGE_SIZE = 20;
 
@@ -112,14 +113,10 @@
 		const type = draft.createdEntityType;
 		const id = draft.createdEntityId;
 		if (!type || !id) return null;
-		if (type === 'Payment') return `/accounting/payments/${id}`;
-		if (type === 'WorkOrder') return `/maintenance/${id}`;
-		if (type === 'Lease') return `/leases/${id}`;
-		if (type === 'Application') return `/applications/${id}`;
 		// A Loan has no standalone detail page (it lives under its property) — fall back to the
 		// read-only draft rather than linking to a non-existent loan record.
 		if (type === 'Loan') return null;
-		return `/accounting/expenses/${id}`;
+		return createdRecordHref(type, id, draft.createdUnitId);
 	}
 
 	// A confirmed draft is terminal: its action/row-click should jump straight to the created record

@@ -48,6 +48,7 @@ public class DailyBriefingService : IDailyBriefingService
                 Category = "Maintenance",
                 EntityType = "WorkOrder",
                 EntityId = w.Id,
+                UnitId = w.UnitId,
                 TitleText = w.Title,
                 DetailText = w.Description,
                 LeaseNumber = null,
@@ -76,6 +77,7 @@ public class DailyBriefingService : IDailyBriefingService
                 Category = "RentLate",
                 EntityType = "Payment",
                 EntityId = p.Id,
+                UnitId = p.Lease != null ? p.Lease.UnitId : null,
                 TitleText = null,
                 DetailText = null,
                 LeaseNumber = p.Lease != null ? p.Lease.LeaseNumber : null,
@@ -104,6 +106,7 @@ public class DailyBriefingService : IDailyBriefingService
                 Category = "RentDue",
                 EntityType = "Lease",
                 EntityId = l.Id,
+                UnitId = l.UnitId,
                 TitleText = null,
                 DetailText = null,
                 LeaseNumber = l.LeaseNumber,
@@ -129,6 +132,7 @@ public class DailyBriefingService : IDailyBriefingService
                 Category = "Appointment",
                 EntityType = "Appointment",
                 EntityId = a.Id,
+                UnitId = a.UnitId,
                 TitleText = a.Title,
                 DetailText = null,
                 LeaseNumber = null,
@@ -155,6 +159,7 @@ public class DailyBriefingService : IDailyBriefingService
                 Category = "Inspection",
                 EntityType = "Inspection",
                 EntityId = i.Id,
+                UnitId = i.UnitId,
                 TitleText = null,
                 DetailText = null,
                 LeaseNumber = null,
@@ -181,6 +186,7 @@ public class DailyBriefingService : IDailyBriefingService
                 Category = "LeaseExpiring",
                 EntityType = "Lease",
                 EntityId = l.Id,
+                UnitId = l.UnitId,
                 TitleText = null,
                 DetailText = null,
                 LeaseNumber = l.LeaseNumber,
@@ -254,7 +260,8 @@ public class DailyBriefingService : IDailyBriefingService
                 Category: candidate.Category,
                 Severity: severity,
                 EntityType: candidate.EntityType,
-                EntityId: candidate.EntityId),
+                EntityId: candidate.EntityId,
+                UnitId: candidate.UnitId),
 
             "RentLate" => new BriefingBullet(
                 Title: $"Rent overdue — {RentAttentionRef(candidate)}",
@@ -262,7 +269,8 @@ public class DailyBriefingService : IDailyBriefingService
                 Category: candidate.Category,
                 Severity: severity,
                 EntityType: candidate.EntityType,
-                EntityId: candidate.EntityId),
+                EntityId: candidate.EntityId,
+                UnitId: candidate.UnitId),
 
             "RentDue" => new BriefingBullet(
                 Title: $"Rent due today — {UnitOrLeaseRef(candidate)}",
@@ -270,7 +278,8 @@ public class DailyBriefingService : IDailyBriefingService
                 Category: candidate.Category,
                 Severity: severity,
                 EntityType: candidate.EntityType,
-                EntityId: candidate.EntityId),
+                EntityId: candidate.EntityId,
+                UnitId: candidate.UnitId),
 
             "Appointment" => new BriefingBullet(
                 Title: $"Appointment today: {candidate.TitleText}",
@@ -278,7 +287,8 @@ public class DailyBriefingService : IDailyBriefingService
                 Category: candidate.Category,
                 Severity: severity,
                 EntityType: candidate.EntityType,
-                EntityId: candidate.EntityId),
+                EntityId: candidate.EntityId,
+                UnitId: candidate.UnitId),
 
             "Inspection" => new BriefingBullet(
                 Title: $"Inspection {RelativeWhen(candidate.EventDate, today)} — {(InspectionType)candidate.TypeValue}",
@@ -286,7 +296,8 @@ public class DailyBriefingService : IDailyBriefingService
                 Category: candidate.Category,
                 Severity: severity,
                 EntityType: candidate.EntityType,
-                EntityId: candidate.EntityId),
+                EntityId: candidate.EntityId,
+                UnitId: candidate.UnitId),
 
             "LeaseExpiring" => new BriefingBullet(
                 Title: $"Lease expiring — {UnitOrLeaseRef(candidate)}",
@@ -294,7 +305,8 @@ public class DailyBriefingService : IDailyBriefingService
                 Category: candidate.Category,
                 Severity: severity,
                 EntityType: candidate.EntityType,
-                EntityId: candidate.EntityId),
+                EntityId: candidate.EntityId,
+                UnitId: candidate.UnitId),
 
             _ => new BriefingBullet(
                 Title: candidate.TitleText ?? candidate.Category,
@@ -302,7 +314,8 @@ public class DailyBriefingService : IDailyBriefingService
                 Category: candidate.Category,
                 Severity: severity,
                 EntityType: candidate.EntityType,
-                EntityId: candidate.EntityId),
+                EntityId: candidate.EntityId,
+                UnitId: candidate.UnitId),
         };
     }
 
@@ -380,6 +393,7 @@ public class DailyBriefingService : IDailyBriefingService
         public string Category { get; set; } = string.Empty;
         public string EntityType { get; set; } = string.Empty;
         public int EntityId { get; set; }
+        public int? UnitId { get; set; }
         public string? TitleText { get; set; }
         public string? DetailText { get; set; }
         public string? LeaseNumber { get; set; }

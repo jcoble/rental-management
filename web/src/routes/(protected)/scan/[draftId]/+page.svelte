@@ -614,13 +614,14 @@
 	// Success state — what was just created, so the landlord keeps context
 	// instead of being dumped onto /accounting. (Lease drafts navigate straight to
 	// the new lease instead, so they don't use this card.)
-	let confirmedRecord = $state<{ type: 'Expense' | 'Payment' | 'WorkOrder'; id: number | null; amount: number | null } | null>(null);
+	let confirmedRecord = $state<{ type: 'Expense' | 'Payment' | 'WorkOrder'; id: number | null; amount: number | null; unitId: number | null } | null>(null);
 	const isTerminal = $derived(isTerminalScanReview(data?.status, !!confirmedRecord));
 	const reviewControlsDisabled = $derived(shouldDisableScanReviewControls(data?.status, !!confirmedRecord));
 	const linkedRecordHref = $derived((() => {
 		const type = confirmedRecord?.type ?? data?.createdEntityType;
 		const id = confirmedRecord?.id ?? data?.createdEntityId;
-		return createdRecordHref(type, id);
+		const unitId = confirmedRecord?.unitId ?? data?.createdUnitId ?? scanContext.unitId ?? null;
+		return createdRecordHref(type, id, unitId);
 	})());
 
 	function formatUsd(val: number | null): string {
@@ -665,18 +666,19 @@
 				const leaseId = result.leaseId ?? result.entityId ?? null;
 				toast.success('Lease created');
 				if (leaseId) {
-					// Route to the unit Command Center Lease tab when the unit is known (an existing
-					// unit was selected); a brand-new unit from the address has no id in scope yet,
-					// so recordHref falls back to the generic /leases/{id} page.
-					const unitId = selectedLeaseUnitId ? Number(selectedLeaseUnitId) : null;
+					const unitId = result.unitId ?? (selectedLeaseUnitId ? Number(selectedLeaseUnitId) : null) ?? scanContext.unitId ?? null;
 					goto(recordHref('lease', { id: leaseId, unitId }));
-					return;
+				} else {
+					goto('/leases');
 				}
+				return;
 			}
-			// Application drafts land on the applications list, where the new applicant appears.
 			if (isApplication) {
+				const applicationId = result.applicationId ?? result.entityId ?? null;
 				toast.success('Applicant created');
-				goto('/applications');
+				goto(applicationId
+					? createdRecordHref('Application', applicationId, result.unitId ?? scanContext.unitId ?? null)
+					: '/applications');
 				return;
 			}
 			// Loan drafts attach to a property (no standalone loan page) — go back to that property,
@@ -696,7 +698,8 @@
 			confirmedRecord = {
 				type,
 				id: result.entityId ?? result.paymentId ?? result.expenseId ?? result.workOrderId ?? null,
-				amount: resolvedAmount
+				amount: resolvedAmount,
+				unitId: result.unitId ?? scanContext.unitId ?? null
 			};
 			if (isPayment) {
 				toast.success('Payment recorded');
