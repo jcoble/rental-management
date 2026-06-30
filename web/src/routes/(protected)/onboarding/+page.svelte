@@ -58,8 +58,15 @@
 		buildOnboardingLeaseScanOverrides,
 		type OnboardingLeaseConfirmInput,
 	} from '$lib/onboarding/lease-scan-confirm';
-	import { ownerEntityIdForOnboarding } from '$lib/onboarding/owner-selection';
-	import { buildOnboardingPropertyPayload } from '$lib/onboarding/property-payload';
+	import {
+		NEW_ONBOARDING_OWNER_VALUE,
+		onboardingOwnerFormFromOwner,
+	} from '$lib/onboarding/owner-selection';
+	import {
+		NEW_ONBOARDING_PROPERTY_VALUE,
+		buildOnboardingPropertyPayload,
+		onboardingPropertyFormFromProperty,
+	} from '$lib/onboarding/property-payload';
 	import { defaultLeaseNumber } from '$lib/leases/lease-number';
 	import type { ScanContext, ScanDocType } from '$lib/scan/scan-context';
 	import { formatPropertyType, propertyTypeOptions } from '$lib/properties/property-labels';
@@ -295,6 +302,51 @@
 	const OWNER_ENTITY_TYPES: OwnerEntityType[] = ['Person', 'LLC', 'Trust'];
 	let ownerForm = $state({ name: '', ownerEntityType: 'Person' as OwnerEntityType, email: '', taxId: '' });
 	let ownerErrors = $state<Record<string, string>>({});
+	let selectedOwnerId = $state(NEW_ONBOARDING_OWNER_VALUE);
+	let ownerSelectionPrefilled = false;
+
+	function ownerById(id: string): Owner | null {
+		return (
+			(createdOwner && String(createdOwner.id) === id ? createdOwner : null) ??
+			(ownersQuery.data ?? []).find((owner) => String(owner.id) === id) ??
+			null
+		);
+	}
+
+	function ownerIdFromSelection(): number | null {
+		if (selectedOwnerId === NEW_ONBOARDING_OWNER_VALUE) return null;
+		const id = Number(selectedOwnerId);
+		return Number.isFinite(id) && id > 0 ? id : null;
+	}
+
+	function selectOwnerRecord(value: string | undefined) {
+		selectedOwnerId = value || NEW_ONBOARDING_OWNER_VALUE;
+		ownerErrors = {};
+		if (selectedOwnerId === NEW_ONBOARDING_OWNER_VALUE) {
+			ownerForm = { name: '', ownerEntityType: 'Person', email: '', taxId: '' };
+			return;
+		}
+		const owner = ownerById(selectedOwnerId);
+		if (owner) {
+			ownerForm = onboardingOwnerFormFromOwner(owner);
+		}
+	}
+
+	const ownerSelectionLabel = $derived.by(() => {
+		if (selectedOwnerId === NEW_ONBOARDING_OWNER_VALUE) {
+			return (ownersQuery.data?.length ?? 0) > 0 ? 'Add a new owner' : 'Add first owner';
+		}
+		return ownerById(selectedOwnerId)?.name ?? 'Choose owner';
+	});
+
+	$effect(() => {
+		if (ownerSelectionPrefilled) return;
+		const owner = createdOwner ?? ownersQuery.data?.[0] ?? null;
+		if (!owner) return;
+		ownerSelectionPrefilled = true;
+		selectedOwnerId = String(owner.id);
+		ownerForm = onboardingOwnerFormFromOwner(owner);
+	});
 
 	// TSK-209: the landlord IS the first owner, so confirm-don't-retype — pre-fill name + email from
 	// their account. Editable (they might own through an LLC). Only when they don't already have an owner
@@ -311,11 +363,21 @@
 		if (!ownerForm.email.trim() && me.email?.trim()) ownerForm.email = me.email.trim();
 	});
 
-	const saveOwnerMutation = createMutation(() => ({
-		mutationFn: (data: Record<string, unknown>) => owners.create(data),
-		onSuccess: (owner) => {
-			createdOwner = owner;
-			showSuccess('Owner added.');
+	type SaveOwnerVariables = {
+		ownerId: number | null;
+		data: Record<string, unknown>;
+	};
+
+	const saveOwnerMutation = createMutation<Owner, Error, SaveOwnerVariables>(() => ({
+		mutationFn: ({ ownerId, data }: SaveOwnerVariables) =>
+			ownerId == null ? owners.create(data) : owners.update(ownerId, data),
+		onSuccess: (owner, vars) => {
+			if (vars.ownerId == null) {
+				createdOwner = owner;
+			}
+			selectedOwnerId = String(owner.id);
+			ownerForm = onboardingOwnerFormFromOwner(owner);
+			showSuccess(vars.ownerId == null ? 'Owner added.' : 'Owner saved.');
 			queryClient.invalidateQueries({ queryKey: ['owners', portfolioId] });
 			next();
 		},
@@ -336,7 +398,10 @@
 			return;
 		}
 		ownerErrors = {};
-		saveOwnerMutation.mutate({ portfolioId, ...result.data });
+		saveOwnerMutation.mutate({
+			ownerId: ownerIdFromSelection(),
+			data: { portfolioId, ...result.data }
+		});
 	}
 
 	// ---------------------------------------------------------------------------
@@ -356,6 +421,65 @@
 		postalCode: '',
 	});
 	let propertyErrors = $state<Record<string, string>>({});
+	let selectedPropertyId = $state(NEW_ONBOARDING_PROPERTY_VALUE);
+	let propertySelectionPrefilled = false;
+
+	function propertyById(id: string): Property | null {
+		return (
+			(createdProperty && String(createdProperty.id) === id ? createdProperty : null) ??
+			(propertiesQuery.data ?? []).find((property) => String(property.id) === id) ??
+			null
+		);
+	}
+
+	function propertyIdFromSelection(): number | null {
+		if (selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE) return null;
+		const id = Number(selectedPropertyId);
+		return Number.isFinite(id) && id > 0 ? id : null;
+	}
+
+	function selectPropertyRecord(value: string | undefined) {
+		selectedPropertyId = value || NEW_ONBOARDING_PROPERTY_VALUE;
+		propertyErrors = {};
+		if (selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE) {
+			propertyForm = {
+				name: '',
+				type: 'SingleFamily',
+				addressLine1: '',
+				addressLine2: '',
+				city: '',
+				state: '',
+				postalCode: '',
+			};
+			unitRows = [emptyUnit()];
+			unitRowErrors = [{}];
+			propertySub = 'address';
+			return;
+		}
+		const property = propertyById(selectedPropertyId);
+		if (property) {
+			propertyForm = onboardingPropertyFormFromProperty(property);
+			unitRows = [emptyUnit()];
+			unitRowErrors = [{}];
+			propertySub = 'address';
+		}
+	}
+
+	const propertySelectionLabel = $derived.by(() => {
+		if (selectedPropertyId === NEW_ONBOARDING_PROPERTY_VALUE) {
+			return (propertiesQuery.data?.length ?? 0) > 0 ? 'Add a new property' : 'Add first property';
+		}
+		return propertyById(selectedPropertyId)?.name ?? 'Choose property';
+	});
+
+	$effect(() => {
+		if (propertySelectionPrefilled) return;
+		const property = createdProperty ?? propertiesQuery.data?.[0] ?? null;
+		if (!property) return;
+		propertySelectionPrefilled = true;
+		selectedPropertyId = String(property.id);
+		propertyForm = onboardingPropertyFormFromProperty(property);
+	});
 
 	const emptyUnit = () => ({ unitNumber: '', bedrooms: '', bathrooms: '', marketRent: '' });
 	let unitRows = $state<ReturnType<typeof emptyUnit>[]>([emptyUnit()]);
@@ -370,22 +494,39 @@
 		unitRowErrors = unitRowErrors.filter((_, idx) => idx !== i);
 	}
 
-	const savePropertyMutation = createMutation(() => ({
-		mutationFn: async (vars: { property: Record<string, unknown>; units: Record<string, unknown>[] }) => {
-			const property = await properties.create(vars.property);
+	type SavePropertyVariables = {
+		propertyId: number | null;
+		property: Record<string, unknown>;
+		units: Record<string, unknown>[];
+	};
+
+	const savePropertyMutation = createMutation<
+		{ property: Property; units: Unit[]; updated: boolean },
+		Error,
+		SavePropertyVariables
+	>(() => ({
+		mutationFn: async (vars: SavePropertyVariables) => {
+			const property =
+				vars.propertyId == null
+					? await properties.create(vars.property)
+					: await properties.update(vars.propertyId, vars.property);
 			const units: Unit[] = [];
 			for (const u of vars.units) {
 				units.push(await properties.createUnit(property.id, u));
 			}
-			return { property, units };
+			return { property, units, updated: vars.propertyId != null };
 		},
-		onSuccess: ({ property, units }) => {
+		onSuccess: ({ property, units, updated }) => {
 			createdProperty = property;
 			createdUnits = units;
+			selectedPropertyId = String(property.id);
+			propertyForm = onboardingPropertyFormFromProperty(property);
 			showSuccess(
 				units.length > 0
 					? `Property and ${units.length} unit${units.length === 1 ? '' : 's'} added.`
-					: 'Property added.'
+					: updated
+						? 'Property saved.'
+						: 'Property added.'
 			);
 			queryClient.invalidateQueries({ queryKey: ['properties', portfolioId] });
 			propertySub = 'address';
@@ -411,6 +552,7 @@
 			propertySchema,
 			buildOnboardingPropertyPayload({
 				propertyForm,
+				selectedOwnerId,
 				createdOwner,
 				existingOwners: ownersQuery.data ?? []
 			})
@@ -439,7 +581,11 @@
 		unitRowErrors = errors;
 		if (hasUnitError) return;
 
-		savePropertyMutation.mutate({ property: { portfolioId, ...propResult.data }, units: validUnits });
+		savePropertyMutation.mutate({
+			propertyId: propertyIdFromSelection(),
+			property: { portfolioId, ...propResult.data },
+			units: validUnits
+		});
 	}
 
 	// ---------------------------------------------------------------------------
@@ -1194,11 +1340,33 @@
 						<WizardStepScaffold step={currentStep}>
 							{#if hasExistingOwners && !createdOwner}
 								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-owner-existing">
-									You already have {ownersQuery.data?.length} owner{(ownersQuery.data?.length ?? 0) === 1 ? '' : 's'} on file. You can add another or skip ahead.
+									You already have {ownersQuery.data?.length} owner{(ownersQuery.data?.length ?? 0) === 1 ? '' : 's'} on file. Choose one to review, add another, or skip ahead.
 								</div>
 							{:else if ownerPrefilled}
 								<div class="mb-4 rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-owner-prefilled">
 									We filled this in from your account — just confirm it's right. Own through an LLC or trust? Change the name and type below.
+								</div>
+							{/if}
+							{#if hasExistingOwners || createdOwner}
+								<div class="mb-4 rounded-md border border-border bg-muted/30 p-3" data-testid="onboarding-owner-selector-panel">
+									<label for="ob-owner-selector" class="mb-1 block text-xs font-medium text-muted-foreground">Owner record</label>
+									<Select.Root type="single" value={selectedOwnerId} onValueChange={selectOwnerRecord}>
+										<Select.Trigger id="ob-owner-selector" class="w-full" data-testid="onboarding-owner-selector">
+											{ownerSelectionLabel}
+										</Select.Trigger>
+										<Select.Content>
+											{#each ownersQuery.data ?? [] as owner (owner.id)}
+												<Select.Item value={String(owner.id)} label={owner.name}>{owner.name}</Select.Item>
+											{/each}
+											{#if createdOwner && !(ownersQuery.data ?? []).some((owner) => owner.id === createdOwner?.id)}
+												<Select.Item value={String(createdOwner.id)} label={createdOwner.name}>{createdOwner.name}</Select.Item>
+											{/if}
+											<Select.Item value={NEW_ONBOARDING_OWNER_VALUE} label="Add a new owner">
+												<span class="inline-flex items-center gap-2"><Plus class="h-3.5 w-3.5" /> Add a new owner</span>
+											</Select.Item>
+										</Select.Content>
+									</Select.Root>
+									<p class="mt-1 text-xs text-muted-foreground">Pick an owner to edit these fields, or start a fresh owner record.</p>
 								</div>
 							{/if}
 							<div class="grid gap-4 sm:grid-cols-2">
@@ -1235,7 +1403,29 @@
 						<WizardStepScaffold step={currentStep}>
 							{#if hasExistingProperties && !createdProperty}
 								<div class="mb-4 rounded-md border border-success/40 bg-success/10 px-3 py-2 text-sm text-foreground" data-testid="onboarding-property-existing">
-									You already have {propertiesQuery.data?.length} propert{(propertiesQuery.data?.length ?? 0) === 1 ? 'y' : 'ies'}. Add another or skip ahead.
+									You already have {propertiesQuery.data?.length} propert{(propertiesQuery.data?.length ?? 0) === 1 ? 'y' : 'ies'}. Choose one to review, add another, or skip ahead.
+								</div>
+							{/if}
+							{#if hasExistingProperties || createdProperty}
+								<div class="mb-4 rounded-md border border-border bg-muted/30 p-3" data-testid="onboarding-property-selector-panel">
+									<label for="ob-property-selector" class="mb-1 block text-xs font-medium text-muted-foreground">Property record</label>
+									<Select.Root type="single" value={selectedPropertyId} onValueChange={selectPropertyRecord}>
+										<Select.Trigger id="ob-property-selector" class="w-full" data-testid="onboarding-property-selector">
+											{propertySelectionLabel}
+										</Select.Trigger>
+										<Select.Content>
+											{#each propertiesQuery.data ?? [] as property (property.id)}
+												<Select.Item value={String(property.id)} label={property.name}>{property.name}</Select.Item>
+											{/each}
+											{#if createdProperty && !(propertiesQuery.data ?? []).some((property) => property.id === createdProperty?.id)}
+												<Select.Item value={String(createdProperty.id)} label={createdProperty.name}>{createdProperty.name}</Select.Item>
+											{/if}
+											<Select.Item value={NEW_ONBOARDING_PROPERTY_VALUE} label="Add a new property">
+												<span class="inline-flex items-center gap-2"><Plus class="h-3.5 w-3.5" /> Add a new property</span>
+											</Select.Item>
+										</Select.Content>
+									</Select.Root>
+									<p class="mt-1 text-xs text-muted-foreground">Pick a property to edit these fields, or start a fresh property record.</p>
 								</div>
 							{/if}
 
