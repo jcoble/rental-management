@@ -15,6 +15,7 @@ public class InspectionService : IInspectionService
     private const string TemplateEntityType = "InspectionTemplate";
     private const string WorkOrderEntityType = "WorkOrder";
     private const int MaxTemplateItems = 100;
+    private const int MaxInspectionItems = 100;
 
     private readonly RentalCommandDbContext _db;
     private readonly IDataUpdateService _dataUpdate;
@@ -91,6 +92,8 @@ public class InspectionService : IInspectionService
         var items = await _db.InspectionItems
             .AsNoTracking()
             .Where(it => it.InspectionId == id && it.PortfolioId == portfolioId)
+            .OrderBy(it => it.SortOrder)
+            .ThenBy(it => it.Id)
             .ToListAsync(ct);
 
         return InspectionDetailResponse.FromEntity(entity, items);
@@ -335,6 +338,47 @@ public class InspectionService : IInspectionService
         return true;
     }
 
+    public async Task<InspectionItemResponse?> CreateItemAsync(int portfolioId, int inspectionId, CreateInspectionItemRequest request, CancellationToken ct = default)
+    {
+        var inspection = await _db.Inspections
+            .FirstOrDefaultAsync(i => i.Id == inspectionId && i.PortfolioId == portfolioId, ct);
+        if (inspection == null)
+        {
+            return null;
+        }
+
+        EnsureChecklistItemEditable(inspection.Status);
+
+        var existingCount = await _db.InspectionItems
+            .CountAsync(it => it.InspectionId == inspectionId && it.PortfolioId == portfolioId, ct);
+        if (existingCount >= MaxInspectionItems)
+        {
+            throw new DomainValidationException($"An inspection can have at most {MaxInspectionItems} checklist questions.");
+        }
+
+        var normalized = NormalizeInspectionItemText(request.Area, request.Label, existingCount + 1);
+        var maxSortOrder = await _db.InspectionItems
+            .Where(it => it.InspectionId == inspectionId && it.PortfolioId == portfolioId)
+            .Select(it => (int?)it.SortOrder)
+            .MaxAsync(ct);
+
+        var item = new InspectionItem
+        {
+            PortfolioId = portfolioId,
+            InspectionId = inspectionId,
+            Area = normalized.Area,
+            Label = normalized.Label,
+            Result = InspectionItemResult.Pending,
+            SortOrder = (maxSortOrder ?? -1) + 1,
+        };
+
+        _db.InspectionItems.Add(item);
+        inspection.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        return InspectionItemResponse.FromEntity(item);
+    }
+
     public async Task<InspectionItemResponse?> UpdateItemAsync(int portfolioId, int inspectionId, int itemId, UpdateInspectionItemRequest request, CancellationToken ct = default)
     {
         var target = await _db.InspectionItems
@@ -349,6 +393,15 @@ public class InspectionService : IInspectionService
         EnsureChecklistItemEditable(target.InspectionStatus);
 
         var item = target.Item;
+        if (request.Area != null || request.Label != null)
+        {
+            var normalized = NormalizeInspectionItemText(
+                request.Area ?? item.Area,
+                request.Label ?? item.Label,
+                item.SortOrder + 1);
+            item.Area = normalized.Area;
+            item.Label = normalized.Label;
+        }
         if (request.Result.HasValue) item.Result = request.Result.Value;
         if (request.Note != null) item.Note = request.Note;
 
@@ -356,6 +409,81 @@ public class InspectionService : IInspectionService
         await _db.SaveChangesAsync(ct);
 
         return InspectionItemResponse.FromEntity(item);
+    }
+
+    public async Task<bool> DeleteItemAsync(int portfolioId, int inspectionId, int itemId, CancellationToken ct = default)
+    {
+        var target = await _db.InspectionItems
+            .Where(it => it.Id == itemId && it.InspectionId == inspectionId && it.PortfolioId == portfolioId)
+            .Select(it => new { Item = it, InspectionStatus = it.Inspection!.Status })
+            .FirstOrDefaultAsync(ct);
+        if (target == null)
+        {
+            return false;
+        }
+
+        EnsureChecklistItemEditable(target.InspectionStatus);
+
+        _db.InspectionItems.Remove(target.Item);
+        await TouchInspectionAsync(inspectionId, portfolioId, ct);
+        await _db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    public async Task<IReadOnlyList<InspectionItemResponse>?> ReorderItemsAsync(int portfolioId, int inspectionId, ReorderInspectionItemsRequest request, CancellationToken ct = default)
+    {
+        var inspection = await _db.Inspections
+            .FirstOrDefaultAsync(i => i.Id == inspectionId && i.PortfolioId == portfolioId, ct);
+        if (inspection == null)
+        {
+            return null;
+        }
+
+        EnsureChecklistItemEditable(inspection.Status);
+
+        var requestedIds = (request.ItemIds ?? []).ToList();
+        if (requestedIds.Count == 0)
+        {
+            throw new DomainValidationException("Include the checklist questions in the order they should appear.");
+        }
+        if (requestedIds.Any(id => id <= 0))
+        {
+            throw new DomainValidationException("Checklist question ids must be positive.");
+        }
+        if (requestedIds.Distinct().Count() != requestedIds.Count)
+        {
+            throw new DomainValidationException("Each checklist question can appear only once in the new order.");
+        }
+
+        var items = await _db.InspectionItems
+            .Where(it => it.InspectionId == inspectionId && it.PortfolioId == portfolioId)
+            .OrderBy(it => it.SortOrder)
+            .ThenBy(it => it.Id)
+            .ToListAsync(ct);
+
+        var itemIds = items.Select(it => it.Id).ToHashSet();
+        if (items.Count != requestedIds.Count || requestedIds.Any(id => !itemIds.Contains(id)))
+        {
+            throw new DomainValidationException("Reorder request must include every checklist question exactly once.");
+        }
+
+        var orderById = requestedIds
+            .Select((id, index) => new { id, sortOrder = index })
+            .ToDictionary(row => row.id, row => row.sortOrder);
+
+        foreach (var item in items)
+        {
+            item.SortOrder = orderById[item.Id];
+        }
+
+        inspection.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        return items
+            .OrderBy(it => it.SortOrder)
+            .ThenBy(it => it.Id)
+            .Select(InspectionItemResponse.FromEntity)
+            .ToList();
     }
 
     public async Task<InspectionItemResponse?> AttachItemPhotoAsync(int portfolioId, int inspectionId, int itemId, int storedFileId, CancellationToken ct = default)
@@ -692,6 +820,31 @@ public class InspectionService : IInspectionService
         }
 
         return (normalizedName, inspectionType, normalizedItems);
+    }
+
+    private static (string Area, string Label) NormalizeInspectionItemText(string? area, string? label, int questionNumber)
+    {
+        var normalizedArea = (area ?? string.Empty).Trim();
+        var normalizedLabel = (label ?? string.Empty).Trim();
+
+        if (string.IsNullOrWhiteSpace(normalizedArea))
+        {
+            throw new DomainValidationException($"Question {questionNumber} needs an area or room.");
+        }
+        if (normalizedArea.Length > 120)
+        {
+            throw new DomainValidationException($"Question {questionNumber} area must be 120 characters or fewer.");
+        }
+        if (string.IsNullOrWhiteSpace(normalizedLabel))
+        {
+            throw new DomainValidationException($"Question {questionNumber} needs a checklist item.");
+        }
+        if (normalizedLabel.Length > 300)
+        {
+            throw new DomainValidationException($"Question {questionNumber} item must be 300 characters or fewer.");
+        }
+
+        return (normalizedArea, normalizedLabel);
     }
 
     private static void AddTemplateItems(InspectionTemplate template, IReadOnlyList<(string Area, string Label)> items)

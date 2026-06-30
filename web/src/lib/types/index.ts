@@ -1087,6 +1087,18 @@ export interface InspectionItem {
 	sortOrder: number;
 }
 
+export interface InspectionItemInput {
+	area: string;
+	label: string;
+}
+
+export interface InspectionItemUpdate {
+	area?: string;
+	label?: string;
+	result?: InspectionItemResult;
+	note?: string;
+}
+
 /** Inspection detail/create response: the inspection fields plus checklist items. */
 export interface InspectionDetail extends Inspection {
 	templateId?: number;

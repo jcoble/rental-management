@@ -17,6 +17,7 @@
 	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import StatusBadge from '$lib/components/shared/StatusBadge.svelte';
 	import StepperNextButton from '$lib/components/shared/StepperNextButton.svelte';
+	import DatePicker from '$lib/components/shared/DatePicker.svelte';
 	import ExpenseDetail from '$lib/components/records/ExpenseDetail.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -244,7 +245,12 @@
 						</div>
 						<div>
 							<label class="mb-1 block text-xs font-medium text-muted-foreground" for="exp-date">Incurred</label>
-							<Input id="exp-date" data-testid="expenses-date-input" type="date" bind:value={createForm.incurredAt} oninput={() => clearCreateError('incurredAt')} />
+							<DatePicker
+								id="exp-date"
+								testid="expenses-date-input"
+								bind:value={createForm.incurredAt}
+								onchange={() => clearCreateError('incurredAt')}
+							/>
 							{#if createErrors.incurredAt}<p class="mt-1 text-xs text-destructive" data-testid="expenses-date-error">{createErrors.incurredAt}</p>{/if}
 						</div>
 					{:else}

@@ -33,9 +33,20 @@
 	import * as Popover from '$lib/components/ui/popover';
 	import { buttonVariants } from '$lib/components/ui/button';
 	import { cn } from '$lib/utils';
-	import { parseCompleteLooseDate, parseLooseDate, formatIsoToUsInput } from '$lib/utils/parse-date';
+	import {
+		formatIsoToUsInput,
+		maskDateInput,
+		parseCompleteLooseDate,
+		parseLooseDate
+	} from '$lib/utils/parse-date';
 	import CalendarIcon from '@lucide/svelte/icons/calendar';
-	import { CalendarDate, parseDate, type DateValue } from '@internationalized/date';
+	import {
+		CalendarDate,
+		getLocalTimeZone,
+		parseDate,
+		today,
+		type DateValue
+	} from '@internationalized/date';
 
 	let {
 		value = $bindable(''),
@@ -132,17 +143,31 @@
 	}
 
 	function handleTextInput(e: Event) {
-		text = (e.target as HTMLInputElement).value;
+		const input = e.target as HTMLInputElement;
+		const raw = input.value;
 		// Clear the error as soon as the user resumes typing.
 		if (invalid) invalid = false;
-		if (text.trim() === '') {
+		if (raw.trim() === '') {
+			text = '';
 			commit('');
 			return;
 		}
+		const completeIso = parseCompleteLooseDate(raw);
+		if (completeIso && isInRange(completeIso)) {
+			invalid = false;
+			text = formatIsoToUsInput(completeIso);
+			input.value = text;
+			commit(completeIso);
+			return;
+		}
+
+		text = maskDateInput(raw);
+		if (text !== raw) input.value = text;
 		const iso = parseCompleteLooseDate(text);
 		if (iso && isInRange(iso)) {
 			invalid = false;
 			text = formatIsoToUsInput(iso);
+			input.value = text;
 			commit(iso);
 		}
 	}
@@ -163,6 +188,18 @@
 		commit(iso);
 		if (iso) open = false;
 	}
+
+	function setToday() {
+		const iso = today(getLocalTimeZone()).toString();
+		if (!isInRange(iso)) {
+			invalid = true;
+			return;
+		}
+		text = formatIsoToUsInput(iso);
+		invalid = false;
+		commit(iso);
+		open = false;
+	}
 </script>
 
 <div class="relative">
@@ -180,36 +217,51 @@
 		onblur={commitText}
 		onkeydown={handleKeydown}
 		class={cn(
-			'm3-field-surface h-11 w-full rounded-[var(--m3-shape-large)] bg-transparent py-2 pl-3 pr-11 text-left text-sm font-normal text-foreground outline-none',
+			'm3-field-surface h-11 w-full rounded-[var(--m3-shape-large)] bg-transparent py-2 pl-3 pr-[6.5rem] text-left text-sm font-normal text-foreground outline-none',
 			'placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
 			invalid && 'ring-2 ring-destructive'
 		)}
 	/>
-	<Popover.Root bind:open>
-		<Popover.Trigger
+	<div class="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
+		<button
+			type="button"
 			{disabled}
-			tabindex={-1}
-			aria-label="Open calendar"
-			data-testid={testid ? `${testid}-calendar-trigger` : undefined}
+			aria-label="Use today's date"
+			data-testid={testid ? `${testid}-today` : undefined}
+			onclick={setToday}
 			class={cn(
-				buttonVariants({ variant: 'ghost', size: 'icon' }),
-				'absolute right-1 top-1/2 size-9 -translate-y-1/2 text-muted-foreground hover:bg-transparent'
+				buttonVariants({ variant: 'ghost', size: 'sm' }),
+				'h-8 px-2 text-xs text-muted-foreground hover:bg-transparent'
 			)}
 		>
-			<CalendarIcon class="size-4 shrink-0 opacity-70" />
-		</Popover.Trigger>
-		<Popover.Content class="w-auto p-0" align="start">
-			<Calendar
-				type="single"
-				value={selected}
-				onValueChange={handleValueChange}
-				minValue={minDate}
-				maxValue={maxDate}
-				captionLayout="dropdown"
-				{years}
-			/>
-		</Popover.Content>
-	</Popover.Root>
+			Today
+		</button>
+		<Popover.Root bind:open>
+			<Popover.Trigger
+				{disabled}
+				tabindex={-1}
+				aria-label="Open calendar"
+				data-testid={testid ? `${testid}-calendar-trigger` : undefined}
+				class={cn(
+					buttonVariants({ variant: 'ghost', size: 'icon' }),
+					'size-9 text-muted-foreground hover:bg-transparent'
+				)}
+			>
+				<CalendarIcon class="size-4 shrink-0 opacity-70" />
+			</Popover.Trigger>
+			<Popover.Content class="w-auto p-0" align="start">
+				<Calendar
+					type="single"
+					value={selected}
+					onValueChange={handleValueChange}
+					minValue={minDate}
+					maxValue={maxDate}
+					captionLayout="dropdown"
+					{years}
+				/>
+			</Popover.Content>
+		</Popover.Root>
+	</div>
 </div>
 {#if invalid}
 	<p class="mt-1 text-xs text-destructive" data-testid={testid ? `${testid}-error` : undefined}>

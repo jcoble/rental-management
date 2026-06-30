@@ -112,6 +112,106 @@ public class InspectionChecklistServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ScheduledInspection_AllowsChecklistQuestionCustomization()
+    {
+        var property = SeedProperty();
+        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.Routine,
+            ScheduledFor = DateTime.UtcNow,
+        });
+        created.Should().NotBeNull();
+        created!.Items.Should().BeEmpty();
+
+        var first = await _service.CreateItemAsync(PortfolioId, created.Id, new CreateInspectionItemRequest
+        {
+            Area = " Kitchen ",
+            Label = " Sink drains ",
+        });
+        var second = await _service.CreateItemAsync(PortfolioId, created.Id, new CreateInspectionItemRequest
+        {
+            Area = "Safety",
+            Label = "Smoke detector works",
+        });
+
+        first.Should().NotBeNull();
+        second.Should().NotBeNull();
+        first!.Area.Should().Be("Kitchen");
+        first.Label.Should().Be("Sink drains");
+
+        var updated = await _service.UpdateItemAsync(PortfolioId, created.Id, first.Id, new UpdateInspectionItemRequest
+        {
+            Area = "Kitchenette",
+            Label = "Sink and faucet are dry",
+            Result = InspectionItemResult.Pass,
+            Note = "No drip.",
+        });
+
+        updated.Should().NotBeNull();
+        updated!.Area.Should().Be("Kitchenette");
+        updated.Label.Should().Be("Sink and faucet are dry");
+        updated.Result.Should().Be(InspectionItemResult.Pass);
+        updated.Note.Should().Be("No drip.");
+
+        var reordered = await _service.ReorderItemsAsync(PortfolioId, created.Id, new ReorderInspectionItemsRequest
+        {
+            ItemIds = [second!.Id, first.Id],
+        });
+        reordered.Should().NotBeNull();
+        reordered!.Select(i => i.Id).Should().Equal(second.Id, first.Id);
+        reordered.Select(i => i.SortOrder).Should().Equal(0, 1);
+
+        (await _service.DeleteItemAsync(PortfolioId, created.Id, second.Id)).Should().BeTrue();
+
+        var detail = await _service.GetAsync(PortfolioId, created.Id);
+        detail!.Items.Should().ContainSingle();
+        detail.Items[0].Id.Should().Be(first.Id);
+        detail.Items[0].Area.Should().Be("Kitchenette");
+    }
+
+    [Fact]
+    public async Task ChecklistQuestionCustomization_ValidatesRequiredTextAndReorderMembership()
+    {
+        var property = SeedProperty();
+        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.Routine,
+            ScheduledFor = DateTime.UtcNow,
+        });
+        created.Should().NotBeNull();
+
+        Func<Task> createWithoutArea = () => _service.CreateItemAsync(PortfolioId, created!.Id, new CreateInspectionItemRequest
+        {
+            Area = " ",
+            Label = "Window locks",
+        });
+        (await createWithoutArea.Should().ThrowAsync<DomainValidationException>())
+            .Which.Message.Should().Contain("area");
+
+        var item = await _service.CreateItemAsync(PortfolioId, created!.Id, new CreateInspectionItemRequest
+        {
+            Area = "Doors",
+            Label = "Front door latches",
+        });
+
+        Func<Task> updateWithoutLabel = () => _service.UpdateItemAsync(PortfolioId, created.Id, item!.Id, new UpdateInspectionItemRequest
+        {
+            Label = "",
+        });
+        (await updateWithoutLabel.Should().ThrowAsync<DomainValidationException>())
+            .Which.Message.Should().Contain("checklist item");
+
+        Func<Task> reorderMissingItem = () => _service.ReorderItemsAsync(PortfolioId, created.Id, new ReorderInspectionItemsRequest
+        {
+            ItemIds = [999_999],
+        });
+        (await reorderMissingItem.Should().ThrowAsync<DomainValidationException>())
+            .Which.Message.Should().Contain("every checklist question exactly once");
+    }
+
+    [Fact]
     public async Task Create_WithUnknownTemplate_ReturnsNull()
     {
         var property = SeedProperty();
@@ -289,6 +389,59 @@ public class InspectionChecklistServiceTests : IDisposable
         var persisted = await _db.InspectionItems.AsNoTracking().SingleAsync(i => i.Id == item.Id);
         persisted.Result.Should().Be(InspectionItemResult.Pass);
         persisted.Note.Should().Be("Walked before completion");
+    }
+
+    [Fact]
+    public async Task CompletedInspection_BlocksChecklistQuestionStructureChanges()
+    {
+        var property = SeedProperty();
+        var moveIn = InspectionTemplateCatalog.BuiltIns.First(t => t.InspectionType == InspectionType.MoveIn);
+
+        var created = await _service.CreateAsync(PortfolioId, new CreateInspectionRequest
+        {
+            PropertyId = property.Id,
+            Type = InspectionType.MoveIn,
+            ScheduledFor = DateTime.UtcNow,
+            TemplateId = moveIn.Id,
+        });
+        created.Should().NotBeNull();
+
+        var items = created!.Items.OrderBy(i => i.SortOrder).Take(2).ToList();
+        await _service.UpdateItemAsync(PortfolioId, created.Id, items[0].Id,
+            new UpdateInspectionItemRequest { Result = InspectionItemResult.Pass });
+
+        var (summary, error) = await _service.CompleteAsync(PortfolioId, created.Id, userId: 7);
+        error.Should().BeNull();
+        summary.Should().NotBeNull();
+
+        Func<Task> add = () => _service.CreateItemAsync(PortfolioId, created.Id, new CreateInspectionItemRequest
+        {
+            Area = "Safety",
+            Label = "New late question",
+        });
+        Func<Task> editText = () => _service.UpdateItemAsync(PortfolioId, created.Id, items[0].Id, new UpdateInspectionItemRequest
+        {
+            Label = "Changed after completion",
+        });
+        Func<Task> delete = () => _service.DeleteItemAsync(PortfolioId, created.Id, items[0].Id);
+        Func<Task> reorder = () => _service.ReorderItemsAsync(PortfolioId, created.Id, new ReorderInspectionItemsRequest
+        {
+            ItemIds = created.Items.Select(i => i.Id).Reverse().ToList(),
+        });
+
+        foreach (var action in new[] { add, editText, delete, reorder })
+        {
+            var ex = await action.Should().ThrowAsync<DomainValidationException>();
+            ex.Which.StatusCode.Should().Be(409);
+            ex.Which.Message.Should().Contain("completed inspection");
+        }
+
+        var persisted = await _db.InspectionItems.AsNoTracking()
+            .Where(i => i.InspectionId == created.Id)
+            .OrderBy(i => i.SortOrder)
+            .ToListAsync();
+        persisted.Should().HaveCount(created.Items.Count);
+        persisted[0].Label.Should().Be(items[0].Label);
     }
 
     [Fact]
