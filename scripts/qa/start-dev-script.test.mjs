@@ -20,13 +20,11 @@ describe('start-dev launcher', () => {
 		assert.match(script, /dotnet run --no-build --project RentalCommand\.Api\b/);
 	});
 
-	it('suppresses real outbound notification providers unless explicitly enabled', () => {
-		const guard = script.indexOf('ALLOW_EXTERNAL_NOTIFICATIONS="${ALLOW_EXTERNAL_NOTIFICATIONS:-0}"');
+	it('leaves notification provider configuration to user secrets and explicit environment variables', () => {
 		const buildSection = script.indexOf('Building .NET hosts');
 
-		assert.ok(guard > -1, 'expected an explicit opt-in guard for external notifications');
-		assert.ok(guard < buildSection, 'provider suppression must run before API/Engine launch');
-		assert.match(script, /ALLOW_EXTERNAL_NOTIFICATIONS=1/);
+		assert.ok(buildSection > -1, 'expected an explicit serial .NET build section');
+		assert.doesNotMatch(script, /ALLOW_EXTERNAL_NOTIFICATIONS/);
 
 		for (const key of [
 			'Notifications__SendGrid__ApiKey',
@@ -48,7 +46,7 @@ describe('start-dev launcher', () => {
 			'Notifications__Vonage__ApiSecret',
 			'Notifications__Vonage__FromNumber'
 		]) {
-			assert.match(script, new RegExp(`export ${key}=""`), `expected ${key} to be blanked`);
+			assert.doesNotMatch(script, new RegExp(`export ${key}=""`), `${key} must not be blanked by start-dev.sh`);
 		}
 	});
 });
