@@ -135,7 +135,15 @@
 			return;
 		}
 		propertyFormErrors = {};
-		savePropertyMutation.mutate({ id, data: { portfolioId, ...result.data, ...basis.data } });
+		savePropertyMutation.mutate({
+			id,
+			data: {
+				portfolioId,
+				...result.data,
+				...basis.data,
+				clearOwnerEntity: result.data.ownerEntityId == null,
+			},
+		});
 	}
 
 	const savePropertyMutation = createMutation(() => ({

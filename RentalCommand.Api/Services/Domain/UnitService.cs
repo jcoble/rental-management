@@ -491,6 +491,16 @@ public class UnitService : IUnitService
                 statusCode: 409);
         }
 
+        if (await _db.RentalApplications
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .AnyAsync(a => a.PortfolioId == portfolioId && a.UnitId == unitId, ct))
+        {
+            throw new DomainValidationException(
+                "This unit has application history. Archive the applications instead of deleting the unit.",
+                statusCode: 409);
+        }
+
         if (await _db.RecurringExpenses
             .IgnoreQueryFilters()
             .AsNoTracking()
