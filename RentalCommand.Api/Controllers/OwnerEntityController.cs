@@ -65,9 +65,16 @@ public class OwnerEntityController : ManagementControllerBase
     [HttpDelete("{id:int}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<IActionResult> Delete(int id, CancellationToken ct)
+    public async Task<IActionResult> Delete(
+        int id,
+        [FromQuery] bool clearPropertyAssignments = false,
+        CancellationToken ct = default)
     {
-        var deleted = await _service.DeleteAsync(GetPortfolioId(), id, ct);
+        var deleted = await _service.DeleteAsync(
+            GetPortfolioId(),
+            id,
+            new DeleteOwnerEntityOptions { ClearPropertyAssignments = clearPropertyAssignments },
+            ct);
         return deleted ? NoContent() : NotFound(new { error = "Owner entity not found" });
     }
 }

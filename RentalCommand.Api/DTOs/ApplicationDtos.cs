@@ -190,6 +190,72 @@ public class CreateApplicationRequest
     public string? IdExtractedFields { get; set; }
 }
 
+/// <summary>
+/// Landlord correction body for a submitted/under-review application. Nullable fields are partial:
+/// omitted means "leave as-is"; empty strings clear optional text fields. Explicit clear flags are
+/// used for nullable dates/numbers/foreign keys where JSON null is otherwise ambiguous.
+/// </summary>
+public class UpdateApplicationRequest
+{
+    [Range(1, int.MaxValue)]
+    public int? PropertyId { get; set; }
+
+    public bool ClearProperty { get; set; }
+
+    [Range(1, int.MaxValue)]
+    public int? UnitId { get; set; }
+
+    public bool ClearUnit { get; set; }
+
+    [MaxLength(100)]
+    public string? FirstName { get; set; }
+
+    [MaxLength(100)]
+    public string? LastName { get; set; }
+
+    [MaxLength(200)]
+    [EmailAddress]
+    public string? Email { get; set; }
+
+    [MaxLength(50)]
+    [Phone]
+    public string? Phone { get; set; }
+
+    public DateTime? DateOfBirth { get; set; }
+    public bool ClearDateOfBirth { get; set; }
+
+    [MaxLength(250)]
+    public string? CurrentAddressLine1 { get; set; }
+
+    [MaxLength(250)]
+    public string? CurrentAddressLine2 { get; set; }
+
+    [MaxLength(120)]
+    public string? CurrentCity { get; set; }
+
+    [MaxLength(60)]
+    public string? CurrentState { get; set; }
+
+    [MaxLength(20)]
+    public string? CurrentPostalCode { get; set; }
+
+    [MaxLength(500)]
+    public string? CurrentAddress { get; set; }
+
+    [MaxLength(200)]
+    public string? Employer { get; set; }
+
+    [Range(0, 100_000_000)]
+    public decimal? MonthlyIncome { get; set; }
+    public bool ClearMonthlyIncome { get; set; }
+
+    public DateTime? DesiredMoveInDate { get; set; }
+    public bool ClearDesiredMoveInDate { get; set; }
+
+    [MaxLength(2000)]
+    public string? Notes { get; set; }
+}
+
 /// <summary>Wire shape returned for a <see cref="RentalApplication"/> to the landlord.</summary>
 public class ApplicationResponse
 {
