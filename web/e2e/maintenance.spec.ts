@@ -13,7 +13,7 @@ test.describe('Maintenance', () => {
 		const title = unique('Leaky Faucet');
 
 		await expect(page.getByRole('button', { name: /new work order/i })).toHaveCount(1);
-		await page.getByTestId('work-order-create-button-toolbar').click();
+		await page.getByTestId('work-order-create-button').click();
 		await expect(page.getByTestId('work-order-form')).toBeVisible();
 
 		await expect(page.getByTestId('work-order-form-save')).toHaveCount(0);
@@ -33,7 +33,7 @@ test.describe('Maintenance', () => {
 		await realProperties.first().click();
 
 		await page.getByTestId('work-order-step-next').click();
-		await expect(page.getByTestId('work-order-scheduled-input')).toBeVisible();
+		await expect(page.getByTestId('work-order-scheduled-input-date')).toBeVisible();
 		await page.getByTestId('work-order-step-next').click();
 		await expect(page.getByTestId('work-order-vendor-input')).toBeVisible();
 
