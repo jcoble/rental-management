@@ -11,6 +11,7 @@
 	import type { ColumnDef } from '$lib/components/data-grid/types';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import ConfirmDialog from '$lib/components/shared/ConfirmDialog.svelte';
+	import FormStepper, { type FormStepperStep } from '$lib/components/shared/FormStepper.svelte';
 	import SearchInput from '$lib/components/shared/SearchInput.svelte';
 	import AddressAutocomplete from '$lib/components/shared/AddressAutocomplete.svelte';
 	import StateSelect from '$lib/components/shared/StateSelect.svelte';
@@ -68,7 +69,20 @@
 	let editingOwnerId = $state<number | null>(null);
 	let ownerForm = $state({ ...emptyOwner });
 	let ownerErrors = $state<Record<string, string>>({});
+	let ownerStep = $state(0);
+	let completedOwnerSteps = $state<number[]>([]);
 	let ownerDeleteTarget = $state<Owner | null>(null);
+
+	const ownerSteps: FormStepperStep[] = [
+		{ id: 'identity', label: 'Identity', description: 'Name and tax info' },
+		{ id: 'address', label: 'Address', description: 'Mailing address' },
+		{ id: 'contact', label: 'Contact', description: 'Phone and email' },
+	];
+	const ownerStepFields = [
+		['name', 'ownerEntityType', 'taxId'],
+		['addressLine1', 'addressLine2', 'city', 'state', 'postalCode'],
+		['phone', 'email'],
+	] as const;
 
 	function invalidateOwners() {
 		queryClient.invalidateQueries({ queryKey: ['owners', portfolioId] });
@@ -99,6 +113,8 @@
 		editingOwnerId = null;
 		ownerForm = { ...emptyOwner };
 		ownerErrors = {};
+		ownerStep = 0;
+		completedOwnerSteps = [];
 		showOwnerForm = true;
 	}
 	function openEditOwner(o: Owner) {
@@ -117,17 +133,51 @@
 			email: o.email ?? '',
 		};
 		ownerErrors = {};
+		ownerStep = 0;
+		completedOwnerSteps = [];
 		showOwnerForm = true;
 	}
 	function closeOwnerForm() {
 		showOwnerForm = false;
 		editingOwnerId = null;
 		ownerErrors = {};
+		ownerStep = 0;
+		completedOwnerSteps = [];
+	}
+	function ownerStepErrorFields(step: number, errors: Record<string, string>) {
+		const visibleFields = new Set<string>(ownerStepFields[step] ?? []);
+		return Object.entries(errors).filter(([field]) => visibleFields.has(field));
+	}
+	function firstOwnerErrorStep(errors: Record<string, string>) {
+		return ownerStepFields.findIndex((fields) => fields.some((field) => errors[field]));
+	}
+	function markOwnerStepInvalid(step: number) {
+		completedOwnerSteps = completedOwnerSteps.filter((completedStep) => completedStep < step);
+	}
+	function validateOwnerStep(step: number) {
+		const result = parseForm(ownerSchema, ownerForm);
+		const currentErrors = result.errors ? Object.fromEntries(ownerStepErrorFields(step, result.errors)) : {};
+		const currentFields = new Set<string>(ownerStepFields[step] ?? []);
+		const nextErrors = Object.fromEntries(Object.entries(ownerErrors).filter(([field]) => !currentFields.has(field)));
+		ownerErrors = { ...nextErrors, ...currentErrors };
+		const isValid = Object.keys(currentErrors).length === 0;
+		if (!isValid) markOwnerStepInvalid(step);
+		return isValid;
+	}
+	function nextOwnerStep() {
+		if (!validateOwnerStep(ownerStep)) return;
+		if (!completedOwnerSteps.includes(ownerStep)) completedOwnerSteps = [...completedOwnerSteps, ownerStep];
+		ownerStep = Math.min(ownerStep + 1, ownerSteps.length - 1);
 	}
 	function submitOwner() {
 		const result = parseForm(ownerSchema, ownerForm);
 		if (result.errors) {
 			ownerErrors = result.errors;
+			const firstErrorStep = firstOwnerErrorStep(result.errors);
+			if (firstErrorStep >= 0) {
+				ownerStep = firstErrorStep;
+				markOwnerStepInvalid(firstErrorStep);
+			}
 			return;
 		}
 		ownerErrors = {};
@@ -250,54 +300,73 @@
 </div>
 
 <Dialog.Root open={showOwnerForm} onOpenChange={(v) => { if (!v) closeOwnerForm(); }}>
-	<Dialog.Content class="max-w-md">
+	<Dialog.Content class="max-h-[85vh] max-w-2xl overflow-y-auto [background:var(--m3c-surface-container-highest)]">
 		<Dialog.Header>
 			<Dialog.Title>{editingOwnerId == null ? 'New Owner' : 'Edit Owner'}</Dialog.Title>
 		</Dialog.Header>
-		<div class="space-y-2" data-testid="owner-form">
-			<div>
-				<Input data-testid="owner-name-input" bind:value={ownerForm.name} placeholder="Owner name" />
-				{#if ownerErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="owner-name-error">{ownerErrors.name}</p>{/if}
+		<FormStepper
+			steps={ownerSteps}
+			bind:currentStep={ownerStep}
+			completedSteps={completedOwnerSteps}
+			testid="owner-stepper"
+		>
+			<div class="space-y-3" data-testid="owner-form">
+				{#if ownerStep === 0}
+					<div>
+						<span class="mb-1 block text-xs font-medium text-muted-foreground">Owner name</span>
+						<Input data-testid="owner-name-input" bind:value={ownerForm.name} placeholder="Owner name" />
+						{#if ownerErrors.name}<p class="mt-1 text-xs text-destructive" data-testid="owner-name-error">{ownerErrors.name}</p>{/if}
+					</div>
+					<div>
+						<span class="mb-1 block text-xs text-muted-foreground">Type</span>
+						<Select.Root type="single" bind:value={ownerForm.ownerEntityType}>
+							<Select.Trigger class="w-full" data-testid="owner-type-input">
+								{ownerForm.ownerEntityType || 'Select type'}
+							</Select.Trigger>
+							<Select.Content>
+								{#each OWNER_ENTITY_TYPES as t}
+									<Select.Item value={t} label={t}>{t}</Select.Item>
+								{/each}
+							</Select.Content>
+						</Select.Root>
+					</div>
+					<Input data-testid="owner-taxid-input" bind:value={ownerForm.taxId} placeholder="Tax ID / EIN (optional)" />
+				{:else if ownerStep === 1}
+					<AddressAutocomplete
+						testid="owner-address-input"
+						bind:value={ownerForm.addressLine1}
+						placeholder="Address (optional)"
+						onresolved={(a) => {
+							if (a.city) ownerForm.city = a.city;
+							if (a.state) ownerForm.state = a.state;
+							if (a.zip) ownerForm.postalCode = a.zip;
+						}}
+					/>
+					<Input data-testid="owner-address2-input" bind:value={ownerForm.addressLine2} placeholder="Apt / Suite / Unit # (optional)" />
+					<div class="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto]">
+						<Input data-testid="owner-city-input" bind:value={ownerForm.city} placeholder="City" />
+						<StateSelect testid="owner-state-input" bind:value={ownerForm.state} placeholder="State" />
+						<Input data-testid="owner-zip-input" bind:value={ownerForm.postalCode} placeholder="ZIP" inputmode="numeric" autocomplete="postal-code" maxlength={10} mask="zip" />
+					</div>
+				{:else}
+					<Input data-testid="owner-phone-input" bind:value={ownerForm.phone} placeholder="Phone (optional)" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
+					<div>
+						<Input data-testid="owner-email-input" bind:value={ownerForm.email} type="email" autocomplete="email" placeholder="Email (optional)" />
+						{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="owner-email-error">{ownerErrors.email}</p>{/if}
+					</div>
+				{/if}
 			</div>
-			<div>
-				<span class="mb-1 block text-xs text-muted-foreground">Type</span>
-				<Select.Root type="single" bind:value={ownerForm.ownerEntityType}>
-					<Select.Trigger class="w-full" data-testid="owner-type-input">
-						{ownerForm.ownerEntityType || 'Select type'}
-					</Select.Trigger>
-					<Select.Content>
-						{#each OWNER_ENTITY_TYPES as t}
-							<Select.Item value={t} label={t}>{t}</Select.Item>
-						{/each}
-					</Select.Content>
-				</Select.Root>
-			</div>
-			<Input data-testid="owner-taxid-input" bind:value={ownerForm.taxId} placeholder="Tax ID / EIN (optional)" />
-			<AddressAutocomplete
-				testid="owner-address-input"
-				bind:value={ownerForm.addressLine1}
-				placeholder="Address (optional)"
-				onresolved={(a) => {
-					if (a.city) ownerForm.city = a.city;
-					if (a.state) ownerForm.state = a.state;
-					if (a.zip) ownerForm.postalCode = a.zip;
-				}}
-			/>
-			<Input data-testid="owner-address2-input" bind:value={ownerForm.addressLine2} placeholder="Apt / Suite / Unit # (optional)" />
-			<div class="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_auto]">
-				<Input data-testid="owner-city-input" bind:value={ownerForm.city} placeholder="City" />
-				<StateSelect testid="owner-state-input" bind:value={ownerForm.state} placeholder="State" />
-				<Input data-testid="owner-zip-input" bind:value={ownerForm.postalCode} placeholder="ZIP" inputmode="numeric" autocomplete="postal-code" maxlength={10} mask="zip" />
-			</div>
-			<Input data-testid="owner-phone-input" bind:value={ownerForm.phone} placeholder="Phone (optional)" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
-			<div>
-				<Input data-testid="owner-email-input" bind:value={ownerForm.email} type="email" autocomplete="email" placeholder="Email (optional)" />
-				{#if ownerErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="owner-email-error">{ownerErrors.email}</p>{/if}
-			</div>
-		</div>
+		</FormStepper>
 		<div class="mt-4 flex justify-end gap-2">
 			<Button data-testid="owner-form-cancel" variant="outline" onclick={closeOwnerForm}>Cancel</Button>
-			<Button data-testid="owner-form-save" onclick={submitOwner} disabled={saveOwnerMutation.isPending}>{saveOwnerMutation.isPending ? 'Saving…' : 'Save owner'}</Button>
+			{#if ownerStep > 0}
+				<Button data-testid="owner-step-back" variant="outline" onclick={() => (ownerStep = Math.max(ownerStep - 1, 0))}>Back</Button>
+			{/if}
+			{#if ownerStep < ownerSteps.length - 1}
+				<Button data-testid="owner-step-next" onclick={nextOwnerStep}>Next</Button>
+			{:else}
+				<Button data-testid="owner-form-save" onclick={submitOwner} disabled={saveOwnerMutation.isPending}>{saveOwnerMutation.isPending ? 'Saving…' : 'Save owner'}</Button>
+			{/if}
 		</div>
 	</Dialog.Content>
 </Dialog.Root>
