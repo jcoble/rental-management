@@ -665,7 +665,7 @@
 	}
 
 	function queueStatusLabel(status: string): string {
-		if (status === 'DeliveryDisabled') return 'Delivery disabled';
+		if (status === 'DeliveryDisabled') return 'Not delivered';
 		if (status === 'Retrying') return 'Retrying';
 		if (status === 'Failed') return 'Failed';
 		if (status === 'Sent') return 'Sent';
@@ -694,7 +694,7 @@
 				: item.status === 'Failed'
 					? 'Failed'
 					: item.status === 'DeliveryDisabled'
-						? 'Delivery disabled'
+						? 'Not delivered'
 						: item.status === 'Retrying'
 							? 'Retrying since'
 							: 'Queued';
@@ -1244,7 +1244,7 @@
 						</p>
 					{:else if signature?.esignStatus === 'Sent' && latestSignatureEmailStatus === 'DeliveryDisabled'}
 						<p class="mt-2 text-xs text-warning" data-testid="lease-esign-delivery-disabled-note">
-							Signing request created, but email delivery is disabled right now. Open the signing link from the queue below, or configure email delivery and resend.
+							Signing request created, but that email attempt was not delivered. Resend for signature to try the configured email provider again, or use the signing link from the queue below.
 						</p>
 					{:else if signature?.esignStatus === 'Sent' && latestSignatureEmailStatus === 'Failed'}
 						<p class="mt-2 text-xs text-destructive" data-testid="lease-esign-delivery-failed-note">

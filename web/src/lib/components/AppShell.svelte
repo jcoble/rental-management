@@ -712,6 +712,12 @@
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
 						{#if !portalUser}
+							<DropdownMenuItem data-testid="user-menu-guided-setup-collapsed">
+								<a href="/onboarding?from=account-menu" class="flex w-full items-center gap-2">
+									<ClipboardList class="h-4 w-4" />
+									Guided Setup
+								</a>
+							</DropdownMenuItem>
 							<DropdownMenuItem data-testid="user-menu-settings">
 								<a href="/settings" class="flex w-full items-center gap-2">
 									<Settings class="h-4 w-4" />
@@ -763,6 +769,12 @@
 						</DropdownMenuLabel>
 						<DropdownMenuSeparator />
 						{#if !portalUser}
+							<DropdownMenuItem data-testid="user-menu-guided-setup">
+								<a href="/onboarding?from=account-menu" class="flex w-full items-center gap-2">
+									<ClipboardList class="h-4 w-4" />
+									Guided Setup
+								</a>
+							</DropdownMenuItem>
 							<DropdownMenuItem data-testid="user-menu-settings">
 								<a href="/settings" class="flex w-full items-center gap-2">
 									<Settings class="h-4 w-4" />

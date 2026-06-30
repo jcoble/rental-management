@@ -9,7 +9,7 @@
 - Exploration budget: 6. Used: 4 (01, 03, 05, 06). Remaining: wave 3 = 02, 04.
 
 ## ⚠ Environment & API restart recipe (LEARNED — incident fixed)
-- Dev stack = tmux session `rental-main-stack` running scripts/start-dev.sh (with ALLOW_EXTERNAL_NOTIFICATIONS=1).
+- Dev stack = tmux session `rental-main-stack` running `scripts/start-dev.sh`. Notification provider configuration is resolved from .NET user-secrets or explicit process environment; do not add a local delivery-disable override to the normal dev stack.
 - start-dev.sh does NOT hot-reload backend, so to run merged API code I run MY OWN API on :5666.
 - INCIDENT: my first API restart omitted the mkcert cert → API served self-signed `CN=localhost` →
   web SSR (strict Node fetch to /auth/me) rejected it → every protected route bounced to /login →
@@ -18,7 +18,7 @@
     export Upload__BasePath="$PWD/uploads"
     export Kestrel__Certificates__Default__Path="$PWD/web/.cert/api-cert.pem"   # <-- THE FIX
     export Kestrel__Certificates__Default__KeyPath="$PWD/web/.cert/api-key.pem"
-    export Notifications__<all providers>=""        # blank — no real mail/SMS during tests
+    export Notifications__<all providers>=""        # only for isolated synthetic QA runs; never for the normal dev stack
     # do NOT export ConnectionStrings (User-Secrets supplies it)
     dotnet build RentalCommand.Api   # only if code changed
     dotnet run --no-build --project RentalCommand.Api -- --urls "https://localhost:5666;http://localhost:5665"  (background)
@@ -27,10 +27,10 @@
   CONFIRMED via real browser: verifier logged into :5667 ("Fill dev login" + Sign In) → Dashboard, no
   /login bounce; all 8 checks re-passed on canonical web; the earlier SignalR negotiate-500 was a
   workaround-instance artifact, NOT a defect (canonical negotiate=200).
-- Current API = my relaunch (bg task b0ich7yjb): merged code, mkcert cert, notifications BLANKED.
+- Current API = my relaunch (bg task b0ich7yjb): merged code, mkcert cert, notifications blanked for that isolated QA run only.
 - Current ENGINE = my relaunch (bg task bjmv23bql): RentalCommand.Engine died ~23:02 in the stack churn
   (no scan extraction → uploads stuck Pending). Restarted with Development env + Upload__BasePath="$PWD/uploads"
-  (MUST match the API's upload path so the worker reads the blob the API wrote) + notifications BLANKED +
+  (MUST match the API's upload path so the worker reads the blob the API wrote) + notifications blanked for that isolated QA run only +
   Engine user-secrets (ConnectionStrings + Assistant:Provider LLM). Confirmed: drained stuck draft 270 →
   Reviewing; OutboxDispatchWorker logs NotificationDeliverySuppressedException = mail safely suppressed.
 - Web (:5667) = tmux-managed; HMR already serves merged frontend. (API + Engine are now MY processes.)
@@ -39,8 +39,7 @@
 - SCAN-1 [Low] GET /scans/{id}/file?full=1 → HTTP 400 ("'1' is not valid"); only ?full=true works, but
   ScanController.cs:547 documents ?full=1. Fix: accept 1/0 (bind bool from "1") or update the doc string.
   (Expense scan path fully verified end-to-end by tester1b: draft 269 → expense 1034, all fields persisted.)
-- NOTE for user: the tmux stack had ALLOW_EXTERNAL_NOTIFICATIONS=1 (real providers). My API blanks them
-  so the test run can't send real emails/SMS to real addresses (e.g. redacted-person@example.invalid on portfolio 1).
+- NOTE for user: the normal tmux stack may use configured real providers from user-secrets. An isolated QA API/Engine should blank provider environment variables only for that QA process so synthetic tests cannot send real emails/SMS to real addresses.
 
 ## ⚠ Shared/volatile DB environment (discovered mid-run)
 The dev Postgres `rentalcommand` is SHARED with other concurrent agentic sessions. Mid-run it was
