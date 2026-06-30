@@ -56,6 +56,89 @@ public class PropertyServiceTests : IDisposable
             sql.Contains("OFFSET", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Theory]
+    [InlineData(PropertyType.SingleFamily)]
+    [InlineData(PropertyType.Condo)]
+    [InlineData(PropertyType.Townhome)]
+    public async Task CreateAsync_CreatesCanonicalUnitForPropertyUnitTypes(PropertyType propertyType)
+    {
+        var created = await _sut.CreateAsync(PortfolioId, NewProperty("293 Mallard Point Dr", propertyType));
+
+        created.Should().NotBeNull();
+        created!.UnitCount.Should().Be(1);
+
+        var unit = _ctx.Db.Units.Single(u => u.PropertyId == created.Id);
+        unit.UnitNumber.Should().Be("293 Mallard Point Dr");
+        unit.Status.Should().Be(UnitStatus.Vacant);
+        unit.MarketRent.Should().Be(0m);
+    }
+
+    [Theory]
+    [InlineData(PropertyType.MultiFamily)]
+    [InlineData(PropertyType.MixedUse)]
+    [InlineData(PropertyType.Commercial)]
+    public async Task CreateAsync_DoesNotCreateCanonicalUnitForUnitizedPropertyTypes(PropertyType propertyType)
+    {
+        var created = await _sut.CreateAsync(PortfolioId, NewProperty("Westview Four-Plex", propertyType));
+
+        created.Should().NotBeNull();
+        created!.UnitCount.Should().Be(0);
+        _ctx.Db.Units.Where(u => u.PropertyId == created.Id).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UpdateAsync_CreatesCanonicalUnitWhenPropertyUnitTypeHasNoUnits()
+    {
+        var property = SeedProperty("Standalone Home", PropertyType.MultiFamily);
+
+        var updated = await _sut.UpdateAsync(
+            PortfolioId,
+            property.Id,
+            new UpdatePropertyRequest { PropertyType = PropertyType.SingleFamily });
+
+        updated.Should().NotBeNull();
+        updated!.UnitCount.Should().Be(1);
+        _ctx.Db.Units.Single(u => u.PropertyId == property.Id).UnitNumber.Should().Be("Standalone Home");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_RenamesExistingCanonicalUnitWhenPropertyNameChanges()
+    {
+        var created = await _sut.CreateAsync(PortfolioId, NewProperty("Old Home Name", PropertyType.SingleFamily));
+
+        var updated = await _sut.UpdateAsync(
+            PortfolioId,
+            created!.Id,
+            new UpdatePropertyRequest { Name = "New Home Name" });
+
+        updated.Should().NotBeNull();
+        updated!.UnitCount.Should().Be(1);
+        _ctx.Db.Units.Single(u => u.PropertyId == created.Id).UnitNumber.Should().Be("New Home Name");
+    }
+
+    [Fact]
+    public async Task UpdateAsync_DoesNotRenameManuallyNamedSingleUnit()
+    {
+        var property = SeedProperty("Standalone Home", PropertyType.SingleFamily);
+        _ctx.Db.Units.Add(new Unit
+        {
+            PropertyId = property.Id,
+            UnitNumber = "Detached Garage Apartment",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        await _ctx.Db.SaveChangesAsync();
+
+        var updated = await _sut.UpdateAsync(
+            PortfolioId,
+            property.Id,
+            new UpdatePropertyRequest { Name = "Renamed Home" });
+
+        updated.Should().NotBeNull();
+        _ctx.Db.Units.Single(u => u.PropertyId == property.Id)
+            .UnitNumber.Should().Be("Detached Garage Apartment");
+    }
+
     [Fact]
     public async Task DeleteAsync_ThrowsWhenPropertyStillHasLiveUnits()
     {
@@ -125,6 +208,37 @@ public class PropertyServiceTests : IDisposable
         _ctx.Db.SaveChanges();
         return property;
     }
+
+    private Property SeedProperty(string name, PropertyType type)
+    {
+        var now = DateTime.UtcNow;
+        var property = new Property
+        {
+            PortfolioId = PortfolioId,
+            Name = name,
+            PropertyType = type,
+            AddressLine1 = $"{name} Street",
+            City = "Columbus",
+            State = "OH",
+            PostalCode = "43215",
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        _ctx.Db.Properties.Add(property);
+        _ctx.Db.SaveChanges();
+        return property;
+    }
+
+    private static CreatePropertyRequest NewProperty(string name, PropertyType type) => new()
+    {
+        Name = name,
+        PropertyType = type,
+        Status = PropertyStatus.Active,
+        AddressLine1 = "293 Mallard Point Dr",
+        City = "Columbus",
+        State = "OH",
+        PostalCode = "43215",
+    };
 
     private void SeedOccupyingLease(Property property, Unit unit, LeaseStatus status)
     {
