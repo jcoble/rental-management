@@ -8,6 +8,10 @@
 import { redirect } from '@sveltejs/kit';
 import type { LayoutServerLoad } from './$types';
 
+// The "not linked yet" page lives inside the portal group; exempt it from the link guard so it can
+// render without bouncing (otherwise an unlinked tenant would loop on it).
+const UNLINKED_PATH = '/portal/unlinked';
+
 export const load: LayoutServerLoad = async ({ locals, url }) => {
 	if (!locals.user) {
 		const redirectTo = url.pathname + url.search;
@@ -28,6 +32,19 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		!locals.user.roles.some((r) => ['Admin', 'Manager', 'Agent'].includes(r));
 	if (!isPortalUser) {
 		throw redirect(303, '/');
+	}
+
+	// A Tenant-role user whose account isn't linked to a tenant record yet would hit a portal that
+	// 403s on every card (every /portal API is scoped to the tenantId claim). Show them a clear
+	// "not linked yet — contact your landlord" page instead. Exempt that page itself so we never loop,
+	// and bounce a now-linked tenant who somehow lands there back to the dashboard. This stays within
+	// the Tenant-role group, so it never sends a portal user back to a (protected) route (no cross-loop).
+	const isLinked = locals.user.tenantId != null;
+	if (!isLinked && url.pathname !== UNLINKED_PATH) {
+		throw redirect(303, UNLINKED_PATH);
+	}
+	if (isLinked && url.pathname === UNLINKED_PATH) {
+		throw redirect(303, '/portal');
 	}
 
 	return {
