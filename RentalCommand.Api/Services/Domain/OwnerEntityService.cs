@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using RentalCommand.Api.DTOs;
+using RentalCommand.Core;
 using RentalCommand.Core.Entities;
 using RentalCommand.Core.Interfaces;
 using RentalCommand.Data;
@@ -147,6 +148,18 @@ public class OwnerEntityService : IOwnerEntityService
         if (entity == null)
         {
             return false;
+        }
+
+        var propertyCount = await _db.Properties
+            .AsNoTracking()
+            .CountAsync(p => p.PortfolioId == portfolioId && p.OwnerEntityId == id, ct);
+        if (propertyCount > 0)
+        {
+            var propertyNoun = propertyCount == 1 ? "property" : "properties";
+            var targetNoun = propertyCount == 1 ? "that property" : "those properties";
+            throw new DomainValidationException(
+                $"This owner is assigned to {propertyCount} {propertyNoun}. Please reassign {targetNoun} or clear the owner before deleting this owner.",
+                statusCode: 409);
         }
 
         entity.DeletedAt = DateTime.UtcNow;
