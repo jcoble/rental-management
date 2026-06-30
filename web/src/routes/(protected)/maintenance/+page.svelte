@@ -647,6 +647,7 @@
 
 {#snippet headerActions()}
 	<div class="flex flex-wrap gap-2">
+		<Button data-testid="work-order-create-button" onclick={openCreateWo}><Plus class="h-4 w-4" /> New Work Order</Button>
 		<Button data-testid="inspection-create-button" variant="outline" onclick={openInspectionForm}><ShieldCheck class="h-4 w-4" /> Inspection</Button>
 		<Button data-testid="recurring-maintenance-link" variant="outline" onclick={() => goto('/maintenance/recurring')}><RefreshCw class="h-4 w-4" /> Recurring</Button>
 	</div>
@@ -712,9 +713,6 @@
 					{/each}
 				</Select.Content>
 			</Select.Root>
-			<Button data-testid="work-order-create-button-toolbar" class="shrink-0" onclick={openCreateWo}>
-				<Plus class="h-4 w-4" /> New work order
-			</Button>
 		{/snippet}
 	</DataGrid>
 
