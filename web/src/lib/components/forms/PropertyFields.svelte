@@ -82,7 +82,15 @@
 				<span class="text-xs font-medium text-muted-foreground">ZIP</span>
 				<AutoFilledBadge show={filled('postalCode')} confidence={conf('postalCode')} />
 			</div>
-			<Input data-testid={`${testidPrefix}-postal-input`} bind:value={form.postalCode} placeholder="ZIP" />
+			<Input
+				data-testid={`${testidPrefix}-postal-input`}
+				bind:value={form.postalCode}
+				placeholder="ZIP"
+				inputmode="numeric"
+				autocomplete="postal-code"
+				maxlength={10}
+				mask="zip"
+			/>
 			{#if errors.postalCode}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-postal-error`}>{errors.postalCode}</p>{/if}
 		</div>
 	</div>

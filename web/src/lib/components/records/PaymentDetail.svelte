@@ -235,7 +235,7 @@
 		<div class="grid gap-6 lg:grid-cols-2">
 			<DetailCard title="Charge" icon={Receipt} accent="primary" testid="payment-card-charge" contentClass="grid gap-x-6 gap-y-4 sm:grid-cols-2">
 				<InlineField label="Lease" bind:value={form.leaseId} display={leaseDisplay} {editing} type="select" options={leaseOptions} error={formErrors.leaseId} testid="payment-detail-lease" class="sm:col-span-2" />
-				<InlineField label="Amount" bind:value={form.amount} display={formatPaymentMoney(payment.amount)} {editing} error={formErrors.amount} testid="payment-detail-amount" />
+				<InlineField label="Amount" bind:value={form.amount} display={formatPaymentMoney(payment.amount)} {editing} type="number" error={formErrors.amount} testid="payment-detail-amount" />
 				<InlineField label="Payment type" bind:value={form.paymentType} display={payment.paymentType} {editing} type="select" options={typeOptions} testid="payment-detail-type" />
 				{@render dateField({ label: 'Due date', value: form.dueDate, setValue: (v) => (form.dueDate = v), display: formatDateOnly(payment.dueDate), error: formErrors.dueDate, testid: 'payment-detail-due-date' })}
 			</DetailCard>
@@ -246,7 +246,7 @@
 				     only when the chosen status is Partial; read-only show it only when the payment IS
 				     Partial — every other status has no split to display. -->
 				{#if editing ? form.status === 'Partial' : payment.status === 'Partial'}
-					<InlineField label="Amount paid" bind:value={form.amountPaid} display={payment.amountPaid != null ? formatPaymentMoney(payment.amountPaid) : '-'} {editing} error={formErrors.amountPaid} testid="payment-detail-amount-paid" />
+					<InlineField label="Amount paid" bind:value={form.amountPaid} display={payment.amountPaid != null ? formatPaymentMoney(payment.amountPaid) : '-'} {editing} type="number" error={formErrors.amountPaid} testid="payment-detail-amount-paid" />
 				{/if}
 				{@render dateField({ label: 'Paid date', value: form.paidDate, setValue: (v) => (form.paidDate = v), display: payment.paidDate ? formatDateOnly(payment.paidDate) : '', testid: 'payment-detail-paid-date' })}
 				<InlineField label="Method" bind:value={form.method} display={payment.method} {editing} testid="payment-detail-method" />

@@ -276,11 +276,11 @@
 			</div>
 			<div class="grid grid-cols-2 gap-3">
 				<InlineField label="Interest rate %" bind:value={form.annualInterestRatePct} editing type="number" error={formErrors.annualInterestRatePct} testid="loan-rate" />
-				<InlineField label="Term (months)" bind:value={form.termMonths} editing type="number" error={formErrors.termMonths} testid="loan-term" />
+				<InlineField label="Term (months)" bind:value={form.termMonths} editing type="number" maxlength={4} error={formErrors.termMonths} testid="loan-term" />
 			</div>
 			<div class="grid grid-cols-2 gap-3">
 				<InlineField label="Start date" bind:value={form.startDate} editing type="date" error={formErrors.startDate} testid="loan-start-date" />
-				<InlineField label="Day of month due" bind:value={form.dayOfMonthDue} editing type="number" error={formErrors.dayOfMonthDue} testid="loan-day-due" />
+				<InlineField label="Day of month due" bind:value={form.dayOfMonthDue} editing type="number" maxlength={2} error={formErrors.dayOfMonthDue} testid="loan-day-due" />
 			</div>
 			<div class="grid grid-cols-2 gap-3">
 				<InlineField label="Monthly P&I" bind:value={form.monthlyPrincipalInterest} editing type="number" error={formErrors.monthlyPrincipalInterest} testid="loan-pi" />

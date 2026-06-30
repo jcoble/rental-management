@@ -722,9 +722,10 @@
 									</label>
 									<Input
 										id="settings-rent-collection-day"
-										type="number"
-										min="1"
-										max="31"
+										type="text"
+										inputmode="numeric"
+										maxlength={2}
+										mask="integer"
 										bind:value={settingsModel.rentCollectionDay}
 										data-testid="settings-rent-collection-day"
 									/>
@@ -982,9 +983,10 @@
 								<label for="settings-briefing-hour" class="mb-1 block text-xs text-muted-foreground">Send Hour Local</label>
 								<Input
 									id="settings-briefing-hour"
-									type="number"
-									min="0"
-									max="23"
+									type="text"
+									inputmode="numeric"
+									maxlength={2}
+									mask="integer"
 									bind:value={notificationSettingsForm.dailyBriefingSendHourLocal}
 									data-testid="settings-briefing-hour"
 								/>
@@ -1158,9 +1160,10 @@
 								<label for="settings-rent-lead-days" class="mb-1 block text-xs text-muted-foreground">Rent Lead Days</label>
 								<Input
 									id="settings-rent-lead-days"
-									type="number"
-									min="0"
-									max="31"
+									type="text"
+									inputmode="numeric"
+									maxlength={2}
+									mask="integer"
 									bind:value={notificationSettingsForm.rentChargeLeadDays}
 									data-testid="settings-rent-lead-days"
 								/>
@@ -1170,9 +1173,10 @@
 								<label for="settings-late-grace-days" class="mb-1 block text-xs text-muted-foreground">Late Fee Grace Days</label>
 								<Input
 									id="settings-late-grace-days"
-									type="number"
-									min="0"
-									max="60"
+									type="text"
+									inputmode="numeric"
+									maxlength={2}
+									mask="integer"
 									bind:value={notificationSettingsForm.lateFeeGraceDays}
 									data-testid="settings-late-grace-days"
 								/>
@@ -1182,9 +1186,10 @@
 								<label for="settings-lease-reminder-days" class="mb-1 block text-xs text-muted-foreground">Lease Reminder Days</label>
 								<Input
 									id="settings-lease-reminder-days"
-									type="number"
-									min="1"
-									max="365"
+									type="text"
+									inputmode="numeric"
+									maxlength={3}
+									mask="integer"
 									bind:value={notificationSettingsForm.leaseExpiryReminderDays}
 									data-testid="settings-lease-reminder-days"
 								/>

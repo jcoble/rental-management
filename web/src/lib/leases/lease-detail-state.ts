@@ -20,6 +20,40 @@ export function hasNoticeMoveOutDate(value: string | null | undefined): boolean 
 
 const LEASE_STATUS_TRANSITIONS_TO_ACTIVE = new Set(['Draft', 'PendingSignature', 'NoticeGiven']);
 
+export type LeaseQuickStatusTarget = 'Active' | 'Expired' | 'Terminated';
+
+export interface LeaseQuickStatusAction {
+	targetStatus: LeaseQuickStatusTarget;
+	label: string;
+	confirmLabel: string;
+}
+
+const ACTIVE_ACTION: LeaseQuickStatusAction = {
+	targetStatus: 'Active',
+	label: 'Set Active',
+	confirmLabel: 'Set active',
+};
+const EXPIRED_ACTION: LeaseQuickStatusAction = {
+	targetStatus: 'Expired',
+	label: 'Mark expired',
+	confirmLabel: 'Mark expired',
+};
+const TERMINATED_ACTION: LeaseQuickStatusAction = {
+	targetStatus: 'Terminated',
+	label: 'Terminate',
+	confirmLabel: 'Terminate lease',
+};
+
+const LEASE_QUICK_STATUS_ACTIONS: Record<string, readonly LeaseQuickStatusAction[]> = {
+	Draft: [ACTIVE_ACTION],
+	PendingSignature: [ACTIVE_ACTION],
+	Active: [EXPIRED_ACTION, TERMINATED_ACTION],
+	NoticeGiven: [ACTIVE_ACTION, EXPIRED_ACTION, TERMINATED_ACTION],
+	Expired: [],
+	Terminated: [],
+	Void: [],
+};
+
 const LEASE_STATUS_EDIT_TARGETS: Record<string, Set<string>> = {
 	Draft: new Set(['Draft', 'PendingSignature', 'Active', 'Void']),
 	PendingSignature: new Set(['PendingSignature', 'Active', 'Draft', 'Void']),
@@ -32,6 +66,13 @@ const LEASE_STATUS_EDIT_TARGETS: Record<string, Set<string>> = {
 
 export function canSetLeaseActive(status: string | null | undefined): boolean {
 	return Boolean(status && LEASE_STATUS_TRANSITIONS_TO_ACTIVE.has(status));
+}
+
+export function quickLeaseStatusActionsForStatus(
+	status: string | null | undefined
+): LeaseQuickStatusAction[] {
+	if (!status) return [];
+	return [...(LEASE_QUICK_STATUS_ACTIONS[status] ?? [])];
 }
 
 export function leaseStatusOptionsForCurrentStatus(

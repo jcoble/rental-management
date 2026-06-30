@@ -8,9 +8,11 @@
 	import {
 		canSetLeaseActive,
 		leaseStatusOptionsForCurrentStatus,
+		quickLeaseStatusActionsForStatus,
 		resolveLeaseDetailTab,
 		scannedLeaseDocumentLinkLabel,
 		tabForLeaseEdit,
+		type LeaseQuickStatusAction,
 	} from '$lib/leases/lease-detail-state';
 	import { ensureSelectedOption } from '$lib/leases/lease-edit-options';
 	import { getLeaseDeleteState } from '$lib/leases/lease-delete-state';
@@ -258,9 +260,20 @@
 		}
 	});
 
-	function invalidateLease() {
+	function invalidateLease(updatedLease?: Lease | null) {
+		const unitId = updatedLease?.unitId ?? lease?.unitId;
+
 		queryClient.invalidateQueries({ queryKey: ['lease', leaseId] });
 		queryClient.invalidateQueries({ queryKey: ['leases', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['dashboard', portfolioId] });
+		queryClient.invalidateQueries({ queryKey: ['units'] });
+		queryClient.invalidateQueries({ queryKey: ['units-for-lease'] });
+
+		if (unitId) {
+			queryClient.invalidateQueries({ queryKey: ['unit-dashboard', unitId] });
+			queryClient.invalidateQueries({ queryKey: ['unit-leases', portfolioId, unitId] });
+			queryClient.invalidateQueries({ queryKey: ['unit-timeline', unitId] });
+		}
 	}
 
 	const saveMutation = createMutation(() => ({
@@ -280,20 +293,49 @@
 			queryClient.setQueryData(['lease', leaseId], updatedLease);
 			showSuccess('Lease status updated.');
 			showSetActiveConfirm = false;
-			invalidateSignatureStatus();
+			pendingStatusAction = null;
+			invalidateSignatureStatus(updatedLease);
 		},
 		onError: (err) => showError(apiErrorMessage(err)),
 	}));
 
 	// --- Lifecycle confirms (F11) — Set Active is no longer a one-click write. ---
 	let showSetActiveConfirm = $state(false);
+	let pendingStatusAction = $state<LeaseQuickStatusAction | null>(null);
 	let showNoticeDialog = $state(false);
+
+	const pendingStatusActionTitle = $derived.by(() => {
+		switch (pendingStatusAction?.targetStatus) {
+			case 'Expired':
+				return 'Mark lease expired?';
+			case 'Terminated':
+				return 'Terminate lease?';
+			default:
+				return 'Update lease status?';
+		}
+	});
+	const pendingStatusActionMessage = $derived.by(() => {
+		const leaseLabel = lease?.leaseNumber ? `lease ${lease.leaseNumber}` : 'this lease';
+
+		switch (pendingStatusAction?.targetStatus) {
+			case 'Expired':
+				return `Mark ${leaseLabel} as Expired? Use this when the lease term has ended. This does not regenerate or modify the original lease agreement.`;
+			case 'Terminated':
+				return `Mark ${leaseLabel} as Terminated? Use this for an early end or legal termination. This changes the lifecycle status but keeps the original lease agreement intact.`;
+			default:
+				return '';
+		}
+	});
 
 	function openNoticeDialog() {
 		showNoticeDialog = true;
 	}
 	function confirmSetActive() {
 		statusMutation.mutate({ status: 'Active' });
+	}
+	function confirmPendingStatusAction() {
+		if (!pendingStatusAction) return;
+		statusMutation.mutate({ status: pendingStatusAction.targetStatus });
 	}
 
 	const deleteMutation = createMutation(() => ({
@@ -390,6 +432,11 @@
 	const latestSignatureEmailStatus = $derived(latestSignatureQueueItem?.status ?? null);
 	const visibleStatus = $derived(visibleLeaseStatus(lease?.status, signature));
 	const canActivateLease = $derived(canSetLeaseActive(visibleStatus ?? lease?.status));
+	const terminalStatusActions = $derived(
+		quickLeaseStatusActionsForStatus(visibleStatus ?? lease?.status).filter(
+			(action) => action.targetStatus !== 'Active'
+		)
+	);
 	const canSendForSignature = $derived(canShowLeaseSignatureSendAction(lease?.status, signature));
 	const visibleLease = $derived(lease && visibleStatus ? { ...lease, status: visibleStatus } : lease);
 	const leaseDeleteState = $derived(getLeaseDeleteState(visibleLease));
@@ -413,10 +460,10 @@
 		}
 	});
 
-	function invalidateSignatureStatus() {
+	function invalidateSignatureStatus(updatedLease?: Lease | null) {
 		queryClient.invalidateQueries({ queryKey: ['lease-signature-status', leaseId] });
 		// Status changes flip the lease status too (e.g. PendingSignature).
-		invalidateLease();
+		invalidateLease(updatedLease);
 	}
 
 	function invalidateSignatureQueue() {
@@ -805,6 +852,23 @@
 							Create / Send notice
 						</Button>
 					{/if}
+					{#each terminalStatusActions as action (action.targetStatus)}
+						<Button
+							data-testid="lease-set-{action.targetStatus.toLowerCase()}"
+							variant="outline"
+							size="sm"
+							class="gap-1.5 {action.targetStatus === 'Terminated' ? 'hover:text-destructive' : ''}"
+							onclick={() => (pendingStatusAction = action)}
+							disabled={statusMutation.isPending}
+						>
+							{#if action.targetStatus === 'Expired'}
+								<CalendarRange class="h-4 w-4" />
+							{:else}
+								<X class="h-4 w-4" />
+							{/if}
+							{action.label}
+						</Button>
+					{/each}
 					<Button data-testid="lease-edit" variant="outline" size="sm" class="gap-1.5" onclick={startEditing}>
 						<Pencil class="h-4 w-4" />
 						Edit
@@ -882,7 +946,7 @@
 						<!-- Move-in is distinct from lease start (tenant may take possession on a different day)
 						     and is optional/clearable, so it gets its own editable date field. -->
 						{@render dateField({ label: 'Move-In', value: form.moveInDate, setValue: (v) => (form.moveInDate = v), display: formatDate(lease.moveInDate), error: formErrors.moveInDate, testid: 'lease-detail-move-in' })}
-						<InlineField label="Rent Due Day" bind:value={form.rentDueDay} display={`Day ${lease.rentDueDay}`} {editing} type="number" error={formErrors.rentDueDay} testid="lease-detail-due-day" />
+						<InlineField label="Rent Due Day" bind:value={form.rentDueDay} display={`Day ${lease.rentDueDay}`} {editing} type="number" maxlength={2} error={formErrors.rentDueDay} testid="lease-detail-due-day" />
 						<InlineField label="Status" bind:value={form.status} display={formatStatusLabel(visibleStatus ?? lease.status)} {editing} type="select" options={statusOptions} error={formErrors.status} testid="lease-detail-status" />
 						{#if !editing && lease.moveOutDate}
 							<div>
@@ -1025,6 +1089,43 @@
 						{/if}
 					</Card.Content>
 				</Card.Root>
+
+				{#if lease.hasScan}
+					<DetailCard title="Original source lease agreement" icon={FileText} accent="warning" testid="lease-original-source-document-card">
+						<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+							<div class="space-y-1">
+								<p class="text-sm font-medium text-foreground">Uploaded/scanned original</p>
+								<p class="max-w-2xl text-xs leading-relaxed text-muted-foreground">
+									This is the original source file kept as the legal record. It is not the generated agreement, the e-signed copy, or a regenerated PDF.
+								</p>
+							</div>
+							<div class="flex flex-wrap items-center gap-2">
+								<Button
+									href="/lease-file/{lease.id}"
+									target="_blank"
+									rel="noopener noreferrer"
+									size="sm"
+									class="gap-1.5"
+									data-testid="lease-original-source-document-open"
+								>
+									<ExternalLink class="h-4 w-4" />
+									Open original
+								</Button>
+								<Button
+									href="/lease-file/{lease.id}"
+									download
+									variant="outline"
+									size="sm"
+									class="gap-1.5"
+									data-testid="lease-original-source-document-download"
+								>
+									<Download class="h-4 w-4" />
+									Download original
+								</Button>
+							</div>
+						</div>
+					</DetailCard>
+				{/if}
 
 		<!-- Lease agreement PDF — generate, then download an authed blob -->
 		<Card.Root data-testid="lease-agreement-card">
@@ -1426,6 +1527,17 @@
 	oncancel={() => (showSetActiveConfirm = false)}
 />
 
+<ConfirmDialog
+	open={pendingStatusAction !== null}
+	title={pendingStatusActionTitle}
+	message={pendingStatusActionMessage}
+	confirmLabel={pendingStatusAction?.confirmLabel ?? 'Update status'}
+	busy={statusMutation.isPending}
+	testid="lease-status-action-confirm"
+	onconfirm={confirmPendingStatusAction}
+	oncancel={() => (pendingStatusAction = null)}
+/>
+
 {#if lease}
 	<TenantNoticeDialog
 		bind:open={showNoticeDialog}
@@ -1467,9 +1579,9 @@
 				<Input
 					data-testid="lease-opening-balance-amount"
 					bind:value={openingAmount}
-					type="number"
-					min="0"
-					step="0.01"
+					type="text"
+					inputmode="decimal"
+					mask="currency"
 					placeholder="0.00"
 				/>
 				{#if openingErrors.amount}<p class="mt-1 text-xs text-destructive" data-testid="lease-opening-balance-amount-error">{openingErrors.amount}</p>{/if}

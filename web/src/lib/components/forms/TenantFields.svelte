@@ -41,12 +41,12 @@
 	</div>
 	<div>
 		<span class="mb-1 block text-xs font-medium text-muted-foreground">Email</span>
-		<Input data-testid={`${testidPrefix}-email-input`} bind:value={form.email} placeholder="Email" />
+		<Input data-testid={`${testidPrefix}-email-input`} bind:value={form.email} placeholder="Email" type="email" autocomplete="email" />
 		{#if errors.email}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-email-error`}>{errors.email}</p>{/if}
 	</div>
 	<div>
 		<span class="mb-1 block text-xs font-medium text-muted-foreground">Phone</span>
-		<Input data-testid={`${testidPrefix}-phone-input`} bind:value={form.phone} placeholder="Phone" />
+		<Input data-testid={`${testidPrefix}-phone-input`} bind:value={form.phone} placeholder="Phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
 	</div>
 	<div class="md:col-span-2">
 		<span class="mb-1 block text-xs font-medium text-muted-foreground">Emergency contact</span>

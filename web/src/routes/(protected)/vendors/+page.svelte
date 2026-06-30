@@ -312,10 +312,10 @@
 				{#if vendorErrors.serviceType}<p class="mt-1 text-xs text-destructive" data-testid="vendor-service-error">{vendorErrors.serviceType}</p>{/if}
 			</div>
 			<div>
-				<Input data-testid="vendor-email-input" bind:value={vendorForm.email} placeholder="Vendor email" />
+				<Input data-testid="vendor-email-input" bind:value={vendorForm.email} placeholder="Vendor email" type="email" autocomplete="email" />
 				{#if vendorErrors.email}<p class="mt-1 text-xs text-destructive" data-testid="vendor-email-error">{vendorErrors.email}</p>{/if}
 			</div>
-			<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" />
+			<Input data-testid="vendor-phone-input" bind:value={vendorForm.phone} placeholder="Vendor phone" type="tel" autocomplete="tel" inputmode="tel" mask="phone" />
 			<div class="space-y-2">
 				<AddressAutocomplete
 					testid="vendor-address-input"
@@ -334,7 +334,7 @@
 						bind:value={vendorForm.state}
 						placeholder="State"
 					/>
-					<Input data-testid="vendor-zip-input" bind:value={vendorForm.postalCode} placeholder="ZIP" />
+					<Input data-testid="vendor-zip-input" bind:value={vendorForm.postalCode} placeholder="ZIP" inputmode="numeric" autocomplete="postal-code" maxlength={10} mask="zip" />
 				</div>
 			</div>
 			<div class="flex flex-wrap gap-4 text-sm">
