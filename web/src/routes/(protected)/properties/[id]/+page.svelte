@@ -470,7 +470,7 @@
 
 	{:else}
 		<!-- Header -->
-		<div class="mb-6 flex flex-wrap items-start justify-between gap-3">
+		<div class="rc-hero mb-6 flex flex-wrap items-start justify-between gap-3">
 			<div>
 				<h1 class="text-2xl font-bold" data-testid="property-detail-name">{property.name}</h1>
 				<p class="mt-1 text-sm text-muted-foreground">

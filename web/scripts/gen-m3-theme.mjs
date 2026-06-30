@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs";
 import { genCSS, colors } from "m3-svelte/etc/colors";
 import { Hct, SchemeTonalSpot } from "@ktibow/material-color-utilities-nightly";
 
-const src = Hct.fromInt(0xffa36bff); // landing violet #A36BFF
+const src = Hct.fromInt(0xff7c6ff5); // periwinkle violet #7C6FF5 (TSK-596 refresh)
 const light = new SchemeTonalSpot(src, false, 0.0);
 const dark = new SchemeTonalSpot(src, true, 0.0);
 
@@ -86,7 +86,15 @@ const darkOverrides = new Map([
   ["--m3c-on-tertiary-fixed", "#2a1700"],
   ["--m3c-on-tertiary-fixed-variant", "#653e00"],
   ["--m3c-tertiary-container-subtle", "#563400"],
-  ["--m3c-on-tertiary-container-subtle", "#ffcb8e"]
+  ["--m3c-on-tertiary-container-subtle", "#ffcb8e"],
+
+  // Error → cooler ROSE/raspberry (TSK-596): the M3 default orange-salmon clashed
+  // with the violet/periwinkle scheme. A magenta-leaning rose still reads as
+  // "alert/negative" but harmonizes. Drives --destructive + .m3-tone--error app-wide.
+  ["--m3c-error", "#ffb2c1"],
+  ["--m3c-on-error", "#5f1130"],
+  ["--m3c-error-container", "#7e2741"],
+  ["--m3c-on-error-container", "#ffd9e0"]
 ]);
 
 const lightOverrides = new Map([
@@ -132,7 +140,12 @@ const lightOverrides = new Map([
   ["--m3c-on-tertiary-fixed", "#2a1700"],
   ["--m3c-on-tertiary-fixed-variant", "#653e00"],
   ["--m3c-tertiary-container-subtle", "#ffeede"],
-  ["--m3c-on-tertiary-container-subtle", "#754900"]
+  ["--m3c-on-tertiary-container-subtle", "#754900"],
+
+  ["--m3c-error", "#b41a4e"],
+  ["--m3c-on-error", "#ffffff"],
+  ["--m3c-error-container", "#ffd9e0"],
+  ["--m3c-on-error-container", "#400018"]
 ]);
 
 applyOverrides(darkMap, darkOverrides);
