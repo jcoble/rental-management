@@ -275,6 +275,7 @@ export const expenseSchema = z.object({
 	category: z.string(),
 	status: z.string(),
 	propertyId: idString,
+	unitId: idString,
 	vendorId: idString,
 	workOrderId: idString,
 	billableToOwner: z.boolean(),

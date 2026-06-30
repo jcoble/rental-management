@@ -24,4 +24,15 @@ describe('property delete state', () => {
 			confirmDisabled: true,
 		});
 	});
+
+	it('allows a standalone home with its generated rental space to reach the server guard', () => {
+		assert.deepEqual(
+			getPropertyDeleteState({ name: 'Maple Court', type: 'SingleFamily', unitCount: 1 }),
+			{
+				message:
+					'Delete "Maple Court"? This will also remove its empty rental space. If it has any history, the server will stop the delete and explain why.',
+				confirmDisabled: false,
+			}
+		);
+	});
 });

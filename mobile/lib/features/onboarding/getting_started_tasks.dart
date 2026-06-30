@@ -143,8 +143,8 @@ const List<GettingStartedTask> kGettingStartedTasks = [
     key: 'property',
     label: 'Add your first property',
     eli5:
-        'A property is one building or address. Add it once, then put the '
-        'rentable units inside it.',
+        'A property is one building or address. Standalone homes get their '
+        'rental space automatically; larger buildings can add each unit.',
     icon: Symbols.home_rounded,
     dest: GettingStartedDest.properties,
     core: true,
@@ -152,10 +152,10 @@ const List<GettingStartedTask> kGettingStartedTasks = [
   ),
   GettingStartedTask(
     key: 'unit',
-    label: 'Add a unit to that property',
+    label: 'Confirm the rental spaces',
     eli5:
-        'A unit is a single rentable space. A house is one unit; a duplex is '
-        'two. Open a property to add its units.',
+        'A rental space is what gets leased. A house is one space; a duplex is '
+        'two. Open a property to add more spaces when needed.',
     icon: Symbols.meeting_room_rounded,
     dest: GettingStartedDest.properties,
     core: true,
