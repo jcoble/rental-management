@@ -204,6 +204,14 @@ class _TellMeScreenState extends ConsumerState<TellMeScreen> {
         ),
         if (state.phase == VoicePhase.review && turn != null)
           _reviewActions()
+        else if (turn?.ambiguous == true)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _ambiguousActions(),
+              _micArea(state),
+            ],
+          )
         else
           _micArea(state),
       ],
@@ -312,6 +320,17 @@ class _TellMeScreenState extends ConsumerState<TellMeScreen> {
       ),
     );
   }
+
+  Widget _ambiguousActions() {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: OutlinedButton.icon(
+        onPressed: _openFix,
+        icon: const Icon(Icons.edit_outlined),
+        label: const Text('Review manually'),
+      ),
+    );
+  }
 }
 
 /// Shows the draft captured so far: filled fields, what's still needed, and
@@ -350,6 +369,16 @@ class _DraftCard extends StatelessWidget {
                 fontWeight: FontWeight.w700,
               ),
             ),
+            if (turn.ambiguous) ...[
+              const SizedBox(height: 8),
+              Text(
+                'I need clarification before this can be saved by voice.',
+                style: TextStyle(
+                  color: cs.error,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
             const SizedBox(height: 8),
             if (fields.isEmpty)
               Text(
