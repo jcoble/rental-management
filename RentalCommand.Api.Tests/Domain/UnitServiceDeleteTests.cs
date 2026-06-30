@@ -60,6 +60,29 @@ public sealed class UnitServiceDeleteTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteAsync_RejectsUnitWithApplicationHistory()
+    {
+        var unit = SeedUnit();
+        _ctx.Db.RentalApplications.Add(new RentalApplication
+        {
+            PortfolioId = PortfolioId,
+            PropertyId = unit.PropertyId,
+            UnitId = unit.Id,
+            FirstName = "Applied",
+            LastName = "Tenant",
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        });
+        _ctx.Db.SaveChanges();
+
+        var act = async () => await _sut.DeleteAsync(PortfolioId, unit.Id);
+
+        var ex = await act.Should().ThrowAsync<DomainValidationException>();
+        ex.Which.Message.Should().Contain("application").And.Contain("history");
+        (await _sut.GetAsync(PortfolioId, unit.Id)).Should().NotBeNull();
+    }
+
+    [Fact]
     public async Task DeleteAsync_SoftDeletesEmptyUnit()
     {
         var unit = SeedUnit();
