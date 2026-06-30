@@ -173,6 +173,56 @@ ensure_database_exists
 export ASPNETCORE_ENVIRONMENT=Development
 export DOTNET_ENVIRONMENT=Development
 export MSBUILDDISABLENODEREUSE="${MSBUILDDISABLENODEREUSE:-1}"
+
+# A blank environment variable has higher priority than .NET User Secrets. QA wrappers sometimes
+# clear provider settings by exporting empty Notifications__* values; if that leaks into this normal
+# dev launcher, email/SMS/Google config looks intentionally disabled even when user-secrets are set.
+# Keep real explicit overrides, but remove blank ones so Development user-secrets can load.
+unset_if_blank() {
+    local key="$1"
+    if [ "${!key+x}" = "x" ] && [ -z "${!key}" ]; then
+        unset "$key"
+    fi
+}
+unset_if_blank ConnectionStrings__DefaultConnection
+unset_if_blank Notifications__SendGrid__ApiKey
+unset_if_blank Notifications__SendGrid__FromEmail
+unset_if_blank Notifications__SendGrid__FromName
+unset_if_blank Notifications__Email__Transport
+unset_if_blank Notifications__Smtp__Host
+unset_if_blank Notifications__Smtp__Username
+unset_if_blank Notifications__Smtp__Password
+unset_if_blank Notifications__Smtp__FromEmail
+unset_if_blank Notifications__SignalWire__ProjectId
+unset_if_blank Notifications__SignalWire__Token
+unset_if_blank Notifications__SignalWire__SpaceUrl
+unset_if_blank Notifications__SignalWire__FromNumber
+unset_if_blank Notifications__Twilio__AccountSid
+unset_if_blank Notifications__Twilio__AuthToken
+unset_if_blank Notifications__Twilio__FromNumber
+unset_if_blank Notifications__Telnyx__ApiKey
+unset_if_blank Notifications__Telnyx__FromNumber
+unset_if_blank Notifications__Vonage__ApiKey
+unset_if_blank Notifications__Vonage__ApiSecret
+unset_if_blank Notifications__Vonage__FromNumber
+unset_if_blank Authentication__Google__ClientId
+unset_if_blank Authentication__Google__ClientSecret
+unset_if_blank GooglePlaces__ApiKey
+unset_if_blank Assistant__ApiKey
+unset_if_blank Assistant__GeminiApiKeyBackup
+unset_if_blank Assistant__ModelId
+unset_if_blank Assistant__Provider
+unset_if_blank Plaid__AndroidPackageName
+unset_if_blank Plaid__ClientId
+unset_if_blank Plaid__Environment
+unset_if_blank Plaid__RedirectUri
+unset_if_blank Plaid__Secret
+unset_if_blank QuickBooks__ClientId
+unset_if_blank QuickBooks__ClientSecret
+unset_if_blank QuickBooks__Environment
+unset_if_blank QuickBooks__RedirectUri
+unset_if_blank PlatformAdmin__Emails__0
+
 # Serve the API's HTTPS endpoint with the locally-trusted mkcert cert.
 export Kestrel__Certificates__Default__Path="$CERT_DIR/api-cert.pem"
 export Kestrel__Certificates__Default__KeyPath="$CERT_DIR/api-key.pem"

@@ -819,6 +819,11 @@
 		finished = false;
 		goToStep(key);
 	}
+	function openImportCenterFromFinished() {
+		returnToFinishAfterOptional = false;
+		finished = false;
+		goToStep(activeImportTarget ?? 'property');
+	}
 
 	const anyPending = $derived(
 		savePortfolioMutation.isPending ||
@@ -988,6 +993,10 @@
 					{/if}
 					<!-- Optional add-ons the user can still set up, clearly marked optional. -->
 					<div class="mt-2 flex flex-col items-stretch gap-2 sm:flex-row">
+						<Button variant="outline" class="gap-2" data-testid="onboarding-return-import" onclick={openImportCenterFromFinished}>
+							<FileSpreadsheet class="h-4 w-4" />
+							Import more records
+						</Button>
 						{#if !stepDone.notifications}
 							<Button variant="outline" class="gap-2" data-testid="onboarding-setup-notifications" onclick={() => openOptionalStepFromFinished('notifications')}>
 								<Bell class="h-4 w-4" />
@@ -1042,48 +1051,50 @@
 								{@const done = importPhaseCompletion[phase.key]}
 								{@const active = phase.key === activeImportPhaseKey}
 								{@const target = wizardTargetForImportPhase(phase.key)}
-								<button
-									type="button"
-									class="relative flex min-h-16 items-start gap-3 rounded-md border px-3 py-2.5 text-left transition-colors
-										{active
-											? 'border-primary bg-primary/10 text-foreground'
-											: done
-												? 'phase-complete border-success/50 bg-success/10 text-foreground'
-												: 'border-border bg-muted/20 text-muted-foreground hover:bg-muted/40'}
-										{!target && !done ? 'cursor-default' : ''}"
-									disabled={!target && !done}
-									onclick={() => openImportPhase(phase.key)}
-									data-testid="onboarding-import-phase-{phase.key}"
-								>
-									<span
-										class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs
-											{done
-												? 'border-success bg-success text-success-foreground'
-												: active
-													? 'border-primary bg-primary text-primary-foreground'
-													: 'border-border bg-background'}"
+								<div class="relative">
+									<button
+										type="button"
+										class="relative flex min-h-16 w-full items-start gap-3 rounded-md border px-3 py-2.5 pr-9 text-left transition-colors
+											{active
+												? 'border-primary bg-primary/10 text-foreground'
+												: done
+													? 'phase-complete border-success/50 bg-success/10 text-foreground'
+													: 'border-border bg-muted/20 text-muted-foreground hover:bg-muted/40'}
+											{!target && !done ? 'cursor-default' : ''}"
+										disabled={!target && !done}
+										onclick={() => openImportPhase(phase.key)}
+										data-testid="onboarding-import-phase-{phase.key}"
 									>
+										<span
+											class="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs
+												{done
+													? 'border-success bg-success text-success-foreground'
+													: active
+														? 'border-primary bg-primary text-primary-foreground'
+														: 'border-border bg-background'}"
+										>
+											{#if done}
+												<Check class="h-4 w-4" />
+											{:else}
+												{ONBOARDING_IMPORT_PHASES.indexOf(phase) + 1}
+											{/if}
+										</span>
+										<span class="min-w-0">
+											<span class="block text-sm font-semibold">{phase.label}</span>
+											<span class="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
+												{done ? phase.rewardLabel : phase.title}
+											</span>
+										</span>
 										{#if done}
-											<Check class="h-4 w-4" />
-										{:else}
-											{ONBOARDING_IMPORT_PHASES.indexOf(phase) + 1}
+											<span class="reward-burst" aria-hidden="true">
+												<span></span><span></span><span></span>
+											</span>
 										{/if}
-									</span>
-									<span class="min-w-0">
-										<span class="flex items-center gap-1.5 text-sm font-semibold">
-											{phase.label}
-											<HelpPopover title={phase.label} summary={phase.tooltip} side="top" testid="onboarding-help-{phase.key}" />
-										</span>
-										<span class="mt-0.5 block text-xs leading-relaxed text-muted-foreground">
-											{done ? phase.rewardLabel : phase.title}
-										</span>
-									</span>
-									{#if done}
-										<span class="reward-burst" aria-hidden="true">
-											<span></span><span></span><span></span>
-										</span>
-									{/if}
-								</button>
+									</button>
+									<div class="absolute right-2 top-2">
+										<HelpPopover title={phase.label} summary={phase.tooltip} side="top" testid="onboarding-help-{phase.key}" />
+									</div>
+								</div>
 							{/each}
 						</div>
 					</div>

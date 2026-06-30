@@ -24,10 +24,14 @@ describe('start-dev launcher', () => {
 		const buildSection = script.indexOf('Building .NET hosts');
 
 		assert.ok(buildSection > -1, 'expected an explicit serial .NET build section');
+		assert.match(script, /unset_if_blank\(\)/);
 
 		for (const key of [
+			'ConnectionStrings__DefaultConnection',
 			'Notifications__SendGrid__ApiKey',
 			'Notifications__SendGrid__FromEmail',
+			'Notifications__SendGrid__FromName',
+			'Notifications__Email__Transport',
 			'Notifications__Smtp__Host',
 			'Notifications__Smtp__Username',
 			'Notifications__Smtp__Password',
@@ -43,9 +47,27 @@ describe('start-dev launcher', () => {
 			'Notifications__Telnyx__FromNumber',
 			'Notifications__Vonage__ApiKey',
 			'Notifications__Vonage__ApiSecret',
-			'Notifications__Vonage__FromNumber'
+			'Notifications__Vonage__FromNumber',
+			'Authentication__Google__ClientId',
+			'Authentication__Google__ClientSecret',
+			'GooglePlaces__ApiKey',
+			'Assistant__ApiKey',
+			'Assistant__GeminiApiKeyBackup',
+			'Assistant__ModelId',
+			'Assistant__Provider',
+			'Plaid__AndroidPackageName',
+			'Plaid__ClientId',
+			'Plaid__Environment',
+			'Plaid__RedirectUri',
+			'Plaid__Secret',
+			'QuickBooks__ClientId',
+			'QuickBooks__ClientSecret',
+			'QuickBooks__Environment',
+			'QuickBooks__RedirectUri',
+			'PlatformAdmin__Emails__0'
 		]) {
 			assert.doesNotMatch(script, new RegExp(`export ${key}=""`), `${key} must not be blanked by start-dev.sh`);
+			assert.match(script, new RegExp(`unset_if_blank ${key}`), `${key} blank override must be cleared so user-secrets can load`);
 		}
 	});
 });
