@@ -182,34 +182,6 @@ export Kestrel__Certificates__Default__KeyPath="$CERT_DIR/api-key.pem"
 # Pin BOTH to one absolute path so the blob written on upload is the blob the worker reads.
 export Upload__BasePath="$ROOT_DIR/uploads"
 
-# Local/dev starts must not inherit real outbound notification credentials from
-# user-secrets. Enable only for an explicit provider-delivery test.
-ALLOW_EXTERNAL_NOTIFICATIONS="${ALLOW_EXTERNAL_NOTIFICATIONS:-0}"
-if [ "$ALLOW_EXTERNAL_NOTIFICATIONS" = "1" ]; then
-    echo "External notification providers ENABLED by ALLOW_EXTERNAL_NOTIFICATIONS=1."
-else
-    echo "External notification providers disabled for local dev (set ALLOW_EXTERNAL_NOTIFICATIONS=1 to enable)."
-    export Notifications__SendGrid__ApiKey=""
-    export Notifications__SendGrid__FromEmail=""
-    export Notifications__SendGrid__FromName=""
-    export Notifications__Smtp__Host=""
-    export Notifications__Smtp__Username=""
-    export Notifications__Smtp__Password=""
-    export Notifications__Smtp__FromEmail=""
-    export Notifications__SignalWire__ProjectId=""
-    export Notifications__SignalWire__Token=""
-    export Notifications__SignalWire__SpaceUrl=""
-    export Notifications__SignalWire__FromNumber=""
-    export Notifications__Twilio__AccountSid=""
-    export Notifications__Twilio__AuthToken=""
-    export Notifications__Twilio__FromNumber=""
-    export Notifications__Telnyx__ApiKey=""
-    export Notifications__Telnyx__FromNumber=""
-    export Notifications__Vonage__ApiKey=""
-    export Notifications__Vonage__ApiSecret=""
-    export Notifications__Vonage__FromNumber=""
-fi
-
 # Build the two .NET hosts serially before launching them. A fresh worktree can otherwise
 # run API + Engine first-builds at the same time and race on shared project outputs.
 echo "Building .NET hosts serially..."
