@@ -30,6 +30,7 @@
 		autoFilled,
 		confidence,
 		statuses = ['Draft', 'Active', 'Expired', 'Terminated'],
+		section = 'all',
 		testidPrefix = 'lease'
 	}: {
 		form: {
@@ -49,14 +50,18 @@
 		autoFilled?: Set<string>;
 		confidence?: Record<string, number>;
 		statuses?: readonly string[];
+		section?: 'all' | 'identity' | 'dates' | 'money' | 'status';
 		testidPrefix?: string;
 	} = $props();
 
 	const filled = (key: string) => !!autoFilled?.has(key);
 	const conf = (key: string) => confidence?.[STEP_FIELD_TO_EXTRACTION[key] ?? ''];
+	const show = (target: 'identity' | 'dates' | 'money' | 'status') =>
+		section === 'all' || section === target;
 </script>
 
 <div class="grid gap-3 md:grid-cols-2" data-testid={`${testidPrefix}-term-fields`}>
+	{#if show('identity')}
 	<div class="md:col-span-2">
 		<div class="mb-1 flex items-center gap-2">
 			<span class="text-xs font-medium text-muted-foreground">Lease number</span>
@@ -65,6 +70,8 @@
 		<Input data-testid={`${testidPrefix}-number-input`} bind:value={form.leaseNumber} placeholder="Lease number" />
 		{#if errors.leaseNumber}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-number-error`}>{errors.leaseNumber}</p>{/if}
 	</div>
+	{/if}
+	{#if show('dates')}
 	<div>
 		<div class="mb-1 flex items-center gap-2">
 			<span class="text-xs font-medium text-muted-foreground">Start date</span>
@@ -81,6 +88,8 @@
 		<DatePicker testid={`${testidPrefix}-end-input`} bind:value={form.endDate} placeholder="End date" min={form.startDate || undefined} />
 		{#if errors.endDate}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-end-error`}>{errors.endDate}</p>{/if}
 	</div>
+	{/if}
+	{#if show('money')}
 	<div>
 		<div class="mb-1 flex items-center gap-2">
 			<span class="text-xs font-medium text-muted-foreground">Monthly rent</span>
@@ -115,6 +124,8 @@
 			{#if errors.rentDueDay}<p class="mt-1 text-xs text-destructive" data-testid={`${testidPrefix}-due-day-error`}>{errors.rentDueDay}</p>{/if}
 		</div>
 	</div>
+	{/if}
+	{#if show('status')}
 	<div class="md:col-span-2">
 		<span class="mb-1 block text-xs font-medium text-muted-foreground">Status</span>
 		<Select.Root type="single" bind:value={form.status}>
@@ -149,5 +160,6 @@
 				</div>
 			{/if}
 		</div>
+	{/if}
 	{/if}
 </div>

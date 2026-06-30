@@ -88,6 +88,7 @@ public class WorkOrderListQuery : ListQuery
     public int? PropertyId { get; set; }
     public int? UnitId { get; set; }
     public int? VendorId { get; set; }
+    public bool OpenOnly { get; set; }
     public WorkOrderStatus? Status { get; set; }
     public WorkOrderPriority? Priority { get; set; }
 }
