@@ -16,7 +16,7 @@ public class PortfolioResponse
     public string Currency { get; set; } = "USD";
     public string? Settings { get; set; }
 
-    /// <summary>Account-wide sandbox/live state. True = seeded demo sandbox (real outbound suppressed).</summary>
+    /// <summary>Account-wide sandbox/live state. True = seeded example data.</summary>
     public bool IsSandbox { get; set; }
 
     public DateTime CreatedAt { get; set; }
@@ -50,7 +50,7 @@ public class SandboxStateResponse
 {
     public int PortfolioId { get; set; }
 
-    /// <summary>True while the account is a seeded demo sandbox (all real outbound is suppressed).</summary>
+    /// <summary>True while the account is using seeded example data.</summary>
     public bool IsSandbox { get; set; }
 
     /// <summary>When the sandbox demo data was seeded; null once graduated to Live.</summary>

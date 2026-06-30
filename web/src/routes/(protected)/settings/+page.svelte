@@ -1475,16 +1475,16 @@
 		<!-- ─────────────────────────── SETUP & IMPORT ─────────────────────────── -->
 		<Tabs.Content value="setup">
 			<div class="space-y-4">
-				{@render sectionIntro(section('setup'))}
-				<Card.Root class="gap-0 py-0" data-testid="settings-setup-link">
-					<Card.Content class="grid gap-3 p-5 sm:grid-cols-2">
-						<div class="rounded-lg border border-border bg-muted/30 p-4">
-							<p class="text-sm font-semibold">Guided setup</p>
-							<p class="mb-3 text-xs text-muted-foreground">Walk step-by-step through your portfolio, owner, properties, tenants, and first lease.</p>
-							<Button variant="outline" href="/onboarding?from=settings" data-testid="settings-setup-wizard">
-								Start guided setup <ArrowRight class="ml-1.5 h-4 w-4" />
-							</Button>
-						</div>
+					{@render sectionIntro(section('setup'))}
+					<Card.Root class="gap-0 py-0" data-testid="settings-setup-link">
+						<Card.Content class="grid gap-3 p-5 sm:grid-cols-2">
+							<div class="rounded-lg border border-border bg-muted/30 p-4">
+								<p class="text-sm font-semibold">Setup & Import</p>
+								<p class="mb-3 text-xs text-muted-foreground">Walk step-by-step through your portfolio, owner, properties, tenants, and first lease.</p>
+								<Button variant="outline" href="/onboarding?from=settings" data-testid="settings-setup-wizard">
+									Open setup & import <ArrowRight class="ml-1.5 h-4 w-4" />
+								</Button>
+							</div>
 						<div class="rounded-lg border border-border bg-muted/30 p-4">
 							<p class="text-sm font-semibold">Import from a spreadsheet</p>
 							<p class="mb-3 text-xs text-muted-foreground">Already have a list? Bring properties, tenants, and leases in from a spreadsheet — the app reads it and makes drafts to confirm.</p>
