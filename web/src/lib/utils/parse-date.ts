@@ -114,7 +114,9 @@ export function parseCompleteLooseDate(input: string): string | null {
 		return parseLooseDate(trimmed);
 	}
 
-	const yearLast = parts[2].length === 4 || parts[2].length === 2;
+	// Do not auto-commit two-digit years while the user is still typing a masked
+	// MM/DD/YYYY value. Otherwise `08012026` normalizes after `08/01/20`.
+	const yearLast = parts[2].length === 4;
 	return yearLast ? parseLooseDate(trimmed) : null;
 }
 

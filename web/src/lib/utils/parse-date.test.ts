@@ -24,7 +24,7 @@ describe('parseLooseDate', () => {
 describe('parseCompleteLooseDate', () => {
 	it('auto-commits complete user-typed dates while the field is still focused', () => {
 		assert.equal(parseCompleteLooseDate('07/31/2027'), '2027-07-31');
-		assert.equal(parseCompleteLooseDate('7/31/27'), '2027-07-31');
+		assert.equal(parseCompleteLooseDate('7/31/2027'), '2027-07-31');
 		assert.equal(parseCompleteLooseDate('2027-07-31'), '2027-07-31');
 	});
 
@@ -35,7 +35,14 @@ describe('parseCompleteLooseDate', () => {
 
 	it('does not auto-commit partial month-first years', () => {
 		assert.equal(parseCompleteLooseDate('07/31/2'), null);
+		assert.equal(parseCompleteLooseDate('07/31/27'), null);
 		assert.equal(parseCompleteLooseDate('07/31/202'), null);
+	});
+
+	it('does not auto-commit a masked date before all four year digits are typed', () => {
+		assert.equal(parseCompleteLooseDate('08/01/20'), null);
+		assert.equal(parseCompleteLooseDate('08/01/202'), null);
+		assert.equal(parseCompleteLooseDate('08/01/2026'), '2026-08-01');
 	});
 });
 
